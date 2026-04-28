@@ -1,0 +1,66 @@
+# Workspace Dockerfile for event-driven-agent
+# Usage (from truvag3 root): docker build -f examples/event-driven-agent/Dockerfile.workspace -t event-driven-agent:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy 6 local modules
+COPY ai/ ./ai/
+COPY core/ ./core/
+COPY memory/ ./memory/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+COPY resilience/ ./resilience/
+
+# Copy the event-driven-agent example
+COPY examples/event-driven-agent/ ./examples/event-driven-agent/
+
+# Create go.work for local module resolution
+RUN echo 'go 1.26.2' > go.work && \
+    echo '' >> go.work && \
+    echo 'use (' >> go.work && \
+    echo '    ./ai' >> go.work && \
+    echo '    ./core' >> go.work && \
+    echo '    ./memory' >> go.work && \
+    echo '    ./orchestration' >> go.work && \
+    echo '    ./telemetry' >> go.work && \
+    echo '    ./resilience' >> go.work && \
+    echo '    ./examples/event-driven-agent' >> go.work && \
+    echo ')' >> go.work
+
+WORKDIR /app/examples/event-driven-agent
+
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+
+RUN go mod download
+
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o event-driven-agent .
+
+RUN ls -lh event-driven-agent
+
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/event-driven-agent/event-driven-agent .
+
+RUN chown appuser:appgroup /app/event-driven-agent && \
+    chmod +x /app/event-driven-agent
+USER appuser
+
+ENV PORT=8372
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./event-driven-agent"]

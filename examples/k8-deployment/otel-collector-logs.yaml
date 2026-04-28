@@ -1,0 +1,228 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-logs-config
+  namespace: truvag3-examples
+data:
+  config.yaml: |
+    receivers:
+      filelog:
+        include:
+          - /var/log/pods/truvag3-examples_*/*/*.log
+        exclude:
+          # Exclude log collector's own logs to prevent feedback loop
+          - /var/log/pods/truvag3-examples_otel-collector-logs-*/*/*.log
+        # "beginning" ensures no logs are lost. The file_storage extension
+        # persists read offsets on a hostPath volume, so after restarts the
+        # collector resumes where it left off instead of re-reading everything.
+        start_at: beginning
+        storage: file_storage
+        include_file_path: true
+        operators:
+          # Parse CRI container log format
+          - type: regex_parser
+            regex: '^(?P<time>[^ ]+) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) (?P<log>.*)$'
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+          # Recombine CRI partial log lines (P = partial, F = final).
+          # Long JSON entries (e.g., AI prompts) get split by CRI into
+          # multiple lines. This joins them before JSON parsing.
+          - type: recombine
+            combine_field: attributes.log
+            combine_with: ""
+            is_last_entry: "attributes.logtag == 'F'"
+            source_identifier: attributes["log.file.path"]
+            max_unmatched_batch_size: 1
+          # Filter: DROP non-JSON logs (filter operator drops matching entries)
+          - type: filter
+            expr: 'attributes.log == nil or not (attributes.log matches "^\\{")'
+          # Parse JSON log body from Truva-G3 apps
+          - type: json_parser
+            parse_from: attributes.log
+            on_error: send
+            timestamp:
+              parse_from: attributes.timestamp
+              layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+          # Extract trace context from parsed JSON attributes to OTel log record
+          - type: trace_parser
+            trace_id:
+              parse_from: attributes.trace_id
+            span_id:
+              parse_from: attributes.span_id
+            on_error: send
+          # Extract K8s pod UID from the log file path so k8sattributes can
+          # associate each record to its originating pod. The file path format
+          # is /var/log/pods/<namespace>_<pod_name>_<pod_uid>/<container>/<n>.log
+          # Only the UID is captured — namespace and pod name are filled in by
+          # k8sattributes from the K8s API. Capturing them here as attributes
+          # would collide with k8sattributes' resource attributes in Loki and
+          # produce confusing *_extracted duplicate labels.
+          - type: regex_parser
+            regex: '^/var/log/pods/[^_]+_[^_]+_(?P<k8s_pod_uid>[0-9a-f-]+)/.*'
+            parse_from: attributes["log.file.path"]
+            on_error: send
+          # Promote pod UID onto the record's resource. Setting resource per-entry
+          # here (before the stanza->plog adapter groups by resource hash) is what
+          # gives each pod its own ResourceLogs downstream and prevents the
+          # shared-resource contamination that the old OTTL transform suffered.
+          - type: move
+            from: attributes.k8s_pod_uid
+            to: resource["k8s.pod.uid"]
+            on_error: send
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 100
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: "development"
+            action: upsert
+      # Resolve per-record service identity from Kubernetes pod metadata rather
+      # than from log-body fields. Associates each record by pod UID (set into
+      # resource by the filelog move operator above), extracts standard K8s
+      # resource attributes, and maps the pod label `app` to service.name —
+      # which Loki's OTLP ingester promotes to the `service_name` stream label.
+      #
+      # Replaces the previous OTTL transform/log_identity. The OTTL approach
+      # mutated the ResourceLogs' shared resource from log-body fields, which
+      # produced last-writer-wins contamination across pods on the same node.
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.namespace.name
+            - k8s.deployment.name
+            - k8s.node.name
+          labels:
+            - tag_name: service.name
+              key: app
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+
+    exporters:
+      otlp:
+        endpoint: otel-collector.truvag3-examples:4317
+        tls:
+          insecure: true
+        sending_queue:
+          enabled: true
+          queue_size: 100
+        retry_on_failure:
+          enabled: true
+          max_elapsed_time: 60s
+
+    extensions:
+      # Persist filelog read offsets so the collector resumes after restarts
+      file_storage:
+        directory: /var/otel/storage
+        compaction:
+          on_start: true
+          directory: /var/otel/storage
+
+    service:
+      extensions: [file_storage]
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [resource, k8sattributes, batch]
+          exporters: [otlp]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector-logs
+  namespace: truvag3-examples
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector-logs
+  template:
+    metadata:
+      labels:
+        app: otel-collector-logs
+    spec:
+      serviceAccountName: otel-collector-logs
+      # Set ownership on the checkpoint storage directory so the non-root
+      # otel-collector process (UID 10001) can persist filelog read offsets
+      initContainers:
+      - name: init-storage-permissions
+        image: busybox:1.36
+        command: ['sh', '-c', 'chown -R 10001:10001 /var/otel/storage']
+        volumeMounts:
+        - name: checkpoint-storage
+          mountPath: /var/otel/storage
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:latest
+        args:
+        - --config=/etc/otelcol-contrib/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/otelcol-contrib
+          readOnly: true
+        - name: varlogpods
+          mountPath: /var/log/pods
+          readOnly: true
+        - name: checkpoint-storage
+          mountPath: /var/otel/storage
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: config
+        configMap:
+          name: otel-collector-logs-config
+      - name: varlogpods
+        hostPath:
+          path: /var/log/pods
+      # hostPath for checkpoint persistence — survives DaemonSet restarts
+      # so the collector resumes from where it left off (no duplicate/lost logs)
+      - name: checkpoint-storage
+        hostPath:
+          path: /var/otel-collector-logs-storage
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-logs
+  namespace: truvag3-examples
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-logs
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces"]
+  verbs: ["get", "list", "watch"]
+# Required so k8sattributes can derive k8s.deployment.name by walking the
+# pod -> replicaset -> deployment owner-reference chain.
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-logs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-logs
+subjects:
+- kind: ServiceAccount
+  name: otel-collector-logs
+  namespace: truvag3-examples

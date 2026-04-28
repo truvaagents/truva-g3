@@ -1,0 +1,116 @@
+# Note: Secrets are created by setup.sh from .env file
+# Run ./setup.sh to deploy with proper API keys
+# Or create the secret manually:
+#   kubectl create secret generic hotel-tool-secrets \
+#     --from-literal=LITEAPI_KEY=your-key -n truvag3-examples
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hotel-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: hotel-tool
+    component: tool
+spec:
+  selector:
+    app: hotel-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8343
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hotel-tool
+  namespace: truvag3-examples
+  labels:
+    app: hotel-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hotel-tool
+  template:
+    metadata:
+      labels:
+        app: hotel-tool
+        component: tool
+    spec:
+      containers:
+      - name: hotel-tool
+        image: hotel-tool:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8343
+          name: http
+        # User-configurable env vars from .env via setup.sh
+        envFrom:
+        - configMapRef:
+            name: hotel-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        # Infrastructure env vars (K8s-internal, not from .env)
+        env:
+        - name: PORT
+          value: "8343"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # Secrets (API keys)
+        - name: LITEAPI_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hotel-tool-secrets
+              key: LITEAPI_KEY
+        # K8s identity
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "hotel-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Expose the pod's `app:` label via the downward API so the framework
+        # can detect observability-identity drift at startup. If this value
+        # disagrees with core.WithName() or OTEL_SERVICE_NAME, the framework
+        # logs a WARN on boot (never fails startup). Harmless to omit — the
+        # check becomes a no-op.
+        - name: TRUVAG3_K8S_POD_APP_LABEL
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['app']
+        # Telemetry endpoint (K8s-internal address)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8343
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8343
+          initialDelaySeconds: 5
+          periodSeconds: 10

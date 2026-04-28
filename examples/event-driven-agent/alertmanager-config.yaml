@@ -1,0 +1,42 @@
+# AlertManager Configuration for Truva-G3 Event-Driven Agent
+# This ConfigMap is mounted into the AlertManager pod.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: truvag3-examples
+  labels:
+    app: alertmanager
+    framework: truvag3
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'default'
+
+      routes:
+      # Only TruvaG3HighLatency alerts route to the event-driven-agent.
+      # This is the sole alert defined in Prometheus for the stress test scenario.
+      - match:
+          alertname: TruvaG3HighLatency
+        receiver: 'truvag3-event-agent'
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 15m
+
+    receivers:
+    - name: 'default'
+      # Default receiver (no-op for non-Truva-G3 alerts)
+
+    - name: 'truvag3-event-agent'
+      webhook_configs:
+      - url: 'http://event-driven-agent.truvag3-examples:80/webhook/alertmanager'
+        send_resolved: true
+        max_alerts: 10

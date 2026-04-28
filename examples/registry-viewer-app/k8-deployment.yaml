@@ -1,0 +1,115 @@
+# Registry Viewer - Kubernetes Deployment
+# Connects to Redis service defined in ../k8-deployment/redis.yaml
+# Redis URL can be overridden via REDIS_URL environment variable
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-viewer-config
+  namespace: truvag3-examples
+  labels:
+    app: registry-viewer
+    component: ui
+data:
+  # Default Redis URL - points to Redis service in same namespace
+  # Format: redis://<service-name>.<namespace>.svc.cluster.local:<port>
+  # Simplified: redis://<service-name>:<port> (same namespace)
+  REDIS_URL: "redis://redis:6379"
+  REDIS_NAMESPACE: "truvag3"
+  USE_MOCK: "false"
+  PORT: "8361"
+  TRUVAG3_VIEWER_MEMORY_DOMAINS: "infrastructure"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-viewer
+  namespace: truvag3-examples
+  labels:
+    app: registry-viewer
+    component: ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry-viewer
+  template:
+    metadata:
+      labels:
+        app: registry-viewer
+        component: ui
+    spec:
+      containers:
+      - name: registry-viewer
+        image: registry-viewer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8361
+          name: http
+        env:
+        # Load config from ConfigMap (can be overridden by pod-level env vars)
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: REDIS_URL
+        - name: REDIS_NAMESPACE
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: REDIS_NAMESPACE
+        - name: USE_MOCK
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: USE_MOCK
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: PORT
+        - name: TRUVAG3_VIEWER_MEMORY_DOMAINS
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: TRUVAG3_VIEWER_MEMORY_DOMAINS
+              optional: true
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "192Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8361
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8361
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-viewer-service
+  namespace: truvag3-examples
+  labels:
+    app: registry-viewer
+    component: ui
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8361
+    targetPort: 8361
+    protocol: TCP
+    name: http
+  selector:
+    app: registry-viewer

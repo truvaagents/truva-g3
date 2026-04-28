@@ -1,0 +1,217 @@
+# Kubernetes Deployment for QA Agent
+# Namespace: truvag3-examples
+# Port: 8358
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qa-agent-config
+  namespace: truvag3-examples
+  labels:
+    app: qa-agent
+    component: agent
+    framework: truvag3
+data:
+  # Deployment identity (kept in YAML — not user-tunable per-env)
+  APP_ENV: "development"
+  PORT: "8358"
+  NAMESPACE: "truvag3-examples"
+
+  # Framework tunables (DEV_MODE, TRUVAG3_LOG_LEVEL, TRUVAG3_LOG_FORMAT,
+  # TRUVAG3_DEBUG, TRUVAG3_VALIDATE_PAYLOADS, TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED,
+  # TRUVAG3_LLM_DEBUG_ENABLED, TRUVAG3_ORCHESTRATOR_MODE, and all timeouts) are
+  # sourced from .env via the qa-agent-env-config ConfigMap.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qa-agent
+  namespace: truvag3-examples
+  labels:
+    app: qa-agent
+    component: agent
+    framework: truvag3
+    version: v1
+    module: orchestration
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qa-agent
+  template:
+    metadata:
+      labels:
+        app: qa-agent
+        component: agent
+        framework: truvag3
+        version: v1
+        module: orchestration
+      annotations:
+        # Uses OTLP push-based telemetry to OTEL Collector, not Prometheus pull scraping
+        prometheus.io/scrape: "false"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+      - name: agent
+        image: qa-agent:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 8358
+          protocol: TCP
+
+        # Environment variables from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: qa-agent-config
+        - configMapRef:
+            name: qa-agent-env-config
+            optional: true  # Created by setup.sh from .env values
+        - secretRef:
+            name: ai-provider-keys-qa-agent
+            optional: true
+
+        # Additional environment variables
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "qa-agent"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL  # For backward compatibility
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # K8s service discovery configuration
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "qa-agent-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Telemetry
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        # Timeouts (TRUVAG3_ITERATIVE_PHASE_TIMEOUT, TRUVAG3_ORCHESTRATION_TIMEOUT,
+        # TRUVAG3_HTTP_WRITE_TIMEOUT, TRUVAG3_HTTP_READ_TIMEOUT) are configured via
+        # .env and loaded from qa-agent-env-config ConfigMap.
+
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qa-agent-service
+  namespace: truvag3-examples
+  labels:
+    app: qa-agent
+    component: agent
+    framework: truvag3
+    truvag3.framework/type: agent
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8358
+    protocol: TCP
+  selector:
+    app: qa-agent
+
+---
+# Ingress for external access via qa-agent.localhost
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qa-agent-ingress
+  namespace: truvag3-examples
+  labels:
+    app: qa-agent
+    component: agent
+    framework: truvag3
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: qa-agent.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: qa-agent-service
+            port:
+              number: 80

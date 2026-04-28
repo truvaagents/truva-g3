@@ -1,0 +1,48 @@
+# Workspace Dockerfile for devops-observability-tool
+# Usage (from truvag3 root): docker build -f examples/devops-observability-tool/Dockerfile.workspace -t devops-observability-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the tool
+COPY examples/devops-observability-tool/ ./examples/devops-observability-tool/
+
+WORKDIR /app/examples/devops-observability-tool
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o devops-observability-tool .
+
+FROM alpine:3.23
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/devops-observability-tool/devops-observability-tool .
+RUN chown appuser:appgroup /app/devops-observability-tool && \
+    chmod +x /app/devops-observability-tool
+USER appuser
+
+ENV PORT=8378
+EXPOSE ${PORT}
+ENTRYPOINT ["./devops-observability-tool"]

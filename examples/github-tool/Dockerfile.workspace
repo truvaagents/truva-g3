@@ -1,0 +1,56 @@
+# Workspace Dockerfile for github-tool
+# Builds with LOCAL framework modules (used during framework development).
+# Usage (from truvag3 repo root):
+#   docker build -f examples/github-tool/Dockerfile.workspace \
+#                -t github-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+# Copy local modules referenced by replace directives
+COPY ai/ ./ai/
+COPY core/ ./core/
+COPY memory/ ./memory/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+COPY resilience/ ./resilience/
+
+# Copy the tool example
+COPY examples/github-tool/ ./examples/github-tool/
+
+WORKDIR /app/examples/github-tool
+
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+RUN go mod tidy && go mod download
+
+ARG TARGETARCH=arm64
+RUN go build -trimpath -buildvcs=false \
+    -ldflags '-w -s' \
+    -o github-tool .
+
+# Runtime stage
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata && \
+    addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+WORKDIR /app
+
+COPY --from=builder --chown=appuser:appgroup \
+    /app/examples/github-tool/github-tool .
+
+USER appuser
+
+ENV PORT=8381
+
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./github-tool"]

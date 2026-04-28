@@ -1,0 +1,257 @@
+# Kubernetes Deployment for Async Travel Agent - API Component
+# Agent Namespace: truvag3-examples
+# Port: 8098
+#
+# This deployment runs in API mode (TRUVAG3_MODE=api):
+# - Handles HTTP requests only (task submission, polling, cancellation)
+# - Does NOT process tasks (workers do that)
+# - Scales based on request load
+#
+# Deploy this alongside k8-deployment-worker.yaml for production.
+#
+# API Endpoints:
+#   POST /api/v1/tasks       - Submit async travel research task (returns 202 + task ID)
+#   GET  /api/v1/tasks/:id   - Poll task status/result
+#   POST /api/v1/tasks/:id/cancel - Cancel running task
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: async-travel-agent-api-config
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-api
+    component: api
+    framework: truvag3
+data:
+  # Environment configuration
+  APP_ENV: "production"
+  PORT: "8098"
+  NAMESPACE: "truvag3-examples"
+
+  # Deployment mode - API only
+  TRUVAG3_MODE: "api"
+
+  # Framework configuration
+  DEV_MODE: "false"
+  TRUVAG3_LOG_LEVEL: "info"
+  TRUVAG3_DEBUG: "false"
+  TRUVAG3_VALIDATE_PAYLOADS: "false"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: async-travel-agent-api
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-api
+    component: api
+    framework: truvag3
+    version: v1
+    module: async
+spec:
+  replicas: 2  # Multiple replicas for API availability
+  selector:
+    matchLabels:
+      app: async-travel-agent-api
+  template:
+    metadata:
+      labels:
+        app: async-travel-agent-api
+        component: api
+        framework: truvag3
+        version: v1
+        module: async
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8098"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+      - name: api
+        image: async-travel-agent:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 8098
+          protocol: TCP
+
+        # Environment variables from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: async-travel-agent-api-config
+        - secretRef:
+            name: ai-provider-keys-async-agent
+            optional: true
+
+        # Additional environment variables
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "async-travel-agent-api"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: TRUVAG3_DEV_MODE
+          value: "false"
+        # Logging Configuration
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        # K8s service discovery configuration
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "async-travel-agent-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Telemetry Configuration
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+
+        # Resource limits (API is lightweight)
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+
+        # Liveness probe
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness probe
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Startup probe
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 3
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 10
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: async-travel-agent-service
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-api
+    component: api
+    framework: truvag3
+    truvag3.framework/type: agent
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8098
+    protocol: TCP
+  selector:
+    app: async-travel-agent-api  # Routes to API pods
+
+---
+# HPA for API - scales based on request load
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: async-travel-agent-api-hpa
+  namespace: truvag3-examples
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: async-travel-agent-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# PodDisruptionBudget for API high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: async-travel-agent-api-pdb
+  namespace: truvag3-examples
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: async-travel-agent-api

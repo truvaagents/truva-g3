@@ -1,0 +1,4 @@
+Knowledge Graph - 
+I have 5 microservices: Auth, UserProfile, OrderService, PaymentService, and NotificationService. Auth must start before UserProfile. UserProfile must start before OrderService. PaymentService depends on both Auth and OrderService. NotificationService depends on PaymentService. If UserProfile fails to start, which services are guaranteed to never reach a running state, and what is the minimum number of services that remain operational?
+
+"Compare the GDP per capita of the G7 countries, find which one has the lowest, then check if that country's largest publicly traded company has beaten earnings estimates in its last 3 quarters."

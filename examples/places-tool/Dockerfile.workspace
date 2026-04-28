@@ -1,0 +1,22 @@
+# Workspace Dockerfile for places-tool
+FROM golang:1.26.2-alpine AS builder
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+WORKDIR /app
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+COPY examples/places-tool/ ./examples/places-tool/
+WORKDIR /app/examples/places-tool
+ENV GOWORK=off CGO_ENABLED=0 GOOS=linux GONOSUMDB=github.com/truvaagents/truva-g3/*
+RUN go mod tidy && go mod download
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo -ldflags '-w -s -extldflags "-static"' -o places-tool .
+FROM alpine:3.23
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /app
+RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
+COPY --from=builder /app/examples/places-tool/places-tool .
+RUN chown appuser:appgroup /app/places-tool && chmod +x /app/places-tool
+USER appuser
+ENV PORT=8344
+EXPOSE ${PORT}
+ENTRYPOINT ["./places-tool"]

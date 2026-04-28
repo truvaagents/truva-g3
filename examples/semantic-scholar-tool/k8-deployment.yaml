@@ -1,0 +1,114 @@
+# Note: Secrets are created by setup.sh from .env file
+# Run ./setup.sh to deploy with proper API keys
+# Or create the secret manually:
+#   kubectl create secret generic s2-tool-secrets \
+#     --from-literal=S2_API_KEY=your-key -n truvag3-examples
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: semantic-scholar-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: semantic-scholar-tool
+    component: tool
+spec:
+  selector:
+    app: semantic-scholar-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8370
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: semantic-scholar-tool
+  namespace: truvag3-examples
+  labels:
+    app: semantic-scholar-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: semantic-scholar-tool
+  template:
+    metadata:
+      labels:
+        app: semantic-scholar-tool
+        component: tool
+    spec:
+      containers:
+      - name: semantic-scholar-tool
+        image: semantic-scholar-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8370
+          name: http
+        envFrom:
+        - configMapRef:
+            name: semantic-scholar-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8370"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # S2_API_KEY is optional -- tool works without it but will hit shared rate limits
+        - name: S2_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s2-tool-secrets
+              key: S2_API_KEY
+              optional: true  # Tool works without API key (shared rate limit pool)
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "semantic-scholar-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8370
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8370
+          initialDelaySeconds: 5
+          periodSeconds: 10

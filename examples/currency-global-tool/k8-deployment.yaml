@@ -1,0 +1,124 @@
+# Note: Secrets and ConfigMaps are created by setup.sh from .env file
+# Run ./setup.sh deploy to deploy with proper API keys
+# Or create the secret manually:
+#   kubectl create secret generic currency-global-tool-secrets \
+#     --from-literal=CURRENCYBEACON_API_KEY=your-key -n truvag3-examples
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: currency-global-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: currency-global-tool
+    component: tool
+spec:
+  selector:
+    app: currency-global-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8346
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: currency-global-tool
+  namespace: truvag3-examples
+  labels:
+    app: currency-global-tool
+    component: tool
+    truvag3.framework/type: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: currency-global-tool
+  template:
+    metadata:
+      labels:
+        app: currency-global-tool
+        component: tool
+        truvag3.framework/type: tool
+    spec:
+      containers:
+      - name: currency-global-tool
+        image: currency-global-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8346
+          name: http
+        # User-configurable env vars from .env via setup.sh
+        envFrom:
+        - configMapRef:
+            name: currency-global-tool-env-config
+            optional: true
+        # Infrastructure env vars (K8s-internal)
+        env:
+        - name: DEV_MODE
+          value: "false"
+        - name: PORT
+          value: "8346"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "currency-global-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Secrets (API keys)
+        - name: CURRENCYBEACON_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: currency-global-tool-secrets
+              key: CURRENCYBEACON_API_KEY
+        # Telemetry endpoint
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8346
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8346
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          readOnlyRootFilesystem: true

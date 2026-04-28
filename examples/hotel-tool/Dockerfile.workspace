@@ -1,0 +1,25 @@
+# Workspace Dockerfile for hotel-tool
+# Usage (from truvag3 root): docker build -f examples/hotel-tool/Dockerfile.workspace -t hotel-tool:latest .
+FROM golang:1.26.2-alpine AS builder
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+WORKDIR /app
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+COPY examples/hotel-tool/ ./examples/hotel-tool/
+WORKDIR /app/examples/hotel-tool
+ENV GOWORK=off CGO_ENABLED=0 GOOS=linux GONOSUMDB=github.com/truvaagents/truva-g3/*
+RUN go mod tidy && go mod download
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo -ldflags '-w -s -extldflags "-static"' -o hotel-tool .
+RUN ls -lh hotel-tool
+
+FROM alpine:3.23
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /app
+RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
+COPY --from=builder /app/examples/hotel-tool/hotel-tool .
+RUN chown appuser:appgroup /app/hotel-tool && chmod +x /app/hotel-tool
+USER appuser
+ENV PORT=8343
+EXPOSE ${PORT}
+ENTRYPOINT ["./hotel-tool"]

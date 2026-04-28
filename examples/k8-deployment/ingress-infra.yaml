@@ -1,0 +1,127 @@
+# Ingress resources for shared infrastructure components (dashboards & UIs).
+# These route *.localhost hostnames to infra services via the NGINX Ingress Controller.
+# On macOS/Linux, *.localhost resolves to 127.0.0.1 automatically (RFC 6761).
+#
+# NOTE: Only agents and infra UIs get Ingress resources. Tools (weather-tool-v2,
+# geocoding-tool, currency-tool, etc.) are internal services accessed by agents
+# within the cluster via ClusterIP — they do NOT need external Ingress routes.
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-ingress
+  namespace: truvag3-examples
+  labels:
+    framework: truvag3
+    component: infrastructure
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: grafana.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              number: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus-ingress
+  namespace: truvag3-examples
+  labels:
+    framework: truvag3
+    component: infrastructure
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: prometheus.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: prometheus
+            port:
+              number: 9090
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger-ingress
+  namespace: truvag3-examples
+  labels:
+    framework: truvag3
+    component: infrastructure
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: jaeger.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: jaeger-query
+            port:
+              number: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: registry-viewer-ingress
+  namespace: truvag3-examples
+  labels:
+    framework: truvag3
+    component: infrastructure
+  annotations:
+    # Registry viewer may serve large JSON payloads
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: registry.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: registry-viewer-service
+            port:
+              number: 8361
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: swagger-ui-ingress
+  namespace: truvag3-examples
+  labels:
+    framework: truvag3
+    component: infrastructure
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: swagger.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: swagger-ui
+            port:
+              number: 80

@@ -1,0 +1,51 @@
+# Workspace Dockerfile for scheduled-executor
+# Usage (from truvag3 root):
+#   docker build -f examples/scheduled-executor/Dockerfile.workspace -t scheduled-executor:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+COPY core/ ./core/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+COPY examples/scheduled-executor/ ./examples/scheduled-executor/
+
+WORKDIR /app/examples/scheduled-executor
+
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+RUN go mod tidy && go mod download
+
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o scheduled-executor .
+
+RUN ls -lh scheduled-executor
+
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/scheduled-executor/scheduled-executor .
+
+RUN chown appuser:appgroup /app/scheduled-executor && \
+    chmod +x /app/scheduled-executor
+
+USER appuser
+
+ENV PORT=8380
+
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./scheduled-executor"]

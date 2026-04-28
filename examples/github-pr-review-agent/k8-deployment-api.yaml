@@ -1,0 +1,213 @@
+# Kubernetes Deployment for GitHub PR Review Agent — API Component
+# Namespace: truvag3-examples
+# Port: 8382
+#
+# This deployment runs in API mode (TRUVAG3_MODE=api):
+#   - Receives GitHub pull_request webhooks
+#   - Exposes /api/v1/tasks (submit/poll/cancel)
+#   - Enqueues review_pr tasks to Redis
+#   - Does NOT execute review work (that's the worker deployment)
+#
+# Deploy alongside k8-deployment-worker.yaml for split mode. Remove
+# k8-deployment.yaml (embedded mode) when running split mode.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-pr-review-agent-api-config
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-api
+    component: api
+    framework: truvag3
+data:
+  APP_ENV: "production"
+  PORT: "8382"
+  NAMESPACE: "truvag3-examples"
+  TRUVAG3_MODE: "api"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-pr-review-agent-api
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-api
+    component: api
+    framework: truvag3
+    version: v1
+    module: orchestration
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: github-pr-review-agent-api
+  template:
+    metadata:
+      labels:
+        app: github-pr-review-agent-api
+        component: api
+        framework: truvag3
+        truvag3.framework/type: agent
+        version: v1
+        module: orchestration
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: api
+        image: github-pr-review-agent:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8382
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: github-pr-review-agent-api-config
+        - configMapRef:
+            name: github-pr-review-agent-env-config
+            optional: true
+        - secretRef:
+            name: github-pr-review-agent-webhook
+            optional: true  # GITHUB_WEBHOOK_SECRET
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "github-pr-review-agent"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # API service name shared with embedded — same Service routes to whichever
+        # deployment is active. Worker also uses this name to look up the API.
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "github-pr-review-agent-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "15m"
+            memory: "32Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 12
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+# Service shared with embedded mode by name. The selector targets the API pod
+# in split mode; targets the embedded pod in single-deployment mode.
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-pr-review-agent-service
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-api
+    component: api
+    framework: truvag3
+    truvag3.framework/type: agent
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8382
+    protocol: TCP
+  selector:
+    app: github-pr-review-agent-api
+
+---
+# Ingress for GitHub webhook delivery (API pod only)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: github-pr-review-agent-ingress
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-api
+    component: api
+    framework: truvag3
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: github-pr-review-agent.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: github-pr-review-agent-service
+            port:
+              number: 80

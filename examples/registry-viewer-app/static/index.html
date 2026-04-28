@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truva-G3 Registry Viewer</title>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+    <div class="app">
+        <header>
+            <div class="header-left">
+                <div class="logo">
+                    <div class="logo-icon">🧠</div>
+                    <h1>Go<span>Mind</span> Registry</h1>
+                </div>
+                <div class="main-nav">
+                    <button class="main-nav-btn active" data-view="registry">
+                        <span class="nav-icon">📋</span> Registry
+                    </button>
+                    <button class="main-nav-btn" data-view="llm-debug">
+                        <span class="nav-icon">🔍</span> LLM Debug
+                    </button>
+                    <button class="main-nav-btn" data-view="hitl">
+                        <span class="nav-icon">✋</span> HITL Interrupted
+                    </button>
+                    <button class="main-nav-btn" data-view="dag">
+                        <span class="nav-icon">🔀</span> Execution DAG
+                    </button>
+                    <button class="main-nav-btn" data-view="memory">
+                        <span class="nav-icon">📝</span> Memory
+                    </button>
+                </div>
+            </div>
+            <div class="header-controls">
+                <div class="stats" id="registryStats">
+                    <div class="stat"><span>Total</span><span class="stat-value total" id="totalCount">-</span></div>
+                    <div class="stat"><span>Agents</span><span class="stat-value agents" id="agentCount">-</span></div>
+                    <div class="stat"><span>Tools</span><span class="stat-value tools" id="toolCount">-</span></div>
+                </div>
+                <div class="stats hidden" id="llmDebugStats">
+                    <div class="stat"><span>Records</span><span class="stat-value records" id="recordCount">-</span></div>
+                    <div class="stat"><span>Total Tokens</span><span class="stat-value tokens" id="tokenCount">-</span></div>
+                </div>
+                <div class="stats hidden" id="hitlStats">
+                    <div class="stat"><span>Pending</span><span class="stat-value" style="color: var(--accent-orange);" id="pendingCount">-</span></div>
+                    <div class="stat"><span>Critical</span><span class="stat-value" style="color: var(--accent-red);" id="criticalCount">-</span></div>
+                </div>
+                <div class="stats hidden" id="dagStats">
+                    <div class="stat"><span>Executions</span><span class="stat-value" style="color: var(--accent-teal);" id="executionCount">-</span></div>
+                    <div class="stat"><span>Success Rate</span><span class="stat-value" style="color: var(--accent-green);" id="successRate">-</span></div>
+                </div>
+                <div class="stats hidden" id="memoryStats">
+                    <div class="stat"><span>Domain</span><span class="stat-value" style="color: var(--accent-teal);" id="memoryDomainLabel">-</span></div>
+                    <div class="stat"><span>Events</span><span class="stat-value" style="color: var(--accent-teal);" id="memoryEventCount">-</span></div>
+                    <div class="stat"><span>Investigations</span><span class="stat-value" style="color: #f0a030;" id="memoryInvestigationCount">-</span></div>
+                </div>
+                <label class="auto-refresh">
+                    <input type="checkbox" id="autoRefresh" checked> Auto-refresh
+                </label>
+                <button class="refresh-btn">
+                    <span class="refresh-icon">↻</span> Refresh
+                </button>
+            </div>
+        </header>
+
+        <div class="main" id="mainContainer">
+            <!-- Registry View -->
+            <div class="list-panel" id="registryListPanel">
+                <div class="filters">
+                    <div class="search-box">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" id="searchInput" placeholder="Search services...">
+                    </div>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="agent">Agents</button>
+                    <button class="filter-btn" data-filter="tool">Tools</button>
+                </div>
+                <div class="error-banner" id="errorBanner">
+                    <strong>Error:</strong> <span id="errorMessage"></span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Name</th>
+                                <th>Health</th>
+                                <th>Last Seen</th>
+                                <th>Capabilities</th>
+                            </tr>
+                        </thead>
+                        <tbody id="serviceTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="last-updated" id="lastUpdated">Loading...</div>
+            </div>
+
+            <!-- Registry Resize Handle -->
+            <div class="resize-handle" id="registryResizeHandle"></div>
+
+            <!-- LLM Debug View -->
+            <div class="list-panel hidden" id="llmDebugListPanel">
+                <div class="filters">
+                    <div class="search-box">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" id="llmSearchInput" placeholder="Search by request ID, conversation, source agent, or type...">
+                    </div>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="success">Success</button>
+                    <button class="filter-btn" data-filter="error">Errors</button>
+                    <button class="filter-btn" data-filter="grouped" title="Group related HITL records by conversation">Grouped</button>
+                </div>
+                <div class="error-banner" id="llmErrorBanner">
+                    <strong>Error:</strong> <span id="llmErrorMessage"></span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Request ID</th>
+                                <th>Conversation</th>
+                                <th>Source</th>
+                                <th>Interactions</th>
+                                <th>Tokens</th>
+                                <th>Status</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="llmTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="last-updated" id="llmLastUpdated">Loading...</div>
+            </div>
+
+            <!-- Resize Handle for LLM Debug View -->
+            <div class="resize-handle hidden" id="llmResizeHandle"></div>
+
+            <!-- HITL List Panel -->
+            <div class="list-panel hidden" id="hitlListPanel">
+                <div class="filters">
+                    <div class="search-box">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" id="hitlSearchInput" placeholder="Search by checkpoint ID, request, or message...">
+                    </div>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="plan">Plan</button>
+                    <button class="filter-btn" data-filter="step">Step</button>
+                    <button class="filter-btn" data-filter="error">Error</button>
+                </div>
+                <div class="error-banner" id="hitlErrorBanner">
+                    <strong>Error:</strong> <span id="hitlErrorMessage"></span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Priority</th>
+                                <th class="sortable" data-sort="agent_name">Agent</th>
+                                <th>Type</th>
+                                <th>Request</th>
+                                <th>Progress</th>
+                                <th class="sortable" data-sort="created_at">Created</th>
+                                <th class="sortable asc" data-sort="expires_at">Expires</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hitlTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="last-updated" id="hitlLastUpdated">Loading...</div>
+            </div>
+
+            <!-- HITL Resize Handle -->
+            <div class="resize-handle hidden" id="hitlResizeHandle"></div>
+
+            <!-- Registry Detail Panel -->
+            <div class="detail-panel" id="registryDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="detailTitle">Select a service</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="formatted">Formatted</button>
+                        <button class="detail-tab" data-tab="json">JSON</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="detailContent">
+                    <div class="empty-detail">
+                        <div class="empty-detail-icon">📋</div>
+                        <div>Select a service to view details</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LLM Debug Detail Panel -->
+            <div class="detail-panel hidden" id="llmDebugDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="llmDetailTitle">Select a record</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="interactions">Interactions</button>
+                        <button class="detail-tab" data-tab="json">JSON</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="llmDetailContent">
+                    <div class="empty-detail">
+                        <div class="empty-detail-icon">🔍</div>
+                        <div>Select a record to view LLM interactions</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HITL Detail Panel -->
+            <div class="detail-panel hidden" id="hitlDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="hitlDetailTitle">Select a checkpoint</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="overview">Overview</button>
+                        <button class="detail-tab" data-tab="plan">Plan</button>
+                        <button class="detail-tab" data-tab="json">JSON</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="hitlDetailContent">
+                    <div class="empty-detail">
+                        <div class="empty-detail-icon">✋</div>
+                        <div>Select a checkpoint to view details</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Execution DAG View -->
+            <div class="list-panel hidden" id="dagListPanel">
+                <div class="filters">
+                    <div class="search-box">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" id="dagSearchInput" placeholder="Search by request ID or query...">
+                    </div>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="success">Success</button>
+                    <button class="filter-btn" data-filter="failed">Failed</button>
+                    <button class="filter-btn" data-filter="interrupted">Interrupted</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th class="sortable" data-sort="original_request">Request</th>
+                                <th>Steps</th>
+                                <th class="sortable" data-sort="total_duration_ms">Duration</th>
+                                <th class="sortable desc" data-sort="created_at">Created</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dagTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="last-updated" id="dagLastUpdated">Loading...</div>
+            </div>
+            <div class="resize-handle hidden" id="dagResizeHandle"></div>
+            <div class="detail-panel hidden" id="dagDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="dagDetailTitle">Select an execution</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="dag-viz">DAG Visualization</button>
+                        <button class="detail-tab" data-tab="dag-pre" style="display: none;">Pre-Execution</button>
+                        <button class="detail-tab" data-tab="dag-steps">Step Details</button>
+                        <button class="detail-tab" data-tab="dag-llm" style="display: none;">LLM Calls</button>
+                        <button class="detail-tab" data-tab="dag-post" style="display: none;">Post-Execution</button>
+                        <button class="detail-tab" data-tab="dag-hitl" style="display: none;">HITL</button>
+                        <button class="detail-tab" data-tab="dag-raw">Raw JSON</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="dagDetailContent">
+                    <div class="empty-detail">
+                        <div class="empty-detail-icon">🔀</div>
+                        <div>Select an execution to view DAG</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory View -->
+            <div class="list-panel hidden" id="memoryListPanel">
+                <div class="filters" style="flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 160px;">
+                        <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); white-space: nowrap;">Domain</span>
+                        <div style="position: relative; flex: 1;">
+                            <select id="memoryDomainSelect" style="width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 8px 32px 8px 12px; color: var(--text-primary); font-size: 13px; font-weight: 500; outline: none; cursor: pointer; appearance: none; -webkit-appearance: none; transition: border-color 0.2s, background 0.2s;"
+                               
+                               >
+                                <option value="">Loading domains...</option>
+                            </select>
+                            <span style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 11px; color: var(--text-muted);">▾</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 2px; background: rgba(0,0,0,0.3); padding: 3px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                        <button class="filter-btn" data-range="1h">1h</button>
+                        <button class="filter-btn" data-range="6h">6h</button>
+                        <button class="filter-btn active" data-range="24h">24h</button>
+                        <button class="filter-btn" data-range="3d">3d</button>
+                        <button class="filter-btn" data-range="7d">7d</button>
+                    </div>
+                </div>
+                <div id="memoryInvestigationsStrip" style="display: none; padding: 8px 18px; border-bottom: 1px solid var(--border-subtle); overflow-x: auto; white-space: nowrap;"></div>
+                <div style="flex: 1; overflow-y: auto; padding: 8px;" id="memoryEventsList">
+                    <div class="empty-detail" style="padding: 60px 20px;">
+                        <div class="empty-detail-icon">📝</div>
+                        <div>Loading memory events...</div>
+                    </div>
+                </div>
+                <div class="last-updated" id="memoryLastUpdated">Loading...</div>
+            </div>
+            <div class="resize-handle hidden" id="memoryResizeHandle"></div>
+            <div class="detail-panel hidden" id="memoryDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="memoryDetailTitle">Select an event</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="mem-event">Event Detail</button>
+                        <button class="detail-tab" data-tab="mem-activity">Live Activity</button>
+                        <button class="detail-tab" data-tab="mem-digest">Digest</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="memoryDetailContent">
+                    <div class="empty-detail">
+                        <div class="empty-detail-icon">📝</div>
+                        <div>Select an event to view details</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cytoscape.js for DAG visualization -->
+    <script src="https://unpkg.com/cytoscape@3.29.2/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

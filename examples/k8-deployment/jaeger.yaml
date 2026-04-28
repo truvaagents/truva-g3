@@ -1,0 +1,185 @@
+# Jaeger v2 - Distributed Tracing
+# Image: jaegertracing/jaeger (v2 is built on the OpenTelemetry Collector)
+# Jaeger v1 (all-in-one) reached EOL on Dec 31, 2025.
+#
+# Jaeger v2 uses an OTel Collector config file instead of environment variables.
+# It supports OTLP receivers natively for traces (and won't reject logs/metrics).
+# Storage: in-memory (suitable for local dev/Kind clusters).
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jaeger-config
+  namespace: truvag3-examples
+  labels:
+    app: jaeger
+    component: tracing
+data:
+  config.yaml: |
+    service:
+      extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [jaeger_storage_exporter]
+      telemetry:
+        resource:
+          service.name: jaeger
+        metrics:
+          level: detailed
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: "0.0.0.0"
+                    port: 8888
+        logs:
+          level: info
+
+    extensions:
+      jaeger_query:
+        storage:
+          traces: mem_store
+        http:
+          endpoint: "0.0.0.0:16686"
+        grpc:
+          endpoint: "0.0.0.0:16685"
+
+      jaeger_storage:
+        backends:
+          mem_store:
+            memory:
+              max_traces: 50000
+
+      healthcheckv2:
+        use_v2: true
+        http:
+          endpoint: "0.0.0.0:13133"
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+
+    exporters:
+      jaeger_storage_exporter:
+        trace_storage: mem_store
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: truvag3-examples
+  labels:
+    app: jaeger
+    component: tracing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        component: tracing
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/jaeger:2.15.1
+        args:
+        - --config=/etc/jaeger/config.yaml
+        ports:
+        - containerPort: 16686
+          name: query-http
+        - containerPort: 16685
+          name: query-grpc
+        - containerPort: 4317
+          name: otlp-grpc
+        - containerPort: 4318
+          name: otlp-http
+        - containerPort: 13133
+          name: health
+        - containerPort: 8888
+          name: metrics
+        volumeMounts:
+        - name: config
+          mountPath: /etc/jaeger
+          readOnly: true
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: 13133
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /status
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: jaeger-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-query
+  namespace: truvag3-examples
+  labels:
+    app: jaeger
+    component: tracing
+    service: query
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 16686
+    name: query-http
+  selector:
+    app: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: truvag3-examples
+  labels:
+    app: jaeger
+    component: tracing
+    service: collector
+spec:
+  type: ClusterIP
+  ports:
+  - port: 4317
+    targetPort: 4317
+    name: otlp-grpc
+  - port: 4318
+    targetPort: 4318
+    name: otlp-http
+  selector:
+    app: jaeger

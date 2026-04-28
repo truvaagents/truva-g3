@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jira-tool
+  namespace: truvag3-examples
+  labels:
+    app: jira-tool
+    component: tool
+    truvag3.framework/type: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jira-tool
+  template:
+    metadata:
+      labels:
+        app: jira-tool
+        component: tool
+        truvag3.framework/type: tool
+    spec:
+      containers:
+      - name: jira-tool
+        image: jira-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8366
+          name: http
+        envFrom:
+        - configMapRef:
+            name: jira-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8366"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # JIRA credentials from Kubernetes Secret
+        - name: JIRA_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: jira-tool-secrets
+              key: JIRA_BASE_URL
+        - name: JIRA_USER_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: jira-tool-secrets
+              key: JIRA_USER_EMAIL
+        - name: JIRA_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: jira-tool-secrets
+              key: JIRA_API_TOKEN
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "jira-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8366
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8366
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jira-tool-service
+  namespace: truvag3-examples
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8366
+  selector:
+    app: jira-tool

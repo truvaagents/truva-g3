@@ -1,0 +1,74 @@
+# Workspace Dockerfile for scheduler-tool
+# This Dockerfile builds with LOCAL modules (uses local core, telemetry,
+# memory, orchestration, scheduler) referenced via replace directives in
+# go.mod. Used by setup.sh during local development.
+#
+# Usage (from truvag3 root):
+#   docker build -f examples/scheduler-tool/Dockerfile.workspace -t scheduler-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives in go.mod.
+# scheduler-tool depends on four framework modules — all of them must be
+# present so go build can resolve the replace directives.
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+COPY memory/ ./memory/
+COPY orchestration/ ./orchestration/
+
+# Copy the scheduler-tool example
+COPY examples/scheduler-tool/ ./examples/scheduler-tool/
+
+WORKDIR /app/examples/scheduler-tool
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o scheduler-tool .
+
+# Verify the binary was created
+RUN ls -lh scheduler-tool
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Copy binary from builder stage
+COPY --from=builder /app/examples/scheduler-tool/scheduler-tool .
+
+# Change ownership to non-root user
+RUN chown appuser:appgroup /app/scheduler-tool && \
+    chmod +x /app/scheduler-tool
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8379
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./scheduler-tool"]

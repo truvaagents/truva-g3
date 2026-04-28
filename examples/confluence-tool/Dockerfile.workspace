@@ -1,0 +1,51 @@
+# Workspace Dockerfile for confluence-tool
+# Usage (from truvag3 root): docker build -f examples/confluence-tool/Dockerfile.workspace -t confluence-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the confluence-tool example
+COPY examples/confluence-tool/ ./examples/confluence-tool/
+
+WORKDIR /app/examples/confluence-tool
+
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+RUN go mod tidy && go mod download
+
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o confluence-tool .
+
+RUN ls -lh confluence-tool
+
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/confluence-tool/confluence-tool .
+
+RUN chown appuser:appgroup /app/confluence-tool && \
+    chmod +x /app/confluence-tool
+USER appuser
+
+ENV PORT=8376
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./confluence-tool"]

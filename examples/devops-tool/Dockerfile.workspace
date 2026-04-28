@@ -1,0 +1,86 @@
+# Workspace Dockerfile for devops-tool
+# This Dockerfile builds with LOCAL modules (uses local core and telemetry)
+# Usage (from truvag3 root): docker build -f examples/devops-tool/Dockerfile.workspace -t devops-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the devops-tool example
+COPY examples/devops-tool/ ./examples/devops-tool/
+
+WORKDIR /app/examples/devops-tool
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o devops-tool .
+
+# Verify the binary was created
+RUN ls -lh devops-tool
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime dependencies:
+# - ca-certificates: TLS for HTTPS
+# - tzdata: timezone support
+# - curl: health check utility in K8s
+# - kubectl: Kubernetes command-line tool (core dependency)
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    curl
+
+# Install kubectl
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) KUBECTL_ARCH="amd64" ;; \
+        aarch64) KUBECTL_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${KUBECTL_ARCH}/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/kubectl && \
+    kubectl version --client
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Copy binary from builder stage
+COPY --from=builder /app/examples/devops-tool/devops-tool .
+
+# Change ownership to non-root user
+RUN chown appuser:appgroup /app/devops-tool && \
+    chmod +x /app/devops-tool
+
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8347
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./devops-tool"]

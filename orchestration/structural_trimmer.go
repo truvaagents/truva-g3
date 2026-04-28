@@ -1,0 +1,1047 @@
+package orchestration
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+)
+
+const (
+	// maxArrayInventoryItems caps the number of array items inventoried.
+	// Even at ~80 bytes/item (smallest typical items), 500 items = 40 KB which
+	// already fills most practical budgets. Prevents O(n log n) sort bloat for
+	// very large arrays (10K+ items from paginated APIs).
+	maxArrayInventoryItems = 500
+
+	// minBackfillBudget is the minimum remaining budget (in bytes) after greedy
+	// field selection to attempt backfilling a dropped string field. Below this
+	// threshold, the truncated value would be too small to be useful to the LLM.
+	minBackfillBudget = 512
+
+	// minBackfillValueSize is the minimum JSON-serialized value budget (in bytes)
+	// for a backfilled string field. Accounts for key overhead and wrapper nesting.
+	// Below this, the truncated content is unlikely to contain meaningful data.
+	minBackfillValueSize = 100
+
+	// previewScoringLength is the maximum number of characters from a string
+	// field's value to scan for keyword matches during scoring. Limits CPU cost
+	// on large fields (e.g., 642KB stdout) while capturing enough context to
+	// identify content relevance. 500 chars covers most JSON structure preambles
+	// and log file headers where identifying keywords appear.
+	previewScoringLength = 500
+
+	// minBackfillRelevance is the minimum relevance score for a dropped field
+	// to be considered for backfill. Fields below this threshold are likely
+	// irrelevant to the user's query and including them may distract the
+	// synthesis LLM (ACON, Oct 2025: compression improves accuracy when
+	// irrelevant context is removed).
+	//
+	// scoreField base scores (no keyword signal):
+	//   depth 0 scalar: 0.3 (isScalar) + 0.1 (depth-0) = 0.4 → passes (0.4 > 0.3)
+	//   depth 1 scalar: 0.3 (isScalar) + 0.0             = 0.3 → excluded (≤ 0.3)
+	//   depth 4 scalar: 0.3 (isScalar) - 0.1 (deep)      = 0.2 → excluded (≤ 0.3)
+	//
+	// Any keyword match (name: +1.5, path: +1.0, fuzzy: +0.3, content: +0.8)
+	// pushes the score well above 0.3. This threshold filters nested fields
+	// with zero keyword relevance — the most likely distractors.
+	minBackfillRelevance = 0.3
+
+	// maxInventoryDepth caps the recursion depth in buildFieldInventory and
+	// buildArrayInventory. Prevents stack overflow on pathological inputs with
+	// deeply nested JSON-in-strings (each deserializeStringValues unwrap adds
+	// a nesting level). Real-world REST API JSON rarely exceeds 4-5 levels.
+	maxInventoryDepth = 8
+)
+
+// StructuralTrimmer is the default ResultProcessor. Uses query-conditioned field selection.
+// Research: ACON, CompactPrompt, SWE-Pruner.
+type StructuralTrimmer struct {
+	preserveKeys map[string]bool
+	logger       core.Logger
+}
+
+// NewStructuralTrimmer creates a StructuralTrimmer with optional preserve keys.
+func NewStructuralTrimmer(preserveKeys []string, logger core.Logger) *StructuralTrimmer {
+	keySet := make(map[string]bool, len(preserveKeys))
+	for _, k := range preserveKeys {
+		keySet[strings.ToLower(k)] = true
+	}
+	return &StructuralTrimmer{preserveKeys: keySet, logger: logger}
+}
+
+type fieldEntry struct {
+	path       string
+	key        string
+	value      interface{}
+	size       int
+	depth      int
+	isScalar   bool
+	relevance  float64
+	arrayIndex int // -1 for non-array fields, 0+ for array items
+	arrayTotal int // total items in parent array (for positional scoring)
+}
+
+// ProcessForPrompt trims a result to fit within maxBytes using query-conditioned field selection.
+func (t *StructuralTrimmer) ProcessForPrompt(
+	ctx context.Context, response string, maxBytes int, stepCtx ResultProcessorContext,
+) string {
+	if len(response) <= maxBytes {
+		return response
+	}
+
+	var data interface{}
+	if err := json.Unmarshal([]byte(response), &data); err != nil {
+		result := t.trimPlainText(response, maxBytes, stepCtx.Instruction)
+		captureTrimMetadata(ctx, ResultTrimMetadata{
+			OriginalBytes: len(response),
+			TrimmedBytes:  len(result),
+			Method:        "structural_text",
+			Keywords:      extractKeywords(stepCtx.Instruction),
+		})
+		return result
+	}
+
+	// Phase 5 Fix 2: Unwrap JSON-valued strings before inventory building so
+	// buildFieldInventory's existing object/array recursion handles embedded
+	// structures. Reuses deserializeStringValues (result_processor.go:83).
+	data = deserializeStringValues(data)
+
+	keywords := extractKeywords(stepCtx.Instruction)
+
+	// Extract request_id from baggage for Jaeger correlation (DISTRIBUTED_TRACING_GUIDE.md Pattern 6)
+	requestID := ""
+	if bag := telemetry.GetBaggage(ctx); bag != nil {
+		requestID = bag["request_id"]
+	}
+
+	telemetry.AddSpanEvent(ctx, "result_trim.structural",
+		attribute.String("request_id", requestID),
+		attribute.String("step_id", stepCtx.StepID),
+		attribute.String("agent_name", stepCtx.AgentName),
+		attribute.Int("original_bytes", len(response)),
+		attribute.Int("budget_bytes", maxBytes),
+		attribute.Int("keyword_count", len(keywords)),
+	)
+
+	if obj, ok := data.(map[string]interface{}); ok {
+		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths := t.selectFieldsWithMeta(ctx, obj, maxBytes, keywords)
+		captureTrimMetadata(ctx, ResultTrimMetadata{
+			OriginalBytes:    len(response),
+			TrimmedBytes:     len(result),
+			Method:           "structural",
+			FieldsKept:       fieldsKept,
+			FieldsDropped:    fieldsDropped,
+			BackfilledCount:  backfilledCount,
+			ThresholdSkipped: thresholdSkipped,
+			Keywords:         keywords,
+			MatchedPaths:     matchedPaths,
+		})
+		if t.logger != nil {
+			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON object)", map[string]interface{}{
+				"operation":      "result_trim",
+				"request_id":     requestID,
+				"step_id":        stepCtx.StepID,
+				"agent_name":     stepCtx.AgentName,
+				"original_bytes": len(response),
+				"trimmed_bytes":  len(result),
+				"keyword_count":  len(keywords),
+			})
+		}
+		if registry := core.GetGlobalMetricsRegistry(); registry != nil {
+			registry.Counter("orchestration.result_trim.triggered", "agent_name", stepCtx.AgentName)
+			registry.Histogram("orchestration.result.original_size_bytes", float64(len(response)), "agent_name", stepCtx.AgentName)
+			registry.Histogram("orchestration.result.trimmed_size_bytes", float64(len(result)), "agent_name", stepCtx.AgentName)
+		}
+		return result
+	}
+
+	if arr, ok := data.([]interface{}); ok {
+		result, keptCount, totalCount := t.trimArray(arr, maxBytes)
+		captureTrimMetadata(ctx, ResultTrimMetadata{
+			OriginalBytes: len(response),
+			TrimmedBytes:  len(result),
+			Method:        "structural_array",
+			FieldsKept:    keptCount,
+			FieldsDropped: totalCount - keptCount,
+		})
+		if t.logger != nil {
+			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON array)", map[string]interface{}{
+				"operation":      "result_trim",
+				"request_id":     requestID,
+				"step_id":        stepCtx.StepID,
+				"agent_name":     stepCtx.AgentName,
+				"original_bytes": len(response),
+				"trimmed_bytes":  len(result),
+			})
+		}
+		return result
+	}
+
+	fallback := truncateResultBytes(response, maxBytes)
+	captureTrimMetadata(ctx, ResultTrimMetadata{
+		OriginalBytes: len(response),
+		TrimmedBytes:  len(fallback),
+		Method:        "truncate",
+	})
+	return fallback
+}
+
+func (t *StructuralTrimmer) buildFieldInventory(obj map[string]interface{}, prefix string, depth int) []fieldEntry {
+	if depth >= maxInventoryDepth {
+		return nil
+	}
+	entries := make([]fieldEntry, 0, len(obj))
+	for key, val := range obj {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		serialized, _ := json.Marshal(val)
+		size := len(serialized) + len(key) + 4 // key + quotes + colon + comma
+
+		entries = append(entries, fieldEntry{
+			path: path, key: key, value: val,
+			size: size, depth: depth, isScalar: isScalar(val),
+			arrayIndex: -1,
+		})
+
+		// Recurse into large nested objects/arrays for deeper scoring
+		if nested, ok := val.(map[string]interface{}); ok && size > 1024 {
+			entries = append(entries, t.buildFieldInventory(nested, path, depth+1)...)
+		} else if arr, ok := val.([]interface{}); ok && size > 1024 {
+			entries = append(entries, t.buildArrayInventory(arr, path, depth+1)...)
+		}
+	}
+	return entries
+}
+
+// buildArrayInventory decomposes a JSON array into individual selectable items.
+// Each item competes in the same inventory as map fields, scored by position and content.
+// Capped at maxArrayInventoryItems to prevent sort bloat on very large arrays.
+func (t *StructuralTrimmer) buildArrayInventory(
+	arr []interface{}, prefix string, depth int,
+) []fieldEntry {
+	if depth >= maxInventoryDepth {
+		return nil
+	}
+	total := len(arr)
+	if total > maxArrayInventoryItems {
+		total = maxArrayInventoryItems
+	}
+
+	entries := make([]fieldEntry, 0, total)
+	for i := 0; i < total; i++ {
+		item := arr[i]
+		path := fmt.Sprintf("%s[%d]", prefix, i)
+		serialized, _ := json.Marshal(item)
+		size := len(serialized) + 1 // item bytes + comma separator
+
+		entries = append(entries, fieldEntry{
+			path:       path,
+			key:        fmt.Sprintf("%s[%d]", lastPathSegment(prefix), i),
+			value:      item,
+			size:       size,
+			depth:      depth,
+			isScalar:   isScalar(item),
+			arrayIndex: i,
+			arrayTotal: len(arr),
+		})
+
+		// Phase 5 Fix 1: Recurse into large object items — same pattern as
+		// buildFieldInventory. Sub-fields compete with the atomic item entry;
+		// ancestor/descendant checks in selectFieldsWithMeta prevent double-counting.
+		if obj, ok := item.(map[string]interface{}); ok && size > 1024 {
+			entries = append(entries, t.buildFieldInventory(obj, path, depth+1)...)
+		}
+	}
+	return entries
+}
+
+// lastPathSegment returns the final segment of a dot-separated path.
+// "data.news" → "news", "news" → "news".
+func lastPathSegment(path string) string {
+	if idx := strings.LastIndex(path, "."); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+func (t *StructuralTrimmer) scoreField(entry fieldEntry, keywords []string) float64 {
+	score := 0.0
+	lowerKey := strings.ToLower(entry.key)
+	lowerPath := strings.ToLower(entry.path)
+
+	if t.preserveKeys[lowerKey] {
+		score += 5.0
+	}
+
+	for _, kw := range keywords {
+		if strings.Contains(lowerKey, kw) {
+			score += 1.5
+		} else if strings.Contains(lowerPath, kw) {
+			score += 1.0
+		} else {
+			for _, part := range strings.Split(lowerKey, "_") {
+				if len(part) >= 3 && len(kw) >= 3 && (strings.HasPrefix(part, kw[:3]) || strings.HasPrefix(kw, part[:3])) {
+					score += 0.3
+					break
+				}
+			}
+		}
+	}
+
+	// Content-aware preview scoring: match keywords against the first
+	// previewScoringLength characters of string field values. Catches cases
+	// where field names are generic (e.g., "stdout", "output") but the value
+	// contains query-relevant data. Weight (0.8) is lower than name match (1.5)
+	// because content matches are probabilistic — a large JSON blob may contain
+	// the keyword anywhere without being primarily about that topic.
+	if entry.isScalar {
+		if strVal, ok := entry.value.(string); ok && len(strVal) > 0 {
+			previewLen := len(strVal)
+			if previewLen > previewScoringLength {
+				previewLen = previewScoringLength
+			}
+			lowerPreview := strings.ToLower(strVal[:previewLen])
+			for _, kw := range keywords {
+				if strings.Contains(lowerPreview, kw) {
+					score += 0.8
+					break // one content bonus per field, not per keyword
+				}
+			}
+		}
+	}
+
+	// Array item: content-based keyword scoring + positional decay
+	if entry.arrayIndex >= 0 {
+		// Scan string values within object items for keyword matches.
+		// E.g., {"title": "Q4 earnings report"} matches keyword "earn",
+		// {"name": "Wireless Bluetooth Speaker"} matches keyword "bluetooth".
+		if obj, ok := entry.value.(map[string]interface{}); ok {
+			score += scoreObjectContent(obj, keywords)
+		}
+		// Positional decay: earlier items score higher (APIs return by relevance/recency).
+		// Range: +0.5 (first item) to ~0.0 (last item).
+		if entry.arrayTotal > 0 {
+			score += 0.5 * (1.0 - float64(entry.arrayIndex)/float64(entry.arrayTotal))
+		}
+	}
+
+	if entry.isScalar {
+		score += 0.3
+	}
+	if entry.depth == 0 {
+		score += 0.1
+	}
+	if entry.depth > 3 {
+		score -= 0.1
+	}
+	return score
+}
+
+// scoreObjectContent scans string field values of a JSON object for keyword matches.
+// Returns a bonus score based on the number of keyword hits in the object's content.
+// Capped at 1.0 to avoid over-weighting content-rich items relative to key matches.
+func scoreObjectContent(obj map[string]interface{}, keywords []string) float64 {
+	if len(keywords) == 0 {
+		return 0
+	}
+	hits := 0
+	for _, val := range obj {
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+		lower := strings.ToLower(s)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				hits++
+			}
+		}
+	}
+	// Cap at 1.0 total content bonus
+	bonus := float64(hits) * 0.2
+	if bonus > 1.0 {
+		bonus = 1.0
+	}
+	return bonus
+}
+
+func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[string]interface{}, maxBytes int, keywords []string) (string, int, int, int, int, []string) {
+	inventory := t.buildFieldInventory(obj, "", 0)
+	for i := range inventory {
+		inventory[i].relevance = t.scoreField(inventory[i], keywords)
+	}
+
+	// Sort by value = relevance/size (descending)
+	sort.Slice(inventory, func(i, j int) bool {
+		vi := inventory[i].relevance / float64(max(inventory[i].size, 1))
+		vj := inventory[j].relevance / float64(max(inventory[j].size, 1))
+		if vi != vj {
+			return vi > vj
+		}
+		return inventory[i].size < inventory[j].size
+	})
+
+	// Step 3 (§4.4.3 / RESEARCH §7.2): Budget-constrained greedy selection.
+	// All inventoried fields at all depths compete equally.
+	// Ancestor/descendant checks prevent double-counting:
+	//   - If a parent is already selected, skip its children (included via parent).
+	//   - If children are already selected, skip the parent (would re-include everything).
+	selectedSet := make(map[string]bool) // fast lookup for ancestor/descendant checks
+	var selectedPaths []string           // ordered list for annotation
+	wrapperKeys := make(map[string]bool) // intermediate wrapper paths already budgeted
+	budgetUsed := 2                      // "{}" root wrapper
+	droppedCount := 0
+
+	for _, entry := range inventory {
+		// Ancestor check: skip if a parent path is already selected.
+		if hasAncestor(entry.path, selectedSet) {
+			continue
+		}
+		// Descendant check: skip if a child under this entry is already selected.
+		if !entry.isScalar && hasDescendant(entry.path, selectedSet) {
+			continue
+		}
+
+		// Split once for both overhead calculation and wrapper marking.
+		var parts []string
+		if entry.depth > 0 {
+			parts = strings.Split(entry.path, ".")
+		}
+
+		// Calculate wrapper overhead for nested fields.
+		// When selecting "data.metric" (depth 1), the output needs the intermediate
+		// "data":{} wrapper. Each new intermediate path costs len(key) + 5 bytes.
+		overhead := 0
+		if entry.depth > 0 {
+			for i := 0; i < len(parts)-1; i++ {
+				ancestorPath := strings.Join(parts[:i+1], ".")
+				if !wrapperKeys[ancestorPath] && !selectedSet[ancestorPath] {
+					overhead += len(parts[i]) + 5
+				}
+			}
+		}
+
+		if budgetUsed+entry.size+overhead <= maxBytes {
+			selectedSet[entry.path] = true
+			selectedPaths = append(selectedPaths, entry.path)
+			budgetUsed += entry.size + overhead
+			// Mark intermediate wrappers so subsequent siblings don't re-pay.
+			if entry.depth > 0 {
+				for i := 0; i < len(parts)-1; i++ {
+					wrapperKeys[strings.Join(parts[:i+1], ".")] = true
+				}
+			}
+		} else {
+			droppedCount++
+		}
+	}
+
+	// Phase 3.5: Multi-field greedy backfill — recover dropped string fields
+	// into remaining budget, highest-relevance first. Only strings can be safely
+	// truncated (objects/arrays would produce invalid JSON if cut mid-way).
+	// Algorithm: fractional knapsack — provably optimal for value-density ordering.
+	backfilledCount := 0
+	thresholdSkipped := 0
+	valueOverrides := make(map[string]interface{})
+	remainingBudget := maxBytes - budgetUsed
+	if remainingBudget > minBackfillBudget && droppedCount > 0 {
+		// Collect all dropped string candidates
+		type backfillCandidate struct {
+			entry  *fieldEntry
+			srcStr string
+		}
+		var candidates []backfillCandidate
+		for i := range inventory {
+			e := &inventory[i]
+			if selectedSet[e.path] || hasAncestor(e.path, selectedSet) {
+				continue
+			}
+			if !e.isScalar {
+				continue
+			}
+			srcVal := navigateToValue(obj, e.path)
+			if s, ok := srcVal.(string); ok {
+				candidates = append(candidates, backfillCandidate{entry: e, srcStr: s})
+			}
+		}
+
+		// Sort by relevance descending (highest-priority fields get budget first)
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].entry.relevance > candidates[j].entry.relevance
+		})
+
+		// Iterate candidates, each taking what it needs from shrinking budget
+		for i, cand := range candidates {
+			if remainingBudget <= minBackfillBudget {
+				break
+			}
+
+			// Skip candidates at or below minimum relevance threshold.
+			// Since candidates are sorted by relevance descending, once we hit
+			// one at/below threshold, all remaining candidates are also below — break.
+			if cand.entry.relevance <= minBackfillRelevance {
+				thresholdSkipped = len(candidates) - i
+				break
+			}
+
+			// Calculate wrapper overhead for this field's nesting
+			overhead := 0
+			if cand.entry.depth > 0 {
+				parts := strings.Split(cand.entry.path, ".")
+				for pi := 0; pi < len(parts)-1; pi++ {
+					ancestorPath := strings.Join(parts[:pi+1], ".")
+					if !wrapperKeys[ancestorPath] && !selectedSet[ancestorPath] {
+						overhead += len(parts[pi]) + 5
+					}
+				}
+			}
+
+			keyOverhead := len(cand.entry.key) + 4
+			valueBudget := remainingBudget - overhead - keyOverhead
+			if valueBudget <= minBackfillValueSize {
+				continue
+			}
+
+			// Check if the field fits entirely (no truncation needed)
+			fullSerialized, _ := json.Marshal(cand.srcStr)
+			if len(fullSerialized)+overhead+keyOverhead <= remainingBudget {
+				// Include at full size — no wasteful truncation
+				valueOverrides[cand.entry.path] = cand.srcStr
+				actualCost := len(fullSerialized) + overhead + keyOverhead
+				selectedSet[cand.entry.path] = true
+				selectedPaths = append(selectedPaths, cand.entry.path)
+				remainingBudget -= actualCost
+				budgetUsed += actualCost
+				droppedCount--
+				backfilledCount++
+
+				if cand.entry.depth > 0 {
+					parts := strings.Split(cand.entry.path, ".")
+					for pi := 0; pi < len(parts)-1; pi++ {
+						wrapperKeys[strings.Join(parts[:pi+1], ".")] = true
+					}
+				}
+				continue
+			}
+
+			// Binary search for max raw string length whose JSON-serialized
+			// size (including quotes) fits within valueBudget.
+			lo, hi := 0, len(cand.srcStr)
+			for lo < hi {
+				mid := (lo + hi + 1) / 2
+				candidate := truncateResultBytes(cand.srcStr, mid)
+				serialized, _ := json.Marshal(candidate)
+				if len(serialized) <= valueBudget {
+					lo = mid
+				} else {
+					hi = mid - 1
+				}
+			}
+
+			if lo > 0 {
+				truncatedVal := truncateResultBytes(cand.srcStr, lo)
+				valueOverrides[cand.entry.path] = truncatedVal
+				selectedSet[cand.entry.path] = true
+				selectedPaths = append(selectedPaths, cand.entry.path)
+
+				serializedVal, _ := json.Marshal(truncatedVal)
+				actualCost := len(serializedVal) + overhead + keyOverhead
+				remainingBudget -= actualCost
+				budgetUsed += actualCost
+				droppedCount--
+				backfilledCount++
+
+				if cand.entry.depth > 0 {
+					parts := strings.Split(cand.entry.path, ".")
+					for pi := 0; pi < len(parts)-1; pi++ {
+						wrapperKeys[strings.Join(parts[:pi+1], ".")] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Note: No fallback needed. When all relevance scores are 0 (no keyword matches),
+	// the primary sort's size-ascending tiebreaker already produces smallest-first ordering,
+	// which is the optimal greedy selection for maximizing field count within budget.
+
+	// Step 4 (§4.4.3 / RESEARCH §7.2): Hierarchy reconstruction.
+	// Selected fields at any depth are placed back into their original nesting.
+	// Build path→relevance map for relevance-ordered serialization.
+	// Only populated when there are multiple selected fields (single-field
+	// output doesn't benefit from ordering).
+	var fieldRelevance map[string]float64
+	if len(selectedPaths) > 1 {
+		fieldRelevance = make(map[string]float64, len(inventory))
+		for _, e := range inventory {
+			fieldRelevance[e.path] = e.relevance
+		}
+	}
+
+	output, err := marshalOrdered(reconstructHierarchy(obj, selectedSet, valueOverrides), fieldRelevance)
+	if err != nil {
+		return truncateResultBytes(fmt.Sprintf("%v", obj), maxBytes), 0, 0, 0, 0, nil
+	}
+
+	// Safety check: if wrapper overhead estimation was slightly off, batch-remove
+	// fields using size estimates, then reconstruct once. Avoids O(n²)
+	// re-serialization from per-iteration reconstructHierarchy + json.Marshal.
+	if len(output) > maxBytes && len(selectedPaths) > 0 {
+		// Build size lookup from inventory for removal estimates.
+		sizeOf := make(map[string]int, len(inventory))
+		for _, e := range inventory {
+			sizeOf[e.path] = e.size
+		}
+		overshoot := len(output) - maxBytes
+		for overshoot > 0 && len(selectedPaths) > 0 {
+			removePath := selectedPaths[len(selectedPaths)-1]
+			selectedPaths = selectedPaths[:len(selectedPaths)-1]
+			delete(selectedSet, removePath)
+			droppedCount++
+			overshoot -= sizeOf[removePath]
+		}
+		output, _ = marshalOrdered(reconstructHierarchy(obj, selectedSet, valueOverrides), fieldRelevance)
+		// Final guard: if size estimate was wrong, remove one more.
+		if len(output) > maxBytes && len(selectedPaths) > 0 {
+			removePath := selectedPaths[len(selectedPaths)-1]
+			selectedPaths = selectedPaths[:len(selectedPaths)-1]
+			delete(selectedSet, removePath)
+			droppedCount++
+			output, _ = marshalOrdered(reconstructHierarchy(obj, selectedSet, valueOverrides), fieldRelevance)
+		}
+	}
+
+	candidateCount := len(selectedPaths) + droppedCount
+
+	// Count array items in selection for annotation
+	arrayItemCount := 0
+	for _, p := range selectedPaths {
+		if strings.Contains(p, "[") {
+			arrayItemCount++
+		}
+	}
+
+	if t.logger != nil {
+		requestID := ""
+		if bag := telemetry.GetBaggage(ctx); bag != nil {
+			requestID = bag["request_id"]
+		}
+		t.logger.DebugWithContext(ctx, "Field selection completed", map[string]interface{}{
+			"operation":         "result_trim.select_fields",
+			"request_id":        requestID,
+			"inventory_size":    len(inventory),
+			"candidates_total":  candidateCount,
+			"fields_kept":       len(selectedPaths),
+			"fields_dropped":    droppedCount,
+			"backfilled_count":  backfilledCount,
+			"threshold_skipped": thresholdSkipped,
+			"array_items_kept":  arrayItemCount,
+			"budget_bytes":      maxBytes,
+			"output_bytes":      len(output),
+			"keyword_count":     len(keywords),
+		})
+	}
+
+	var annotation string
+	backfillNote := ""
+	if backfilledCount > 0 {
+		backfillNote = fmt.Sprintf(" (%d backfilled)", backfilledCount)
+	}
+	if arrayItemCount > 0 {
+		annotation = fmt.Sprintf("\n[trimmed: %d/%d entries kept%s (%d array items), %d dropped]",
+			len(selectedPaths), candidateCount, backfillNote, arrayItemCount, droppedCount)
+	} else {
+		annotation = fmt.Sprintf("\n[trimmed: %d/%d fields kept%s, %d dropped, matched: %s]",
+			len(selectedPaths), candidateCount, backfillNote, droppedCount,
+			truncateString(strings.Join(selectedPaths, ", "), 200))
+	}
+
+	if len(output)+len(annotation) <= maxBytes {
+		return string(output) + annotation, len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths
+	}
+	return string(output), len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths
+}
+
+func (t *StructuralTrimmer) trimArray(arr []interface{}, maxBytes int) (string, int, int) {
+	var result []interface{}
+	budgetUsed := 2
+	for _, item := range arr {
+		serialized, _ := json.Marshal(item)
+		if budgetUsed+len(serialized)+1 > maxBytes {
+			break
+		}
+		result = append(result, item)
+		budgetUsed += len(serialized) + 1
+	}
+	output, _ := json.Marshal(result)
+	annotation := fmt.Sprintf("\n[trimmed: %d/%d items]", len(result), len(arr))
+	if len(output)+len(annotation) <= maxBytes {
+		return string(output) + annotation, len(result), len(arr)
+	}
+	return string(output), len(result), len(arr)
+}
+
+func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction string) string {
+	keywords := extractKeywords(instruction)
+	if len(keywords) == 0 {
+		return truncateResultBytes(text, maxBytes)
+	}
+	sentences := strings.FieldsFunc(text, func(r rune) bool { return r == '.' || r == '!' || r == '?' })
+	if len(sentences) == 0 {
+		return truncateResultBytes(text, maxBytes)
+	}
+
+	type scored struct {
+		text  string
+		score float64
+		idx   int
+	}
+	items := make([]scored, 0, len(sentences))
+	for i, s := range sentences {
+		s = strings.TrimSpace(s)
+		if len(s) == 0 {
+			continue
+		}
+		sc := 0.0
+		lower := strings.ToLower(s)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				sc += 1.0
+			}
+		}
+		items = append(items, scored{text: s, score: sc, idx: i})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].score != items[j].score {
+			return items[i].score > items[j].score
+		}
+		return items[i].idx < items[j].idx
+	})
+
+	var selected []scored
+	budgetUsed := 0
+	for _, s := range items {
+		if budgetUsed+len(s.text)+2 > maxBytes-50 {
+			break
+		}
+		selected = append(selected, s)
+		budgetUsed += len(s.text) + 2
+	}
+
+	sort.Slice(selected, func(i, j int) bool { return selected[i].idx < selected[j].idx })
+
+	var sb strings.Builder
+	for _, s := range selected {
+		sb.WriteString(s.text)
+		sb.WriteString(". ")
+	}
+	fmt.Fprintf(&sb, "\n[trimmed: %d/%d sentences]", len(selected), len(sentences))
+	return sb.String()
+}
+
+func isScalar(v interface{}) bool {
+	switch v.(type) {
+	case string, float64, bool, nil:
+		return true
+	}
+	return false
+}
+
+// hasAncestor reports whether any ancestor of path is in the selected set.
+// An ancestor is any prefix up to a "." or "[" separator.
+// Examples: "data.news[0]" has ancestors "data" (at ".") and "data.news" (at "[").
+func hasAncestor(path string, selected map[string]bool) bool {
+	for i := 0; i < len(path); i++ {
+		if (path[i] == '.' || path[i] == '[') && selected[path[:i]] {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDescendant reports whether any path in selected is a child of prefix.
+// Checks both "." children (map fields) and "[" children (array items).
+// Examples: "data.news" has descendants "data.news.extra" and "data.news[0]".
+func hasDescendant(prefix string, selected map[string]bool) bool {
+	dotPrefix := prefix + "."
+	bracketPrefix := prefix + "["
+	for p := range selected {
+		if strings.HasPrefix(p, dotPrefix) || strings.HasPrefix(p, bracketPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalOrdered serializes a map with keys ordered by relevance (descending).
+// When fieldRelevance is nil, falls back to standard json.Marshal (alphabetical).
+// Uses manual JSON construction to control key order — json.Marshal always alphabetizes.
+//
+// Research: Lost in the Middle (ICLR 2025) — LLMs attend most to data at
+// the beginning and end of context. Placing highest-relevance fields first
+// aligns data position with attention distribution.
+func marshalOrdered(obj map[string]interface{}, fieldRelevance map[string]float64) ([]byte, error) {
+	if fieldRelevance == nil || len(obj) <= 1 {
+		return json.Marshal(obj)
+	}
+
+	// Sort top-level keys by maximum relevance of any descendant path
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ri := maxRelevanceForKey(keys[i], fieldRelevance)
+		rj := maxRelevanceForKey(keys[j], fieldRelevance)
+		if ri != rj {
+			return ri > rj
+		}
+		return keys[i] < keys[j] // stable tiebreaker
+	})
+
+	// Build ordered JSON manually
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		keyBytes, _ := json.Marshal(k)
+		buf.Write(keyBytes)
+		buf.WriteByte(':')
+		valBytes, err := json.Marshal(obj[k])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(valBytes)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}
+
+// maxRelevanceForKey returns the highest relevance score among all paths
+// that start with the given top-level key.
+func maxRelevanceForKey(key string, fieldRelevance map[string]float64) float64 {
+	best := 0.0
+	prefix := key + "."
+	for path, rel := range fieldRelevance {
+		if path == key || strings.HasPrefix(path, prefix) {
+			if rel > best {
+				best = rel
+			}
+		}
+	}
+	return best
+}
+
+// reconstructHierarchy builds a map containing only the selected fields,
+// preserving the original nesting structure. Handles both map paths
+// ("data.metric.pe_ratio") and array paths ("data.news[0]").
+// Array items are reconstructed as dense arrays sorted by original index
+// (deterministic ordering despite Go's random map iteration).
+func reconstructHierarchy(obj map[string]interface{}, selectedPaths map[string]bool, valueOverrides map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// indexedItem tracks both the value and its original array position.
+	// Without this, items collected via `for path := range selectedPaths`
+	// (random Go map iteration) would produce non-deterministic dense arrays.
+	type indexedItem struct {
+		index int
+		value interface{}
+	}
+
+	// Collect array items grouped by parent path for dense reconstruction.
+	// Key: parent path (e.g., "data.news"), Value: items with original indices.
+	arrayItems := make(map[string][]indexedItem)
+
+	// arrayItemObjects tracks reconstructed objects for array sub-field paths.
+	// Key: "parentPath#index" (e.g., "items#0"), Value: merged object fields.
+	// Phase 5 introduces sub-field paths like "items[0].name" alongside atomic
+	// paths like "items[0]". Sub-fields at the same index must be merged into
+	// a single object within the dense array.
+	arrayItemObjects := make(map[string]map[string]interface{})
+
+	for path := range selectedPaths {
+		// Check if this is an array item path (contains "[")
+		if bracketIdx := strings.Index(path, "["); bracketIdx >= 0 {
+			parentPath := path[:bracketIdx]
+			// Extract the original array index from the path
+			closeBracket := strings.Index(path[bracketIdx:], "]")
+			idx := 0
+			if closeBracket > 1 {
+				for _, c := range path[bracketIdx+1 : bracketIdx+closeBracket] {
+					idx = idx*10 + int(c-'0')
+				}
+			}
+
+			// Check for sub-field suffix after "]" (e.g., "items[0].name" → ".name")
+			afterBracket := path[bracketIdx+closeBracket+1:]
+			if afterBracket != "" && strings.HasPrefix(afterBracket, ".") {
+				// Sub-field path: merge into a reconstructed object for this index.
+				// Split by "." to handle multi-level paths like "metadata.name" →
+				// {"metadata":{"name":"..."}} instead of flat {"metadata.name":"..."}.
+				subFieldParts := strings.Split(afterBracket[1:], ".") // strip leading "."
+				compositeKey := fmt.Sprintf("%s#%d", parentPath, idx)
+				if arrayItemObjects[compositeKey] == nil {
+					arrayItemObjects[compositeKey] = make(map[string]interface{})
+				}
+				srcVal := navigateToValue(obj, path)
+				if valueOverrides != nil {
+					if override, ok := valueOverrides[path]; ok {
+						srcVal = override
+					}
+				}
+				// Navigate/create nested maps for multi-level sub-fields.
+				current := arrayItemObjects[compositeKey]
+				for si, part := range subFieldParts {
+					if si == len(subFieldParts)-1 {
+						current[part] = srcVal
+					} else {
+						if next, ok := current[part].(map[string]interface{}); ok {
+							current = next
+						} else {
+							next := make(map[string]interface{})
+							current[part] = next
+							current = next
+						}
+					}
+				}
+				continue
+			}
+
+			// Atomic array item: retrieve the full original value
+			srcVal := navigateToValue(obj, path)
+			arrayItems[parentPath] = append(arrayItems[parentPath], indexedItem{index: idx, value: srcVal})
+			continue
+		}
+
+		// Map path: use override if available, otherwise navigate to source value
+		parts := strings.Split(path, ".")
+		srcVal := navigateToValue(obj, path)
+		if valueOverrides != nil {
+			if override, ok := valueOverrides[path]; ok {
+				srcVal = override
+			}
+		}
+
+		current := result
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				current[part] = srcVal
+			} else {
+				if next, ok := current[part].(map[string]interface{}); ok {
+					current = next
+				} else {
+					next := make(map[string]interface{})
+					current[part] = next
+					current = next
+				}
+			}
+		}
+	}
+
+	// Merge sub-field objects into the arrayItems collection.
+	// Each composite key "parentPath#index" becomes an indexedItem with the merged object.
+	for compositeKey, fieldMap := range arrayItemObjects {
+		hashIdx := strings.LastIndex(compositeKey, "#")
+		parentPath := compositeKey[:hashIdx]
+		idx := 0
+		for _, c := range compositeKey[hashIdx+1:] {
+			idx = idx*10 + int(c-'0')
+		}
+		arrayItems[parentPath] = append(arrayItems[parentPath], indexedItem{index: idx, value: fieldMap})
+	}
+
+	// Place collected array items into the result hierarchy as dense arrays.
+	// Sort by original index first to ensure deterministic output regardless
+	// of Go map iteration order.
+	for parentPath, items := range arrayItems {
+		sort.Slice(items, func(i, j int) bool { return items[i].index < items[j].index })
+
+		// Extract values in sorted order for dense array
+		dense := make([]interface{}, len(items))
+		for i, item := range items {
+			dense[i] = item.value
+		}
+
+		parts := strings.Split(parentPath, ".")
+		current := result
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				// Place the dense array
+				current[part] = dense
+			} else {
+				if next, ok := current[part].(map[string]interface{}); ok {
+					current = next
+				} else {
+					next := make(map[string]interface{})
+					current[part] = next
+					current = next
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// navigateToValue retrieves a value from a nested map/array structure using a path.
+// Handles both dot-separated map paths ("data.metric") and array paths ("data.news[5]").
+func navigateToValue(obj map[string]interface{}, path string) interface{} {
+	var srcVal interface{} = obj
+	for _, segment := range splitPath(path) {
+		switch v := srcVal.(type) {
+		case map[string]interface{}:
+			srcVal = v[segment.key]
+		case []interface{}:
+			if segment.index >= 0 && segment.index < len(v) {
+				srcVal = v[segment.index]
+			} else {
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+	return srcVal
+}
+
+// pathSegment represents one segment of a hierarchical path.
+type pathSegment struct {
+	key   string // map key (e.g., "data", "news")
+	index int    // array index (-1 for map segments)
+}
+
+// splitPath breaks "data.news[5].headline" into segments:
+// [{key:"data", index:-1}, {key:"news", index:-1}, {key:"", index:5}, {key:"headline", index:-1}]
+func splitPath(path string) []pathSegment {
+	var segments []pathSegment
+	for _, part := range strings.Split(path, ".") {
+		if bracketIdx := strings.Index(part, "["); bracketIdx >= 0 {
+			// "news[5]" → map key "news" + array index 5
+			mapKey := part[:bracketIdx]
+			if mapKey != "" {
+				segments = append(segments, pathSegment{key: mapKey, index: -1})
+			}
+			idxStr := part[bracketIdx+1 : len(part)-1] // strip "[" and "]"
+			idx := 0
+			for _, c := range idxStr {
+				idx = idx*10 + int(c-'0')
+			}
+			segments = append(segments, pathSegment{index: idx})
+		} else {
+			segments = append(segments, pathSegment{key: part, index: -1})
+		}
+	}
+	return segments
+}

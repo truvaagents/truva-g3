@@ -1,0 +1,96 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace for all resources
+namespace: truvag3-examples
+
+# Create namespace if it doesn't exist
+resources:
+- namespace.yaml
+- redis.yaml
+- otel-collector.yaml
+- otel-collector-logs.yaml
+- prometheus.yaml
+- loki.yaml
+- jaeger.yaml
+- grafana-dashboards-new.yaml
+- grafana.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  project: truvag3-examples
+  managed-by: kustomize
+  framework: truvag3
+
+# Common annotations
+commonAnnotations:
+  documentation: "https://github.com/truvaagents/truva-g3/examples"
+  version: "v1.0.0"
+
+# Images to use (can be overridden for different environments)
+images:
+- name: redis
+  newTag: 7-alpine
+- name: otel/opentelemetry-collector-contrib
+  newTag: latest
+- name: prom/prometheus
+  newTag: latest
+- name: jaegertracing/jaeger
+  newTag: "2.15.1"
+- name: grafana/loki
+  newTag: "3.6.7"
+- name: grafana/grafana
+  newTag: latest
+
+# Generate secrets for API keys
+secretGenerator:
+- name: api-keys
+  literals:
+  - weather-api-key=demo-weather-key-change-me
+  type: Opaque
+- name: ai-keys
+  literals:
+  - openai-api-key=sk-your-openai-key-here
+  - anthropic-api-key=sk-ant-your-anthropic-key-here
+  - groq-api-key=gsk-your-groq-key-here
+  type: Opaque
+
+# Patches for different environments
+patches:
+- target:
+    kind: Deployment
+    name: redis
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: 256Mi
+- target:
+    kind: Deployment
+    name: prometheus
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: 512Mi
+
+# ConfigMap generator for shared configuration
+configMapGenerator:
+- name: shared-config
+  literals:
+  - REDIS_URL=redis://redis:6379
+  - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.truvag3-examples:4318
+  - PROMETHEUS_URL=http://prometheus:9090
+  - JAEGER_ENDPOINT=http://jaeger-collector:4317
+  - GRAFANA_URL=http://grafana
+  - ENVIRONMENT=development
+
+# Replacements for cross-cutting concerns
+replacements:
+- source:
+    kind: ConfigMap
+    name: shared-config
+    fieldPath: data.REDIS_URL
+  targets:
+  - select:
+      kind: Deployment
+    fieldPaths:
+    - spec.template.spec.containers.[name=*].env.[name=REDIS_URL].value

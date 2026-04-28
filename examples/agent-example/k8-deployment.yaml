@@ -1,0 +1,217 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: research-agent
+  namespace: truvag3-examples
+  labels:
+    app: research-agent
+    component: agent
+    version: v1.0.0
+    truvag3.framework/type: agent
+spec:
+  replicas: 1  # Running 2 replicas for high availability
+  selector:
+    matchLabels:
+      app: research-agent
+  template:
+    metadata:
+      labels:
+        app: research-agent
+        component: agent
+        version: v1.0.0
+        truvag3.framework/type: agent
+      annotations:
+        # Note: This agent doesn't have telemetry enabled, so no /metrics endpoint
+        prometheus.io/scrape: "false"
+    spec:
+      containers:
+      - name: research-agent
+        image: research-agent:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8350
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: research-agent-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "research-assistant"
+        - name: PORT
+          value: "8350"
+        - name: TRUVAG3_PORT  # For backward compatibility
+          value: "8350"
+        - name: NAMESPACE
+          value: "truvag3-examples"
+        - name: TRUVAG3_NAMESPACE  # For backward compatibility
+          value: "truvag3-examples"
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: research-agent-config
+              key: redis_url
+              optional: false
+        - name: TRUVAG3_REDIS_URL  # For backward compatibility
+          valueFrom:
+            configMapKeyRef:
+              name: research-agent-config
+              key: redis_url
+              optional: false
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # Framework tunables (DEV_MODE, TRUVAG3_LOG_LEVEL, TRUVAG3_LOG_FORMAT,
+        # TRUVAG3_LLM_DEBUG_ENABLED) are sourced from .env via the
+        # research-agent-env-config ConfigMap.
+        # 🔧 KUBERNETES SERVICE DISCOVERY CONFIGURATION
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "research-agent-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: TRUVAG3_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # Telemetry Configuration
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        # AI Provider Configuration
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-provider-keys-research-agent
+              key: OPENAI_API_KEY
+              optional: true
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "50Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8350
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8350
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: research-agent-service
+  namespace: truvag3-examples
+  labels:
+    app: research-agent
+    component: agent
+    truvag3.framework/type: agent
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8350
+    protocol: TCP
+    name: http
+  selector:
+    app: research-agent
+---
+# Optional: Ingress for external access to the agent (Cloud Provider Specific)
+#
+# NOTE: Ingress resources are commented out for cloud compatibility.
+# Uncomment and modify based on your cloud provider:
+#
+# FOR KIND/NGINX INGRESS:
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: research-agent-ingress
+#   namespace: truvag3-examples
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+#     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+#     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+#     nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type, Authorization"
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: research-agent.local
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: research-agent-service
+#             port:
+#               number: 80
+#
+# FOR EKS/GKE/AKS: See k8-deployment/grafana.yaml for cloud-specific examples
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: research-agent-config
+  namespace: truvag3-examples
+  labels:
+    app: research-agent
+    component: agent
+data:
+  # Direct key for environment variable reference
+  redis_url: "redis://redis.truvag3-examples:6379"
+  # Full configuration file
+  config.yaml: |
+    service:
+      name: research-assistant
+      port: 8350
+      namespace: truvag3-examples
+    discovery:
+      enabled: true
+      provider: redis
+      redis_url: redis://redis.truvag3-examples:6379
+      cache_enabled: true
+    ai:
+      auto_detect: true
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30s
+    logging:
+      level: info
+      format: json
+    cors:
+      enabled: true
+      origins: ["*"]

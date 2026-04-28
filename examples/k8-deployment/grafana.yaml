@@ -1,0 +1,1233 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        component: monitoring
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsGroup: 472
+        runAsUser: 472
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: "admin"
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "admin"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+        - name: grafana-datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: grafana-dashboard-providers
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: grafana-dashboards
+          mountPath: /var/lib/grafana/dashboards
+        - name: grafana-dashboards-new
+          mountPath: /var/lib/grafana/dashboards/new
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: grafana-data
+        persistentVolumeClaim:
+          claimName: grafana-pvc
+      - name: grafana-datasources
+        configMap:
+          name: grafana-datasources
+      - name: grafana-dashboard-providers
+        configMap:
+          name: grafana-dashboard-providers
+      - name: grafana-dashboards
+        configMap:
+          name: grafana-dashboards
+      - name: grafana-dashboards-new
+        configMap:
+          name: grafana-dashboards-new
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 3000
+    name: http
+  selector:
+    app: grafana
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Storage class options for different cloud providers:
+  # storageClassName: gp3-csi         # EKS (recommended) - 20% cheaper than gp2
+  # storageClassName: premium-rwo     # GKE (SSD) - better performance
+  # storageClassName: standard-rwo    # GKE (Standard) - cheaper option
+  # storageClassName: managed-premium # AKS (Premium SSD) - better performance
+  # storageClassName: managed-csi     # AKS (Standard) - default
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: true
+      uid: prometheus
+    - name: Jaeger
+      type: jaeger
+      access: proxy
+      url: http://jaeger-query
+      uid: jaeger
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          customQuery: true
+          query: '{service_name=~".+"} |= `$${__span.traceId}` |= `$${__span.spanId}`'
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      uid: loki
+      jsonData:
+        derivedFields:
+        - datasourceUid: jaeger
+          matcherRegex: '"trace_id":"(\\w+)"'
+          matcherType: label
+          name: TraceID
+          url: "$${__value.raw}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: 'truvag3'
+      orgId: 1
+      folder: 'Truva-G3'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards
+    - name: 'truvag3-new'
+      orgId: 1
+      folder: 'Truva-G3'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards/new
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  truvag3-agent-telemetry.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "id": 100,
+          "panels": [],
+          "title": "Global Overview (All Agents & Tools)",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 4, "x": 0, "y": 1},
+          "id": 1,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(count by (exported_job) (truvag3_discovery_registrations_count{exported_job=~\".*-tool.*|.*-service.*\"}))", "refId": "A"}],
+          "title": "Active Tools",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 2, "x": 4, "y": 1},
+          "id": 2,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(count by (exported_job) (truvag3_request_total{service_type=\"tool\"}))", "refId": "A"}],
+          "title": "Active Tools",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 2, "x": 6, "y": 1},
+          "id": 20,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(count by (exported_job) (truvag3_request_total{service_type=\"agent\"}))", "refId": "A"}],
+          "title": "Active Agents",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 4, "x": 8, "y": 1},
+          "id": 3,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(truvag3_tool_call_total{status=\"success\"})", "refId": "A"}],
+          "title": "Total Tool Calls",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 4, "x": 12, "y": 1},
+          "id": 4,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(truvag3_tool_call_errors_total) or vector(0)", "refId": "A"}],
+          "title": "Total Errors",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 4, "x": 16, "y": 1},
+          "id": 5,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(truvag3_ai_request_total) or vector(0)", "refId": "A"}],
+          "title": "AI Requests",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 3, "w": 4, "x": 20, "y": 1},
+          "id": 6,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(truvag3_request_total)", "refId": "A"}],
+          "title": "Total Requests",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
+          "id": 200,
+          "panels": [],
+          "title": "Per-Agent Metrics",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Shows all agents with their key metrics. Filter using the Agent dropdown above.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Agent"}, "properties": [{"id": "custom.width", "value": 250}]},
+              {"matcher": {"id": "byName", "options": "Errors"}, "properties": [{"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}]},
+              {"matcher": {"id": "byName", "options": "Success Rate"}, "properties": [{"id": "unit", "value": "percentunit"}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.9}, {"color": "green", "value": 0.99}]}}]}
+            ]
+          },
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 5},
+          "id": 201,
+          "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Requests"}]},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_request_total)", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "Requests"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_tool_call_total{status=\"success\"})", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "ToolCalls"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_tool_call_errors_total) or sum by (exported_job) (truvag3_request_total) * 0", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "Errors"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_ai_request_total) or sum by (exported_job) (truvag3_request_total) * 0", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "AIRequests"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "avg by (exported_job) (rate(truvag3_request_duration_ms_sum[5m]) / rate(truvag3_request_duration_ms_count[5m]))", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "AvgLatency"}
+          ],
+          "title": "Agent Status Table",
+          "transformations": [
+            {"id": "seriesToColumns", "options": {"byField": "exported_job"}},
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true}, "indexByName": {}, "renameByName": {"Value #AIRequests": "AI Requests", "Value #AvgLatency": "Avg Latency (ms)", "Value #Errors": "Errors", "Value #Requests": "Requests", "Value #ToolCalls": "Tool Calls", "exported_job": "Agent"}}}
+          ],
+          "type": "table"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+          "id": 300,
+          "panels": [],
+          "title": "Per-Tool Metrics (Registry & Health)",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Shows all registered tools with their health status, call counts, and latency.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Tool"}, "properties": [{"id": "custom.width", "value": 200}]},
+              {"matcher": {"id": "byName", "options": "Registrations"}, "properties": [{"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}]},
+              {"matcher": {"id": "byName", "options": "Last Heartbeat (s)"}, "properties": [{"id": "unit", "value": "s"}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 30}, {"color": "red", "value": 60}]}}]}
+            ]
+          },
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 14},
+          "id": 301,
+          "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Registrations"}]},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_discovery_registrations_count{exported_job=~\".*-tool.*|.*-service.*\"})", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "Registrations"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "time() - max by (exported_job) (truvag3_discovery_last_health_check_timestamp{exported_job=~\".*-tool.*|.*-service.*\"})", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "LastHeartbeat"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_discovery_deregistrations_total{exported_job=~\".*-tool.*|.*-service.*\"}) or sum by (exported_job) (truvag3_discovery_registrations_count{exported_job=~\".*-tool.*|.*-service.*\"}) * 0", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "Deregistrations"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (exported_job) (truvag3_discovery_lookups_count{exported_job=~\".*-tool.*|.*-service.*\"}) or sum by (exported_job) (truvag3_discovery_registrations_count{exported_job=~\".*-tool.*|.*-service.*\"}) * 0", "format": "table", "instant": true, "legendFormat": "{{exported_job}}", "refId": "Lookups"}
+          ],
+          "title": "Tool Registry Status",
+          "transformations": [
+            {"id": "seriesToColumns", "options": {"byField": "exported_job"}},
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true}, "indexByName": {}, "renameByName": {"Value #Deregistrations": "Deregistrations", "Value #LastHeartbeat": "Last Heartbeat (s)", "Value #Lookups": "Lookups", "Value #Registrations": "Registrations", "exported_job": "Tool"}}}
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Tool call metrics broken down by tool name",
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Tool"}, "properties": [{"id": "custom.width", "value": 200}]},
+              {"matcher": {"id": "byName", "options": "Errors"}, "properties": [{"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}]},
+              {"matcher": {"id": "byName", "options": "Avg Latency (ms)"}, "properties": [{"id": "unit", "value": "ms"}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 500}, {"color": "red", "value": 2000}]}}]}
+            ]
+          },
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+          "id": 302,
+          "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Success Calls"}]},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (tool_name) (truvag3_tool_call_total{status=\"success\"})", "format": "table", "instant": true, "legendFormat": "{{tool_name}}", "refId": "SuccessCalls"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (tool_name) (truvag3_tool_call_errors_total) or sum by (tool_name) (truvag3_tool_call_total{status=\"success\"}) * 0", "format": "table", "instant": true, "legendFormat": "{{tool_name}}", "refId": "Errors"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (tool_name) (truvag3_tool_call_retries_total) or sum by (tool_name) (truvag3_tool_call_total{status=\"success\"}) * 0", "format": "table", "instant": true, "legendFormat": "{{tool_name}}", "refId": "Retries"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "avg by (tool_name) (rate(truvag3_tool_call_duration_ms_sum[5m]) / rate(truvag3_tool_call_duration_ms_count[5m]))", "format": "table", "instant": true, "legendFormat": "{{tool_name}}", "refId": "AvgLatency"}
+          ],
+          "title": "Tool Call Performance (by Tool Name)",
+          "transformations": [
+            {"id": "seriesToColumns", "options": {"byField": "tool_name"}},
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true}, "indexByName": {}, "renameByName": {"Value #AvgLatency": "Avg Latency (ms)", "Value #Errors": "Errors", "Value #Retries": "Retries", "Value #SuccessCalls": "Success Calls", "tool_name": "Tool"}}}
+          ],
+          "type": "table"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 30},
+          "id": 101,
+          "panels": [],
+          "title": "Performance Metrics",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 31},
+          "id": 7,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_request_duration_ms_sum[5m]) / rate(truvag3_request_duration_ms_count[5m])", "legendFormat": "Avg Request Duration", "refId": "A"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, rate(truvag3_request_duration_ms_bucket[5m]))", "legendFormat": "P95 Request Duration", "refId": "B"}
+          ],
+          "title": "Request Duration",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 31},
+          "id": 8,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_ai_request_duration_ms_sum[5m]) / rate(truvag3_ai_request_duration_ms_count[5m])", "legendFormat": "Avg AI Request", "refId": "A"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, rate(truvag3_ai_request_duration_ms_bucket[5m]))", "legendFormat": "P95 AI Request", "refId": "B"}
+          ],
+          "title": "AI Request Duration",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 39},
+          "id": 9,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_tool_call_duration_ms_sum[5m]) / rate(truvag3_tool_call_duration_ms_count[5m])", "legendFormat": "Avg Tool Call {{tool_name}}", "refId": "A"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, rate(truvag3_tool_call_duration_ms_bucket[5m]))", "legendFormat": "P95 Tool Call", "refId": "B"}
+          ],
+          "title": "Tool Call Duration",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 39},
+          "id": 10,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_discovery_lookup_duration_ms_sum[5m]) / rate(truvag3_discovery_lookup_duration_ms_count[5m])", "legendFormat": "Avg Discovery Lookup", "refId": "A"}
+          ],
+          "title": "Service Discovery Duration",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 47},
+          "id": 102,
+          "panels": [],
+          "title": "Operations & Cache",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 50, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 48},
+          "id": 11,
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_discovery_registrations_count[5m])", "legendFormat": "Registrations", "refId": "A"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_discovery_deregistrations_total[5m])", "legendFormat": "Deregistrations", "refId": "B"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_discovery_lookups_count[5m])", "legendFormat": "Lookups", "refId": "C"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_discovery_health_checks_count[5m])", "legendFormat": "Health Checks", "refId": "D"}
+          ],
+          "title": "Discovery Operations",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 50, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
+          "id": 12,
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_memory_cache_hits_total[5m])", "legendFormat": "Cache Hits", "refId": "A"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_memory_cache_misses_total[5m])", "legendFormat": "Cache Misses", "refId": "B"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(truvag3_memory_evictions_total[5m])", "legendFormat": "Evictions", "refId": "C"}
+          ],
+          "title": "Cache Operations",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["truvag3", "telemetry", "agent"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Truva-G3 Agent Telemetry",
+      "uid": "truvag3-agent-telemetry",
+      "version": 1,
+      "weekStart": ""
+    }
+  truvag3-resource-usage.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "id": 100,
+          "panels": [],
+          "title": "Resource Overview - Truva-G3 Agents & Tools",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "CPU Cores", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "opacity", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+          "id": 1,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}}", "refId": "A"}
+          ],
+          "title": "CPU Usage by Pod",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "Memory", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "opacity", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+          "id": 2,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A"}
+          ],
+          "title": "Memory Usage by Pod",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+          "id": 101,
+          "panels": [],
+          "title": "Current Resource Usage",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Current CPU and Memory usage for all Truva-G3 pods",
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Pod"}, "properties": [{"id": "custom.width", "value": 300}]},
+              {"matcher": {"id": "byName", "options": "CPU (cores)"}, "properties": [{"id": "unit", "value": "short"}, {"id": "decimals", "value": 3}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 0.5}]}}]},
+              {"matcher": {"id": "byName", "options": "Memory (MB)"}, "properties": [{"id": "unit", "value": "decmbytes"}, {"id": "decimals", "value": 1}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 100}, {"color": "red", "value": 256}]}}]},
+              {"matcher": {"id": "byName", "options": "Type"}, "properties": [{"id": "custom.width", "value": 80}]}
+            ]
+          },
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 10},
+          "id": 3,
+          "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Memory (MB)"}]},
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "format": "table", "instant": true, "legendFormat": "{{pod}}", "refId": "CPU"},
+            {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}) by (pod) / 1024 / 1024", "format": "table", "instant": true, "legendFormat": "{{pod}}", "refId": "Memory"}
+          ],
+          "title": "Pod Resource Table",
+          "transformations": [
+            {"id": "seriesToColumns", "options": {"byField": "pod"}},
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true}, "indexByName": {}, "renameByName": {"Value #CPU": "CPU (cores)", "Value #Memory": "Memory (MB)", "pod": "Pod"}}}
+          ],
+          "type": "table"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 20},
+          "id": 102,
+          "panels": [],
+          "title": "Agents vs Tools Comparison",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 21},
+          "id": 4,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\".*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}[5m]))", "refId": "A"}],
+          "title": "Total Agent CPU",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 21},
+          "id": 5,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\".*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"})", "refId": "A"}],
+          "title": "Total Agent Memory",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 21},
+          "id": 6,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\".*-tool.*\", container!=\"\", container!=\"POD\"}[5m]))", "refId": "A"}],
+          "title": "Total Tool CPU",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 21},
+          "id": 7,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\".*-tool.*\", container!=\"\", container!=\"POD\"})", "refId": "A"}],
+          "title": "Total Tool Memory",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25},
+          "id": 103,
+          "panels": [],
+          "title": "Top Resource Consumers",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"hideFrom": {"legend": false, "tooltip": false, "viz": false}},
+              "mappings": [],
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+          "id": 8,
+          "options": {"displayLabels": ["name", "value"], "legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value"]}, "pieType": "pie", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "tooltip": {"mode": "single", "sort": "none"}},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "topk(10, sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod))", "legendFormat": "{{pod}}", "refId": "A"}],
+          "title": "CPU Distribution (Top 10)",
+          "type": "piechart"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "palette-classic"},
+              "custom": {"hideFrom": {"legend": false, "tooltip": false, "viz": false}},
+              "mappings": [],
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+          "id": 9,
+          "options": {"displayLabels": ["name", "value"], "legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value"]}, "pieType": "pie", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "tooltip": {"mode": "single", "sort": "none"}},
+          "pluginVersion": "10.0.0",
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "topk(10, sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\".*-tool.*|.*-agent.*|travel-chat.*|async-travel.*|research-agent.*\", container!=\"\", container!=\"POD\"}) by (pod))", "legendFormat": "{{pod}}", "refId": "A"}],
+          "title": "Memory Distribution (Top 10)",
+          "type": "piechart"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["truvag3", "resources", "cpu", "memory"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Truva-G3 Resource Usage",
+      "uid": "truvag3-resource-usage",
+      "version": 1,
+      "weekStart": ""
+    }
+  product-catalog-response-time.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "panels": [
+        {
+          "title": "Response Time Percentiles (ms)",
+          "type": "timeseries",
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto"
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"truvag3-mock-services\"}[1m]))) * 1000",
+              "legendFormat": "P50",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            },
+            {
+              "expr": "histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"truvag3-mock-services\"}[1m]))) * 1000",
+              "legendFormat": "P90",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"truvag3-mock-services\"}[1m]))) * 1000",
+              "legendFormat": "P95",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Request Rate (req/s)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 20}
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{job=\"truvag3-mock-services\"}[1m])",
+              "legendFormat": "{{method}} {{path}} ({{status}})",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Process Memory (MB)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "decmbytes",
+              "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 25},
+                  {"color": "red", "value": 40}
+                ]
+              },
+              "color": {"mode": "thresholds"}
+            }
+          },
+          "targets": [
+            {
+              "expr": "process_resident_memory_bytes{job=\"truvag3-mock-services\"} / 1024 / 1024",
+              "legendFormat": "Process RSS",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Alert Status",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 18},
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {"type": "value", "options": {"0": {"text": "Inactive", "color": "green"}}},
+                {"type": "value", "options": {"1": {"text": "FIRING", "color": "red"}}}
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "red", "value": 1}
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "ALERTS{alertname=\"TruvaG3HighLatency\", alertstate=\"firing\"}",
+              "legendFormat": "Alert",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        }
+      ],
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["truvag3", "product-catalog", "response-time", "latency"],
+      "templating": {"list": []},
+      "time": {"from": "now-30m", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Product Catalog API - Response Time",
+      "uid": "product-catalog-response-time",
+      "version": 1,
+      "weekStart": ""
+    }
+  product-catalog-resources.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "panels": [
+        {
+          "title": "CPU Usage (cores)",
+          "type": "timeseries",
+          "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 20}
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\"product-catalog-api.*\", container!=\"POD\", container!=\"\"}[1m])",
+              "legendFormat": "{{pod}}",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Memory Usage (MB)",
+          "type": "timeseries",
+          "gridPos": {"h": 10, "w": 12, "x": 12, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "decmbytes",
+              "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 20}
+            }
+          },
+          "targets": [
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\"product-catalog-api.*\", container!=\"POD\", container!=\"\"} / 1024 / 1024",
+              "legendFormat": "{{pod}} (actual)",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            },
+            {
+              "expr": "process_resident_memory_bytes{job=\"truvag3-mock-services\"} / 1024 / 1024",
+              "legendFormat": "Process RSS",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "CPU vs Memory (combined)",
+          "type": "timeseries",
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 10},
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "CPU (cores)"},
+                "properties": [{"id": "unit", "value": "short"}, {"id": "custom.axisPlacement", "value": "left"}]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Memory (MB)"},
+                "properties": [{"id": "unit", "value": "decmbytes"}, {"id": "custom.axisPlacement", "value": "right"}]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "expr": "rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", pod=~\"product-catalog-api.*\", container!=\"POD\", container!=\"\"}[1m])",
+              "legendFormat": "CPU (cores)",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            },
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"truvag3-examples\", pod=~\"product-catalog-api.*\", container!=\"POD\", container!=\"\"} / 1024 / 1024",
+              "legendFormat": "Memory (MB)",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Alert Status",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 20},
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {"type": "value", "options": {"0": {"text": "Inactive", "color": "green"}}},
+                {"type": "value", "options": {"1": {"text": "FIRING", "color": "red"}}}
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "red", "value": 1}
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "ALERTS{alertname=\"TruvaG3HighLatency\", alertstate=\"firing\"}",
+              "legendFormat": "Alert",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        }
+      ],
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["truvag3", "product-catalog", "resources", "cpu", "memory"],
+      "templating": {"list": []},
+      "time": {"from": "now-30m", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Product Catalog API - Pod Resources",
+      "uid": "product-catalog-resources",
+      "version": 1,
+      "weekStart": ""
+    }
+---
+# Ingress for Grafana (Cloud Provider Specific - Choose One)
+#
+# NOTE: Ingress resources are commented out for cloud compatibility.
+# Uncomment and modify based on your cloud provider:
+#
+# FOR KIND/NGINX INGRESS:
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: grafana-ingress
+#   namespace: truvag3-examples
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: grafana.local
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: grafana
+#             port:
+#               number: 80
+#
+# FOR EKS (AWS Load Balancer Controller):
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: grafana-ingress
+#   namespace: truvag3-examples
+#   annotations:
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/load-balancer-name: grafana-alb
+# spec:
+#   ingressClassName: alb
+#   rules:
+#   - host: grafana.yourdomain.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: grafana
+#             port:
+#               number: 80
+#
+# FOR GKE (GCE Ingress Controller):
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: grafana-ingress
+#   namespace: truvag3-examples
+#   annotations:
+#     kubernetes.io/ingress.class: "gce"
+#     kubernetes.io/ingress.global-static-ip-name: "grafana-ip"
+# spec:
+#   rules:
+#   - host: grafana.yourdomain.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: grafana
+#             port:
+#               number: 80
+#
+# FOR AKS (Application Gateway):
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: grafana-ingress
+#   namespace: truvag3-examples
+#   annotations:
+#     kubernetes.io/ingress.class: azure/application-gateway
+# spec:
+#   rules:
+#   - host: grafana.yourdomain.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: grafana
+#             port:
+#               number: 80

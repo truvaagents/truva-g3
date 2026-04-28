@@ -1,0 +1,222 @@
+# Grafana Loki - Log Aggregation (Monolithic / Single Binary)
+# Image: grafana/loki:3.6.7
+#
+# Receives logs from otel-collector via OTLP HTTP endpoint.
+# Stores logs on local filesystem with automatic retention cleanup.
+# Grafana queries Loki for log-to-trace correlation via trace_id.
+#
+# Resource protection:
+#   - 30h retention (compactor auto-deletes older chunks)
+#   - 5Gi PVC hard cap on disk
+#   - 1Gi memory limit
+#   - Ingestion rate limits to prevent burst-driven OOM
+#   - Max stream limits to prevent label cardinality explosion
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: truvag3-examples
+  labels:
+    app: loki
+    component: logging
+data:
+  loki.yaml: |
+    # Disable multi-tenancy for local dev
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+      log_level: warn
+
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+    # Ingestion and query limits — sized for ~80 pods at INFO level
+    limits_config:
+      retention_period: 30h
+      ingestion_rate_mb: 4
+      ingestion_burst_size_mb: 8
+      per_stream_rate_limit: 3MB
+      per_stream_rate_limit_burst: 10MB
+      max_global_streams_per_user: 5000
+      max_query_length: 30h
+      max_entries_limit_per_query: 10000
+
+    # Compactor handles retention enforcement
+    compactor:
+      working_directory: /loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true
+      retention_delete_delay: 1h
+      retention_delete_worker_count: 50
+      delete_request_store: filesystem
+
+    # Query engine settings
+    query_range:
+      results_cache:
+        cache:
+          embedded_cache:
+            enabled: true
+            max_size_mb: 100
+
+    # Chunk storage tuning — flush smaller chunks more often to limit memory
+    ingester:
+      chunk_idle_period: 1m
+      chunk_retain_period: 30s
+      max_chunk_age: 2h
+      chunk_encoding: snappy
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+
+    # Analytics opt-out
+    analytics:
+      reporting_enabled: false
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: truvag3-examples
+  labels:
+    app: loki
+    component: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: loki
+        component: logging
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3100"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+      - name: loki
+        image: grafana/loki:3.6.7
+        args:
+        - -config.file=/etc/loki/loki.yaml
+        - -target=all
+        ports:
+        - containerPort: 3100
+          name: http
+          protocol: TCP
+        - containerPort: 9096
+          name: grpc
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /etc/loki
+          readOnly: true
+        - name: loki-data
+          mountPath: /loki
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 3100
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3100
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: loki-config
+      - name: loki-data
+        persistentVolumeClaim:
+          claimName: loki-pvc
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-pvc
+  namespace: truvag3-examples
+  labels:
+    app: loki
+    component: logging
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: truvag3-examples
+  labels:
+    app: loki
+    component: logging
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3100
+    targetPort: 3100
+    protocol: TCP
+    name: http
+  - port: 9096
+    targetPort: 9096
+    protocol: TCP
+    name: grpc
+  selector:
+    app: loki

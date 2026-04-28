@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: truvag3-examples
+  labels:
+    name: truvag3-examples
+    project: truvag3
+    environment: development
+  annotations:
+    description: "Truva-G3 framework examples and demos"
+    documentation: "https://github.com/truvaagents/truva-g3/examples"

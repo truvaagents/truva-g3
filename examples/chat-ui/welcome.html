@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truva-G3 Chat Assistant - Select Mode</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --glass-bg: rgba(10, 10, 15, 0.85);
+            --glass-bg-light: rgba(20, 20, 30, 0.75);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-border-light: rgba(255, 255, 255, 0.12);
+            --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            --glass-blur: 24px;
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.75);
+            --text-muted: rgba(255, 255, 255, 0.5);
+            --accent-blue: #0a84ff;
+            --accent-purple: #da8fff;
+            --accent-green: #32d74b;
+            --accent-red: #ff6b6b;
+            --accent-orange: #ffb340;
+            --accent-teal: #64d2ff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg,
+                #0d0d12 0%,
+                #1a1a2e 25%,
+                #16213e 50%,
+                #1a2744 75%,
+                #0d0d12 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 25s ease infinite;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 40px 20px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        .welcome-container {
+            max-width: 1400px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .welcome-header {
+            margin-bottom: 40px;
+        }
+
+        .welcome-header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 15px;
+            text-shadow: 0 2px 20px rgba(100, 150, 255, 0.3);
+        }
+
+        .welcome-header .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            max-width: 800px;
+            margin: 0 auto 20px;
+            line-height: 1.6;
+        }
+
+        .hitl-explainer {
+            background: linear-gradient(135deg,
+                rgba(15, 15, 25, 0.85) 0%,
+                rgba(20, 20, 35, 0.8) 100%);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px 30px;
+            max-width: 900px;
+            margin: 0 auto;
+            text-align: left;
+            box-shadow:
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .hitl-explainer h2 {
+            font-size: 1rem;
+            color: var(--accent-teal);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .hitl-explainer p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .hitl-explainer code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85em;
+            color: var(--accent-teal);
+        }
+
+        .scenario-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+
+        .scenario-card {
+            background: linear-gradient(135deg,
+                rgba(15, 15, 25, 0.85) 0%,
+                rgba(20, 20, 35, 0.8) 50%,
+                rgba(15, 15, 25, 0.85) 100%);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 30px 25px;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            text-decoration: none;
+            display: block;
+            position: relative;
+            overflow: hidden;
+            box-shadow:
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        /* Glass shine effect */
+        .scenario-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+            border-radius: 20px 20px 0 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Colored accent line on hover */
+        .scenario-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--card-accent);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .scenario-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow:
+                0 20px 60px rgba(0, 0, 0, 0.5),
+                0 0 40px rgba(100, 150, 255, 0.08),
+                inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        }
+
+        .scenario-card:hover::after {
+            opacity: 1;
+        }
+
+        .scenario-card.basic { --card-accent: var(--accent-blue); }
+        .scenario-card.plan-approval { --card-accent: var(--accent-purple); }
+        .scenario-card.step-approval { --card-accent: var(--accent-orange); }
+
+        .scenario-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+
+        .scenario-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+
+        .scenario-description {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 15px;
+        }
+
+        .scenario-backend {
+            background: linear-gradient(135deg,
+                rgba(0, 0, 0, 0.25) 0%,
+                rgba(0, 0, 0, 0.15) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 14px;
+            margin-bottom: 15px;
+            text-align: left;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .scenario-backend .backend-title {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .scenario-backend .backend-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .scenario-backend .backend-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+        }
+
+        .scenario-backend .backend-row .label {
+            color: var(--text-muted);
+        }
+
+        .scenario-backend .backend-row .value {
+            font-family: 'SF Mono', Monaco, monospace;
+            color: var(--accent-teal);
+            font-size: 0.75rem;
+        }
+
+        .scenario-features {
+            text-align: left;
+            padding: 14px;
+            background: linear-gradient(135deg,
+                rgba(255, 255, 255, 0.06) 0%,
+                rgba(255, 255, 255, 0.02) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            margin-bottom: 15px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .scenario-features li {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            padding-left: 18px;
+            position: relative;
+            list-style: none;
+        }
+
+        .scenario-features li::before {
+            content: '\2713';
+            position: absolute;
+            left: 0;
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+
+        .scenario-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .scenario-card.basic .scenario-badge {
+            background: linear-gradient(135deg, rgba(10, 132, 255, 0.25) 0%, rgba(10, 132, 255, 0.1) 100%);
+            color: var(--accent-blue);
+            border-color: rgba(10, 132, 255, 0.3);
+        }
+
+        .scenario-card.plan-approval .scenario-badge {
+            background: linear-gradient(135deg, rgba(218, 143, 255, 0.25) 0%, rgba(218, 143, 255, 0.1) 100%);
+            color: var(--accent-purple);
+            border-color: rgba(218, 143, 255, 0.3);
+        }
+
+        .scenario-card.step-approval .scenario-badge {
+            background: linear-gradient(135deg, rgba(255, 179, 64, 0.25) 0%, rgba(255, 179, 64, 0.1) 100%);
+            color: var(--accent-orange);
+            border-color: rgba(255, 179, 64, 0.3);
+        }
+
+
+        .bottom-sections {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 900px) {
+            .bottom-sections {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .config-section {
+            background: linear-gradient(135deg,
+                rgba(15, 15, 25, 0.85) 0%,
+                rgba(20, 20, 35, 0.8) 100%);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            text-align: left;
+            box-shadow:
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .config-section h3 {
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .config-section .section-subtitle {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 15px;
+        }
+
+        .backend-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .backend-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            background: linear-gradient(135deg,
+                rgba(255, 255, 255, 0.06) 0%,
+                rgba(255, 255, 255, 0.02) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font-size: 0.85rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .backend-label {
+            color: var(--text-secondary);
+            flex: 1;
+        }
+
+        .backend-url {
+            color: var(--text-muted);
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.75rem;
+            margin: 0 12px;
+        }
+
+        .backend-status {
+            min-width: 55px;
+            text-align: right;
+            font-size: 0.75rem;
+        }
+
+        .backend-status.success { color: var(--accent-green); }
+        .backend-status.error { color: #ff6b6b; }
+        .backend-status.checking { color: var(--text-muted); }
+
+        .test-button {
+            width: 100%;
+            padding: 12px 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(10, 132, 255, 0.4);
+            background: linear-gradient(135deg,
+                rgba(10, 132, 255, 0.3) 0%,
+                rgba(10, 132, 255, 0.15) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            color: white;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow:
+                0 4px 15px rgba(10, 132, 255, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        .test-button:hover {
+            background: linear-gradient(135deg,
+                rgba(10, 132, 255, 0.45) 0%,
+                rgba(10, 132, 255, 0.25) 100%);
+            border-color: rgba(10, 132, 255, 0.6);
+            transform: translateY(-2px);
+            box-shadow:
+                0 8px 25px rgba(10, 132, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        }
+
+        .env-vars-section h3 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .env-vars-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .env-var-item {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+
+        .env-var-name {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.75rem;
+            color: var(--accent-orange);
+            margin-bottom: 4px;
+        }
+
+        .env-var-desc {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .env-var-example {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.7rem;
+            color: var(--accent-green);
+            margin-top: 4px;
+        }
+
+        .config-file-note {
+            margin-top: 15px;
+            padding: 10px 12px;
+            background: rgba(10, 132, 255, 0.1);
+            border-radius: 8px;
+            border-left: 3px solid var(--accent-blue);
+        }
+
+        .config-file-note p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        .config-file-note code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.7rem;
+            color: var(--accent-teal);
+        }
+
+        @media (max-width: 768px) {
+            .welcome-header h1 {
+                font-size: 1.8rem;
+            }
+
+            .scenario-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .scenario-card {
+                padding: 25px 20px;
+            }
+
+            .hitl-explainer {
+                padding: 15px 20px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .scenario-card, .hitl-explainer, .config-section {
+                backdrop-filter: blur(4px) !important;
+                -webkit-backdrop-filter: blur(4px) !important;
+            }
+        }
+
+        @supports not (backdrop-filter: blur(10px)) {
+            .scenario-card { background: rgba(20, 20, 30, 0.95); }
+            .hitl-explainer { background: rgba(20, 20, 30, 0.95); }
+        }
+    </style>
+</head>
+<body>
+    <div class="welcome-container">
+        <div class="welcome-header">
+            <h1>Truva-G3 Chat Assistant</h1>
+            <p class="subtitle">
+                Explore different AI orchestration modes and Human-in-the-Loop (HITL) patterns for AI safety and oversight.
+            </p>
+            <div class="hitl-explainer">
+                <h2>What is Human-in-the-Loop (HITL)?</h2>
+                <p>
+                    <strong>Human-in-the-Loop</strong> is a safety pattern where AI systems pause execution to request human approval
+                    before performing sensitive operations. In Truva-G3, HITL creates <code>checkpoints</code> that wait for human
+                    decisions (approve/reject) with configurable timeouts. This enables oversight of AI tool
+                    invocations at the plan level or individual step level.
+                </p>
+            </div>
+        </div>
+
+        <div class="scenario-grid">
+            <!-- Scenario: Basic Chat (Travel) -->
+            <a href="index.html" class="scenario-card basic">
+                <span class="scenario-badge">No HITL</span>
+                <div class="scenario-icon">🌍</div>
+                <div class="scenario-title">Travel Assistant</div>
+                <div class="scenario-description">
+                    AI travel assistant with full automation. Coordinates weather, flights, hotels, and currency tools.
+                </div>
+                <div class="scenario-backend">
+                    <div class="backend-title">Backend Agent</div>
+                    <div class="backend-info">
+                        <div class="backend-row">
+                            <span class="label">Agent:</span>
+                            <span class="value">travel-chat-agent</span>
+                        </div>
+                        <div class="backend-row">
+                            <span class="label">Endpoint:</span>
+                            <span class="value">travel-chat-agent.localhost/chat/stream</span>
+                        </div>
+                    </div>
+                </div>
+                <ul class="scenario-features">
+                    <li>Direct AI responses</li>
+                    <li>Automatic tool execution</li>
+                    <li>Fastest interaction</li>
+                    <li>No approval required</li>
+                </ul>
+            </a>
+
+            <!-- Scenario: DevOps Chat -->
+            <a href="devops.html" class="scenario-card basic">
+                <span class="scenario-badge">No HITL</span>
+                <div class="scenario-icon">🛠️</div>
+                <div class="scenario-title">DevOps Assistant</div>
+                <div class="scenario-description">
+                    Operations assistant for Kubernetes cluster management. Coordinates devops, system, and monitoring tools.
+                </div>
+                <div class="scenario-backend">
+                    <div class="backend-title">Backend Agent</div>
+                    <div class="backend-info">
+                        <div class="backend-row">
+                            <span class="label">Agent:</span>
+                            <span class="value">devops-chat-agent</span>
+                        </div>
+                        <div class="backend-row">
+                            <span class="label">Endpoint:</span>
+                            <span class="value">devops-chat-agent.localhost/chat/stream</span>
+                        </div>
+                    </div>
+                </div>
+                <ul class="scenario-features">
+                    <li>Kubernetes cluster ops</li>
+                    <li>Pod logs &amp; troubleshooting</li>
+                    <li>Multi-tool orchestration</li>
+                    <li>No approval required</li>
+                </ul>
+            </a>
+
+            <!-- Scenario 1: Plan Approval -->
+            <a href="hitl.html?mode=plan" class="scenario-card plan-approval">
+                <span class="scenario-badge">HITL: Plan Approval</span>
+                <div class="scenario-icon">📋</div>
+                <div class="scenario-title">Plan Approval Mode</div>
+                <div class="scenario-description">
+                    Review and approve the entire execution plan before any tools run. Best for high-stakes operations.
+                </div>
+                <div class="scenario-backend">
+                    <div class="backend-title">Backend Agent</div>
+                    <div class="backend-info">
+                        <div class="backend-row">
+                            <span class="label">Agent:</span>
+                            <span class="value">agent-with-human-approval</span>
+                        </div>
+                        <div class="backend-row">
+                            <span class="label">Endpoint:</span>
+                            <span class="value">hitl-agent.localhost/chat/stream</span>
+                        </div>
+                    </div>
+                </div>
+                <ul class="scenario-features">
+                    <li>See full plan before execution</li>
+                    <li>Approve or reject entire workflow</li>
+                    <li>Modify plan before running</li>
+                    <li>Maximum oversight control</li>
+                </ul>
+            </a>
+
+            <!-- Scenario 2: Step Approval -->
+            <a href="hitl.html?mode=step" class="scenario-card step-approval">
+                <span class="scenario-badge">HITL: Step Approval</span>
+                <div class="scenario-icon">🛡️</div>
+                <div class="scenario-title">Step Approval Mode</div>
+                <div class="scenario-description">
+                    Execution starts automatically, but pauses before sensitive operations for your approval.
+                </div>
+                <div class="scenario-backend">
+                    <div class="backend-title">Backend Agent</div>
+                    <div class="backend-info">
+                        <div class="backend-row">
+                            <span class="label">Agent:</span>
+                            <span class="value">agent-with-human-approval</span>
+                        </div>
+                        <div class="backend-row">
+                            <span class="label">Endpoint:</span>
+                            <span class="value">hitl-agent.localhost/chat/stream</span>
+                        </div>
+                    </div>
+                </div>
+                <ul class="scenario-features">
+                    <li>Fast start - no initial delay</li>
+                    <li>Pause only for sensitive steps</li>
+                    <li>Review specific tool parameters</li>
+                    <li>Granular operation control</li>
+                </ul>
+            </a>
+
+        </div>
+
+        <div class="bottom-sections" style="grid-template-columns: 1fr; max-width: 600px;">
+            <!-- Backend Status Section -->
+            <div class="config-section">
+                <h3>Backend Status</h3>
+                <p class="section-subtitle">Verify backend agents are running before using the interfaces</p>
+                <div class="backend-grid">
+                    <div class="backend-item">
+                        <span class="backend-label">travel-chat-agent</span>
+                        <span class="backend-url">travel-chat-agent.localhost</span>
+                        <span id="status-chat" class="backend-status">...</span>
+                    </div>
+                    <div class="backend-item">
+                        <span class="backend-label">devops-chat-agent</span>
+                        <span class="backend-url">devops-chat-agent.localhost</span>
+                        <span id="status-devops" class="backend-status">...</span>
+                    </div>
+                    <div class="backend-item">
+                        <span class="backend-label">agent-with-human-approval</span>
+                        <span class="backend-url">hitl-agent.localhost</span>
+                        <span id="status-hitl" class="backend-status">...</span>
+                    </div>
+                </div>
+                <button onclick="testConnections()" class="test-button">Test Connections</button>
+                <div class="config-file-note" style="margin-top: 15px;">
+                    <p>
+                        <strong>Configuration:</strong> See
+                        <code>examples/agent-with-human-approval/README.md</code> for HITL configuration options.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function testBackend(url, statusId) {
+            const statusEl = document.getElementById(statusId);
+            statusEl.className = 'backend-status checking';
+            statusEl.textContent = '...';
+
+            try {
+                const response = await fetch(`${url}/health`, {
+                    method: 'GET',
+                    mode: 'cors'
+                });
+
+                if (response.ok) {
+                    statusEl.className = 'backend-status success';
+                    statusEl.textContent = 'Online';
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                statusEl.className = 'backend-status error';
+                statusEl.textContent = 'Offline';
+            }
+        }
+
+        function testConnections() {
+            testBackend('http://travel-chat-agent.localhost', 'status-chat');
+            testBackend('http://devops-chat-agent.localhost', 'status-devops');
+            testBackend('http://hitl-agent.localhost', 'status-hitl');
+        }
+
+        // Test on page load
+        testConnections();
+    </script>
+</body>
+</html>

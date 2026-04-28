@@ -1,0 +1,5432 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-new
+  namespace: truvag3-examples
+  labels:
+    app: grafana
+    component: monitoring
+data:
+  platform-overview.json: |
+    {
+      "uid": "truvag3-platform-overview",
+      "title": "Truva-G3 Platform Overview",
+      "tags": [
+        "truvag3",
+        "overview",
+        "platform"
+      ],
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [
+        {
+          "type": "dashboards",
+          "tags": [
+            "truvag3"
+          ],
+          "title": "Truva-G3 Dashboards",
+          "keepTime": true,
+          "includeVars": true
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "label": "Datasource",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "service_type",
+            "type": "custom",
+            "label": "Service Type",
+            "query": "agent,tool",
+            "current": {
+              "selected": true,
+              "text": "All",
+              "value": "$__all"
+            },
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": false,
+            "options": [
+              {
+                "selected": true,
+                "text": "All",
+                "value": "$__all"
+              },
+              {
+                "selected": false,
+                "text": "agent",
+                "value": "agent"
+              },
+              {
+                "selected": false,
+                "text": "tool",
+                "value": "tool"
+              }
+            ],
+            "skipUrlSync": false
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[$__range]))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 2,
+          "title": "Error Rate",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "(sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / clamp_min(sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[$__range])), 1e-10) * 100",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "0%",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 5
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 3,
+          "title": "Avg Latency",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) / clamp_min(sum(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}), 1e-10) * 1000",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 500
+                  },
+                  {
+                    "color": "red",
+                    "value": 2000
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 4,
+          "title": "Active Services",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "count(count by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\"}))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "purple",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 5,
+          "title": "Service Health",
+          "type": "table",
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (service_name, service_type) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"})",
+              "refId": "A",
+              "legendFormat": "Requests",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}) or sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) * 0",
+              "refId": "B",
+              "legendFormat": "Errors",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "(sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[6h])) or sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) * 0) / clamp_min(sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[6h])), 1e-10) * 100",
+              "refId": "C",
+              "legendFormat": "Error %",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[6h]))) * 1000",
+              "refId": "D",
+              "legendFormat": "P95 (ms)",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (service_name) (truvag3_tool_call_total{job=\"otel-collector-metrics\"}) or sum by (service_name) (truvag3_request_total{job=\"otel-collector-metrics\"}) * 0",
+              "refId": "E",
+              "legendFormat": "Tool Calls",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (service_name) (truvag3_ai_request_total{job=\"otel-collector-metrics\"}) or sum by (service_name) (truvag3_request_total{job=\"otel-collector-metrics\"}) * 0",
+              "refId": "F",
+              "legendFormat": "AI Calls",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "indexByName": {
+                  "service_name": 0,
+                  "service_type": 1,
+                  "Value #A": 2,
+                  "Value #B": 3,
+                  "Value #C": 4,
+                  "Value #D": 5,
+                  "Value #E": 6,
+                  "Value #F": 7
+                },
+                "renameByName": {
+                  "service_name": "Service",
+                  "service_type": "Type",
+                  "Value #A": "Requests",
+                  "Value #B": "Errors",
+                  "Value #C": "Error %",
+                  "Value #D": "P95 (ms)",
+                  "Value #E": "Tool Calls",
+                  "Value #F": "AI Calls"
+                }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Error %"
+                },
+                "properties": [
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green",
+                          "value": null
+                        },
+                        {
+                          "color": "yellow",
+                          "value": 1
+                        },
+                        {
+                          "color": "red",
+                          "value": 5
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "P95 (ms)"
+                },
+                "properties": [
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green",
+                          "value": null
+                        },
+                        {
+                          "color": "yellow",
+                          "value": 500
+                        },
+                        {
+                          "color": "red",
+                          "value": 2000
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "basic"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "Error %",
+                "desc": true
+              }
+            ],
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "id": 6,
+          "title": "Traffic & Latency",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 7,
+          "title": "Request Rate by Service",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[5m])) by (service_name)",
+              "refId": "A",
+              "legendFormat": "{{service_name}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 8,
+          "title": "Request Duration Heatmap",
+          "type": "heatmap",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[5m])) by (le)",
+              "refId": "A",
+              "format": "heatmap",
+              "legendFormat": "{{le}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "calculate": false,
+            "color": {
+              "mode": "scheme",
+              "scheme": "YlOrRd",
+              "exponent": 0.5
+            },
+            "yAxis": {
+              "unit": "ms",
+              "reverse": false
+            },
+            "cellGap": 1,
+            "tooltip": {
+              "show": true,
+              "yHistogram": false
+            },
+            "exemplars": {
+              "color": "rgba(255,0,255,0.7)"
+            },
+            "filterValues": {
+              "le": 1e-09
+            },
+            "rowsFrame": {
+              "layout": "auto"
+            },
+            "showValue": "never"
+          }
+        },
+        {
+          "id": 9,
+          "title": "Errors & Discovery",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 23
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 10,
+              "title": "Errors by Service",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 24
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[5m])) by (service_name)",
+                  "refId": "A",
+                  "legendFormat": "{{service_name}}",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "color": {
+                    "mode": "shades",
+                    "fixedColor": "red"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "red",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            },
+            {
+              "id": 11,
+              "title": "Service Registrations",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 24
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_discovery_registrations_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+                  "refId": "A",
+                  "legendFormat": "{{service_name}}",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Resource Usage",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 31
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 13,
+              "title": "CPU by Pod",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 32
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "topk(15, sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", container!=\"\", container!=\"POD\"}[5m])) by (pod))",
+                  "refId": "A",
+                  "legendFormat": "{{pod}}",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            },
+            {
+              "id": 14,
+              "title": "Memory by Pod",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 32
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "topk(15, sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", container!=\"\", container!=\"POD\"}) by (pod) / 1024 / 1024)",
+                  "refId": "A",
+                  "legendFormat": "{{pod}}",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "decmbytes",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  llm-analytics.json: |
+    {
+      "uid": "truvag3-llm-analytics",
+      "title": "Truva-G3 LLM & AI Analytics",
+      "tags": [
+        "truvag3",
+        "ai",
+        "llm",
+        "tokens"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "fiscalYearStartMonth": 0,
+      "liveNow": false,
+      "weekStart": "",
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [
+        {
+          "type": "dashboards",
+          "tags": [
+            "truvag3"
+          ],
+          "title": "Truva-G3 Dashboards",
+          "keepTime": true,
+          "includeVars": true
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "label": "Datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "service_name",
+            "type": "query",
+            "label": "Service",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "query": "label_values(truvag3_ai_request_total{job=\"otel-collector-metrics\"}, service_name)",
+            "current": {},
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "options": [],
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Total Tokens",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"})",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "purple",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 2,
+          "title": "Token Rate",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"}[$__range]))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 3,
+          "title": "AI Request Rate",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_request_total{job=\"otel-collector-metrics\"}[$__range]))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 4,
+          "title": "AI Avg Latency",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(truvag3_ai_request_duration_ms_sum{job=\"otel-collector-metrics\"}) / clamp_min(sum(truvag3_ai_request_duration_ms_count{job=\"otel-collector-metrics\"}), 1e-10)",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 5000
+                  },
+                  {
+                    "color": "red",
+                    "value": 15000
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 5,
+          "title": "Tokens by Service",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "legendFormat": "{{service_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 20,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto",
+                "lineWidth": 1
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 6,
+          "title": "Tokens: Agents vs Tools",
+          "type": "piechart",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"}) by (service_type)",
+              "legendFormat": "{{service_type}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "pieType": "donut",
+            "legend": {
+              "displayMode": "list",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "single"
+            },
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "agent"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "purple"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "tool"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 17,
+          "title": "Provider Breakdown",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 12
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 18,
+          "title": "Requests by Provider",
+          "type": "piechart",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 13
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (provider) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"})",
+              "legendFormat": "{{provider}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "pieType": "donut",
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "single"
+            },
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
+        },
+        {
+          "id": 19,
+          "title": "Tokens by Provider",
+          "type": "piechart",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 13
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"})",
+              "legendFormat": "{{provider}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "pieType": "donut",
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "single"
+            },
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 20,
+          "title": "Provider Detail",
+          "type": "table",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 13
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (provider) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"})",
+              "legendFormat": "Requests",
+              "refId": "A",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"input\"})",
+              "legendFormat": "Input Tokens",
+              "refId": "B",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"output\"})",
+              "legendFormat": "Output Tokens",
+              "refId": "C",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (provider) (truvag3_ai_request_duration_ms_sum{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"}) / clamp_min(sum by (provider) (truvag3_ai_request_duration_ms_count{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"}), 1e-10)",
+              "legendFormat": "Avg Latency (ms)",
+              "refId": "D",
+              "instant": true,
+              "format": "table",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "Value #B",
+                "desc": true
+              }
+            ]
+          },
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "renameByName": {
+                  "provider": "Provider",
+                  "Value #A": "Requests",
+                  "Value #B": "Input Tokens",
+                  "Value #C": "Output Tokens",
+                  "Value #D": "Avg Latency (ms)"
+                }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Avg Latency (ms)"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "ms"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 7,
+          "title": "AI Duration by Provider (P95)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 21
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(truvag3_ai_request_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\", provider=\"anthropic\"}[5m])) by (le))",
+              "legendFormat": "Anthropic P95",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(truvag3_ai_request_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\", provider=\"openai\"}[5m])) by (le))",
+              "legendFormat": "OpenAI P95",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto",
+                "lineWidth": 2
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 8,
+          "title": "AI Request Duration Heatmap",
+          "type": "heatmap",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 21
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_request_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le)",
+              "format": "heatmap",
+              "legendFormat": "{{le}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "calculate": false,
+            "color": {
+              "scheme": "YlOrRd",
+              "mode": "scheme"
+            },
+            "yAxis": {
+              "unit": "ms"
+            },
+            "cellGap": 1,
+            "tooltip": {
+              "show": true
+            },
+            "exemplars": {
+              "color": "rgba(255,0,255,0.7)"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          }
+        },
+        {
+          "id": 9,
+          "title": "Chain Attempts",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 29
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_chain_attempt_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "legendFormat": "{{service_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto",
+                "lineWidth": 1
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 10,
+          "title": "Chain Failovers",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 29
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_chain_failover_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "legendFormat": "{{service_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto",
+                "lineWidth": 1
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byFrameRefID",
+                  "options": "A"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "continuous-reds"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 11,
+          "title": "Stream Success Rate",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 29
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_ai_chain_stream_success_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "legendFormat": "{{service_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto",
+                "lineWidth": 1
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 12,
+          "title": "Embeddings",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 37
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 13,
+              "title": "Embedding Duration P95",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 38
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_ai_embedding_duration_ms_bucket{job=\"otel-collector-metrics\"}[5m])) by (le))",
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto",
+                    "lineWidth": 1
+                  }
+                },
+                "overrides": []
+              }
+            },
+            {
+              "id": 14,
+              "title": "Embedding Tokens",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 38
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_ai_embedding_tokens_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+                  "legendFormat": "{{service_name}}",
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto",
+                    "lineWidth": 1
+                  }
+                },
+                "overrides": []
+              }
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "title": "Top AI Consumers",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 38
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 16,
+              "title": "AI Usage by Service",
+              "type": "table",
+              "gridPos": {
+                "h": 10,
+                "w": 24,
+                "x": 0,
+                "y": 39
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum by (service_name) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"})",
+                  "legendFormat": "Tokens",
+                  "refId": "A",
+                  "instant": true,
+                  "format": "table",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                },
+                {
+                  "expr": "sum by (service_name) (truvag3_ai_request_total{job=\"otel-collector-metrics\"})",
+                  "legendFormat": "Requests",
+                  "refId": "B",
+                  "instant": true,
+                  "format": "table",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                },
+                {
+                  "expr": "sum by (service_name) (rate(truvag3_ai_request_duration_ms_sum{job=\"otel-collector-metrics\"}[6h])) / clamp_min(sum by (service_name) (rate(truvag3_ai_request_duration_ms_count{job=\"otel-collector-metrics\"}[6h])), 1e-10)",
+                  "legendFormat": "Avg Duration (ms)",
+                  "refId": "C",
+                  "instant": true,
+                  "format": "table",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "options": {
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Value #A",
+                    "desc": true
+                  }
+                ],
+                "footer": {
+                  "show": false
+                }
+              },
+              "transformations": [
+                {
+                  "id": "merge",
+                  "options": {}
+                },
+                {
+                  "id": "organize",
+                  "options": {
+                    "excludeByName": {
+                      "Time": true
+                    },
+                    "renameByName": {
+                      "service_name": "Service",
+                      "Value #A": "Tokens",
+                      "Value #B": "Requests",
+                      "Value #C": "Avg Duration (ms)"
+                    }
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Tokens"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "short"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Avg Duration (ms)"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "ms"
+                      },
+                      {
+                        "id": "decimals",
+                        "value": 1
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  orchestration.json: |
+    {
+      "uid": "truvag3-orchestration",
+      "title": "Truva-G3 Orchestration & Execution",
+      "tags": [
+        "truvag3",
+        "orchestration",
+        "planning",
+        "execution"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "fiscalYearStartMonth": 0,
+      "liveNow": false,
+      "weekStart": "",
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [
+        {
+          "type": "dashboards",
+          "tags": [
+            "truvag3"
+          ],
+          "title": "Truva-G3 Dashboards",
+          "keepTime": true,
+          "includeVars": true
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "label": "Datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "service_name",
+            "type": "query",
+            "label": "Agent",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "query": "label_values(truvag3_plan_generation_total{job=\"otel-collector-metrics\"}, service_name)",
+            "current": {},
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "options": [],
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "row",
+          "title": "Orchestration Health",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "panels": []
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Plans Generated/s",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_plan_generation_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]))",
+              "refId": "A",
+              "legendFormat": "__auto"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Plan Success Rate",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 95
+                  },
+                  {
+                    "color": "green",
+                    "value": 99
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_plan_generation_total{job=\"otel-collector-metrics\", status=\"success\", service_name=~\"$service_name\"}[$__range])) / clamp_min(sum(rate(truvag3_plan_generation_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range])), 1e-10) * 100",
+              "refId": "A",
+              "legendFormat": "__auto"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Avg Phases/Request",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 1,
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(truvag3_orchestration_phases_per_request_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}) / clamp_min(sum(truvag3_orchestration_phases_per_request_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}), 1e-10)",
+              "refId": "A",
+              "legendFormat": "__auto"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Workflow Completions/s",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_workflow_completed_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]))",
+              "refId": "A",
+              "legendFormat": "__auto"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "row",
+          "title": "Plan Generation",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 4
+          },
+          "panels": []
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Plan Generation by Agent",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*success.*"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*error.*"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_plan_generation_total{job=\"otel-collector-metrics\"}[5m])) by (service_name, status)",
+              "refId": "A",
+              "legendFormat": "{{service_name}} - {{status}}"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Plan Generation Duration",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "P95"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "histogram_quantile(0.5, sum(rate(truvag3_plan_generation_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+              "refId": "A",
+              "legendFormat": "P50"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "histogram_quantile(0.95, sum(rate(truvag3_plan_generation_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+              "refId": "B",
+              "legendFormat": "P95"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "row",
+          "title": "Execution Pipeline",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 12
+          },
+          "panels": []
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "Tasks Submitted vs Completed",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_executor_tasks_submitted_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "Submitted"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_executor_tasks_completed_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+              "refId": "B",
+              "legendFormat": "Completed"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "type": "heatmap",
+          "title": "Task Duration Heatmap",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "options": {
+            "calculate": false,
+            "color": {
+              "mode": "scheme",
+              "scheme": "YlOrRd",
+              "exponent": 0.5
+            },
+            "yAxis": {
+              "unit": "ms"
+            },
+            "cellGap": 1,
+            "tooltip": {
+              "show": true,
+              "yHistogram": true
+            }
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_executor_task_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le)",
+              "refId": "A",
+              "format": "heatmap",
+              "legendFormat": "{{le}}"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "type": "row",
+          "title": "Workflow Steps",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 20
+          },
+          "panels": []
+        },
+        {
+          "id": 13,
+          "type": "timeseries",
+          "title": "Workflow Duration",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 20
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "histogram_quantile(0.5, sum(rate(truvag3_workflow_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+              "refId": "A",
+              "legendFormat": "P50"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "histogram_quantile(0.95, sum(rate(truvag3_workflow_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+              "refId": "B",
+              "legendFormat": "P95"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "type": "timeseries",
+          "title": "Step Duration P95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 20
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "histogram_quantile(0.95, sum(rate(truvag3_workflow_step_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+              "refId": "A",
+              "legendFormat": "P95"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "Step Failures",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 20
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_workflow_step_failures_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "Failures/s"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "type": "row",
+          "title": "Tiered Tool Selection",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 28
+          },
+          "panels": []
+        },
+        {
+          "id": 17,
+          "type": "timeseries",
+          "title": "Tools Selected Distribution",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 28
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_orchestrator_tiered_tool_selection_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (selected_tools)",
+              "refId": "A",
+              "legendFormat": "{{selected_tools}} tools"
+            }
+          ]
+        },
+        {
+          "id": 18,
+          "type": "timeseries",
+          "title": "Tokens Saved by Tiering",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 28
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 20,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none"
+                },
+                "axisPlacement": "auto"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "sum(rate(truvag3_orchestrator_tiered_tokens_saved_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "Tokens Saved/s"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "type": "row",
+          "title": "Result Processing",
+          "collapsed": true,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 36
+          },
+          "panels": [
+            {
+              "id": 20,
+              "type": "timeseries",
+              "title": "Result Trim Rate",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 37
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_orchestration_result_trim_triggered_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Trims/s"
+                }
+              ]
+            },
+            {
+              "id": 21,
+              "type": "timeseries",
+              "title": "Original vs Trimmed Size",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 37
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "decbytes",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.5, sum(rate(truvag3_orchestration_result_original_size_bytes_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "Original (P50)"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.5, sum(rate(truvag3_orchestration_result_trimmed_size_bytes_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "B",
+                  "legendFormat": "Trimmed (P50)"
+                }
+              ]
+            },
+            {
+              "id": 22,
+              "type": "timeseries",
+              "title": "Synthesis Prompt Size",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 37
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "decbytes",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.5, sum(rate(truvag3_orchestration_synthesis_prompt_size_bytes_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "P50"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "type": "row",
+          "title": "Continuation & Multi-Phase",
+          "collapsed": true,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 37
+          },
+          "panels": [
+            {
+              "id": 24,
+              "type": "timeseries",
+              "title": "Continuation Plans",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 38
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_continuation_plan_generation_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "New Plans"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_continuation_plan_regeneration_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "B",
+                  "legendFormat": "Regenerations"
+                }
+              ]
+            },
+            {
+              "id": 25,
+              "type": "timeseries",
+              "title": "Continuation Duration P95",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 38
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_continuation_plan_generation_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "Plan Generation P95"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_orchestrator_continuation_prompt_build_duration_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "B",
+                  "legendFormat": "Prompt Build P95"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 26,
+          "type": "row",
+          "title": "Error Analysis & Retries",
+          "collapsed": true,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 38
+          },
+          "panels": [
+            {
+              "id": 27,
+              "type": "timeseries",
+              "title": "Error Analysis Retries",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 39
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "orange"
+                  },
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "orange",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_orchestration_error_analysis_retry_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Retries/s"
+                }
+              ]
+            },
+            {
+              "id": 28,
+              "type": "timeseries",
+              "title": "Error Analyzer LLM Latency P95",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 39
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_orchestration_error_analyzer_llm_latency_ms_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "P95"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 29,
+          "type": "row",
+          "title": "Human-in-the-Loop (HITL)",
+          "collapsed": true,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 39
+          },
+          "panels": [
+            {
+              "id": 30,
+              "type": "timeseries",
+              "title": "Expiry Scan Duration P95",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 40
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_orchestration_hitl_expiry_scan_duration_seconds_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "P95"
+                }
+              ]
+            },
+            {
+              "id": 31,
+              "type": "timeseries",
+              "title": "Checkpoint Lifecycle",
+              "description": "Will populate when HITL requests are made",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 40
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "fillOpacity": 10,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "axisPlacement": "auto"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_orchestration_hitl_checkpoint_created_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Created"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_orchestration_hitl_checkpoint_expired_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+                  "refId": "B",
+                  "legendFormat": "Expired"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  memory.json: |
+    {
+      "uid": "truvag3-memory",
+      "title": "Truva-G3 Memory & Knowledge",
+      "tags": [
+        "truvag3",
+        "memory",
+        "knowledge",
+        "cache"
+      ],
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [
+        {
+          "type": "dashboards",
+          "tags": [
+            "truvag3"
+          ],
+          "title": "Truva-G3 Dashboards",
+          "keepTime": true,
+          "includeVars": true
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "label": "Datasource",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "service_name",
+            "type": "query",
+            "datasource": "${datasource}",
+            "query": "label_values(truvag3_memory_operations_total{job=\"otel-collector-metrics\"}, service_name)",
+            "label": "Service",
+            "current": {
+              "selected": true,
+              "text": "All",
+              "value": "$__all"
+            },
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Cache Health",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 2,
+          "title": "Cache Hit Rate",
+          "type": "gauge",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[$__range])) / clamp_min(sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[$__range])) + sum(rate(truvag3_memory_cache_misses_total{job=\"otel-collector-metrics\"}[$__range])), 1e-10) * 100",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 50
+                  },
+                  {
+                    "color": "green",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
+          }
+        },
+        {
+          "id": 3,
+          "title": "Memory Ops Rate",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_operations_total{job=\"otel-collector-metrics\"}[$__range]))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 4,
+          "title": "Evictions/s",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_evictions_total{job=\"otel-collector-metrics\"}[$__range]))",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "noValue": "0",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.01
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 5,
+          "title": "Memory Avg Duration",
+          "type": "stat",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(truvag3_memory_request_duration_ms_sum{job=\"otel-collector-metrics\"}) / clamp_min(sum(truvag3_memory_request_duration_ms_count{job=\"otel-collector-metrics\"}), 1e-10)",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "noValue": "\u2014",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 100
+                  },
+                  {
+                    "color": "red",
+                    "value": 500
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "wideLayout": true
+          }
+        },
+        {
+          "id": 6,
+          "title": "Cache & Eviction Trends",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 5
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 7,
+          "title": "Cache Hits vs Misses",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "Hits",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum(rate(truvag3_memory_cache_misses_total{job=\"otel-collector-metrics\"}[5m]))",
+              "refId": "B",
+              "legendFormat": "Misses",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Hits"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Misses"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 8,
+          "title": "Evictions Over Time",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_evictions_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "refId": "A",
+              "legendFormat": "{{service_name}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 9,
+          "title": "Episodic Memory",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 10,
+          "title": "Events Recorded",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_memory_record_events_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "refId": "A",
+              "legendFormat": "{{service_name}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 11,
+          "title": "Event Summarization",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "Event Summarization",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\"}[5m]))",
+              "refId": "B",
+              "legendFormat": "Orchestration Summarization",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            }
+          }
+        },
+        {
+          "id": 12,
+          "title": "Shared Knowledge",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 23
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 13,
+              "title": "Knowledge Store & Search",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 24
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Store Success",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                },
+                {
+                  "expr": "sum(rate(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "B",
+                  "legendFormat": "Search Success",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "unit": "ops",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            },
+            {
+              "id": 14,
+              "title": "Enrichment Injected",
+              "description": "Memory context added to LLM prompts",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 24
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+                  "refId": "A",
+                  "legendFormat": "{{service_name}}",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "unit": "ops",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "title": "Activity Coordination & Compaction",
+          "type": "row",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "collapsed": true,
+          "panels": [
+            {
+              "id": 16,
+              "title": "Compaction Success",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 25
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Full Compaction",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                },
+                {
+                  "expr": "sum(rate(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "B",
+                  "legendFormat": "Incremental",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "unit": "ops",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            },
+            {
+              "id": 17,
+              "title": "Coordination Duration P95",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 25
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_orchestration_activity_coordination_duration_ms_bucket{job=\"otel-collector-metrics\"}[5m])) by (le))",
+                  "refId": "A",
+                  "legendFormat": "P95",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "unit": "ms",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            },
+            {
+              "id": 18,
+              "title": "Digest Cache Hit/Miss",
+              "type": "timeseries",
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 25
+              },
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(truvag3_orchestration_digest_cache_hit_count{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "A",
+                  "legendFormat": "Hit",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                },
+                {
+                  "expr": "sum(rate(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\"}[5m]))",
+                  "refId": "B",
+                  "legendFormat": "Miss",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  }
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "linear",
+                    "fillOpacity": 10,
+                    "stacking": {
+                      "mode": "none"
+                    },
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  },
+                  "unit": "ops",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      }
+                    ]
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Hit"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "green"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Miss"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                },
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  logs-traces.json: |
+    {
+      "uid": "truvag3-logs-traces",
+      "title": "Truva-G3 Logs & Traces",
+      "tags": ["truvag3", "logs", "traces", "loki", "jaeger"],
+      "editable": true,
+      "graphTooltip": 1,
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "browser",
+      "links": [
+        {
+          "type": "dashboards",
+          "tags": ["truvag3"],
+          "title": "Truva-G3 Dashboards",
+          "keepTime": true,
+          "includeVars": true
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "label": "Metrics",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "loki_ds",
+            "type": "datasource",
+            "query": "loki",
+            "label": "Logs",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "jaeger_ds",
+            "type": "datasource",
+            "query": "jaeger",
+            "label": "Traces",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "options": [],
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": false
+          },
+          {
+            "name": "service_name",
+            "type": "query",
+            "label": "Service",
+            "datasource": {
+              "type": "loki",
+              "uid": "${loki_ds}"
+            },
+            "query": "label_values({service_name=~\".+\"}, service_name)",
+            "current": {},
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".+",
+            "multi": true,
+            "options": [],
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Log Overview",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "panels": []
+        },
+        {
+          "id": 2,
+          "title": "Log Volume by Service",
+          "type": "timeseries",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki_ds}"
+          },
+          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "${loki_ds}"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service_name\"} [1m])) by (service_name)",
+              "legendFormat": "{{service_name}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "fillOpacity": 30,
+                "drawStyle": "bars",
+                "stacking": {
+                  "mode": "normal"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "axisPlacement": "auto",
+                "spanNulls": false
+              },
+              "color": {
+                "mode": "palette-classic"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Error Log Count (5m)",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki_ds}"
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "${loki_ds}"
+              },
+              "expr": "sum(count_over_time({service_name=~\".+\"} |= \"error\" [5m]))"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": 0 },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 100 }
+                ]
+              },
+              "noValue": "0",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 4,
+          "title": "Error Log Stream",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+          "panels": []
+        },
+        {
+          "id": 5,
+          "title": "Error Logs",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki_ds}"
+          },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "${loki_ds}"
+              },
+              "expr": "{service_name=~\"$service_name\"} |= \"error\""
+            }
+          ],
+          "options": {
+            "showTime": true,
+            "showLabels": true,
+            "showCommonLabels": false,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "sortOrder": "Descending",
+            "dedupStrategy": "none"
+          }
+        },
+        {
+          "id": 6,
+          "title": "Traces",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+          "panels": []
+        },
+        {
+          "id": 7,
+          "title": "Trace Search",
+          "type": "traces",
+          "datasource": {
+            "type": "jaeger",
+            "uid": "${jaeger_ds}"
+          },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "jaeger",
+                "uid": "${jaeger_ds}"
+              },
+              "queryType": "search",
+              "service": "$service_name",
+              "limit": 20
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "HTTP Traffic Detail",
+          "type": "row",
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+          "panels": [
+            {
+              "id": 9,
+              "title": "HTTP Status Code Distribution",
+              "type": "timeseries",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+              "targets": [
+                {
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (http_response_status_code)",
+                  "legendFormat": "{{http_response_status_code}}"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "reqps",
+                  "custom": {
+                    "fillOpacity": 10,
+                    "drawStyle": "line",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "axisPlacement": "auto",
+                    "spanNulls": false
+                  },
+                  "color": {
+                    "mode": "palette-classic"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": { "id": "byName", "options": "200" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+                    ]
+                  },
+                  {
+                    "matcher": { "id": "byName", "options": "400" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+                    ]
+                  },
+                  {
+                    "matcher": { "id": "byName", "options": "404" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+                    ]
+                  },
+                  {
+                    "matcher": { "id": "byName", "options": "500" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                    ]
+                  },
+                  {
+                    "matcher": { "id": "byName", "options": "502" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                    ]
+                  },
+                  {
+                    "matcher": { "id": "byName", "options": "503" },
+                    "properties": [
+                      { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                    ]
+                  }
+                ]
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              }
+            },
+            {
+              "id": 10,
+              "title": "HTTP Server Latency P95",
+              "type": "timeseries",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+              "targets": [
+                {
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "${datasource}"
+                  },
+                  "expr": "histogram_quantile(0.95, sum(rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (service_name, le))",
+                  "legendFormat": "{{service_name}}"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "custom": {
+                    "fillOpacity": 10,
+                    "drawStyle": "line",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "showPoints": "auto",
+                    "axisPlacement": "auto",
+                    "spanNulls": false
+                  },
+                  "color": {
+                    "mode": "palette-classic"
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "All Logs",
+          "type": "row",
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+          "panels": [
+            {
+              "id": 12,
+              "title": "Full Log Stream",
+              "type": "logs",
+              "datasource": {
+                "type": "loki",
+                "uid": "${loki_ds}"
+              },
+              "gridPos": { "h": 12, "w": 24, "x": 0, "y": 30 },
+              "targets": [
+                {
+                  "refId": "A",
+                  "datasource": {
+                    "type": "loki",
+                    "uid": "${loki_ds}"
+                  },
+                  "expr": "{service_name=~\"$service_name\"}"
+                }
+              ],
+              "options": {
+                "showTime": true,
+                "showLabels": true,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": false,
+                "enableLogDetails": true,
+                "sortOrder": "Descending",
+                "dedupStrategy": "none"
+              }
+            }
+          ]
+        }
+      ],
+      "fiscalYearStartMonth": 0,
+      "liveNow": false,
+      "weekStart": ""
+    }

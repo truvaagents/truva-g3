@@ -1,0 +1,183 @@
+# Kubernetes Deployment for GitHub PR Review Agent — Worker Component
+# Namespace: truvag3-examples
+# Port: 8382 (health/metrics only)
+#
+# This deployment runs in Worker mode (TRUVAG3_MODE=worker):
+#   - Dequeues review_pr tasks from Redis
+#   - Calls github-tool for PR bundles + file context + posting
+#   - Runs the shard review pipeline (model calls, merge, evidence verification)
+#   - Does NOT receive HTTP API requests (the API deployment does that)
+#
+# Deploy alongside k8-deployment-api.yaml for split mode.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-pr-review-agent-worker-config
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-worker
+    component: worker
+    framework: truvag3
+data:
+  APP_ENV: "production"
+  PORT: "8382"
+  NAMESPACE: "truvag3-examples"
+  TRUVAG3_MODE: "worker"
+  WORKER_COUNT: "3"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-pr-review-agent-worker
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-worker
+    component: worker
+    framework: truvag3
+    version: v1
+    module: orchestration
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: github-pr-review-agent-worker
+  template:
+    metadata:
+      labels:
+        app: github-pr-review-agent-worker
+        component: worker
+        framework: truvag3
+        truvag3.framework/type: agent
+        version: v1
+        module: orchestration
+      annotations:
+        # Worker has no Framework HTTP server — only the minimal health server.
+        # Metrics still go through OTLP push, not Prometheus scrape.
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: worker
+        image: github-pr-review-agent:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8382
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: github-pr-review-agent-worker-config
+        - configMapRef:
+            name: github-pr-review-agent-env-config
+            optional: true
+        - secretRef:
+            name: ai-provider-keys-pr-review-agent
+            optional: true
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "github-pr-review-agent"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Workers point at the API service (same name as embedded) for any
+        # cross-component links (e.g. progress reporting, future admin API).
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "github-pr-review-agent-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        # Workers run multiple shards in parallel and call AI providers, so
+        # they need more headroom than the API pod.
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 15
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+# Worker service exposes only the minimal health server (no API).
+# Used by K8s probes; not registered in framework discovery.
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-pr-review-agent-worker-service
+  namespace: truvag3-examples
+  labels:
+    app: github-pr-review-agent-worker
+    component: worker
+    framework: truvag3
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8382
+    protocol: TCP
+  selector:
+    app: github-pr-review-agent-worker

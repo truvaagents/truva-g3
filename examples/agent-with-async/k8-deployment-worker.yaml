@@ -1,0 +1,274 @@
+# Kubernetes Deployment for Async Travel Agent - Worker Component
+# Agent Namespace: truvag3-examples
+# Port: 8098 (health/metrics only)
+#
+# This deployment runs in Worker mode (TRUVAG3_MODE=worker):
+# - Processes tasks from Redis queue
+# - Does NOT handle HTTP API requests (API deployment does that)
+# - Scales based on queue depth / CPU load
+#
+# Deploy this alongside k8-deployment-api.yaml for production.
+#
+# Worker responsibilities:
+# - Dequeue tasks from Redis
+# - Execute AI orchestration (tool calls, synthesis)
+# - Update task status/results in Redis
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: async-travel-agent-worker-config
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-worker
+    component: worker
+    framework: truvag3
+data:
+  # Environment configuration
+  APP_ENV: "production"
+  PORT: "8098"
+  NAMESPACE: "truvag3-examples"
+
+  # Deployment mode - Worker only
+  TRUVAG3_MODE: "worker"
+
+  # Framework configuration
+  DEV_MODE: "false"
+  TRUVAG3_LOG_LEVEL: "info"
+  TRUVAG3_DEBUG: "false"
+  TRUVAG3_VALIDATE_PAYLOADS: "false"
+
+  # Worker configuration
+  WORKER_COUNT: "5"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: async-travel-agent-worker
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-worker
+    component: worker
+    framework: truvag3
+    version: v1
+    module: async
+spec:
+  replicas: 2  # Multiple workers for throughput
+  selector:
+    matchLabels:
+      app: async-travel-agent-worker
+  template:
+    metadata:
+      labels:
+        app: async-travel-agent-worker
+        component: worker
+        framework: truvag3
+        version: v1
+        module: async
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8098"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+      - name: worker
+        image: async-travel-agent:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 8098
+          protocol: TCP
+
+        # Environment variables from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: async-travel-agent-worker-config
+        - secretRef:
+            name: ai-provider-keys-async-agent
+            optional: true
+
+        # Additional environment variables
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "async-travel-agent-worker"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: TRUVAG3_DEV_MODE
+          value: "false"
+        # Logging Configuration
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        # K8s service discovery configuration (workers need discovery for tool calls)
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "async-travel-agent-worker-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Telemetry Configuration
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        # Timeout Configuration for Task Processing
+        - name: TRUVAG3_HTTP_WRITE_TIMEOUT
+          value: "5m"
+        - name: TRUVAG3_HTTP_READ_TIMEOUT
+          value: "5m"
+        # Model Alias Override: Use cheaper models for testing
+        - name: TRUVAG3_OPENAI_MODEL_DEFAULT
+          value: "gpt-4o-mini"
+        - name: TRUVAG3_OPENAI_MODEL_SMART
+          value: "gpt-4o-mini"
+        - name: TRUVAG3_ANTHROPIC_MODEL_DEFAULT
+          value: "claude-3-haiku-20240307"
+        - name: TRUVAG3_ANTHROPIC_MODEL_SMART
+          value: "claude-3-haiku-20240307"
+
+        # Resource limits (workers are CPU/memory intensive)
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+
+        # Liveness probe
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness probe
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Startup probe (workers may take longer to initialize)
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 15
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+# Worker service (for health checks / metrics scraping only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: async-travel-agent-worker-service
+  namespace: truvag3-examples
+  labels:
+    app: async-travel-agent-worker
+    component: worker
+    framework: truvag3
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8098
+    protocol: TCP
+  selector:
+    app: async-travel-agent-worker
+
+---
+# HPA for Workers - scales based on CPU (task processing load)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: async-travel-agent-worker-hpa
+  namespace: truvag3-examples
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: async-travel-agent-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# PodDisruptionBudget for Workers
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: async-travel-agent-worker-pdb
+  namespace: truvag3-examples
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: async-travel-agent-worker

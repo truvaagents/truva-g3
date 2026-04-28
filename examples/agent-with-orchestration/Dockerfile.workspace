@@ -1,0 +1,68 @@
+# Workspace Dockerfile for travel-research-orchestration-example
+# This Dockerfile builds with LOCAL modules (includes type coercion fix)
+# Usage (from truvag3 root): docker build -f examples/agent-with-orchestration/Dockerfile.workspace -t travel-research-agent:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY ai/ ./ai/
+COPY core/ ./core/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+
+# Copy the agent-with-orchestration example
+COPY examples/agent-with-orchestration/ ./examples/agent-with-orchestration/
+
+WORKDIR /app/examples/agent-with-orchestration
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o travel-research-agent .
+
+# Verify the binary was created
+RUN ls -lh travel-research-agent
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Copy binary from builder stage
+COPY --from=builder /app/examples/agent-with-orchestration/travel-research-agent .
+
+# Change ownership to non-root user
+RUN chown appuser:appgroup /app/travel-research-agent && \
+    chmod +x /app/travel-research-agent
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8094
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./travel-research-agent"]

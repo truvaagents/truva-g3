@@ -1,0 +1,54 @@
+# Workspace Dockerfile for arxiv-tool
+# This Dockerfile builds with LOCAL modules (uses local core and telemetry)
+# Usage (from truvag3 root): docker build -f examples/arxiv-tool/Dockerfile.workspace -t arxiv-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the arxiv-tool example
+COPY examples/arxiv-tool/ ./examples/arxiv-tool/
+
+WORKDIR /app/examples/arxiv-tool
+
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+RUN go mod tidy && go mod download
+
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o arxiv-tool .
+
+RUN ls -lh arxiv-tool
+
+# Runtime stage
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/arxiv-tool/arxiv-tool .
+
+RUN chown appuser:appgroup /app/arxiv-tool && \
+    chmod +x /app/arxiv-tool
+USER appuser
+
+ENV PORT=8369
+
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./arxiv-tool"]

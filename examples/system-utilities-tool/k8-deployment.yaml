@@ -1,0 +1,101 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: system-utilities-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: system-utilities-tool
+    component: tool
+spec:
+  selector:
+    app: system-utilities-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8348
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: system-utilities-tool
+  namespace: truvag3-examples
+  labels:
+    app: system-utilities-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: system-utilities-tool
+  template:
+    metadata:
+      labels:
+        app: system-utilities-tool
+        component: tool
+    spec:
+      containers:
+      - name: system-utilities-tool
+        image: system-utilities-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8348
+          name: http
+        envFrom:
+        - configMapRef:
+            name: system-utilities-tool-env-config
+        env:
+        - name: PORT
+          value: "8348"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "system-utilities-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8348
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8348
+          initialDelaySeconds: 5
+          periodSeconds: 10

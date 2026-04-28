@@ -1,0 +1,1099 @@
+# Truva-G3 AI Module Architecture
+
+**Version**: 1.0
+**Module**: `github.com/truvaagents/truva-g3/ai`
+**Purpose**: Production-grade AI provider abstraction with multi-provider support
+**Audience**: Framework developers, application developers, operations teams
+
+---
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [Design Philosophy](#design-philosophy)
+3. [Module Dependencies](#module-dependencies)
+4. [Provider Registry System](#provider-registry-system)
+5. [Provider Implementation Pattern](#provider-implementation-pattern)
+6. [Chain Client (Failover)](#chain-client-failover)
+7. [AI Agent and AI Tool](#ai-agent-and-ai-tool)
+8. [Logging and Telemetry](#logging-and-telemetry)
+9. [Configuration System](#configuration-system)
+10. [Integration Patterns](#integration-patterns)
+11. [Common Pitfalls](#common-pitfalls)
+12. [Troubleshooting Guide](#troubleshooting-guide)
+
+---
+
+## Architecture Overview
+
+### System Context
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Application Layer                                            │
+│                                                             │
+│  client, _ := ai.NewClient(ai.WithProvider("openai"))      │
+│  response, _ := client.GenerateResponse(ctx, prompt, opts)  │
+└─────────────────────────────────────────────────────────────┘
+                         │
+                         │ Uses factory pattern
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ AI Module (github.com/truvaagents/truva-g3/ai)                 │
+│                                                             │
+│  ┌─────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │  Registry   │───>│ ProviderFactory│───>│ AIClient    │  │
+│  │  (Global)   │    │ (Per Provider)│    │ (Per Call)  │  │
+│  └─────────────┘    └──────────────┘    └──────────────┘  │
+│         │                                                   │
+│         │ Import-time registration via init()              │
+└─────────────────────────────────────────────────────────────┘
+                         │
+                         │ Implements core.AIClient
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Provider Clients                                            │
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│  │ OpenAI   │  │Anthropic │  │  Gemini  │  │ Bedrock  │  │
+│  │ Client   │  │  Client  │  │  Client  │  │  Client  │  │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│         │            │            │            │           │
+│         └────────────┴────────────┴────────────┘           │
+│                              │                             │
+│                    All embed BaseClient                    │
+└─────────────────────────────────────────────────────────────┘
+                         │
+                         │ HTTPS API calls
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ External AI APIs                                            │
+│                                                             │
+│  OpenAI, Anthropic, Google Gemini, AWS Bedrock, etc.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | Responsibility | Location |
+|-----------|----------------|----------|
+| `ProviderRegistry` | Global registry of provider factories | `registry.go` |
+| `ProviderFactory` | Interface for provider creation | `registry.go` |
+| `AIConfig` | Configuration options for clients | `provider.go` |
+| `BaseClient` | Shared functionality (retry, logging) | `providers/base.go` |
+| `ChainClient` | Multi-provider failover | `chain_client.go` |
+| `AIAgent` | Agent with AI + discovery capabilities | `ai_agent.go` |
+| `AITool` | Tool with AI capabilities (no discovery) | `ai_tool.go` |
+
+---
+
+## Design Philosophy
+
+### 1. Import-Driven Provider Registration
+
+**The Design Decision**: Providers self-register via `init()` functions when their package is imported.
+
+```go
+// Application chooses which providers to include at compile time
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"     // Registers OpenAI
+    _ "github.com/truvaagents/truva-g3/ai/providers/anthropic"  // Registers Anthropic
+    // Don't import bedrock → not compiled in, smaller binary
+)
+```
+
+**Benefits**:
+- **Compile-time selection**: Only imported providers are included in binary
+- **No runtime configuration**: Provider availability is determined at build time
+- **Smaller binaries**: Unused providers don't bloat the executable
+- **Clear dependencies**: `go.mod` shows exactly which providers are used
+
+### 2. Factory Pattern for Client Creation
+
+**The Design Decision**: Each provider implements `ProviderFactory` interface.
+
+```go
+type ProviderFactory interface {
+    Create(config *AIConfig) core.AIClient
+    DetectEnvironment() (priority int, available bool)
+    Name() string
+    Description() string
+}
+```
+
+**Why Factory Pattern?**
+
+| Pattern | Pros | Cons | Truva-G3 Choice |
+|---------|------|------|---------------|
+| Direct instantiation | Simple | Tight coupling | ❌ |
+| Factory method | Flexible, testable | Slightly more code | ✅ Chosen |
+| Dependency injection | Maximum flexibility | Complex setup | ❌ |
+
+**Benefits**:
+1. **Environment detection**: Auto-detect available providers
+2. **Priority-based selection**: Choose best provider automatically
+3. **Configuration injection**: Pass config at creation time
+4. **Testability**: Easy to mock provider factories
+
+### 3. Shared Base Client for Cross-Cutting Concerns
+
+**The Design Decision**: All provider clients embed `BaseClient`.
+
+```go
+// providers/openai/client.go
+type Client struct {
+    *providers.BaseClient  // Embedded - provides retry, logging, defaults
+    apiKey  string
+    baseURL string
+}
+```
+
+**What BaseClient Provides**:
+- HTTP client with configurable timeout
+- Exponential backoff retry logic
+- Request/response logging
+- Default value management
+- Error handling utilities
+
+### 4. Tool/Agent Separation with AI
+
+**The Design Decision**: Maintain the framework's Tool/Agent distinction.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ AITool (Passive)                                            │
+│ - Uses AI for capabilities                                  │
+│ - NO discovery (cannot find other components)               │
+│ - Example: Translation tool, Summarization tool             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ AIAgent (Active)                                            │
+│ - Uses AI for orchestration                                 │
+│ - HAS discovery (can find and coordinate components)        │
+│ - Example: Research agent, Planning agent                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+This enforced distinction prevents architectural violations where tools accidentally become orchestrators.
+
+### 5. Valuable, Not Mandatory
+
+**The Design Decision**: The `ai` module should be the **best default path**, not a required abstraction wall.
+
+Truva-G3 should support major providers out of the box, but developers must always retain two freedoms:
+
+1. **Use the AI module for common portability and framework integration**
+2. **Bypass the AI module and use a provider's native SDK directly when they need full control**
+
+This means the AI module is intentionally designed as a convenience layer with strong defaults, not as the only allowed way to talk to an LLM provider.
+
+**What this implies architecturally**:
+
+- The framework should support major providers directly (`openai`, `anthropic`, `gemini`, `bedrock`, and key OpenAI-compatible aliases).
+- The framework must not force developers to abandon `ai/` just because a provider shipped a new request field that Truva-G3 has not modeled yet.
+- A developer who prefers the provider's native SDK should be able to plug that choice into Truva-G3 cleanly by supplying a compatible client or adapter.
+- Framework-owned abstractions should focus on the stable common core, not on exhaustively normalizing every vendor-specific feature.
+
+**Non-goal**:
+
+- The AI module is **not** trying to become a perfect universal compatibility layer for every provider feature across time.
+
+Instead, its job is to provide:
+
+- a **portable core** for the common 80%
+- **escape hatches** for provider-specific innovation
+- a **clean exit path** for teams that want native SDK control
+
+### 6. Portable Core, Provider Escape Hatches
+
+**The Design Decision**: Separate the stable cross-provider surface from provider-specific extensions.
+
+The AI module should expose a small portable core that Truva-G3 itself can rely on:
+
+- model selection
+- temperature
+- max tokens
+- system prompt
+- reasoning intent
+- response format / structured output intent
+
+At the same time, it should preserve flexibility through escape hatches:
+
+1. **Client-level provider extras and headers** for long-lived defaults
+2. **Per-request provider extras and headers** for agent-specific or phase-specific parameters
+
+This is the mechanism that prevents the framework from becoming obsolete every time a provider adds a new field.
+
+**Principle**:
+
+> A missing first-class Truva-G3 field or header must never force a developer to stop using the AI module.
+
+If the provider supports an extra request field or a required request header and the developer wants to use it from agent code, the AI module should allow that via provider-specific extras/headers until or unless the capability becomes common enough to deserve first-class promotion.
+
+### 7. Minimal Compatibility Responsibility
+
+**The Design Decision**: The AI module should own only the minimum compatibility logic required to keep Truva-G3 safe and useful.
+
+That means:
+
+- It **should** protect users from obviously invalid provider/model combinations for the features Truva-G3 relies on heavily.
+- It **should** translate a small number of semantic concepts that matter to the framework, such as reasoning intent or structured-output intent.
+- It **should not** try to completely normalize every field or every vendor-specific feature.
+
+The correct posture is:
+
+- **thin compatibility guardrails**
+- **best-effort portability**
+- **clear logging when a requested feature is degraded or ignored**
+
+not:
+
+- full universal feature parity
+- exhaustive modeling of the entire provider ecosystem
+
+This keeps the module useful without over-committing the framework to an endless compatibility matrix.
+
+---
+
+## Module Dependencies
+
+### Dependency Decision
+
+```
+Valid Dependencies:
+┌─────────────────────────────────────────────────────────────┐
+│  ai  →  core  +  telemetry                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Rationale**: The AI module is expanded to include telemetry for production visibility:
+
+| Dependency | Purpose | Justification |
+|------------|---------|---------------|
+| `core` | Interfaces (AIClient, Logger) | Required foundation |
+| `telemetry` | Metrics emission | Production observability |
+
+**Why `ai` needs `telemetry`**:
+1. **External API calls**: AI providers make external HTTP calls that need latency/error tracking
+2. **Cost visibility**: Token usage directly translates to costs
+3. **Failover tracking**: Chain client failovers need metrics
+4. **Consistency**: Matches `resilience` and `orchestration` modules
+
+### Import Structure
+
+```go
+// ai/client.go
+import (
+    "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/telemetry"  // Allowed
+)
+
+// ai/providers/openai/client.go
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/ai/providers"
+    "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/telemetry"  // Allowed
+)
+```
+
+---
+
+## Provider Registry System
+
+### Global Registry Architecture
+
+```go
+// registry.go
+var registry = &ProviderRegistry{
+    providers: make(map[string]ProviderFactory),
+}
+
+// Thread-safe registration
+func Register(factory ProviderFactory) error {
+    registry.mu.Lock()
+    defer registry.mu.Unlock()
+
+    if _, exists := registry.providers[factory.Name()]; exists {
+        return fmt.Errorf("provider '%s' already registered", factory.Name())
+    }
+    registry.providers[factory.Name()] = factory
+    return nil
+}
+```
+
+### Provider Registration Flow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Application Startup                                           │
+│                                                              │
+│ 1. Go runtime processes imports                              │
+│ 2. Each provider's init() runs                               │
+│ 3. init() calls ai.Register(&Factory{})                      │
+│ 4. Factory stored in global registry                         │
+└──────────────────────────────────────────────────────────────┘
+          │
+          ↓
+┌──────────────────────────────────────────────────────────────┐
+│ Provider Registration (e.g., openai/factory.go)              │
+│                                                              │
+│ func init() {                                                │
+│     if err := ai.Register(&Factory{}); err != nil {          │
+│         panic(err)  // Fail fast on registration error       │
+│     }                                                        │
+│ }                                                            │
+└──────────────────────────────────────────────────────────────┘
+          │
+          ↓
+┌──────────────────────────────────────────────────────────────┐
+│ Client Creation                                              │
+│                                                              │
+│ client, _ := ai.NewClient(                                   │
+│     ai.WithProvider("openai"),  // Lookup in registry        │
+│ )                                                            │
+│                                                              │
+│ // Registry finds "openai" factory, calls factory.Create()   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Auto-Detection Logic
+
+The detection system supports both simple providers and multi-sub-provider factories (e.g., OpenAI managing Groq, DeepSeek, etc.) via the optional `SubProviderEnumerator` interface:
+
+```go
+// Optional interface for factories managing multiple sub-providers
+type SubProviderEnumerator interface {
+    DetectAvailableAliases() []AliasAvailability
+}
+
+type AliasAvailability struct {
+    Alias        string // Full alias: "openai.groq", "anthropic"
+    ProviderName string // Base factory name: "openai", "anthropic"
+    Priority     int    // Detection priority (higher = tried first)
+}
+
+// DetectAvailableProviders returns all available providers sorted by priority
+func DetectAvailableProviders(logger core.Logger) []AliasAvailability {
+    // For each registered factory:
+    //   - If it implements SubProviderEnumerator → collect per-alias entries
+    //   - Otherwise → use DetectEnvironment() as single entry
+    // Returns sorted by priority descending, only available entries
+}
+```
+
+The `detectBestProvider()` function delegates to `DetectAvailableProviders()` and returns the highest-priority result. This ensures single-client auto-detection and chain auto-detection share the same logic.
+```
+
+**Provider Priorities** (default):
+| Provider | Alias | Priority | Detection Method |
+|----------|-------|----------|------------------|
+| OpenAI | `openai` | 1000 | `OPENAI_API_KEY` exists |
+| Anthropic | `anthropic` | 900 | `ANTHROPIC_API_KEY` exists |
+| Gemini | `gemini` | 800 | `GEMINI_API_KEY` or `GOOGLE_API_KEY` exists |
+| Groq | `openai.groq` | 700 | `GROQ_API_KEY` exists |
+| DeepSeek | `openai.deepseek` | 600 | `DEEPSEEK_API_KEY` exists |
+| xAI | `openai.xai` | 500 | `XAI_API_KEY` exists |
+| Mistral | `openai.mistral` | 450 | `MISTRAL_API_KEY` exists |
+| Qwen | `openai.qwen` | 400 | `QWEN_API_KEY` exists |
+| Together | `openai.together` | 300 | `TOGETHER_API_KEY` exists |
+| Bedrock | `bedrock` | 200 | AWS credentials available |
+| Ollama | `openai.ollama` | 100 | `OLLAMA_BASE_URL` set and local server reachable |
+| Mock | `mock` | 1 | Never auto-detected |
+
+---
+
+## Provider Implementation Pattern
+
+### Factory Implementation
+
+Each provider implements this pattern:
+
+```go
+// providers/openai/factory.go
+package openai
+
+func init() {
+    if err := ai.Register(&Factory{}); err != nil {
+        panic(fmt.Sprintf("failed to register openai provider: %v", err))
+    }
+}
+
+type Factory struct{}
+
+func (f *Factory) Name() string        { return "openai" }
+func (f *Factory) Description() string { return "OpenAI GPT models" }
+
+func (f *Factory) DetectEnvironment() (priority int, available bool) {
+    if os.Getenv("OPENAI_API_KEY") != "" {
+        return 100, true  // High priority when key exists
+    }
+    return 0, false
+}
+
+func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
+    // Extract configuration
+    apiKey := firstNonEmpty(config.APIKey, os.Getenv("OPENAI_API_KEY"))
+    baseURL := firstNonEmpty(config.BaseURL, os.Getenv("OPENAI_BASE_URL"), DefaultBaseURL)
+
+    // CRITICAL: Get logger from config, wrap with component
+    logger := config.Logger
+    if logger != nil {
+        if cal, ok := logger.(core.ComponentAwareLogger); ok {
+            logger = cal.WithComponent("framework/ai")
+        }
+    }
+
+    return NewClient(apiKey, baseURL, logger)
+}
+```
+
+### Client Implementation
+
+```go
+// providers/openai/client.go
+package openai
+
+type Client struct {
+    *providers.BaseClient  // Embedded for retry, logging
+    apiKey  string
+    baseURL string
+}
+
+func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
+    base := providers.NewBaseClient(180*time.Second, logger)  // 3 min default for reasoning models
+    base.DefaultModel = "gpt-3.5-turbo"
+    base.DefaultMaxTokens = 1000
+
+    return &Client{
+        BaseClient: base,
+        apiKey:     apiKey,
+        baseURL:    baseURL,
+    }
+}
+
+func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
+    // Apply defaults
+    options = c.ApplyDefaults(options)
+
+    // Log request
+    c.LogRequest("openai", options.Model, prompt)
+    startTime := time.Now()
+
+    // Build and execute request...
+
+    // Log response
+    c.LogResponse("openai", result.Model, result.Usage, time.Since(startTime))
+
+    return result, nil
+}
+```
+
+### OpenAI-Compatible Providers (Provider Aliases)
+
+The `ai` module supports OpenAI-compatible providers through aliases:
+
+```go
+// Usage
+client, _ := ai.NewClient(
+    ai.WithProviderAlias("openai.deepseek"),  // Uses DeepSeek API
+    ai.WithModel("smart"),                     // Resolves to "deepseek-reasoner"
+)
+```
+
+**Supported Aliases**:
+| Alias | Base URL | API Key Env |
+|-------|----------|-------------|
+| `openai.deepseek` | `api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| `openai.groq` | `api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `openai.xai` | `api.x.ai/v1` | `XAI_API_KEY` |
+| `openai.together` | `api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `openai.qwen` | `dashscope-intl.aliyuncs.com/...` | `QWEN_API_KEY` |
+| `openai.ollama` | `localhost:11434/v1` | (none required) |
+
+---
+
+## Chain Client (Failover)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ChainClient                                                  │
+│                                                             │
+│  GenerateResponse(ctx, prompt, opts)                        │
+│         │                                                   │
+│         ├──→ Provider 1 (OpenAI) ────→ Success? Return     │
+│         │         │                                        │
+│         │         ↓ Failure (5xx)                          │
+│         │                                                   │
+│         ├──→ Provider 2 (Anthropic) ──→ Success? Return    │
+│         │         │                                        │
+│         │         ↓ Failure (5xx)                          │
+│         │                                                   │
+│         └──→ Provider 3 (Gemini) ────→ Success? Return     │
+│                   │                                        │
+│                   ↓ All failed                             │
+│                                                             │
+│              Return aggregated error                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Usage
+
+```go
+// Explicit chain: providers are tried in the order specified
+chain, err := ai.NewChainClient(
+    ai.WithProviderChain("openai", "openai.deepseek", "anthropic"),
+    ai.WithChainLogger(logger),
+)
+
+// Uses OpenAI first, falls back to DeepSeek, then Anthropic
+response, err := chain.GenerateResponse(ctx, prompt, opts)
+```
+
+### Auto-Detect Mode
+
+When no `WithProviderChain` is specified, the chain client auto-detects available providers from the environment and orders them by priority:
+
+```go
+// Auto-detect: discovers providers from API keys in environment
+chain, err := ai.NewChainClient(
+    ai.WithChainLogger(logger),
+)
+// If ANTHROPIC_API_KEY and GROQ_API_KEY are set:
+// → chain = ["anthropic" (900), "openai.groq" (700)]
+```
+
+**How auto-detect works**:
+1. Calls `DetectAvailableProviders()` which checks all registered factories
+2. Factories implementing `SubProviderEnumerator` (e.g., OpenAI) report each sub-provider individually
+3. Results are sorted by priority (highest first) and used as the chain order
+4. If no providers are detected, fails fast with: `"configuration error: no providers detected (check API keys)"`
+
+**When to use auto-detect vs explicit chain**:
+| Scenario | Recommendation |
+|----------|----------------|
+| Development / prototyping | Auto-detect — adapts to whatever keys are available |
+| Staging | Auto-detect — mirrors production env vars |
+| Production (deterministic order matters) | Explicit `WithProviderChain` — locks the failover order |
+| Production (environment-driven) | Auto-detect — ops controls order via which keys are deployed |
+
+### Failover Behavior
+
+| Error Type | Behavior | Rationale |
+|------------|----------|-----------|
+| **Client errors (4xx)** | Fail fast, no retry | Request is invalid for all providers |
+| **Transient proxy errors (4xx, `IsTransient`)** | Try next provider | Proxy/infra issue (e.g., Cloudflare), not a request problem |
+| **Provider-specific terminal errors (4xx, `IsRetryable`)** | Try next provider | Billing exhausted, account suspended, or similar — terminal on this provider but may succeed on a different one. Detected by `BaseClient.HandleError` from a narrow set of structured response markers (`credit balance`, `insufficient_quota`, `payment required`, and case/underscore variants); see [providers/base.go](providers/base.go) `billingExhaustedPhrases` for the authoritative list. |
+| **Server errors (5xx)** | Try next provider | Provider-specific issue |
+| **Rate limits (429)** | Try next provider | Provider at capacity |
+| **Network errors** | Try next provider | Transient connectivity |
+
+The two override flags (`IsTransient` and `IsRetryable`) are independent — see godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx classification, but they signal different conditions: `IsTransient` = "this never reached the API" (proxy 4xx), `IsRetryable` = "the API gave a definitive answer that may differ on a different provider" (billing/quota).
+
+### Per-Provider Retry Budget
+
+Inside each provider, `BaseClient.ExecuteWithRetry` may retry on transient errors (5xx, 429, network, CDN) with exponential backoff before returning the final error. When a chain client sits above the provider, a returned error triggers failover to the next provider. The retry count and its default depend on whether the provider was created standalone or inside a chain.
+
+**Single client (`ai.NewClient`)** — default `MaxRetries = 3`. Single clients have no failover layer below them, so in-provider retries are the only mechanism for absorbing transient blips (5xx, 429, network errors, brief CDN hiccups). The historical default of 3 is preserved.
+
+**Chain client (`ai.NewChainClient`)** — default per-provider `MaxRetries = 0`. The chain client's failover loop IS the retry mechanism inside a chain: when a provider fails on a retryable error, the chain walks to the next provider. Per-provider in-provider retries inside a chain just amplify wasted token spend on the dead provider before failover kicks in. Operators who want in-provider retries inside a chain (e.g. flaky network during a deploy where one provider should retry once before failover) must opt in via `ai.WithChainMaxRetries(n)` or `TRUVAG3_AI_RETRY_ATTEMPTS=n`.
+
+**Configuration knobs:**
+
+- **`ai.WithMaxRetries(n)`** — single-client option. Programmatic Go API; any non-negative integer is honored, including `0` (no retries).
+- **`ai.WithChainMaxRetries(n)`** — chain option. Applies uniformly to every provider in the chain. Same semantics as `WithMaxRetries`; overrides the chain default of 0.
+- **`TRUVAG3_AI_RETRY_ATTEMPTS`** — env var fallback for both client types. Per FRAMEWORK_DESIGN_PRINCIPLES §3.5 rule 3, env var values are guarded with `val > 0`. Zero, negative, and non-integer values are silently rejected and fall through to the appropriate default (3 for single, 0 for chain).
+
+**Precedence (highest to lowest):**
+
+1. Explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` — programmatic call, any non-negative integer including 0
+2. `TRUVAG3_AI_RETRY_ATTEMPTS` env var — only positive integers honored
+3. Default — `3` for single clients, `0` for chain clients
+
+**To disable retries entirely on a single client**, use `ai.WithMaxRetries(0)` programmatically — the env var path cannot do this because the framework rule rejects `≤ 0`.
+
+See [docs/ENVIRONMENT_VARIABLES_GUIDE.md](../docs/ENVIRONMENT_VARIABLES_GUIDE.md#ai-configuration) for the env var documentation.
+
+### Metrics for Failover
+
+When telemetry is initialized, the chain client should emit:
+
+```go
+// On failover
+telemetry.Counter("ai.chain.failover",
+    "from_provider", "openai",
+    "to_provider", "anthropic",
+    "reason", "server_error")
+
+// On complete failure
+telemetry.Counter("ai.chain.exhausted",
+    "providers_tried", "3",
+    "final_error", "rate_limit")
+```
+
+---
+
+## AI Agent and AI Tool
+
+### AIAgent (Active Orchestrator)
+
+```go
+type AIAgent struct {
+    *core.BaseAgent               // Has discovery capability
+    AI              core.AIClient // AI client for processing
+}
+
+// Can discover and coordinate other components
+func (a *AIAgent) DiscoverAndOrchestrate(ctx context.Context, query string) (string, error) {
+    // 1. Use AI to understand intent
+    // 2. Discover available components via a.Discover()
+    // 3. Use AI to plan component usage
+    // 4. Execute plan
+    // 5. Synthesize response
+}
+```
+
+### AITool (Passive Service)
+
+```go
+type AITool struct {
+    *core.BaseTool    // NO discovery capability
+    aiClient core.AIClient
+}
+
+// Can only process requests, cannot discover
+func (t *AITool) ProcessWithAI(ctx context.Context, input string) (string, error) {
+    return t.aiClient.GenerateResponse(ctx, input, opts)
+}
+```
+
+### When to Use Each
+
+| Component | Use Case | Example |
+|-----------|----------|---------|
+| **AIAgent** | Orchestration requiring discovery | Research agent coordinating multiple tools |
+| **AITool** | Single-purpose AI capability | Translation tool, Summarization tool |
+| **Raw AIClient** | Direct API access | Custom integration |
+
+---
+
+## Logging and Telemetry
+
+### Logging Guidelines
+
+**Where to Log** (all logging uses `core.Logger`):
+
+| Location | Log Level | What to Log |
+|----------|-----------|-------------|
+| `client.go` | INFO | Client creation, provider selection |
+| `registry.go` | INFO/DEBUG | Provider detection, auto-selection |
+| `providers/*/factory.go` | INFO | Provider initialization |
+| `providers/*/client.go` | INFO/DEBUG | Request/response, errors |
+| `providers/base.go` | INFO/WARN | Retries, failures |
+| `chain_client.go` | INFO/WARN | Failover events |
+| `ai_agent.go` | INFO | Orchestration phases |
+
+**Structured Log Fields**:
+
+```go
+// Standard fields for AI operations
+logger.Info("AI request initiated", map[string]interface{}{
+    "operation":     "ai_request",        // Operation type
+    "provider":      "openai",            // Provider name
+    "model":         "gpt-4",             // Model used
+    "prompt_length": len(prompt),         // Input size
+    "max_tokens":    1000,                // Token limit
+})
+
+logger.Info("AI response received", map[string]interface{}{
+    "operation":         "ai_response",
+    "provider":          "openai",
+    "model":             "gpt-4",
+    "prompt_tokens":     usage.PromptTokens,
+    "completion_tokens": usage.CompletionTokens,
+    "duration_ms":       duration.Milliseconds(),
+    "status":            "success",
+})
+```
+
+### Telemetry Guidelines
+
+**Metrics to Emit** (using `telemetry` module):
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `ai.request.duration_ms` | Histogram | provider, model, status | Latency tracking |
+| `ai.request.tokens` | Counter | provider, model, token_type | Cost tracking |
+| `ai.request.errors` | Counter | provider, error_type | Error rates |
+| `ai.chain.failover` | Counter | from_provider, to_provider | Failover frequency |
+| `ai.provider.available` | Gauge | provider | Health monitoring |
+
+**Implementation Pattern**:
+
+```go
+// In providers/*/client.go
+func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
+    startTime := time.Now()
+
+    // ... execute request ...
+
+    duration := time.Since(startTime).Milliseconds()
+
+    // Emit metrics (if telemetry is initialized)
+    telemetry.RecordAIRequest(telemetry.ModuleAI, "openai", float64(duration), "success")
+    telemetry.RecordAITokens(telemetry.ModuleAI, "openai", "prompt", int64(usage.PromptTokens))
+    telemetry.RecordAITokens(telemetry.ModuleAI, "openai", "completion", int64(usage.CompletionTokens))
+
+    return result, nil
+}
+```
+
+### Component Filtering
+
+All AI module logs should use the `framework/ai` component:
+
+```go
+// In factory.go
+if config.Logger != nil {
+    if cal, ok := config.Logger.(core.ComponentAwareLogger); ok {
+        config.Logger = cal.WithComponent("framework/ai")
+    }
+}
+```
+
+This enables filtering:
+```bash
+kubectl logs ... | jq 'select(.component == "framework/ai")'
+```
+
+---
+
+## Configuration System
+
+### Configuration Hierarchy
+
+Priority order (highest to lowest):
+
+```
+1. Explicit options     → ai.WithAPIKey("sk-...")
+2. Provider-specific    → OPENAI_API_KEY, ANTHROPIC_API_KEY
+3. TRUVAG3 prefixed      → TRUVAG3_AI_PROVIDER
+4. Defaults             → "auto" detection
+```
+
+### Configuration Options
+
+```go
+client, err := ai.NewClient(
+    // Provider selection
+    ai.WithProvider("openai"),           // Explicit provider
+    ai.WithProviderAlias("openai.groq"), // OpenAI-compatible service
+
+    // Credentials
+    ai.WithAPIKey("sk-..."),             // API key
+    ai.WithBaseURL("https://..."),       // Custom endpoint
+
+    // Model configuration
+    ai.WithModel("gpt-4"),               // Model selection
+    ai.WithTemperature(0.7),             // Generation temperature
+    ai.WithMaxTokens(1000),              // Token limit
+
+    // Connection settings
+    ai.WithTimeout(180 * time.Second),   // Request timeout (default, supports reasoning models)
+    ai.WithMaxRetries(3),                // Retry count
+
+    // Observability
+    ai.WithLogger(logger),               // Logger instance
+)
+```
+
+### Environment Variable Reference
+
+| Variable | Provider | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI | API key |
+| `OPENAI_BASE_URL` | OpenAI | Custom endpoint |
+| `ANTHROPIC_API_KEY` | Anthropic | API key |
+| `GEMINI_API_KEY` | Gemini | API key |
+| `GOOGLE_API_KEY` | Gemini | Alternative key |
+| `AWS_REGION` | Bedrock | AWS region |
+| `DEEPSEEK_API_KEY` | OpenAI.DeepSeek | API key |
+| `GROQ_API_KEY` | OpenAI.Groq | API key |
+| `XAI_API_KEY` | OpenAI.xAI | API key |
+| `TOGETHER_API_KEY` | OpenAI.Together | API key |
+| `QWEN_API_KEY` | OpenAI.Qwen | API key |
+
+---
+
+## Integration Patterns
+
+### Pattern 1: Direct Client Usage
+
+```go
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+)
+
+func main() {
+    client, err := ai.NewClient(
+        ai.WithProvider("openai"),
+        ai.WithModel("gpt-4"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    response, err := client.GenerateResponse(ctx, "Hello!", nil)
+}
+```
+
+### Pattern 2: With Framework Integration
+
+```go
+import (
+    "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/telemetry"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+)
+
+func main() {
+    // Initialize telemetry
+    telemetry.Initialize(telemetry.UseProfile(telemetry.ProfileProduction))
+    defer telemetry.Shutdown(context.Background())
+
+    // Create agent with AI
+    agent, err := ai.NewAIAgent("research-agent", os.Getenv("OPENAI_API_KEY"))
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Create framework
+    framework, err := core.NewFramework(agent,
+        core.WithLogger(logger),
+        core.WithDiscovery(true, "redis"),
+    )
+
+    // Run
+    framework.Run(context.Background())
+}
+```
+
+### Pattern 3: Multi-Provider with Failover
+
+```go
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
+)
+
+func main() {
+    // Option A: Explicit chain order
+    chain, err := ai.NewChainClient(
+        ai.WithProviderChain("openai", "anthropic"),
+        ai.WithChainLogger(logger),
+    )
+
+    // Option B: Auto-detect from environment (discovers all available providers)
+    chain, err := ai.NewChainClient(
+        ai.WithChainLogger(logger),
+    )
+
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Automatically fails over if first provider is unavailable
+    response, err := chain.GenerateResponse(ctx, prompt, nil)
+}
+```
+
+---
+
+## Common Pitfalls
+
+### Pitfall 1: Forgetting Provider Import
+
+**Problem**:
+```go
+import "github.com/truvaagents/truva-g3/ai"
+// Missing: _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+
+client, err := ai.NewClient(ai.WithProvider("openai"))
+// Error: provider 'openai' not registered
+```
+
+**Solution**:
+```go
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"  // Add blank import
+)
+```
+
+### Pitfall 2: Nil Logger in Factory
+
+**Problem**:
+```go
+// In factory.go (BROKEN)
+func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
+    var logger core.Logger  // Nil!
+    return NewClient(apiKey, baseURL, logger)
+}
+```
+
+**Symptom**: Silent failures, no logging from provider.
+
+**Solution**:
+```go
+func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
+    logger := config.Logger
+    if logger != nil {
+        if cal, ok := logger.(core.ComponentAwareLogger); ok {
+            logger = cal.WithComponent("framework/ai")
+        }
+    }
+    return NewClient(apiKey, baseURL, logger)
+}
+```
+
+### Pitfall 3: Missing Error Handling
+
+**Problem**:
+```go
+client, _ := ai.NewClient()  // Ignoring error
+response, _ := client.GenerateResponse(ctx, prompt, nil)  // Panic if client is nil
+```
+
+**Solution**:
+```go
+client, err := ai.NewClient()
+if err != nil {
+    log.Fatalf("Failed to create AI client: %v", err)
+}
+
+response, err := client.GenerateResponse(ctx, prompt, nil)
+if err != nil {
+    // Handle error appropriately
+}
+```
+
+### Pitfall 4: Using Auto-Detection in Production
+
+**For single clients** — auto-detection picks ONE provider, which could change if env vars change:
+```go
+// Potentially surprising in production - provider could change unexpectedly
+client, _ := ai.NewClient()  // Uses auto-detection → picks single best provider
+```
+
+**Solution for single client**:
+```go
+// Explicit provider selection in production
+client, _ := ai.NewClient(
+    ai.WithProvider("openai"),  // Explicit
+    ai.WithModel("gpt-4"),      // Explicit
+)
+```
+
+**For chain clients** — auto-detection is safe because it builds a **failover list of ALL available providers**, which is the intended production use case:
+```go
+// Safe for production - builds failover chain from all available providers
+chain, _ := ai.NewChainClient(ai.WithChainLogger(logger))
+// All detected providers become failover targets, ordered by priority
+```
+
+Use explicit `WithProviderChain(...)` when you need deterministic ordering that doesn't change with environment.
+
+---
+
+## Troubleshooting Guide
+
+### Issue: "provider not registered"
+
+**Diagnostic**:
+```go
+// Check registered providers
+providers := ai.ListProviders()
+fmt.Printf("Registered providers: %v\n", providers)
+```
+
+**Common Causes**:
+1. Missing blank import for provider package
+2. Build tags excluding provider (e.g., `//go:build bedrock`)
+
+**Solution**: Add blank import:
+```go
+import _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+```
+
+### Issue: "no provider detected in environment"
+
+**Diagnostic**:
+```go
+info := ai.GetProviderInfo()
+for _, p := range info {
+    fmt.Printf("%s: available=%v, priority=%d\n", p.Name, p.Available, p.Priority)
+}
+```
+
+**Common Causes**:
+1. API key environment variables not set
+2. Using auto-detection with no configured providers
+
+**Solution**: Set required environment variables or use explicit configuration.
+
+### Issue: Silent Failures (No Logs)
+
+**Diagnostic**:
+```go
+// Check if logger is being passed
+client, _ := ai.NewClient(
+    ai.WithLogger(myLogger),  // Ensure logger is passed
+)
+```
+
+**Common Causes**:
+1. Logger not passed to `NewClient`
+2. Factory not propagating logger to client
+3. Nil logger in factory (Gemini, Bedrock bug)
+
+**Solution**: Ensure logger propagation through factory chain.
+
+### Issue: Chain Client Exhausts All Providers
+
+**Diagnostic**: Check logs for failover sequence.
+
+**Common Causes**:
+1. All providers have same underlying issue (invalid API key)
+2. Request is malformed (true 4xx client errors don't trigger failover; transient proxy 4xx errors with `IsTransient() == true` do)
+
+**Solution**:
+- Verify API keys for all providers in chain
+- Check if error is client error (4xx) vs server error (5xx)
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2025-12-14 | Initial architecture documentation |
+
+---
+
+## Related Documentation
+
+- [AI Module Logging/Telemetry Audit](./LOGGING_TELEMETRY_AUDIT.md) - Implementation recommendations
+- [Framework Design Principles](../FRAMEWORK_DESIGN_PRINCIPLES.md) - Overall framework architecture
+- [Core Module Design](../core/CORE_DESIGN_PRINCIPLES.md) - Core module rules
+- [Telemetry Architecture](../telemetry/ARCHITECTURE.md) - Telemetry patterns
+
+---
+
+**Remember**: The AI module abstracts away provider complexity while maintaining the framework's architectural principles. When in doubt, favor explicit configuration over auto-detection, and always propagate loggers through the factory chain for production visibility.

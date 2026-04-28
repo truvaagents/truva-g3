@@ -1,0 +1,66 @@
+# Workspace Dockerfile for weather-tool-v2
+# This Dockerfile builds with LOCAL modules (uses local core and telemetry)
+# Usage (from truvag3 root): docker build -f examples/weather-tool-v2/Dockerfile.workspace -t weather-tool-v2:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the weather-tool-v2 example
+COPY examples/weather-tool-v2/ ./examples/weather-tool-v2/
+
+WORKDIR /app/examples/weather-tool-v2
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o weather-tool-v2 .
+
+# Verify the binary was created
+RUN ls -lh weather-tool-v2
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Copy binary from builder stage
+COPY --from=builder /app/examples/weather-tool-v2/weather-tool-v2 .
+
+# Change ownership to non-root user
+RUN chown appuser:appgroup /app/weather-tool-v2 && \
+    chmod +x /app/weather-tool-v2
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8339
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./weather-tool-v2"]

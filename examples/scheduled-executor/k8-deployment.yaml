@@ -1,0 +1,156 @@
+# scheduled-executor — Kubernetes deployment manifest
+#
+# This internal BaseAgent consumes tasks from the fixed scheduled-execution
+# queue and forwards them to target agents over HTTP.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduled-executor-config
+  namespace: truvag3-examples
+  labels:
+    app: scheduled-executor
+    component: agent
+    framework: truvag3
+data:
+  # Deployment identity (kept in YAML — not user-tunable per-env)
+  APP_ENV: "production"
+  PORT: "8380"
+  NAMESPACE: "truvag3-examples"
+
+  # Framework tunables (DEV_MODE, TRUVAG3_LOG_LEVEL, TRUVAG3_LOG_FORMAT) are
+  # sourced from .env via the scheduled-executor-env-config ConfigMap.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduled-executor-service
+  namespace: truvag3-examples
+  labels:
+    app: scheduled-executor
+    component: agent
+    framework: truvag3
+    truvag3.framework/type: agent
+spec:
+  selector:
+    app: scheduled-executor
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8380
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduled-executor
+  namespace: truvag3-examples
+  labels:
+    app: scheduled-executor
+    component: agent
+    framework: truvag3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduled-executor
+  template:
+    metadata:
+      labels:
+        app: scheduled-executor
+        component: agent
+        framework: truvag3
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: scheduled-executor
+        image: scheduled-executor:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8380
+          name: http
+        envFrom:
+        - configMapRef:
+            name: scheduled-executor-config
+        - configMapRef:
+            name: scheduled-executor-env-config
+            optional: true
+        env:
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: TRUVAG3_AGENT_NAME
+          value: "scheduled-executor"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "scheduled-executor-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: TRUVAG3_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "150m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8380
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8380
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8380
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          failureThreshold: 12
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1001

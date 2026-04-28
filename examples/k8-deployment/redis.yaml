@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: truvag3-examples
+  labels:
+    app: redis
+    component: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: infrastructure
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        args:
+        - redis-server
+        - --appendonly
+        - "yes"
+        - --appendfsync
+        - everysec
+        - --maxmemory
+        - 256mb
+        - --maxmemory-policy
+        - allkeys-lru
+        # Prevent write blocking when RDB snapshot fails (common in Kind/dev environments)
+        - --stop-writes-on-bgsave-error
+        - "no"
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-pvc
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: truvag3-examples
+  labels:
+    app: redis
+    component: infrastructure
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+  selector:
+    app: redis
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: truvag3-examples
+  labels:
+    app: redis
+    component: infrastructure
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Storage class options for different cloud providers:
+  # storageClassName: gp3-csi         # EKS (recommended) - 20% cheaper than gp2
+  # storageClassName: premium-rwo     # GKE (SSD) - better performance for Redis
+  # storageClassName: standard-rwo    # GKE (Standard) - cheaper option
+  # storageClassName: managed-premium # AKS (Premium SSD) - better performance for Redis
+  # storageClassName: managed-csi     # AKS (Standard) - default
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Redis configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: truvag3-examples
+  labels:
+    app: redis
+    component: infrastructure
+data:
+  redis.conf: |
+    # Redis configuration for Truva-G3 framework
+    bind 0.0.0.0
+    port 6379
+    
+    # Persistence
+    appendonly yes
+    appendfsync everysec
+    # Prevent write blocking when RDB snapshot fails (common in Kind/dev environments)
+    stop-writes-on-bgsave-error no
+    
+    # Memory management
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
+    
+    # Networking
+    tcp-keepalive 300
+    timeout 0
+    
+    # Performance
+    tcp-backlog 511
+    databases 16
+    
+    # Logging
+    loglevel notice
+    
+    # Truva-G3 specific settings
+    # Key expiration for service discovery (30 seconds default)
+    # Services should send heartbeats every 15 seconds
+    notify-keyspace-events Ex

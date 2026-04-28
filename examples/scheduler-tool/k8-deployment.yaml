@@ -1,0 +1,165 @@
+# scheduler-tool — Kubernetes deployment manifest
+#
+# scheduler-tool is a standard BaseTool that exposes 5 scheduling capabilities
+# to any agent via the Truva-G3 service catalog:
+#
+#   POST /api/capabilities/schedule_task
+#   POST /api/capabilities/list_schedules
+#   POST /api/capabilities/get_schedule
+#   POST /api/capabilities/update_schedule
+#   POST /api/capabilities/cancel_schedule
+#
+# Internally it also runs the orchestration.Scheduler as a core.Runnable
+# goroutine that promotes due schedules into target agent task queues on
+# each tick.
+#
+# The distributed lock (for leader election when running multiple replicas)
+# is provided by memory.RedisDistributedLock — acquired per tick, so any
+# replica can become leader within one TTL window after the previous leader
+# dies.
+#
+# Deploy alongside the standard truvag3-examples infrastructure (Redis,
+# OTel collector). No ConfigMap or Secret needed — scheduler-tool has no
+# external API keys.
+#
+# Note: Per docs/TOOL_DEVELOPMENT_GUIDE.md §8, the Service is defined BEFORE
+# the Deployment so the service endpoint is available when pods start.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: scheduler-tool
+    component: tool
+spec:
+  selector:
+    app: scheduler-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8379
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-tool
+  namespace: truvag3-examples
+  labels:
+    app: scheduler-tool
+    component: tool
+spec:
+  # Default to 1 replica for simplicity. Scale to 2+ for HA — the
+  # distributed lock ensures only one replica runs the tick loop at a
+  # time, and the HTTP capabilities are stateless so any replica can serve
+  # schedule_task / list_schedules / etc. requests.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler-tool
+  template:
+    metadata:
+      labels:
+        app: scheduler-tool
+        component: tool
+    spec:
+      containers:
+      - name: scheduler-tool
+        image: scheduler-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8379
+          name: http
+        envFrom:
+        - configMapRef:
+            name: scheduler-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8379"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # Scheduler tuning — numeric tuning via env vars per
+        # FRAMEWORK_DESIGN_PRINCIPLES.md §3 (Configuration Split).
+        - name: TRUVAG3_SCHEDULER_TICK_INTERVAL
+          value: "5s"
+        - name: TRUVAG3_SCHEDULER_LOCK_TTL
+          value: "30s"
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "scheduler-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: TRUVAG3_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8379
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8379
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1001

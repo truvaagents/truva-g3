@@ -1,0 +1,93 @@
+/*
+ * Design Tokens
+ *
+ * Glassmorphism foundation preserved from GLASSMORPHISM_DESIGN.md.
+ * New spacing/typography/elevation tokens added for Phase 2b+ component library.
+ */
+
+:root {
+    /* ── Glassmorphism foundation (from GLASSMORPHISM_DESIGN.md §Color Palette Used) ── */
+
+    /* Glass backgrounds — semi-transparent dark, higher opacity than light themes (§Dark Theme Tips) */
+    --glass-bg: rgba(10, 10, 15, 0.85);
+    --glass-bg-light: rgba(20, 20, 30, 0.75);
+
+    /* Glass borders — subtle white edges for definition (§Core CSS Properties) */
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-border-light: rgba(255, 255, 255, 0.12);
+
+    /* Glass shadow — multi-layer depth perception (§Dark Theme Glassmorphism) */
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+    /* Glass blur — frosted glass effect intensity (§The Essential Glass Effect) */
+    --glass-blur: 24px;
+
+    /* Typography — white/light gray only on dark glass (§Accessibility) */
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.75);
+    --text-muted: rgba(255, 255, 255, 0.5);
+
+    /* Accent colors — status indicators with glow capability (§Legend Items with Glow Dots) */
+    --accent-blue: #0a84ff;
+    --accent-purple: #da8fff;
+    --accent-green: #32d74b;
+    --accent-red: #ff6b6b;
+    --accent-orange: #ffb340;
+    --accent-teal: #64d2ff;
+    --accent-pink: #ff6eb4;
+    --accent-cyan: #64d2ff; /* Alias for --accent-teal; referenced by child-indicator styles */
+    --border-subtle: rgba(255, 255, 255, 0.08);
+
+    /* ── Spacing scale (for Phase 2b+ component library) ── */
+    --space-2xs: 2px;
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-xl: 24px;
+    --space-2xl: 32px;
+    --space-3xl: 48px;
+
+    /* ── Typography scale (for Phase 2b+ component library) ── */
+    --text-2xs: 0.7em;
+    --text-xs: 0.75em;
+    --text-sm: 0.85em;
+    --text-base: 1em;
+    --text-lg: 1.2em;
+
+    /* ── Glassmorphism elevation tiers (derived from GLASSMORPHISM_DESIGN.md §Multi-Layer Shadows) ── */
+    --shadow-card:
+        0 8px 32px rgba(0, 0, 0, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+    --shadow-card-hover:
+        0 16px 48px rgba(0, 0, 0, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.15),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+    --shadow-popup: 0 8px 32px rgba(0, 0, 0, 0.5);
+    --shadow-panel:
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    /* ── Border radii (matching GLASSMORPHISM_DESIGN.md §Core CSS Properties: 12-20px) ── */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-pill: 20px;
+
+    /* ── Interaction type colors (for Phase 2b+ card.js component) ── */
+    --type-tiered-rgb: 140, 150, 255;
+    --type-planning-rgb: 218, 143, 255;
+    --type-synthesis-rgb: 52, 211, 153;
+    --type-resolution-rgb: 100, 210, 255;
+    --type-correction-rgb: 255, 179, 64;
+    --type-error-rgb: 255, 107, 107;
+    --type-memory-rgb: 240, 160, 48;
+    --type-schema-rgb: 0, 200, 170;
+
+    /* ── Transition durations (per §Performance Optimization: animate opacity/transform, not backdrop-filter) ── */
+    --transition-fast: 150ms;
+    --transition-normal: 200ms;
+    --transition-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}

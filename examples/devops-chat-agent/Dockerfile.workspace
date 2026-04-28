@@ -1,0 +1,62 @@
+# Workspace Dockerfile for devops-chat-agent
+# This Dockerfile builds with LOCAL modules (includes local fixes)
+# Usage (from truvag3 root): docker build -f examples/devops-chat-agent/Dockerfile.workspace -t devops-chat-agent:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies (CGO disabled, so no C toolchain needed)
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY ai/ ./ai/
+COPY core/ ./core/
+COPY memory/ ./memory/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+COPY resilience/ ./resilience/
+
+# Copy the devops-chat-agent example
+COPY examples/devops-chat-agent/ ./examples/devops-chat-agent/
+
+WORKDIR /app/examples/devops-chat-agent
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary
+ARG TARGETARCH=arm64
+RUN go build -trimpath -buildvcs=false \
+    -ldflags '-w -s' \
+    -o devops-chat-agent .
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime deps and create non-root user in one layer
+RUN apk --no-cache add ca-certificates tzdata && \
+    addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+WORKDIR /app
+
+# Copy binary from builder stage (ownership set at copy time)
+COPY --from=builder --chown=appuser:appgroup /app/examples/devops-chat-agent/devops-chat-agent .
+
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8357
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./devops-chat-agent"]

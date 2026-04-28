@@ -1,0 +1,261 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: truvag3-examples
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        ports:
+        - containerPort: 9090
+          name: web
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus
+        - --web.console.libraries=/usr/share/prometheus/console_libraries
+        - --web.console.templates=/usr/share/prometheus/consoles
+        - --storage.tsdb.retention.time=15d
+        - --web.enable-lifecycle
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-data
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: truvag3-examples
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9090
+    targetPort: 9090
+    name: web
+  selector:
+    app: prometheus
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: truvag3-examples
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Storage class options for different cloud providers:
+  # storageClassName: gp3-csi         # EKS (recommended) - 20% cheaper than gp2
+  # storageClassName: premium-rwo     # GKE (SSD) - better performance
+  # storageClassName: standard-rwo    # GKE (Standard) - cheaper option
+  # storageClassName: managed-premium # AKS (Premium SSD) - better performance
+  # storageClassName: managed-csi     # AKS (Standard) - default
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: truvag3-examples
+  labels:
+    app: prometheus
+    component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager.truvag3-examples:9093
+
+    rule_files:
+      - "truvag3_rules.yml"
+
+    scrape_configs:
+      # NOTE: Agents and tools use OTLP push-based telemetry to the OTEL Collector.
+      # Prometheus scrapes only the collector's Prometheus exporter (port 8889),
+      # NOT individual agent/tool pods. Do not add direct pod scrape jobs for them.
+
+      # Kubelet cAdvisor metrics for container resource usage (CPU, Memory)
+      - job_name: 'kubelet-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+        metric_relabel_configs:
+        # Keep only metrics for truvag3-examples namespace
+        - source_labels: [namespace]
+          regex: truvag3-examples
+          action: keep
+        # Keep only container_* metrics we need
+        - source_labels: [__name__]
+          regex: container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_usage_bytes|network_.*)
+          action: keep
+
+      # OTEL Collector — single scrape target for all Truva-G3 app metrics
+      # The collector receives OTLP from all agents/tools and exports in Prometheus format
+      - job_name: 'otel-collector-metrics'
+        static_configs:
+        - targets: ['otel-collector.truvag3-examples:8889']
+          labels:
+            service: 'otel-collector'
+            component: 'telemetry'
+
+      # NOTE: Redis does not expose a Prometheus-compatible HTTP endpoint on
+      # port 6379.  Scraping it sends HTTP to the Redis wire protocol, which
+      # triggers "Possible SECURITY ATTACK" warnings and connection aborts —
+      # degrading Redis availability for heartbeats and scheduled tasks.
+      # If Redis metrics are needed in the future, deploy a redis-exporter
+      # sidecar and scrape its /metrics endpoint instead.
+
+      - job_name: 'prometheus'
+        static_configs:
+        - targets: ['localhost:9090']
+
+      # Truva-G3 Mock Services (for testing/stress testing)
+      - job_name: 'truvag3-mock-services'
+        kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+            - truvag3-examples
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_component]
+          action: keep
+          regex: mock-service
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: pod
+
+  truvag3_rules.yml: |
+    groups:
+    - name: truvag3.rules
+      rules:
+      - alert: TruvaG3HighLatency
+        expr: histogram_quantile(0.90, sum by (le, pod, namespace, app, job, instance) (rate(http_request_duration_seconds_bucket{job="truvag3-mock-services"}[2m]))) > 0.8
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High P90 latency on {{ $labels.app }} ({{ $labels.pod }})"
+          description: "P90 response time is {{ printf \"%.2f\" $value }}s on pod {{ $labels.pod }} in namespace {{ $labels.namespace }}. Normal baseline is ~150ms."
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: truvag3-examples
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: truvag3-examples

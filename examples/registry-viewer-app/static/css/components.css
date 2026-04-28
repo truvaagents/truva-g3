@@ -1,0 +1,153 @@
+/*
+ * Component Styles & Utility Classes
+ *
+ * Reusable classes for Phase 2b+ component library (data-table.js, card.js, etc.).
+ * Glassmorphism surfaces per GLASSMORPHISM_DESIGN.md.
+ *
+ * These classes are NOT used by the current index.html — they exist for the
+ * JS component library to reference when views are modularized in Phase 2b-2f.
+ * Adding this file now has zero visual effect.
+ */
+
+/* ── Glassmorphism surfaces (per GLASSMORPHISM_DESIGN.md §Dark Theme Glassmorphism) ── */
+
+/* Base glass card — gradient background + blur + multi-layer shadows + top highlight.
+   Matches §Step Cards with Status Glow exactly. */
+.glass-card {
+    position: relative;
+    background: linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.08) 0%,
+        rgba(255, 255, 255, 0.02) 100%
+    );
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-card);
+    /* Per §Performance Optimization: animate transform/opacity, not backdrop-filter */
+    transition: transform var(--transition-normal) var(--transition-ease),
+                box-shadow var(--transition-normal) var(--transition-ease),
+                border-color var(--transition-normal) var(--transition-ease);
+}
+
+/* Top highlight line (§Step Cards — pseudo-element for additional depth) */
+.glass-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+/* Interactive hover — intensified glass + lift (§Interactive Hover States) */
+.glass-card-interactive { cursor: pointer; }
+.glass-card-interactive:hover {
+    background: linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.12) 0%,
+        rgba(255, 255, 255, 0.04) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.18);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-card-hover);
+}
+
+/* Lightweight glass surface — for table rows, list items (no blur, lower cost) */
+.glass-surface {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+}
+
+/* Glass container — for panels and sections (§DAG Visualization Container) */
+.glass-container {
+    background: linear-gradient(
+        180deg,
+        rgba(15, 15, 25, 0.6) 0%,
+        rgba(10, 10, 18, 0.8) 100%
+    );
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-panel);
+    overflow: hidden;
+}
+
+/* Status glow borders — colored left border with radial glow (§Status-specific colored glow) */
+.glass-card.status-success { border-left: 3px solid var(--accent-green); box-shadow: var(--shadow-card), -6px 0 24px -10px rgba(50, 215, 75, 0.4); }
+.glass-card.status-failed  { border-left: 3px solid var(--accent-red);   box-shadow: var(--shadow-card), -6px 0 24px -10px rgba(255, 107, 107, 0.4); }
+.glass-card.status-pending { border-left: 3px solid var(--accent-orange); box-shadow: var(--shadow-card), -6px 0 24px -10px rgba(255, 179, 64, 0.4); }
+
+/* Glow dots for legends and status indicators (§Legend Items with Glow Dots) */
+.glow-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    box-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+}
+
+/* ── Browser compatibility fallback (§Browser Compatibility) ── */
+@supports not (backdrop-filter: blur(10px)) {
+    .glass-card, .glass-container {
+        background: rgba(20, 20, 30, 0.95);
+    }
+}
+
+/* ── Loading overlay ── */
+.loading-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(10, 10, 15, 0.6);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    border-radius: inherit;
+}
+.loading-spinner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 32px;
+    background: linear-gradient(135deg, rgba(20, 30, 40, 0.95) 0%, rgba(10, 15, 25, 0.95) 100%);
+    border: 1px solid rgba(100, 210, 255, 0.3);
+    border-radius: var(--radius-xl);
+    box-shadow:
+        0 0 40px rgba(100, 210, 255, 0.2),
+        0 0 80px rgba(100, 210, 255, 0.1),
+        0 8px 32px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 500;
+    animation: loading-ambient 2s ease-in-out infinite;
+}
+@keyframes loading-ambient {
+    0%, 100% { box-shadow: 0 0 40px rgba(100, 210, 255, 0.2), 0 0 80px rgba(100, 210, 255, 0.1), 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1); border-color: rgba(100, 210, 255, 0.3); }
+    50% { box-shadow: 0 0 60px rgba(100, 210, 255, 0.35), 0 0 100px rgba(100, 210, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15); border-color: rgba(100, 210, 255, 0.5); }
+}
+.loading-spin-icon {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+    font-size: 22px;
+    color: var(--accent-teal);
+}
+@keyframes loading-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── Reduced motion (§Performance Optimization) ── */
+@media (prefers-reduced-motion: reduce) {
+    .glass-card, .glass-container {
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+    }
+    .glass-card-interactive:hover {
+        transform: none;
+    }
+}

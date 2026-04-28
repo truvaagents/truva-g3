@@ -1,0 +1,109 @@
+# Service first — ensures endpoint is available when pods start
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-observability-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: devops-observability-tool
+    component: tool
+spec:
+  selector:
+    app: devops-observability-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8378
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-observability-tool
+  namespace: truvag3-examples
+  labels:
+    app: devops-observability-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devops-observability-tool
+  template:
+    metadata:
+      labels:
+        app: devops-observability-tool
+        component: tool
+    spec:
+      containers:
+      - name: devops-observability-tool
+        image: devops-observability-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8378
+          name: http
+        envFrom:
+        - configMapRef:
+            name: devops-observability-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8378"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: LOKI_URL
+          value: "http://loki.truvag3-examples:3100"
+        - name: JAEGER_URL
+          value: "http://jaeger-query.truvag3-examples:80"
+        - name: DEV_MODE
+          value: "false"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # Logging
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        # K8s identity
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "devops-observability-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8378
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8378
+          initialDelaySeconds: 5
+          periodSeconds: 10

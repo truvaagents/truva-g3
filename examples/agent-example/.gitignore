@@ -1,0 +1,38 @@
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# But keep the example
+!.env.example
+
+# Binary files
+research-agent
+research-agent-example
+research-agent-test
+test-binary
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+*.out
+coverage.txt
+coverage.html
+
+# Temporary files
+*.tmp
+*.log
+
+# Documentation files (except README)
+*.md
+!README.md

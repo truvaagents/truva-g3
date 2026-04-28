@@ -1,0 +1,122 @@
+# Note: Secrets are created by setup.sh from .env file
+# Run ./setup.sh to deploy with proper API keys
+# Or create the secret manually:
+#   kubectl create secret generic slack-tool-secrets \
+#     --from-literal=SLACK_BOT_TOKEN=your-slack-bot-token \
+#     --from-literal=SLACK_USER_TOKEN=your-slack-user-token -n truvag3-examples
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slack-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: slack-tool
+    component: tool
+spec:
+  selector:
+    app: slack-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8373
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-tool
+  namespace: truvag3-examples
+  labels:
+    app: slack-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slack-tool
+  template:
+    metadata:
+      labels:
+        app: slack-tool
+        component: tool
+    spec:
+      containers:
+      - name: slack-tool
+        image: slack-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8373
+          name: http
+        envFrom:
+        - configMapRef:
+            name: slack-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        # --- Category 1: Core Configuration ---
+        - name: PORT
+          value: "8373"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # --- Category 2: API Credentials (from secrets) ---
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-tool-secrets
+              key: SLACK_BOT_TOKEN
+        - name: SLACK_USER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-tool-secrets
+              key: SLACK_USER_TOKEN
+              optional: true  # search_messages won't work without it, but tool still starts
+        # --- Category 3: Operational Configuration ---
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "slack-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8373
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8373
+          initialDelaySeconds: 5
+          periodSeconds: 10

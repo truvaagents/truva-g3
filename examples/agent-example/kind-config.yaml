@@ -1,0 +1,23 @@
+# Kind cluster configuration for Truva-G3 Agent Example
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  # Port mappings for easy local access
+  extraPortMappings:
+  # Agent HTTP port
+  - containerPort: 30090
+    hostPort: 8090
+    protocol: TCP
+  # Additional port for other services
+  - containerPort: 30080
+    hostPort: 8080
+    protocol: TCP
+  # Prometheus metrics port (optional)
+  - containerPort: 30900
+    hostPort: 9090
+    protocol: TCP
+  # Grafana port (optional)
+  - containerPort: 33000
+    hostPort: 3000
+    protocol: TCP

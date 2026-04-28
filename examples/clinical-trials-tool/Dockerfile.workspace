@@ -1,0 +1,53 @@
+# Workspace Dockerfile for clinical-trials-tool
+# Builds with LOCAL modules (uses local core and telemetry)
+# Usage (from truvag3 root): docker build -f examples/clinical-trials-tool/Dockerfile.workspace -t clinical-trials-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the clinical-trials-tool example
+COPY examples/clinical-trials-tool/ ./examples/clinical-trials-tool/
+
+WORKDIR /app/examples/clinical-trials-tool
+
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+RUN go mod tidy && go mod download
+
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o clinical-trials-tool .
+
+RUN ls -lh clinical-trials-tool
+
+FROM alpine:3.23
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=builder /app/examples/clinical-trials-tool/clinical-trials-tool .
+
+RUN chown appuser:appgroup /app/clinical-trials-tool && \
+    chmod +x /app/clinical-trials-tool
+USER appuser
+
+ENV PORT=8367
+
+EXPOSE ${PORT}
+
+ENTRYPOINT ["./clinical-trials-tool"]

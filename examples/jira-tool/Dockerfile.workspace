@@ -1,0 +1,66 @@
+# Workspace Dockerfile for jira-tool
+# This Dockerfile builds with LOCAL modules (uses local core and telemetry)
+# Usage (from truvag3 root): docker build -f examples/jira-tool/Dockerfile.workspace -t jira-tool:latest .
+
+FROM golang:1.26.2-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make gcc musl-dev ca-certificates
+
+WORKDIR /app
+
+# Copy local modules that are referenced by replace directives
+COPY core/ ./core/
+COPY telemetry/ ./telemetry/
+
+# Copy the jira-tool example
+COPY examples/jira-tool/ ./examples/jira-tool/
+
+WORKDIR /app/examples/jira-tool
+
+# Configure Go build
+ENV GOWORK=off
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
+
+# Download remaining dependencies and build
+RUN go mod tidy && go mod download
+
+# Build the binary with optimizations
+ARG TARGETARCH=arm64
+RUN go build -a -installsuffix cgo \
+    -ldflags '-w -s -extldflags "-static"' \
+    -o jira-tool .
+
+# Verify the binary was created
+RUN ls -lh jira-tool
+
+# Runtime stage
+FROM alpine:3.23
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Copy binary from builder stage
+COPY --from=builder /app/examples/jira-tool/jira-tool .
+
+# Change ownership to non-root user
+RUN chown appuser:appgroup /app/jira-tool && \
+    chmod +x /app/jira-tool
+USER appuser
+
+# Set default PORT if not provided
+ENV PORT=8366
+
+# Expose port
+EXPOSE ${PORT}
+
+# Run the binary
+ENTRYPOINT ["./jira-tool"]

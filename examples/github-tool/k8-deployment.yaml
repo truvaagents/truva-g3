@@ -1,0 +1,190 @@
+# Kubernetes Deployment for github-tool
+# Namespace: truvag3-examples
+# Port: 8381
+#
+# This is a tool, not an agent — no Ingress is provisioned. The tool is
+# reached only by other components in the cluster (specifically
+# github-pr-review-agent) via service discovery on the Redis registry.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-tool-config
+  namespace: truvag3-examples
+  labels:
+    app: github-tool
+    component: tool
+    framework: truvag3
+data:
+  # Deployment identity (kept in YAML — not user-tunable per-env)
+  APP_ENV: "production"
+  PORT: "8381"
+  NAMESPACE: "truvag3-examples"
+
+  # Framework tunables (DEV_MODE, TRUVAG3_LOG_LEVEL, TRUVAG3_LOG_FORMAT,
+  # artifact backend/TTL/limits, GitHub API base URL, and discovery resilience)
+  # are sourced from .env via the github-tool-env-config ConfigMap.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-tool
+  namespace: truvag3-examples
+  labels:
+    app: github-tool
+    component: tool
+    framework: truvag3
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: github-tool
+  template:
+    metadata:
+      labels:
+        app: github-tool
+        component: tool
+        framework: truvag3
+        truvag3.framework/type: tool
+        version: v1
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: default
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+      - name: tool
+        image: github-tool:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 8381
+          protocol: TCP
+
+        envFrom:
+        - configMapRef:
+            name: github-tool-config
+        - configMapRef:
+            name: github-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        - secretRef:
+            name: github-tool-secrets
+            optional: true  # Holds GITHUB_TOKEN
+
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "github-tool"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # K8s service discovery
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "github-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+
+        resources:
+          requests:
+            cpu: "15m"
+            memory: "32Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness gates on /api/capabilities so traffic is only routed once
+        # capabilities are registered (per the tool development guide).
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 12
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: github-tool
+    component: tool
+    framework: truvag3
+    truvag3.framework/type: tool
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8381
+    protocol: TCP
+  selector:
+    app: github-tool

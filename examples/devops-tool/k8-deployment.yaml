@@ -1,0 +1,231 @@
+---
+# RBAC: ServiceAccount for devops-tool
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devops-tool-sa
+  namespace: truvag3-examples
+  labels:
+    app: devops-tool
+    component: tool
+
+---
+# RBAC: ClusterRole with broad operational access for local testing clusters
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devops-tool-role
+  labels:
+    app: devops-tool
+    component: tool
+rules:
+  # --- Core API (read + write) ---
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status", "services", "endpoints", "configmaps", "events", "namespaces", "nodes", "persistentvolumeclaims", "persistentvolumes", "replicationcontrollers", "resourcequotas", "limitranges", "serviceaccounts", "componentstatuses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "endpoints", "serviceaccounts", "persistentvolumeclaims", "replicationcontrollers"]
+    verbs: ["create", "update", "patch"]
+  # Pod exec and port-forward (for kubectl exec, kubectl cp, kubectl port-forward)
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/portforward", "pods/attach"]
+    verbs: ["create", "get"]
+  # Pod eviction (for kubectl drain)
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  # Node operations (cordon/uncordon/taint)
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/status"]
+    verbs: ["patch", "update"]
+
+  # --- Apps API (full operational access) ---
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/rollback"]
+    verbs: ["create"]
+
+  # --- Batch API (jobs/cronjobs) ---
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # --- Networking ---
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingresses/status", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # --- Autoscaling ---
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # --- Metrics API (kubectl top) ---
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+
+  # --- Storage ---
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments", "csinodes", "csidrivers"]
+    verbs: ["get", "list", "watch"]
+
+  # --- RBAC (read-only for auditing) ---
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch"]
+
+  # --- Policy ---
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets", "podsecuritypolicies"]
+    verbs: ["get", "list", "watch"]
+
+  # --- Discovery and coordination ---
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch"]
+
+  # --- Auth (kubectl auth can-i) ---
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]
+    verbs: ["create"]
+
+  # --- Custom Resource Definitions (read-only) ---
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+
+  # --- API discovery (kubectl api-resources, api-versions) ---
+  - nonResourceURLs: ["/api", "/api/*", "/apis", "/apis/*", "/version", "/healthz", "/openapi/*"]
+    verbs: ["get"]
+
+---
+# RBAC: Bind the ClusterRole to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devops-tool-binding
+  labels:
+    app: devops-tool
+    component: tool
+subjects:
+  - kind: ServiceAccount
+    name: devops-tool-sa
+    namespace: truvag3-examples
+roleRef:
+  kind: ClusterRole
+  name: devops-tool-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: devops-tool
+    component: tool
+spec:
+  selector:
+    app: devops-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8347
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-tool
+  namespace: truvag3-examples
+  labels:
+    app: devops-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devops-tool
+  template:
+    metadata:
+      labels:
+        app: devops-tool
+        component: tool
+    spec:
+      serviceAccountName: devops-tool-sa
+      containers:
+      - name: devops-tool
+        image: devops-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8347
+          name: http
+        # User-configurable env vars from .env via setup.sh
+        envFrom:
+        - configMapRef:
+            name: devops-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8347"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience (handles Redis startup race conditions)
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "devops-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8347
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8347
+          initialDelaySeconds: 5
+          periodSeconds: 10

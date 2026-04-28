@@ -1,0 +1,29 @@
+# Environment variables
+.env
+
+# Built binaries
+weather-tool-example
+weather-tool-test
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+coverage.out
+*.test
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation files (except README)
+*.md
+!README.md

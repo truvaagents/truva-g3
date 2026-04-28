@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: country-info-tool
+  namespace: truvag3-examples
+  labels:
+    app: country-info-tool
+    truvag3.framework/type: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: country-info-tool
+  template:
+    metadata:
+      labels:
+        app: country-info-tool
+        truvag3.framework/type: tool
+    spec:
+      containers:
+      - name: country-info-tool
+        image: country-info-tool:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8333
+        envFrom:
+        - configMapRef:
+            name: country-info-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8333"
+        - name: TRUVAG3_NAMESPACE
+          value: "truvag3-examples"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "country-info-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: TRUVAG3_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8333
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8333
+          initialDelaySeconds: 5
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: country-info-tool-service
+  namespace: truvag3-examples
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8333
+  selector:
+    app: country-info-tool

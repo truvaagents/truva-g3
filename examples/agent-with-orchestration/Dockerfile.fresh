@@ -1,0 +1,10 @@
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /app
+RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
+COPY agent-binary-new ./travel-research-agent
+RUN chown appuser:appgroup /app/travel-research-agent && chmod +x /app/travel-research-agent
+USER appuser
+ENV PORT=8094
+EXPOSE 8094
+ENTRYPOINT ["./travel-research-agent"]

@@ -1,0 +1,103 @@
+# Qdrant Vector Database for Truva-G3 Shared Knowledge (Phase 2)
+# Lightweight single-node deployment for Kind cluster and development.
+# Production: consider Qdrant Cloud or multi-node cluster with replication.
+#
+# Deploy: kubectl apply -f qdrant.yaml -n truvag3-examples
+# Verify: kubectl get pods -n truvag3-examples -l app=qdrant
+# Access: qdrant.truvag3-examples.svc.cluster.local:6334 (gRPC)
+#          qdrant.truvag3-examples.svc.cluster.local:6333 (REST/Dashboard)
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-storage
+  namespace: truvag3-examples
+  labels:
+    app: qdrant
+    component: shared-memory
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: truvag3-examples
+  labels:
+    app: qdrant
+    component: shared-memory
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+        component: shared-memory
+    spec:
+      containers:
+      - name: qdrant
+        image: qdrant/qdrant:v1.13.6
+        ports:
+        - name: rest
+          containerPort: 6333
+          protocol: TCP
+        - name: grpc
+          containerPort: 6334
+          protocol: TCP
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: qdrant-storage
+          mountPath: /qdrant/storage
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 6333
+          initialDelaySeconds: 5
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 6333
+          initialDelaySeconds: 3
+          periodSeconds: 10
+          timeoutSeconds: 3
+      volumes:
+      - name: qdrant-storage
+        persistentVolumeClaim:
+          claimName: qdrant-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: truvag3-examples
+  labels:
+    app: qdrant
+    component: shared-memory
+spec:
+  type: ClusterIP
+  ports:
+  - name: rest
+    port: 6333
+    targetPort: 6333
+    protocol: TCP
+  - name: grpc
+    port: 6334
+    targetPort: 6334
+    protocol: TCP
+  selector:
+    app: qdrant

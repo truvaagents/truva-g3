@@ -1,0 +1,119 @@
+# Note: Secrets are created by setup.sh from .env file
+# Run ./setup.sh to deploy with proper API keys
+# Or create the secret manually:
+#   kubectl create secret generic pubmed-tool-secrets \
+#     --from-literal=NCBI_API_KEY=your-key -n truvag3-examples
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pubmed-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: pubmed-tool
+    component: tool
+spec:
+  selector:
+    app: pubmed-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8375
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pubmed-tool
+  namespace: truvag3-examples
+  labels:
+    app: pubmed-tool
+    component: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pubmed-tool
+  template:
+    metadata:
+      labels:
+        app: pubmed-tool
+        component: tool
+    spec:
+      containers:
+      - name: pubmed-tool
+        image: pubmed-tool:latest
+        imagePullPolicy: Never  # For local Kind cluster
+        ports:
+        - containerPort: 8375
+          name: http
+        envFrom:
+        - configMapRef:
+            name: pubmed-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        env:
+        - name: PORT
+          value: "8375"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # NCBI policy-required env vars
+        - name: NCBI_TOOL_NAME
+          value: "truvag3-pubmed-tool"
+        - name: NCBI_EMAIL
+          value: "truvag3-pubmed@example.com"
+        # Optional API key from secret
+        - name: NCBI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pubmed-tool-secrets
+              key: NCBI_API_KEY
+              optional: true  # Tool works without key (3 req/sec vs 10)
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "pubmed-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8375
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8375
+          initialDelaySeconds: 5
+          periodSeconds: 10

@@ -1,0 +1,275 @@
+# Kubernetes Deployment for Research Assistant Agent with Telemetry
+# Agent Namespace: truvag3-examples
+# Infrastructure Namespace: default
+# Port: 8355
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: research-agent-telemetry-config
+  namespace: truvag3-examples
+  labels:
+    app: research-agent-telemetry
+    component: agent
+    framework: truvag3
+data:
+  # Deployment identity (kept in YAML — not user-tunable per-env)
+  APP_ENV: "production"
+  PORT: "8355"
+  NAMESPACE: "truvag3-examples"
+
+  # In-cluster telemetry endpoint (infra wiring, not tunable)
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.truvag3-examples:4318"
+
+  # Framework tunables (DEV_MODE, TRUVAG3_LOG_LEVEL, TRUVAG3_VALIDATE_PAYLOADS,
+  # TRUVAG3_LLM_DEBUG_ENABLED) are sourced from .env via the
+  # research-agent-telemetry-env-config ConfigMap.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: research-agent-telemetry
+  namespace: truvag3-examples
+  labels:
+    app: research-agent-telemetry
+    component: agent
+    framework: truvag3
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: research-agent-telemetry
+  template:
+    metadata:
+      labels:
+        app: research-agent-telemetry
+        component: agent
+        framework: truvag3
+        truvag3.framework/type: agent
+        version: v1
+      annotations:
+        # Uses OTLP push-based telemetry to OTEL Collector, not Prometheus pull scraping
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: default
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+      - name: agent
+        image: research-agent-telemetry:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 8355
+          protocol: TCP
+
+        # Environment variables from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: research-agent-telemetry-config
+        - configMapRef:
+            name: research-agent-telemetry-env-config
+            optional: true  # Created by setup.sh from .env values
+        - secretRef:
+            name: ai-provider-keys-telemetry-agent
+            optional: true
+
+        # Additional environment variables
+        env:
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # K8s service discovery configuration (CRITICAL for proper registration)
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "research-agent-telemetry-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+
+        # Resource limits
+        resources:
+          requests:
+            cpu: "15m"
+            memory: "32Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+
+        # Liveness probe
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness probe
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Startup probe (for slow-starting applications)
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 12
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: research-agent-telemetry-service
+  namespace: truvag3-examples
+  labels:
+    app: research-agent-telemetry
+    component: agent
+    framework: truvag3
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  selector:
+    app: research-agent-telemetry
+
+---
+# Ingress for external access via telemetry-agent.localhost
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: telemetry-agent-ingress
+  namespace: truvag3-examples
+  labels:
+    app: research-agent-telemetry
+    component: agent
+    framework: truvag3
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: telemetry-agent.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: research-agent-telemetry-service
+            port:
+              number: 80
+
+---
+# Horizontal Pod Autoscaler (optional - uncomment to enable)
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: research-agent-telemetry-hpa
+#   namespace: truvag3-examples
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: research-agent-telemetry
+#   minReplicas: 2
+#   maxReplicas: 10
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   - type: Resource
+#     resource:
+#       name: memory
+#       target:
+#         type: Utilization
+#         averageUtilization: 80
+
+---
+# PodDisruptionBudget (optional - uncomment for production)
+# apiVersion: policy/v1
+# kind: PodDisruptionBudget
+# metadata:
+#   name: research-agent-telemetry-pdb
+#   namespace: truvag3-examples
+# spec:
+#   minAvailable: 1
+#   selector:
+#     matchLabels:
+#       app: research-agent-telemetry
+
+---
+# ServiceMonitor for Prometheus Operator (optional - uncomment if using Prometheus Operator)
+# apiVersion: monitoring.coreos.com/v1
+# kind: ServiceMonitor
+# metadata:
+#   name: research-agent-telemetry
+#   namespace: truvag3-examples
+#   labels:
+#     app: research-agent-telemetry
+# spec:
+#   selector:
+#     matchLabels:
+#       app: research-agent-telemetry
+#   endpoints:
+#   - port: http
+#     path: /metrics
+#     interval: 30s

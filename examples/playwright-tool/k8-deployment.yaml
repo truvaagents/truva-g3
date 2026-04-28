@@ -1,0 +1,157 @@
+# Kubernetes Deployment for Playwright Tool
+# Namespace: truvag3-examples
+# Port: 8349
+# Note: S3 credentials come from playwright-s3-credentials secret (created by setup.sh from .env)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: playwright-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: playwright-tool
+    component: tool
+    framework: truvag3
+spec:
+  selector:
+    app: playwright-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8349
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: playwright-tool
+  namespace: truvag3-examples
+  labels:
+    app: playwright-tool
+    component: tool
+    framework: truvag3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: playwright-tool
+  template:
+    metadata:
+      labels:
+        app: playwright-tool
+        component: tool
+        framework: truvag3
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      containers:
+      - name: playwright-tool
+        image: playwright-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8349
+          name: http
+        envFrom:
+        - configMapRef:
+            name: playwright-tool-env-config
+        env:
+        - name: TRUVAG3_AGENT_NAME
+          value: "playwright-tool"
+        - name: PORT
+          value: "8349"
+        - name: NAMESPACE
+          value: "truvag3-examples"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        # Redis Registration Resilience
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        # S3 Configuration (AWS S3 — no S3_ENDPOINT means real AWS)
+        - name: S3_BUCKET
+          value: "truvag3-qa-playwright"
+        - name: S3_REGION
+          value: "us-east-1"
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: playwright-s3-credentials
+              key: S3_ACCESS_KEY
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: playwright-s3-credentials
+              key: S3_SECRET_KEY
+        # Playwright script directory
+        - name: PLAYWRIGHT_SCRIPT_DIR
+          value: "/app/scripts"
+        # Redis DB for QA data
+        - name: QA_REDIS_DB
+          value: "9"
+        - name: DEV_MODE
+          value: "false"
+        - name: TRUVAG3_LOG_LEVEL
+          value: "info"
+        - name: TRUVAG3_LOG_FORMAT
+          value: "json"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "playwright-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Telemetry Configuration
+        - name: APP_ENV
+          value: "development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8349
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8349
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8349
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12

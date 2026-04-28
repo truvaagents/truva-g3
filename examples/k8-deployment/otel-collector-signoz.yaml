@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: truvag3-examples
+  labels:
+    app: otel-collector
+    component: telemetry
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+          - job_name: 'otel-collector'
+            scrape_interval: 5s
+            static_configs:
+            - targets: ['localhost:8888']
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+      memory_limiter:
+        limit_mib: 256
+        check_interval: 1s
+      resource:
+        attributes:
+        - key: deployment.environment
+          value: "development"
+          action: upsert
+        - key: service.namespace
+          value: "truvag3-examples"
+          action: upsert
+
+    exporters:
+      otlp/signoz:
+        endpoint: signoz-otel-collector.signoz:4317
+        tls:
+          insecure: true
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: "truvag3"
+        const_labels:
+          cluster: "truvag3-examples"
+        resource_to_telemetry_conversion:
+          enabled: true
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp/signoz]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp/signoz, prometheus]
+      telemetry:
+        logs:
+          level: "info"
+        metrics:
+          level: detailed
