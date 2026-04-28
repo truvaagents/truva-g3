@@ -437,7 +437,24 @@ main() {
     # 7. Swagger UI - Interactive OpenAPI documentation for all Truva-G3 services
     deploy_component "Swagger UI" "swagger-ui" "swagger-ui" "swagger-ui.yaml"
 
-    # 8. Qdrant - Vector DB for Shared Agent Memory (semantic knowledge search)
+    # 8. Registry Viewer - Real-time UI for the Redis service registry.
+    # Lives under examples/registry-viewer-app/ because it has its own Docker
+    # image (not a stock container). We delegate to its setup.sh, which builds,
+    # loads into kind, and applies its k8-deployment.yaml.
+    local viewer_dir="$SCRIPT_DIR/../registry-viewer-app"
+    if [ -d "$viewer_dir" ] && [ -f "$viewer_dir/setup.sh" ]; then
+        echo ""
+        echo -e "${COLOR_PURPLE}🔍 Deploying Registry Viewer...${COLOR_NC}"
+        if (cd "$viewer_dir" && bash ./setup.sh deploy); then
+            echo -e "${COLOR_GREEN}✅ Registry Viewer deployed${COLOR_NC}"
+        else
+            echo -e "${COLOR_YELLOW}⚠️  Registry Viewer deploy failed (continuing)${COLOR_NC}"
+        fi
+    else
+        echo -e "${COLOR_BLUE}ℹ️  Registry Viewer: Skipped (registry-viewer-app/ not found at $viewer_dir)${COLOR_NC}"
+    fi
+
+    # 9. Qdrant - Vector DB for Shared Agent Memory (semantic knowledge search)
     # Optional — deploy with TRUVAG3_DEPLOY_QDRANT=true. Agents degrade gracefully without it.
     if [ -f "$SCRIPT_DIR/qdrant.yaml" ]; then
         if [ "${TRUVAG3_DEPLOY_QDRANT:-false}" = "true" ]; then
@@ -460,10 +477,11 @@ main() {
 
     # Show access information
     echo -e "${COLOR_BLUE}🌐 Access via Ingress (*.localhost):${COLOR_NC}"
-    echo -e "   Grafana:    ${COLOR_YELLOW}http://grafana.localhost${COLOR_NC} (admin/admin)"
-    echo -e "   Prometheus: ${COLOR_YELLOW}http://prometheus.localhost${COLOR_NC}"
-    echo -e "   Jaeger:     ${COLOR_YELLOW}http://jaeger.localhost${COLOR_NC}"
-    echo -e "   Swagger UI: ${COLOR_YELLOW}http://swagger.localhost${COLOR_NC}"
+    echo -e "   Grafana:         ${COLOR_YELLOW}http://grafana.localhost${COLOR_NC} (admin/admin)"
+    echo -e "   Prometheus:      ${COLOR_YELLOW}http://prometheus.localhost${COLOR_NC}"
+    echo -e "   Jaeger:          ${COLOR_YELLOW}http://jaeger.localhost${COLOR_NC}"
+    echo -e "   Swagger UI:      ${COLOR_YELLOW}http://swagger.localhost${COLOR_NC}"
+    echo -e "   Registry Viewer: ${COLOR_YELLOW}http://registry.localhost${COLOR_NC}"
     echo ""
 
     echo -e "${COLOR_BLUE}🔗 Internal cluster addresses:${COLOR_NC}"
