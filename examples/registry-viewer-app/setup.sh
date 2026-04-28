@@ -586,6 +586,7 @@ case "${1:-help}" in
         status
         ;;
     cleanup)
+        check_prerequisites
         cleanup
         ;;
     help|--help|-h)
