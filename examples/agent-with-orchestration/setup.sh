@@ -510,15 +510,15 @@ status() {
 cleanup() {
     log_info "Cleaning up..."
 
-    # Stop port forwards
-    pkill -f "port-forward.*8353" 2>/dev/null || true
-
     # Delete K8s resources
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
+    kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
     docker stop truvag3-redis 2>/dev/null || true
     docker rm truvag3-redis 2>/dev/null || true
+
+    # Remove local binary
+    rm -f "$SCRIPT_DIR/travel-research-agent"
 
     log_success "Cleanup complete"
 }
@@ -706,7 +706,7 @@ Kubernetes Deployment Commands:
   test           Run the orchestration test scenario
   rollout        Restart deployment to pick up new secrets/config
                  Use --build flag to rebuild Docker image first
-  cleanup        Remove all deployed resources (agent only)
+  cleanup        Remove deployed resources
   cleanup-all    Delete Kind cluster and all resources
 
 Examples:
@@ -759,19 +759,9 @@ full_deploy() {
 cleanup_all() {
     log_info "Cleaning up everything..."
 
-    # Stop port forwards for this agent only (preserve jaeger, registry-viewer, etc.)
-    pkill -f "port-forward.*travel-research-agent" 2>/dev/null || true
+    cleanup
 
-    # Delete K8s resources
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-
-    # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
-
-    # Delete Kind cluster
     truvag3_delete_cluster
-
     log_success "Full cleanup complete"
 }
 

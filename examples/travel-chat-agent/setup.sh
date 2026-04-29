@@ -546,12 +546,8 @@ logs() {
 cleanup() {
     log_info "Cleaning up..."
 
-    # Delete K8s resources
+    # Delete K8s resources (agent only — chat-ui is a shared concern, leave it for its own setup)
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-
-    if [ -f "$CHAT_UI_DIR/k8-deployment.yaml" ]; then
-        kubectl delete -f "$CHAT_UI_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-    fi
 
     # Stop local Redis
     docker stop truvag3-redis 2>/dev/null || true
@@ -566,7 +562,9 @@ cleanup() {
 # Cleanup everything including Kind cluster
 cleanup_all() {
     log_info "Cleaning up everything..."
+
     cleanup
+
     truvag3_delete_cluster
     log_success "Full cleanup complete"
 }

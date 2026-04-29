@@ -554,13 +554,15 @@ rollout() {
 cleanup() {
     log_info "Cleaning up..."
 
-    pkill -f "port-forward.*$AGENT_PORT" 2>/dev/null || true
-    pkill -f "async-travel-agent" 2>/dev/null || true
+    # Delete K8s resources
+    kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-
+    # Stop local Redis
     docker stop truvag3-redis 2>/dev/null || true
     docker rm truvag3-redis 2>/dev/null || true
+
+    # Remove local binary
+    rm -f "$SCRIPT_DIR/async-travel-agent"
 
     log_success "Cleanup complete"
 }
@@ -643,19 +645,9 @@ verify_ingress() {
 cleanup_all() {
     log_info "Cleaning up everything..."
 
-    pkill -f "port-forward.*$NAMESPACE" 2>/dev/null || true
+    cleanup
 
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
-
-    if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-        log_info "Deleting Kind cluster $CLUSTER_NAME..."
-        kind delete cluster --name $CLUSTER_NAME
-        log_success "Kind cluster deleted"
-    fi
-
+    truvag3_delete_cluster
     log_success "Full cleanup complete"
 }
 

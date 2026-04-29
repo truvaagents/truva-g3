@@ -50,6 +50,12 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+# Canonical log helpers (parity with other example setup scripts).
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
 # Load environment variables. truvag3_load_env auto-bootstraps .env from
 # .env.example on fresh checkouts.
 load_env() { truvag3_load_env "$SCRIPT_DIR/.env"; }
@@ -559,26 +565,20 @@ cmd_rollout() {
     echo ""
 }
 
-cmd_clean() {
-    print_header
-    print_step "Removing agent deployment..."
+cleanup() {
+    log_info "Cleaning up..."
 
-    if kubectl get deployment $APP_NAME -n $NAMESPACE &>/dev/null; then
-        kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found=true
-        print_success "Agent removed"
-    else
-        print_warning "Agent not found"
-    fi
+    # Delete K8s resources
+    kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
-    # Remove API keys secret
-    if kubectl get secret ai-provider-keys-research-agent -n $NAMESPACE &>/dev/null; then
-        kubectl delete secret ai-provider-keys-research-agent -n $NAMESPACE
-        print_success "API keys secret removed"
-    fi
+    # Stop local Redis
+    docker stop truvag3-redis 2>/dev/null || true
+    docker rm truvag3-redis 2>/dev/null || true
 
-    echo ""
-    print_success "Agent cleanup complete"
-    echo ""
+    # Remove local binary
+    rm -f "$SCRIPT_DIR/research-agent"
+
+    log_success "Cleanup complete"
 }
 
 # Rebuild with no-cache and redeploy
@@ -629,29 +629,13 @@ cmd_rebuild() {
     fi
 }
 
-cmd_clean_all() {
-    print_header
+cleanup_all() {
+    log_info "Cleaning up everything..."
 
-    read -p "$(echo -e ${YELLOW}This will delete the entire Kind cluster. Continue? [y/N]: ${NC})" -n 1 -r
-    echo ""
+    cleanup
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_step "Deleting Kind cluster..."
-
-        if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-            kind delete cluster --name $CLUSTER_NAME
-            print_success "Cluster deleted"
-        else
-            print_warning "Cluster not found"
-        fi
-
-        echo ""
-        print_success "Full cleanup complete"
-    else
-        print_warning "Cleanup cancelled"
-    fi
-
-    echo ""
+    truvag3_delete_cluster
+    log_success "Full cleanup complete"
 }
 
 cmd_help() {
@@ -687,8 +671,8 @@ ${BLUE}Testing & Monitoring:${NC}
                      Use --build flag to rebuild Docker image first
 
 ${BLUE}Cleanup Commands:${NC}
-  ${YELLOW}clean${NC}              Remove agent deployment only
-  ${YELLOW}clean-all${NC}          Delete entire Kind cluster
+  ${YELLOW}cleanup${NC}            Remove deployed resources
+  ${YELLOW}cleanup-all${NC}        Delete Kind cluster and all resources
 
 ${BLUE}Configuration:${NC}
   Cluster:     ${CLUSTER_NAME}
@@ -711,7 +695,7 @@ ${BLUE}Examples:${NC}
   ./setup.sh run            # Run locally for development
   ./setup.sh status         # Check what's running
   ./setup.sh logs           # View agent logs
-  ./setup.sh clean-all      # Delete everything
+  ./setup.sh cleanup-all    # Delete everything
 
 ${BLUE}Port Mappings:${NC}
   8350   - Research Agent
@@ -778,11 +762,11 @@ case "${1:-help}" in
     rollout)
         cmd_rollout "$@"
         ;;
-    clean)
-        cmd_clean
+    cleanup)
+        cleanup
         ;;
-    clean-all)
-        cmd_clean_all
+    cleanup-all)
+        cleanup_all
         ;;
     help|--help|-h)
         cmd_help

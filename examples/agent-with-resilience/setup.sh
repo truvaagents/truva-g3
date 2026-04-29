@@ -405,19 +405,15 @@ test_resilience() {
 cleanup() {
     log_info "Cleaning up..."
 
-    # Stop port forwards
-    pkill -f "port-forward.*8081" 2>/dev/null || true
-    pkill -f "port-forward.*8083" 2>/dev/null || true
-    pkill -f "port-forward.*8354" 2>/dev/null || true
-
-    # Delete K8s resources
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-    kubectl delete -f "$GROCERY_TOOL_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-    kubectl delete -f "$GROCERY_API_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
+    # Delete K8s resources (agent only — grocery-tool/api are shared deps, leave them)
+    kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
     docker stop truvag3-redis 2>/dev/null || true
     docker rm truvag3-redis 2>/dev/null || true
+
+    # Remove local binary
+    rm -f "$SCRIPT_DIR/research-agent-resilience"
 
     log_success "Cleanup complete"
 }
@@ -647,39 +643,14 @@ test() {
     test_resilience
 }
 
-# Clean up agent only (standardized)
-clean() {
-    print_header "Cleaning Up Agent"
+# Cleanup everything including Kind cluster
+cleanup_all() {
+    log_info "Cleaning up everything..."
 
     cleanup
 
-    print_success "Agent cleanup complete"
-}
-
-# Clean up everything including cluster (standardized)
-clean_all() {
-    print_header "Cleaning Up Everything"
-
-    # Kill port forwards
-    pkill -f "kubectl.*port-forward.*$NAMESPACE" 2>/dev/null || true
-
-    # Delete agent
-    kubectl delete -f "$AGENT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-    kubectl delete -f "$GROCERY_TOOL_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-    kubectl delete -f "$GROCERY_API_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
-
-    # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
-
-    # Delete Kind cluster
-    if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-        print_info "Deleting Kind cluster $CLUSTER_NAME..."
-        kind delete cluster --name $CLUSTER_NAME
-        print_success "Kind cluster deleted"
-    fi
-
-    print_success "Full cleanup complete"
+    truvag3_delete_cluster
+    log_success "Full cleanup complete"
 }
 
 # View logs
@@ -871,8 +842,8 @@ STANDARDIZED 1-CLICK DEPLOYMENT COMMANDS:
   test          Run resilience test scenario
   rollout       Restart deployment to pick up new secrets/config
                 Use --build flag to rebuild Docker image first
-  clean         Remove agent deployment only
-  clean-all     Delete Kind cluster and all resources
+  cleanup       Remove deployed resources
+  cleanup-all   Delete Kind cluster and all resources
 
 Local Development Commands:
   build         Build the agent binary
@@ -892,7 +863,6 @@ Legacy Commands:
   build-all     Build all components (agent + mock-services)
   docker        Build Docker images (alias for docker-build)
   forward       Set up port forwards (legacy - use forward-all)
-  cleanup       Remove deployed resources (alias for clean)
 
 Environment Variables:
   CLUSTER_NAME      Kind cluster name (default: truvag3-demo-\$(whoami))
@@ -910,7 +880,7 @@ Examples:
   $0 deploy         # Deploy to existing cluster
   $0 forward-all    # Access all dashboards
   $0 test           # Run resilience tests
-  $0 clean-all      # Delete everything
+  $0 cleanup-all    # Delete everything
 
   $0 run-all        # Quick start: run everything locally
   REDIS_URL=redis://localhost:6379 $0 run
@@ -947,11 +917,8 @@ case "${1:-help}" in
     test)
         test
         ;;
-    clean)
-        clean
-        ;;
-    clean-all)
-        clean_all
+    cleanup-all)
+        cleanup_all
         ;;
     build)
         build
