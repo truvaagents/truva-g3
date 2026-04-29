@@ -222,6 +222,13 @@ function setupGlobalHandlers() {
                 autoRefreshInterval = null;
             }
         } else {
+            // Refresh immediately on resume so the user doesn't stare at stale state
+            // for up to one polling interval after switching back to the tab.
+            if (activeViewModule && activeViewModule.refresh) {
+                Promise.resolve(activeViewModule.refresh()).catch(err => {
+                    console.error('Refresh on visibility resume failed:', err);
+                });
+            }
             updateAutoRefresh();
         }
     });

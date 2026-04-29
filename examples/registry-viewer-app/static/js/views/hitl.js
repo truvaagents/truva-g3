@@ -142,6 +142,14 @@ function renderTable(list) {
         // Agent name display
         const agentName = cp.agent_name || '(default)';
 
+        // Step context — distinguishes per-step approvals that share the same message.
+        const stepBadge = cp.step_id
+            ? `<span class="mono" style="font-size: 10px; padding: 1px 6px; background: rgba(10, 132, 255, 0.15); border: 1px solid rgba(10, 132, 255, 0.3); border-radius: 3px; color: var(--accent-blue); margin-right: 6px;">${escapeHtml(cp.step_id)}</span>`
+            : '';
+        const stepDetail = cp.step_instruction
+            ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(cp.step_instruction)}">${escapeHtml(truncateText(cp.step_instruction, 60))}</div>`
+            : '';
+
         return `
         <tr data-checkpoint-id="${cp.checkpoint_id}" class="${selected?.checkpoint_id === cp.checkpoint_id ? 'selected' : ''}">
             <td><span class="priority-badge ${cp.priority || 'normal'}">${(cp.priority || 'normal').toUpperCase()}</span></td>
@@ -150,7 +158,8 @@ function renderTable(list) {
             <td>
                 <div style="max-width: 250px;">
                     <div style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(cp.original_request || '')}">${escapeHtml(truncateText(cp.original_request || 'N/A', 40))}</div>
-                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">${escapeHtml(truncateText(cp.message || '', 50))}</div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">${stepBadge}${escapeHtml(truncateText(cp.message || '', 50))}</div>
+                    ${stepDetail}
                 </div>
             </td>
             <td>

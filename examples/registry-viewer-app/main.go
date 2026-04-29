@@ -229,6 +229,8 @@ type HITLCheckpointSummary struct {
 	StepCount       int       `json:"step_count"`
 	CompletedCount  int       `json:"completed_count"`
 	CurrentStep     string    `json:"current_step,omitempty"`
+	StepID          string    `json:"step_id,omitempty"`
+	StepInstruction string    `json:"step_instruction,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	Status          string    `json:"status"`
@@ -2995,9 +2997,11 @@ func toHITLCheckpointSummary(cp HITLCheckpoint) HITLCheckpointSummary {
 		priority = cp.Decision.Priority
 		message = cp.Decision.Message
 	}
-	currentStep := ""
+	currentStep, stepID, stepInstruction := "", "", ""
 	if cp.CurrentStep != nil {
 		currentStep = cp.CurrentStep.Capability
+		stepID = cp.CurrentStep.StepID
+		stepInstruction = cp.CurrentStep.Instruction
 	}
 	stepCount := 0
 	if cp.Plan != nil {
@@ -3014,6 +3018,8 @@ func toHITLCheckpointSummary(cp HITLCheckpoint) HITLCheckpointSummary {
 		StepCount:       stepCount,
 		CompletedCount:  len(cp.StepResults),
 		CurrentStep:     currentStep,
+		StepID:          stepID,
+		StepInstruction: stepInstruction,
 		CreatedAt:       cp.CreatedAt,
 		ExpiresAt:       cp.ExpiresAt,
 		Status:          cp.Status,
