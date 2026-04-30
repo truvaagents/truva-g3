@@ -30,7 +30,7 @@ func TestGap1ManualOverrideLogging(t *testing.T) {
 
 		// Verify logging
 		foundLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "forced open") {
 				foundLog = true
 				// Verify required fields
@@ -70,7 +70,7 @@ func TestGap1ManualOverrideLogging(t *testing.T) {
 
 		// Verify logging
 		foundLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "forced closed") {
 				foundLog = true
 				if op, ok := log.Fields["operation"].(string); !ok || op != "circuit_breaker_force_closed" {
@@ -106,7 +106,7 @@ func TestGap1ManualOverrideLogging(t *testing.T) {
 
 		// Should log because override was active
 		foundLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "override cleared") {
 				foundLog = true
 				if wasOpen, ok := log.Fields["was_force_open"].(bool); !ok || !wasOpen {
@@ -139,7 +139,7 @@ func TestGap1ManualOverrideLogging(t *testing.T) {
 		cb.ClearForce()
 
 		// Should NOT log because no override was active
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if strings.Contains(log.Message, "override cleared") {
 				t.Error("Should not log when no override was active")
 			}
@@ -214,7 +214,7 @@ func TestGap3OrphanedRequestLogging(t *testing.T) {
 		// Should have WARN log for orphaned requests
 		foundWarnLog := false
 		foundStartLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "DEBUG" && strings.Contains(log.Message, "Starting orphaned request cleanup") {
 				foundStartLog = true
 			}
@@ -269,7 +269,7 @@ func TestGap3OrphanedRequestLogging(t *testing.T) {
 
 		// Should have DEBUG log saying no orphans found
 		foundDebugLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "DEBUG" && strings.Contains(log.Message, "No orphaned requests found") {
 				foundDebugLog = true
 				if count, ok := log.Fields["cleaned_count"].(int); !ok || count != 0 {
@@ -336,7 +336,7 @@ func TestGap4ErrorClassificationLogging(t *testing.T) {
 
 			// Find classification log
 			foundLog := false
-			for _, log := range logger.logs {
+			for _, log := range logger.Snapshot() {
 				if log.Level == "DEBUG" && strings.Contains(log.Message, "Error classification decision") {
 					foundLog = true
 					if class, ok := log.Fields["classification"].(string); !ok || !strings.Contains(class, tc.expectedClass) {
@@ -373,7 +373,7 @@ func TestGap5ConfigurationValidationLogging(t *testing.T) {
 		// Should have validation and creation logs
 		foundValidation := false
 		foundCreation := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "DEBUG" && strings.Contains(log.Message, "Validating circuit breaker configuration") {
 				foundValidation = true
 			}
@@ -414,7 +414,7 @@ func TestGap5ConfigurationValidationLogging(t *testing.T) {
 
 		// Should have error log
 		foundError := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "ERROR" && strings.Contains(log.Message, "validation failed") {
 				foundError = true
 				if op, ok := log.Fields["operation"].(string); !ok || op != "circuit_breaker_validation_failed" {
@@ -458,7 +458,7 @@ func TestGap6EnhancedResetLogging(t *testing.T) {
 
 		// Check reset log has all required fields
 		foundLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "reset") {
 				foundLog = true
 				// Required fields
@@ -522,7 +522,7 @@ func TestGap6EnhancedResetLogging(t *testing.T) {
 
 		// Check for half-open specific fields
 		foundLog := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "reset") {
 				foundLog = true
 				// Should have half-open fields when resetting from half-open
@@ -564,7 +564,7 @@ func TestGap6EnhancedResetLogging(t *testing.T) {
 
 		// Should include orphaned_tokens field
 		foundOrphaned := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "reset") {
 				if orphaned, ok := log.Fields["orphaned_tokens"].(int); ok && orphaned > 0 {
 					foundOrphaned = true
@@ -603,7 +603,7 @@ func TestExecutionLogging(t *testing.T) {
 		// Should have start and completion logs
 		foundStart := false
 		foundComplete := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			// Log message might vary, check operation field
 			if log.Level == "DEBUG" && log.Fields["operation"] == "circuit_breaker_execute" {
 				foundStart = true
@@ -618,8 +618,8 @@ func TestExecutionLogging(t *testing.T) {
 
 		// Print logs for debugging if test fails
 		if !foundStart || !foundComplete {
-			t.Logf("Logs captured: %d", len(logger.logs))
-			for i, log := range logger.logs {
+			t.Logf("Logs captured: %d", logger.LogCount())
+			for i, log := range logger.Snapshot() {
 				t.Logf("Log %d: Level=%s, Message=%s, Operation=%v",
 					i, log.Level, log.Message, log.Fields["operation"])
 			}
@@ -663,7 +663,7 @@ func TestExecutionLogging(t *testing.T) {
 
 		// Should have rejection log
 		foundRejection := false
-		for _, log := range logger.logs {
+		for _, log := range logger.Snapshot() {
 			if log.Level == "INFO" && strings.Contains(log.Message, "rejected") {
 				foundRejection = true
 				if state, ok := log.Fields["current_state"].(string); !ok || state != "open" {
@@ -704,7 +704,7 @@ func TestStateTransitionLogging(t *testing.T) {
 
 	// Should have opening decision log
 	foundOpening := false
-	for _, log := range logger.logs {
+	for _, log := range logger.Snapshot() {
 		if log.Level == "INFO" && strings.Contains(log.Message, "opening due to error threshold") {
 			foundOpening = true
 			if _, ok := log.Fields["error_rate"]; !ok {
@@ -731,7 +731,7 @@ func TestStateTransitionLogging(t *testing.T) {
 
 	// Should have half-open transition log
 	foundHalfOpen := false
-	for _, log := range logger.logs {
+	for _, log := range logger.Snapshot() {
 		if strings.Contains(log.Message, "half-open") || strings.Contains(log.Message, "transition attempt") {
 			foundHalfOpen = true
 			break

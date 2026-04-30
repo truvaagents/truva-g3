@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// TestLogger captures logs for verification
+// TestLogger captures logs for verification.
+// Safe for concurrent use: CircuitBreaker spawns cleanup goroutines for
+// orphaned requests that log alongside the test's main goroutine, so the
+// captured-log slice must be guarded by a mutex.
 type TestLogger struct {
+	mu   sync.Mutex
 	logs []LogEntry
 }
 
@@ -22,18 +27,26 @@ type LogEntry struct {
 }
 
 func (t *TestLogger) Info(msg string, fields map[string]interface{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.logs = append(t.logs, LogEntry{Level: "INFO", Message: msg, Fields: fields})
 }
 
 func (t *TestLogger) Error(msg string, fields map[string]interface{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.logs = append(t.logs, LogEntry{Level: "ERROR", Message: msg, Fields: fields})
 }
 
 func (t *TestLogger) Warn(msg string, fields map[string]interface{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.logs = append(t.logs, LogEntry{Level: "WARN", Message: msg, Fields: fields})
 }
 
 func (t *TestLogger) Debug(msg string, fields map[string]interface{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.logs = append(t.logs, LogEntry{Level: "DEBUG", Message: msg, Fields: fields})
 }
 
@@ -55,6 +68,8 @@ func (t *TestLogger) DebugWithContext(ctx context.Context, msg string, fields ma
 }
 
 func (t *TestLogger) GetLogsByOperation(operation string) []LogEntry {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var result []LogEntry
 	for _, log := range t.logs {
 		if op, exists := log.Fields["operation"]; exists && op == operation {
@@ -65,6 +80,8 @@ func (t *TestLogger) GetLogsByOperation(operation string) []LogEntry {
 }
 
 func (t *TestLogger) GetLogsByLevel(level string) []LogEntry {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var result []LogEntry
 	for _, log := range t.logs {
 		if log.Level == level {
@@ -75,6 +92,8 @@ func (t *TestLogger) GetLogsByLevel(level string) []LogEntry {
 }
 
 func (t *TestLogger) HasLogWithMessage(message string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, log := range t.logs {
 		if strings.Contains(log.Message, message) {
 			return true
@@ -84,7 +103,25 @@ func (t *TestLogger) HasLogWithMessage(message string) bool {
 }
 
 func (t *TestLogger) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.logs = nil
+}
+
+// LogCount returns the number of captured logs.
+func (t *TestLogger) LogCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.logs)
+}
+
+// Snapshot returns a copy of captured logs for safe iteration outside the lock.
+func (t *TestLogger) Snapshot() []LogEntry {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]LogEntry, len(t.logs))
+	copy(out, t.logs)
+	return out
 }
 
 func TestCircuitBreakerLoggingIntegration(t *testing.T) {
@@ -118,7 +155,7 @@ func TestCircuitBreakerLoggingIntegration(t *testing.T) {
 	}
 
 	// Verify execution logs exist (should have DEBUG logs)
-	if len(testLogger.logs) == 0 {
+	if testLogger.LogCount() == 0 {
 		t.Error("No logs captured during execution")
 	}
 
@@ -141,13 +178,13 @@ func TestCircuitBreakerLoggingIntegration(t *testing.T) {
 	}
 
 	// Check that we have some logs from the failures
-	if len(testLogger.logs) == 0 {
+	if testLogger.LogCount() == 0 {
 		t.Error("No logs captured during failure scenario")
 	}
 
 	// Look for any error-related operations or state changes
 	hasFailureRelatedLogs := false
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["operation"]; exists {
 			opStr := op.(string)
 			if strings.Contains(opStr, "execute") || strings.Contains(opStr, "state") || strings.Contains(opStr, "failure") {
@@ -193,8 +230,8 @@ func TestRetryExecutorLoggingIntegration(t *testing.T) {
 	}
 
 	// Verify we have logs from multiple attempts
-	if len(testLogger.logs) < 3 {
-		t.Errorf("Expected multiple logs from retry attempts, got %d", len(testLogger.logs))
+	if testLogger.LogCount() < 3 {
+		t.Errorf("Expected multiple logs from retry attempts, got %d", testLogger.LogCount())
 	}
 
 	// Verify success logging exists
@@ -203,7 +240,7 @@ func TestRetryExecutorLoggingIntegration(t *testing.T) {
 	}
 
 	// Check for operation field in logs
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["retry_operation"]; exists {
 			if op != "test-operation" {
 				t.Errorf("Expected retry_operation to be 'test-operation', got %v", op)
@@ -243,7 +280,7 @@ func TestRetryExecutorExhaustionLogging(t *testing.T) {
 
 	// Verify backoff logging occurred
 	hasBackoffLog := false
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["operation"]; exists && op == "retry_backoff" {
 			hasBackoffLog = true
 			break
@@ -273,7 +310,7 @@ func TestFactoryDependencyInjection(t *testing.T) {
 	}
 
 	// Test execution to verify logger is working
-	originalLogCount := len(testLogger.logs)
+	originalLogCount := testLogger.LogCount()
 	err = cb.Execute(context.Background(), func() error {
 		return nil
 	})
@@ -282,7 +319,7 @@ func TestFactoryDependencyInjection(t *testing.T) {
 		t.Fatalf("Execution failed: %v", err)
 	}
 
-	if len(testLogger.logs) <= originalLogCount {
+	if testLogger.LogCount() <= originalLogCount {
 		t.Error("No new logs captured during execution, logger injection may have failed")
 	}
 
@@ -298,13 +335,13 @@ func TestFactoryDependencyInjection(t *testing.T) {
 		t.Fatalf("Retry execution failed: %v", err)
 	}
 
-	if len(testLogger.logs) == 0 {
+	if testLogger.LogCount() == 0 {
 		t.Error("No logs captured during retry execution, logger injection failed")
 	}
 
 	// Verify operation names are preserved in logs
 	foundCorrectOperation := false
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["retry_operation"]; exists {
 			if op == "factory-test" {
 				foundCorrectOperation = true
@@ -379,12 +416,12 @@ func TestRetryWithLogging(t *testing.T) {
 	}
 
 	// Verify logging occurred
-	if len(testLogger.logs) == 0 {
+	if testLogger.LogCount() == 0 {
 		t.Error("No logs captured during retry with logging")
 	}
 
 	// Verify operation name is correct
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["retry_operation"]; exists {
 			if op != operation {
 				t.Errorf("Expected retry_operation to be '%s', got %v", operation, op)
@@ -415,7 +452,7 @@ func TestLoggingFieldValidation(t *testing.T) {
 	}
 
 	// Verify required fields are present in logs
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		// Check for name field in circuit breaker logs
 		if name, exists := log.Fields["name"]; exists {
 			if name != "field-validation-test" {
@@ -443,7 +480,7 @@ func TestLoggingFieldValidation(t *testing.T) {
 	}
 
 	// Verify retry-specific fields
-	for _, log := range testLogger.logs {
+	for _, log := range testLogger.Snapshot() {
 		if op, exists := log.Fields["operation"]; exists && op == "retry_start" {
 			// Check for required retry configuration fields
 			requiredFields := []string{"max_attempts", "initial_delay", "backoff_factor"}
@@ -574,7 +611,7 @@ func TestFactoryWithComponentAwareLogger(t *testing.T) {
 		}
 
 		// Verify logs were captured (proving the logger was injected)
-		if len(testLogger.logs) == 0 {
+		if testLogger.LogCount() == 0 {
 			t.Error("No logs captured, logger injection may have failed")
 		}
 	})
@@ -597,7 +634,7 @@ func TestFactoryWithComponentAwareLogger(t *testing.T) {
 		}
 
 		// Verify logs were captured
-		if len(testLogger.logs) == 0 {
+		if testLogger.LogCount() == 0 {
 			t.Error("No logs captured, logger injection may have failed")
 		}
 	})

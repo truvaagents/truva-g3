@@ -15,7 +15,7 @@ const (
 	contextKeyPlanID                contextKey = "truvag3_plan_id"
 	contextKeyOriginalRequestID     contextKey = "truvag3_original_request_id"
 	contextKeyAgentName             contextKey = "truvag3_agent_name"
-	contextKeyTokenUsageAccumulator contextKey = "truvag3_token_usage_accumulator" //nolint:gosec // G101: context key for LLM token-usage accounting, not a credential
+	contextKeyTokenUsageAccumulator contextKey = "truvag3_token_usage_accumulator" // #nosec G101 -- context key for LLM token-usage accounting, not a credential
 )
 
 func WithRequestID(ctx context.Context, id string) context.Context {
