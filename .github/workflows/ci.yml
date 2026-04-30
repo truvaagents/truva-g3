@@ -107,6 +107,11 @@ jobs:
           while IFS= read -r modfile; do
             dir=$(dirname "$modfile")
             echo "::group::build $dir"
-            (cd "$dir" && go build ./...)
+            # `go mod tidy` first because framework dep bumps (in core, ai,
+            # memory, etc.) propagate to examples via replace directives,
+            # which leaves each example's go.sum stale relative to current
+            # framework state. This matches what the production Dockerfiles
+            # do (Dockerfile.workspace runs `go mod tidy && go mod download`).
+            (cd "$dir" && go mod tidy && go build ./...)
             echo "::endgroup::"
           done < <(find examples -name go.mod -type f | sort)
