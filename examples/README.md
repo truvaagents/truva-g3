@@ -1437,7 +1437,7 @@ When working with AI assistants (Claude, Copilot, etc.), use these prompts:
 - **[Shared Setup Library](k8-deployment/setup-env-lib.sh)** - Common functions for all setup scripts
 - **[Infrastructure Setup](k8-deployment/setup-infrastructure.sh)** - Ingress Controller + monitoring stack
 - **[Cloud Deployment](CLOUD_DEPLOYMENT_GUIDE.md)** - Production deployment guide
-- **[Getting Started](../docs/GETTING_STARTED.md)** - Framework introduction and prerequisites
+- **[Getting Started](../GETTING_STARTED.md)** - Framework introduction and prerequisites
 - **[Distributed Tracing Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md)** - End-to-end request tracing and log correlation
 - **[Individual Examples](.)** - Each example has its own README
 - **[Framework Core](../core/)** - Core framework documentation

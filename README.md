@@ -769,6 +769,11 @@ Start simple with just `core`, add modules as you grow. No bloat, no unused feat
 
 ## Getting Started in 5 Minutes
 
+> 📖 **For the full walkthrough** — including Kind cluster setup, deploying
+> the bundled tools, configuring an AI provider, and the complete chat-UI
+> flow — see [GETTING_STARTED.md](GETTING_STARTED.md). The 5-minute version
+> below is a code-only orientation.
+
 ### Your First Agent
 
 ```go

@@ -19,11 +19,17 @@ Truva-G3 is designed to run on Kubernetes. For local development, we use [Kind](
 
 ### Required Software
 
+> **Go version**: the framework's `go.mod` declares `go 1.26.2`, so building
+> from source needs Go 1.26+. With Go's toolchain auto-upgrade (default since
+> Go 1.21), an older Go install will fetch 1.26.2 on first build — but some
+> corporate environments disable auto-upgrade, so installing a current Go
+> directly is the simplest path.
+
 **macOS:**
 ```bash
-# Go 1.21+ (auto-upgrades to required version when needed)
+# Go (latest stable; needs ≥1.26 to build the framework)
 brew install go
-go version  # Should show go1.21+
+go version
 
 # Docker Desktop (or Podman - see below)
 brew install --cask docker
@@ -34,9 +40,11 @@ brew install kind kubectl
 
 **Linux (Ubuntu/Debian):**
 ```bash
-# Go 1.21+
-wget https://golang.org/dl/go1.21.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+# Go (substitute the latest 1.26+ release for $GO_VERSION)
+GO_VERSION=1.26.2
+wget "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 
@@ -91,143 +99,285 @@ For multi-container setups, use [Podman Compose](https://github.com/containers/p
 ### Verify Your Setup
 
 ```bash
-go version          # Should show go1.21+
+go version          # Should show go1.26+ (or earlier with toolchain auto-upgrade)
 docker --version    # Should show Docker version (or: podman --version)
 kind --version      # Should show Kind version
 kubectl version --client
 ```
 
+> **Linux/Windows note**: the deployment exposes services via `*.localhost`
+> ingress hostnames. macOS resolves `*.localhost` automatically; on most Linux
+> distros and Windows you may need to add the hostnames you'll use to your
+> hosts file (e.g. `chat.localhost`, `travel-chat-agent.localhost`,
+> `grafana.localhost`, `prometheus.localhost`, `jaeger.localhost` →
+> `127.0.0.1`).
+
 ---
 
 ## 2. Run the Examples First (Recommended)
 
-The fastest way to understand Truva-G3 is to run a complete example. We recommend starting with the **travel-chat-agent** which demonstrates the full framework capabilities.
+The fastest way to understand Truva-G3 is to run a complete example end-to-end.
+We recommend starting with the **travel-chat-agent** — it exercises the full
+framework: discovery, AI orchestration, multi-tool coordination, observability,
+and a browser UI.
 
 ### Quick Start: Travel Chat Agent
 
-The travel-chat-agent example includes a one-command setup that creates everything you need:
+#### Step 1: Clone the repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/truvaagents/truva-g3.git
 cd truva-g3/examples/travel-chat-agent
+```
 
-# Configure your AI provider (interactive prompt)
-../setup-api-keys.sh
+#### Step 2: Configure an AI provider API key (required)
 
-# Deploy everything with one command
+> 🔑 **You must set at least one AI provider API key. Without one, the agent
+> will start, but every chat request will fail at the LLM call.** The agent
+> uses the LLM both to plan tool calls and to synthesize the final answer —
+> there is no offline fallback.
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set **one** of the following:
+
+| Provider | Variable | Free tier? |
+|----------|----------|------------|
+| OpenAI | `OPENAI_API_KEY=sk-...` | No |
+| Anthropic | `ANTHROPIC_API_KEY=sk-ant-...` | No |
+| Groq | `GROQ_API_KEY=gsk-...` | **Yes** — quick to start |
+| Google Gemini | `GEMINI_API_KEY=...` | Yes (limited) |
+
+For multi-provider failover, custom model aliases, or other providers
+(DeepSeek, Bedrock, Ollama, etc.), see the
+[**AI Providers Setup Guide**](docs/AI_PROVIDERS_SETUP_GUIDE.md). For this
+quick-start, one key is enough.
+
+#### Step 3: Deploy the agent
+
+```bash
+# Cluster + infrastructure + agent + chat-ui in one command
 ./setup.sh full-deploy
 ```
 
-This single command:
-1. Creates a Kind cluster with proper port mappings
-2. Deploys infrastructure (Redis, Prometheus, Grafana, Jaeger)
-3. Deploys required tools (weather, geocoding, currency, country-info)
-4. Builds and deploys the travel-chat-agent
-5. Sets up port forwarding for local access
+The first run takes **~5–15 minutes**. `full-deploy` creates a Kind cluster
+named `truvag3-demo-$(whoami)`, deploys the shared infrastructure (Redis,
+OTEL Collector, Loki, Prometheus, Jaeger, Grafana, Swagger UI, Registry
+Viewer, ingress-nginx), builds and loads the agent + chat-ui Docker images,
+and waits for the rollouts to complete.
+
+> **Forgot Step 2?** `setup.sh` auto-creates `.env` from `.env.example` on
+> first run, but the placeholder keys won't authenticate. Edit `.env` after
+> the deploy and run `./setup.sh rollout` to pick up the real values.
+
+#### Step 4: Deploy the tools the agent will call
+
+The agent has no built-in capabilities — it discovers tools via Redis at
+runtime and asks the LLM to plan a sequence of tool calls. Without tools
+deployed, the agent will respond but can't fetch live data.
+
+```bash
+cd ../weather-tool-v2       && ./setup.sh deploy && cd -
+cd ../geocoding-tool        && ./setup.sh deploy && cd -
+cd ../currency-tool         && ./setup.sh deploy && cd -
+cd ../country-info-tool     && ./setup.sh deploy && cd -
+cd ../system-utilities-tool && ./setup.sh deploy && cd -
+# (optional, see table below) cd ../news-tool && ./setup.sh deploy && cd -
+```
+
+The travel-chat-agent orchestrates these tools to fulfil user queries:
+
+| Tool | API Key Required? | External Service | Path |
+|------|-------------------|------------------|------|
+| weather-tool-v2 | No (free, no auth) | [Open-Meteo](https://open-meteo.com/) | [examples/weather-tool-v2/](examples/weather-tool-v2/) |
+| geocoding-tool | No (free, no auth) | [Nominatim / OpenStreetMap](https://nominatim.org/) | [examples/geocoding-tool/](examples/geocoding-tool/) |
+| currency-tool | No (free, no auth) | [Frankfurter](https://frankfurter.dev/) | [examples/currency-tool/](examples/currency-tool/) |
+| country-info-tool | No (free, no auth) | [RestCountries](https://restcountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
+| system-utilities-tool | No (self-contained) | None — Go stdlib (timezone DB, date math) | [examples/system-utilities-tool/](examples/system-utilities-tool/) |
+| news-tool | **Yes** — `GNEWS_API_KEY` | [GNews.io](https://gnews.io/) (free tier: 100 req/day) | [examples/news-tool/](examples/news-tool/) |
+
+The first five are deployed in step 4 above and require no additional
+configuration. For `news-tool`, edit `examples/news-tool/.env` and set
+`GNEWS_API_KEY=...` before running `./setup.sh deploy`.
+
+> **Why `system-utilities-tool`?** The agent has no built-in clock — without
+> this tool it can't answer time-aware queries ("what time is it in Tokyo?",
+> "if I leave New York at 9am, what time is that in London?"). The tool
+> exposes `get_current_time`, `convert_timezone`, `list_timezones`, and
+> `date_arithmetic` (plus a few non-travel capabilities the LLM ignores when
+> they're not relevant to the query).
+
+After all tools are running, verify the agent can see them:
+
+```bash
+curl http://travel-chat-agent.localhost/discover  # lists discovered tools
+```
 
 ### Access the Running System
 
-After deployment completes:
+All services are reachable via `*.localhost` ingress — no port-forwarding
+required:
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Chat UI | http://localhost:8360 | Web interface for chatting |
-| Agent API | http://localhost:8356 | Direct API access |
-| Grafana | http://localhost:3000 | Metrics dashboards |
-| Prometheus | http://localhost:9090 | Raw metrics |
-| Jaeger | http://localhost:16686 | Distributed tracing |
+| Service | URL | Notes |
+|---------|-----|-------|
+| Chat dashboard | http://chat.localhost | **Launcher with cards** — your entry point (see below) |
+| Travel Chat UI | http://chat.localhost/index.html | Direct link to the travel chat (the dashboard's "Travel Chat" card opens this) |
+| Agent API | http://travel-chat-agent.localhost | Direct API access (REST + SSE) |
+| Grafana | http://grafana.localhost | admin / admin |
+| Prometheus | http://prometheus.localhost | Raw metrics |
+| Jaeger | http://jaeger.localhost | Distributed tracing |
+| Swagger UI | http://swagger.localhost | Interactive OpenAPI explorer |
+| Registry Viewer | http://registry.localhost | Real-time view of services registered in Redis |
+
+> **`http://chat.localhost` is a launcher, not the chat itself.** The page
+> shows cards for each available chat surface (Travel Chat, DevOps Chat,
+> HITL Plan/Step Approval) plus links to Grafana, Prometheus, Jaeger, and
+> the Registry Viewer. To talk to the travel agent, click the **🌍 Travel
+> Chat** card (it opens `index.html` in a new tab) or visit
+> `http://chat.localhost/index.html` directly.
 
 ### Test the Agent
 
-**Via Chat UI:**
-Open http://localhost:8360 and try:
-- "What's the weather in Paris?"
-- "Plan a trip to Tokyo"
-- "What currency do they use in Japan?"
+**Via the Chat UI:**
 
-**Via curl:**
+1. Open http://chat.localhost in your browser.
+2. Click the **🌍 Travel Chat** card (or go directly to http://chat.localhost/index.html).
+3. Try queries like:
+
+   - "What's the weather in Paris?"
+   - "Plan a trip to Tokyo"
+   - "What currency do they use in Japan?"
+
+**Via curl (SSE streaming):**
+
 ```bash
-# Chat endpoint (SSE streaming)
-curl -N http://localhost:8356/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is the weather in London?", "session_id": "test-session"}'
+# 1. Create a session
+SESSION=$(curl -sS -X POST http://travel-chat-agent.localhost/chat/session | jq -r .session_id)
 
-# Discover registered tools
-curl http://localhost:8356/discover
+# 2. Stream a chat response
+curl -N -X POST http://travel-chat-agent.localhost/chat/stream \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\":\"$SESSION\",\"message\":\"What is the weather in London?\"}"
 
 # Health check
-curl http://localhost:8356/health
+curl http://travel-chat-agent.localhost/health
 ```
 
 ### Clean Up
 
 ```bash
-# Remove just this deployment
+# Remove just this deployment (keep the cluster + infra for other examples)
 ./setup.sh cleanup
 
-# Delete the entire Kind cluster
-kind delete cluster --name truvag3
+# Or delete the whole Kind cluster
+kind delete cluster --name "truvag3-demo-$(whoami)"
 ```
 
 ---
 
 ## 3. Available Examples
 
-Truva-G3 provides reference examples demonstrating various framework patterns.
+Truva-G3 ships ~50 reference examples. Below is a curated subset; see
+[examples/README.md](examples/README.md) for the full list.
 
-### Agents (Active Components - Can Discover and Orchestrate)
+> **Setup convention**: every example has a `setup.sh`. From a cold start
+> (fresh clone, no cluster yet) use `full-deploy`. Once the cluster +
+> infrastructure are already up from your first example, subsequent examples
+> only need `deploy` (faster — skips cluster creation and infra rollout).
 
-| Example | Port | Description | Setup |
-|---------|------|-------------|-------|
-| [travel-chat-agent](../examples/travel-chat-agent/) | 8356 | Real-time streaming chat with SSE | `./setup.sh full-deploy` |
-| [agent-example](../examples/agent-example/) | 8350 | Research assistant with AI orchestration | `./setup.sh run-all` |
-| [agent-with-async](../examples/agent-with-async/) | 8351 | Async task processing with DAG execution | `./setup.sh run-all` |
-| [agent-with-orchestration](../examples/agent-with-orchestration/) | 8353 | Predefined DAGs and dynamic AI planning | `./setup.sh run-all` |
-| [agent-with-resilience](../examples/agent-with-resilience/) | 8354 | Circuit breakers, retries, graceful degradation | `./setup.sh run-all` |
-| [agent-with-telemetry](../examples/agent-with-telemetry/) | 8355 | Full OpenTelemetry integration | `./setup.sh run-all` |
-| [agent-with-human-approval](../examples/agent-with-human-approval/) | 8352 | Human-in-the-loop approval workflows | `./setup.sh run-all` |
+### Agents (active components — discover and orchestrate)
 
-### Tools (Passive Components - Register Capabilities)
+| Example | Description |
+|---------|-------------|
+| [travel-chat-agent](examples/travel-chat-agent/) | Real-time streaming chat with SSE, multi-tool coordination, web UI |
+| [agent-example](examples/agent-example/) | Research assistant with AI orchestration |
+| [agent-with-async](examples/agent-with-async/) | Async task processing with DAG execution |
+| [agent-with-orchestration](examples/agent-with-orchestration/) | Predefined DAGs and dynamic AI planning |
+| [agent-with-resilience](examples/agent-with-resilience/) | Circuit breakers, retries, graceful degradation |
+| [agent-with-telemetry](examples/agent-with-telemetry/) | Full OpenTelemetry integration |
+| [agent-with-human-approval](examples/agent-with-human-approval/) | Human-in-the-loop approval workflows |
 
-| Example | Port | Description | Setup |
-|---------|------|-------------|-------|
-| [weather-tool-v2](../examples/weather-tool-v2/) | 8339 | Weather using Open-Meteo API (free) | `./setup.sh run-all` |
-| [geocoding-tool](../examples/geocoding-tool/) | 8335 | Location geocoding | `./setup.sh run-all` |
-| [currency-tool](../examples/currency-tool/) | 8334 | Currency conversion | `./setup.sh run-all` |
-| [country-info-tool](../examples/country-info-tool/) | 8333 | Country information | `./setup.sh run-all` |
-| [news-tool](../examples/news-tool/) | 8337 | News search and retrieval | `./setup.sh run-all` |
-| [stock-market-tool](../examples/stock-market-tool/) | 8338 | Stock prices and market data | `./setup.sh run-all` |
-| [tool-example](../examples/tool-example/) | 8340 | Basic weather tool pattern | `./setup.sh run-all` |
-| [grocery-tool](../examples/grocery-tool/) | 8336 | Mock grocery store (resilience testing) | `./setup.sh run-all` |
+### Tools (passive components — register capabilities)
+
+| Example | Description |
+|---------|-------------|
+| [weather-tool-v2](examples/weather-tool-v2/) | Weather using Open-Meteo API (no key) |
+| [geocoding-tool](examples/geocoding-tool/) | Forward + reverse geocoding |
+| [currency-tool](examples/currency-tool/) | Currency conversion |
+| [country-info-tool](examples/country-info-tool/) | Country information |
+| [news-tool](examples/news-tool/) | News search and retrieval |
+| [stock-market-tool](examples/stock-market-tool/) | Stock prices and market data |
+| [tool-example](examples/tool-example/) | Minimal passive-tool template |
+| [grocery-tool](examples/grocery-tool/) | Mock grocery store (resilience testing) |
+
+Tools are reached by agents over ClusterIP within the cluster — they're not
+typically exposed via ingress to the host.
 
 ### UI Applications
 
-| Example | Port | Description | Setup |
-|---------|------|-------------|-------|
-| [chat-ui](../examples/chat-ui/) | 8360 | Web interface for chat agents | `./setup.sh run-all` |
-| [registry-viewer-app](../examples/registry-viewer-app/) | 8361 | Visualize services in Redis registry | `./setup.sh run-all` |
+| Example | URL | Description |
+|---------|-----|-------------|
+| [chat-ui](examples/chat-ui/) | http://chat.localhost | Web interface for chat agents |
+| [registry-viewer-app](examples/registry-viewer-app/) | (ClusterIP) | Visualize services in the Redis registry |
+
+Neither app has its own `full-deploy` — both are deployed automatically as
+part of any agent's `full-deploy`:
+
+- **chat-ui** is built and deployed alongside the agent (e.g.
+  `travel-chat-agent`'s setup.sh handles both images).
+- **registry-viewer-app** is deployed by `truvag3_setup_infra` (the shared
+  infrastructure setup), so it comes up with Redis, Grafana, etc. on the
+  first agent's `full-deploy`.
+
+To rebuild either standalone:
+
+```bash
+cd ../chat-ui && ./setup.sh deploy
+cd ../registry-viewer-app && ./setup.sh rebuild   # rebuild only re-rolls the image
+```
 
 ### Running Other Examples
-
-Each example has a consistent setup pattern:
 
 ```bash
 cd examples/<example-name>
 
-# Option 1: Full local deployment (Kind cluster + infrastructure + component)
-./setup.sh full-deploy   # Creates everything if needed
+# Configure API keys / config (auto-bootstrapped from .env.example if missing)
+cp .env.example .env            # if you want to edit before deploying
 
-# Option 2: Deploy to existing cluster
-./setup.sh deploy        # Deploy to current K8s context
-./setup.sh forward       # Port-forward for local access
+# Full local deployment from scratch — cluster + infra + this example
+./setup.sh full-deploy
 
-# Common commands
-./setup.sh status        # Check deployment status
-./setup.sh test          # Run test scenarios
-./setup.sh cleanup       # Remove this deployment
-./setup.sh logs          # View logs
+# Deploy to an existing cluster (cluster + infra already up)
+./setup.sh deploy
+
+# Common commands (run `./setup.sh` with no args to see the full list per example)
+./setup.sh logs          # Follow logs
+./setup.sh rollout       # Restart the deployment to pick up .env / config changes
+./setup.sh rebuild       # Rebuild Docker image with --no-cache and redeploy
+./setup.sh status        # Check deployment status (most examples)
+
+# Removing a deployment — verb varies:
+./setup.sh cleanup       # Used by agents (travel-chat-agent, devops-chat-agent, etc.)
+./setup.sh clean         # Used by tools (currency-tool, weather-tool-v2, etc.)
 ```
+
+> **Heads-up: `deploy` vs `rollout` after editing `.env`.** Both commands
+> regenerate the Kubernetes Secret and ConfigMap from `.env`. The difference
+> is whether the running pods are forced to restart afterwards:
+>
+> - **Agent examples** (e.g. `travel-chat-agent`) — `deploy` issues an
+>   explicit `kubectl rollout restart`, so new pods pick up the new env
+>   values automatically.
+> - **Tool examples** (e.g. `currency-tool`, `weather-tool-v2`) — `deploy`
+>   only `kubectl apply`s the manifest. If the manifest didn't change and
+>   the image tag is still `:latest`, Kubernetes will not roll the
+>   deployment, and the running pods keep their old env values.
+>
+> If you only edited `.env` (no code change), use **`./setup.sh rollout`** —
+> it works consistently across both agents and tools by regenerating the
+> Secret/ConfigMap and forcing a pod restart.
 
 ---
 
@@ -281,7 +431,7 @@ func main() {
 		core.WithNamespace(os.Getenv("NAMESPACE")),
 		core.WithRedisURL(os.Getenv("REDIS_URL")),
 		core.WithDiscovery(true, "redis"),
-		core.WithCORS([]string{"*"}, true),
+		core.WithCORS([]string{"*"}, true), // server-to-server only; if a browser will call this, use WithCORSDefaults() instead — see Section 5
 	)
 	if err != nil {
 		log.Fatalf("Failed to create framework: %v", err)
@@ -540,14 +690,33 @@ spec:
 
 ```go
 framework, err := core.NewFramework(component,
-	core.WithName("my-service"),           // Service name for discovery
-	core.WithPort(8080),                   // HTTP server port
-	core.WithNamespace("default"),         // K8s namespace for discovery
+	core.WithName("my-service"),            // Service name for discovery
+	core.WithPort(8080),                    // HTTP server port
+	core.WithNamespace("default"),          // K8s namespace for discovery
 	core.WithRedisURL("redis://host:6379"), // Redis connection
-	core.WithDiscovery(true, "redis"),     // Enable service discovery
-	core.WithCORS([]string{"*"}, true),    // CORS configuration
-	core.WithDevelopmentMode(true),        // Development helpers
+	core.WithDiscovery(true, "redis"),      // Enable service discovery
+	core.WithCORS([]string{"*"}, true),     // CORS — see "CORS choice" below
+	core.WithDevelopmentMode(true),         // Development helpers
 )
+```
+
+### CORS choice — `WithCORS` vs `WithCORSDefaults`
+
+Two helpers, intended for different audiences:
+
+| Helper | Allowed Headers | When to use |
+|--------|-----------------|-------------|
+| `core.WithCORS(origins, credentials)` | `Content-Type`, `Authorization` only | Server-to-server (agent ↔ tool, internal API) |
+| `core.WithCORSDefaults()` | `*` (any header) — also sets origins `*`, credentials, all methods | Anything called from a **browser** (chat UIs, dashboards, SSE streams sending custom headers) |
+
+If a browser sends `Accept`, `X-Requested-With`, or any custom header (most
+SSE/streaming UIs do), the strict default of `WithCORS(...)` will reject the
+preflight and the browser will fail with `Failed to connect to backend`.
+
+For browser-facing components, prefer:
+
+```go
+core.WithCORSDefaults(), // browser UI needs more than Content-Type + Authorization
 ```
 
 ### Resilience Options
@@ -667,52 +836,85 @@ kubectl logs -f deployment/my-service
 
 ### Common Issues
 
-**"connection refused" to Redis:**
-```bash
-# Check Redis pod
-kubectl get pods | grep redis
+**Browser shows "Failed to connect to backend" when using a UI (e.g. http://chat.localhost):**
 
-# Port-forward Redis
-kubectl port-forward svc/redis 6379:6379 &
+The browser's CORS preflight is being rejected. The agent is alive (its `/health` returns 200) but its CORS configuration only allows `Content-Type, Authorization` while the UI sends `Accept` / `X-User-ID` / etc.
+
+Switch the agent's framework option from `core.WithCORS(...)` to `core.WithCORSDefaults()` (see Section 5), then `./setup.sh rebuild` to redeploy. Verify with:
+
+```bash
+curl -i -X OPTIONS http://travel-chat-agent.localhost/chat/stream \
+  -H "Origin: http://chat.localhost" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type, Accept, X-User-ID"
+# Expect: Access-Control-Allow-Headers: *
+```
+
+**`.env` not loaded / missing API key:**
+
+`setup.sh` auto-creates `.env` from `.env.example` if missing, but the placeholder keys won't authenticate. After editing `.env`:
+
+```bash
+./setup.sh rollout      # restart deployment to pick up new ConfigMap/Secret values
+```
+
+**Pods stuck in `ImagePullBackOff` / `ErrImageNeverPull`:**
+
+Kind doesn't have access to local Docker images unless they're explicitly loaded. The deploy scripts handle this, but if a manual `kubectl apply` was used:
+
+```bash
+kind load docker-image my-tool:latest --name "truvag3-demo-$(whoami)"
+kubectl rollout restart deployment/my-tool -n truvag3-examples
+```
+
+**Ingress URLs don't resolve (`*.localhost` returns NXDOMAIN):**
+
+Common on Linux/Windows. Add the hostnames you use to your hosts file:
+
+```
+127.0.0.1 chat.localhost travel-chat-agent.localhost grafana.localhost prometheus.localhost jaeger.localhost swagger.localhost
+```
+
+macOS resolves `*.localhost` automatically.
+
+**"connection refused" to Redis:**
+
+```bash
+# Check Redis pod (in the truvag3-examples namespace)
+kubectl get pods -n truvag3-examples -l app=redis
+
+# Port-forward Redis for local debugging
+kubectl port-forward -n truvag3-examples svc/redis 6379:6379 &
 
 # Test connectivity
 redis-cli ping  # Should return "PONG"
 ```
 
 **Components can't discover each other:**
-```bash
-# Check Redis keys
-kubectl port-forward svc/redis 6379:6379 &
-redis-cli KEYS "*"
 
-# Verify registration
+```bash
+# Check the registry
+kubectl port-forward -n truvag3-examples svc/redis 6379:6379 &
+redis-cli KEYS "truvag3:*"
+
+# Verify a specific service is registered
 redis-cli HGETALL "truvag3:services:my-tool"
 
-# Check all components use same namespace
-kubectl get pods -n default
-```
-
-**Port already in use:**
-```bash
-# Find existing port-forwards
-ps aux | grep port-forward
-
-# Kill them
-pkill -f "kubectl port-forward"
-
-# Or use different port
-export PORT=8081
+# Check all components use the same namespace
+kubectl get pods -n truvag3-examples
 ```
 
 **Kind cluster issues:**
+
 ```bash
 # Check cluster status
 kind get clusters
 kubectl cluster-info
 
-# Restart cluster
-kind delete cluster --name truvag3
-./setup-kind-demo.sh setup
+# Recreate the cluster from scratch
+kind delete cluster --name "truvag3-demo-$(whoami)"
+cd examples/travel-chat-agent
+./setup.sh full-deploy
 ```
 
 ---
@@ -721,25 +923,25 @@ kind delete cluster --name truvag3
 
 ### Recommended Learning Path
 
-1. **Run examples** - Start with [travel-chat-agent](../examples/travel-chat-agent/) to see everything working
-2. **Explore patterns** - Study [agent-with-orchestration](../examples/agent-with-orchestration/) for DAG workflows
-3. **Add observability** - Try [agent-with-telemetry](../examples/agent-with-telemetry/) for full monitoring
-4. **Build resilience** - Learn from [agent-with-resilience](../examples/agent-with-resilience/)
+1. **Run examples** - Start with [travel-chat-agent](examples/travel-chat-agent/) to see everything working
+2. **Explore patterns** - Study [agent-with-orchestration](examples/agent-with-orchestration/) for DAG workflows
+3. **Add observability** - Try [agent-with-telemetry](examples/agent-with-telemetry/) for full monitoring
+4. **Build resilience** - Learn from [agent-with-resilience](examples/agent-with-resilience/)
 
 ### Explore Advanced Features
 
-- **[AI Module](../ai/README.md)** - Multi-provider support with automatic failover
-- **[Orchestration Module](../orchestration/README.md)** - DAG workflows and AI-generated plans
-- **[Telemetry Module](../telemetry/README.md)** - OpenTelemetry integration
-- **[Resilience Module](../resilience/README.md)** - Circuit breakers and graceful degradation
-- **[Agent Memory Guide](AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and real-time coordination
-- **[Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
+- **[AI Module](ai/README.md)** - Multi-provider support with automatic failover
+- **[Orchestration Module](orchestration/README.md)** - DAG workflows and AI-generated plans
+- **[Telemetry Module](telemetry/README.md)** - OpenTelemetry integration
+- **[Resilience Module](resilience/README.md)** - Circuit breakers and graceful degradation
+- **[Agent Memory Guide](docs/AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and real-time coordination
+- **[Adding Context to Your Agent](docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
 
 ### Resources
 
-- [Full Documentation](../README.md)
-- [API Reference](API_REFERENCE.md)
-- [Examples Directory](../examples/README.md)
+- [Full Documentation](README.md)
+- [API Reference](docs/API_REFERENCE.md)
+- [Examples Directory](examples/README.md)
 - [GitHub Issues](https://github.com/truvaagents/truva-g3/issues)
 
 ---
