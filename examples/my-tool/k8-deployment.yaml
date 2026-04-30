@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-tool
+  namespace: truvag3-examples
+  labels:
+    app: my-tool
+    component: tool
+    truvag3.framework/type: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-tool
+  template:
+    metadata:
+      labels:
+        app: my-tool
+        component: tool
+        truvag3.framework/type: tool
+    spec:
+      containers:
+      - name: my-tool
+        image: my-tool:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8390
+          name: http
+        envFrom:
+        - configMapRef:
+            name: my-tool-env-config
+            optional: true  # Created by setup.sh from .env values
+        # Add a Secret reference here if your tool needs API keys, e.g.:
+        # - secretRef:
+        #     name: my-tool-secrets
+        #     optional: true
+        env:
+        - name: PORT
+          value: "8390"
+        - name: TRUVAG3_NAMESPACE
+          value: "truvag3-examples"
+        - name: REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_REDIS_URL
+          value: "redis://redis.truvag3-examples:6379"
+        - name: TRUVAG3_DISCOVERY_RETRY
+          value: "true"
+        - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+          value: "30s"
+        - name: TRUVAG3_K8S_SERVICE_NAME
+          value: "my-tool-service"
+        - name: TRUVAG3_K8S_SERVICE_PORT
+          value: "80"
+        - name: TRUVAG3_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TRUVAG3_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.truvag3-examples:4318"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8390
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/capabilities
+            port: 8390
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-tool-service
+  namespace: truvag3-examples
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8390
+  selector:
+    app: my-tool
