@@ -1,0 +1,50 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - gosec
+    - misspell
+
+  settings:
+    gosec:
+      # Disable rules with widely-known false-positive rates that gosec
+      # cannot resolve without interprocedural analysis:
+      # G602 — slice index out of range: misfires on indexes bounded by
+      #        the enclosing for-loop range; gosec doesn't track bounds.
+      # G118 — context cancellation func not called: misfires when the
+      #        cancel func is stored as a struct field and invoked in a
+      #        Stop/Close method on the same type.
+      excludes:
+        - G602
+        - G118
+
+  exclusions:
+    rules:
+      # Tests don't need production-code strictness. errcheck and gosec
+      # catch patterns that are intentional in tests (unchecked errors,
+      # weak crypto, hardcoded fixtures). unused and ineffassign also
+      # misfire on test scaffolding.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unused
+          - ineffassign
+      # Specific staticcheck rules that misfire in test code:
+      # SA5011 — nil-deref; tests rely on assertions to fatal-out first
+      # SA1012 — nil-context; tests intentionally pass nil to verify handling
+      # SA4006 — unused value; tests keep intermediate values for clarity
+      # SA9003 — empty branch; common in test scaffolds
+      - path: _test\.go
+        linters:
+          - staticcheck
+        text: "SA(5011|1012|4006|9003)"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

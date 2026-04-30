@@ -1,0 +1,77 @@
+version: 2
+
+updates:
+  # GitHub Actions used by .github/workflows/*.yml
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Go modules. Dependabot does not understand go.work, so each
+  # workspace module is listed individually. Minor and patch updates
+  # are grouped to keep PR volume manageable; majors stay separate.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/ai"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/memory"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/orchestration"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/resilience"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/telemetry"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

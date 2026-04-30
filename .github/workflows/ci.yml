@@ -1,0 +1,112 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: Build & test all workspace modules
+        run: |
+          set -e
+          for mod in . ai core memory orchestration resilience telemetry; do
+            echo "::group::$mod"
+            (cd "$mod" && go build ./... && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
+            echo "::endgroup::"
+          done
+      - name: Upload coverage profiles
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: '**/coverage.out'
+          if-no-files-found: ignore
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+      - name: Lint all workspace modules
+        run: |
+          set -e
+          for mod in . ai core memory orchestration resilience telemetry; do
+            echo "::group::$mod"
+            (cd "$mod" && golangci-lint run ./...)
+            echo "::endgroup::"
+          done
+
+  vuln:
+    name: vuln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Run govulncheck on all workspace modules
+        run: |
+          set -e
+          for mod in . ai core memory orchestration resilience telemetry; do
+            echo "::group::$mod"
+            (cd "$mod" && govulncheck ./...)
+            echo "::endgroup::"
+          done
+
+  examples:
+    name: examples (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+      # Examples are intentionally out of go.work and use `replace` directives
+      # pointing to local framework source. We only verify they compile — no
+      # tests, no lint, no vulnerability scan. This catches framework changes
+      # that break example builds without subjecting examples to framework rigor.
+      - name: Build all example modules
+        env:
+          # Examples are not part of go.work; disable workspace mode so each
+          # example resolves deps via its own go.mod + replace directives.
+          GOWORK: 'off'
+        run: |
+          set -e
+          while IFS= read -r modfile; do
+            dir=$(dirname "$modfile")
+            echo "::group::build $dir"
+            (cd "$dir" && go build ./...)
+            echo "::endgroup::"
+          done < <(find examples -name go.mod -type f | sort)
