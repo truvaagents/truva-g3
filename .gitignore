@@ -85,3 +85,8 @@ tmp/DEVELOPER_FRIENDLY_UPDATES.md
 
 # Implementation plans (internal documentation)
 examples/agent-with-telemetry/IMPLEMENTATION_PLAN.md
+
+# Internal research drafts (not tracked)
+docs/PAPER_DRAFT_3PHASE_PROGRESSIVE_ENHANCEMENT.md
+docs/PAPER_NOVELTY_ASSESSMENT.md
+docs/REDIS_DEPENDENCY_ANALYSIS.md
