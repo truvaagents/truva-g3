@@ -374,14 +374,16 @@ func TestCircuitBreakerExponentialBackoff(t *testing.T) {
 		return errors.New("test error")
 	})
 
-	// Sleep window should have increased
-	if config.SleepWindow <= initialSleepWindow {
+	// Sleep window should have increased. Read via accessor — the dynamic
+	// value lives on the breaker, not on the (immutable) config.
+	currentSleepWindow := cb.GetSleepWindow()
+	if currentSleepWindow <= initialSleepWindow {
 		t.Error("Expected sleep window to increase after half-open failure")
 	}
 
 	expectedNewWindow := time.Duration(float64(initialSleepWindow) * 1.5)
-	if config.SleepWindow != expectedNewWindow {
-		t.Errorf("Expected sleep window %v, got %v", expectedNewWindow, config.SleepWindow)
+	if currentSleepWindow != expectedNewWindow {
+		t.Errorf("Expected sleep window %v, got %v", expectedNewWindow, currentSleepWindow)
 	}
 }
 

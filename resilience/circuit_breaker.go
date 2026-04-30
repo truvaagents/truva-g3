@@ -163,6 +163,11 @@ type CircuitBreaker struct {
 	stateChangedAt atomic.Value // time.Time
 	generation     uint64
 
+	// Dynamic sleep window. Initialized from config.SleepWindow; may grow via
+	// exponential backoff on repeated half-open re-opens. Read on every Execute
+	// call, written under cb.mu when re-opening — atomic to avoid lock on reads.
+	sleepWindow atomic.Int64 // time.Duration as int64 nanoseconds
+
 	// Metrics tracking
 	window *SlidingWindow
 
@@ -262,6 +267,7 @@ func NewCircuitBreaker(config *CircuitBreakerConfig) (*CircuitBreaker, error) {
 	// Initialize atomic values
 	cb.state.Store(StateClosed)
 	cb.stateChangedAt.Store(time.Now())
+	cb.sleepWindow.Store(int64(config.SleepWindow))
 
 	// Log successful creation
 	if config.Logger != nil {
@@ -474,8 +480,9 @@ func (cb *CircuitBreaker) startExecution() (ExecutionToken, bool) {
 		// Check if we should transition to half-open
 		stateChangedAt := cb.stateChangedAt.Load().(time.Time)
 		timeInOpen := time.Since(stateChangedAt)
+		sleepWindow := time.Duration(cb.sleepWindow.Load())
 
-		if timeInOpen > cb.config.SleepWindow {
+		if timeInOpen > sleepWindow {
 			// Log transition attempt
 			if cb.config.Logger != nil {
 				cb.config.Logger.Info("Circuit breaker attempting half-open transition", map[string]interface{}{
@@ -484,7 +491,7 @@ func (cb *CircuitBreaker) startExecution() (ExecutionToken, bool) {
 					"from_state":      "open",
 					"to_state":        "half-open",
 					"time_in_open_ms": timeInOpen.Milliseconds(),
-					"sleep_window_ms": cb.config.SleepWindow.Milliseconds(),
+					"sleep_window_ms": sleepWindow.Milliseconds(),
 				})
 			}
 
@@ -745,6 +752,11 @@ func (cb *CircuitBreaker) evaluateState() {
 				cb.transitionToUnlocked(StateClosed)
 				cb.failureCount.Store(0) // Reset legacy counter
 			} else {
+				// Compute next sleep window: exponential backoff capped at 5 minutes.
+				newSleepWindow := time.Duration(float64(cb.sleepWindow.Load()) * 1.5)
+				if newSleepWindow > 5*time.Minute {
+					newSleepWindow = 5 * time.Minute
+				}
 				// Log re-opening from half-open
 				if cb.config.Logger != nil {
 					cb.config.Logger.Info("Circuit breaker re-opening due to insufficient success rate", map[string]interface{}{
@@ -752,16 +764,12 @@ func (cb *CircuitBreaker) evaluateState() {
 						"name":                cb.config.Name,
 						"success_rate":        successRate,
 						"threshold":           cb.config.SuccessThreshold,
-						"new_sleep_window_ms": time.Duration(float64(cb.config.SleepWindow) * 1.5).Milliseconds(),
+						"new_sleep_window_ms": newSleepWindow.Milliseconds(),
 					})
 				}
 				// Too many failures, reopen
 				cb.transitionToUnlocked(StateOpen)
-				// Exponential backoff for next attempt
-				cb.config.SleepWindow = time.Duration(float64(cb.config.SleepWindow) * 1.5)
-				if cb.config.SleepWindow > 5*time.Minute {
-					cb.config.SleepWindow = 5 * time.Minute // Cap at 5 minutes
-				}
+				cb.sleepWindow.Store(int64(newSleepWindow))
 			}
 			cb.mu.Unlock()
 		}
@@ -819,6 +827,13 @@ func (cb *CircuitBreaker) AddStateChangeListener(listener func(name string, from
 // GetState returns the current state
 func (cb *CircuitBreaker) GetState() string {
 	return cb.state.Load().(CircuitState).String()
+}
+
+// GetSleepWindow returns the current sleep window duration. The value starts
+// at config.SleepWindow and grows via exponential backoff each time the
+// breaker re-opens from half-open without enough successes.
+func (cb *CircuitBreaker) GetSleepWindow() time.Duration {
+	return time.Duration(cb.sleepWindow.Load())
 }
 
 // GetMetrics returns current metrics
@@ -1305,7 +1320,7 @@ func (cb *CircuitBreaker) CanExecute() bool {
 	if state == StateOpen {
 		// Check if we should transition to half-open
 		stateChangedAt := cb.stateChangedAt.Load().(time.Time)
-		if time.Since(stateChangedAt) > cb.config.SleepWindow {
+		if time.Since(stateChangedAt) > time.Duration(cb.sleepWindow.Load()) {
 			// Transition to half-open
 			cb.mu.Lock()
 			if cb.state.Load().(CircuitState) == StateOpen {
