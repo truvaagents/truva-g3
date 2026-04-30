@@ -6,7 +6,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// SlackTool wraps the Slack Web API as a Truva-G3 tool
+// SlackTool wraps the Slack Web API as a TruvaG3 tool
 // It demonstrates a WRITE-CAPABLE tool pattern (send_message, send_rich_message)
 type SlackTool struct {
 	*core.BaseTool

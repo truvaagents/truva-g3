@@ -1,6 +1,6 @@
 # Country Info Tool
 
-A Truva-G3 tool that provides country information using the [RestCountries](https://restcountries.com/) API. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
+A TruvaG3 tool that provides country information using the [RestCountries](https://restcountries.com/) API. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ A Truva-G3 tool that provides country information using the [RestCountries](http
 
 ## How to Run This Example
 
-Running this tool locally is the best way to understand how Truva-G3 tools provide capabilities to agents. This tool is **independent** - it only needs Redis for service discovery and does not require any other tools or agents to function.
+Running this tool locally is the best way to understand how TruvaG3 tools provide capabilities to agents. This tool is **independent** - it only needs Redis for service discovery and does not require any other tools or agents to function.
 
 ### Prerequisites
 

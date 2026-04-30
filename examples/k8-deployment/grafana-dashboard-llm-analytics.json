@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-llm-analytics",
-  "title": "Truva-G3 LLM & AI Analytics",
+  "title": "TruvaG3 LLM & AI Analytics",
   "tags": [
     "truvag3",
     "ai",
@@ -26,7 +26,7 @@
       "tags": [
         "truvag3"
       ],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

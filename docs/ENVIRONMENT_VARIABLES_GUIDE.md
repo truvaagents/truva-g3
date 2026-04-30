@@ -1,6 +1,6 @@
-# Truva-G3 Framework Environment Variables Guide
+# TruvaG3 Framework Environment Variables Guide
 
-This document provides a comprehensive reference for all environment variables supported by the Truva-G3 framework. Variables are organized by module/functionality with their default values, descriptions, and verification status.
+This document provides a comprehensive reference for all environment variables supported by the TruvaG3 framework. Variables are organized by module/functionality with their default values, descriptions, and verification status.
 
 ## Important Notes
 
@@ -37,7 +37,7 @@ This document provides a comprehensive reference for all environment variables s
 
 ## Kubernetes Deployment Requirements
 
-This section provides a quick reference for deploying Truva-G3 agents and tools in Kubernetes. Variables are categorized by requirement level to help you configure deployments correctly.
+This section provides a quick reference for deploying TruvaG3 agents and tools in Kubernetes. Variables are categorized by requirement level to help you configure deployments correctly.
 
 > **Working Examples**: See [agent-example/k8-deployment.yaml](../examples/agent-example/k8-deployment.yaml) for a complete agent deployment and [tool-example/k8-deployment.yaml](../examples/tool-example/k8-deployment.yaml) for a complete tool deployment.
 
@@ -158,7 +158,7 @@ env:
 
 ## Core Configuration
 
-These variables configure the fundamental settings of a Truva-G3 agent or tool.
+These variables configure the fundamental settings of a TruvaG3 agent or tool.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|

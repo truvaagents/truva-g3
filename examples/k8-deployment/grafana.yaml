@@ -174,7 +174,7 @@ data:
     providers:
     - name: 'truvag3'
       orgId: 1
-      folder: 'Truva-G3'
+      folder: 'TruvaG3'
       type: file
       disableDeletion: false
       updateIntervalSeconds: 10
@@ -183,7 +183,7 @@ data:
         path: /var/lib/grafana/dashboards
     - name: 'truvag3-new'
       orgId: 1
-      folder: 'Truva-G3'
+      folder: 'TruvaG3'
       type: file
       disableDeletion: false
       updateIntervalSeconds: 10
@@ -632,7 +632,7 @@ data:
       "time": {"from": "now-1h", "to": "now"},
       "timepicker": {},
       "timezone": "browser",
-      "title": "Truva-G3 Agent Telemetry",
+      "title": "TruvaG3 Agent Telemetry",
       "uid": "truvag3-agent-telemetry",
       "version": 1,
       "weekStart": ""
@@ -652,7 +652,7 @@ data:
           "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
           "id": 100,
           "panels": [],
-          "title": "Resource Overview - Truva-G3 Agents & Tools",
+          "title": "Resource Overview - TruvaG3 Agents & Tools",
           "type": "row"
         },
         {
@@ -709,7 +709,7 @@ data:
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Current CPU and Memory usage for all Truva-G3 pods",
+          "description": "Current CPU and Memory usage for all TruvaG3 pods",
           "fieldConfig": {
             "defaults": {
               "color": {"mode": "thresholds"},
@@ -878,7 +878,7 @@ data:
       "time": {"from": "now-1h", "to": "now"},
       "timepicker": {},
       "timezone": "browser",
-      "title": "Truva-G3 Resource Usage",
+      "title": "TruvaG3 Resource Usage",
       "uid": "truvag3-resource-usage",
       "version": 1,
       "weekStart": ""

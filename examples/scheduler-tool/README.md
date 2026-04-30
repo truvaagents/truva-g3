@@ -1,6 +1,6 @@
 # Scheduler Tool
 
-A `BaseTool` that exposes **delayed and recurring task scheduling** to any Truva-G3 agent via 5 discoverable capabilities. Once deployed, every agent's LLM sees `scheduler-tool/schedule_task` in its service catalog and can include it in a plan -- just like `slack-tool/send_message` or `stock-market-tool/get_stock_quote`.
+A `BaseTool` that exposes **delayed and recurring task scheduling** to any TruvaG3 agent via 5 discoverable capabilities. Once deployed, every agent's LLM sees `scheduler-tool/schedule_task` in its service catalog and can include it in a plan -- just like `slack-tool/send_message` or `stock-market-tool/get_stock_quote`.
 
 ## Table of Contents
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# setup-signoz.sh - SigNoz Observability Stack for Truva-G3 Examples
+# setup-signoz.sh - SigNoz Observability Stack for TruvaG3 Examples
 #
 # DESCRIPTION:
 #   This script manages SigNoz deployment as an optional, feature-rich alternative
@@ -42,7 +42,7 @@
 # PREREQUISITES:
 #   - kubectl configured with cluster access
 #   - Helm 3.x installed
-#   - Truva-G3 infrastructure deployed (./setup-infrastructure.sh)
+#   - TruvaG3 infrastructure deployed (./setup-infrastructure.sh)
 #
 # ACCESS AFTER INSTALLATION:
 #   SigNoz UI: kubectl port-forward -n signoz svc/signoz-frontend 3301:3301
@@ -268,7 +268,7 @@ data:
     service:
       extensions: [health_check]
       pipelines:
-        # Traces and metrics are sent via OTLP from Truva-G3 apps
+        # Traces and metrics are sent via OTLP from TruvaG3 apps
         traces:
           receivers: [otlp]
           processors: [memory_limiter, resource, batch]
@@ -277,7 +277,7 @@ data:
           receivers: [otlp, prometheus]
           processors: [memory_limiter, resource, batch]
           exporters: [otlp/signoz, prometheus]
-        # NOTE: No logs pipeline here - Truva-G3 apps write logs to stdout.
+        # NOTE: No logs pipeline here - TruvaG3 apps write logs to stdout.
         # Logs are collected separately via the filelog receiver DaemonSet.
       telemetry:
         logs:
@@ -325,7 +325,7 @@ data:
           # Filter: DROP non-JSON logs (filter operator drops matching entries)
           - type: filter
             expr: 'attributes.log == nil or not (attributes.log matches "^\\{")'
-          # Parse JSON log body from Truva-G3 apps
+          # Parse JSON log body from TruvaG3 apps
           - type: json_parser
             parse_from: attributes.log
             on_error: send
@@ -517,7 +517,7 @@ print_access_info() {
     echo "  kubectl get pods -n truvag3-examples -l app=otel-collector-logs"
     echo ""
     echo "Log-Trace Correlation:"
-    echo "  Logs from Truva-G3 apps include trace_id and span_id fields."
+    echo "  Logs from TruvaG3 apps include trace_id and span_id fields."
     echo "  In SigNoz Logs view, click any log's trace_id to jump to its trace."
     echo ""
     echo "Finding trace_id from request_id:"
@@ -536,7 +536,7 @@ print_access_info() {
 main() {
     echo ""
     echo "=============================================="
-    echo "  SigNoz Setup for Truva-G3 Examples"
+    echo "  SigNoz Setup for TruvaG3 Examples"
     echo "=============================================="
     echo ""
 
@@ -595,7 +595,7 @@ revert_to_jaeger() {
 # Show help
 show_help() {
     cat << 'EOF'
-SigNoz Setup Script for Truva-G3 Examples
+SigNoz Setup Script for TruvaG3 Examples
 ========================================
 
 SigNoz is an optional, feature-rich alternative to Jaeger for distributed
@@ -651,7 +651,7 @@ ACCESS AFTER INSTALLATION:
 PREREQUISITES:
   - kubectl configured with cluster access
   - Helm 3.x installed
-  - Truva-G3 infrastructure deployed (./setup-infrastructure.sh)
+  - TruvaG3 infrastructure deployed (./setup-infrastructure.sh)
 
 TO FULLY REMOVE SIGNOZ:
   helm uninstall signoz -n signoz

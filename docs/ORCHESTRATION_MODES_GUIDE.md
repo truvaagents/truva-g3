@@ -1,6 +1,6 @@
 # Orchestration Modes Guide
 
-Hey there! This guide will help you understand the different ways to orchestrate multi-tool workflows in Truva-G3. If you've ever wondered "Should I let the AI figure out which tools to use, or should I define the steps myself?" - this is the guide for you.
+Hey there! This guide will help you understand the different ways to orchestrate multi-tool workflows in TruvaG3. If you've ever wondered "Should I let the AI figure out which tools to use, or should I define the steps myself?" - this is the guide for you.
 
 > **Working Example**
 >

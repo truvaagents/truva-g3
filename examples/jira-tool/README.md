@@ -1,6 +1,6 @@
 # JIRA Tool
 
-A Truva-G3 tool that provides JIRA Cloud issue management capabilities using the [Atlassian JIRA REST API v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides JIRA Cloud issue management capabilities using the [Atlassian JIRA REST API v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 
@@ -347,7 +347,7 @@ A JIRA API token is **required** for this tool. The tool connects to your Atlass
 
 1. Visit [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
 2. Click "Create API token"
-3. Give it a label (e.g., "Truva-G3 JIRA Tool")
+3. Give it a label (e.g., "TruvaG3 JIRA Tool")
 4. Copy the generated token
 
 **You'll also need:**

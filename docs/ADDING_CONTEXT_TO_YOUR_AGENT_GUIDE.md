@@ -1,6 +1,6 @@
 # Adding Context to Your Agent
 
-How to give your Truva-G3 agent conversation memory, RAG knowledge, semantic caching, and response filtering — without modifying framework internals.
+How to give your TruvaG3 agent conversation memory, RAG knowledge, semantic caching, and response filtering — without modifying framework internals.
 
 ## Table of Contents
 
@@ -23,7 +23,7 @@ How to give your Truva-G3 agent conversation memory, RAG knowledge, semantic cac
 
 ## 1. Why This Guide Exists
 
-Out of the box, a Truva-G3 agent is stateless. It receives a request, plans, executes tools, and synthesizes a response — but it has no memory of past conversations, no access to your domain knowledge base, and no way to cache or filter responses.
+Out of the box, a TruvaG3 agent is stateless. It receives a request, plans, executes tools, and synthesizes a response — but it has no memory of past conversations, no access to your domain knowledge base, and no way to cache or filter responses.
 
 Without context engineering:
 - Every request starts from zero — the agent can't recall what the user said two messages ago
@@ -31,7 +31,7 @@ Without context engineering:
 - Identical queries hit the LLM every time, wasting tokens and adding latency
 - You can't enforce content policies or compliance rules on generated responses
 
-This guide shows you how to solve each of these problems using **pipeline hooks** and **memory interfaces** — Truva-G3's extension points for injecting context at every stage of the orchestration pipeline. Each section is a self-contained scenario with real-world code you can adapt to your stack.
+This guide shows you how to solve each of these problems using **pipeline hooks** and **memory interfaces** — TruvaG3's extension points for injecting context at every stage of the orchestration pipeline. Each section is a self-contained scenario with real-world code you can adapt to your stack.
 
 ---
 
@@ -121,7 +121,7 @@ import (
 // RAGHook retrieves relevant documents from Qdrant before planning.
 type RAGHook struct {
     qdrantClient qdrant.PointsClient
-    embedder     core.EmbeddingClient // Truva-G3's embedding interface
+    embedder     core.EmbeddingClient // TruvaG3's embedding interface
     collection   string
     topK         int
 }
@@ -964,7 +964,7 @@ The plan and execution result types are internal to the orchestration module. Ex
 They serve different access patterns. `ConversationMemory` is session-scoped and ordered (FIFO — "give me the last 10 turns"). `SemanticMemory` is cross-session and similarity-based ("find content similar to this query"). Merging them into one interface would force every implementation to support both patterns.
 
 **Why sessionID per-call instead of per-instance?**
-Unlike LangChain (which binds memory to a session at construction), Truva-G3 passes `sessionID` on every call. This lets a single memory instance serve multiple concurrent sessions — important in K8s deployments where an agent pod handles requests from many users.
+Unlike LangChain (which binds memory to a session at construction), TruvaG3 passes `sessionID` on every call. This lets a single memory instance serve multiple concurrent sessions — important in K8s deployments where an agent pod handles requests from many users.
 
 ---
 

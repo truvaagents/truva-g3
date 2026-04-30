@@ -1,4 +1,4 @@
-# AlertManager Configuration for Truva-G3 Event-Driven Agent
+# AlertManager Configuration for TruvaG3 Event-Driven Agent
 # This ConfigMap is mounted into the AlertManager pod.
 
 apiVersion: v1
@@ -33,7 +33,7 @@ data:
 
     receivers:
     - name: 'default'
-      # Default receiver (no-op for non-Truva-G3 alerts)
+      # Default receiver (no-op for non-TruvaG3 alerts)
 
     - name: 'truvag3-event-agent'
       webhook_configs:

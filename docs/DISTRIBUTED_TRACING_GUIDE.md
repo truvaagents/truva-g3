@@ -1,6 +1,6 @@
 # Distributed Tracing and Log Correlation Guide
 
-Welcome to the complete guide on distributed tracing in Truva-G3! Think of this as your friendly mentor sitting next to you, explaining how to follow a request as it travels through your entire system. Grab a coffee, and let's dive in!
+Welcome to the complete guide on distributed tracing in TruvaG3! Think of this as your friendly mentor sitting next to you, explaining how to follow a request as it travels through your entire system. Grab a coffee, and let's dive in!
 
 ## Table of Contents
 
@@ -55,7 +55,7 @@ Now imagine if every package had a **tracking number** that followed it through 
 
 ### Why This Matters for Your Applications
 
-In a microservices architecture (like Truva-G3's tools and agents), a single user request might touch:
+In a microservices architecture (like TruvaG3's tools and agents), a single user request might touch:
 - 1 Agent (orchestrator)
 - 5 Tools (weather, currency, geocoding, etc.)
 - 2 Databases
@@ -154,7 +154,7 @@ The solution is elegantly simple: **pass a unique identifier with every request*
 
 ### The W3C TraceContext Standard
 
-Truva-G3 uses the **W3C TraceContext** standard, which is supported by all major tracing systems (Jaeger, Zipkin, Datadog, etc.).
+TruvaG3 uses the **W3C TraceContext** standard, which is supported by all major tracing systems (Jaeger, Zipkin, Datadog, etc.).
 
 The magic happens through HTTP headers:
 
@@ -268,7 +268,7 @@ With trace-log correlation, every log entry includes the trace ID:
 grep "fee30b72efcbefd21fddf9cd56d2c8c9" /var/log/*.log
 ```
 
-### How Truva-G3 Implements This
+### How TruvaG3 Implements This
 
 When using the `TracingMiddleware`, you can extract trace information from the context and include it in your logs:
 
@@ -305,7 +305,7 @@ func logWithTrace(ctx context.Context, msg string, fields map[string]interface{}
 
 ## 6. Implementation: Server-Side (TracingMiddleware)
 
-Now let's get practical. Here's how to add distributed tracing to your Truva-G3 tools and agents.
+Now let's get practical. Here's how to add distributed tracing to your TruvaG3 tools and agents.
 
 ### What TracingMiddleware Does
 
@@ -570,7 +570,7 @@ For production, use `NewTracedHTTPClientWithTransport` with custom settings (as 
 
 ## 8. Complete Example: Multi-Service Tracing
 
-The best way to understand distributed tracing is to look at the **actual working examples** in the Truva-G3 repository.
+The best way to understand distributed tracing is to look at the **actual working examples** in the TruvaG3 repository.
 
 > **Working Examples:**
 > - Agent: `examples/agent-with-telemetry/` - Full agent with tracing
@@ -964,7 +964,7 @@ service:
 
 ### Quick Start: Deploy Infrastructure
 
-If you're using the Truva-G3 examples, the infrastructure is already defined:
+If you're using the TruvaG3 examples, the infrastructure is already defined:
 
 ```bash
 # Apply the infrastructure
@@ -1145,7 +1145,7 @@ Each span shows:
 
 ## 11. Required Patterns for Framework-Level Tracing
 
-This section documents the **required patterns** used throughout the Truva-G3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
+This section documents the **required patterns** used throughout the TruvaG3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check
 
@@ -1920,7 +1920,7 @@ In Jaeger, these appear as TWO UNRELATED traces:
 
 ### The Solution: Linked Spans with Baggage
 
-Truva-G3 uses **trace links** (not parent-child relationships) to connect resume traces to their original requests. This is the correct semantic model because:
+TruvaG3 uses **trace links** (not parent-child relationships) to connect resume traces to their original requests. This is the correct semantic model because:
 
 1. Resume operations are causally related but not direct children of the paused operation
 2. The original trace may have already ended
@@ -2215,7 +2215,7 @@ If you don't see `ai.generate_response` or `ai.http_attempt` spans:
 
 ### Framework-Driven Logger Propagation
 
-**Important:** The Truva-G3 Framework automatically propagates the logger to the AI client when you register components. You don't need to manually call `ai.WithLogger()` - the Framework handles this during component registration in `core.NewFramework()`.
+**Important:** The TruvaG3 Framework automatically propagates the logger to the AI client when you register components. You don't need to manually call `ai.WithLogger()` - the Framework handles this during component registration in `core.NewFramework()`.
 
 **How It Works:**
 

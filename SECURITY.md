@@ -10,7 +10,7 @@ Currently supported versions with security updates:
 
 ## Reporting a Vulnerability
 
-We take the security of Truva-G3 seriously. If you believe you have found a security vulnerability, please report it to us as described below.
+We take the security of TruvaG3 seriously. If you believe you have found a security vulnerability, please report it to us as described below.
 
 ### Where to Report
 
@@ -44,7 +44,7 @@ Please include the following information in your report:
 
 ## Security Best Practices
 
-When using Truva-G3 in production:
+When using TruvaG3 in production:
 
 ### 1. API Keys and Secrets
 
@@ -90,7 +90,7 @@ When using Truva-G3 in production:
 
 ## Security Features
 
-Truva-G3 includes several security features:
+TruvaG3 includes several security features:
 
 - **Correlation IDs**: Track requests across the system
 - **Circuit Breaker**: Prevent cascade failures
@@ -123,7 +123,7 @@ Subscribe to our security announcements:
 
 ## Acknowledgments
 
-We appreciate the security research community's efforts in helping keep Truva-G3 secure. Responsible disclosure of vulnerabilities helps us ensure the security and privacy of all our users.
+We appreciate the security research community's efforts in helping keep TruvaG3 secure. Responsible disclosure of vulnerabilities helps us ensure the security and privacy of all our users.
 
 Contributors who report valid security issues will be acknowledged in our security hall of fame (unless they prefer to remain anonymous).
 

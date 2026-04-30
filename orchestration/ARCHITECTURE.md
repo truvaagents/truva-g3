@@ -1,4 +1,4 @@
-# Truva-G3 Orchestration Module Architecture
+# TruvaG3 Orchestration Module Architecture
 
 **Version**: 1.0
 **Purpose**: Comprehensive architectural documentation for the orchestration module
@@ -28,7 +28,7 @@
 
 ## Overview
 
-The orchestration module provides multi-agent coordination with AI-driven orchestration and declarative workflows. It acts as the conductor of the Truva-G3 framework, coordinating multiple agents and tools to accomplish complex tasks.
+The orchestration module provides multi-agent coordination with AI-driven orchestration and declarative workflows. It acts as the conductor of the TruvaG3 framework, coordinating multiple agents and tools to accomplish complex tasks.
 
 ### Key Capabilities
 
@@ -2172,7 +2172,7 @@ migration:
 
 ## Summary
 
-The orchestration module is the brain of the Truva-G3 framework, coordinating tools and agents to accomplish complex tasks. Its architecture emphasizes:
+The orchestration module is the brain of the TruvaG3 framework, coordinating tools and agents to accomplish complex tasks. Its architecture emphasizes:
 
 1. **Clean Separation**: Interface-based dependencies prevent coupling
 2. **Progressive Enhancement**: Start simple, add complexity as needed

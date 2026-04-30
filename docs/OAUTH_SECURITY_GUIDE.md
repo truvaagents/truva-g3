@@ -1,10 +1,10 @@
 # OAuth & Custom Header Propagation Guide
 
-Hey there! This guide will teach you how to secure your Truva-G3 agents with OAuth Bearer Token authentication and custom header propagation. If your tools and services live behind an OAuth gateway, or you need to pass tenant IDs, correlation IDs, or other custom metadata through the orchestration pipeline, this guide has you covered.
+Hey there! This guide will teach you how to secure your TruvaG3 agents with OAuth Bearer Token authentication and custom header propagation. If your tools and services live behind an OAuth gateway, or you need to pass tenant IDs, correlation IDs, or other custom metadata through the orchestration pipeline, this guide has you covered.
 
 > **Reference Example**
 >
-> While there isn't a dedicated OAuth example yet, all the patterns in this guide can be applied to any Truva-G3 agent. We'll use the travel-chat-agent as our reference:
+> While there isn't a dedicated OAuth example yet, all the patterns in this guide can be applied to any TruvaG3 agent. We'll use the travel-chat-agent as our reference:
 > - **Agent**: [`examples/travel-chat-agent/`](../examples/travel-chat-agent/)
 > - **Frontend**: [`examples/chat-ui/index.html`](../examples/chat-ui/index.html)
 >
@@ -32,7 +32,7 @@ Hey there! This guide will teach you how to secure your Truva-G3 agents with OAu
 
 ## What Problem Does This Solve?
 
-When your Truva-G3 orchestrator coordinates multiple tools and services, every outbound HTTP call goes through the executor. Without authentication, those calls look like this:
+When your TruvaG3 orchestrator coordinates multiple tools and services, every outbound HTTP call goes through the executor. Without authentication, those calls look like this:
 
 ```
 POST /process HTTP/1.1
@@ -47,7 +47,7 @@ But in production, your services probably sit behind an API gateway or OAuth pro
 
 Similarly, in multi-tenant systems, you might need to pass `X-Tenant-ID` or `X-Correlation-ID` through the entire orchestration pipeline so that each downstream tool knows which tenant the request belongs to.
 
-Truva-G3's OAuth and Header Propagation features solve both problems:
+TruvaG3's OAuth and Header Propagation features solve both problems:
 
 ```
 POST /process HTTP/1.1
@@ -84,7 +84,7 @@ You don't need both - use whichever applies to your setup. They work independent
 ### Prerequisites
 
 Before adding OAuth or header propagation, you should have:
-- A working Truva-G3 agent with an orchestrator
+- A working TruvaG3 agent with an orchestrator
   - For **streaming agents**: See the [Chat Agent Guide](CHAT_AGENT_GUIDE.md)
   - For **non-streaming agents**: See [`examples/agent-with-orchestration/`](../examples/agent-with-orchestration/)
 - At least one tool registered in your service mesh
@@ -500,7 +500,7 @@ Both fields use `json:"-"` to prevent accidental leakage in debug serialization 
 
 ### Reserved Header Protection
 
-Truva-G3 prevents propagated headers from overriding framework-critical headers. The following headers are **reserved** and will be silently skipped if included in propagated headers:
+TruvaG3 prevents propagated headers from overriding framework-critical headers. The following headers are **reserved** and will be silently skipped if included in propagated headers:
 
 | Reserved Header | Why It's Protected |
 |----------------|-------------------|
@@ -820,7 +820,7 @@ Both `CallService` and `HealthCheck` in the workflow executor honor the same two
    kubectl exec -it <pod> -- env | grep TRUVAG3_OAUTH_TOKEN
    ```
 
-3. **Check token format.** Truva-G3 prepends `Bearer ` automatically. Don't include "Bearer " in your token value:
+3. **Check token format.** TruvaG3 prepends `Bearer ` automatically. Don't include "Bearer " in your token value:
    ```bash
    # Correct
    TRUVAG3_OAUTH_TOKEN=eyJhbGciOiJSUzI1NiIs...

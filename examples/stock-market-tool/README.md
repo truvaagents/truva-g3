@@ -1,6 +1,6 @@
 # Stock Market Tool
 
-A Truva-G3 tool that provides real-time stock market data using the [Finnhub.io](https://finnhub.io/) API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides real-time stock market data using the [Finnhub.io](https://finnhub.io/) API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

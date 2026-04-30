@@ -74,7 +74,7 @@ Or a healthcare system where patient IDs have leading zeros:
 
 ### The Root Cause
 
-The Truva-G3 framework is intentionally **domain-agnostic**. It doesn't hardcode rules like "latitude is always a number" because:
+The TruvaG3 framework is intentionally **domain-agnostic**. It doesn't hardcode rules like "latitude is always a number" because:
 
 1. Domains are infinite (healthcare, finance, gaming, IoT, scientific research...)
 2. The same field name might have different types in different contexts

@@ -1,4 +1,4 @@
-# Redis deployment for Truva-G3 service discovery
+# Redis deployment for TruvaG3 service discovery
 # Deploy to default namespace to be shared across examples
 apiVersion: v1
 kind: PersistentVolumeClaim

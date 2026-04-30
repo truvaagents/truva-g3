@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Config holds all configuration options for the Truva-G3 framework.
+// Config holds all configuration options for the TruvaG3 framework.
 // It supports three-layer configuration priority:
 //  1. Default values (lowest priority)
 //  2. Environment variables (medium priority)

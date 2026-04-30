@@ -1,6 +1,6 @@
 # Currency Tool
 
-A Truva-G3 tool that provides currency conversion using the [Frankfurter](https://frankfurter.dev/) API. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
+A TruvaG3 tool that provides currency conversion using the [Frankfurter](https://frankfurter.dev/) API. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ A Truva-G3 tool that provides currency conversion using the [Frankfurter](https:
 
 ## How to Run This Example
 
-Running this tool locally demonstrates how Truva-G3 tools register with Redis for service discovery and expose capabilities via a REST API.
+Running this tool locally demonstrates how TruvaG3 tools register with Redis for service discovery and expose capabilities via a REST API.
 
 ### Prerequisites
 

@@ -1,6 +1,6 @@
 package framework
 
-// Version information for the Truva-G3 Agent Framework
+// Version information for the TruvaG3 Agent Framework
 const (
 	// Version is the current framework version
 	Version = "development"

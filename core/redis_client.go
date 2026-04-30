@@ -1,4 +1,4 @@
-// Package core provides Redis client abstractions for the Truva-G3 framework.
+// Package core provides Redis client abstractions for the TruvaG3 framework.
 // This file implements a simplified Redis client wrapper with database isolation,
 // namespacing, and connection management for various framework components.
 //

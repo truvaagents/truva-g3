@@ -1,8 +1,8 @@
-# Truva-G3 Documentation
+# TruvaG3 Documentation
 
 🚀 **The AI Agent Framework That Actually Makes Sense**
 
-Welcome! I'm going to show you why Truva-G3 is different and how it can help you build production AI agents without the usual headaches.
+Welcome! I'm going to show you why TruvaG3 is different and how it can help you build production AI agents without the usual headaches.
 
 ## 🎯 The Problem We're Solving
 
@@ -13,11 +13,11 @@ Let me guess - you've tried building AI agents before, right? Maybe with LangCha
 - **Python overhead** when you needed real performance
 - **Debugging nightmares** with magical chains and abstract agents
 
-Been there. That's exactly why we built Truva-G3.
+Been there. That's exactly why we built TruvaG3.
 
-## 💡 What is Truva-G3?
+## 💡 What is TruvaG3?
 
-Think of Truva-G3 as the **Unix philosophy applied to AI agents**:
+Think of TruvaG3 as the **Unix philosophy applied to AI agents**:
 
 - **Small, focused tools** that do one thing well
 - **Clean composition** to build complex systems
@@ -27,7 +27,7 @@ Think of Truva-G3 as the **Unix philosophy applied to AI agents**:
 Here's the difference in one image:
 
 ```
-Other Frameworks:              Truva-G3:
+Other Frameworks:              TruvaG3:
 ┌──────────────────┐          ┌────────┐
 │   500MB Python   │          │  7MB   │
 │   Runtime +      │    vs    │  Go    │
@@ -48,7 +48,7 @@ Imagine you're building a restaurant:
 - Expensive to run
 - Takes forever to set up
 
-**Truva-G3** = Building with modular kitchen equipment
+**TruvaG3** = Building with modular kitchen equipment
 - Pick exactly what you need
 - Each piece does one thing perfectly
 - Easy to understand and maintain
@@ -100,7 +100,7 @@ Each module is like a LEGO brick - small, focused, composable:
 - **[Scaling](./patterns/scaling.md)** - From 1 to 1 million users
 - **[Performance](./patterns/performance.md)** - Make it fast
 
-## 🤔 Why Truva-G3? (The Honest Answer)
+## 🤔 Why TruvaG3? (The Honest Answer)
 
 ### What Makes Us Different
 
@@ -132,12 +132,12 @@ if err != nil {
 **3. We're Fast (Like, Really Fast)**
 ```
 Startup Time:
-- Truva-G3: < 1 second
+- TruvaG3: < 1 second
 - LangChain: 5-10 seconds
 - AutoGen: 3-5 seconds
 
 Memory Usage:
-- Truva-G3: 10MB
+- TruvaG3: 10MB
 - LangChain: 500MB+
 - AutoGen: 300MB+
 ```
@@ -157,7 +157,7 @@ client := ai.NewClient(ai.WithProvider("local-ollama"))
 
 ### The Mental Model
 
-Think of Truva-G3 like a restaurant kitchen:
+Think of TruvaG3 like a restaurant kitchen:
 
 ```
 Tools = Kitchen Equipment (Oven, Mixer, Fridge)
@@ -209,9 +209,9 @@ tools, _ := agent.Discover(ctx, filter)
 
 ### Binary Size Comparison
 ```
-Truva-G3 Core:           3MB
-Truva-G3 + AI:           7MB
-Truva-G3 + Everything:   10MB
+TruvaG3 Core:           3MB
+TruvaG3 + AI:           7MB
+TruvaG3 + Everything:   10MB
 
 LangChain:             500MB+
 AutoGen:               300MB+
@@ -358,7 +358,7 @@ I recommend this order:
 
 ## 💬 Real Developer Testimonials
 
-> "We replaced our 500MB Python agent with a 7MB Truva-G3 agent. Same features, 50x less memory, 10x faster. Our AWS bill dropped 80%." - *Tech Lead, FinTech Startup*
+> "We replaced our 500MB Python agent with a 7MB TruvaG3 agent. Same features, 50x less memory, 10x faster. Our AWS bill dropped 80%." - *Tech Lead, FinTech Startup*
 
 > "Finally, an AI framework I can actually understand. No magic, no abstractions, just clean Go code." - *Senior Engineer, Fortune 500*
 
@@ -385,7 +385,7 @@ A: Probably. We support 20+ providers and any OpenAI-compatible API.
 **Q: Is it really that small?**
 A: Yes. 7MB for a complete AI agent. We're obsessed with efficiency.
 
-## 🎯 The Truva-G3 Philosophy
+## 🎯 The TruvaG3 Philosophy
 
 1. **Small is beautiful** - Every byte counts
 2. **Explicit is better than implicit** - No magic
@@ -399,7 +399,7 @@ Don't just read about it - build something! Head to the [Quick Start Guide](./QU
 
 Remember: **Every expert was once a beginner.** We've all been there. The documentation is written to help you succeed, the community is here to support you, and the framework is designed to grow with you.
 
-Welcome to Truva-G3! Let's build something amazing together. 🎉
+Welcome to TruvaG3! Let's build something amazing together. 🎉
 
 ---
 

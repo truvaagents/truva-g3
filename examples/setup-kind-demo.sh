@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Truva-G3 Framework - Kind Demo Setup Script
+# TruvaG3 Framework - Kind Demo Setup Script
 # This script creates a complete Kind-based demo environment
 
 set -e
@@ -21,7 +21,7 @@ EXAMPLES_DIR="$SCRIPT_DIR"
 K8S_DIR="$SCRIPT_DIR/k8-deployment"
 
 echo -e "${COLOR_BLUE}"
-echo "🚀 Truva-G3 Framework - Kind Demo Setup"
+echo "🚀 TruvaG3 Framework - Kind Demo Setup"
 echo "======================================"
 echo -e "${COLOR_NC}"
 
@@ -179,7 +179,7 @@ deploy_infrastructure() {
 
 # Function to build and deploy examples
 deploy_examples() {
-    echo -e "\n${COLOR_YELLOW}🎯 Building and deploying Truva-G3 examples...${COLOR_NC}"
+    echo -e "\n${COLOR_YELLOW}🎯 Building and deploying TruvaG3 examples...${COLOR_NC}"
 
     # Build Docker images for examples
     local examples=("tool-example" "agent-example" "ai-agent-example")
@@ -222,7 +222,7 @@ wait_for_deployments() {
     done
 
     # Wait for examples (if they exist)
-    echo -e "${COLOR_BLUE}⏳ Waiting for Truva-G3 examples...${COLOR_NC}"
+    echo -e "${COLOR_BLUE}⏳ Waiting for TruvaG3 examples...${COLOR_NC}"
     kubectl wait --for=condition=available --timeout=300s deployment -l "truvag3.framework/type" -n "${NAMESPACE}" || true
 
     echo -e "${COLOR_GREEN}✅ All deployments ready${COLOR_NC}"
@@ -269,7 +269,7 @@ setup_port_forwarding() {
 
 # Function to show status and URLs
 show_status() {
-    echo -e "\n${COLOR_GREEN}🎉 Truva-G3 Kind Demo Environment Ready!${COLOR_NC}"
+    echo -e "\n${COLOR_GREEN}🎉 TruvaG3 Kind Demo Environment Ready!${COLOR_NC}"
     echo -e "${COLOR_PURPLE}=======================================${COLOR_NC}"
     echo ""
     echo -e "${COLOR_BLUE}📊 Monitoring & Observability:${COLOR_NC}"
@@ -277,7 +277,7 @@ show_status() {
     echo -e "   Prometheus: ${COLOR_YELLOW}http://localhost:9090${COLOR_NC}"
     echo -e "   Jaeger:     ${COLOR_YELLOW}http://localhost:16686${COLOR_NC}"
     echo ""
-    echo -e "${COLOR_BLUE}🚀 Truva-G3 Examples:${COLOR_NC}"
+    echo -e "${COLOR_BLUE}🚀 TruvaG3 Examples:${COLOR_NC}"
     echo -e "   Weather Tool: ${COLOR_YELLOW}http://localhost:8080/health${COLOR_NC}"
     echo -e "   Research Agent: ${COLOR_YELLOW}http://localhost:8090/health${COLOR_NC}"
     echo ""
@@ -321,12 +321,12 @@ cleanup() {
 
 # Function to show help
 show_help() {
-    echo "Truva-G3 Kind Demo Setup Script"
+    echo "TruvaG3 Kind Demo Setup Script"
     echo ""
     echo "Usage: $0 [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  setup       Create Kind cluster and deploy Truva-G3 demo (default)"
+    echo "  setup       Create Kind cluster and deploy TruvaG3 demo (default)"
     echo "  cleanup     Stop port forwards and cleanup"
     echo "  status      Show current status and URLs"
     echo "  delete      Delete the Kind cluster completely"

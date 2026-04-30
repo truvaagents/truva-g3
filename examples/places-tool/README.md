@@ -1,6 +1,6 @@
 # Places Tool
 
-A Truva-G3 tool that provides local place search capabilities using [Foursquare Places API](https://location.foursquare.com/developer/) and [Geoapify Places API](https://www.geoapify.com/places-api). This dual-provider tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides local place search capabilities using [Foursquare Places API](https://location.foursquare.com/developer/) and [Geoapify Places API](https://www.geoapify.com/places-api). This dual-provider tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

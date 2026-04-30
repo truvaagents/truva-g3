@@ -11,7 +11,7 @@
 #   - k8-deployment-api.yaml    (TRUVAG3_MODE=api)
 #   - k8-deployment-worker.yaml (TRUVAG3_MODE=worker)
 #
-# This agent uses the Truva-G3 async task system for long-running multi-tool orchestration.
+# This agent uses the TruvaG3 async task system for long-running multi-tool orchestration.
 #
 # Prerequisites (deploy these first):
 #   - Redis (for task queue and discovery)

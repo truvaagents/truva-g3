@@ -1,4 +1,4 @@
-# Truva-G3 AI Module Architecture
+# TruvaG3 AI Module Architecture
 
 **Version**: 1.0
 **Module**: `github.com/truvaagents/truva-g3/ai`
@@ -124,7 +124,7 @@ type ProviderFactory interface {
 
 **Why Factory Pattern?**
 
-| Pattern | Pros | Cons | Truva-G3 Choice |
+| Pattern | Pros | Cons | TruvaG3 Choice |
 |---------|------|------|---------------|
 | Direct instantiation | Simple | Tight coupling | ❌ |
 | Factory method | Flexible, testable | Slightly more code | ✅ Chosen |
@@ -182,7 +182,7 @@ This enforced distinction prevents architectural violations where tools accident
 
 **The Design Decision**: The `ai` module should be the **best default path**, not a required abstraction wall.
 
-Truva-G3 should support major providers out of the box, but developers must always retain two freedoms:
+TruvaG3 should support major providers out of the box, but developers must always retain two freedoms:
 
 1. **Use the AI module for common portability and framework integration**
 2. **Bypass the AI module and use a provider's native SDK directly when they need full control**
@@ -192,8 +192,8 @@ This means the AI module is intentionally designed as a convenience layer with s
 **What this implies architecturally**:
 
 - The framework should support major providers directly (`openai`, `anthropic`, `gemini`, `bedrock`, and key OpenAI-compatible aliases).
-- The framework must not force developers to abandon `ai/` just because a provider shipped a new request field that Truva-G3 has not modeled yet.
-- A developer who prefers the provider's native SDK should be able to plug that choice into Truva-G3 cleanly by supplying a compatible client or adapter.
+- The framework must not force developers to abandon `ai/` just because a provider shipped a new request field that TruvaG3 has not modeled yet.
+- A developer who prefers the provider's native SDK should be able to plug that choice into TruvaG3 cleanly by supplying a compatible client or adapter.
 - Framework-owned abstractions should focus on the stable common core, not on exhaustively normalizing every vendor-specific feature.
 
 **Non-goal**:
@@ -210,7 +210,7 @@ Instead, its job is to provide:
 
 **The Design Decision**: Separate the stable cross-provider surface from provider-specific extensions.
 
-The AI module should expose a small portable core that Truva-G3 itself can rely on:
+The AI module should expose a small portable core that TruvaG3 itself can rely on:
 
 - model selection
 - temperature
@@ -228,17 +228,17 @@ This is the mechanism that prevents the framework from becoming obsolete every t
 
 **Principle**:
 
-> A missing first-class Truva-G3 field or header must never force a developer to stop using the AI module.
+> A missing first-class TruvaG3 field or header must never force a developer to stop using the AI module.
 
 If the provider supports an extra request field or a required request header and the developer wants to use it from agent code, the AI module should allow that via provider-specific extras/headers until or unless the capability becomes common enough to deserve first-class promotion.
 
 ### 7. Minimal Compatibility Responsibility
 
-**The Design Decision**: The AI module should own only the minimum compatibility logic required to keep Truva-G3 safe and useful.
+**The Design Decision**: The AI module should own only the minimum compatibility logic required to keep TruvaG3 safe and useful.
 
 That means:
 
-- It **should** protect users from obviously invalid provider/model combinations for the features Truva-G3 relies on heavily.
+- It **should** protect users from obviously invalid provider/model combinations for the features TruvaG3 relies on heavily.
 - It **should** translate a small number of semantic concepts that matter to the framework, such as reasoning intent or structured-output intent.
 - It **should not** try to completely normalize every field or every vendor-specific feature.
 

@@ -1,10 +1,10 @@
-# Getting Started with Truva-G3
+# Getting Started with TruvaG3
 
 **Build intelligent AI agents and tools in Go that can discover and coordinate with each other.**
 
-Truva-G3 is a Kubernetes-native framework for building AI agents and tools. Components discover each other automatically through Redis and coordinate to accomplish complex tasks.
+TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Components discover each other automatically through Redis and coordinate to accomplish complex tasks.
 
-**Why Truva-G3?**
+**Why TruvaG3?**
 - Ultra-lightweight: 15-44MB containers, ~100ms startup
 - AI-native: Built-in support for Groq, OpenAI, Anthropic, Gemini, and more
 - Auto-discovery: Components find each other automatically via Redis
@@ -15,7 +15,7 @@ Truva-G3 is a Kubernetes-native framework for building AI agents and tools. Comp
 
 ## 1. Prerequisites
 
-Truva-G3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
+TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
 
 ### Required Software
 
@@ -116,7 +116,7 @@ kubectl version --client
 
 ## 2. Run the Examples First (Recommended)
 
-The fastest way to understand Truva-G3 is to run a complete example end-to-end.
+The fastest way to understand TruvaG3 is to run a complete example end-to-end.
 We recommend starting with the **travel-chat-agent** — it exercises the full
 framework: discovery, AI orchestration, multi-tool coordination, observability,
 and a browser UI.
@@ -279,7 +279,7 @@ kind delete cluster --name "truvag3-demo-$(whoami)"
 
 ## 3. Available Examples
 
-Truva-G3 ships ~50 reference examples. Below is a curated subset; see
+TruvaG3 ships ~50 reference examples. Below is a curated subset; see
 [examples/README.md](examples/README.md) for the full list.
 
 > **Setup convention**: every example has a `setup.sh`. From a cold start

@@ -1,4 +1,4 @@
-# Truva-G3 Limits & Configuration Cheatsheet
+# TruvaG3 Limits & Configuration Cheatsheet
 
 Quick reference for all configurable limits, thresholds, and budgets. Every value below can be overridden via environment variable or programmatic config.
 

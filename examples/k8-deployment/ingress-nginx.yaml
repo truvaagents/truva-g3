@@ -4,7 +4,7 @@
 # Compatible with Kind (hostPort), EKS (NLB), GKE, AKS.
 #
 # Source: https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-# Trimmed to essentials for Truva-G3 local development.
+# Trimmed to essentials for TruvaG3 local development.
 
 ---
 apiVersion: v1

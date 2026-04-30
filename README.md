@@ -1,29 +1,29 @@
-# Truva-G3 - Kubernetes-Native AI Agent Framework for Enterprise Environments
+# TruvaG3 - Kubernetes-Native AI Agent Framework for Enterprise Environments
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org/dl/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **Microservices meet AI**: Build and operate agent ecosystems as independent Kubernetes services — discover capabilities dynamically, orchestrate intelligently, and keep the whole system inside your own platform boundaries.
 
-> **Note:** Truva-G3 is an open-source framework and reference implementation for teams exploring or building enterprise agent platforms. It demonstrates production-oriented patterns, but it is maintained by a solo developer and is not sold as a commercially supported platform.
+> **Note:** TruvaG3 is an open-source framework and reference implementation for teams exploring or building enterprise agent platforms. It demonstrates production-oriented patterns, but it is maintained by a solo developer and is not sold as a commercially supported platform.
 
-Truva-G3 is an **open source** framework for building autonomous AI agent networks, inspired by **microservice architecture** principles. It is especially well-suited for enterprises that want to run agentic systems inside their existing Kubernetes estate, including air-gapped or tightly controlled environments. Different teams, departments, and use cases can run isolated agent ecosystems in separate namespaces while still using familiar platform controls around networking, observability, rollout, and security.
+TruvaG3 is an **open source** framework for building autonomous AI agent networks, inspired by **microservice architecture** principles. It is especially well-suited for enterprises that want to run agentic systems inside their existing Kubernetes estate, including air-gapped or tightly controlled environments. Different teams, departments, and use cases can run isolated agent ecosystems in separate namespaces while still using familiar platform controls around networking, observability, rollout, and security.
 
 **Vendor agnostic by design**: Seamlessly integrate with any LLM provider (OpenAI, Anthropic, Gemini, Groq, DeepSeek) or your own self-hosted models via OpenAI-compatible endpoints. Switch providers without changing your agent code.
 
 **Production-quality patterns**: Redis/Valkey-based service discovery for dynamic tool networks, built-in resilience patterns (circuit breakers, semantic retry, panic recovery), and full observability through OpenTelemetry with distributed tracing and unified metrics. Written in Go for minimal resource footprint (~15-44MB containers, 8-20MB runtime memory) and Kubernetes-native deployment.
 
-**Distinguishing strength**: Truva-G3 is strongest when the requirement is not just "build an agent", but "run many agent systems safely inside enterprise infrastructure." That includes self-hosted operation, namespace isolation, direct in-cluster service communication, and the ability to grow from isolated experiments to large internal fleets of agents and tools without depending on an external SaaS control plane.
+**Distinguishing strength**: TruvaG3 is strongest when the requirement is not just "build an agent", but "run many agent systems safely inside enterprise infrastructure." That includes self-hosted operation, namespace isolation, direct in-cluster service communication, and the ability to grow from isolated experiments to large internal fleets of agents and tools without depending on an external SaaS control plane.
 
 ## Table of Contents
 
 **1. Quick Start**
-- [Why Truva-G3?](#why-truvag3-microservices-architecture-for-ai-agents) • *2 min read*
+- [Why TruvaG3?](#why-truvag3-microservices-architecture-for-ai-agents) • *2 min read*
 - [Getting Started in 5 Minutes](#getting-started-in-5-minutes) • *5 min setup*
 - [Installation](#installation) • *30 seconds*
 
 **2. Core Concepts**
-- [What Makes Truva-G3 Unique](#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai) • *Key differentiators*
+- [What Makes TruvaG3 Unique](#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai) • *Key differentiators*
 - [Architecture Overview](#how-truvag3-works) • *5 min read*
 - [Enterprise Deployment Model](#enterprise-deployment-model-run-agent-ecosystems-inside-your-existing-kubernetes-platform) • *Why this fits enterprise platforms*
 - [Key Features](#core-capabilities)
@@ -45,8 +45,8 @@ Truva-G3 is an **open source** framework for building autonomous AI agent networ
 - [Performance Metrics](#container-image-size-details) • *Verified benchmarks*
 - [Framework Comparison](#quick-framework-comparison) • *vs Python alternatives*
 
-**5. When to Use Truva-G3**
-- [Choose Truva-G3](#when-to-use-truvag3) • *Is it right for you?*
+**5. When to Use TruvaG3**
+- [Choose TruvaG3](#when-to-use-truvag3) • *Is it right for you?*
 - [Microservices for AI](#why-truvag3-microservices-architecture-for-ai-agents) • *For architects*
 - [Limitations](#consider-other-options-if) • *Be informed*
 
@@ -58,20 +58,20 @@ Truva-G3 is an **open source** framework for building autonomous AI agent networ
 ---
 
 **Reading Paths:**
-- **Quick Evaluation** (5 mins): What is Truva-G3? → When to Use Truva-G3?
+- **Quick Evaluation** (5 mins): What is TruvaG3? → When to Use TruvaG3?
 - **Developer Onboarding** (15 mins): Getting Started → Key Features → Examples
 - **Architecture Review** (30 mins): Architecture Overview → Setup Pattern → Framework Comparison
 - **Complete Guide** (60 mins): Read everything top to bottom
 
 ---
 
-## Why Truva-G3? Microservices Architecture for AI Agents
+## Why TruvaG3? Microservices Architecture for AI Agents
 
 ### 1. The Microservices Paradigm Applied to AI
 
 **The Core Insight**: The same principles that revolutionized web services—independent deployment, service discovery, fault isolation, and horizontal scaling—apply perfectly to AI agent systems.
 
-Just as microservices decomposed monolithic applications into specialized, independently deployable services, Truva-G3 decomposes AI systems into:
+Just as microservices decomposed monolithic applications into specialized, independently deployable services, TruvaG3 decomposes AI systems into:
 
 - **Tools as Domain Services**: Each tool is an independent microservice focused on a specific domain, exposing multiple related capabilities. A stock-market-tool provides quotes, company profiles, and news; a weather-tool provides current conditions and forecasts. Deploy, scale, and update each domain independently.
 - **Agents as Composable Orchestrators**: Agents discover and coordinate tools at runtime—but they also expose their own capabilities. A travel-research agent orchestrates weather, currency, and geocoding tools, then exposes `research_destination` as a capability that other agents can call. This enables hierarchical composition: agents calling agents.
@@ -82,9 +82,9 @@ Just as microservices decomposed monolithic applications into specialized, indep
 
 ### 2. Kubernetes-Native: Built for the Platform That Runs Production
 
-**Why Reinvent the Wheel?** Kubernetes already solved the hard problems of running microservices at scale. Truva-G3 embraces this foundation, adding AI-specific capabilities on top:
+**Why Reinvent the Wheel?** Kubernetes already solved the hard problems of running microservices at scale. TruvaG3 embraces this foundation, adding AI-specific capabilities on top:
 
-| Capability | Kubernetes Provides | Truva-G3 Adds |
+| Capability | Kubernetes Provides | TruvaG3 Adds |
 |------------|---------------------|-------------|
 | **Discovery** | Service DNS for static endpoints | Redis/Valkey-based dynamic capability discovery - agents find tools by what they do, not where they are |
 | **Auto-scaling** | HPA scales pods based on metrics | Go's 8-20MB memory footprint can increase pod density compared with heavier interpreter-based stacks |
@@ -92,13 +92,13 @@ Just as microservices decomposed monolithic applications into specialized, indep
 | **Load Balancing** | Distribute traffic across replicas | Intelligent routing based on tool capabilities and health status |
 | **Rolling Updates** | Zero-downtime deployments | Agents automatically discover new tool versions as they come online |
 
-**The Truva-G3 Advantage**: Go's tiny containers (~15-44MB) and minimal runtime footprint (8-20MB) make aggressive autoscaling practical. Scale from 10 to 100 agents without blowing your infrastructure budget.
+**The TruvaG3 Advantage**: Go's tiny containers (~15-44MB) and minimal runtime footprint (8-20MB) make aggressive autoscaling practical. Scale from 10 to 100 agents without blowing your infrastructure budget.
 
 ### 2.5 Enterprise Deployment Model: Run Agent Ecosystems Inside Your Existing Kubernetes Platform
 
 Many enterprises do not want a separate hosted agent control plane. They want agent systems to live inside the same operational model they already trust.
 
-That is where Truva-G3 is intentionally different:
+That is where TruvaG3 is intentionally different:
 
 - **Self-hosted by default**: agents, tools, discovery, traces, and runtime data stay in your environment
 - **Air-gapped friendly**: works in restricted environments where external SaaS dependencies are not acceptable
@@ -106,7 +106,7 @@ That is where Truva-G3 is intentionally different:
 - **Direct use of Kubernetes primitives**: Deployments, Services, Ingress, NetworkPolicy, Secrets, autoscaling, and standard cluster observability all fit naturally
 - **Platform-team friendly**: no need to replace your existing Kubernetes operating model to run agent workloads
 
-This makes Truva-G3 a strong fit for enterprises that want to support:
+This makes TruvaG3 a strong fit for enterprises that want to support:
 
 - multiple internal agent programs in parallel
 - different compliance zones or data boundaries
@@ -130,30 +130,30 @@ This makes Truva-G3 a strong fit for enterprises that want to support:
 
 **The Bottom Line**: With AI assistance removing the learning curve, Go gives you real advantages for agent infrastructure. You write agents that are faster, smaller, and more reliable.
 
-### 4. Patterns Truva-G3 Demonstrates
+### 4. Patterns TruvaG3 Demonstrates
 
-Truva-G3 addresses common challenges in building AI agent systems. Study these patterns and adapt them for your own needs:
+TruvaG3 addresses common challenges in building AI agent systems. Study these patterns and adapt them for your own needs:
 
 ### Challenges & Solutions
 
 🔴 **Common Challenge**: "Here's how to build an agent. Good luck running 100 of them in production!"
-✅ **Truva-G3 shows**: Tools and agents with built-in resilience patterns. Components stay up even when external APIs go down.
+✅ **TruvaG3 shows**: Tools and agents with built-in resilience patterns. Components stay up even when external APIs go down.
 
 🔴 **Common Challenge**: "Install these 50 dependencies, hope they don't conflict."
-✅ **Truva-G3 shows**: Single binary deployment. No dependency hell.
+✅ **TruvaG3 shows**: Single binary deployment. No dependency hell.
 
 🔴 **Common Challenge**: "To coordinate components, write complex orchestration code."
-✅ **Truva-G3 shows**: AI dynamically generates execution plans from natural language. LLM analyzes your request, discovers available tools, and orchestrates them intelligently.
+✅ **TruvaG3 shows**: AI dynamically generates execution plans from natural language. LLM analyzes your request, discovers available tools, and orchestrates them intelligently.
 
 🔴 **Common Challenge**: "When API calls fail, I need to manually handle retries and error correction."
-✅ **Truva-G3 shows**: **Semantic Retry** automatically computes corrected parameters using LLM analysis. When `amount: 0` fails, it computes `amount: 46828.5` from source data.
+✅ **TruvaG3 shows**: **Semantic Retry** automatically computes corrected parameters using LLM analysis. When `amount: 0` fails, it computes `amount: 46828.5` from source data.
 
 🔴 **Common Challenge**: "Add Prometheus, OpenTelemetry, Grafana, configure them all..."
-✅ **Truva-G3 shows**: Initialize once, then `telemetry.Counter("task.done")`. Observability built-in.
+✅ **TruvaG3 shows**: Initialize once, then `telemetry.Counter("task.done")`. Observability built-in.
 
-## What Makes Truva-G3 Unique: Dynamic Agent Discovery, Vendor-Agnostic, Microservice-Native AI
+## What Makes TruvaG3 Unique: Dynamic Agent Discovery, Vendor-Agnostic, Microservice-Native AI
 
-While many popular frameworks center orchestration around explicit graphs, predefined roles, or conversation patterns, Truva-G3 takes a different approach: **dynamic capability-based discovery** where agents discover tools and other agents at runtime through Redis/Valkey — combined with **vendor-agnostic AI** that works with any LLM provider.
+While many popular frameworks center orchestration around explicit graphs, predefined roles, or conversation patterns, TruvaG3 takes a different approach: **dynamic capability-based discovery** where agents discover tools and other agents at runtime through Redis/Valkey — combined with **vendor-agnostic AI** that works with any LLM provider.
 
 For architects, the practical differentiators are:
 
@@ -163,10 +163,10 @@ For architects, the practical differentiators are:
 - **No mandatory SaaS dependency**: a major advantage for regulated, internal, or air-gapped deployments
 - **Direct service-to-service runtime**: once discovered, agents and tools communicate through normal in-cluster HTTP, which is easy for engineers and ops teams to reason about
 - **Security aligns with existing K8s REST service models**: because agents and tools are ordinary HTTP services, teams that already secure REST microservices in Kubernetes can reuse the same ingress, gateway, mesh, mTLS, OAuth/JWT, header propagation, and network policy patterns instead of adopting a separate agent-specific security stack
-- **Observability fits existing OTEL and Kubernetes operations**: Truva-G3 emits OpenTelemetry-native traces and metrics, carries trace context across agents and tools, and produces structured logs that are collected and correlated through the OTEL Collector and Loki/Jaeger stack, so platform teams can troubleshoot distributed agent workflows using the same Grafana, Jaeger, Prometheus, and collector patterns they already know
+- **Observability fits existing OTEL and Kubernetes operations**: TruvaG3 emits OpenTelemetry-native traces and metrics, carries trace context across agents and tools, and produces structured logs that are collected and correlated through the OTEL Collector and Loki/Jaeger stack, so platform teams can troubleshoot distributed agent workflows using the same Grafana, Jaeger, Prometheus, and collector patterns they already know
 - **Well aligned with existing enterprise platform controls**: Kubernetes networking, rollout strategies, service DNS, logs, traces, metrics, and secrets management all remain first-class
 
-> **A note on terminology**: Truva-G3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A Truva-G3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. It is closer to an application that **hosts** callable capabilities than to an MCP client.
+> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A TruvaG3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. It is closer to an application that **hosts** callable capabilities than to an MCP client.
 
 ### Dynamic Orchestration Over Predefined Workflows
 
@@ -176,7 +176,7 @@ For architects, the practical differentiators are:
 - More upfront orchestration structure when adding new capabilities
 - Tool selection that is commonly declared in code or configuration
 
-**Truva-G3's Approach:**
+**TruvaG3's Approach:**
 - AI generates execution plans at runtime based on natural language requests
 - Tools register themselves with capabilities - no predefined roles needed
 - New tools automatically become available to existing orchestrators via Redis/Valkey discovery
@@ -200,7 +200,7 @@ Supported providers: OpenAI, Anthropic Claude, Google Gemini, Groq, DeepSeek, Ol
 
 ### Architectural Innovation: Compile-Time Enforcement
 
-Truva-G3 uniquely enforces architectural boundaries at compile time through Go interfaces:
+TruvaG3 uniquely enforces architectural boundaries at compile time through Go interfaces:
 
 ```go
 // Tools can ONLY register themselves (passive components)
@@ -224,9 +224,9 @@ This isn't just a convention - it's enforced by the type system. Tools literally
 
 ### Production-Quality Patterns
 
-Truva-G3 implements the same patterns used in production-grade systems, giving you a working reference to learn from:
+TruvaG3 implements the same patterns used in production-grade systems, giving you a working reference to learn from:
 
-| Aspect | Truva-G3 | Traditional Frameworks |
+| Aspect | TruvaG3 | Traditional Frameworks |
 |--------|--------|----------------------|
 | **Container Size** | 15-44MB (verified) | Depends heavily on base image and dependencies |
 | **Memory per Agent** | 8-20MB (verified in K8s) | Varies with runtime, libraries, and workload |
@@ -451,7 +451,7 @@ team = SelectorGroupChat(
 result = team.run(task="Analyze the data")
 ```
 
-**Truva-G3 Approach (AI-Driven Orchestration):**
+**TruvaG3 Approach (AI-Driven Orchestration):**
 ```go
 // Create orchestrator - no explicit tool/agent wiring needed
 orchestrator := orchestration.CreateOrchestrator(config, deps)
@@ -467,11 +467,11 @@ response, _ := orchestrator.ProcessRequest(ctx,
 //   4. Synthesizes results into a coherent response
 ```
 
-In Truva-G3's dynamic mode, there is no per-request tool wiring in the application code. Add a new tool to Redis/Valkey, and it becomes discoverable to orchestrators immediately.
+In TruvaG3's dynamic mode, there is no per-request tool wiring in the application code. Add a new tool to Redis/Valkey, and it becomes discoverable to orchestrators immediately.
 
 ### Dual-Mode Orchestration: Choose Your Approach
 
-While Truva-G3's strength is autonomous agent networks, it **also provides traditional workflow-based orchestration** for scenarios requiring explicit control. You can choose the right approach for each use case:
+While TruvaG3's strength is autonomous agent networks, it **also provides traditional workflow-based orchestration** for scenarios requiring explicit control. You can choose the right approach for each use case:
 
 **Workflow-Based (Explicit Control):**
 ```yaml
@@ -507,16 +507,16 @@ orchestrator.ProcessRequest(ctx,
 
 Both orchestration modes leverage the same underlying agent discovery infrastructure, ensuring your agents work seamlessly regardless of how they're orchestrated.
 
-## How Truva-G3 Works
+## How TruvaG3 Works
 
 ### System Architecture - Runtime Behavior in Kubernetes
 
-Truva-G3 is designed for distributed agent systems. Here's how Tools, Agents, and the Registry interact at runtime:
+TruvaG3 is designed for distributed agent systems. Here's how Tools, Agents, and the Registry interact at runtime:
 
 ```mermaid
 flowchart TB
     subgraph K8s["Kubernetes Cluster"]
-        subgraph Services["Truva-G3 Services"]
+        subgraph Services["TruvaG3 Services"]
             subgraph Tools["Tools (Passive - Register Only)"]
                 WT["☁️ weather-service<br/>Capability: current_weather"]
                 ST["📈 stock-service<br/>Capability: stock_quote"]
@@ -590,11 +590,11 @@ flowchart TB
 
 **Understanding Tools and Agents**:
 
-- **Tools** are like Unix commands (`ls`, `grep`, `sort`) or kitchen appliances - each does ONE thing well. A weather-tool fetches weather, a stock-tool fetches stock prices. Tools are "passive" within Truva-G3 (can't discover other components), but actively call APIs outside the Truva-G3 ecosystem to fulfill their capability - whether that's a public internet API (OpenWeatherMap), an internal service in your cluster (company-data-api), or a database.
+- **Tools** are like Unix commands (`ls`, `grep`, `sort`) or kitchen appliances - each does ONE thing well. A weather-tool fetches weather, a stock-tool fetches stock prices. Tools are "passive" within TruvaG3 (can't discover other components), but actively call APIs outside the TruvaG3 ecosystem to fulfill their capability - whether that's a public internet API (OpenWeatherMap), an internal service in your cluster (company-data-api), or a database.
 
 - **Agents** are like chefs who use multiple kitchen tools to create a meal. They discover available tools, select the right ones for the task, and orchestrate complex workflows - often using AI to make intelligent decisions. Agents also register their own capabilities and can be discovered by other agents, enabling hierarchical orchestration (e.g., a master-agent delegating to specialized sub-agents).
 
-> **A note on terminology**: Truva-G3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A Truva-G3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. Think of Truva-G3 Tools as the infrastructure layer that *hosts* capabilities, rather than the capabilities themselves.
+> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A TruvaG3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. Think of TruvaG3 Tools as the infrastructure layer that *hosts* capabilities, rather than the capabilities themselves.
 
 > 📖 For detailed examples and patterns, see the [Core Module README](core/README.md#real-world-tool-examples).
 
@@ -610,9 +610,9 @@ flowchart TB
 
 **Why Kubernetes Makes This Powerful**:
 
-Truva-G3 is designed to leverage Kubernetes capabilities for production-grade deployments:
+TruvaG3 is designed to leverage Kubernetes capabilities for production-grade deployments:
 
-| Kubernetes Feature | How Truva-G3 Uses It |
+| Kubernetes Feature | How TruvaG3 Uses It |
 |-------------------|-------------------|
 | **Service DNS** | Tools register with K8s Service DNS (`weather-service.namespace.svc.cluster.local`), not pod IPs |
 | **Load Balancing** | K8s Services automatically distribute traffic across all healthy pods |
@@ -645,9 +645,9 @@ spec:
 
 **Ops Engineers & System Architects: It Just Works With Your Stack**
 
-Truva-G3 uses **standard HTTP/REST** for all communication - no proprietary protocols, no magic:
+TruvaG3 uses **standard HTTP/REST** for all communication - no proprietary protocols, no magic:
 
-| Your Existing Tool | Truva-G3 Compatibility |
+| Your Existing Tool | TruvaG3 Compatibility |
 |-------------------|---------------------|
 | **API Gateway** (Kong, Ambassador, Nginx) | Route external traffic to agents - they're just HTTP services |
 | **Service Mesh** (Istio, Linkerd) | mTLS, traffic shaping, canary deployments work automatically - no sidecar conflicts |
@@ -661,7 +661,7 @@ Truva-G3 uses **standard HTTP/REST** for all communication - no proprietary prot
 
 **Native OpenTelemetry Observability**:
 
-Truva-G3 emits metrics and traces using the **OTLP protocol** - the industry-standard OpenTelemetry wire format. This means your observability data flows directly into your existing stack without adapters or format conversions:
+TruvaG3 emits metrics and traces using the **OTLP protocol** - the industry-standard OpenTelemetry wire format. This means your observability data flows directly into your existing stack without adapters or format conversions:
 
 | Category | Supported Tools |
 |----------|----------------|
@@ -679,7 +679,7 @@ What you get out of the box:
 
 ### Module Architecture - Code-Level Design
 
-Truva-G3's architecture enforces a clear separation between Tools (passive components) and Agents (active orchestrators), built on independent, composable modules. Start with just the core module and add only what you need - no forced dependencies, no bloat.
+TruvaG3's architecture enforces a clear separation between Tools (passive components) and Agents (active orchestrators), built on independent, composable modules. Start with just the core module and add only what you need - no forced dependencies, no bloat.
 
 ```mermaid
 graph TD
@@ -687,7 +687,7 @@ graph TD
 
     App --> Framework
 
-    subgraph Framework["Truva-G3 Framework"]
+    subgraph Framework["TruvaG3 Framework"]
         subgraph CoreLayer["Core Module (Required)"]
             Core["<b>CORE</b><br/>━━━━━━<br/>• Interfaces<br/>• Discovery<br/>• Config"]
             Tools["<b>TOOLS</b><br/>━━━━━━<br/>• Registry only<br/>• Passive<br/>• Task-focused"]
@@ -1071,7 +1071,7 @@ orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
 
 **The Problem**: You need metrics and tracing to debug issues, but don't want vendor lock-in or complex setup.
 
-**The Solution**: Truva-G3 uses **OpenTelemetry (OTEL)** for vendor-neutral observability. Export metrics and traces to any OTEL-compatible backend—Prometheus, Jaeger, Datadog, Grafana Cloud, or your own infrastructure. Initialize once, then emit metrics with one line from anywhere:
+**The Solution**: TruvaG3 uses **OpenTelemetry (OTEL)** for vendor-neutral observability. Export metrics and traces to any OTEL-compatible backend—Prometheus, Jaeger, Datadog, Grafana Cloud, or your own infrastructure. Initialize once, then emit metrics with one line from anywhere:
 
 ```go
 // Initialize with environment-based profile (development/staging/production)
@@ -1195,7 +1195,7 @@ With this pattern, your agents get:
 
 ### The Practical Differences
 
-| What You're Doing | Truva-G3 (Go) | Python Frameworks |
+| What You're Doing | TruvaG3 (Go) | Python Frameworks |
 |-------------------|---------|-------------------|
 | **Deploy an agent** | Copy single binary, run | Install Python, pip install packages, manage deps |
 | **Container image size** | ~15-44MB (Alpine + Go binary) | Depends on base image and dependency stack |
@@ -1208,7 +1208,7 @@ With this pattern, your agents get:
 
 ### Container Image Size Details
 
-**Truva-G3 Agent Images (Using Alpine Linux base)**:
+**TruvaG3 Agent Images (Using Alpine Linux base)**:
 - Base Alpine image + ca-certificates: ~9-10MB
 - Go binary: ~6-17MB (core only ~6MB, with telemetry ~17MB)
 - **Total container size: ~15-44MB** (tools: ~15-26MB, agents: ~24-44MB)
@@ -1223,13 +1223,13 @@ Compare to interpreter-based agent images:
 - dependency-heavy stacks can grow quickly depending on framework, adapters, and ML libraries
 - final image size depends heavily on the chosen base image and package set
 
-**Truva-G3 Agents and Tools memory footprint** (pods running in the local Kind cluster):
+**TruvaG3 Agents and Tools memory footprint** (pods running in the local Kind cluster):
 
 <img src="docs/images/pods-memory-footprints.png" alt="Pods Memory Footprint" width="600">
 
-## When to Use Truva-G3
+## When to Use TruvaG3
 
-### ✅ Choose Truva-G3 If:
+### ✅ Choose TruvaG3 If:
 - You want to **learn** how Kubernetes-native AI agent systems are architected
 - You're **prototyping** an agent network and want a working starting point
 - You want to understand microservice patterns (discovery, circuit breakers, observability) applied to AI

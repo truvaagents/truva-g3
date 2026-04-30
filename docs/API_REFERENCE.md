@@ -1,6 +1,6 @@
 # API Reference
 
-A comprehensive guide to Truva-G3's APIs with practical examples and best practices.
+A comprehensive guide to TruvaG3's APIs with practical examples and best practices.
 
 ## Quick Navigation
 
@@ -27,11 +27,11 @@ A comprehensive guide to Truva-G3's APIs with practical examples and best practi
 
 ## Core Module
 
-The foundation of Truva-G3 - components, discovery, and lifecycle management.
+The foundation of TruvaG3 - components, discovery, and lifecycle management.
 
 ### Component Interface
 
-Every Truva-G3 component (tools and agents) implements this interface, providing a consistent API for initialization, identification, and capability discovery.
+Every TruvaG3 component (tools and agents) implements this interface, providing a consistent API for initialization, identification, and capability discovery.
 
 ```go
 type Component interface {
@@ -526,7 +526,7 @@ func main() {
 
 ### NewFramework
 
-The main entry point for running Truva-G3 components. The framework handles all the complex setup - discovery, telemetry, configuration - so you can focus on your business logic.
+The main entry point for running TruvaG3 components. The framework handles all the complex setup - discovery, telemetry, configuration - so you can focus on your business logic.
 
 ```go
 func NewFramework(component HTTPComponent, opts ...Option) (*Framework, error)
@@ -581,7 +581,7 @@ if err := framework.Run(ctx); err != nil {
 
 ### Configuration
 
-Truva-G3's configuration system is designed for flexibility - use code, environment variables, or config files.
+TruvaG3's configuration system is designed for flexibility - use code, environment variables, or config files.
 
 #### NewConfig
 
@@ -675,7 +675,7 @@ WithDevelopmentMode()               // Debug logging, mock services
 
 ### Logging
 
-Truva-G3 provides structured logging with automatic context propagation. The framework automatically injects loggers into all components.
+TruvaG3 provides structured logging with automatic context propagation. The framework automatically injects loggers into all components.
 
 **Log Levels (hierarchical):**
 - `error` - Critical errors only
@@ -815,7 +815,7 @@ defer registry.Unregister(ctx, info.ID)
 
 #### Background Redis Retry
 
-Truva-G3 provides an intelligent background retry mechanism for handling Redis connection failures during service startup. This is particularly useful in Kubernetes environments where Redis may not be immediately available.
+TruvaG3 provides an intelligent background retry mechanism for handling Redis connection failures during service startup. This is particularly useful in Kubernetes environments where Redis may not be immediately available.
 
 **Key features:**
 - **Opt-in by default** - Backward compatible, must be explicitly enabled
@@ -2022,7 +2022,7 @@ go sentiment.Start(ctx, 8083)
 
 ### AI Provider Support
 
-Truva-G3 supports multiple AI providers with consistent APIs.
+TruvaG3 supports multiple AI providers with consistent APIs.
 
 | Provider | Models | Best For |
 |----------|--------|----------|
@@ -2472,7 +2472,7 @@ telemetry.RecordLatency("order.processing",
 
 ### Unified Metrics API
 
-Cross-module metrics that enable consistent observability across agents and orchestration. These helpers emit standardized metrics with a `module` label, enabling unified Grafana dashboards regardless of which Truva-G3 module you use.
+Cross-module metrics that enable consistent observability across agents and orchestration. These helpers emit standardized metrics with a `module` label, enabling unified Grafana dashboards regardless of which TruvaG3 module you use.
 
 ```go
 // Module constants
@@ -2498,7 +2498,7 @@ func RecordAITokens(module, provider, tokenType string, count int64)
 
 **Why use unified metrics:**
 - Single Grafana dashboard works for both agent and orchestration examples
-- Consistent metric names across all Truva-G3 modules
+- Consistent metric names across all TruvaG3 modules
 - Easy to compare performance between different module implementations
 - Prometheus queries work regardless of which module emits the data
 
@@ -4207,7 +4207,7 @@ HITL emits these Prometheus metrics:
 
 ## UI Module
 
-Build interactive chat interfaces and web transports for your Truva-G3 applications.
+Build interactive chat interfaces and web transports for your TruvaG3 applications.
 
 ### Chat Transport
 
@@ -4546,7 +4546,7 @@ func LongRunningOperation(ctx context.Context) error {
 
 ## Error Handling
 
-Truva-G3 uses typed errors for better error handling:
+TruvaG3 uses typed errors for better error handling:
 
 ```go
 // Circuit breaker errors
@@ -4597,7 +4597,7 @@ func HandleRequest(ctx context.Context, req Request) error {
 
 ## Environment Variables
 
-Truva-G3 supports configuration through environment variables:
+TruvaG3 supports configuration through environment variables:
 
 ### Core Configuration
 - `TRUVAG3_NAME` - Component name

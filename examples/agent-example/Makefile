@@ -1,4 +1,4 @@
-# Makefile for Truva-G3 Agent Example
+# Makefile for TruvaG3 Agent Example
 # Easy deployment to local Kind cluster
 
 .PHONY: all help setup deploy test clean logs status
@@ -21,7 +21,7 @@ RESET := \033[0m
 export
 
 help: ## Show this help message
-	@echo "$(BLUE)Truva-G3 Agent Example - Local Development$(RESET)"
+	@echo "$(BLUE)TruvaG3 Agent Example - Local Development$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Usage:$(RESET)"
 	@echo "  make setup    - Complete setup (Kind cluster + dependencies)"

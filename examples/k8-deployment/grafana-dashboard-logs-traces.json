@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-logs-traces",
-  "title": "Truva-G3 Logs & Traces",
+  "title": "TruvaG3 Logs & Traces",
   "tags": ["truvag3", "logs", "traces", "loki", "jaeger"],
   "editable": true,
   "graphTooltip": 1,
@@ -16,7 +16,7 @@
     {
       "type": "dashboards",
       "tags": ["truvag3"],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

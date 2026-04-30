@@ -23,7 +23,7 @@ import (
 )
 
 // OTelProvider implements core.Telemetry with OpenTelemetry.
-// This is the main integration point between Truva-G3 and OpenTelemetry.
+// This is the main integration point between TruvaG3 and OpenTelemetry.
 // It manages both tracing and metrics, exporting them via OTLP/HTTP.
 //
 // Design decisions:

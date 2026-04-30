@@ -1,6 +1,6 @@
 # Semantic Scholar Tool
 
-A Truva-G3 tool that provides academic paper search, citation analysis, and author profile capabilities using the free [Semantic Scholar Academic Graph API](https://www.semanticscholar.org/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides academic paper search, citation analysis, and author profile capabilities using the free [Semantic Scholar Academic Graph API](https://www.semanticscholar.org/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

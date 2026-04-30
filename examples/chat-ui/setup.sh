@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# setup.sh - One-click setup for Truva-G3 Chat UI
+# setup.sh - One-click setup for TruvaG3 Chat UI
 # A static frontend serving multiple chat interfaces:
 #   - /           - Standard chat UI (connects to travel-chat-agent on port 8356)
 #   - /hitl.html  - HITL chat UI (connects to agent-with-human-approval on port 8352)
@@ -40,7 +40,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     Truva-G3 Chat UI - Standard & HITL Frontends        ║${NC}"
+    echo -e "${BLUE}║     TruvaG3 Chat UI - Standard & HITL Frontends        ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

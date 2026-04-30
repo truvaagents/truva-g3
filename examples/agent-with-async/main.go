@@ -1,5 +1,5 @@
 // Package main implements an Async Travel Research Agent that demonstrates
-// the Truva-G3 async task system for long-running operations.
+// the TruvaG3 async task system for long-running operations.
 //
 // This agent showcases:
 //   - Async task submission with HTTP 202 + polling pattern

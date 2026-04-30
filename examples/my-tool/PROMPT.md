@@ -1,6 +1,6 @@
-# PROMPT — Build a Truva-G3 Tool (step-by-step)
+# PROMPT — Build a TruvaG3 Tool (step-by-step)
 
-This guide walks you through building a Truva-G3 tool with a coding agent.
+This guide walks you through building a TruvaG3 tool with a coding agent.
 Each step below is a **self-contained prompt** — paste it to your coding
 agent, wait for the work to complete, review it, then move to the next.
 
@@ -26,7 +26,7 @@ Before pasting: replace `<DOMAIN>` with what you want this tool to do,
 test/dev key (or remove that line if the API needs no key).
 
 ```
-We're going to build a Truva-G3 tool. Domain: <DOMAIN>.
+We're going to build a TruvaG3 tool. Domain: <DOMAIN>.
 
 Step 1 of 12: explore the external API this tool will wrap.
 

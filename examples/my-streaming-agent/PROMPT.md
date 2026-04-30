@@ -1,4 +1,4 @@
-# PROMPT — Build a Truva-G3 Streaming Agent (step-by-step)
+# PROMPT — Build a TruvaG3 Streaming Agent (step-by-step)
 
 This guide walks you through building a streaming chat agent (SSE-based)
 with a coding agent. Each step is a **self-contained prompt** — paste it
@@ -26,7 +26,7 @@ do, list the existing tools in the cluster it will orchestrate, and
 declare whether it needs to be callable by other agents.
 
 ```
-We're going to build a Truva-G3 streaming chat agent. Domain: <DOMAIN>.
+We're going to build a TruvaG3 streaming chat agent. Domain: <DOMAIN>.
 
 Step 1 of 12: define the agent's responsibilities and dependencies.
 
@@ -130,7 +130,7 @@ Step 3 of 12: read `docs/AGENT_DEVELOPMENT_GUIDE.md` end-to-end, focused
 on the Streaming Agent path.
 
 Pay particular attention to:
-- §1 Understanding Agents in Truva-G3 — agent vs tool distinction
+- §1 Understanding Agents in TruvaG3 — agent vs tool distinction
 - §3 Project Structure (focus on the "Streaming Agent (Chat)" subsection)
 - §4 Step 1: Create the Agent Struct (focus on the "Streaming Chat Agent"
   subsection)

@@ -1,6 +1,6 @@
 # AI Providers Setup Guide
 
-Welcome to the Truva-G3 AI providers guide! This document explains how to configure AI providers for your agents and tools, from simple single-provider setups to production-ready multi-provider failover systems. Think of this as your complete reference for doing AI integration the right way.
+Welcome to the TruvaG3 AI providers guide! This document explains how to configure AI providers for your agents and tools, from simple single-provider setups to production-ready multi-provider failover systems. Think of this as your complete reference for doing AI integration the right way.
 
 ## Table of Contents
 
@@ -75,13 +75,13 @@ Without a clear strategy, you end up with:
 - No failover (single point of failure)
 - Different code paths for different environments (maintenance nightmare)
 
-This guide ensures every Truva-G3 deployment handles AI providers in a consistent, production-ready way.
+This guide ensures every TruvaG3 deployment handles AI providers in a consistent, production-ready way.
 
 ---
 
 ## The Two Types of AI Clients
 
-Truva-G3 provides two ways to connect to AI providers. Understanding when to use each is the first decision you'll make.
+TruvaG3 provides two ways to connect to AI providers. Understanding when to use each is the first decision you'll make.
 
 ### Single Client: The Simple Path
 
@@ -541,7 +541,7 @@ or other higher-priority providers, Ollama will usually be used only as a fallba
 **Useful notes**:
 - `openai.ollama` does not require an API key.
 - Use the exact model tag you run with Ollama. If you use `ollama run gemma4:26b`, set `TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b`.
-- `openai.ollama` can now accept reasoning controls through Truva-G3, but support is still model-dependent.
+- `openai.ollama` can now accept reasoning controls through TruvaG3, but support is still model-dependent.
 
 **Pro tip**: Create a `make dev` target that starts Ollama:
 ```makefile
@@ -933,7 +933,7 @@ export TRUVAG3_OPENAI_MODEL_SMART=o3
 {"provider": "anthropic", "model": "o3"}  // Anthropic shouldn't see "o3"!
 ```
 
-**Fix**: Update to the latest Truva-G3 version. The options cloning fix was added in December 2025.
+**Fix**: Update to the latest TruvaG3 version. The options cloning fix was added in December 2025.
 
 ### Issue 5: Unexpected Provider Being Used
 
@@ -998,7 +998,7 @@ client, err := ai.NewChainClient(
 For detailed provider resolution logs, set the debug environment variable:
 
 ```bash
-# Enable debug logging for all Truva-G3 components
+# Enable debug logging for all TruvaG3 components
 export TRUVAG3_DEBUG=true
 
 # Or set log level directly
@@ -1096,7 +1096,7 @@ Most requests should use the portable `core.AIOptions` fields:
 - `ReasoningEffort`
 - `ResponseFormat`
 
-When a provider exposes a feature Truva-G3 does not model directly yet, use:
+When a provider exposes a feature TruvaG3 does not model directly yet, use:
 
 - `Extra map[string]interface{}`
 - `Headers map[string]string`

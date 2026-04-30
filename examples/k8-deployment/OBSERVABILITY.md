@@ -1,12 +1,12 @@
-# Truva-G3 Observability Stack
+# TruvaG3 Observability Stack
 
-This directory contains a complete observability stack for Truva-G3 framework applications using modern cloud-native patterns.
+This directory contains a complete observability stack for TruvaG3 framework applications using modern cloud-native patterns.
 
 ## 🏗️ Architecture Overview
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Truva-G3 Apps   │───▶│  OTEL Collector  │───▶│   Prometheus    │
+│   TruvaG3 Apps   │───▶│  OTEL Collector  │───▶│   Prometheus    │
 │   (Agents/Tools)│    │   (central, OTLP │    │   (Port 9090)   │
 │   stdout + OTLP │    │    4317/4318)    │    └─────────────────┘
 └─────────────────┘    │                  │
@@ -40,7 +40,7 @@ Three signals reach the central OTEL Collector:
 - **Grafana** - Visualization and dashboards
 
 ### Modern Telemetry Pipeline
-1. **Truva-G3 apps** write structured JSON logs to stdout and export metrics/traces
+1. **TruvaG3 apps** write structured JSON logs to stdout and export metrics/traces
    via **OTLP** (OpenTelemetry Protocol).
 2. **OTEL Collector Logs** (DaemonSet) tails pod stdout files, parses the JSON body,
    associates each record to its originating pod via `k8s.pod.uid` extracted from the
@@ -206,7 +206,7 @@ kubectl port-forward svc/jaeger-query 16686:80 -n truvag3-examples # Jaeger UI
 > to this fix — pre-existing kustomize regex issue). Use `setup-infrastructure.sh`
 > instead until that is resolved.
 
-### Environment Variables for Truva-G3 Apps
+### Environment Variables for TruvaG3 Apps
 
 The stack automatically configures these environment variables for your applications:
 
@@ -255,7 +255,7 @@ TelemetryConfig{
 ## 📈 What You Get
 
 ### Prometheus Metrics (localhost:9090)
-- **Truva-G3 Framework Metrics**: Request counts, latencies, errors
+- **TruvaG3 Framework Metrics**: Request counts, latencies, errors
 - **AI/LLM Metrics**: Token usage, costs, rate limits
 - **Circuit Breaker Metrics**: Success/failure rates, state changes
 - **Discovery Metrics**: Service registrations, health checks
@@ -268,7 +268,7 @@ TelemetryConfig{
 - **Automatic correlation** with metrics via trace IDs
 
 ### Grafana Dashboards (localhost:3000)
-- **Truva-G3 Overview**: System health and performance
+- **TruvaG3 Overview**: System health and performance
 - **AI Usage Dashboard**: Token consumption, costs, provider performance
 - **Service Discovery**: Component topology and health
 - **Infrastructure**: Redis, Kubernetes, OTEL Collector metrics
@@ -276,7 +276,7 @@ TelemetryConfig{
 ## 🔍 Monitoring Your Applications
 
 ### Application Integration
-Your Truva-G3 applications automatically export telemetry when the framework is configured:
+Your TruvaG3 applications automatically export telemetry when the framework is configured:
 
 ```go
 // Framework automatically handles this
@@ -318,8 +318,8 @@ The collector is configured to:
 
 ### Prometheus Discovery
 Uses Kubernetes service discovery to automatically find:
-- Truva-G3 agents with label `truvag3.framework/type: agent`
-- Truva-G3 tools with label `truvag3.framework/type: tool`
+- TruvaG3 agents with label `truvag3.framework/type: agent`
+- TruvaG3 tools with label `truvag3.framework/type: tool`
 - OTEL Collector with proper annotations
 
 ### Resource Requirements
@@ -336,4 +336,4 @@ Total: ~1.6GB RAM, ~800m CPU for complete observability stack
 - [OpenTelemetry Documentation](https://opentelemetry.io/)
 - [Prometheus Best Practices](https://prometheus.io/docs/practices/)
 - [Jaeger Documentation](https://www.jaegertracing.io/)
-- [Truva-G3 Telemetry Module](../../telemetry/README.md)
+- [TruvaG3 Telemetry Module](../../telemetry/README.md)

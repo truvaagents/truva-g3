@@ -1,6 +1,6 @@
 # Travel Advisory Tool
 
-A Truva-G3 tool that provides official US State Department travel safety advisories using the free [Travel Advisories API](https://cadataapi.state.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides official US State Department travel safety advisories using the free [Travel Advisories API](https://cadataapi.state.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

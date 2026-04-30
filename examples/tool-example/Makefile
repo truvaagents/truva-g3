@@ -1,4 +1,4 @@
-# Makefile for Truva-G3 Tool Example
+# Makefile for TruvaG3 Tool Example
 # Easy deployment to local Kind cluster
 
 .PHONY: all help setup deploy test clean logs status
@@ -21,7 +21,7 @@ RESET := \033[0m
 export
 
 help: ## Show this help message
-	@echo "$(BLUE)Truva-G3 Weather Tool Example - Local Development$(RESET)"
+	@echo "$(BLUE)TruvaG3 Weather Tool Example - Local Development$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Usage:$(RESET)"
 	@echo "  make setup    - Complete setup (Kind cluster + dependencies)"

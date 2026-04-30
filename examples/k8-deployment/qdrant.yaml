@@ -1,4 +1,4 @@
-# Qdrant Vector Database for Truva-G3 Shared Knowledge (Phase 2)
+# Qdrant Vector Database for TruvaG3 Shared Knowledge (Phase 2)
 # Lightweight single-node deployment for Kind cluster and development.
 # Production: consider Qdrant Cloud or multi-node cluster with replication.
 #

@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-service-detail",
-  "title": "Truva-G3 Service Detail",
+  "title": "TruvaG3 Service Detail",
   "tags": [
     "truvag3",
     "service",
@@ -24,7 +24,7 @@
       "tags": [
         "truvag3"
       ],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

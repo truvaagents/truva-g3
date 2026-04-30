@@ -1,5 +1,5 @@
 // Package main implements a research assistant agent with comprehensive telemetry
-// and observability using the Truva-G3 framework's telemetry module.
+// and observability using the TruvaG3 framework's telemetry module.
 //
 // This example demonstrates how to add production-grade monitoring to an agent with
 // minimal code changes. It builds on the agent-example by adding:

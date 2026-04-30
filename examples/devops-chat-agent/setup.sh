@@ -34,7 +34,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     Truva-G3 DevOps Chat Agent                          ║${NC}"
+    echo -e "${BLUE}║     TruvaG3 DevOps Chat Agent                          ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

@@ -1,6 +1,6 @@
 # Async Task Orchestration Guide
 
-Welcome to the complete guide on async tasks in Truva-G3! Think of this as your friendly mentor sitting next to you, explaining how to build agents that handle long-running operations without blocking. Grab a coffee, and let's dive in!
+Welcome to the complete guide on async tasks in TruvaG3! Think of this as your friendly mentor sitting next to you, explaining how to build agents that handle long-running operations without blocking. Grab a coffee, and let's dive in!
 
 ## Table of Contents
 
@@ -224,7 +224,7 @@ Before diving into code, let's understand the components.
 
 > **Note: Pluggable Backend Design**
 >
-> Truva-G3's async task system uses an **interface-first design**. The `TaskQueue` and `TaskStore` interfaces are defined in the `core` module, while **Redis implementations are provided as defaults**. You can implement these interfaces for other backends (PostgreSQL, in-memory for testing, etc.) if needed.
+> TruvaG3's async task system uses an **interface-first design**. The `TaskQueue` and `TaskStore` interfaces are defined in the `core` module, while **Redis implementations are provided as defaults**. You can implement these interfaces for other backends (PostgreSQL, in-memory for testing, etc.) if needed.
 >
 > This guide uses the Redis implementations throughout. See [Configuration Reference](#configuration-reference) for Redis configuration details, or [Implementing Custom Backends](#implementing-custom-backends) for guidance on creating your own implementations.
 
@@ -907,7 +907,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 
 ## 5. Deployment Modes
 
-Truva-G3 async agents support three deployment modes, controlled by the `TRUVAG3_MODE` environment variable.
+TruvaG3 async agents support three deployment modes, controlled by the `TRUVAG3_MODE` environment variable.
 
 ### 5.1 Mode 1: Embedded (Default, Local Development)
 
@@ -1272,7 +1272,7 @@ Request Thread (API Pod)        Worker Thread (Worker Pod)
 
 ### 8.2 The Solution: StartLinkedSpan
 
-Truva-G3 provides `telemetry.StartLinkedSpan()` to create linked traces across async boundaries:
+TruvaG3 provides `telemetry.StartLinkedSpan()` to create linked traces across async boundaries:
 
 ```go
 // When enqueuing (API side): trace context is stored in Task fields
@@ -1357,7 +1357,7 @@ func main() {
 
 ## 9. Observability Integration
 
-Async agents benefit from Truva-G3's full observability stack: distributed tracing, log correlation, DAG visualization, and LLM debug payloads. This section shows how to set up observability with accurate code snippets from the `agent-with-async` example.
+Async agents benefit from TruvaG3's full observability stack: distributed tracing, log correlation, DAG visualization, and LLM debug payloads. This section shows how to set up observability with accurate code snippets from the `agent-with-async` example.
 
 > **Complete Guides**: For comprehensive details, see:
 > - [Distributed Tracing and Log Correlation Guide](./DISTRIBUTED_TRACING_GUIDE.md)
@@ -1791,7 +1791,7 @@ for _, task := range runningTasks {
 
 ### 11.6 Implementing Custom Backends
 
-Truva-G3's async task system is designed with pluggable backends. While Redis implementations are provided as defaults, you can implement `core.TaskQueue` and `core.TaskStore` interfaces for other storage systems.
+TruvaG3's async task system is designed with pluggable backends. While Redis implementations are provided as defaults, you can implement `core.TaskQueue` and `core.TaskStore` interfaces for other storage systems.
 
 #### TaskQueue Interface
 
@@ -2538,7 +2538,7 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 
 ## 13. Scheduled Task Execution
 
-Truva-G3 ships a centralized scheduled-execution subsystem that lets any agent defer work to the future -- "do this in 10 minutes" or "check that service every hour." It builds on the same async-task foundation described in this guide but uses a different consumer pattern (HTTP dispatch to agents instead of worker-pool task handlers).
+TruvaG3 ships a centralized scheduled-execution subsystem that lets any agent defer work to the future -- "do this in 10 minutes" or "check that service every hour." It builds on the same async-task foundation described in this guide but uses a different consumer pattern (HTTP dispatch to agents instead of worker-pool task handlers).
 
 The system has three components:
 - **scheduler-tool** -- a `BaseTool` exposing 5 LLM-facing capabilities for creating, listing, updating, and cancelling schedules

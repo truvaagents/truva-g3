@@ -4459,7 +4459,7 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 
 // callTool sends an HTTP request to a tool with raw parameters.
 // Tools expect flat JSON: {"location": "Tokyo", "units": "metric"}
-// This is the standard format for all Truva-G3 tools.
+// This is the standard format for all TruvaG3 tools.
 func (e *SmartExecutor) callTool(ctx context.Context, url string, parameters map[string]interface{}) (string, string, error) {
 	// Tools receive raw parameters directly
 	body, err := json.Marshal(parameters)

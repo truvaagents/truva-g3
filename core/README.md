@@ -1,4 +1,4 @@
-# Truva-G3 Core Module
+# TruvaG3 Core Module
 
 Welcome to the foundation of intelligent agent systems! This guide will walk you through everything step-by-step, like a friendly mentor sitting right next to you. ☕
 
@@ -38,11 +38,11 @@ Now, imagine if these workers could:
 3. **Handle problems gracefully** (if the coffee machine breaks, they know what to do)
 4. **Work together seamlessly** (cashier tells barista what to make)
 
-**That's exactly what the Truva-G3 Core module does for your code!** It helps you build intelligent components that can work independently or together.
+**That's exactly what the TruvaG3 Core module does for your code!** It helps you build intelligent components that can work independently or together.
 
 ### The Two Types of Components: Tools and Agents
 
-In Truva-G3, we have two fundamental building blocks:
+In TruvaG3, we have two fundamental building blocks:
 
 #### 🔧 Tools (Passive Components)
 Think of **Tools** like the appliances in your kitchen:
@@ -50,7 +50,7 @@ Think of **Tools** like the appliances in your kitchen:
 - A **blender** blends ingredients (doesn't cook them)
 - A **microwave** heats food (doesn't wash dishes)
 
-Tools in Truva-G3:
+Tools in TruvaG3:
 - **Do ONE thing well** (like Unix commands: `ls`, `grep`, `sort`)
 - **Register themselves** ("I'm a calculator, I can add and multiply")
 - **Respond to requests** (process input, return output)
@@ -70,7 +70,7 @@ To understand what makes a good Tool, consider these examples from simple to com
 
 Like Unix commands that process input and return output:
 
-| Unix Command | Truva-G3 Tool Equivalent | What It Does |
+| Unix Command | TruvaG3 Tool Equivalent | What It Does |
 |--------------|------------------------|--------------|
 | `ls` | `directory-tool` | Lists files in a directory |
 | `grep` | `search-tool` | Searches text for patterns |
@@ -125,7 +125,7 @@ func (t *WeatherTool) handleWeather(w http.ResponseWriter, r *http.Request) {
 
 **Level 3: AI-Enhanced Tools**
 
-Tools can use AI internally while remaining "passive" within Truva-G3:
+Tools can use AI internally while remaining "passive" within TruvaG3:
 
 ```go
 // Translation tool - uses AI provider but doesn't orchestrate other tools
@@ -145,19 +145,19 @@ func (t *TranslatorTool) handleTranslate(w http.ResponseWriter, r *http.Request)
 
 #### What "Passive" Really Means
 
-**Passive within Truva-G3** - Tools cannot:
+**Passive within TruvaG3** - Tools cannot:
 - ❌ Discover other tools or agents
-- ❌ Call other Truva-G3 components
+- ❌ Call other TruvaG3 components
 - ❌ Orchestrate workflows
 
-**Active outside Truva-G3** - Tools can (and often do):
+**Active outside TruvaG3** - Tools can (and often do):
 - ✅ Call public APIs (OpenWeatherMap, Alpha Vantage, etc.)
 - ✅ Call internal services in your cluster (company-data-api, auth-service, etc.)
 - ✅ Use AI providers (OpenAI, Anthropic, etc.)
 - ✅ Connect to databases
 - ✅ Read/write files
 
-The key rule: **A tool does ONE thing, even if that one thing requires resources outside the Truva-G3 ecosystem.**
+The key rule: **A tool does ONE thing, even if that one thing requires resources outside the TruvaG3 ecosystem.**
 
 #### 🤖 Agents (Active Orchestrators)
 Think of **Agents** like the human workers who USE the tools:
@@ -165,7 +165,7 @@ Think of **Agents** like the human workers who USE the tools:
 - A **barista** uses the coffee machine, grinder, and steamer
 - A **manager** coordinates multiple workers
 
-Agents in Truva-G3:
+Agents in TruvaG3:
 - **Register themselves** (discoverable by other agents)
 - **Can discover both tools and other agents**
 - **Orchestrate complex workflows**
@@ -375,7 +375,7 @@ core.WithMockDiscovery(true)         // Use in-memory discovery (testing)
 
 ### Environment Variables and Constants
 
-Truva-G3 defines standard environment variables for configuration. The framework provides constants in `core/constants.go` to reference these variables, eliminating magic strings and providing type safety.
+TruvaG3 defines standard environment variables for configuration. The framework provides constants in `core/constants.go` to reference these variables, eliminating magic strings and providing type safety.
 
 #### Required Configuration
 
@@ -1205,7 +1205,7 @@ The `core/conformance/` sub-package provides `RunTaskConsumerConformance(t, fact
 
 ### 🚦 CORS Middleware: Opening Doors Safely
 
-When building web-accessible components, you need Cross-Origin Resource Sharing (CORS) support. Truva-G3 provides powerful CORS middleware with wildcard support.
+When building web-accessible components, you need Cross-Origin Resource Sharing (CORS) support. TruvaG3 provides powerful CORS middleware with wildcard support.
 
 #### Basic CORS Setup
 
@@ -1508,7 +1508,7 @@ func main() {
 
 ### ❌ Error Handling: Fail Gracefully
 
-Truva-G3 provides a comprehensive error system with standard errors and helper functions.
+TruvaG3 provides a comprehensive error system with standard errors and helper functions.
 
 #### Standard Errors
 
@@ -1581,7 +1581,7 @@ func (t *DataTool) fetchData(ctx context.Context, id string) error {
 
 #### Intelligent Error Handling for Tool-Agent Communication
 
-When tools and agents communicate, they need a standardized way to report errors with enough context for intelligent retry decisions. Truva-G3 provides the `ToolError` and `ToolResponse` types for this purpose.
+When tools and agents communicate, they need a standardized way to report errors with enough context for intelligent retry decisions. TruvaG3 provides the `ToolError` and `ToolResponse` types for this purpose.
 
 **Why This Matters:** A tool might fail because of bad input (don't retry with same data) or a rate limit (wait and retry). Without structured error information, agents can't make smart decisions.
 
@@ -2346,7 +2346,7 @@ All components automatically provide health endpoints:
 
 ## 14. Summary
 
-The Truva-G3 Core module provides two fundamental building blocks:
+The TruvaG3 Core module provides two fundamental building blocks:
 
 1. **Tools** - Passive components that do one thing well
 2. **Agents** - Active orchestrators that discover and coordinate

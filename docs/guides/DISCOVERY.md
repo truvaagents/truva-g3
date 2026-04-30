@@ -1,6 +1,6 @@
 # Agent and Tool Discovery Guide
 
-This guide explains how AI agents and tools find each other in the Truva-G3 framework. Whether you're building a math-solving agent that needs to find calculation tools, or a document processor that needs language analysis capabilities, this guide will help you understand how components discover and connect with each other.
+This guide explains how AI agents and tools find each other in the TruvaG3 framework. Whether you're building a math-solving agent that needs to find calculation tools, or a document processor that needs language analysis capabilities, this guide will help you understand how components discover and connect with each other.
 
 Think of discovery as an intelligent "AI capability marketplace" where agents can find the right tools and collaborators for any task.
 
@@ -44,7 +44,7 @@ A **heartbeat** is a periodic "I'm still alive and ready to work" signal that co
 
 ## Overview
 
-Agent and tool discovery in Truva-G3 works like an AI capability marketplace:
+Agent and tool discovery in TruvaG3 works like an AI capability marketplace:
 - **Registration**: Agents and tools "advertise their capabilities" by registering in Redis
 - **Discovery**: Agents "shop for capabilities" to find the right tools and collaborators
 - **Heartbeat**: Components "stay online" by sending periodic availability updates
@@ -181,13 +181,13 @@ The discovery process follows these steps:
 
 ## Heartbeat and TTL Management
 
-At the heart of Truva-G3's discovery system lies an elegant lease-based architecture. Understanding this design will give you insights into how distributed systems maintain consistency without complex coordination protocols.
+At the heart of TruvaG3's discovery system lies an elegant lease-based architecture. Understanding this design will give you insights into how distributed systems maintain consistency without complex coordination protocols.
 
 ### The Concept of Distributed Leases
 
 Imagine you're managing a co-working space. When someone reserves a desk, you don't give them permanent ownership - you give them a **lease** that expires after a certain time. If they want to keep the desk, they must renew their lease before it expires. If they disappear without renewing, their desk becomes available to others.
 
-This is exactly how Truva-G3's TTL (Time To Live) system works. Services don't permanently register themselves; they obtain renewable leases on their registry entries.
+This is exactly how TruvaG3's TTL (Time To Live) system works. Services don't permanently register themselves; they obtain renewable leases on their registry entries.
 
 ### Why Leases Are Brilliant
 
@@ -195,11 +195,11 @@ This is exactly how Truva-G3's TTL (Time To Live) system works. Services don't p
 
 **Traditional Approach**: Keep a permanent registry and hope AI components unregister themselves when they shut down. (Spoiler: they often don't!)
 
-**Truva-G3's Approach**: Every AI component registration is a lease that expires automatically. Agents and tools prove they're alive and ready for AI tasks by continuously renewing their lease through heartbeats.
+**TruvaG3's Approach**: Every AI component registration is a lease that expires automatically. Agents and tools prove they're alive and ready for AI tasks by continuously renewing their lease through heartbeats.
 
 ### The Two-Layer Lease Architecture
 
-Truva-G3 uses a sophisticated two-layer lease system that balances performance with reliability:
+TruvaG3 uses a sophisticated two-layer lease system that balances performance with reliability:
 
 #### Layer 1: Component Identity Leases (30 seconds)
 ```go
@@ -304,7 +304,7 @@ This is distributed systems design at its finest - complex system-level behavior
 
 **The challenge**: How does the system handle multiple identical components? Each instance needs its own identity, but agents searching for capabilities should find all available instances.
 
-**Truva-G3's elegant solution**: Each instance gets a unique identity, but they all share the same capability listings. This gives you automatic load balancing and fault tolerance without any complex coordination.
+**TruvaG3's elegant solution**: Each instance gets a unique identity, but they all share the same capability listings. This gives you automatic load balancing and fault tolerance without any complex coordination.
 
 Let's see how this works in practice:
 
@@ -422,7 +422,7 @@ response := callService(selectedService)
 
 **Why this section matters**: When you start using the discovery system, you might notice behaviors that seem unusual if you're used to simpler systems. This section explains what's normal, what's by design, and what might need attention.
 
-**The key insight**: Truva-G3 prioritizes keeping your AI system running over having perfect information. It's better to have slightly outdated data than a completely failed system.
+**The key insight**: TruvaG3 prioritizes keeping your AI system running over having perfect information. It's better to have slightly outdated data than a completely failed system.
 
 ### The Graceful Degradation Principle
 
@@ -430,7 +430,7 @@ response := callService(selectedService)
 
 **Real-world analogy**: If one elevator in a building breaks, people can still use the other elevators and the stairs. The building doesn't shut down completely.
 
-**How Truva-G3 applies this**: When agents or tools fail, discovery continues working with the remaining healthy components. The system gradually cleans up information about failed components instead of immediately removing everything.
+**How TruvaG3 applies this**: When agents or tools fail, discovery continues working with the remaining healthy components. The system gradually cleans up information about failed components instead of immediately removing everything.
 
 ### Discovery Behavior During Component Transitions
 
@@ -461,7 +461,7 @@ This behavior demonstrates the system's resilience - it never returns unreachabl
 - The system prioritizes reliability over memory optimization
 
 **Consistency Model**:
-- Truva-G3 uses **eventual consistency** - there may be brief moments where different discovery methods return slightly different results
+- TruvaG3 uses **eventual consistency** - there may be brief moments where different discovery methods return slightly different results
 - The system converges to consistency as leases expire and renew
 - This trade-off enables high availability without complex distributed coordination
 
@@ -552,7 +552,7 @@ redis-cli SCARD "truvag3:capabilities:calculation"
 
 ### Understanding "Expected" Anomalies
 
-**Why some behaviors might seem odd**: If you're used to traditional databases or simple component lists, Truva-G3's distributed behavior might seem unusual at first. These "quirks" are actually intelligent design choices.
+**Why some behaviors might seem odd**: If you're used to traditional databases or simple component lists, TruvaG3's distributed behavior might seem unusual at first. These "quirks" are actually intelligent design choices.
 
 **What might seem like problems but are actually features working correctly**:
 
@@ -578,7 +578,7 @@ redis-cli SCARD "truvag3:capabilities:calculation"
 
 ### The Philosophy Behind the Design
 
-Truva-G3's discovery system embodies several distributed systems principles:
+TruvaG3's discovery system embodies several distributed systems principles:
 
 1. **Availability over Consistency**: The system remains available even when parts fail
 2. **Simple Local Rules**: Complex behaviors emerge from simple heartbeat logic
@@ -590,7 +590,7 @@ Understanding these principles helps you work **with** the system rather than fi
 
 ## Redis Failure Resilience and Self-Healing
 
-One of the most important aspects of a production discovery system is what happens when the discovery backend (Redis) fails. Truva-G3 is designed to handle Redis outages gracefully and recover automatically.
+One of the most important aspects of a production discovery system is what happens when the discovery backend (Redis) fails. TruvaG3 is designed to handle Redis outages gracefully and recover automatically.
 
 ### What Happens During a Redis Outage
 
@@ -611,7 +611,7 @@ When Redis goes offline, here's what you can expect:
 
 ### Automatic Self-Healing Recovery
 
-When Redis comes back online, Truva-G3 automatically heals itself without any manual intervention:
+When Redis comes back online, TruvaG3 automatically heals itself without any manual intervention:
 
 #### 1. Intelligent Heartbeat Recovery
 Every component runs a smart heartbeat that detects when it's no longer registered in Redis:
@@ -709,7 +709,7 @@ Before the atomic registration fix, you might have seen services that were parti
 
 ### The Philosophy of Resilient Discovery
 
-Truva-G3's approach to Redis failures follows these principles:
+TruvaG3's approach to Redis failures follows these principles:
 
 1. **Services Over Discovery**: Your business logic is more important than perfect discovery
 2. **Automatic Recovery**: Systems should heal themselves without human intervention
@@ -740,7 +740,7 @@ In production Kubernetes environments, particularly during rolling updates or cl
 
 ### The Solution: Background Retry Manager
 
-Truva-G3 now includes an intelligent background retry system that automatically recovers from initial connection failures without manual intervention.
+TruvaG3 now includes an intelligent background retry system that automatically recovers from initial connection failures without manual intervention.
 
 #### Key Features
 

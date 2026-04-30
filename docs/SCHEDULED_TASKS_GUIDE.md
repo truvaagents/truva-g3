@@ -1,6 +1,6 @@
 # Scheduled Tasks Guide
 
-If you've ever wanted an agent to "do this in 10 minutes" or "check that service every hour," you're in the right place. This guide covers Truva-G3's scheduled-execution system -- how to schedule tasks, how they fire, how to observe them, and how to extend the system to non-Redis backends.
+If you've ever wanted an agent to "do this in 10 minutes" or "check that service every hour," you're in the right place. This guide covers TruvaG3's scheduled-execution system -- how to schedule tasks, how they fire, how to observe them, and how to extend the system to non-Redis backends.
 
 The scheduling system is three cooperating components that together give any agent delayed and recurring task execution with zero per-agent plumbing.
 
@@ -53,7 +53,7 @@ The scheduling system is three cooperating components that together give any age
 
 ## What is Scheduled Execution?
 
-Scheduled execution lets any Truva-G3 agent defer work to the future. An LLM can say "remind me in 10 minutes" or "check this service every hour," and the framework handles the timing, dispatch, retry, and dead-lettering -- the agent itself gains one HTTP endpoint via one line of code.
+Scheduled execution lets any TruvaG3 agent defer work to the future. An LLM can say "remind me in 10 minutes" or "check this service every hour," and the framework handles the timing, dispatch, retry, and dead-lettering -- the agent itself gains one HTTP endpoint via one line of code.
 
 Think of it like a cron job that an AI can create on the fly, except:
 - The agent's LLM creates schedules naturally (via the `scheduler-tool` capabilities)
@@ -67,7 +67,7 @@ Think of it like a cron job that an AI can create on the fly, except:
 
 ### Prerequisites
 
-- A running Truva-G3 cluster with Redis (see [Getting Started](../examples/README.md))
+- A running TruvaG3 cluster with Redis (see [Getting Started](../examples/README.md))
 - `scheduler-tool` deployed (the producer side)
 - `scheduled-executor` deployed (the consumer side)
 - At least one agent with an orchestrator (e.g., `devops-chat-agent`)

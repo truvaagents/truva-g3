@@ -1,4 +1,4 @@
-# Truva-G3 Orchestration Module
+# TruvaG3 Orchestration Module
 
 Multi-agent coordination with AI-driven orchestration and declarative workflows.
 
@@ -715,7 +715,7 @@ The same principle applies to AI orchestration. When your workflow involves:
 
 ### The Solution: HTTP 202 + Polling Pattern
 
-Truva-G3 provides an async task system that works like that restaurant ticket:
+TruvaG3 provides an async task system that works like that restaurant ticket:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐

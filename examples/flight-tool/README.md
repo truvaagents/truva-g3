@@ -1,6 +1,6 @@
 # Flight Tool
 
-A Truva-G3 tool that provides flight search capabilities using the [Amadeus Self-Service API](https://developers.amadeus.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides flight search capabilities using the [Amadeus Self-Service API](https://developers.amadeus.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

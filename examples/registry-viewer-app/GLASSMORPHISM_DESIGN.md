@@ -1,6 +1,6 @@
 # Glassmorphism Design Guide
 
-This document captures the CSS techniques and best practices for glassmorphism used in the Truva-G3 Registry Viewer application. Based on 2026 web design trends and research.
+This document captures the CSS techniques and best practices for glassmorphism used in the TruvaG3 Registry Viewer application. Based on 2026 web design trends and research.
 
 ## What is Glassmorphism?
 
@@ -535,4 +535,4 @@ body {
 ---
 
 *Last updated: January 2026*
-*Applied in: Truva-G3 Registry Viewer - Execution DAG Tab*
+*Applied in: TruvaG3 Registry Viewer - Execution DAG Tab*

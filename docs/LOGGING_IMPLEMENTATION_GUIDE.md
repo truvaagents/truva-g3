@@ -1,6 +1,6 @@
 # Logging Implementation Guide
 
-Welcome to the Truva-G3 logging guide! This document explains how to implement consistent, production-ready logging across your tools and agents. Think of this as your complete reference for doing logging the right way.
+Welcome to the TruvaG3 logging guide! This document explains how to implement consistent, production-ready logging across your tools and agents. Think of this as your complete reference for doing logging the right way.
 
 ## Table of Contents
 
@@ -32,13 +32,13 @@ In a distributed system with multiple agents and tools, logs are your primary de
 - You can't filter logs effectively in production
 - You waste hours debugging issues that should take minutes
 
-This guide ensures every Truva-G3 component logs in a consistent, useful way.
+This guide ensures every TruvaG3 component logs in a consistent, useful way.
 
 ---
 
 ## 2. The Logger Interface
 
-Truva-G3 uses a custom `Logger` interface defined in [`core/interfaces.go:11-23`](../core/interfaces.go#L11-L23). This design:
+TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go:11-23`](../core/interfaces.go#L11-L23). This design:
 
 - **Avoids vendor lock-in** (not tied to zap, logrus, zerolog, etc.)
 - **Is minimal and composable** (easy to test and mock)
@@ -80,7 +80,7 @@ When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the 
 
 ## 3. Log Levels Explained
 
-Truva-G3 uses four standard log levels, from most to least verbose:
+TruvaG3 uses four standard log levels, from most to least verbose:
 
 | Level | When to Use | Example |
 |-------|-------------|---------|
@@ -111,7 +111,7 @@ When you set `TRUVAG3_LOG_LEVEL=INFO`, you see INFO, WARN, and ERROR logs. DEBUG
 
 ## 4. Environment Configuration
 
-Truva-G3 logging is configured through environment variables:
+TruvaG3 logging is configured through environment variables:
 
 ### Core Environment Variables
 
@@ -694,7 +694,7 @@ When using JSON format (production), trace context appears as **top-level fields
 }
 ```
 
-> **Design Principle**: Truva-G3 uses standard OpenTelemetry field names (`trace_id`, `span_id`) at the root level for vendor-agnostic compatibility with any OTel-compliant observability backend (SigNoz, Grafana Loki, Datadog, Elastic, etc.).
+> **Design Principle**: TruvaG3 uses standard OpenTelemetry field names (`trace_id`, `span_id`) at the root level for vendor-agnostic compatibility with any OTel-compliant observability backend (SigNoz, Grafana Loki, Datadog, Elastic, etc.).
 
 ---
 
@@ -732,7 +732,7 @@ HITL workflows present a unique logging challenge: a single user conversation ma
 
 ### The Solution: `original_request_id`
 
-Truva-G3 uses `original_request_id` to link all requests in a HITL conversation:
+TruvaG3 uses `original_request_id` to link all requests in a HITL conversation:
 
 | Field | Initial Request | Resume Request | Purpose |
 |-------|-----------------|----------------|---------|
@@ -1199,7 +1199,7 @@ logger.Info("Request completed", map[string]interface{}{
 
 ## 11. Required Patterns for Framework-Level Logging
 
-This section documents **required patterns** that MUST be followed when implementing logging in Truva-G3 framework modules. These patterns are used throughout [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
+This section documents **required patterns** that MUST be followed when implementing logging in TruvaG3 framework modules. These patterns are used throughout [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check (REQUIRED)
 
@@ -1459,11 +1459,11 @@ func main() {
 
 ## 13. Telemetry Integration
 
-Logging integrates with Truva-G3's telemetry system for metrics and tracing.
+Logging integrates with TruvaG3's telemetry system for metrics and tracing.
 
 ### Three-Layer Observability
 
-Truva-G3's `ProductionLogger` ([`core/config.go:1532-1702`](../core/config.go#L1532-L1702)) implements three layers:
+TruvaG3's `ProductionLogger` ([`core/config.go:1532-1702`](../core/config.go#L1532-L1702)) implements three layers:
 
 1. **Layer 1 - Console Output**: Always works, immediate visibility ([line 1626-1652](../core/config.go#L1626-L1652))
 2. **Layer 2 - Metrics Emission**: When telemetry is initialized ([line 1674-1676](../core/config.go#L1674-L1676))
@@ -1540,11 +1540,11 @@ agent.Logger.Error("Request failed", map[string]interface{}{
 
 ## 14. Component-Aware Logging for Framework Modules
 
-Truva-G3 uses a component-based logging architecture that separates framework-level logs from agent/tool-level logs. This section explains how this segregation works and how to use it effectively.
+TruvaG3 uses a component-based logging architecture that separates framework-level logs from agent/tool-level logs. This section explains how this segregation works and how to use it effectively.
 
 ### Understanding Log Segregation
 
-Every log message in Truva-G3 includes a `component` field that identifies the source of the log. Components are organized into categories:
+Every log message in TruvaG3 includes a `component` field that identifies the source of the log. Components are organized into categories:
 
 | Category | Format | Examples |
 |----------|--------|----------|
@@ -1966,7 +1966,7 @@ type ComponentAwareLogger interface {
 }
 ```
 
-The framework's `ProductionLogger` implements this interface, so component segregation works automatically when you use Truva-G3's standard logging setup.
+The framework's `ProductionLogger` implements this interface, so component segregation works automatically when you use TruvaG3's standard logging setup.
 
 ### For Framework Module Developers
 

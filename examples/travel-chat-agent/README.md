@@ -1,6 +1,6 @@
 # Travel Chat Agent
 
-A streaming chat agent that demonstrates AI-powered orchestration using the Truva-G3 framework. It provides real-time Server-Sent Events (SSE) responses by intelligently coordinating multiple travel-related tools to answer user queries about weather, locations, currencies, and country information.
+A streaming chat agent that demonstrates AI-powered orchestration using the TruvaG3 framework. It provides real-time Server-Sent Events (SSE) responses by intelligently coordinating multiple travel-related tools to answer user queries about weather, locations, currencies, and country information.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ A streaming chat agent that demonstrates AI-powered orchestration using the Truv
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 framework orchestrates tools and agents. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 framework orchestrates tools and agents. Follow the steps below to get this example running.
 
 ### Prerequisites
 

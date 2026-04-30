@@ -96,7 +96,7 @@ func (e *ToolError) Error() string {
 }
 
 // ToolResponse is the standard response envelope for tool capability invocations.
-// All Truva-G3 tools should wrap their responses in this format for consistent
+// All TruvaG3 tools should wrap their responses in this format for consistent
 // error handling across the framework.
 //
 // Success response:

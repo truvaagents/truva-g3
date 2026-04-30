@@ -1,6 +1,6 @@
 # Human-in-the-Loop (HITL) User Guide
 
-Hey there! This guide will teach you how to add human oversight to your Truva-G3 AI agents. If you've ever worried about an AI making decisions without supervision, HITL is your solution - it pauses execution at critical points so a human can review and approve before proceeding.
+Hey there! This guide will teach you how to add human oversight to your TruvaG3 AI agents. If you've ever worried about an AI making decisions without supervision, HITL is your solution - it pauses execution at critical points so a human can review and approve before proceeding.
 
 > **Working Example**
 >
@@ -78,7 +78,7 @@ Don't use HITL for everything - that defeats the purpose of automation. Use it s
 ### Prerequisites
 
 Before adding HITL, you should have:
-- A working Truva-G3 agent with an orchestrator
+- A working TruvaG3 agent with an orchestrator
   - For **streaming agents** (SSE/WebSocket): See the [Chat Agent Guide](CHAT_AGENT_GUIDE.md)
   - For **non-streaming agents** (JSON request/response): See [`examples/agent-with-orchestration/`](../examples/agent-with-orchestration/)
   - For **long-running operations** (HTTP 202 + polling): See the [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md)

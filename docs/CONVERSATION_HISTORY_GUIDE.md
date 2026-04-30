@@ -1,6 +1,6 @@
 # Conversation History Guide
 
-Hey there! This guide shows you how to give your Truva-G3 chat agents **multi-turn conversation memory** without letting long sessions blow up prompt size. If you've ever had a chat agent understand the first few turns perfectly and then start losing context as the session grows, this is the feature you're looking for.
+Hey there! This guide shows you how to give your TruvaG3 chat agents **multi-turn conversation memory** without letting long sessions blow up prompt size. If you've ever had a chat agent understand the first few turns perfectly and then start losing context as the session grows, this is the feature you're looking for.
 
 > **Working Examples**
 >
@@ -63,7 +63,7 @@ That last request only makes sense if the agent still remembers:
 
 That is what conversation-history protection is for. It gives the orchestrator enough prior dialogue to understand the current turn, while also keeping long sessions from overrunning prompt budgets.
 
-In Truva-G3, this matters even more than in a simple "single prompt in, single prompt out" chat app, because the prepared conversation history is reused across multiple orchestration prompts:
+In TruvaG3, this matters even more than in a simple "single prompt in, single prompt out" chat app, because the prepared conversation history is reused across multiple orchestration prompts:
 
 - planning
 - continuation prompts in later phases
@@ -76,7 +76,7 @@ Conversation-history protection does two jobs:
 1. It preserves multi-turn chat context so the model still understands references like "there," "that version," or "the issue from earlier."
 2. It prevents long chat sessions from overwhelming orchestration prompts.
 
-Truva-G3 handles this in a shared framework path that prepares the `<conversation_history>` enrichment before planning. The prepared history is then reused across planning, continuation, and synthesis.
+TruvaG3 handles this in a shared framework path that prepares the `<conversation_history>` enrichment before planning. The prepared history is then reused across planning, continuation, and synthesis.
 
 This feature works on **conversation turns**, not just user messages. If older turns are compacted, the summary folds in both:
 - user turns
@@ -142,7 +142,7 @@ Here is what that looks like in practice:
 | **Context overflow** | Latency and token cost grow with every turn, then prompts fail or degrade | Raw history is appended without budgeting |
 | **Blunt truncation** | The agent forgets goals, constraints, or prior decisions | History is cut by count or size instead of preserving durable state |
 
-Truva-G3's conversation-history path addresses all three:
+TruvaG3's conversation-history path addresses all three:
 
 | Mode | What Happens |
 |---|---|
@@ -244,7 +244,7 @@ Those are there for advanced cases, and this guide covers them later.
 
 ## The Three Layers
 
-The API follows Truva-G3's three-layer framework style:
+The API follows TruvaG3's three-layer framework style:
 
 | Layer | Who It's For | What You Write |
 |---|---|---|
@@ -254,7 +254,7 @@ The API follows Truva-G3's three-layer framework style:
 
 This layering keeps the default path low-friction while still leaving room for advanced overrides.
 
-If you are new to Truva-G3, read the layers like this:
+If you are new to TruvaG3, read the layers like this:
 
 - **Layer 1**: "I just want safe conversation history"
 - **Layer 2**: "I want better long-session behavior, but I still want the framework to do most of the setup"

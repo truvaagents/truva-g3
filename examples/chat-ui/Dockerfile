@@ -1,4 +1,4 @@
-# Chat UI - Static file server for Truva-G3 chat interfaces
+# Chat UI - Static file server for TruvaG3 chat interfaces
 # Uses nginx:alpine for minimal footprint (~20MB)
 #
 # Serves multiple UIs:

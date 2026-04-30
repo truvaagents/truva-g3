@@ -1,4 +1,4 @@
-// Package main implements a Travel Research Agent that demonstrates the Truva-G3
+// Package main implements a Travel Research Agent that demonstrates the TruvaG3
 // orchestration module through intelligent multi-tool coordination with full telemetry.
 //
 // This agent showcases:

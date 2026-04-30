@@ -1,6 +1,6 @@
 # Weather Tool Example
 
-A comprehensive example demonstrating how to build a **Tool** (passive component) using the Truva-G3 framework. This tool provides weather-related capabilities and showcases the framework's auto-discovery, capability registration, and production-ready patterns.
+A comprehensive example demonstrating how to build a **Tool** (passive component) using the TruvaG3 framework. This tool provides weather-related capabilities and showcases the framework's auto-discovery, capability registration, and production-ready patterns.
 
 ## 🎯 What This Example Demonstrates
 
@@ -158,7 +158,7 @@ make clean        # Delete Kind cluster and clean up
 
 ## 🆕 What's New in v0.6.4
 
-This example showcases the latest Truva-G3 v0.6.4 features:
+This example showcases the latest TruvaG3 v0.6.4 features:
 
 ### 3-Phase AI-Powered Schema Discovery
 
@@ -1319,7 +1319,7 @@ The 4-file structure provides clear benefits:
 - **Live Debugging**: Real-time logs with `make logs` and `make debug`
 - **Quick Iteration**: Rebuild and redeploy with single `make deploy`
 
-This tool showcases Truva-G3 v0.6.4 best practices and can be discovered and orchestrated by agents in your system!
+This tool showcases TruvaG3 v0.6.4 best practices and can be discovered and orchestrated by agents in your system!
 
 ---
 

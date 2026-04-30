@@ -1,4 +1,4 @@
-# Truva-G3 AI Module
+# TruvaG3 AI Module
 
 Multi-provider LLM integration with automatic detection, universal compatibility, and extensible architecture.
 
@@ -906,7 +906,7 @@ response, _ := client.GenerateResponse(
 
 ### Universal OpenAI-Compatible Provider
 
-The Truva-G3 AI module features a **universal OpenAI-compatible provider** that works with 20+ services using a single implementation. This means one provider implementation handles OpenAI, Groq, DeepSeek, local models, and any OpenAI-compatible API!
+The TruvaG3 AI module features a **universal OpenAI-compatible provider** that works with 20+ services using a single implementation. This means one provider implementation handles OpenAI, Groq, DeepSeek, local models, and any OpenAI-compatible API!
 
 #### Quick Examples
 
@@ -1155,7 +1155,7 @@ client, _ := ai.NewClient(
 - **Temperature**: 0.7
 - **MaxTokens**: 1000
 
-## 13. How It Fits in Truva-G3
+## 13. How It Fits in TruvaG3
 
 ### The Architecture
 
@@ -1167,7 +1167,7 @@ client, _ := ai.NewClient(
 └────────────────┬────────────────────────┘
                  │
     ┌────────────▼────────────┐
-    │     Truva-G3 Core         │
+    │     TruvaG3 Core         │
     │                         │
     │  Tools & Agents with AI │
     └────────────┬────────────┘
@@ -1190,7 +1190,7 @@ client, _ := ai.NewClient(
 
 ### Module Dependencies
 
-The AI module follows Truva-G3's architectural principles:
+The AI module follows TruvaG3's architectural principles:
 
 ```
 ai → core + telemetry

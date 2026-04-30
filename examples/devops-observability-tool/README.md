@@ -1,6 +1,6 @@
 # DevOps Observability Tool
 
-A Truva-G3 tool that wraps **Loki** (logs) and **Jaeger** (distributed traces) HTTP APIs as capabilities for DevOps troubleshooting. Agents can query logs, search traces, and correlate requests across services — all as DAG steps in their execution plans.
+A TruvaG3 tool that wraps **Loki** (logs) and **Jaeger** (distributed traces) HTTP APIs as capabilities for DevOps troubleshooting. Agents can query logs, search traces, and correlate requests across services — all as DAG steps in their execution plans.
 
 ## Table of Contents
 

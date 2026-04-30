@@ -43,7 +43,7 @@ func (a *ArxivTool) sendError(rw http.ResponseWriter, message string, status int
 }
 
 // handleSearchPapers processes paper search requests with full telemetry.
-// Follows the 16-step handler checklist from the Truva-G3 tool pattern.
+// Follows the 16-step handler checklist from the TruvaG3 tool pattern.
 func (a *ArxivTool) handleSearchPapers(rw http.ResponseWriter, r *http.Request) {
 	// Step 1: startTime + ctx
 	startTime := time.Now()

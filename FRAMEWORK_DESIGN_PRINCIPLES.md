@@ -1,4 +1,4 @@
-# Truva-G3 Framework Design Principles & Architecture Guidelines
+# TruvaG3 Framework Design Principles & Architecture Guidelines
 
 **Version**: 1.0  
 **Purpose**: Ensure consistency and maintainability across all framework development  
@@ -9,7 +9,7 @@
 ## Core Philosophy
 
 ### Mission Statement
-Truva-G3 enables **autonomous agent networks** in production environments through **compile-time architectural enforcement** and **intelligent defaults**. Unlike orchestrated frameworks, Truva-G3 agents discover and collaborate dynamically without centralized coordination.
+TruvaG3 enables **autonomous agent networks** in production environments through **compile-time architectural enforcement** and **intelligent defaults**. Unlike orchestrated frameworks, TruvaG3 agents discover and collaborate dynamically without centralized coordination.
 
 ### Design Principles
 
@@ -84,7 +84,7 @@ The principles in §3 and §4 above are extracted from software systems that hav
 
 - **Go's Design Philosophy** ("Accept interfaces, return structs"): "The bigger the interface, the weaker the abstraction." Rob Pike: "Simplicity is complicated — it requires work to achieve." Go's 1.0 Compatibility Guarantee means code written in 2012 compiles and runs identically on Go 1.24 — stability comes from narrow, focused APIs. **Lesson**: Small interfaces that compose > large interfaces that prescribe. ([source](https://dave.cheney.net/2016/08/20/solid-go-design))
 
-- **controller-runtime's `manager.Runnable`** (7+ years, the background-task interface used by most modern Go Kubernetes operators): A single-method interface — `Start(ctx context.Context) error` — for anything the manager should run in parallel with the main reconcile loop. Leader election, cache, webhook server, metrics server all implement `Runnable`. The manager calls `Start`, the runnable blocks until `ctx.Done()`, returns nil on clean shutdown. The manager cannot forcibly terminate a goroutine; honouring ctx is the runnable's contract, not the framework's. **Lesson**: A single blocking method with ctx-based cancellation is the right shape for background jobs. Don't invent `Stop()`, `Cancel()`, `Shutdown()` companion methods — they duplicate what ctx already expresses. Truva-G3's `core.Runnable` has the same shape and the same contract. ([source](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/manager#Runnable))
+- **controller-runtime's `manager.Runnable`** (7+ years, the background-task interface used by most modern Go Kubernetes operators): A single-method interface — `Start(ctx context.Context) error` — for anything the manager should run in parallel with the main reconcile loop. Leader election, cache, webhook server, metrics server all implement `Runnable`. The manager calls `Start`, the runnable blocks until `ctx.Done()`, returns nil on clean shutdown. The manager cannot forcibly terminate a goroutine; honouring ctx is the runnable's contract, not the framework's. **Lesson**: A single blocking method with ctx-based cancellation is the right shape for background jobs. Don't invent `Stop()`, `Cancel()`, `Shutdown()` companion methods — they duplicate what ctx already expresses. TruvaG3's `core.Runnable` has the same shape and the same contract. ([source](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/manager#Runnable))
 
 **Synthesis — the rules these patterns produce:**
 
@@ -536,4 +536,4 @@ func (t *BaseTool) processRequest() {
 
 ---
 
-**Remember**: These principles exist to maintain Truva-G3's core promise of **autonomous agent networks in production**. When in doubt, favor production reliability over development convenience, and architectural clarity over implementation simplicity.
+**Remember**: These principles exist to maintain TruvaG3's core promise of **autonomous agent networks in production**. When in doubt, favor production reliability over development convenience, and architectural clarity over implementation simplicity.

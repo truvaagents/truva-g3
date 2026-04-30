@@ -1,6 +1,6 @@
 # Agent Memory User Guide
 
-Hey there! This guide shows you how to give your Truva-G3 agents **shared memory** — so they can see what other agents have done, avoid duplicating work, and learn from past experience. If you've ever had two agents investigate the same incident independently (wasting tokens and time), this is the fix.
+Hey there! This guide shows you how to give your TruvaG3 agents **shared memory** — so they can see what other agents have done, avoid duplicating work, and learn from past experience. If you've ever had two agents investigate the same incident independently (wasting tokens and time), this is the fix.
 
 > **Working Example**
 >
@@ -47,7 +47,7 @@ Hey there! This guide shows you how to give your Truva-G3 agents **shared memory
 
 ## What is Agent Memory?
 
-In Truva-G3, each `ProcessRequest` call starts with a blank slate. The AI has no idea what happened on the previous request — or what other agents did. Agent memory fixes this by giving agents a shared history.
+In TruvaG3, each `ProcessRequest` call starts with a blank slate. The AI has no idea what happened on the previous request — or what other agents did. Agent memory fixes this by giving agents a shared history.
 
 Think of it like a **team shared notebook**:
 - After each request, the agent writes down what it did (episodic events)
@@ -140,7 +140,7 @@ The key insight: **hooks are fail-open**. If Redis is down, if the LLM compactio
 
 ### Prerequisites
 
-- A working Truva-G3 agent with an orchestrator
+- A working TruvaG3 agent with an orchestrator
 - Redis running (memory uses Redis for event storage and coordination)
 - An AI provider API key
 
@@ -648,7 +648,7 @@ Phase 2 requires all three: Qdrant running, embedding endpoint configured, and a
 
 ## User Memory: Per-User Personalization
 
-Everything above covers **shared agent memory** — cross-agent visibility within a domain. Truva-G3 also provides **user memory** — per-user private facts for personal assistant agents. These are completely separate concerns with separate stores, hooks, and privacy boundaries.
+Everything above covers **shared agent memory** — cross-agent visibility within a domain. TruvaG3 also provides **user memory** — per-user private facts for personal assistant agents. These are completely separate concerns with separate stores, hooks, and privacy boundaries.
 
 Think of it like a **personal assistant's notebook** vs a **team shared notebook**:
 - Shared memory: "Agent A restarted pod X and created DEVOPS-42" — everyone reads it

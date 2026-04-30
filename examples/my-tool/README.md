@@ -1,4 +1,4 @@
-# `<TOOL NAME>` — a Truva-G3 Tool
+# `<TOOL NAME>` — a TruvaG3 Tool
 
 > **Template scaffold.** This README is a placeholder. After your coding
 > agent populates the tool from [`PROMPT.md`](PROMPT.md), replace this

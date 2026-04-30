@@ -1,11 +1,11 @@
 # Redis Dependency Analysis
 
-This document provides a comprehensive analysis of Redis usage in the Truva-G3 framework, evaluating whether Redis is a required or optional dependency, and assessing the feasibility of swapping Redis with alternative backends like Memcached.
+This document provides a comprehensive analysis of Redis usage in the TruvaG3 framework, evaluating whether Redis is a required or optional dependency, and assessing the feasibility of swapping Redis with alternative backends like Memcached.
 
 ## Table of Contents
 
 - [Executive Summary](#executive-summary)
-- [Redis Licensing and Impact on Truva-G3 Users](#redis-licensing-and-impact-on-truvag3-users)
+- [Redis Licensing and Impact on TruvaG3 Users](#redis-licensing-and-impact-on-truvag3-users)
 - [Cloud Provider Availability](#cloud-provider-availability)
 - [Redis Usage in Core Module](#redis-usage-in-core-module)
 - [Redis Usage in Orchestration Module](#redis-usage-in-orchestration-module)
@@ -28,11 +28,11 @@ This document provides a comprehensive analysis of Redis usage in the Truva-G3 f
 
 ### Is Redis Required?
 
-**No, Redis is optional.** The Truva-G3 framework is designed with interface abstractions that allow Redis to be disabled or swapped with alternative implementations.
+**No, Redis is optional.** The TruvaG3 framework is designed with interface abstractions that allow Redis to be disabled or swapped with alternative implementations.
 
 ### Can Redis Be Swapped with Memcached?
 
-**Not directly.** Memcached lacks critical data structures (Pub/Sub, Lists, Sets, Sorted Sets) that Truva-G3 depends on for core functionality. A direct swap would require:
+**Not directly.** Memcached lacks critical data structures (Pub/Sub, Lists, Sets, Sorted Sets) that TruvaG3 depends on for core functionality. A direct swap would require:
 
 - Complete architectural redesign for HITL (Human-in-the-Loop)
 - External message broker integration for Pub/Sub
@@ -41,7 +41,7 @@ This document provides a comprehensive analysis of Redis usage in the Truva-G3 f
 
 ---
 
-## Redis Licensing and Impact on Truva-G3 Users
+## Redis Licensing and Impact on TruvaG3 Users
 
 ### Redis License History
 
@@ -63,20 +63,20 @@ This document provides a comprehensive analysis of Redis usage in the Truva-G3 f
 | Network use | No requirements | ⚠️ Must disclose source if modified and used over network |
 | Proprietary forks | ✅ Allowed | ❌ Not allowed |
 
-### Impact on Truva-G3 Users
+### Impact on TruvaG3 Users
 
-**Truva-G3 users are NOT affected by Redis's AGPLv3 license.**
+**TruvaG3 users are NOT affected by Redis's AGPLv3 license.**
 
 | Scenario | Affected? | Reason |
 |----------|-----------|--------|
 | Using Redis as a database/cache | ❌ No | You're a *user*, not modifying Redis |
-| Building agents/tools with Truva-G3 | ❌ No | Truva-G3 connects to Redis via network protocol |
+| Building agents/tools with TruvaG3 | ❌ No | TruvaG3 connects to Redis via network protocol |
 | Hosting your own Redis instance | ❌ No | Running unmodified Redis is permitted |
 | Using managed Redis services | ❌ No | Cloud provider handles licensing |
 | Modifying Redis source code | ✅ Yes | Must release modifications under AGPLv3 |
 | Offering modified Redis-as-a-Service | ✅ Yes | Network clause applies |
 
-**Bottom Line:** Organizations using Truva-G3 to create and host agents/tools have **zero licensing concerns** with Redis. The AGPLv3 "network clause" only affects those who modify Redis itself and offer it as a service—not application developers using Redis as a dependency.
+**Bottom Line:** Organizations using TruvaG3 to create and host agents/tools have **zero licensing concerns** with Redis. The AGPLv3 "network clause" only affects those who modify Redis itself and offer it as a service—not application developers using Redis as a dependency.
 
 ### License-Conscious Alternative
 
@@ -87,7 +87,7 @@ For organizations preferring fully permissive licensing:
 | **Valkey** | BSD-3-Clause | No copyleft, no restrictions |
 | **Redis 8+** | AGPLv3 | Copyleft only if you modify Redis |
 
-Both are drop-in compatible with Truva-G3—no code changes required.
+Both are drop-in compatible with TruvaG3—no code changes required.
 
 ---
 
@@ -188,7 +188,7 @@ For self-hosted deployments, all options are readily available:
 
 ### Database Isolation Scheme
 
-Truva-G3 uses Redis database numbers for logical separation:
+TruvaG3 uses Redis database numbers for logical separation:
 
 ```go
 const (
@@ -255,7 +255,7 @@ ZRevRange(ctx, indexKey, 0, limit-1)  // Get recent records
 
 ## Interface Abstractions
 
-Truva-G3 provides interface abstractions that enable alternative implementations.
+TruvaG3 provides interface abstractions that enable alternative implementations.
 
 ### Core Module Interfaces
 
@@ -499,7 +499,7 @@ config.Development.MockDiscovery = true   // Use mock instead
 
 ### Redis vs Memcached Feature Comparison
 
-| Feature | Redis | Memcached | Truva-G3 Uses | Impact |
+| Feature | Redis | Memcached | TruvaG3 Uses | Impact |
 |---------|-------|-----------|-------------|--------|
 | String Get/Set with TTL | ✓ | ✓ | Heavy | Compatible |
 | Sets (SADD, SMEMBERS) | ✓ | ✗ | Heavy | **INCOMPATIBLE** |
@@ -612,7 +612,7 @@ type MemcachedCheckpointStore struct { ... }
 
 ## Open-Source Alternatives to Redis
 
-This section evaluates open-source tools that can replace Redis for the specific functions Truva-G3 depends on.
+This section evaluates open-source tools that can replace Redis for the specific functions TruvaG3 depends on.
 
 ### Category 1: Drop-in Redis Replacements
 
@@ -634,7 +634,7 @@ These are Redis-compatible alternatives that support the RESP protocol and can w
 - ✅ Clustering (up to 1,000 nodes)
 - ✅ Multi-threaded I/O (Valkey 8.0+)
 
-**Truva-G3 Compatibility:** **FULL** - Drop-in replacement, no code changes required.
+**TruvaG3 Compatibility:** **FULL** - Drop-in replacement, no code changes required.
 
 **Performance:** Similar to Redis; Valkey 8.0 enhanced I/O multithreading to match enterprise Redis throughput.
 
@@ -659,12 +659,12 @@ These are Redis-compatible alternatives that support the RESP protocol and can w
 
 **Supported Features:**
 - ✅ Redis API compatible (RESP protocol)
-- ✅ All data structures Truva-G3 uses
+- ✅ All data structures TruvaG3 uses
 - ✅ Pub/Sub
 - ✅ Multi-threaded (shared-nothing architecture)
 - ⚠️ RDB snapshotting only (no AOF)
 
-**Truva-G3 Compatibility:** **FULL** - Drop-in replacement.
+**TruvaG3 Compatibility:** **FULL** - Drop-in replacement.
 
 **Considerations:**
 - BSL license restricts cloud providers from offering as managed service
@@ -690,7 +690,7 @@ These are Redis-compatible alternatives that support the RESP protocol and can w
 - ✅ Active Replica and Multi-Master modes
 - ✅ Flash storage support
 
-**Truva-G3 Compatibility:** **FULL** - Drop-in replacement.
+**TruvaG3 Compatibility:** **FULL** - Drop-in replacement.
 
 **⚠️ WARNING:** As of September 2025, KeyDB has not been actively updated for 1.5 years. The main maintainer left in January 2025. **Not recommended for new projects.**
 
@@ -714,7 +714,7 @@ These are Redis-compatible alternatives that support the RESP protocol and can w
 - ✅ Cluster sharding, replication, key migration
 - ⚠️ Partial Redis API coverage
 
-**Truva-G3 Compatibility:** **PARTIAL** - May require testing; not all Redis commands supported.
+**TruvaG3 Compatibility:** **PARTIAL** - May require testing; not all Redis commands supported.
 
 **Considerations:**
 - Only partially supports Redis API (migration challenges)
@@ -746,7 +746,7 @@ If using a non-Redis backend for storage, you'll need a separate message broker 
 - ✅ JetStream for persistence (200k msgs/sec with persistence)
 - ✅ Lightweight, low latency
 
-**Truva-G3 Integration:**
+**TruvaG3 Integration:**
 ```go
 // Would require new NATSCommandStore implementation
 type NATSCommandStore struct {
@@ -784,7 +784,7 @@ func (s *NATSCommandStore) SubscribeCommand(ctx context.Context, checkpointID st
 - ✅ Management UI
 - ✅ Clustering and high availability
 
-**Truva-G3 Integration:** Would require implementing `CommandStore` interface with AMQP client.
+**TruvaG3 Integration:** Would require implementing `CommandStore` interface with AMQP client.
 
 **Resources:**
 - [RabbitMQ Official Site](https://www.rabbitmq.com/)
@@ -819,7 +819,7 @@ PostgreSQL can replace Redis for several use cases, reducing infrastructure comp
 
 #### PostgreSQL Feature Mapping
 
-| Truva-G3 Need | PostgreSQL Solution | Performance |
+| TruvaG3 Need | PostgreSQL Solution | Performance |
 |-------------|---------------------|-------------|
 | Key-Value Storage | JSONB columns or UNLOGGED tables | 50-158% slower per op |
 | Pub/Sub | `LISTEN/NOTIFY` | Adequate for moderate load |
@@ -889,7 +889,7 @@ RETURNING *;
 - ✅ Strong consistency guarantees
 - ✅ Used by Kubernetes for cluster state
 
-**Truva-G3 Integration:**
+**TruvaG3 Integration:**
 ```go
 // Service registration with etcd
 client.Put(ctx, "/services/my-tool/instance-1", serviceInfoJSON)
@@ -939,7 +939,7 @@ resp, _ := client.Get(ctx, "/services/my-tool/", clientv3.WithPrefix())
 │                 Valkey                  │
 │  (Drop-in Redis replacement)            │
 │                                         │
-│  • All Truva-G3 features work unchanged   │
+│  • All TruvaG3 features work unchanged   │
 │  • BSD-3 license                        │
 │  • Linux Foundation backing             │
 └─────────────────────────────────────────┘
@@ -985,7 +985,7 @@ resp, _ := client.Get(ctx, "/services/my-tool/", clientv3.WithPrefix())
 
 ### Comparison Matrix
 
-| Solution | License | Truva-G3 Compat | Pub/Sub | Sets | Sorted Sets | Effort |
+| Solution | License | TruvaG3 Compat | Pub/Sub | Sets | Sorted Sets | Effort |
 |----------|---------|---------------|---------|------|-------------|--------|
 | **Valkey** | BSD-3 | ✅ Full | ✅ | ✅ | ✅ | Minimal |
 | **DragonflyDB** | BSL | ✅ Full | ✅ | ✅ | ✅ | Minimal |

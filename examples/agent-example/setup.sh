@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Truva-G3 Agent Example - Standardized Setup Script
+# TruvaG3 Agent Example - Standardized Setup Script
 # One-click deployment with standardized cmd_* pattern
 
 set -e  # Exit on error
@@ -29,7 +29,7 @@ source "$EXAMPLES_DIR/k8-deployment/setup-env-lib.sh"
 # Print functions
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     Truva-G3 Agent Example Setup         ║${NC}"
+    echo -e "${BLUE}║     TruvaG3 Agent Example Setup         ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -642,7 +642,7 @@ cmd_help() {
     print_header
 
     cat <<EOF
-${GREEN}Truva-G3 Agent Example - Setup Script${NC}
+${GREEN}TruvaG3 Agent Example - Setup Script${NC}
 
 ${BLUE}Usage:${NC}
   ./setup.sh [COMMAND]

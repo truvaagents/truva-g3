@@ -7,7 +7,7 @@ import (
 // ArxivTool is a focused tool that provides academic paper search capabilities via the arXiv API.
 // It demonstrates the passive tool pattern with XML-to-JSON conversion.
 // arXiv returns Atom 1.0 XML exclusively -- this tool handles the XML parsing
-// and converts results to JSON for the standard Truva-G3 ToolResponse wrapper.
+// and converts results to JSON for the standard TruvaG3 ToolResponse wrapper.
 type ArxivTool struct {
 	*core.BaseTool
 	client *ArxivClient

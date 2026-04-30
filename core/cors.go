@@ -1,4 +1,4 @@
-// Package core provides the core functionality for the Truva-G3 framework.
+// Package core provides the core functionality for the TruvaG3 framework.
 package core
 
 import (

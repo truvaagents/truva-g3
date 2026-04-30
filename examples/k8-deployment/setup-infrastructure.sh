@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Truva-G3 Infrastructure Setup Script
+# TruvaG3 Infrastructure Setup Script
 # Intelligently deploys infrastructure components only if they don't exist
 # Never deletes existing resources - always checks services first
 
@@ -18,7 +18,7 @@ NAMESPACE=${NAMESPACE:-truvag3-examples}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${COLOR_BLUE}"
-echo "🏗️  Truva-G3 Infrastructure Setup"
+echo "🏗️  TruvaG3 Infrastructure Setup"
 echo "================================"
 echo -e "${COLOR_NC}"
 
@@ -434,7 +434,7 @@ main() {
     kubectl apply -f "$SCRIPT_DIR/grafana-dashboards-new.yaml" >/dev/null
     deploy_component "Grafana" "grafana" "grafana" "grafana.yaml"
 
-    # 7. Swagger UI - Interactive OpenAPI documentation for all Truva-G3 services
+    # 7. Swagger UI - Interactive OpenAPI documentation for all TruvaG3 services
     deploy_component "Swagger UI" "swagger-ui" "swagger-ui" "swagger-ui.yaml"
 
     # 8. Registry Viewer - Real-time UI for the Redis service registry.
@@ -506,7 +506,7 @@ status_only() {
 
 # Help command
 show_help() {
-    echo "Truva-G3 Infrastructure Setup Script"
+    echo "TruvaG3 Infrastructure Setup Script"
     echo ""
     echo "This script intelligently deploys infrastructure components"
     echo "and never deletes existing resources."

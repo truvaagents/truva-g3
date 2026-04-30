@@ -1,6 +1,6 @@
 // Package main — scheduler-tool example application.
 //
-// scheduler-tool is a standard Truva-G3 BaseTool that exposes scheduling as
+// scheduler-tool is a standard TruvaG3 BaseTool that exposes scheduling as
 // 5 discoverable capabilities (schedule_task, list_schedules, get_schedule,
 // update_schedule, cancel_schedule). Any agent's LLM that sees the tool in
 // its service catalog can include these in its plan — the scheduling API

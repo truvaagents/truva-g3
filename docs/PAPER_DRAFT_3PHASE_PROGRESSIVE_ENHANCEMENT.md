@@ -8,7 +8,7 @@
 
 ## Abstract
 
-The proliferation of Large Language Model (LLM) based autonomous agents has created an urgent need for robust mechanisms enabling AI systems to generate accurate JSON payloads for tool invocation. Recent benchmarks reveal significant challenges: state-of-the-art models like GPT-4o achieve only ~61% task success on realistic tool-agent benchmarks such as τ-bench [1], while the Berkeley Function Calling Leaderboard shows top models reaching 70% accuracy on complex function calling tasks [2]. Current approaches either rely solely on natural language descriptions—suffering from field name ambiguity—or require heavyweight JSON Schema validation that adds latency and complexity. We present **Progressive Enhancement**, a 3-phase architecture that provides incremental accuracy improvements while maintaining minimal overhead. Our approach introduces an intermediate **Field Hints** abstraction (Phase 2) that provides structured guidance to LLMs without the complexity of full schema specifications. We implement this architecture in Truva-G3, a production Go framework for multi-agent orchestration with Redis-based service discovery. Experimental evaluation across [PLACEHOLDER: N] tool capabilities demonstrates that Phase 2 achieves [PLACEHOLDER: X]% accuracy improvement over description-only approaches with only [PLACEHOLDER: Y] bytes additional metadata per capability.
+The proliferation of Large Language Model (LLM) based autonomous agents has created an urgent need for robust mechanisms enabling AI systems to generate accurate JSON payloads for tool invocation. Recent benchmarks reveal significant challenges: state-of-the-art models like GPT-4o achieve only ~61% task success on realistic tool-agent benchmarks such as τ-bench [1], while the Berkeley Function Calling Leaderboard shows top models reaching 70% accuracy on complex function calling tasks [2]. Current approaches either rely solely on natural language descriptions—suffering from field name ambiguity—or require heavyweight JSON Schema validation that adds latency and complexity. We present **Progressive Enhancement**, a 3-phase architecture that provides incremental accuracy improvements while maintaining minimal overhead. Our approach introduces an intermediate **Field Hints** abstraction (Phase 2) that provides structured guidance to LLMs without the complexity of full schema specifications. We implement this architecture in TruvaG3, a production Go framework for multi-agent orchestration with Redis-based service discovery. Experimental evaluation across [PLACEHOLDER: N] tool capabilities demonstrates that Phase 2 achieves [PLACEHOLDER: X]% accuracy improvement over description-only approaches with only [PLACEHOLDER: Y] bytes additional metadata per capability.
 
 **Keywords:** LLM agents, tool calling, JSON schema, payload generation, multi-agent systems, service discovery
 
@@ -54,7 +54,7 @@ Our key insight is that LLMs generate better payloads when provided with **expli
 **Contributions:**
 1. A novel 3-phase progressive enhancement architecture for AI payload generation
 2. The **Field Hints** abstraction—a compact intermediate representation (~200-300 bytes) that improves accuracy by [PLACEHOLDER: X]% over descriptions
-3. A production implementation in Truva-G3 with Redis-based schema caching
+3. A production implementation in TruvaG3 with Redis-based schema caching
 4. Empirical evaluation demonstrating [PLACEHOLDER: summarize key results]
 
 ---
@@ -360,7 +360,7 @@ type RedisSchemaCache struct {
 
 ### 4.1 Framework Overview
 
-We implement Progressive Enhancement in **Truva-G3**, a production Go framework for multi-agent orchestration. Key components:
+We implement Progressive Enhancement in **TruvaG3**, a production Go framework for multi-agent orchestration. Key components:
 
 | Component | Purpose | LOC |
 |-----------|---------|-----|
@@ -718,7 +718,7 @@ Progressive Enhancement complements existing discovery protocols:
 
 We presented Progressive Enhancement, a 3-phase architecture for AI-powered tool payload generation. Our approach introduces Field Hints (Phase 2), a compact intermediate representation that improves payload generation accuracy from [PLACEHOLDER: Phase 1 accuracy]% to [PLACEHOLDER: Phase 2 accuracy]% with minimal metadata overhead ([PLACEHOLDER: bytes] per capability). Optional Phase 3 validation catches [PLACEHOLDER: percentage]% of remaining errors through cached JSON Schema validation.
 
-Our implementation in Truva-G3 demonstrates practical applicability in production multi-agent systems. The architecture is complementary to existing protocols (MCP, A2A) and can be adopted incrementally—tools start with Phase 1 and add phases as accuracy requirements increase.
+Our implementation in TruvaG3 demonstrates practical applicability in production multi-agent systems. The architecture is complementary to existing protocols (MCP, A2A) and can be adopted incrementally—tools start with Phase 1 and add phases as accuracy requirements increase.
 
 [PLACEHOLDER: Final statement about significance]
 

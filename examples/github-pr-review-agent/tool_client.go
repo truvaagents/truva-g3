@@ -12,7 +12,7 @@ import (
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
-// GitHubToolClient calls the github-tool via Truva-G3 service discovery.
+// GitHubToolClient calls the github-tool via TruvaG3 service discovery.
 // Discovery is resolved at call time because BaseAgent.Discovery is nil
 // until framework.Run() populates it.
 type GitHubToolClient struct {

@@ -1,7 +1,7 @@
 # scheduler-tool — Kubernetes deployment manifest
 #
 # scheduler-tool is a standard BaseTool that exposes 5 scheduling capabilities
-# to any agent via the Truva-G3 service catalog:
+# to any agent via the TruvaG3 service catalog:
 #
 #   POST /api/capabilities/schedule_task
 #   POST /api/capabilities/list_schedules

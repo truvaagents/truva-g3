@@ -1,4 +1,4 @@
-# Truva-G3 Telemetry Module Architecture
+# TruvaG3 Telemetry Module Architecture
 
 **Version**: 1.0
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
@@ -139,7 +139,7 @@ func main() {
 
 **Comparison**:
 
-| Pattern | Pros | Cons | Truva-G3 Choice |
+| Pattern | Pros | Cons | TruvaG3 Choice |
 |---------|------|------|---------------|
 | **Dependency Injection** | Explicit dependencies | Verbose, boilerplate-heavy | ❌ |
 | **Global Singleton** | Simple API, zero boilerplate | Global state | ✅ Chosen |
@@ -275,7 +275,7 @@ middlewareConfig := &telemetry.TracingMiddlewareConfig{
 
 **Why This Design?**
 
-| Approach | Pros | Cons | Truva-G3 Choice |
+| Approach | Pros | Cons | TruvaG3 Choice |
 |----------|------|------|---------------|
 | **Hard-coded rules in telemetry** | Simple for specific use case | Couples telemetry to application logic | ❌ |
 | **Generic filter mechanism** | Flexible, decoupled | Requires application configuration | ✅ Chosen |
@@ -513,7 +513,7 @@ func main() {
 ### Architecture
 
 ```go
-// OTelProvider bridges Truva-G3 and OpenTelemetry
+// OTelProvider bridges TruvaG3 and OpenTelemetry
 type OTelProvider struct {
     tracer         trace.Tracer             // Distributed tracing
     meter          metric.Meter             // Metrics collection
@@ -588,7 +588,7 @@ OTEL_TRACES_SAMPLER="always_on"
 OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 ```
 
-**Truva-G3 Configuration Priority**:
+**TruvaG3 Configuration Priority**:
 1. Explicit `Config` passed to `Initialize()`
 2. `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
 3. `TRUVAG3_TELEMETRY_ENDPOINT` (framework-specific)
@@ -596,9 +596,9 @@ OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
 
 ### Metric Type Mapping
 
-Truva-G3 automatically maps metric names to appropriate OpenTelemetry instrument types:
+TruvaG3 automatically maps metric names to appropriate OpenTelemetry instrument types:
 
-| Truva-G3 API | Naming Pattern | OTEL Instrument | Use Case |
+| TruvaG3 API | Naming Pattern | OTEL Instrument | Use Case |
 |------------|----------------|-----------------|----------|
 | `Counter()` | `*count*`, `*total*`, `*errors*` | Counter (monotonic) | Cumulative counts |
 | `Histogram()` | `*duration*`, `*latency*`, `*time*` | Histogram | Latency distributions |
@@ -919,7 +919,7 @@ receivers:
   otlp:
     protocols:
       http:
-        endpoint: 0.0.0.0:4318  # Truva-G3 uses HTTP by default
+        endpoint: 0.0.0.0:4318  # TruvaG3 uses HTTP by default
       grpc:
         endpoint: 0.0.0.0:4317  # Available but not primary
 
@@ -1280,7 +1280,7 @@ telemetry.Counter("requests.total",
 ctx = telemetry.WithBaggage(ctx, "user_id", userID)
 ```
 
-**Built-in Protection**: Truva-G3 telemetry has cardinality limiter (default: 1000 unique combinations).
+**Built-in Protection**: TruvaG3 telemetry has cardinality limiter (default: 1000 unique combinations).
 
 ### Pitfall 5: OTEL Collector Misconfiguration
 

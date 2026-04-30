@@ -1,4 +1,4 @@
-# MinIO — S3-compatible object storage for Truva-G3 QA artifacts
+# MinIO — S3-compatible object storage for TruvaG3 QA artifacts
 # Deploy: kubectl apply -f minio.yaml -n truvag3-examples
 ---
 apiVersion: v1

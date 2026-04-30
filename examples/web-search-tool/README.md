@@ -1,6 +1,6 @@
 # Web Search Tool
 
-A Truva-G3 tool that provides web search capabilities using the [Tavily Search API](https://tavily.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components. It features a pluggable provider architecture with Tavily for real results and a mock provider for development.
+A TruvaG3 tool that provides web search capabilities using the [Tavily Search API](https://tavily.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components. It features a pluggable provider architecture with Tavily for real results and a mock provider for development.
 
 ## Table of Contents
 

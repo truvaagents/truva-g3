@@ -1,6 +1,6 @@
 # Chat UI
 
-A web-based chat interface for the Truva-G3 Travel Assistant. This frontend connects to the `travel-chat-agent` backend via Server-Sent Events (SSE) for real-time streaming responses.
+A web-based chat interface for the TruvaG3 Travel Assistant. This frontend connects to the `travel-chat-agent` backend via Server-Sent Events (SSE) for real-time streaming responses.
 
 ## Features
 

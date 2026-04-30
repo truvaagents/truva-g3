@@ -1,6 +1,6 @@
 # PubMed Tool
 
-A Truva-G3 tool that searches biomedical literature and retrieves article metadata using the free [NCBI PubMed E-utilities API](https://pubmed.ncbi.nlm.nih.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that searches biomedical literature and retrieves article metadata using the free [NCBI PubMed E-utilities API](https://pubmed.ncbi.nlm.nih.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

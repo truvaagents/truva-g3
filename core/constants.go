@@ -2,7 +2,7 @@ package core
 
 import "time"
 
-// Environment Variables - Truva-G3 Protocol
+// Environment Variables - TruvaG3 Protocol
 const (
 	// Schema Discovery Protocol
 	EnvValidatePayloads = "TRUVAG3_VALIDATE_PAYLOADS" // Enable Phase 3 schema validation

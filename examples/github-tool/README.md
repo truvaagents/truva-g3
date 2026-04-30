@@ -1,6 +1,6 @@
 # GitHub Tool
 
-A passive Truva-G3 tool that wraps the GitHub REST API for the
+A passive TruvaG3 tool that wraps the GitHub REST API for the
 [`github-pr-review-agent`](../github-pr-review-agent/). Owns GitHub auth,
 pagination, artifact storage for raw PR patches/files, exact-line file context
 retrieval, and write calls for review comments.

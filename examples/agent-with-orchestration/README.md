@@ -1,6 +1,6 @@
 # Travel Research Agent with Orchestration
 
-A travel research agent that demonstrates the Truva-G3 **orchestration module** through intelligent coordination of multiple travel-related tools. It supports both predefined DAG-based workflows and dynamic AI-powered orchestration from natural language queries.
+A travel research agent that demonstrates the TruvaG3 **orchestration module** through intelligent coordination of multiple travel-related tools. It supports both predefined DAG-based workflows and dynamic AI-powered orchestration from natural language queries.
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ A travel research agent that demonstrates the Truva-G3 **orchestration module** 
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 framework orchestrates tools using both predefined workflows and dynamic AI-powered planning. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 framework orchestrates tools using both predefined workflows and dynamic AI-powered planning. Follow the steps below to get this example running.
 
 ### Prerequisites
 
@@ -1167,7 +1167,7 @@ func main() {
 
 ### Observability
 
-The agent integrates with Truva-G3 telemetry:
+The agent integrates with TruvaG3 telemetry:
 
 - **Traces**: Follow requests across tool boundaries
 - **Metrics**: Track orchestrator performance

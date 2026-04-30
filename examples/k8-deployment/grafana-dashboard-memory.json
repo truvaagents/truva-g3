@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-memory",
-  "title": "Truva-G3 Memory & Knowledge",
+  "title": "TruvaG3 Memory & Knowledge",
   "tags": [
     "truvag3",
     "memory",
@@ -24,7 +24,7 @@
       "tags": [
         "truvag3"
       ],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

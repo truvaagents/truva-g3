@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-platform-overview",
-  "title": "Truva-G3 Platform Overview",
+  "title": "TruvaG3 Platform Overview",
   "tags": [
     "truvag3",
     "overview",
@@ -23,7 +23,7 @@
       "tags": [
         "truvag3"
       ],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

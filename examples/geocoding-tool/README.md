@@ -1,6 +1,6 @@
 # Geocoding Tool
 
-A Truva-G3 tool that provides location geocoding capabilities using the [Nominatim](https://nominatim.org/) API (OpenStreetMap). This tool converts location names to geographic coordinates and vice versa.
+A TruvaG3 tool that provides location geocoding capabilities using the [Nominatim](https://nominatim.org/) API (OpenStreetMap). This tool converts location names to geographic coordinates and vice versa.
 
 ## Table of Contents
 
@@ -775,7 +775,7 @@ curl http://localhost:8095/health
 
 ---
 
-## Part of Truva-G3 Examples
+## Part of TruvaG3 Examples
 
 This tool is designed to work with the Smart Travel Research Assistant example. It provides geocoding for travel destinations, which is used by the weather-tool-v2 to fetch weather data.
 

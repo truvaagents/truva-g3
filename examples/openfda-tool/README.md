@@ -1,6 +1,6 @@
 # OpenFDA Tool
 
-A Truva-G3 tool that provides FDA drug and device safety data using the free [OpenFDA API](https://open.fda.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides FDA drug and device safety data using the free [OpenFDA API](https://open.fda.gov/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

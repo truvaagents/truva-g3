@@ -1,6 +1,6 @@
-# Truva-G3 Framework Examples
+# TruvaG3 Framework Examples
 
-Complete, production-ready examples demonstrating AI-enhanced distributed systems with the Truva-G3 framework. Optimized for local development with Kind and cloud deployment on any Kubernetes platform.
+Complete, production-ready examples demonstrating AI-enhanced distributed systems with the TruvaG3 framework. Optimized for local development with Kind and cloud deployment on any Kubernetes platform.
 
 ---
 
@@ -58,7 +58,7 @@ Complete, production-ready examples demonstrating AI-enhanced distributed system
 
 ### Where Should I Start?
 
-**👋 New to Truva-G3?** → `tool-example` then `agent-example`
+**👋 New to TruvaG3?** → `tool-example` then `agent-example`
 
 **🤖 Want AI features?** → `ai-tools-showcase` (4 ready tools) or `agent-example-enhanced`
 
@@ -1407,7 +1407,7 @@ Before committing your new example, verify:
 When working with AI assistants (Claude, Copilot, etc.), use these prompts:
 
 ```
-"Create a new Truva-G3 tool following the 4-file pattern from tool-example"
+"Create a new TruvaG3 tool following the 4-file pattern from tool-example"
 
 "Add a capability to {domain}_tool.go with Phase 2 InputSummary"
 

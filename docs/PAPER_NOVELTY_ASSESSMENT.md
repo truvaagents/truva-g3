@@ -1,4 +1,4 @@
-# Research Novelty Assessment: Truva-G3 Orchestration Module
+# Research Novelty Assessment: TruvaG3 Orchestration Module
 
 > **Date:** January 28, 2026
 > **Author:** Research Assessment
@@ -12,7 +12,7 @@
 
 ## Executive Summary
 
-This document assesses the novelty and publishability of Truva-G3's orchestration module approaches, specifically the **Four-Layer Progressive Parameter Resolution System** and the **Contextual Re-Resolution (Semantic Retry)** mechanism. After comprehensive research against current literature and frameworks (as of January 2026), we identify **potentially novel contributions** worthy of academic publication.
+This document assesses the novelty and publishability of TruvaG3's orchestration module approaches, specifically the **Four-Layer Progressive Parameter Resolution System** and the **Contextual Re-Resolution (Semantic Retry)** mechanism. After comprehensive research against current literature and frameworks (as of January 2026), we identify **potentially novel contributions** worthy of academic publication.
 
 **Key Finding:** The most novel aspect is the identification of a **"source data gap"** in existing retry mechanisms—where error analysis components can diagnose problems but cannot prescribe computed fixes because they lack access to dependency results.
 
@@ -130,14 +130,14 @@ Most requests are handled by cheap layers; expensive LLM layers only trigger whe
 - Actor-Evaluator-Reflection three-component architecture
 - Self-reflection generates verbal cues to assist improvement
 
-**How Truva-G3 differs:**
+**How TruvaG3 differs:**
 - Reflexion maintains reflection text in memory but doesn't specifically address the **source data → error context gap**
-- Reflexion is general-purpose self-improvement; Truva-G3's Layer 4 is specifically for **computed value recovery** in multi-step workflows
-- Truva-G3 provides BOTH error AND source data to the LLM in a single context
+- Reflexion is general-purpose self-improvement; TruvaG3's Layer 4 is specifically for **computed value recovery** in multi-step workflows
+- TruvaG3 provides BOTH error AND source data to the LLM in a single context
 
 **Key quote from Reflexion:** "Given a sparse reward signal (success/fail), the current trajectory, and its persistent memory, the self-reflection model generates nuanced and specific feedback."
 
-Truva-G3 extends this by providing **structured source data** (not just trajectory) for computational inference.
+TruvaG3 extends this by providing **structured source data** (not just trajectory) for computational inference.
 
 ---
 
@@ -149,12 +149,12 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - Shows that simple retries without feedback can be surprisingly effective
 - Questions whether sophisticated reasoning frameworks justify their computational cost
 
-**How Truva-G3 differs:**
-- Truva-G3 agrees that simple retries matter (hence Layer 1 auto-wiring)
-- But Truva-G3 adds **targeted correction** when simple retries won't work
+**How TruvaG3 differs:**
+- TruvaG3 agrees that simple retries matter (hence Layer 1 auto-wiring)
+- But TruvaG3 adds **targeted correction** when simple retries won't work
 - The four-layer system balances the insight that "retrials help" with "sometimes you need computation"
 
-**Key insight alignment:** Both recognize that not every failure needs sophisticated intervention—but Truva-G3 provides a graceful escalation path.
+**Key insight alignment:** Both recognize that not every failure needs sophisticated intervention—but TruvaG3 provides a graceful escalation path.
 
 ---
 
@@ -167,10 +167,10 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - Proposed AgentErrorTaxonomy: modular classification of failure modes
 - AgentDebug framework isolates root-cause failures and provides corrective feedback
 
-**How Truva-G3 differs:**
+**How TruvaG3 differs:**
 - AgentDebug focuses on **detection, attribution, and classification** of failures
-- Truva-G3 focuses on **automated recovery with computed values**
-- AgentDebug is diagnostic; Truva-G3 Layer 4 is prescriptive
+- TruvaG3 focuses on **automated recovery with computed values**
+- AgentDebug is diagnostic; TruvaG3 Layer 4 is prescriptive
 
 **Complementary work:** AgentDebug's taxonomy could inform which errors should route to Layer 4.
 
@@ -185,10 +185,10 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - Conditional progression and replanning based on global state
 - Dynamic stateful context across nodes
 
-**How Truva-G3 differs:**
+**How TruvaG3 differs:**
 - LangGraph handles state passing but doesn't implement **four-layer progressive resolution**
-- LangGraph focuses on workflow orchestration; Truva-G3 focuses on **parameter binding and error recovery**
-- Truva-G3's Layer 4 specifically addresses the case where state exists but wasn't correctly used
+- LangGraph focuses on workflow orchestration; TruvaG3 focuses on **parameter binding and error recovery**
+- TruvaG3's Layer 4 specifically addresses the case where state exists but wasn't correctly used
 
 **Key finding:** LangGraph was found to be the fastest framework with most efficient state management in 2025 benchmarks, but parameter binding and error recovery are not its primary focus.
 
@@ -202,10 +202,10 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - Community discussion about passing tool errors back to LLM for self-correction
 - Feature request for Pydantic AI-like model retry on validation failure
 
-**How Truva-G3 differs:**
-- This is an **open feature request** in Semantic Kernel—Truva-G3 has it **already implemented**
-- Truva-G3's architecture is more sophisticated (four layers vs. single feedback loop)
-- Truva-G3 explicitly addresses source data availability in the retry context
+**How TruvaG3 differs:**
+- This is an **open feature request** in Semantic Kernel—TruvaG3 has it **already implemented**
+- TruvaG3's architecture is more sophisticated (four layers vs. single feedback loop)
+- TruvaG3 explicitly addresses source data availability in the retry context
 
 **Current Semantic Kernel status:** "The default setup offers a built-in retry policy that automatically retries requests up to three times with exponential backoff" but this is **same-payload retry**, not LLM-corrected retry.
 
@@ -220,10 +220,10 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - Post-hoc validation and error messages
 - Re-prompt LLM on validation failure
 
-**How Truva-G3 differs:**
-- Truva-G3's Layer 2 performs **pre-execution schema-based coercion** based on capability schema BEFORE the tool call
-- Pydantic is post-validation; Truva-G3 coerces proactively
-- Truva-G3 uses the tool's own schema (from capability discovery) rather than requiring model definitions
+**How TruvaG3 differs:**
+- TruvaG3's Layer 2 performs **pre-execution schema-based coercion** based on capability schema BEFORE the tool call
+- Pydantic is post-validation; TruvaG3 coerces proactively
+- TruvaG3 uses the tool's own schema (from capability discovery) rather than requiring model definitions
 
 ---
 
@@ -235,10 +235,10 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - `strict: true` mode guarantees schema compliance at generation time
 - 100% schema conformance when using supported models
 
-**How Truva-G3 differs:**
+**How TruvaG3 differs:**
 - Structured Outputs is **model-specific** (OpenAI API only)
-- Truva-G3's approach is **model-agnostic** (works with any LLM provider)
-- Truva-G3 handles the case where the schema was followed but the **values were wrong**
+- TruvaG3's approach is **model-agnostic** (works with any LLM provider)
+- TruvaG3 handles the case where the schema was followed but the **values were wrong**
 
 ---
 
@@ -251,8 +251,8 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 - AgenTracer framework improves attribution by 18.18%
 - In "independent" systems, errors amplify 17.2× vs. single-agent baseline
 
-**How Truva-G3 relates:**
-- Truva-G3's four-layer system provides clear **attribution** (which layer handled/failed)
+**How TruvaG3 relates:**
+- TruvaG3's four-layer system provides clear **attribution** (which layer handled/failed)
 - Telemetry spans track exactly where errors occur and how they're recovered
 - The sequential layer approach avoids the 17.2× error amplification of parallel approaches
 
@@ -260,7 +260,7 @@ Truva-G3 extends this by providing **structured source data** (not just trajecto
 
 ## Novelty Assessment by Component
 
-| Component | Novelty Level | Existing Similar Work | Truva-G3's Differentiation |
+| Component | Novelty Level | Existing Similar Work | TruvaG3's Differentiation |
 |-----------|---------------|----------------------|--------------------------|
 | **Layer 1: Auto-Wiring** | Low | Standard in many frameworks | Explicit empty SemanticAliases (domain-agnostic) |
 | **Layer 2: Schema-Based Type Coercion** | Medium | Pydantic, structured outputs | Pre-execution coercion from capability schema |

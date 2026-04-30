@@ -1,6 +1,6 @@
 # DevOps Tool
 
-A Truva-G3 tool that provides Kubernetes cluster management capabilities via kubectl. This tool demonstrates the passive tool pattern with RBAC-secured in-cluster access — it requires **no external API keys** and uses the pod's ServiceAccount for Kubernetes API access.
+A TruvaG3 tool that provides Kubernetes cluster management capabilities via kubectl. This tool demonstrates the passive tool pattern with RBAC-secured in-cluster access — it requires **no external API keys** and uses the pod's ServiceAccount for Kubernetes API access.
 
 ## Table of Contents
 

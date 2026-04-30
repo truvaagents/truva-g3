@@ -1,5 +1,5 @@
 // Package main implements a research assistant agent that demonstrates intelligent
-// tool orchestration and AI-powered analysis using the Truva-G3 framework.
+// tool orchestration and AI-powered analysis using the TruvaG3 framework.
 //
 // This agent showcases several key capabilities:
 //   - Automatic tool discovery via Redis service registry

@@ -1,6 +1,6 @@
-# Contributing to Truva-G3
+# Contributing to TruvaG3
 
-Thank you for your interest in contributing to Truva-G3! We welcome contributions from the community and are grateful for your support.
+Thank you for your interest in contributing to TruvaG3! We welcome contributions from the community and are grateful for your support.
 
 ## Table of Contents
 
@@ -301,4 +301,4 @@ Contributors will be recognized in:
 - Release notes
 - Special thanks in documentation
 
-Thank you for contributing to Truva-G3!
+Thank you for contributing to TruvaG3!

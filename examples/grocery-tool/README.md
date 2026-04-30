@@ -1,6 +1,6 @@
 # Grocery Tool
 
-A proxy tool to the Grocery Store API with error injection capabilities for testing circuit breaker and rate limiting scenarios. This tool demonstrates resilience patterns in the Truva-G3 framework by providing configurable failure modes for integration testing.
+A proxy tool to the Grocery Store API with error injection capabilities for testing circuit breaker and rate limiting scenarios. This tool demonstrates resilience patterns in the TruvaG3 framework by providing configurable failure modes for integration testing.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ A proxy tool to the Grocery Store API with error injection capabilities for test
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 framework handles resilience patterns like circuit breakers and rate limiting. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 framework handles resilience patterns like circuit breakers and rate limiting. Follow the steps below to get this example running.
 
 ### Prerequisites
 

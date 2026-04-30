@@ -37,7 +37,7 @@ data:
           # Filter: DROP non-JSON logs (filter operator drops matching entries)
           - type: filter
             expr: 'attributes.log == nil or not (attributes.log matches "^\\{")'
-          # Parse JSON log body from Truva-G3 apps
+          # Parse JSON log body from TruvaG3 apps
           - type: json_parser
             parse_from: attributes.log
             on_error: send

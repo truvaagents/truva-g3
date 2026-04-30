@@ -1,6 +1,6 @@
 # Chat Session Management Guide
 
-Hey there! This guide explains how Truva-G3's example chat agents keep a conversation going across multiple requests.
+Hey there! This guide explains how TruvaG3's example chat agents keep a conversation going across multiple requests.
 
 If you've ever wondered things like:
 
@@ -32,7 +32,7 @@ Read this guide when your question is mostly about the **session lifecycle**:
 
 If your question is instead:
 
-- "How does Truva-G3 compact long chat history?"
+- "How does TruvaG3 compact long chat history?"
 - "What are Tier 1 and Tier 2 conversation-history protection?"
 - "How does the framework prepare `<conversation_history>` for prompts?"
 
@@ -662,7 +662,7 @@ If you ever need an exact count of currently existing session keys, you would ne
 
 If you only want one sentence to carry around in your head, use this one:
 
-A Truva-G3 chat session in these examples is a Redis-backed transcript that the agent updates on every turn, then converts into structured conversation history for orchestration.
+A TruvaG3 chat session in these examples is a Redis-backed transcript that the agent updates on every turn, then converts into structured conversation history for orchestration.
 
 And if you want the slightly longer version:
 

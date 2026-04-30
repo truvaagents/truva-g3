@@ -31,7 +31,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║              Truva-G3 GitHub Tool                       ║${NC}"
+    echo -e "${BLUE}║              TruvaG3 GitHub Tool                       ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

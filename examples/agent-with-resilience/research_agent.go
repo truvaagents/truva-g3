@@ -15,7 +15,7 @@ import (
 
 // ResearchAgent is an intelligent agent with built-in resilience capabilities.
 // It demonstrates the active agent pattern with fault tolerance using the
-// Truva-G3 resilience module.
+// TruvaG3 resilience module.
 //
 // Key Resilience Features:
 //   - Per-tool circuit breakers that protect against cascading failures

@@ -1,4 +1,4 @@
-# Truva-G3 Core Module Design Principles
+# TruvaG3 Core Module Design Principles
 
 **Version**: 1.0  
 **Module**: `github.com/truvaagents/truva-g3/core`  
@@ -9,7 +9,7 @@
 
 ## Core Module Mission
 
-The **core module** is the foundation of the Truva-G3 framework. It defines all framework interfaces, provides base implementations, and ensures architectural consistency across all other modules. **Every other framework module depends on core - core depends on no other framework modules.**
+The **core module** is the foundation of the TruvaG3 framework. It defines all framework interfaces, provides base implementations, and ensures architectural consistency across all other modules. **Every other framework module depends on core - core depends on no other framework modules.**
 
 ### Primary Responsibilities
 
@@ -50,7 +50,7 @@ import "github.com/truvaagents/truva-g3/ai" // NEVER in core
 
 ### 2. **Zero Framework Dependencies**
 
-**Rule**: Core module must never import any other Truva-G3 framework modules.
+**Rule**: Core module must never import any other TruvaG3 framework modules.
 
 **Current External Dependencies** (minimal and justified):
 ```go

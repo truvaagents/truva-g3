@@ -1,6 +1,6 @@
 # Chat Agent Implementation Guide
 
-Hey there! Welcome to the Truva-G3 chat agent guide. If you're reading this, you probably want to build something like ChatGPT - a conversational AI that can stream responses in real-time, remember what users said earlier, and maybe even call external tools to get information.
+Hey there! Welcome to the TruvaG3 chat agent guide. If you're reading this, you probably want to build something like ChatGPT - a conversational AI that can stream responses in real-time, remember what users said earlier, and maybe even call external tools to get information.
 
 This guide will walk you through everything step-by-step. We'll use the [`travel-chat-agent`](../examples/travel-chat-agent/) example as our reference - it's a working implementation you can run and poke at.
 

@@ -10,7 +10,7 @@ data:
   platform-overview.json: |
     {
       "uid": "truvag3-platform-overview",
-      "title": "Truva-G3 Platform Overview",
+      "title": "TruvaG3 Platform Overview",
       "tags": [
         "truvag3",
         "overview",
@@ -33,7 +33,7 @@ data:
           "tags": [
             "truvag3"
           ],
-          "title": "Truva-G3 Dashboards",
+          "title": "TruvaG3 Dashboards",
           "keepTime": true,
           "includeVars": true
         }
@@ -992,7 +992,7 @@ data:
   llm-analytics.json: |
     {
       "uid": "truvag3-llm-analytics",
-      "title": "Truva-G3 LLM & AI Analytics",
+      "title": "TruvaG3 LLM & AI Analytics",
       "tags": [
         "truvag3",
         "ai",
@@ -1018,7 +1018,7 @@ data:
           "tags": [
             "truvag3"
           ],
-          "title": "Truva-G3 Dashboards",
+          "title": "TruvaG3 Dashboards",
           "keepTime": true,
           "includeVars": true
         }
@@ -2222,7 +2222,7 @@ data:
   orchestration.json: |
     {
       "uid": "truvag3-orchestration",
-      "title": "Truva-G3 Orchestration & Execution",
+      "title": "TruvaG3 Orchestration & Execution",
       "tags": [
         "truvag3",
         "orchestration",
@@ -2248,7 +2248,7 @@ data:
           "tags": [
             "truvag3"
           ],
-          "title": "Truva-G3 Dashboards",
+          "title": "TruvaG3 Dashboards",
           "keepTime": true,
           "includeVars": true
         }
@@ -3911,7 +3911,7 @@ data:
   memory.json: |
     {
       "uid": "truvag3-memory",
-      "title": "Truva-G3 Memory & Knowledge",
+      "title": "TruvaG3 Memory & Knowledge",
       "tags": [
         "truvag3",
         "memory",
@@ -3935,7 +3935,7 @@ data:
           "tags": [
             "truvag3"
           ],
-          "title": "Truva-G3 Dashboards",
+          "title": "TruvaG3 Dashboards",
           "keepTime": true,
           "includeVars": true
         }
@@ -4981,7 +4981,7 @@ data:
   logs-traces.json: |
     {
       "uid": "truvag3-logs-traces",
-      "title": "Truva-G3 Logs & Traces",
+      "title": "TruvaG3 Logs & Traces",
       "tags": ["truvag3", "logs", "traces", "loki", "jaeger"],
       "editable": true,
       "graphTooltip": 1,
@@ -4997,7 +4997,7 @@ data:
         {
           "type": "dashboards",
           "tags": ["truvag3"],
-          "title": "Truva-G3 Dashboards",
+          "title": "TruvaG3 Dashboards",
           "keepTime": true,
           "includeVars": true
         }

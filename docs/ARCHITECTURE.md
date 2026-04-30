@@ -1,4 +1,4 @@
-# Truva-G3 Architecture
+# TruvaG3 Architecture
 
 **Enterprise Architecture Guide for Software Architects, Solution Architects, and Technical Leaders**
 
@@ -17,11 +17,11 @@
 
 ### Strategic Positioning
 
-Truva-G3 represents a **paradigm shift** from monolithic AI frameworks to **composable, cloud-native agent systems**. It addresses the fundamental limitations of existing Python-based AI frameworks (LangChain, AutoGen) that struggle with enterprise production requirements.
+TruvaG3 represents a **paradigm shift** from monolithic AI frameworks to **composable, cloud-native agent systems**. It addresses the fundamental limitations of existing Python-based AI frameworks (LangChain, AutoGen) that struggle with enterprise production requirements.
 
 ### Business Value Proposition
 
-| Traditional AI Frameworks | Truva-G3 Framework | Business Impact |
+| Traditional AI Frameworks | TruvaG3 Framework | Business Impact |
 |---------------------------|------------------|-----------------|
 | **Resource Heavy**: 500MB+ RAM per instance | **Lightweight**: 64MB RAM per instance | **8x lower infrastructure costs** |
 | **Slow Startup**: 10-15 seconds | **Fast Startup**: < 1 second | **Rapid scaling, better user experience** |
@@ -41,7 +41,7 @@ Truva-G3 represents a **paradigm shift** from monolithic AI frameworks to **comp
 
 ### The Tool/Agent Dichotomy
 
-Truva-G3 implements a **fundamental architectural constraint** that prevents the chaos common in large-scale agent systems:
+TruvaG3 implements a **fundamental architectural constraint** that prevents the chaos common in large-scale agent systems:
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -65,10 +65,10 @@ This separation provides **compile-time safety** against architectural anti-patt
 
 ### Design Philosophy: Unix Meets Microservices
 
-Truva-G3 applies **Unix philosophy** to AI agent architecture:
+TruvaG3 applies **Unix philosophy** to AI agent architecture:
 
 ```
-Traditional Monolithic AI App          Truva-G3 Composable Architecture
+Traditional Monolithic AI App          TruvaG3 Composable Architecture
 ┌─────────────────────────────┐       ┌──────┐ ┌──────┐ ┌──────┐
 │                             │       │Tool A├─┤Tool B├─┤Tool C│
 │    Everything in One        │  →    └──────┘ └──────┘ └──────┘
@@ -130,7 +130,7 @@ Scaling Phase:
 
 #### Discovery Pattern Selection
 
-Truva-G3 supports **dual discovery patterns** to accommodate different deployment scenarios:
+TruvaG3 supports **dual discovery patterns** to accommodate different deployment scenarios:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -723,7 +723,7 @@ Phase 3: Enterprise Scale (Months 7-12)
 #### Total Cost of Ownership (TCO) Analysis
 
 ```
-Traditional AI Framework vs Truva-G3 (3-Year Analysis):
+Traditional AI Framework vs TruvaG3 (3-Year Analysis):
 
 Traditional Python-based Solution:
 ├── Infrastructure Costs:
@@ -736,7 +736,7 @@ Traditional Python-based Solution:
 │   └── Training: $30,000 (Python/AI framework training)
 ├── Total: $780,000
 
-Truva-G3 Solution:
+TruvaG3 Solution:
 ├── Infrastructure Costs:
 │   ├── Compute: $22,500 (64MB RAM × 100 instances × 3 years)
 │   ├── Storage: $18,000 (smaller containers, efficient logging)

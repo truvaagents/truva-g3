@@ -1,6 +1,6 @@
 # Research Agent with Telemetry
 
-A production-ready intelligent research agent with comprehensive observability through OpenTelemetry integration. This example demonstrates the complete telemetry capabilities of the Truva-G3 framework, including metrics and distributed tracing.
+A production-ready intelligent research agent with comprehensive observability through OpenTelemetry integration. This example demonstrates the complete telemetry capabilities of the TruvaG3 framework, including metrics and distributed tracing.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ A production-ready intelligent research agent with comprehensive observability t
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 telemetry module provides comprehensive observability for your agents. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 telemetry module provides comprehensive observability for your agents. Follow the steps below to get this example running.
 
 ### Prerequisites
 
@@ -748,7 +748,7 @@ This example extends the basic [agent-example](../agent-example) with:
 
 ## What You'll Learn
 
-- How to integrate the Truva-G3 telemetry module into your agents
+- How to integrate the TruvaG3 telemetry module into your agents
 - Best practices for declaring and emitting metrics
 - Configuring environment-specific telemetry profiles
 - Debugging performance issues with distributed tracing
@@ -1250,7 +1250,7 @@ curl -X POST http://localhost:8092/api/capabilities/research_topic \
 
 ## Learn More
 
-- [Truva-G3 Telemetry Module](../../telemetry/README.md) - Complete telemetry documentation
+- [TruvaG3 Telemetry Module](../../telemetry/README.md) - Complete telemetry documentation
 - [Distributed Tracing Guide](../../docs/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing, log correlation, and multi-service examples
 - [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/)
 - [Prometheus Best Practices](https://prometheus.io/docs/practices/naming/)
@@ -1259,4 +1259,4 @@ curl -X POST http://localhost:8092/api/capabilities/research_topic \
 
 ## License
 
-This example is part of the Truva-G3 framework and is licensed under the same terms.
+This example is part of the TruvaG3 framework and is licensed under the same terms.

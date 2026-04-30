@@ -1,10 +1,10 @@
-# Truva-G3 Agent Development Guide
+# TruvaG3 Agent Development Guide
 
-This guide provides a comprehensive, step-by-step tutorial for developing **agents** in the Truva-G3 framework. Agents are active components that use AI-powered orchestration to coordinate multiple tools and provide intelligent responses to natural language queries.
+This guide provides a comprehensive, step-by-step tutorial for developing **agents** in the TruvaG3 framework. Agents are active components that use AI-powered orchestration to coordinate multiple tools and provide intelligent responses to natural language queries.
 
 ## Table of Contents
 
-1. [Understanding Agents in Truva-G3](#1-understanding-agents-in-truvag3)
+1. [Understanding Agents in TruvaG3](#1-understanding-agents-in-truvag3)
 2. [Choosing Your Agent Type](#2-choosing-your-agent-type)
 3. [Project Structure](#3-project-structure)
 4. [Step 1: Create the Agent Struct](#4-step-1-create-the-agent-struct)
@@ -29,11 +29,11 @@ This guide provides a comprehensive, step-by-step tutorial for developing **agen
 
 ---
 
-## 1. Understanding Agents in Truva-G3
+## 1. Understanding Agents in TruvaG3
 
 ### What is an Agent?
 
-In Truva-G3, an **Agent** is an active component that:
+In TruvaG3, an **Agent** is an active component that:
 - Uses AI-powered orchestration to coordinate multiple tools
 - Processes natural language requests and generates execution plans
 - Can discover other components via service discovery (Redis)
@@ -85,7 +85,7 @@ In Truva-G3, an **Agent** is an active component that:
 
 ## 2. Choosing Your Agent Type
 
-Truva-G3 supports two agent patterns. Choose based on your use case:
+TruvaG3 supports two agent patterns. Choose based on your use case:
 
 ### Non-Streaming Agent (Request/Response)
 
@@ -636,7 +636,7 @@ Capabilities with `Internal: false` enter the orchestrator's tiered tool selecti
 
 ### Writing Effective Capability Descriptions
 
-The LLM uses descriptions to select tools and generate JSON payloads. Truva-G3 uses 3-phase progressive enhancement:
+The LLM uses descriptions to select tools and generate JSON payloads. TruvaG3 uses 3-phase progressive enhancement:
 
 | Phase | Accuracy | What You Provide |
 |-------|----------|------------------|
@@ -1336,7 +1336,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 ### SSE Event Protocol
 
-The SSE protocol used by Truva-G3 streaming agents:
+The SSE protocol used by TruvaG3 streaming agents:
 
 | Event | When | Data Fields |
 |-------|------|-------------|

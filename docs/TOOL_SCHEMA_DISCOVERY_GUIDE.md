@@ -1,6 +1,6 @@
 # AI-Powered Payload Generation Guide
 
-Welcome to the complete guide on how Truva-G3 helps your AI agents generate perfect JSON payloads for tool calls! This guide will walk you through everything step-by-step, with plenty of examples and explanations. ☕
+Welcome to the complete guide on how TruvaG3 helps your AI agents generate perfect JSON payloads for tool calls! This guide will walk you through everything step-by-step, with plenty of examples and explanations. ☕
 
 ## 📚 Table of Contents
 
@@ -38,7 +38,7 @@ Now, imagine three scenarios:
 
 **Scenario 3 (Phase 3):** The kitchen checks your filled form before cooking to make sure everything is valid - prevents mistakes!
 
-**That's exactly what Truva-G3's 3-Phase approach does for AI agents!** It helps AI generate the right JSON payloads for tool calls, with progressive levels of guidance and validation.
+**That's exactly what TruvaG3's 3-Phase approach does for AI agents!** It helps AI generate the right JSON payloads for tool calls, with progressive levels of guidance and validation.
 
 ### Why This Matters
 
@@ -63,7 +63,7 @@ Without guidance, the AI must guess field names, types, and structure. This lead
 - ❌ Unexpected extra fields
 - ❌ Failed tool calls and poor user experience
 
-**Truva-G3 solves this with a 3-phase progressive enhancement approach.**
+**TruvaG3 solves this with a 3-phase progressive enhancement approach.**
 
 ## 🔍 The Problem We're Solving
 
@@ -71,7 +71,7 @@ Before we dive into the solution, let's understand the constraints and challenge
 
 ### The Challenge: Scale and Efficiency
 
-In a typical Truva-G3 deployment:
+In a typical TruvaG3 deployment:
 - **50-100 tools** × **3-5 capabilities each** = **150-500 total capabilities**
 - Each capability needs payload metadata for AI generation
 - AI has limited context window (~100k tokens)
@@ -109,7 +109,7 @@ This 2025 research validates our 3-phase approach:
 
 ## 🚀 The Solution: 3-Phase Progressive Enhancement
 
-Truva-G3 uses a **progressive enhancement** approach - each phase builds on the previous one, and you can stop at any phase based on your needs.
+TruvaG3 uses a **progressive enhancement** approach - each phase builds on the previous one, and you can stop at any phase based on your needs.
 
 ### Overview: The Three Phases
 
@@ -2027,7 +2027,7 @@ if err != nil {
 
 ## 📝 Summary
 
-The 3-phase approach to AI-powered payload generation in Truva-G3 provides a **progressive enhancement** strategy that balances accuracy, performance, and complexity.
+The 3-phase approach to AI-powered payload generation in TruvaG3 provides a **progressive enhancement** strategy that balances accuracy, performance, and complexity.
 
 ### Quick Reference
 

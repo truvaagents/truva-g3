@@ -1,6 +1,6 @@
 # Weather Tool v2
 
-A Truva-G3 tool that provides weather forecast capabilities using the [Open-Meteo](https://open-meteo.com/) API. This tool delivers current weather conditions and multi-day forecasts without requiring any API keys.
+A TruvaG3 tool that provides weather forecast capabilities using the [Open-Meteo](https://open-meteo.com/) API. This tool delivers current weather conditions and multi-day forecasts without requiring any API keys.
 
 ## Table of Contents
 
@@ -21,7 +21,7 @@ A Truva-G3 tool that provides weather forecast capabilities using the [Open-Mete
 
 ## How to Run This Example
 
-Running this tool locally is the best way to understand how Truva-G3 tools work. This is an **independent tool** - it only requires Redis for service discovery and does not depend on any other tools or agents.
+Running this tool locally is the best way to understand how TruvaG3 tools work. This is an **independent tool** - it only requires Redis for service discovery and does not depend on any other tools or agents.
 
 ### Prerequisites
 

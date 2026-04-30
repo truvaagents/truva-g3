@@ -1,6 +1,6 @@
 # Slack Tool
 
-A Truva-G3 tool that provides Slack workspace messaging and search capabilities using the [Slack Web API](https://api.slack.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides Slack workspace messaging and search capabilities using the [Slack Web API](https://api.slack.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 
@@ -346,7 +346,7 @@ go version
 A Slack Bot User OAuth Token is **required** for this tool. The tool connects to your Slack workspace via the Slack Web API.
 
 1. Visit [api.slack.com/apps](https://api.slack.com/apps) and click "Create New App"
-2. Choose "From scratch", give it a name (e.g., "Truva-G3 Slack Tool"), and select your workspace
+2. Choose "From scratch", give it a name (e.g., "TruvaG3 Slack Tool"), and select your workspace
 3. Navigate to **OAuth & Permissions** in the sidebar
 4. Under **Bot Token Scopes**, add the following scopes:
    - `chat:write` - Send messages as the bot
@@ -807,7 +807,7 @@ kubectl port-forward -n truvag3-examples svc/slack-tool-service 8363:80
 # Test send message
 curl -X POST http://localhost:8363/api/capabilities/send_message \
   -H "Content-Type: application/json" \
-  -d '{"channel": "C123ABC456", "text": "Hello from Truva-G3!"}'
+  -d '{"channel": "C123ABC456", "text": "Hello from TruvaG3!"}'
 
 # Test list channels
 curl -X POST http://localhost:8363/api/capabilities/list_channels \

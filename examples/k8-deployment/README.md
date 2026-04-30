@@ -1,6 +1,6 @@
-# Truva-G3 Kubernetes Infrastructure
+# TruvaG3 Kubernetes Infrastructure
 
-Welcome to your production-ready Truva-G3 infrastructure! This guide will walk you through deploying a complete Kubernetes setup that supports all Truva-G3 examples and applications. Think of this as the foundation that makes everything else work seamlessly.
+Welcome to your production-ready TruvaG3 infrastructure! This guide will walk you through deploying a complete Kubernetes setup that supports all TruvaG3 examples and applications. Think of this as the foundation that makes everything else work seamlessly.
 
 ## Table of Contents
 
@@ -49,7 +49,7 @@ Imagine you're building a smart city with different services:
 - **Security cameras** (Jaeger for tracing)
 - **Control center dashboard** (Grafana for visualization)
 
-That's exactly what this k8-deployment setup provides for your Truva-G3 applications! It creates the essential infrastructure that every Truva-G3 component needs to work together effectively.
+That's exactly what this k8-deployment setup provides for your TruvaG3 applications! It creates the essential infrastructure that every TruvaG3 component needs to work together effectively.
 
 ### What This Infrastructure Provides
 
@@ -65,7 +65,7 @@ That's exactly what this k8-deployment setup provides for your Truva-G3 applicat
 
 | Component | Image | Purpose | Access | Storage |
 |-----------|-------|---------|--------|---------|
-| **Namespace** | N/A | Isolated environment for Truva-G3 apps | N/A | N/A |
+| **Namespace** | N/A | Isolated environment for TruvaG3 apps | N/A | N/A |
 | **Redis** | `redis:7-alpine` | Service discovery registry | `redis:6379` | 1Gi PVC |
 | **Loki** | `grafana/loki:3.6.7` | Log aggregation with retention | `loki:3100` | 5Gi PVC |
 | **OTEL Collector** | `otel/opentelemetry-collector-contrib:latest` | Telemetry routing (traces, metrics, logs) | `otel-collector:4318` | None |
@@ -443,7 +443,7 @@ kubectl patch statefulset prometheus -n truvag3-examples -p '{"spec":{"replicas"
 
 ### Redis Configuration
 
-Redis serves as the service discovery backend for all Truva-G3 components.
+Redis serves as the service discovery backend for all TruvaG3 components.
 
 **Key Features:**
 - Persistent storage with volume claims
@@ -475,7 +475,7 @@ redis-cli MONITOR
 
 ### OTEL Collector Configuration
 
-The OTEL Collector is the central telemetry hub — all Truva-G3 apps send OTLP data here, and it routes signals to the appropriate backends.
+The OTEL Collector is the central telemetry hub — all TruvaG3 apps send OTLP data here, and it routes signals to the appropriate backends.
 
 **Architecture:**
 
@@ -486,7 +486,7 @@ There are two collector components:
 
 **Pipeline Flow:**
 ```
-Truva-G3 Apps ──OTLP──→ OTEL Collector ──→ Prometheus (metrics)
+TruvaG3 Apps ──OTLP──→ OTEL Collector ──→ Prometheus (metrics)
                                       ──→ Jaeger v2 (traces via OTLP gRPC)
                                       ──→ Loki (logs via OTLP HTTP)
 
@@ -502,7 +502,7 @@ receivers:
       grpc:
         endpoint: 0.0.0.0:4317
       http:
-        endpoint: 0.0.0.0:4318  # Truva-G3 apps connect here
+        endpoint: 0.0.0.0:4318  # TruvaG3 apps connect here
 
 processors:
   batch:           # Improves performance
@@ -519,7 +519,7 @@ exporters:
 
 **Log Collector DaemonSet (`otel-collector-logs.yaml`):**
 
-Collects logs from all Truva-G3 pods, parses CRI format, filters non-JSON logs, extracts trace context for correlation:
+Collects logs from all TruvaG3 pods, parses CRI format, filters non-JSON logs, extracts trace context for correlation:
 
 ```yaml
 operators:
@@ -529,7 +529,7 @@ operators:
   # Filter: DROP non-JSON logs
   - type: filter
     expr: 'attributes.log == nil or not (attributes.log matches "^\\{")'
-  # Parse JSON log body from Truva-G3 apps
+  # Parse JSON log body from TruvaG3 apps
   - type: json_parser
     parse_from: attributes.log
   # Extract trace context for log-trace correlation
@@ -696,7 +696,7 @@ Grafana provides unified dashboards with three pre-provisioned datasources: Prom
 **Key Features:**
 - Three auto-provisioned datasources (Prometheus, Jaeger, Loki)
 - Bidirectional trace-log correlation (Jaeger → Loki, Loki → Jaeger)
-- Pre-built Truva-G3 dashboards (Agent Telemetry + Resource Usage)
+- Pre-built TruvaG3 dashboards (Agent Telemetry + Resource Usage)
 - Default admin/admin credentials
 - Persistent storage for dashboards (2Gi PVC)
 
@@ -732,19 +732,19 @@ datasources:
 ```
 
 **Pre-built Dashboards:**
-- **Truva-G3 Agent Telemetry** — active tools/agents, request counts, error rates, AI request latency, tool call performance, discovery operations, cache operations
-- **Truva-G3 Resource Usage** — CPU/memory by pod, agents vs tools comparison, top resource consumers
+- **TruvaG3 Agent Telemetry** — active tools/agents, request counts, error rates, AI request latency, tool call performance, discovery operations, cache operations
+- **TruvaG3 Resource Usage** — CPU/memory by pod, agents vs tools comparison, top resource consumers
 
 ## Observability: Trace-Log Correlation
 
-One of the most powerful features of this infrastructure is bidirectional trace-log correlation. When debugging distributed requests across multiple Truva-G3 services, you can follow a single request from agent to tools and back, seeing both the trace spans and the associated log entries.
+One of the most powerful features of this infrastructure is bidirectional trace-log correlation. When debugging distributed requests across multiple TruvaG3 services, you can follow a single request from agent to tools and back, seeing both the trace spans and the associated log entries.
 
 ### How It Works
 
-Truva-G3's structured logging automatically includes `trace_id` and `span_id` in all log entries. The OTEL Collector Logs DaemonSet extracts these fields and propagates them to Loki. This means every log line stored in Loki carries its trace context, enabling correlation with Jaeger traces.
+TruvaG3's structured logging automatically includes `trace_id` and `span_id` in all log entries. The OTEL Collector Logs DaemonSet extracts these fields and propagates them to Loki. This means every log line stored in Loki carries its trace context, enabling correlation with Jaeger traces.
 
 ```
-Truva-G3 App logs JSON with trace_id/span_id
+TruvaG3 App logs JSON with trace_id/span_id
         ↓
 OTEL Collector Logs (DaemonSet) extracts trace context via trace_parser
         ↓
@@ -777,7 +777,7 @@ Grafana: Loki ←──── bidirectional link ────→ Jaeger
 
 ### Finding trace_id from request_id
 
-Truva-G3 uses `request_id` (format: `orch-{timestamp}`) to identify orchestration requests. Here's how to find the `trace_id` for a specific request:
+TruvaG3 uses `request_id` (format: `orch-{timestamp}`) to identify orchestration requests. Here's how to find the `trace_id` for a specific request:
 
 **Method 1: Search Logs in Grafana**
 
@@ -1004,7 +1004,7 @@ kubectl rollout restart deployment/prometheus -n truvag3-examples
 # Quick health check script
 cat <<'EOF' > health-check.sh
 #!/bin/bash
-echo "Truva-G3 Infrastructure Health Check"
+echo "TruvaG3 Infrastructure Health Check"
 echo "==================================="
 
 NAMESPACE="truvag3-examples"
@@ -1106,7 +1106,7 @@ data:
         labels:
           severity: critical
         annotations:
-          summary: "Truva-G3 component is down"
+          summary: "TruvaG3 component is down"
 EOF
 ```
 
@@ -1162,7 +1162,7 @@ kubectl rollout undo deployment/redis -n truvag3-examples
 
 ## Summary
 
-This infrastructure provides the foundation for running Truva-G3 applications at scale. You now have:
+This infrastructure provides the foundation for running TruvaG3 applications at scale. You now have:
 
 1. **Complete Infrastructure** — Redis, OTEL Collector, Loki, Prometheus, Jaeger v2, Grafana
 2. **Flexible Deployment** — Works on local Kind clusters and production Kubernetes
@@ -1174,9 +1174,9 @@ This infrastructure provides the foundation for running Truva-G3 applications at
 
 ### What's Next?
 
-1. Deploy Truva-G3 applications using this infrastructure
+1. Deploy TruvaG3 applications using this infrastructure
 2. Explore the [Monitoring Guide](../monitoring/README.md) for advanced observability
 3. Check out example applications in other folders
 4. Set up custom dashboards and alerts
 
-**Congratulations!** Your Truva-G3 infrastructure is ready for action. All your applications can now discover each other, export telemetry, and provide rich observability. Happy building!
+**Congratulations!** Your TruvaG3 infrastructure is ready for action. All your applications can now discover each other, export telemetry, and provide rich observability. Happy building!

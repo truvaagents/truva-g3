@@ -1,6 +1,6 @@
 # Error Handling Guide
 
-How errors flow through Truva-G3 — from upstream API failure to intelligent recovery.
+How errors flow through TruvaG3 — from upstream API failure to intelligent recovery.
 
 ## Table of Contents
 
@@ -21,11 +21,11 @@ How errors flow through Truva-G3 — from upstream API failure to intelligent re
 
 ## 1. The Error Journey at a Glance
 
-Think of Truva-G3's error handling like an air traffic control system. When a pilot (tool) encounters trouble mid-flight — bad weather, engine warning, communication failure — they transmit a distress code over radio. The control tower (the executor in the `orchestration` module) reads the code and routes to the appropriate recovery procedure:
+Think of TruvaG3's error handling like an air traffic control system. When a pilot (tool) encounters trouble mid-flight — bad weather, engine warning, communication failure — they transmit a distress code over radio. The control tower (the executor in the `orchestration` module) reads the code and routes to the appropriate recovery procedure:
 
-- **Squawk 7600** (communication failure) — land immediately, no second chances. In Truva-G3, this is a 401/403 auth error: fail immediately.
-- **Squawk 7700** (general emergency) — enter a holding pattern, try again when conditions improve. In Truva-G3, this is a 429/5xx error: the executor retries with the same payload after exponential backoff.
-- **Approach correction** — the pilot is on the wrong heading; ATC gives them a new vector. In Truva-G3, this is a 400 input error: the LLM Error Analyzer suggests corrected parameters.
+- **Squawk 7600** (communication failure) — land immediately, no second chances. In TruvaG3, this is a 401/403 auth error: fail immediately.
+- **Squawk 7700** (general emergency) — enter a holding pattern, try again when conditions improve. In TruvaG3, this is a 429/5xx error: the executor retries with the same payload after exponential backoff.
+- **Approach correction** — the pilot is on the wrong heading; ATC gives them a new vector. In TruvaG3, this is a 400 input error: the LLM Error Analyzer suggests corrected parameters.
 
 The key insight: **tools don't decide recovery strategy** — they classify the error and report it. The executor in the `orchestration` module decides what to do based on the classification.
 

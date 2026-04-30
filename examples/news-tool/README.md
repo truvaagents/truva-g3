@@ -1,6 +1,6 @@
 # News Tool
 
-A Truva-G3 tool that provides news search capabilities using the [GNews.io](https://gnews.io/) API. This tool integrates with the Truva-G3 framework for service discovery and distributed tracing.
+A TruvaG3 tool that provides news search capabilities using the [GNews.io](https://gnews.io/) API. This tool integrates with the TruvaG3 framework for service discovery and distributed tracing.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ A Truva-G3 tool that provides news search capabilities using the [GNews.io](http
 
 ## How to Run This Example
 
-Running this example locally demonstrates how Truva-G3 tools expose capabilities that can be discovered and orchestrated by agents. Follow the steps below to get this tool running.
+Running this example locally demonstrates how TruvaG3 tools expose capabilities that can be discovered and orchestrated by agents. Follow the steps below to get this tool running.
 
 ### Prerequisites
 

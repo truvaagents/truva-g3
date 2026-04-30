@@ -1,6 +1,6 @@
-# Truva-G3 Telemetry Module
+# TruvaG3 Telemetry Module
 
-Welcome to the observability powerhouse of Truva-G3! Think of this guide as your friendly companion who'll walk you through every aspect of telemetry, from the simplest metric to sophisticated production monitoring. Grab a coffee and let's dive in! ☕
+Welcome to the observability powerhouse of TruvaG3! Think of this guide as your friendly companion who'll walk you through every aspect of telemetry, from the simplest metric to sophisticated production monitoring. Grab a coffee and let's dive in! ☕
 
 ## Table of Contents
 
@@ -573,7 +573,7 @@ spec:
 
 ## 10. Adding Telemetry to Tools and Agents
 
-Now let's see how telemetry integrates with Truva-G3's core components - Tools and Agents.
+Now let's see how telemetry integrates with TruvaG3's core components - Tools and Agents.
 
 ### Adding Telemetry to a Tool
 
@@ -1308,11 +1308,11 @@ if !health.Initialized {
 
 ## 18. Unified Metrics API
 
-The Unified Metrics API provides pre-defined helper functions for recording cross-module metrics with consistent naming conventions. This enables unified observability across all Truva-G3 modules (agent, orchestration, core) with standardized Prometheus metrics.
+The Unified Metrics API provides pre-defined helper functions for recording cross-module metrics with consistent naming conventions. This enables unified observability across all TruvaG3 modules (agent, orchestration, core) with standardized Prometheus metrics.
 
 ### Why Unified Metrics?
 
-When building distributed systems with Truva-G3, different modules emit their own metrics. The unified metrics API ensures:
+When building distributed systems with TruvaG3, different modules emit their own metrics. The unified metrics API ensures:
 - **Consistent naming**: All modules use the same metric names and label conventions
 - **Cross-module dashboards**: Create Grafana dashboards that aggregate data from all modules
 - **Simplified instrumentation**: Pre-defined functions for common patterns (requests, errors, tool calls, AI operations)
@@ -1746,7 +1746,7 @@ spec:
 
 ### 📖 Comprehensive Distributed Tracing Guide
 
-For a complete deep-dive into distributed tracing with Truva-G3, including:
+For a complete deep-dive into distributed tracing with TruvaG3, including:
 - **Trace-Log Correlation** - Connecting traces to logs for easier debugging
 - **Complete Multi-Service Examples** - Based on actual working examples in `examples/agent-with-telemetry/`
 - **Infrastructure Setup** - OTEL Collector, Jaeger, and Grafana configuration
@@ -1757,7 +1757,7 @@ See the **[Distributed Tracing and Log Correlation Guide](../docs/DISTRIBUTED_TR
 
 ## 20. AI Module Distributed Tracing
 
-The Truva-G3 AI module supports distributed tracing, allowing you to see AI operations (`ai.generate_response`, `ai.http_attempt`) as part of your request traces in Jaeger.
+The TruvaG3 AI module supports distributed tracing, allowing you to see AI operations (`ai.generate_response`, `ai.http_attempt`) as part of your request traces in Jaeger.
 
 ### Critical: Initialization Order
 
@@ -1794,7 +1794,7 @@ func main() {
 
 ### Framework-Driven Logger Propagation
 
-**Important:** The Truva-G3 Framework automatically propagates the logger to the AI client when you register components. This happens in `core.NewFramework()` during component registration via the `applyConfigToComponent()` function.
+**Important:** The TruvaG3 Framework automatically propagates the logger to the AI client when you register components. This happens in `core.NewFramework()` during component registration via the `applyConfigToComponent()` function.
 
 **How It Works:**
 
@@ -1858,7 +1858,7 @@ See `examples/agent-with-orchestration/` for a working example with AI telemetry
 
 ### The Silent Failure Problem
 
-Truva-G3's telemetry uses **push-based OpenTelemetry** where agents send metrics to an OTEL Collector. While this architecture is standard and scalable, it has a critical blind spot: **when an agent is broken, it cannot report that it's broken**.
+TruvaG3's telemetry uses **push-based OpenTelemetry** where agents send metrics to an OTEL Collector. While this architecture is standard and scalable, it has a critical blind spot: **when an agent is broken, it cannot report that it's broken**.
 
 #### The Data Flow
 

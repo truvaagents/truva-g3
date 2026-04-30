@@ -1,6 +1,6 @@
 #!/bin/bash
 # examples/k8-deployment/setup-env-lib.sh
-# Shared library for Truva-G3 Kubernetes deployments.
+# Shared library for TruvaG3 Kubernetes deployments.
 #
 # Usage: source this file from individual setup.sh scripts.
 #   source "$EXAMPLES_DIR/k8-deployment/setup-env-lib.sh"

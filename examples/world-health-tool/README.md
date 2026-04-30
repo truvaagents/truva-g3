@@ -1,6 +1,6 @@
 # World Health Tool
 
-A Truva-G3 tool that provides global health indicator data from the [WHO Global Health Observatory API](https://ghoapi.azureedge.net/api/) with automatic fallback to the World Bank API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides global health indicator data from the [WHO Global Health Observatory API](https://ghoapi.azureedge.net/api/) with automatic fallback to the World Bank API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

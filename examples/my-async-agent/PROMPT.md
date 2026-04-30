@@ -1,4 +1,4 @@
-# PROMPT — Build a Truva-G3 Async (Event-Driven) Agent (step-by-step)
+# PROMPT — Build a TruvaG3 Async (Event-Driven) Agent (step-by-step)
 
 This guide walks you through building an event-driven async agent — one
 that consumes events from webhooks, queues, or scheduled triggers, and
@@ -42,7 +42,7 @@ event source (webhook, queue, scheduler), and decide whether HITL is
 needed.
 
 ```
-We're going to build a Truva-G3 async (event-driven) agent.
+We're going to build a TruvaG3 async (event-driven) agent.
 Domain: <DOMAIN>.
 
 Step 1 of 12: define the async shape, event source, and processing model.
@@ -159,7 +159,7 @@ implementation. Code, tracing, logs, retries — all flow from this file.
 Step 3 of 12: read these two guides end-to-end:
 
 1. docs/AGENT_DEVELOPMENT_GUIDE.md — focus on:
-   - §1 Understanding Agents in Truva-G3
+   - §1 Understanding Agents in TruvaG3
    - §3 Project Structure (focus on the "Non-Streaming Agent" subsection)
    - §4 Step 1: Create the Agent Struct (focus on the "Non-Streaming
      Agent" subsection)

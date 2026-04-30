@@ -157,7 +157,7 @@ data:
           regex: container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_usage_bytes|network_.*)
           action: keep
 
-      # OTEL Collector — single scrape target for all Truva-G3 app metrics
+      # OTEL Collector — single scrape target for all TruvaG3 app metrics
       # The collector receives OTLP from all agents/tools and exports in Prometheus format
       - job_name: 'otel-collector-metrics'
         static_configs:
@@ -177,7 +177,7 @@ data:
         static_configs:
         - targets: ['localhost:9090']
 
-      # Truva-G3 Mock Services (for testing/stress testing)
+      # TruvaG3 Mock Services (for testing/stress testing)
       - job_name: 'truvag3-mock-services'
         kubernetes_sd_configs:
         - role: pod

@@ -259,7 +259,7 @@ test() {
             "alertname": "TruvaG3ComponentDown",
             "severity": "critical",
             "instance": "stock-market-tool-xyz:8348",
-            "summary": "Truva-G3 component truvag3-tools is down"
+            "summary": "TruvaG3 component truvag3-tools is down"
         }' | jq . 2>/dev/null || echo "(install jq for pretty output)"
 
     # Kill port forward

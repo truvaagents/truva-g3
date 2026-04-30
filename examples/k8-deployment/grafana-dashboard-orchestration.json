@@ -1,6 +1,6 @@
 {
   "uid": "truvag3-orchestration",
-  "title": "Truva-G3 Orchestration & Execution",
+  "title": "TruvaG3 Orchestration & Execution",
   "tags": [
     "truvag3",
     "orchestration",
@@ -26,7 +26,7 @@
       "tags": [
         "truvag3"
       ],
-      "title": "Truva-G3 Dashboards",
+      "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
     }

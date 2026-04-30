@@ -54,7 +54,7 @@ A standalone, real-time web dashboard for viewing services registered in a Redis
 
 ### Prerequisites
 
-- **Infrastructure deployed**: This is an add-on app that connects to existing Truva-G3 infrastructure
+- **Infrastructure deployed**: This is an add-on app that connects to existing TruvaG3 infrastructure
 - Run any tool/agent example first (e.g., `cd examples/tool-example && ./setup.sh full-deploy`)
 
 ### Deploy to Kubernetes (Recommended)

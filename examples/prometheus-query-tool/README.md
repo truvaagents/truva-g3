@@ -1,6 +1,6 @@
 # Prometheus Query Tool
 
-A Truva-G3 tool that provides PromQL query, alerting, and scrape target capabilities using the [Prometheus HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides PromQL query, alerting, and scrape target capabilities using the [Prometheus HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

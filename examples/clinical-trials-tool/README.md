@@ -1,6 +1,6 @@
 # Clinical Trials Tool
 
-A Truva-G3 tool that searches clinical trials from the free [ClinicalTrials.gov](https://clinicaltrials.gov/) v2 API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that searches clinical trials from the free [ClinicalTrials.gov](https://clinicaltrials.gov/) v2 API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

@@ -1,8 +1,8 @@
-# Truva-G3 Agent Framework - Capabilities Guide
+# TruvaG3 Agent Framework - Capabilities Guide
 
 ## Overview
 
-The Truva-G3 Agent Framework enables autonomous agents to discover, communicate, and collaborate in Kubernetes environments. This guide details the core capabilities including service discovery, inter-agent communication, distributed tracing, and orchestration features.
+The TruvaG3 Agent Framework enables autonomous agents to discover, communicate, and collaborate in Kubernetes environments. This guide details the core capabilities including service discovery, inter-agent communication, distributed tracing, and orchestration features.
 
 ## Table of Contents
 
@@ -631,7 +631,7 @@ spec:
 
 ## References
 
-- [Truva-G3 Framework Documentation](https://github.com/truvaagents/truva-g3)
+- [TruvaG3 Framework Documentation](https://github.com/truvaagents/truva-g3)
 - [OpenTelemetry Documentation](https://opentelemetry.io/docs/)
 - [Kubernetes Service Discovery](https://kubernetes.io/docs/concepts/services-networking/service/)
 - [Redis Documentation](https://redis.io/documentation)

@@ -1,4 +1,4 @@
-# Truva-G3 Memory Module
+# TruvaG3 Memory Module
 
 Pluggable storage backends for cross-agent shared memory. Agents in the same domain see each other's events, coordinate investigations, and share knowledge — enabling multi-agent systems that learn from collective experience.
 

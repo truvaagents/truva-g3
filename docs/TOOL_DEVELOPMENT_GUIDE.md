@@ -1,10 +1,10 @@
-# Truva-G3 Tool Development Guide
+# TruvaG3 Tool Development Guide
 
-This guide provides a comprehensive, step-by-step tutorial for developing tools in the Truva-G3 framework. Tools are passive components that expose capabilities to agents and can interact with external APIs to provide real-world functionality.
+This guide provides a comprehensive, step-by-step tutorial for developing tools in the TruvaG3 framework. Tools are passive components that expose capabilities to agents and can interact with external APIs to provide real-world functionality.
 
 ## Table of Contents
 
-1. [Understanding Tools in Truva-G3](#1-understanding-tools-in-truvag3)
+1. [Understanding Tools in TruvaG3](#1-understanding-tools-in-truvag3)
 2. [Project Structure](#2-project-structure)
 3. [Step 1: Create the Tool Struct](#3-step-1-create-the-tool-struct)
 4. [Step 2: Implement External API Client](#4-step-2-implement-external-api-client)
@@ -19,11 +19,11 @@ This guide provides a comprehensive, step-by-step tutorial for developing tools 
 
 ---
 
-## 1. Understanding Tools in Truva-G3
+## 1. Understanding Tools in TruvaG3
 
 ### What is a Tool?
 
-In Truva-G3, a **Tool** is a passive component that:
+In TruvaG3, a **Tool** is a passive component that:
 - Registers one or more **capabilities** that can be discovered and invoked by agents
 - Cannot discover or invoke other components (this is what makes it "passive")
 - Typically wraps external APIs or provides specialized functionality
@@ -42,7 +42,7 @@ In Truva-G3, a **Tool** is a passive component that:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Truva-G3 Framework                        │
+│                      TruvaG3 Framework                        │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │                    Your Tool                         │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │    │
@@ -286,7 +286,7 @@ Capabilities define what your tool can do. Each capability has a name, descripti
 
 ### Understanding the 3-Phase AI Payload Generation
 
-Truva-G3 uses a progressive enhancement approach for AI to generate correct payloads:
+TruvaG3 uses a progressive enhancement approach for AI to generate correct payloads:
 
 | Phase | Mechanism | Accuracy | When to Use |
 |-------|-----------|----------|-------------|
@@ -1092,7 +1092,7 @@ func initTelemetry(serviceName string) {
 
 ### go.mod
 
-Truva-G3 uses a multi-module workspace. Each tool depends on `core` and `telemetry` as separate modules, with `replace` directives pointing to the local workspace copies for development.
+TruvaG3 uses a multi-module workspace. Each tool depends on `core` and `telemetry` as separate modules, with `replace` directives pointing to the local workspace copies for development.
 
 ```go
 module github.com/truvaagents/truva-g3/examples/your-tool
@@ -1672,7 +1672,7 @@ curl http://localhost:8081/api/registry
    export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
    ```
 
-   > **Note:** Truva-G3 uses OTLP over HTTP (port 4318), not gRPC (port 4317). The endpoint must include the `http://` scheme prefix.
+   > **Note:** TruvaG3 uses OTLP over HTTP (port 4318), not gRPC (port 4317). The endpoint must include the `http://` scheme prefix.
 
 3. **View traces:**
    Open http://localhost:16686 in your browser
@@ -2393,7 +2393,7 @@ func main() {
 
 ### Response Types
 
-Truva-G3 provides standard response structures for consistency:
+TruvaG3 provides standard response structures for consistency:
 
 ```go
 // core.ToolResponse wraps successful and error responses
@@ -2444,6 +2444,6 @@ type ToolError struct {
 |------|--------------|---------------------|
 | [examples/stock-market-tool](../examples/stock-market-tool) | Separate API client file (`finnhub_client.go`), mock data fallback, Finnhub integration | Plain `http.Client` (external API) |
 | [examples/weather-tool-v2](../examples/weather-tool-v2) | Embedded HTTP calls in handlers, `core.ToolResponse` wrapper, coordinate validation | `otelhttp.NewTransport()` |
-| [examples/agent-with-telemetry](../examples/agent-with-telemetry) | **Recommended pattern**: `telemetry.NewTracedHTTPClientWithTransport()` | Traced client (for Truva-G3 service calls) |
+| [examples/agent-with-telemetry](../examples/agent-with-telemetry) | **Recommended pattern**: `telemetry.NewTracedHTTPClientWithTransport()` | Traced client (for TruvaG3 service calls) |
 
-> **Best Practice:** Use `telemetry.NewTracedHTTPClient*()` when your tool calls other Truva-G3 services. Use plain `http.Client` when calling external third-party APIs.
+> **Best Practice:** Use `telemetry.NewTracedHTTPClient*()` when your tool calls other TruvaG3 services. Use plain `http.Client` when calling external third-party APIs.

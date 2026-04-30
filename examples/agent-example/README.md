@@ -1,6 +1,6 @@
 # Research Assistant Agent Example
 
-A comprehensive example demonstrating how to build an **Agent** (active orchestrator) using the Truva-G3 framework. This agent can discover other components, orchestrate complex workflows, and use AI to intelligently coordinate multiple tools.
+A comprehensive example demonstrating how to build an **Agent** (active orchestrator) using the TruvaG3 framework. This agent can discover other components, orchestrate complex workflows, and use AI to intelligently coordinate multiple tools.
 
 ## Table of Contents
 
@@ -30,7 +30,7 @@ A comprehensive example demonstrating how to build an **Agent** (active orchestr
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 framework enables agents to discover and orchestrate tools. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 framework enables agents to discover and orchestrate tools. Follow the steps below to get this example running.
 
 ### Prerequisites
 

@@ -16,7 +16,7 @@ import (
 // ============================================================================
 // Resilient Tool Orchestration
 // ============================================================================
-// This file demonstrates how to use the Truva-G3 resilience module for
+// This file demonstrates how to use the TruvaG3 resilience module for
 // fault-tolerant tool orchestration. Key patterns:
 //   - resilience.RetryWithCircuitBreaker() for combined retry + CB
 //   - cb.ExecuteWithTimeout() for timeout protection

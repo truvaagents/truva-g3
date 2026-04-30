@@ -1,6 +1,6 @@
 # Agentic Memory Tool
 
-A Truva-G3 tool that exposes the framework's shared memory interfaces (episodic events, institutional knowledge, investigation coordination) as HTTP capabilities. This is the **pull layer** of the layered memory architecture — agents invoke it as a DAG step when they need to drill into memory details beyond the compact `<agent_memory>` digest.
+A TruvaG3 tool that exposes the framework's shared memory interfaces (episodic events, institutional knowledge, investigation coordination) as HTTP capabilities. This is the **pull layer** of the layered memory architecture — agents invoke it as a DAG step when they need to drill into memory details beyond the compact `<agent_memory>` digest.
 
 ## Table of Contents
 

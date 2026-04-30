@@ -1,6 +1,6 @@
 # Agent with Resilience
 
-This example demonstrates how to add fault tolerance to a Truva-G3 agent using the `resilience` module. It showcases circuit breakers, automatic retries with exponential backoff, timeout management, and graceful degradation with partial results when some tools fail.
+This example demonstrates how to add fault tolerance to a TruvaG3 agent using the `resilience` module. It showcases circuit breakers, automatic retries with exponential backoff, timeout management, and graceful degradation with partial results when some tools fail.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ This example demonstrates how to add fault tolerance to a Truva-G3 agent using t
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 resilience module protects against cascading failures. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 resilience module protects against cascading failures. Follow the steps below to get this example running.
 
 ### Prerequisites
 
@@ -559,7 +559,7 @@ AI keys are optional for this example - resilience patterns work without AI. If 
 2. Only starts what is missing
 3. Builds and runs all components:
    - `grocery-store-api` (port 8081) - Mock API with error injection
-   - `grocery-tool` (port 8083) - Truva-G3 tool wrapper
+   - `grocery-tool` (port 8083) - TruvaG3 tool wrapper
    - `research-agent-resilience` (port 8093) - The resilient agent
 
 **Smart Infrastructure Detection:**
@@ -587,7 +587,7 @@ Once complete, access the application at:
 | **Resilient Agent** | http://localhost:8093 | Research agent with circuit breakers |
 | **Health Check** | http://localhost:8093/health | Circuit breaker states |
 | **Grocery Store API** | http://localhost:8081 | Mock service with error injection |
-| **Grocery Tool** | http://localhost:8083 | Truva-G3 tool wrapper |
+| **Grocery Tool** | http://localhost:8083 | TruvaG3 tool wrapper |
 
 ### Step-by-Step Deployment
 
@@ -647,7 +647,7 @@ Building on the foundation of `agent-example`, this example adds:
 
 ## Framework APIs Used
 
-This example demonstrates proper usage of the Truva-G3 `resilience` module:
+This example demonstrates proper usage of the TruvaG3 `resilience` module:
 
 ```go
 // 1. Create circuit breakers using the factory (auto-detects telemetry)
@@ -954,12 +954,12 @@ This mode is used in the test scenarios below to:
 
 ### Testing Prerequisites
 
-This example is fully self-contained. All required components are included in the Truva-G3 repository:
+This example is fully self-contained. All required components are included in the TruvaG3 repository:
 
 | Component | Location | Description |
 |-----------|----------|-------------|
 | `grocery-store-api` | [`../mock-services/grocery-store-api/`](../mock-services/grocery-store-api/) | Mock API with error injection |
-| `grocery-tool` | [`../grocery-tool/`](../grocery-tool/) | Truva-G3 tool that proxies to the API |
+| `grocery-tool` | [`../grocery-tool/`](../grocery-tool/) | TruvaG3 tool that proxies to the API |
 | `research-agent-resilience` | This directory | The resilient research agent |
 
 **Deploy to Kubernetes:**

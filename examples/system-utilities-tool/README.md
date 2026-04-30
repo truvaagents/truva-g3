@@ -1,6 +1,6 @@
 # System Utilities Tool
 
-A Truva-G3 tool that provides self-contained system utility capabilities: date/time operations, shell command execution, stealth browser automation, unique ID generation, and bounded wait/sleep. Unlike most tools in the framework, this tool requires **no external API keys** — all capabilities are powered by Go's standard library, Node.js (Playwright), and run entirely within the container.
+A TruvaG3 tool that provides self-contained system utility capabilities: date/time operations, shell command execution, stealth browser automation, unique ID generation, and bounded wait/sleep. Unlike most tools in the framework, this tool requires **no external API keys** — all capabilities are powered by Go's standard library, Node.js (Playwright), and run entirely within the container.
 
 ## Table of Contents
 

@@ -35,7 +35,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     Truva-G3 Agent with Human Approval (HITL)           ║${NC}"
+    echo -e "${BLUE}║     TruvaG3 Agent with Human Approval (HITL)           ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

@@ -1,4 +1,4 @@
-# Prometheus AlertManager Deployment for Truva-G3
+# Prometheus AlertManager Deployment for TruvaG3
 # Routes alerts to the event-driven-agent webhook receiver.
 
 ---

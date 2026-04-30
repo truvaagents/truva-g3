@@ -1,8 +1,8 @@
-# Truva-G3 Documentation Strategy
+# TruvaG3 Documentation Strategy
 
 ## Executive Summary
 
-This document outlines the comprehensive documentation strategy for the Truva-G3 framework, designed to facilitate rapid adoption and production deployment of AI agents in Go. Our documentation will be hosted at `docs.truvag3.dev` and follows best practices from successful open-source projects like Stripe, Kubernetes, Rust, and Terraform.
+This document outlines the comprehensive documentation strategy for the TruvaG3 framework, designed to facilitate rapid adoption and production deployment of AI agents in Go. Our documentation will be hosted at `docs.truvag3.dev` and follows best practices from successful open-source projects like Stripe, Kubernetes, Rust, and Terraform.
 
 ## Documentation Philosophy
 
@@ -58,7 +58,7 @@ docs.truvag3.dev/
 ├── / (Landing Page)
 │   ├── Hero: "Production AI Agents in Go"
 │   ├── Quick Start (< 5 min)
-│   ├── Why Truva-G3?
+│   ├── Why TruvaG3?
 │   ├── Live Playground
 │   └── Feature Comparison Matrix
 │
@@ -149,7 +149,7 @@ docs.truvag3.dev/
 │   └── /contributing/       # Contribution guide
 │
 ├── /community/
-│   ├── /showcase/           # Who's using Truva-G3
+│   ├── /showcase/           # Who's using TruvaG3
 │   ├── /blog/               # Updates & tutorials
 │   ├── /case-studies/       # Success stories
 │   ├── /resources/          # External resources
@@ -302,7 +302,7 @@ docs/
 ## Website Publication Strategy
 
 ### Repository Structure
-The documentation website will be maintained in the same repository as the Truva-G3 codebase for better version alignment and simpler workflow:
+The documentation website will be maintained in the same repository as the TruvaG3 codebase for better version alignment and simpler workflow:
 
 ```
 truvag3/
@@ -407,7 +407,7 @@ jobs:
 #### website/config.toml
 ```toml
 baseURL = "https://docs.truvag3.dev/"
-title = "Truva-G3 Documentation"
+title = "TruvaG3 Documentation"
 theme = ["docsy"]
 languageCode = "en-us"
 defaultContentLanguage = "en"
@@ -424,7 +424,7 @@ pygmentsUseClasses = false
 pygmentsStyle = "monokai"
 
 [params]
-copyright = "Truva-G3 Contributors"
+copyright = "TruvaG3 Contributors"
 privacy_policy = "https://github.com/truvaagents/truva-g3/blob/main/PRIVACY.md"
 
 # Repository configuration
@@ -603,7 +603,7 @@ git push origin docs/v0.4
 
 ## Key Differentiators
 
-### Why Truva-G3 Documentation Stands Out:
+### Why TruvaG3 Documentation Stands Out:
 1. **Production-First**: Every example is production-ready
 2. **Performance Focus**: Benchmarks and metrics included
 3. **Cost Transparency**: Resource usage clearly documented
@@ -653,6 +653,6 @@ git push origin docs/v0.4
 
 ## Conclusion
 
-This documentation strategy positions Truva-G3 as a production-ready framework with world-class documentation. By following best practices from successful projects and focusing on developer experience, we'll create documentation that accelerates adoption and reduces support burden.
+This documentation strategy positions TruvaG3 as a production-ready framework with world-class documentation. By following best practices from successful projects and focusing on developer experience, we'll create documentation that accelerates adoption and reduces support burden.
 
 The key is to start with the critical path (Quick Start → API → Production) and iteratively improve based on user feedback. Documentation is not a one-time effort but a continuous process that evolves with the framework.

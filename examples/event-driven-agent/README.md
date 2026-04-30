@@ -1,6 +1,6 @@
 # Event-Driven Agent
 
-A production-ready event-driven incident response agent that receives Prometheus AlertManager webhooks and orchestrates autonomous investigation and remediation using AI-driven DAG planning. This example demonstrates the event-driven architecture pattern in the Truva-G3 framework, including async event queues, severity-based routing, deduplication, and human-in-the-loop approval for critical write operations.
+A production-ready event-driven incident response agent that receives Prometheus AlertManager webhooks and orchestrates autonomous investigation and remediation using AI-driven DAG planning. This example demonstrates the event-driven architecture pattern in the TruvaG3 framework, including async event queues, severity-based routing, deduplication, and human-in-the-loop approval for critical write operations.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ A production-ready event-driven incident response agent that receives Prometheus
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 framework supports event-driven agent patterns with AlertManager webhook integration, async task processing, and AI-powered incident investigation. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 framework supports event-driven agent patterns with AlertManager webhook integration, async task processing, and AI-powered incident investigation. Follow the steps below to get this example running.
 
 ### Prerequisites
 
@@ -560,7 +560,7 @@ At minimum, uncomment and set ONE of these in your `.env` file:
 **What `./setup.sh full-deploy` does:**
 1. Creates a Kind Kubernetes cluster with proper port mappings
 2. Deploys shared monitoring infrastructure (Redis, OTEL Collector, Prometheus, Jaeger, Grafana)
-3. Deploys Prometheus AlertManager with routing rules for Truva-G3 alerts
+3. Deploys Prometheus AlertManager with routing rules for TruvaG3 alerts
 4. Builds and deploys the event-driven agent
 5. Deploys the stress-test-api mock service (for E2E HITL testing)
 6. Sets up port forwarding automatically
@@ -717,7 +717,7 @@ curl -X POST http://localhost:8372/trigger \
     "alertname": "TruvaG3ComponentDown",
     "severity": "critical",
     "instance": "stock-market-tool-xyz:8348",
-    "summary": "Truva-G3 component truvag3-tools is down"
+    "summary": "TruvaG3 component truvag3-tools is down"
   }'
 ```
 
@@ -777,7 +777,7 @@ This example demonstrates an event-driven agent pattern that is fundamentally di
 - **Async Event Queue**: Critical alerts are enqueued in Redis and processed by background workers
 - **Severity-Based Routing**: Critical alerts trigger AI investigation, warnings send Slack notifications, info alerts are logged
 - **Fingerprint Deduplication**: Prevents duplicate investigations for the same alert within a configurable TTL window
-- **AI-Powered Investigation**: Uses the Truva-G3 orchestration module with DAG planning to investigate incidents
+- **AI-Powered Investigation**: Uses the TruvaG3 orchestration module with DAG planning to investigate incidents
 - **Human-in-the-Loop**: Write operations (pod restarts, scaling, deletions) require human approval before execution
 - **Multi-Mode Deployment**: Supports embedded (single process), split API/worker, or standalone worker modes
 
@@ -794,7 +794,7 @@ This example demonstrates an event-driven agent pattern that is fundamentally di
 - Configuring the AI orchestrator with incident-response domain prompts
 - Human-in-the-loop approval workflows for write operations (pod restarts, scaling)
 - Deploying agents in different modes (embedded, API-only, worker-only)
-- Integrating Prometheus AlertManager with a Truva-G3 agent via webhook receivers
+- Integrating Prometheus AlertManager with a TruvaG3 agent via webhook receivers
 
 ---
 
@@ -953,11 +953,11 @@ AlertManager ──webhook──▶ API pod ──Redis queue──▶ Worker po
 
 ## AlertManager Integration
 
-The agent includes Kubernetes manifests for deploying Prometheus AlertManager pre-configured to route Truva-G3 alerts to the agent's webhook endpoint.
+The agent includes Kubernetes manifests for deploying Prometheus AlertManager pre-configured to route TruvaG3 alerts to the agent's webhook endpoint.
 
 ### Included Files
 
-- **`alertmanager-config.yaml`**: ConfigMap with AlertManager routing rules. Routes alerts matching `^Truva-G3.*` to the agent's webhook at `http://event-driven-agent.truvag3-examples:80/webhook/alertmanager`.
+- **`alertmanager-config.yaml`**: ConfigMap with AlertManager routing rules. Routes alerts matching `^TruvaG3.*` to the agent's webhook at `http://event-driven-agent.truvag3-examples:80/webhook/alertmanager`.
 - **`alertmanager.yaml`**: Deployment, Service, and NodePort for the AlertManager instance.
 
 ### Routing Rules
@@ -965,14 +965,14 @@ The agent includes Kubernetes manifests for deploying Prometheus AlertManager pr
 ```yaml
 routes:
   - match_re:
-      alertname: '^Truva-G3.*'
+      alertname: '^TruvaG3.*'
     receiver: 'truvag3-event-agent'
     group_wait: 10s
     group_interval: 1m
     repeat_interval: 5m
 ```
 
-Alerts with names matching `Truva-G3*` are grouped by `alertname` and `severity`, with a 10-second initial wait before the first notification. Non-matching alerts go to a default no-op receiver.
+Alerts with names matching `TruvaG3*` are grouped by `alertname` and `severity`, with a 10-second initial wait before the first notification. Non-matching alerts go to a default no-op receiver.
 
 ### Testing Without AlertManager
 
@@ -1408,9 +1408,9 @@ curl http://localhost:8372/events
 
 ## Learn More
 
-- [Truva-G3 Orchestration Module](../../orchestration/README.md) - AI orchestration and DAG planning
+- [TruvaG3 Orchestration Module](../../orchestration/README.md) - AI orchestration and DAG planning
 - [Distributed Tracing Guide](../../docs/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing and log correlation
-- [Agent Development Guide](../../docs/AGENT_DEVELOPMENT_GUIDE.md) - Building agents with Truva-G3
+- [Agent Development Guide](../../docs/AGENT_DEVELOPMENT_GUIDE.md) - Building agents with TruvaG3
 - [Prometheus AlertManager Documentation](https://prometheus.io/docs/alerting/latest/alertmanager/)
 - [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/)
 
@@ -1418,4 +1418,4 @@ curl http://localhost:8372/events
 
 ## License
 
-This example is part of the Truva-G3 framework and is licensed under the same terms.
+This example is part of the TruvaG3 framework and is licensed under the same terms.

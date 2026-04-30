@@ -1,6 +1,6 @@
 # Async AI-Driven Agent
 
-An asynchronous task processing agent that demonstrates the Truva-G3 async task system combined with AI orchestration for autonomous multi-tool coordination. The agent accepts natural language queries and dynamically decides which tools to call, using a DAG-based execution engine for parallel processing.
+An asynchronous task processing agent that demonstrates the TruvaG3 async task system combined with AI orchestration for autonomous multi-tool coordination. The agent accepts natural language queries and dynamically decides which tools to call, using a DAG-based execution engine for parallel processing.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ An asynchronous task processing agent that demonstrates the Truva-G3 async task 
 
 ## How to Run This Example
 
-Running this example locally is the best way to understand how the Truva-G3 async task system and AI orchestration work together. Follow the steps below to get this example running.
+Running this example locally is the best way to understand how the TruvaG3 async task system and AI orchestration work together. Follow the steps below to get this example running.
 
 ### Prerequisites
 

@@ -15,7 +15,7 @@ import (
 )
 
 // AsyncTravelAgent is an async-capable AI-driven agent that uses
-// the Truva-G3 async task system combined with AI orchestration for
+// the TruvaG3 async task system combined with AI orchestration for
 // autonomous multi-tool coordination.
 //
 // Key Features:

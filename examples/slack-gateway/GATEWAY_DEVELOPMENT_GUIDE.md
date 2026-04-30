@@ -2,7 +2,7 @@
 
 > **Status:** Draft, kept alongside the first gateway example (`slack-gateway`). Promote to `docs/` once a second gateway (WhatsApp, Teams, CLI, etc.) validates the patterns below.
 
-A complete walkthrough for building **Gateways** in Truva-G3 — the third architectural category alongside Tools and Agents. Gateways bridge external messaging/eventing platforms (Slack, WhatsApp, Teams, Discord, email, SMS, webhooks) into Truva-G3 agents without joining the service mesh.
+A complete walkthrough for building **Gateways** in TruvaG3 — the third architectural category alongside Tools and Agents. Gateways bridge external messaging/eventing platforms (Slack, WhatsApp, Teams, Discord, email, SMS, webhooks) into TruvaG3 agents without joining the service mesh.
 
 ## Table of Contents
 
@@ -30,18 +30,18 @@ A complete walkthrough for building **Gateways** in Truva-G3 — the third archi
 
 ## 1. What is a Gateway?
 
-In Truva-G3, a **Gateway** is a standalone service that:
+In TruvaG3, a **Gateway** is a standalone service that:
 
 - Receives events from an **external messaging or eventing platform** (Slack, WhatsApp, Teams, Discord, email, webhooks, CLI, etc.)
-- Forwards each event to a **configured Truva-G3 agent's existing HTTP/SSE interface** (`/chat/stream`, `/chat/session`, `/hitl/command`)
+- Forwards each event to a **configured TruvaG3 agent's existing HTTP/SSE interface** (`/chat/stream`, `/chat/session`, `/hitl/command`)
 - Formats the agent's response for the platform's native conventions and delivers it back (inline reply, DM, thread message, SMS, etc.)
-- Bridges platform-native interactive elements (buttons, reactions, quick replies) into Truva-G3's HITL approval flow when present
+- Bridges platform-native interactive elements (buttons, reactions, quick replies) into TruvaG3's HITL approval flow when present
 
 A gateway is a **client of agents**, not part of the service mesh. It does not register capabilities and is not discovered by other components.
 
 ## 2. Gateway vs Tool vs Agent
 
-Truva-G3's two-type discipline is enforced at compile time: a component is a Tool or an Agent. Gateways sit **outside** that type system as plain Go services that *consume* the mesh.
+TruvaG3's two-type discipline is enforced at compile time: a component is a Tool or an Agent. Gateways sit **outside** that type system as plain Go services that *consume* the mesh.
 
 | Dimension | Tool | Agent | Gateway |
 |---|---|---|---|
@@ -49,7 +49,7 @@ Truva-G3's two-type discipline is enforced at compile time: a component is a Too
 | Discovered by other components? | Yes | Yes | No |
 | Can discover/call others? | No (passive) | Yes | Yes, but via **fixed URL**, not discovery |
 | Primary inbound protocol | HTTP `POST /api/capabilities/*` | HTTP `POST /chat/stream` | Platform-native (WebSocket, webhooks, IMAP, etc.) |
-| Primary outbound protocol | External REST API | Other agents/tools via discovery | Truva-G3 agent's existing HTTP/SSE endpoints |
+| Primary outbound protocol | External REST API | Other agents/tools via discovery | TruvaG3 agent's existing HTTP/SSE endpoints |
 | Scale model | Stateless, horizontal | Stateless, horizontal | Often **single-replica or leader-elected** (persistent external connections) |
 | State ownership | None (stateless) | Conversation, memory | None (forwards to agent) |
 | Base struct | `*core.BaseTool` | `*core.BaseAgent` | Plain struct; may use `core.NewFramework` for lifecycle only |
@@ -126,7 +126,7 @@ Do **not** build a gateway when:
              │ HTTP / SSE (no Discovery; fixed URL via env var)
              ▼
 ┌─────────────────────────┐
-│    Target Truva-G3 Agent  │   Owns conversation state,
+│    Target TruvaG3 Agent  │   Owns conversation state,
 │  (unchanged by gateway) │   memory, tool orchestration
 └─────────────────────────┘
 ```
@@ -157,7 +157,7 @@ examples/your-gateway/
 |---|---|---|
 | `your_tool.go` (capability registration) | `gateway.go` (event loop wiring) | No capabilities; event dispatch instead |
 | `handlers.go` (HTTP handler per capability) | `events.go` (platform event type dispatch) | Keyed by event type, not URL |
-| `api_client.go` (external REST client) | `agent_client.go` (internal SSE consumer) | Talks to a *Truva-G3 agent*, not a third party |
+| `api_client.go` (external REST client) | `agent_client.go` (internal SSE consumer) | Talks to a *TruvaG3 agent*, not a third party |
 | *(none)* | `response_writer.go` | Outbound side to the platform (not present in Tools) |
 | *(none)* | `session.go` | Stable mapping from platform identity to session_id |
 | *(none)* | `hitl_bridge.go` | Optional — only if supporting HITL checkpoints |
@@ -350,7 +350,7 @@ Webhook-based gateways need a **public HTTPS URL**:
 - Production: your existing ingress controller + DNS + TLS cert.
 - Dev: `ngrok` or `cloudflared` tunneling to localhost.
 
-Note any existing ingress scope rules your framework documents — in Truva-G3's case, ingress is reserved for agents and infra UIs, so adding a gateway to the ingress list is a conscious policy decision.
+Note any existing ingress scope rules your framework documents — in TruvaG3's case, ingress is reserved for agents and infra UIs, so adding a gateway to the ingress list is a conscious policy decision.
 
 ### Secrets
 
@@ -422,7 +422,7 @@ Gateway testing differs substantially from Tool testing:
 - **Do ack within the platform deadline.** If you can't, the platform will retry and your goroutine will spawn a second identical agent run.
 - **Do not buffer responses indefinitely.** Cap response timeout; if the agent hasn't produced a `final` in N seconds, post what you have with a "(response truncated)" note.
 - **Do log the event_id and session_id on every log line.** When a user complains, you need to reconstruct the full trace.
-- **Do not expose gateway internals as a Truva-G3 capability.** The gateway is not in the mesh; adding a `/api/capabilities/*` endpoint here would be a category error.
+- **Do not expose gateway internals as a TruvaG3 capability.** The gateway is not in the mesh; adding a `/api/capabilities/*` endpoint here would be a category error.
 
 ## 18. What This Guide Does Not Cover
 

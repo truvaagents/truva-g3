@@ -1,7 +1,7 @@
-// Package telemetry provides unified metrics infrastructure for the Truva-G3 framework.
+// Package telemetry provides unified metrics infrastructure for the TruvaG3 framework.
 //
 // This file defines the unified metrics contract that enables consistent observability
-// across all Truva-G3 modules (agent, orchestration, core). Using these unified metrics
+// across all TruvaG3 modules (agent, orchestration, core). Using these unified metrics
 // ensures that dashboards and queries work regardless of which module is used.
 //
 // Usage:

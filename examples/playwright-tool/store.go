@@ -11,7 +11,7 @@ import (
 )
 
 // TestStore indexes test run metadata in Redis for fast querying.
-// Uses a dedicated Redis DB (default DB 9) to avoid conflicts with other Truva-G3 stores.
+// Uses a dedicated Redis DB (default DB 9) to avoid conflicts with other TruvaG3 stores.
 type TestStore struct {
 	rdb *redis.Client
 }

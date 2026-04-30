@@ -4,11 +4,11 @@ Research-backed principles for writing prompts that LLMs actually follow.
 
 If you've ever had an LLM ignore your instructions, repeat the same mistake across parallel steps, or confidently present hallucinated data — this guide explains why, and how to fix it. These are not opinions. Every principle traces back to published research, official provider documentation, or lessons learned debugging real production failures in a multi-agent orchestration system.
 
-This guide is useful for anyone writing prompts for LLM-based systems. While the examples draw from Truva-G3's multi-agent architecture, the principles apply universally — whether you're building agents, chatbots, code generators, or data extraction pipelines.
+This guide is useful for anyone writing prompts for LLM-based systems. While the examples draw from TruvaG3's multi-agent architecture, the principles apply universally — whether you're building agents, chatbots, code generators, or data extraction pipelines.
 
-> **Truva-G3 Configuration**: For `PromptConfig`, `TypeRules`, `SystemInstructions`, and domain-specific prompt setup, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
+> **TruvaG3 Configuration**: For `PromptConfig`, `TypeRules`, `SystemInstructions`, and domain-specific prompt setup, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
 >
-> **Architecture**: For Truva-G3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](../orchestration/ARCHITECTURE.md).
+> **Architecture**: For TruvaG3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](../orchestration/ARCHITECTURE.md).
 
 ---
 
@@ -48,7 +48,7 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
   - [6.3 Academic Evidence](#63-academic-evidence)
   - [6.4 The Controller Equation](#64-the-controller-equation)
   - [6.5 Practical Implications for Prompt Design](#65-practical-implications-for-prompt-design)
-- [7. Truva-G3 Application](#7-truvag3-application)
+- [7. TruvaG3 Application](#7-truvag3-application)
   - [7.1 Principle-to-Implementation Mapping](#71-principle-to-implementation-mapping)
   - [7.2 The Restructured Prompt Architecture](#72-the-restructured-prompt-architecture)
 - [8. Quick Reference](#8-quick-reference)
@@ -366,7 +366,7 @@ Standard (non-reasoning) chat models — GPT-4.1, Claude Sonnet/Haiku, Gemini Fl
 
 Reasoning models — OpenAI o3, DeepSeek R1, Gemini with thinking — prefer high-level goals with minimal constraints. These models allocate internal "thinking" tokens that count against the budget. Verbose prompts directly reduce the space available for reasoning. DeepSeek's guidance states explicitly: "too much information reduces accuracy" for R1.
 
-If your system supports both model types (as Truva-G3 does via configurable `smart`/`default` aliases), design prompts that sit at the intersection: **precise enough for standard models, concise enough for reasoning models**. The 31-47% token reduction achieved by applying these principles benefits both families.
+If your system supports both model types (as TruvaG3 does via configurable `smart`/`default` aliases), design prompts that sit at the intersection: **precise enough for standard models, concise enough for reasoning models**. The 31-47% token reduction achieved by applying these principles benefits both families.
 
 ---
 
@@ -490,7 +490,7 @@ another continuation. Only use terminal: false if you need to discover new entit
 
 ### 4.7 Evidence: Token Reduction Results
 
-Applying all 6 principles to Truva-G3's planning prompts produced measurable improvements:
+Applying all 6 principles to TruvaG3's planning prompts produced measurable improvements:
 
 | Metric | Before | After | Reduction |
 |---|---|---|---|
@@ -662,13 +662,13 @@ This context allows the tool selection LLM to pick different (or additional) too
 
 ---
 
-## 7. Truva-G3 Application
+## 7. TruvaG3 Application
 
-This section maps the universal principles to Truva-G3's specific implementation. For detailed configuration, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
+This section maps the universal principles to TruvaG3's specific implementation. For detailed configuration, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
 
 ### 7.1 Principle-to-Implementation Mapping
 
-| Principle | Truva-G3 Implementation | Key File |
+| Principle | TruvaG3 Implementation | Key File |
 |---|---|---|
 | System message priority (2.9) | `SystemPromptBuilder` interface | `orchestration/prompt_builder.go` |
 | Converged ordering (2.8) | `buildSystemPrompt()` + `BuildPlanningPrompt()` | `orchestration/default_prompt_builder.go` |
@@ -681,7 +681,7 @@ This section maps the universal principles to Truva-G3's specific implementation
 
 ### 7.2 The Restructured Prompt Architecture
 
-Truva-G3's planning prompts follow this structure after applying the principles:
+TruvaG3's planning prompts follow this structure after applying the principles:
 
 ```
 SYSTEM MESSAGE (via SystemPromptBuilder — static, cacheable):
@@ -1219,7 +1219,7 @@ The audit record JSON is stable — adding a registry-viewer card that surfaces 
 - **MCP (Model Context Protocol)** (June 2025) — Protocol-level dynamic tool availability via `tools/list` and `notifications/tools/list_changed`.
 - **CrewAI** — Task-level static-dynamic tool selection.
 
-### Related Truva-G3 Documentation
+### Related TruvaG3 Documentation
 
 - [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md) — `PromptConfig`, `SystemInstructions`, `TypeRules`, domain examples
 - [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md) — Provider configuration, API keys, model aliases
@@ -1227,4 +1227,4 @@ The audit record JSON is stable — adding a registry-viewer card that surfaces 
 
 ---
 
-*This guide was distilled from research conducted during production debugging of Truva-G3's orchestration module. Every principle was validated against real execution traces and applied to fix measurable prompt quality issues.*
+*This guide was distilled from research conducted during production debugging of TruvaG3's orchestration module. Every principle was validated against real execution traces and applied to fix measurable prompt quality issues.*

@@ -1,7 +1,7 @@
 // Package core provides async task interfaces and types for long-running operations.
 //
 // This file defines the interfaces and types for the async task system that enables
-// long-running operations (minutes to hours) in Truva-G3. It solves the HTTP timeout
+// long-running operations (minutes to hours) in TruvaG3. It solves the HTTP timeout
 // problem by providing HTTP 202 + polling pattern with background worker execution.
 //
 // # Architecture Overview

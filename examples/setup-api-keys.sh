@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Truva-G3 Framework - API Keys Setup Script
+# TruvaG3 Framework - API Keys Setup Script
 # This script helps you set up API keys for local development and Kubernetes
 
 set -e
@@ -11,7 +11,7 @@ COLOR_YELLOW='\033[1;33m'
 COLOR_BLUE='\033[0;34m'
 COLOR_NC='\033[0m' # No Color
 
-echo -e "${COLOR_BLUE}🔐 Truva-G3 Framework - API Keys Setup${COLOR_NC}"
+echo -e "${COLOR_BLUE}🔐 TruvaG3 Framework - API Keys Setup${COLOR_NC}"
 echo "=================================================="
 
 # Function to prompt for API key
@@ -53,7 +53,7 @@ setup_local_env() {
     fi
 
     # Create new .env file
-    echo "# Truva-G3 Framework - API Keys" > .env
+    echo "# TruvaG3 Framework - API Keys" > .env
     echo "# Generated on $(date)" >> .env
     echo "" >> .env
 

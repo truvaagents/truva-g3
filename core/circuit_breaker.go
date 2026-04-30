@@ -1,4 +1,4 @@
-// Package core provides fundamental abstractions and interfaces for the Truva-G3 framework.
+// Package core provides fundamental abstractions and interfaces for the TruvaG3 framework.
 // This file defines the CircuitBreaker interface and related types for implementing
 // fault tolerance patterns in distributed systems.
 //

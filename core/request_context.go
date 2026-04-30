@@ -86,7 +86,7 @@ func GetAgentName(ctx context.Context) string {
 	return ""
 }
 
-// ExtractRequestContext extracts Truva-G3 orchestration context from HTTP headers.
+// ExtractRequestContext extracts TruvaG3 orchestration context from HTTP headers.
 // This is the primary mechanism for receiving request_id and step_id from the orchestrator
 // (Issue 18: executor's httpClient does not use otelhttp transport).
 // Agents using telemetry.NewTracedHTTPHandler may also get OTel baggage as a bonus.

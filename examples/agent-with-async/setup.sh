@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # setup.sh - One-click setup for Async Travel Research Agent
-# Demonstrates Truva-G3 async task system for long-running multi-tool orchestration
+# Demonstrates TruvaG3 async task system for long-running multi-tool orchestration
 
 set -e
 
@@ -32,7 +32,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  Truva-G3 Async Travel Research Agent                   ║${NC}"
+    echo -e "${BLUE}║  TruvaG3 Async Travel Research Agent                   ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

@@ -1,5 +1,5 @@
-// Package framework provides the main entry point for the Truva-G3 framework
-// This is a monolithic package that includes all Truva-G3 capabilities
+// Package framework provides the main entry point for the TruvaG3 framework
+// This is a monolithic package that includes all TruvaG3 capabilities
 //
 // Import paths:
 //   - github.com/truvaagents/truva-g3 - Main framework package

@@ -1,4 +1,4 @@
-# Truva-G3 Resilience Module
+# TruvaG3 Resilience Module
 
 Bulletproof your agents with production-ready fault tolerance patterns.
 
@@ -548,7 +548,7 @@ config.Metrics = &MyMetricsCollector{}
 
 ### Logging Integration
 
-The circuit breaker integrates with the Truva-G3 logging system:
+The circuit breaker integrates with the TruvaG3 logging system:
 
 ```go
 // The circuit breaker uses core.Logger interface

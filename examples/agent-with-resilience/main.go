@@ -1,4 +1,4 @@
-// Package main implements a research assistant agent that demonstrates the Truva-G3
+// Package main implements a research assistant agent that demonstrates the TruvaG3
 // resilience module for fault-tolerant tool orchestration.
 //
 // This example showcases:

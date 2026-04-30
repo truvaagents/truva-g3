@@ -1,4 +1,4 @@
-// Package memory provides storage backend implementations for Truva-G3's
+// Package memory provides storage backend implementations for TruvaG3's
 // cross-agent shared memory interfaces defined in core.
 //
 // This package exists to isolate heavy client dependencies (gRPC, protobuf)

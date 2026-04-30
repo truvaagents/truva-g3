@@ -1,6 +1,6 @@
 # Mock Services
 
-This directory contains mock backend services used by Truva-G3 examples for testing and development purposes.
+This directory contains mock backend services used by TruvaG3 examples for testing and development purposes.
 
 ## Available Services
 
@@ -23,6 +23,6 @@ Each mock service can be:
 
 1. **Run locally** for development
 2. **Deployed to Docker** for containerized testing
-3. **Deployed to Kubernetes** alongside Truva-G3 agents
+3. **Deployed to Kubernetes** alongside TruvaG3 agents
 
 See individual service directories for specific instructions.

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # setup.sh - Setup and deployment script for registry-viewer-app
-# This is a standalone app that visualizes the Truva-G3 Redis service registry
+# This is a standalone app that visualizes the TruvaG3 Redis service registry
 # No infrastructure setup required - just build, deploy, and run
 
 set -e
@@ -69,7 +69,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 print_header() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║       Truva-G3 Registry Viewer                          ║${NC}"
+    echo -e "${BLUE}║       TruvaG3 Registry Viewer                          ║${NC}"
     echo -e "${BLUE}║       Real-time Service Registry Dashboard            ║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -498,7 +498,7 @@ Redis Configuration:
   The deploy command automatically extracts Redis service info from
   ../k8-deployment/redis.yaml and configures the app accordingly.
   This ensures the registry viewer connects to the same Redis instance
-  used by other Truva-G3 examples.
+  used by other TruvaG3 examples.
 
   To override, set REDIS_URL environment variable before deploying.
 

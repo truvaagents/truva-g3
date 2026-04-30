@@ -1,4 +1,4 @@
-# `<AGENT NAME>` — a Truva-G3 Async Agent
+# `<AGENT NAME>` — a TruvaG3 Async Agent
 
 > **Template scaffold.** This README is a placeholder. After your coding
 > agent populates the implementation from [`PROMPT.md`](PROMPT.md), replace

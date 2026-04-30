@@ -1,4 +1,4 @@
-# `<AGENT NAME>` — a Truva-G3 Streaming Agent
+# `<AGENT NAME>` — a TruvaG3 Streaming Agent
 
 > **Template scaffold.** This README is a placeholder. After your coding
 > agent populates the agent from [`PROMPT.md`](PROMPT.md), replace this

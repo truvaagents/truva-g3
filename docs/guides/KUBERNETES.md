@@ -1,10 +1,10 @@
 # Kubernetes Deployment Guide
 
-🚢 **Deploy Truva-G3 agents to Kubernetes like a pro**
+🚢 **Deploy TruvaG3 agents to Kubernetes like a pro**
 
-Think of Kubernetes as your **digital container ship** - it carries hundreds of tiny containers (your agents) efficiently across the ocean of production traffic. Truva-G3 is perfect for Kubernetes because our agents are incredibly small (8MB vs 500MB+ for Python frameworks), start instantly (< 1 second), and use minimal resources (64MB RAM vs 500MB+).
+Think of Kubernetes as your **digital container ship** - it carries hundreds of tiny containers (your agents) efficiently across the ocean of production traffic. TruvaG3 is perfect for Kubernetes because our agents are incredibly small (8MB vs 500MB+ for Python frameworks), start instantly (< 1 second), and use minimal resources (64MB RAM vs 500MB+).
 
-## 🎯 Why Truva-G3 + Kubernetes = Perfect Match
+## 🎯 Why TruvaG3 + Kubernetes = Perfect Match
 
 ### The Shipping Container Analogy
 
@@ -16,13 +16,13 @@ Imagine you're running a shipping company:
 - Expensive shipping costs (high resource usage)
 - Few containers per ship (low density)
 
-**Truva-G3 agents** are like shipping efficient packages:
+**TruvaG3 agents** are like shipping efficient packages:
 - Lightweight (8MB containers)
 - Fast loading (< 1 second startup)
 - Cheap shipping (64MB RAM each)
 - Hundreds per ship (high density)
 
-This means you can run **500 Truva-G3 agents on the same node** that can only handle **5 Python agents**!
+This means you can run **500 TruvaG3 agents on the same node** that can only handle **5 Python agents**!
 
 ### Real Production Numbers
 
@@ -34,7 +34,7 @@ Traditional Framework (LangChain/AutoGen):
 - Agents per node: 5-10
 - Monthly cost: $2,500
 
-Truva-G3 Framework:
+TruvaG3 Framework:
 - Container size: 8MB
 - Startup time: < 1 second
 - Memory usage: 64MB per agent
@@ -67,7 +67,7 @@ kind version
 
 # 4. Go (for local development)
 go version
-# Should show go1.21+ (Truva-G3 requires go1.25+, but GOTOOLCHAIN=auto handles this)
+# Should show go1.21+ (TruvaG3 requires go1.25+, but GOTOOLCHAIN=auto handles this)
 ```
 
 #### Installation Instructions
@@ -164,7 +164,7 @@ func main() {
     // Create a tool component (using BaseAgent as the foundation)
     tool := core.NewBaseAgent("calculator-tool")
     
-    // Register add capability (Truva-G3 auto-generates endpoints)
+    // Register add capability (TruvaG3 auto-generates endpoints)
     tool.RegisterCapability(core.Capability{
         Name:        "add",
         Description: "Adds two numbers together",
@@ -215,7 +215,7 @@ func main() {
     // Create an agent that can make decisions and orchestrate
     agent := core.NewBaseAgent("greeting-agent")
     
-    // Register greeting capability (Truva-G3 auto-generates endpoints)
+    // Register greeting capability (TruvaG3 auto-generates endpoints)
     agent.RegisterCapability(core.Capability{
         Name:        "greet",
         Description: "Provides personalized greetings",
@@ -241,7 +241,7 @@ EOF
 #### Download Dependencies
 
 ```bash
-# Get Truva-G3 framework
+# Get TruvaG3 framework
 go get github.com/truvaagents/truva-g3@latest
 
 # Verify everything compiles
@@ -420,7 +420,7 @@ echo "✅ kind cluster ready with our images!"
 
 ### Step 5: Deploy Redis for Service Discovery (Required First!)
 
-Truva-G3 components use Redis for service discovery and registration. Let's deploy Redis first:
+TruvaG3 components use Redis for service discovery and registration. Let's deploy Redis first:
 
 ```bash
 # Create Redis deployment
@@ -683,7 +683,7 @@ curl -X POST -H "Content-Type: application/json" \
 # Clean up port forwards
 kill $CALC_PID $GREET_PID
 
-echo "🎉 Success! Both Truva-G3 applications are running on Kubernetes!"
+echo "🎉 Success! Both TruvaG3 applications are running on Kubernetes!"
 
 # ✅ CRITICAL: Verify Redis Registration
 echo ""
@@ -719,11 +719,11 @@ echo "  • Container size: ~21MB each (multi-stage Docker builds)"
 echo "  • Startup time: Nearly instant application boot"
 ```
 
-🎉 **Congratulations!** You've successfully deployed Truva-G3 Tools and Agents to Kubernetes using proper development practices!
+🎉 **Congratulations!** You've successfully deployed TruvaG3 Tools and Agents to Kubernetes using proper development practices!
 
 ## 🤖 Real AI Example: Stock Analysis Workflow
 
-Let's build a **real AI application** that demonstrates the power of Truva-G3's agent orchestration pattern: **Tool → Agent → LLM**. This example shows a stock analysis system where:
+Let's build a **real AI application** that demonstrates the power of TruvaG3's agent orchestration pattern: **Tool → Agent → LLM**. This example shows a stock analysis system where:
 
 1. **Stock Tool** - Fetches market data (no AI, just data)
 2. **Stock Agent** - Orchestrates the workflow and calls OpenAI for analysis
@@ -1201,7 +1201,7 @@ echo "  • CPU Usage: 1m per application"
 echo "  • Container Size: ~21MB each"
 echo "  • Startup Time: < 2 seconds"
 echo ""
-echo "💡 This demonstrates Truva-G3's power: tiny, efficient AI agents"
+echo "💡 This demonstrates TruvaG3's power: tiny, efficient AI agents"
 echo "   that can orchestrate complex workflows with external AI services!"
 ```
 
@@ -1232,7 +1232,7 @@ This example showcases **real-world AI application patterns**:
    - ✅ **Size**: 21MB containers (vs 1.5GB+ for Python AI frameworks)
    - ✅ **Speed**: < 2s startup (vs 10-15s for Python AI frameworks)
 
-This proves that **Truva-G3 + Kubernetes = Efficient AI at Scale**! 🚀
+This proves that **TruvaG3 + Kubernetes = Efficient AI at Scale**! 🚀
 
 ## 🏗️ Understanding the Architecture
 
@@ -1263,7 +1263,7 @@ Think of Kubernetes service discovery like a **smart phone book** for your agent
 
 ### The Two Discovery Patterns
 
-Truva-G3 supports two ways for agents to find each other:
+TruvaG3 supports two ways for agents to find each other:
 
 #### 1. Kubernetes DNS (Recommended)
 **How it works:** Use Kubernetes' built-in DNS like a phone book
@@ -1684,7 +1684,7 @@ curl http://localhost:8080/chat -d '{"message": "Send an email to john@example.c
 
 ### Environment Variables - The Control Panel
 
-Truva-G3 uses a **three-layer configuration system**:
+TruvaG3 uses a **three-layer configuration system**:
 
 1. **Defaults** (built-in sensible values)
 2. **Environment Variables** (override defaults)
@@ -1789,7 +1789,7 @@ spec:
 
 ### Redis Registration Resilience
 
-Truva-G3 includes intelligent retry mechanisms to handle Redis connection failures during service startup, ensuring your services can recover automatically without manual intervention.
+TruvaG3 includes intelligent retry mechanisms to handle Redis connection failures during service startup, ensuring your services can recover automatically without manual intervention.
 
 #### The Problem: Startup Race Conditions
 
@@ -1807,7 +1807,7 @@ Result: Services run in standalone mode, require manual restart
 
 #### The Solution: Background Retry
 
-Truva-G3 provides two configuration options to handle this:
+TruvaG3 provides two configuration options to handle this:
 
 ```yaml
 env:
@@ -2104,7 +2104,7 @@ Think of health checks like **vital signs monitors** in a hospital:
 ```yaml
 livenessProbe:
   httpGet:
-    path: /health        # Truva-G3 provides this endpoint
+    path: /health        # TruvaG3 provides this endpoint
     port: 8080
   initialDelaySeconds: 5   # Wait 5s after container starts
   periodSeconds: 10        # Check every 10s
@@ -2461,7 +2461,7 @@ spec:
 
 ### Prometheus Metrics Integration
 
-Truva-G3 automatically exposes Prometheus metrics at `/metrics`:
+TruvaG3 automatically exposes Prometheus metrics at `/metrics`:
 
 ```yaml
 # ServiceMonitor for Prometheus Operator
@@ -2768,7 +2768,7 @@ Here's a **production-ready script** that deploys everything:
 
 set -e  # Exit on any error
 
-echo "🚀 Deploying Truva-G3 Agent Stack to Kubernetes"
+echo "🚀 Deploying TruvaG3 Agent Stack to Kubernetes"
 
 # Configuration
 NAMESPACE=${NAMESPACE:-"truvag3"}
@@ -3002,7 +3002,7 @@ chmod +x deploy-truvag3-stack.sh
 
 ## 🎓 Summary - What You've Learned
 
-### The Kubernetes + Truva-G3 Advantage
+### The Kubernetes + TruvaG3 Advantage
 
 You now know how to deploy **production-ready AI agent systems** that are:
 
@@ -3060,7 +3060,7 @@ This guide has been completely restructured to follow **industry best practices*
 - **After**: Proper `http.HandlerFunc` signatures that actually compile
 
 **🚨 Issue #2: Go Version Compatibility**  
-- **Before**: Used `golang:1.21-alpine` (incompatible with Truva-G3 v0.4.1+)  
+- **Before**: Used `golang:1.21-alpine` (incompatible with TruvaG3 v0.4.1+)  
 - **After**: Uses `golang:alpine` with `GOTOOLCHAIN=auto` for automatic version management
 
 **🚨 Issue #3: Memory Requirements Confusion**  
@@ -3121,4 +3121,4 @@ The guide now follows proper containerization practices instead of mixing compil
 
 ---
 
-**🎉 Congratulations!** You're now a Truva-G3 + Kubernetes expert! You can deploy, scale, and manage AI agent systems that would make any DevOps engineer proud and any CFO happy with the cost savings! 🚀
+**🎉 Congratulations!** You're now a TruvaG3 + Kubernetes expert! You can deploy, scale, and manage AI agent systems that would make any DevOps engineer proud and any CFO happy with the cost savings! 🚀

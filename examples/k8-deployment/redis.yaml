@@ -113,7 +113,7 @@ metadata:
     component: infrastructure
 data:
   redis.conf: |
-    # Redis configuration for Truva-G3 framework
+    # Redis configuration for TruvaG3 framework
     bind 0.0.0.0
     port 6379
     
@@ -138,7 +138,7 @@ data:
     # Logging
     loglevel notice
     
-    # Truva-G3 specific settings
+    # TruvaG3 specific settings
     # Key expiration for service discovery (30 seconds default)
     # Services should send heartbeats every 15 seconds
     notify-keyspace-events Ex

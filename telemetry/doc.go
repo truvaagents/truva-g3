@@ -1,5 +1,5 @@
 /*
-Package telemetry provides production-grade observability for the Truva-G3 framework.
+Package telemetry provides production-grade observability for the TruvaG3 framework.
 
 Architecture Overview:
 

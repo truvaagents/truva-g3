@@ -1,6 +1,6 @@
 # Developer Tools Guide
 
-Hey there! This guide covers the two developer-facing tools Truva-G3 ships for building, exploring, and debugging agent networks: **Swagger UI** for discovering what each component can do (its API contract), and the **Registry Viewer** for seeing what the running system is actually doing right now (live observability). Between them, they answer almost every "what is this thing?" and "what just happened?" question you'll hit while developing.
+Hey there! This guide covers the two developer-facing tools TruvaG3 ships for building, exploring, and debugging agent networks: **Swagger UI** for discovering what each component can do (its API contract), and the **Registry Viewer** for seeing what the running system is actually doing right now (live observability). Between them, they answer almost every "what is this thing?" and "what just happened?" question you'll hit while developing.
 
 If you've ever had to keep a hand-written spec file in sync with your handlers, tail five different log streams to trace one request, or guess why the LLM made the plan it did — all three of those problems get solved here.
 
@@ -78,7 +78,7 @@ If you've ever had to keep a hand-written spec file in sync with your handlers, 
 
 ## 1. Overview
 
-Building an agent network gives you two kinds of questions that developer tools need to answer. The first is **"what can this thing do?"** — a design-time and integration-time question about contracts and capabilities. The second is **"what did this thing just do?"** — a runtime question about behavior, decisions, and state. Truva-G3 ships one tool for each.
+Building an agent network gives you two kinds of questions that developer tools need to answer. The first is **"what can this thing do?"** — a design-time and integration-time question about contracts and capabilities. The second is **"what did this thing just do?"** — a runtime question about behavior, decisions, and state. TruvaG3 ships one tool for each.
 
 ### The Two Tools at a Glance
 
@@ -87,11 +87,11 @@ Building an agent network gives you two kinds of questions that developer tools 
 | **Swagger UI** | What can this service do? What's the request shape? What does it return? Can I try calling it? | A self-updating API catalog — every service publishes its own OpenAPI spec at `/openapi.json`, no hand-written YAML | [http://swagger.localhost](http://swagger.localhost) |
 | **Registry Viewer** | Which services are running? What LLM calls did the orchestrator make and why? Is there a human approval waiting? For this specific execution, what was the plan, how did each step run, and which memory hooks fired? What's in shared memory right now? | A runtime dashboard for a living system — reads directly from Redis and vector DB, refreshes on demand | [http://registry.localhost](http://registry.localhost) |
 
-Both are optional, opt-in, and developer-facing. Neither is required to run Truva-G3 in production — they exist so you can build, debug, and explain agent behavior while you're developing it.
+Both are optional, opt-in, and developer-facing. Neither is required to run TruvaG3 in production — they exist so you can build, debug, and explain agent behavior while you're developing it.
 
 ### Why This Matters
 
-Think of Swagger UI as the **restaurant menu** — every Truva-G3 tool and agent is a restaurant, its capabilities are the dishes, and instead of maintaining a hand-written menu that drifts out of sync with the kitchen, the menu **prints itself** from what the chef is actually cooking today. No external tooling, no build-time code generation, no spec files to maintain.
+Think of Swagger UI as the **restaurant menu** — every TruvaG3 tool and agent is a restaurant, its capabilities are the dishes, and instead of maintaining a hand-written menu that drifts out of sync with the kitchen, the menu **prints itself** from what the chef is actually cooking today. No external tooling, no build-time code generation, no spec files to maintain.
 
 ```
 Without self-describing APIs:           With /openapi.json:
@@ -107,9 +107,9 @@ The `/openapi.json` endpoint is **opt-in** — disabled by default — so a prod
 
 Think of the Registry Viewer as the **security camera and flight recorder** for the same restaurant — it doesn't tell you what the menu *should* be, it tells you what's happening on the floor right now. Which waiters are working (service registrations), what the head chef is reasoning about (LLM calls), which orders got held up for manager approval (HITL checkpoints), exactly how a specific ticket moved through the kitchen (execution DAG), and what the team remembers about the dinner rush so far (shared memory).
 
-Swagger UI alone is enough to **build** against Truva-G3. Registry Viewer becomes essential the moment you start **debugging** it — especially when the question shifts from "my code is wrong" to "my code is correct but the LLM made a decision I don't understand."
+Swagger UI alone is enough to **build** against TruvaG3. Registry Viewer becomes essential the moment you start **debugging** it — especially when the question shifts from "my code is wrong" to "my code is correct but the LLM made a decision I don't understand."
 
-By exposing a standards-compliant OpenAPI spec at a well-known path, Truva-G3's Swagger UI side also integrates with any of the following **without custom code**:
+By exposing a standards-compliant OpenAPI spec at a well-known path, TruvaG3's Swagger UI side also integrates with any of the following **without custom code**:
 
 - **Swagger UI** — interactive spec browser with "Try it out" forms
 - **Redoc / Redocly** — read-only reference documentation
@@ -124,7 +124,7 @@ You write zero code for any of this. You set one environment variable and point 
 
 # Part 1 — Swagger UI: API Exploration
 
-Sections 2 through 6 cover the first tool: the `/openapi.json` contract every Truva-G3 component publishes, how to enable it, the local kind cluster Swagger UI deployment, how enterprise teams integrate with existing documentation systems, and the security model.
+Sections 2 through 6 cover the first tool: the `/openapi.json` contract every TruvaG3 component publishes, how to enable it, the local kind cluster Swagger UI deployment, how enterprise teams integrate with existing documentation systems, and the security model.
 
 ---
 
@@ -260,7 +260,7 @@ Three pieces live under [examples/k8-deployment/](../examples/k8-deployment/):
 | `ingress-infra.yaml` | Adds an Ingress rule exposing `swagger.localhost` → `swagger-ui` service (alongside the other infra ingress rules) |
 | `setup-infrastructure.sh` | Deploys Swagger UI alongside Redis, Prometheus, Grafana, etc. |
 
-Separately, the [registry-viewer](../examples/registry-viewer-app/) app exposes `GET /swagger-urls.json` — a list of every Truva-G3 service currently registered in Redis, formatted as Swagger UI's `urls` config array. The kind-cluster Swagger UI fetches this URL at page load to auto-populate its service dropdown.
+Separately, the [registry-viewer](../examples/registry-viewer-app/) app exposes `GET /swagger-urls.json` — a list of every TruvaG3 service currently registered in Redis, formatted as Swagger UI's `urls` config array. The kind-cluster Swagger UI fetches this URL at page load to auto-populate its service dropdown.
 
 ### How Auto-Discovery Works
 
@@ -347,7 +347,7 @@ Access it at [http://swagger.localhost](http://swagger.localhost) once the pod i
 
 ## 5. Enterprise Integration Patterns
 
-Here's the honest truth about adopting Truva-G3 in an enterprise environment: most teams already have an API documentation story. They already run a central Swagger UI, or Backstage, or an API gateway that ingests OpenAPI specs. They don't need another one.
+Here's the honest truth about adopting TruvaG3 in an enterprise environment: most teams already have an API documentation story. They already run a central Swagger UI, or Backstage, or an API gateway that ingests OpenAPI specs. They don't need another one.
 
 Good news — you don't need any of the scaffolding above. The framework's contract is just the `/openapi.json` endpoint on each component. Everything else (the kind-cluster Swagger UI, the registry-viewer feed, the nginx proxy) is example code you can ignore. You point your existing documentation system at each service's spec URL, and it just works.
 
@@ -355,7 +355,7 @@ This section walks through the five most common integration patterns. Pick the o
 
 ### Pattern 1: Centralized Swagger UI / Redocly (most common)
 
-Most orgs already run a central Swagger UI or Redocly instance backed by a list of API URLs. Add each Truva-G3 service to that list.
+Most orgs already run a central Swagger UI or Redocly instance backed by a list of API URLs. Add each TruvaG3 service to that list.
 
 For Swagger UI, the `urls` config array accepts a list of `{name, url}` pairs:
 
@@ -366,15 +366,15 @@ For Swagger UI, the `urls` config array accepts a list of `{name, url}` pairs:
 ]
 ```
 
-The URL points to the Truva-G3 service's `/openapi.json` endpoint, exposed through whatever ingress or service mesh the team uses. No registry-viewer needed.
+The URL points to the TruvaG3 service's `/openapi.json` endpoint, exposed through whatever ingress or service mesh the team uses. No registry-viewer needed.
 
-**Operational model**: the dev-portal team maintains the `urls.json`. When a new Truva-G3 service is promoted to dev or staging, it gets added via a PR.
+**Operational model**: the dev-portal team maintains the `urls.json`. When a new TruvaG3 service is promoted to dev or staging, it gets added via a PR.
 
 ### Pattern 2: Backstage (service catalog with auto-discovery)
 
 [Backstage](https://backstage.io) is Spotify's open-source developer portal. Its software catalog has a first-class `API` kind that renders OpenAPI specs inline using a bundled Swagger UI plugin.
 
-Register each Truva-G3 service as a Backstage `API` entity in the repo's `catalog-info.yaml`:
+Register each TruvaG3 service as a Backstage `API` entity in the repo's `catalog-info.yaml`:
 
 ```yaml
 apiVersion: backstage.io/v1alpha1
@@ -402,13 +402,13 @@ Backstage caches the spec, surfaces an interactive API explorer in the catalog, 
 
 These gateways ingest OpenAPI specs to auto-configure routes, authentication, rate limiting, and request validation.
 
-**Kong**: use the [Gateway declarative config](https://docs.konghq.com/gateway/latest/production/deployment-topologies/db-less-and-declarative-config/) with the OpenAPI plugin. Point it at each Truva-G3 service's spec URL and Kong creates routes automatically.
+**Kong**: use the [Gateway declarative config](https://docs.konghq.com/gateway/latest/production/deployment-topologies/db-less-and-declarative-config/) with the OpenAPI plugin. Point it at each TruvaG3 service's spec URL and Kong creates routes automatically.
 
 **Apigee**: use the [generate-apis-from-openapi](https://cloud.google.com/apigee/docs/api-platform/fundamentals/creating-api-proxies) flow with the spec URL as the source.
 
 **AWS API Gateway**: import the spec via the console, CLI (`aws apigateway import-rest-api --body fileb://openapi.json`), or Terraform.
 
-**Operational model**: the platform team runs a periodic job that pulls each Truva-G3 service's `/openapi.json` and pushes it through the gateway's spec importer.
+**Operational model**: the platform team runs a periodic job that pulls each TruvaG3 service's `/openapi.json` and pushes it through the gateway's spec importer.
 
 ### Pattern 4: CI/CD Spec Publishing (SwaggerHub, Stoplight, Git)
 
@@ -437,7 +437,7 @@ cd ../api-specs && git add . && git commit -m "Update weather-tool-v2 spec" && g
 
 If your team wants the kind-cluster experience — one Swagger UI dropdown showing every live service with auto-refresh on deploy — the registry-viewer's `/swagger-urls.json` feed is a reference implementation you can port to your environment.
 
-The endpoint reads service registrations from Redis (Truva-G3's default discovery backend) and emits the `{name, url}` array that Swagger UI expects. ~50 lines of Go in [examples/registry-viewer-app/main.go](../examples/registry-viewer-app/main.go) (`handleSwaggerURLs`).
+The endpoint reads service registrations from Redis (TruvaG3's default discovery backend) and emits the `{name, url}` array that Swagger UI expects. ~50 lines of Go in [examples/registry-viewer-app/main.go](../examples/registry-viewer-app/main.go) (`handleSwaggerURLs`).
 
 To adapt it:
 
@@ -515,7 +515,7 @@ Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger 
 
 Open [http://registry.localhost](http://registry.localhost) against the local kind cluster and you land in a single-page web app with five tabs across the top: **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, and **Memory**. Each tab is its own view of the live system, backed by different data in Redis (and Qdrant for memory), refreshing on demand or on a timer. Everything is read-only except for one narrow exception: the HITL view can submit Approve/Reject commands back to the agent that owns a pending checkpoint.
 
-The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](../examples/registry-viewer-app/) and you can fork it, strip it down, or rewrite it for your own environment. What it demonstrates is that every piece of runtime state Truva-G3 produces is persisted in Redis (and optionally Qdrant) under well-known keys, and a read-only dashboard can be built on top of it in a few thousand lines of Go + vanilla JS.
+The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](../examples/registry-viewer-app/) and you can fork it, strip it down, or rewrite it for your own environment. What it demonstrates is that every piece of runtime state TruvaG3 produces is persisted in Redis (and optionally Qdrant) under well-known keys, and a read-only dashboard can be built on top of it in a few thousand lines of Go + vanilla JS.
 
 ### What It Shows You
 
@@ -839,6 +839,6 @@ When you're stuck and not sure which tab to open, scan this table.
 - **[Tool Schema Discovery Guide](TOOL_SCHEMA_DISCOVERY_GUIDE.md)** — The 3-phase schema architecture (descriptions → field hints → full JSON Schema) that underpins all capability metadata. Phase 3 is what the per-capability `/schema` endpoint implements.
 - **[Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md)** — How to wire shared and user memory into an agent. The Memory view in the Registry Viewer reads the storage this guide tells you how to set up.
 - **[Human-in-the-Loop User Guide](HUMAN_IN_THE_LOOP_USER_GUIDE.md)** — How HITL checkpoints work. The HITL Interrupted view in the Registry Viewer is an operational dashboard for the checkpoints this guide tells you how to create.
-- **[Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md)** — How W3C trace IDs flow through Truva-G3. The DAG view surfaces trace IDs so you can pivot into Jaeger for even lower-level detail.
+- **[Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md)** — How W3C trace IDs flow through TruvaG3. The DAG view surfaces trace IDs so you can pivot into Jaeger for even lower-level detail.
 - **[Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md)** — Full list of `TRUVAG3_*` environment variables, including `TRUVAG3_ENABLE_OPENAPI`, `TRUVAG3_LLM_DEBUG_ENABLED`, and `TRUVAG3_AGENT_DOMAIN`.
 - **[Architecture Overview](ARCHITECTURE.md)** — Framework-wide architectural overview.

@@ -1,6 +1,6 @@
 # Intelligent Error Handling Guide
 
-Welcome to intelligent error handling in Truva-G3! This guide will walk you through how tools report errors and how agents recover from them intelligently. Think of it as teaching your components to have a meaningful conversation when things go wrong.
+Welcome to intelligent error handling in TruvaG3! This guide will walk you through how tools report errors and how agents recover from them intelligently. Think of it as teaching your components to have a meaningful conversation when things go wrong.
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@ That's not helpful! You wanted a cheeseburger. The waiter should have said:
 
 ## The Solution: A Clear Separation of Concerns
 
-Truva-G3 splits error handling into two clear roles:
+TruvaG3 splits error handling into two clear roles:
 
 | Component | Responsibility | Does NOT |
 |-----------|---------------|----------|
@@ -50,7 +50,7 @@ The patient describes the problem clearly. The doctor decides how to fix it.
 
 ## Part 1: The Protocol Types (in core)
 
-Truva-G3 provides three core types for error communication. These live in the `core` package because they're the shared vocabulary between tools and agents.
+TruvaG3 provides three core types for error communication. These live in the `core` package because they're the shared vocabulary between tools and agents.
 
 ### ErrorCategory: Classifying Errors
 

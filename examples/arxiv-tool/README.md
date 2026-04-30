@@ -1,6 +1,6 @@
 # arXiv Tool
 
-A Truva-G3 tool that provides academic paper search capabilities using the free [arXiv.org API](https://arxiv.org/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides academic paper search capabilities using the free [arXiv.org API](https://arxiv.org/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 

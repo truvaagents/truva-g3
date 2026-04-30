@@ -1,6 +1,6 @@
 # GitHub PR Review Agent
 
-An async Truva-G3 agent that reviews GitHub pull requests. Receives `pull_request`
+An async TruvaG3 agent that reviews GitHub pull requests. Receives `pull_request`
 webhooks, fetches PR bundles through the [`github-tool`](../github-tool/), runs
 sharded code review against exact source (no lossy distillation), and optionally
 posts a grouped review back to GitHub.

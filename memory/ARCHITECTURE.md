@@ -1,4 +1,4 @@
-# Truva-G3 Memory Module Architecture
+# TruvaG3 Memory Module Architecture
 
 **Version**: 1.0
 **Module**: `github.com/truvaagents/truva-g3/memory`
@@ -49,7 +49,7 @@
 
 ### 1.1 The Problem
 
-Truva-G3 agents are independent K8s services. Each `ProcessRequest` call starts with a blank slate. When the `event-driven-agent` restarts a pod due to an OOMKilled alert, and 5 minutes later the `devops-chat-agent` receives a query about the same service being slow — it has no idea the restart happened. It investigates from scratch, potentially making conflicting decisions.
+TruvaG3 agents are independent K8s services. Each `ProcessRequest` call starts with a blank slate. When the `event-driven-agent` restarts a pod due to an OOMKilled alert, and 5 minutes later the `devops-chat-agent` receives a query about the same service being slow — it has no idea the restart happened. It investigates from scratch, potentially making conflicting decisions.
 
 This creates three concrete failures:
 - **Duplicated work**: Two agents investigate the same root cause independently, wasting LLM tokens and tool invocations.
@@ -184,7 +184,7 @@ Agent Starts (Day 1)
 
 The memory module provides **production-ready implementations** of the shared memory interfaces defined in `core`. It is the bridge between abstract memory contracts (`core.EpisodicMemory`, `core.SharedKnowledge`, etc.) and concrete storage backends.
 
-**This module follows Truva-G3's micro-kernel architecture**: the `core` module is the lightweight kernel that defines all interfaces and contracts. The `memory` module is a pluggable extension that provides storage-backend-specific implementations. Applications choose which backends to use at compile time by importing the relevant subpackage.
+**This module follows TruvaG3's micro-kernel architecture**: the `core` module is the lightweight kernel that defines all interfaces and contracts. The `memory` module is a pluggable extension that provides storage-backend-specific implementations. Applications choose which backends to use at compile time by importing the relevant subpackage.
 
 ### What This Module Provides
 
@@ -267,7 +267,7 @@ This is the same pattern as the `ai` module: `core` defines `AIClient`, `ai/` pr
 
 ### 1. Micro-Kernel: Core Defines Contracts, Memory Provides Implementations
 
-Truva-G3 follows a **micro-kernel architecture** where the `core` module is the minimal kernel:
+TruvaG3 follows a **micro-kernel architecture** where the `core` module is the minimal kernel:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -299,7 +299,7 @@ Truva-G3 follows a **micro-kernel architecture** where the `core` module is the 
 ```go
 // ❌ WRONG: Adding Qdrant client to core
 // core/shared_memory_qdrant.go
-import "github.com/qdrant/go-client"  // Adds gRPC + protobuf to EVERY Truva-G3 user
+import "github.com/qdrant/go-client"  // Adds gRPC + protobuf to EVERY TruvaG3 user
 
 // ✅ CORRECT: Qdrant implementation in memory module
 // memory/qdrant_shared_knowledge.go
@@ -536,7 +536,7 @@ memory/
 ### Package Documentation (`doc.go`)
 
 ```go
-// Package memory provides storage backend implementations for Truva-G3's
+// Package memory provides storage backend implementations for TruvaG3's
 // cross-agent shared memory interfaces defined in core.
 //
 // This package exists to isolate heavy client dependencies (gRPC, protobuf)
@@ -708,12 +708,12 @@ Backends that target the same `core` interface are **interchangeable with zero a
 
 ## Memory Sharing Topology
 
-Truva-G3 is a platform for building enterprise agentic systems. An enterprise deployment has multiple agent types, each with multiple replicas, serving different business domains. This section defines how memory is shared, isolated, and scoped across these boundaries.
+TruvaG3 is a platform for building enterprise agentic systems. An enterprise deployment has multiple agent types, each with multiple replicas, serving different business domains. This section defines how memory is shared, isolated, and scoped across these boundaries.
 
 ### Sharing Hierarchy
 
 ```
-Platform (Truva-G3 installation)
+Platform (TruvaG3 installation)
   └── Domain (infrastructure, commerce, healthcare)
        ├── Isolation Level: standard | regulated
        └── Agent Type (devops-chat-agent, order-exception-agent)
