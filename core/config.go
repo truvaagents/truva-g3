@@ -608,8 +608,8 @@ func (c *Config) LoadFromEnv() error {
 		} else if c.logger != nil {
 			c.logger.Warn("Invalid port in environment variable", map[string]interface{}{
 				"TRUVAG3_PORT": v,
-				"error":       err,
-				"error_type":  fmt.Sprintf("%T", err),
+				"error":        err,
+				"error_type":   fmt.Sprintf("%T", err),
 			})
 		}
 	}
@@ -726,7 +726,7 @@ func (c *Config) LoadFromEnv() error {
 		} else if c.logger != nil {
 			c.logger.Warn("Invalid retry interval in environment variable", map[string]interface{}{
 				"TRUVAG3_DISCOVERY_RETRY_INTERVAL": v,
-				"error":                           err.Error(),
+				"error":                            err.Error(),
 			})
 		}
 	}
@@ -744,8 +744,8 @@ func (c *Config) LoadFromEnv() error {
 		} else if c.logger != nil {
 			c.logger.Warn("Invalid TTL in environment variable", map[string]interface{}{
 				"TRUVAG3_DISCOVERY_TTL": v,
-				"error":                err.Error(),
-				"hint":                 "use Go duration format: 30s, 1m, etc.",
+				"error":                 err.Error(),
+				"hint":                  "use Go duration format: 30s, 1m, etc.",
 			})
 		}
 	}
@@ -763,8 +763,8 @@ func (c *Config) LoadFromEnv() error {
 		} else if c.logger != nil {
 			c.logger.Warn("Invalid heartbeat interval in environment variable", map[string]interface{}{
 				"TRUVAG3_DISCOVERY_HEARTBEAT": v,
-				"error":                      err.Error(),
-				"hint":                       "use Go duration format: 10s, 500ms, etc.",
+				"error":                       err.Error(),
+				"hint":                        "use Go duration format: 10s, 500ms, etc.",
 			})
 		}
 	}

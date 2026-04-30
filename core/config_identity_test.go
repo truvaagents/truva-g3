@@ -189,7 +189,7 @@ func TestIdentityAlignment_SilentWhenLoggerNil(t *testing.T) {
 func TestLoadFromEnv_PodAppLabel(t *testing.T) {
 	t.Run("loads when running in Kubernetes", func(t *testing.T) {
 		envVars := map[string]string{
-			"KUBERNETES_SERVICE_HOST":  "10.96.0.1",
+			"KUBERNETES_SERVICE_HOST":   "10.96.0.1",
 			"TRUVAG3_K8S_POD_APP_LABEL": "hotel-tool",
 		}
 		for k, v := range envVars {

@@ -434,7 +434,7 @@ func TestAIAgentWithNilClients(t *testing.T) {
 
 	// Set up discovery but no AI client
 	mockDiscovery := core.NewMockDiscovery()
-	agent.BaseAgent.Discovery = mockDiscovery
+	agent.Discovery = mockDiscovery
 
 	ctx := context.Background()
 

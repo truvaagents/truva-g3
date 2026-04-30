@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestEmitScheduleCreated_CronType_DoesNotPanic(t *testing.T) {

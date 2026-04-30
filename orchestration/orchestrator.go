@@ -290,16 +290,16 @@ func GetPropagatedHeaders(ctx context.Context) map[string]string {
 //
 // Keys are canonical (http.CanonicalHeaderKey) for case-insensitive matching.
 var reservedPropagationHeaders = map[string]bool{
-	"Authorization":                true, // OAuth Bearer token (set by executor)
-	"Content-Type":                 true, // Always application/json (set by executor)
+	"Authorization":                 true, // OAuth Bearer token (set by executor)
+	"Content-Type":                  true, // Always application/json (set by executor)
 	"X-Truvag3-Request-Id":          true, // Distributed tracing (set by executor)
 	"X-Truvag3-Original-Request-Id": true, // Original request id across HITL resume (set by executor)
 	"X-Truvag3-Step-Id":             true, // Step correlation (set by executor)
 	"X-Truvag3-Phase-Number":        true, // Phase correlation (set by executor)
 	"X-Truvag3-Plan-Id":             true, // Plan correlation (set by executor)
 	"X-Truvag3-Agent-Name":          true, // Caller agent identity (set by executor)
-	"X-Workflow-Id":                true, // Workflow correlation (set by workflow executor)
-	"X-Step-Id":                    true, // Workflow step (set by workflow executor)
+	"X-Workflow-Id":                 true, // Workflow correlation (set by workflow executor)
+	"X-Step-Id":                     true, // Workflow step (set by workflow executor)
 }
 
 // isReservedPropagationHeader returns true if the given header name must not be

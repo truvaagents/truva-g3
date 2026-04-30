@@ -199,7 +199,7 @@ func TestNewAIToolErrorScenarios(t *testing.T) {
 					t.Error("Expected AI client to be set")
 				}
 				// BaseTool should have AI field set
-				if tool.BaseTool.AI == nil {
+				if tool.AI == nil {
 					t.Error("Expected BaseTool.AI to be set")
 				}
 			}
@@ -221,8 +221,8 @@ func TestNewIntelligentAgentBackwardCompatibility(t *testing.T) {
 				if agent.BaseAgent == nil {
 					t.Error("Expected BaseAgent to be set")
 				}
-				if agent.BaseAgent.ID != "test-agent-123" {
-					t.Errorf("Expected ID to be 'test-agent-123', got %s", agent.BaseAgent.ID)
+				if agent.ID != "test-agent-123" {
+					t.Errorf("Expected ID to be 'test-agent-123', got %s", agent.ID)
 				}
 				if agent.AI != nil {
 					t.Error("Expected AI to be nil (should be set later)")
@@ -239,8 +239,8 @@ func TestNewIntelligentAgentBackwardCompatibility(t *testing.T) {
 				if agent.BaseAgent == nil {
 					t.Error("Expected BaseAgent to be set")
 				}
-				if agent.BaseAgent.ID != "" {
-					t.Errorf("Expected ID to be empty, got %s", agent.BaseAgent.ID)
+				if agent.ID != "" {
+					t.Errorf("Expected ID to be empty, got %s", agent.ID)
 				}
 			},
 		},
@@ -248,8 +248,8 @@ func TestNewIntelligentAgentBackwardCompatibility(t *testing.T) {
 			name: "unicode ID",
 			id:   "agent-🚀-unicode",
 			validate: func(t *testing.T, agent *IntelligentAgent) {
-				if agent.BaseAgent.ID != "agent-🚀-unicode" {
-					t.Errorf("Expected unicode ID to be preserved, got %s", agent.BaseAgent.ID)
+				if agent.ID != "agent-🚀-unicode" {
+					t.Errorf("Expected unicode ID to be preserved, got %s", agent.ID)
 				}
 			},
 		},

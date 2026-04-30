@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/truvaagents/truva-g3/core"
 	pb "github.com/qdrant/go-client/qdrant"
 	"github.com/stretchr/testify/assert"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // VectorUserMemory integration tests require a running Qdrant instance.

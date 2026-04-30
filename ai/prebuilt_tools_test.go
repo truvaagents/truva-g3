@@ -29,8 +29,8 @@ func TestNewTranslationTool(t *testing.T) {
 			expectError: false,
 			validateTool: func(t *testing.T, tool *AITool) {
 				// Verify tool name
-				if tool.BaseTool.Name != "translation-tool" {
-					t.Errorf("Expected tool name 'translation-tool', got '%s'", tool.BaseTool.Name)
+				if tool.Name != "translation-tool" {
+					t.Errorf("Expected tool name 'translation-tool', got '%s'", tool.Name)
 				}
 
 				// Verify capability was registered
@@ -166,8 +166,8 @@ func TestNewSummarizationTool(t *testing.T) {
 	}
 
 	// Verify tool properties
-	if tool.BaseTool.Name != "summarization-tool" {
-		t.Errorf("Expected tool name 'summarization-tool', got '%s'", tool.BaseTool.Name)
+	if tool.Name != "summarization-tool" {
+		t.Errorf("Expected tool name 'summarization-tool', got '%s'", tool.Name)
 	}
 
 	// Verify capability
@@ -234,8 +234,8 @@ func TestNewSentimentAnalysisTool(t *testing.T) {
 	}
 
 	// Verify tool properties
-	if tool.BaseTool.Name != "sentiment-tool" {
-		t.Errorf("Expected tool name 'sentiment-tool', got '%s'", tool.BaseTool.Name)
+	if tool.Name != "sentiment-tool" {
+		t.Errorf("Expected tool name 'sentiment-tool', got '%s'", tool.Name)
 	}
 
 	// Verify capability
@@ -311,8 +311,8 @@ func TestNewCodeReviewTool(t *testing.T) {
 	}
 
 	// Verify tool properties
-	if tool.BaseTool.Name != "code-review-tool" {
-		t.Errorf("Expected tool name 'code-review-tool', got '%s'", tool.BaseTool.Name)
+	if tool.Name != "code-review-tool" {
+		t.Errorf("Expected tool name 'code-review-tool', got '%s'", tool.Name)
 	}
 
 	// Verify capability

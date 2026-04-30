@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestKnowledgeExtractionHook_Name(t *testing.T) {

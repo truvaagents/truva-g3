@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	pb "github.com/qdrant/go-client/qdrant"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
-	pb "github.com/qdrant/go-client/qdrant"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

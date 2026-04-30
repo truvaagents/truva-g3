@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"

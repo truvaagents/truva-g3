@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // Compile-time interface compliance check.

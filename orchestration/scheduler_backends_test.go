@@ -3,7 +3,6 @@ package orchestration
 import (
 	"testing"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,10 +15,6 @@ func TestNewRedisSchedulerBackends_PopulatesBothPrimitives(t *testing.T) {
 	require.NotNil(t, backends)
 	require.NotNil(t, backends.ScheduleStore)
 	require.NotNil(t, backends.TaskDispatcher)
-
-	// Both satisfy their core interfaces.
-	var _ core.ScheduleStore = backends.ScheduleStore
-	var _ core.TaskDispatcher = backends.TaskDispatcher
 
 	// Verify the concrete types are Redis-backed.
 	_, isRedisStore := backends.ScheduleStore.(*RedisScheduleStore)
@@ -41,10 +36,6 @@ func TestNewInMemorySchedulerBackends_PopulatesBothPrimitives(t *testing.T) {
 	require.NotNil(t, backends)
 	require.NotNil(t, backends.ScheduleStore)
 	require.NotNil(t, backends.TaskDispatcher)
-
-	// Both satisfy their core interfaces.
-	var _ core.ScheduleStore = backends.ScheduleStore
-	var _ core.TaskDispatcher = backends.TaskDispatcher
 
 	// Verify the concrete types are in-memory.
 	_, isMemStore := backends.ScheduleStore.(*InMemoryScheduleStore)

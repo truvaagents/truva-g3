@@ -36,9 +36,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
-	"github.com/robfig/cron/v3"
 )
 
 // Default timing for the Scheduler tick loop and leader lock TTL.

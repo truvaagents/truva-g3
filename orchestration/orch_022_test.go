@@ -470,7 +470,7 @@ func redisTTLStoreFixture(t *testing.T) (*miniredis.Miniredis, *RedisExecutionDe
 		logger:    &core.NoOpLogger{},
 		keyPrefix: executionDebugKeyPrefix, // "truvag3:execution:debug:" (trailing colon required — recordKey just concatenates)
 		ttl:       24 * time.Hour,
-		errorTTL:  1 * time.Hour,           // shorter than ttl so carve-out is observable
+		errorTTL:  1 * time.Hour, // shorter than ttl so carve-out is observable
 	}
 	return mr, store
 }

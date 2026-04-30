@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/truvaagents/truva-g3/core"
-	"github.com/truvaagents/truva-g3/telemetry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 // These tests lock the invariant that every LLMInteraction emitted by a

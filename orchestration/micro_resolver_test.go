@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
-	"github.com/stretchr/testify/assert"
 )
 
 // --- Test 1: TestGenerateStructuralSummary_NewsArticles ---

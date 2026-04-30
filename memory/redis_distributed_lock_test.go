@@ -7,9 +7,9 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // --- Constructor tests ---

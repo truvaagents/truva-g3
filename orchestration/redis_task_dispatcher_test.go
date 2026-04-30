@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/truvaagents/truva-g3/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestRedisTaskDispatcher_ImplementsInterface(t *testing.T) {

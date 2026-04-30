@@ -101,7 +101,7 @@ func TestLoadFromEnv(t *testing.T) {
 		"TRUVAG3_CORS_CREDENTIALS": "true",
 		"TRUVAG3_REDIS_URL":        "redis://test-redis:6379",
 		"TRUVAG3_DISCOVERY_CACHE":  "false",
-		"OPENAI_API_KEY":          "sk-test-key",
+		"OPENAI_API_KEY":           "sk-test-key",
 		"TRUVAG3_AI_MODEL":         "gpt-4-turbo",
 		"TRUVAG3_DEV_MODE":         "true",
 		"TRUVAG3_MOCK_AI":          "true",

@@ -219,9 +219,9 @@ type ExecutionStoreConfig struct {
 // Feature is disabled by default per FRAMEWORK_DESIGN_PRINCIPLES.md.
 func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 	return ExecutionStoreConfig{
-		Enabled:   false,                     // Disabled by default
-		TTL:       24 * time.Hour,            // 24 hours for success
-		ErrorTTL:  7 * 24 * time.Hour,        // 7 days for errors
+		Enabled:   false,                      // Disabled by default
+		TTL:       24 * time.Hour,             // 24 hours for success
+		ErrorTTL:  7 * 24 * time.Hour,         // 7 days for errors
 		KeyPrefix: "truvag3:execution:debug:", // Default prefix with trailing colon
 	}
 }
