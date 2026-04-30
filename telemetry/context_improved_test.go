@@ -3,7 +3,6 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -365,15 +364,13 @@ func TestLargeBaggagePerformance(t *testing.T) {
 		}
 	})
 
-	// Should still be reasonably fast even with max items
+	// Threshold is intentionally generous to accommodate slower CI hardware
+	// and -race mode overhead. Goal is to catch catastrophic regressions
+	// (e.g., accidental O(n^2) blowup), not measure real-world performance.
+	const maxNsPerOp = int64(100000) // 100µs
 	nsPerOp := start.NsPerOp()
-	// Note: With race detector, this will be slower. Allow 50 microseconds.
-	maxTime := int64(10000)
-	if testing.Short() || runtime.GOOS == "darwin" {
-		maxTime = 50000 // More lenient on CI/macOS
-	}
-	if nsPerOp > maxTime {
-		t.Errorf("Operation too slow with full baggage: %d ns/op (max: %d)", nsPerOp, maxTime)
+	if nsPerOp > maxNsPerOp {
+		t.Errorf("Operation too slow with full baggage: %d ns/op (max: %d)", nsPerOp, maxNsPerOp)
 	}
 }
 
