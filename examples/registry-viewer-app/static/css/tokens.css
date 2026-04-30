@@ -27,6 +27,16 @@
     --text-secondary: rgba(255, 255, 255, 0.75);
     --text-muted: rgba(255, 255, 255, 0.5);
 
+    /* ── Brand colors (from TruvaG3 logo) ── */
+    /* "Truva" — icy/glass blue with metallic feel */
+    --brand-truva:       #8FCBED;
+    --brand-truva-light: #DBEEFB;
+    --brand-truva-dark:  #4A8AB8;
+    /* "G3" — warm amber with fiery feel */
+    --brand-g3:          #FFA040;
+    --brand-g3-light:    #FFD080;
+    --brand-g3-dark:     #C56710;
+
     /* Accent colors — status indicators with glow capability (§Legend Items with Glow Dots) */
     --accent-blue: #0a84ff;
     --accent-purple: #da8fff;

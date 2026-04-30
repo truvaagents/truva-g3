@@ -48,23 +48,52 @@ header {
 
 .logo { display: flex; align-items: center; gap: 12px; }
 .logo-icon {
-    width: 38px; height: 38px;
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
-    box-shadow: 0 4px 16px rgba(10, 132, 255, 0.4);
+    /* Sized to the TruvaG3 magnifying-glass logo's aspect ratio
+       (320×198 ≈ 1.62:1) so the image fits with no letterboxing. */
+    width: 62px;
+    height: 38px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(10, 132, 255, 0.25);
+    flex-shrink: 0;
+}
+.logo-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
 }
 .logo h1 {
     font-size: 20px;
     font-weight: 600;
     color: var(--text-primary);
 }
-.logo h1 span {
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+/* Brand mark — two-tone matching the TruvaG3 logo.
+   `.brand-truva` closes with -0.04em letter-spacing so the "a" sits
+   tight against the following "G" without the visual gap that
+   `background-clip: text` introduces between adjacent gradient spans.
+   Both spans bump font-size + font-weight relative to their parent h1
+   so the brand mark dominates any descriptor word that follows it
+   (e.g., "Registry").
+   IMPORTANT: `background:` is a shorthand that resets `background-clip`
+   to its default — so the `*-clip: text` and `text-fill-color` props
+   MUST appear AFTER the `background:` declaration in each rule. */
+.brand-truva {
+    background: linear-gradient(135deg, var(--brand-truva-light), var(--brand-truva-dark));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    font-size: 1.35em;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+}
+.brand-g3 {
+    background: linear-gradient(135deg, var(--brand-g3-light), var(--brand-g3-dark));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 1.35em;
+    font-weight: 800;
 }
 
 .main-nav {

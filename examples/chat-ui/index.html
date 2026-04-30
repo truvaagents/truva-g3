@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Truva-G3 Travel Assistant</title>
+    <title>TruvaG3 Travel Assistant</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -33,6 +33,29 @@
             --accent-teal: #64d2ff;
             --border-subtle: rgba(255, 255, 255, 0.08);
             --sidebar-width: 280px;
+
+            /* ── Brand colors (from TruvaG3 logo) ── */
+            --brand-truva:       #8FCBED;
+            --brand-truva-light: #DBEEFB;
+            --brand-truva-dark:  #4A8AB8;
+            --brand-g3:          #FFA040;
+            --brand-g3-light:    #FFD080;
+            --brand-g3-dark:     #C56710;
+        }
+
+        /* Brand mark — two-tone matching the TruvaG3 logo. */
+        .brand-truva {
+            background: linear-gradient(135deg, var(--brand-truva-light), var(--brand-truva-dark));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.04em; /* close the visual gap between "a" and the following "G" */
+        }
+        .brand-g3 {
+            background: linear-gradient(135deg, var(--brand-g3-light), var(--brand-g3-dark));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         * {
@@ -1277,7 +1300,7 @@
     <!-- ===== SIDEBAR ===== -->
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="sidebar-brand">Truva-G3 Travel</div>
+            <div class="sidebar-brand"><span><span class="brand-truva">Truva</span><span class="brand-g3">G3</span> Travel</span></div>
             <button class="new-chat-btn" onclick="startNewChat()">+ New Chat</button>
         </div>
 

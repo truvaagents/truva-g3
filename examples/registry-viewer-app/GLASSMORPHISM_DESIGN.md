@@ -260,6 +260,158 @@ Apple introduced the "Liquid Glass" design language in WWDC 2025. Key techniques
 }
 ```
 
+## Brand Mark (TruvaG3 Two-Tone)
+
+The "TruvaG3" word in the page header uses a two-tone gradient that
+mirrors the project logo: icy/glass blue for "Truva", warm amber for
+"G3". Each part is its own `<span>` so the gradients can be applied
+independently.
+
+### Brand color tokens
+
+Defined in `static/css/tokens.css`. The `*-light` and `*-dark` shades
+feed a 135° gradient that gives the metallic 3D feel of the logo.
+
+```css
+:root {
+  /* "Truva" — icy/glass blue */
+  --brand-truva:       #8FCBED;
+  --brand-truva-light: #DBEEFB;
+  --brand-truva-dark:  #4A8AB8;
+  /* "G3" — warm amber */
+  --brand-g3:          #FFA040;
+  --brand-g3-light:    #FFD080;
+  --brand-g3-dark:     #C56710;
+}
+```
+
+### HTML markup
+
+Two adjacent spans, **no whitespace between them**. The descriptor word
+("Registry") inherits the parent `<h1>` styling.
+
+```html
+<h1>
+  <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
+  Registry
+</h1>
+```
+
+### CSS rules
+
+Two flavors exist across the workspace, with a shared base and an
+optional emphasis layer. **The property order inside each rule matters**
+— see Gotchas below.
+
+**Base — used by `examples/chat-ui/*.html`** (inline in each `<style>`).
+The chat-ui's parent `<h1>` / `.sidebar-brand` is already large and
+heavy, so the brand mark only needs the gradient + the gap fix:
+
+```css
+.brand-truva {
+  /* 1. Gradient FIRST (the shorthand resets background-clip). */
+  background: linear-gradient(135deg, var(--brand-truva-light), var(--brand-truva-dark));
+  /* 2. Clip + transparent fill AFTER, so the gradient paints only the text shape. */
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  /* 3. Tighten the right edge so "a" sits flush against the following "G". */
+  letter-spacing: -0.04em;
+}
+.brand-g3 {
+  background: linear-gradient(135deg, var(--brand-g3-light), var(--brand-g3-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+```
+
+**With emphasis — used by registry-viewer's `static/css/layout.css`.**
+The registry-viewer's parent `.logo h1` is only 20px / weight 600, so
+the brand mark needs an extra size + weight bump to dominate the
+trailing descriptor (`Registry`):
+
+```css
+.brand-truva {
+  background: linear-gradient(135deg, var(--brand-truva-light), var(--brand-truva-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-size: 1.35em;     /* 1.35 × 20px = 27px against parent h1 */
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+.brand-g3 {
+  background: linear-gradient(135deg, var(--brand-g3-light), var(--brand-g3-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-size: 1.35em;
+  font-weight: 800;
+}
+```
+
+**Picking which:** if the parent header is already large enough that the
+brand mark visibly dominates without help, use the base rule. If the
+brand mark is competing with a similarly-sized descriptor word, add the
+emphasis bump. Tune `1.35em` / `800` to taste.
+
+### Gotchas (don't reintroduce)
+
+**1. The `background:` shorthand resets `background-clip` to its
+default.** If you write:
+
+```css
+.brand-x {
+  -webkit-background-clip: text;       /* ← set first */
+  background: linear-gradient(...);    /* ← shorthand RESETS clip to border-box */
+}
+```
+
+…the gradient paints the whole bounding box (visible symptom: solid
+color blocks where the text should be, because the gradient covers the
+glyphs and `text-fill-color: transparent` makes the glyphs invisible
+on top of it). **Always declare `background:` BEFORE `*-clip` and
+`text-fill-color`.** Same trap when refactoring shared properties: if
+`.brand-truva, .brand-g3 { background-clip: text; }` runs *before*
+`.brand-truva { background: ...; }`, the per-class rule resets the
+clip. Either keep all properties per-class, or use `background-image:`
+(longhand, doesn't reset clip).
+
+**2. Don't pair `.brand-truva` / `.brand-g3` with bare-element selectors
+like `.logo h1 span`.**
+
+The bare-selector specificity (`0,1,2` — class + element + element)
+beats `.brand-truva`'s (`0,1,0` — single class). The bare rule silently
+overrides the brand class for every `<span>` inside the header,
+regardless of class. Symptom: both halves of the brand mark render in
+the same color (whichever the bare rule set).
+
+**3. Adjacent gradient spans get a visible gap from `background-clip:
+text`.**
+
+Each span paints its gradient into its own bounding box; natural glyph
+side-bearings on the touching edges add ~4px of visible space between
+"a" and "G" — even though there's no whitespace in the HTML. The
+`letter-spacing: -0.04em` on `.brand-truva` closes that gap. Tune in
+the range `-0.02em` (subtle) to `-0.06em` (aggressive) if your font
+weight/size differs.
+
+### Where the colors come from
+
+Sampled from `TruvaG3-Logo.png` at the project root. If the canonical
+logo is ever updated, re-sample the mid-tone (label center), highlight
+(brightest stroke), and shadow (deepest stroke) of each colored word
+and update the six tokens above.
+
+**Cross-UI consistency:** the same six tokens are duplicated inline in
+each `examples/chat-ui/*.html`'s `<style>` block (dashboard, welcome,
+index, devops, hitl, mock-sidebar). The **token values must stay in
+sync** across all seven definitions — otherwise the brand mark drifts
+between surfaces. The CSS rules themselves (`.brand-truva`,
+`.brand-g3`) intentionally differ between chat-ui (base) and
+registry-viewer (with emphasis); see "CSS rules" above.
+
 ## Best Practices
 
 ### 1. Performance Optimization
@@ -360,6 +512,14 @@ body {
   --accent-blue: #0a84ff;
   --accent-purple: #da8fff;
   --accent-teal: #64d2ff;
+
+  /* Brand colors (sampled from TruvaG3-Logo.png — see "Brand Mark" §) */
+  --brand-truva:       #8FCBED;  /* icy blue, mid-tone */
+  --brand-truva-light: #DBEEFB;  /* icy blue, highlight */
+  --brand-truva-dark:  #4A8AB8;  /* icy blue, shadow */
+  --brand-g3:          #FFA040;  /* warm amber, mid-tone */
+  --brand-g3-light:    #FFD080;  /* warm amber, highlight */
+  --brand-g3-dark:     #C56710;  /* warm amber, shadow */
 }
 ```
 

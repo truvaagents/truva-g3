@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Truva-G3 Chat Assistant - Select Mode</title>
+    <title>TruvaG3 Chat Assistant - Select Mode</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -24,6 +24,29 @@
             --accent-red: #ff6b6b;
             --accent-orange: #ffb340;
             --accent-teal: #64d2ff;
+
+            /* ── Brand colors (from TruvaG3 logo) ── */
+            --brand-truva:       #8FCBED;
+            --brand-truva-light: #DBEEFB;
+            --brand-truva-dark:  #4A8AB8;
+            --brand-g3:          #FFA040;
+            --brand-g3-light:    #FFD080;
+            --brand-g3-dark:     #C56710;
+        }
+
+        /* Brand mark — two-tone matching the TruvaG3 logo. */
+        .brand-truva {
+            background: linear-gradient(135deg, var(--brand-truva-light), var(--brand-truva-dark));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.04em; /* close the visual gap between "a" and the following "G" */
+        }
+        .brand-g3 {
+            background: linear-gradient(135deg, var(--brand-g3-light), var(--brand-g3-dark));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         * {
@@ -536,7 +559,7 @@
 <body>
     <div class="welcome-container">
         <div class="welcome-header">
-            <h1>Truva-G3 Chat Assistant</h1>
+            <h1><span class="brand-truva">Truva</span><span class="brand-g3">G3</span> Chat Assistant</h1>
             <p class="subtitle">
                 Explore different AI orchestration modes and Human-in-the-Loop (HITL) patterns for AI safety and oversight.
             </p>
@@ -544,7 +567,7 @@
                 <h2>What is Human-in-the-Loop (HITL)?</h2>
                 <p>
                     <strong>Human-in-the-Loop</strong> is a safety pattern where AI systems pause execution to request human approval
-                    before performing sensitive operations. In Truva-G3, HITL creates <code>checkpoints</code> that wait for human
+                    before performing sensitive operations. In TruvaG3, HITL creates <code>checkpoints</code> that wait for human
                     decisions (approve/reject) with configurable timeouts. This enables oversight of AI tool
                     invocations at the plan level or individual step level.
                 </p>
