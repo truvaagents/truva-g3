@@ -7,13 +7,13 @@ replace github.com/truvaagents/truva-g3/core => ../core
 replace github.com/truvaagents/truva-g3/telemetry => ../telemetry
 
 require (
-	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
+	github.com/qdrant/go-client v1.17.1
+	github.com/stretchr/testify v1.11.1
 	github.com/truvaagents/truva-g3/core v0.8.2
 	github.com/truvaagents/truva-g3/telemetry v0.0.0-00010101000000-000000000000
-	github.com/qdrant/go-client v1.13.0
-	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
