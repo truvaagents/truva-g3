@@ -74,7 +74,10 @@ func RegisterScheduleCapabilities(tool *core.BaseTool, store core.ScheduleStore)
 				},
 				{
 					Name: "cron_expr", Type: "string", Example: "*/5 * * * *",
-					Description: "Standard 5-field cron expression for recurring execution. Mutually exclusive with run_at and delay.",
+					Description: "Standard 5-field cron expression for recurring execution. " +
+						"Evaluated in UTC: when the user states hours in a local zone (ET, PT, etc.), convert to UTC before submitting. " +
+						"Use `*` for month and day-of-month; pin them only when the user wants the schedule to run on a fixed calendar date every year. " +
+						"Mutually exclusive with run_at and delay.",
 				},
 				{
 					Name: "run_at", Type: "string", Example: "2026-04-10T15:00:00Z",
@@ -159,7 +162,7 @@ func RegisterScheduleCapabilities(tool *core.BaseTool, store core.ScheduleStore)
 			},
 			OptionalFields: []core.FieldHint{
 				{Name: "input", Type: "object", Description: "New payload delivered to the handler on each fire. Full replacement, not merge."},
-				{Name: "cron_expr", Type: "string", Example: "*/10 * * * *", Description: "New cron expression. Recomputes next RunAt."},
+				{Name: "cron_expr", Type: "string", Example: "*/10 * * * *", Description: "New cron expression. Evaluated in UTC; convert user-supplied local times to UTC before submitting. Recomputes next RunAt."},
 				{Name: "run_at", Type: "string", Example: "2026-04-10T18:00:00Z", Description: "New absolute fire time (RFC3339). Clears cron_expr."},
 				{Name: "delay", Type: "string", Example: "30m", Description: "New relative delay from now. Clears cron_expr."},
 				{Name: "target_agent", Type: "string", Example: "devops-chat-agent", Description: "New target agent name. Must be an agent (not a tool)."},
