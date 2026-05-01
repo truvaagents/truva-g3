@@ -24,7 +24,7 @@ This tool reads from the same Redis and Qdrant backends that agents write to via
 ### Prerequisites
 
 - Docker, Kind, kubectl, Go (see [examples/README.md](../README.md) for installation guides)
-- A running Kind cluster with infrastructure (Redis required, Qdrant optional)
+- A running Kind cluster with infrastructure (Redis and Qdrant — both deployed by default; opt out of Qdrant with `TRUVAG3_DEPLOY_QDRANT=false`)
 
 ### Quick Start
 

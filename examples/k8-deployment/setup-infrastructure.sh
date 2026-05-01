@@ -302,6 +302,7 @@ verify_files() {
         "grafana.yaml"
         "metrics-server.yaml"
         "swagger-ui.yaml"
+        "qdrant.yaml"
     )
 
     local missing=()
@@ -455,12 +456,14 @@ main() {
     fi
 
     # 9. Qdrant - Vector DB for Shared Agent Memory (semantic knowledge search)
-    # Optional — deploy with TRUVAG3_DEPLOY_QDRANT=true. Agents degrade gracefully without it.
+    # On by default — chat agents (travel-chat-agent, devops-chat-agent) initialize
+    # vector-backed memory at startup and log errors when it's missing. Opt out with
+    # TRUVAG3_DEPLOY_QDRANT=false for tool-only setups.
     if [ -f "$SCRIPT_DIR/qdrant.yaml" ]; then
-        if [ "${TRUVAG3_DEPLOY_QDRANT:-false}" = "true" ]; then
+        if [ "${TRUVAG3_DEPLOY_QDRANT:-true}" = "true" ]; then
             deploy_component "Qdrant" "qdrant" "qdrant" "qdrant.yaml"
         else
-            echo -e "${COLOR_BLUE}ℹ️  Qdrant: Skipped (set TRUVAG3_DEPLOY_QDRANT=true to enable)${COLOR_NC}"
+            echo -e "${COLOR_BLUE}ℹ️  Qdrant: Skipped (TRUVAG3_DEPLOY_QDRANT=false)${COLOR_NC}"
         fi
     fi
 
@@ -486,7 +489,8 @@ main() {
 
     echo -e "${COLOR_BLUE}🔗 Internal cluster addresses:${COLOR_NC}"
     echo -e "   Redis:          ${COLOR_YELLOW}redis.${NAMESPACE}:6379${COLOR_NC}"
-    echo -e "   Qdrant (gRPC):  ${COLOR_YELLOW}qdrant.${NAMESPACE}:6334${COLOR_NC} (if deployed)"
+    echo -e "   Qdrant (gRPC):  ${COLOR_YELLOW}qdrant.${NAMESPACE}:6334${COLOR_NC}"
+    echo -e "   Qdrant (REST):  ${COLOR_YELLOW}qdrant.${NAMESPACE}:6333${COLOR_NC}"
     echo -e "   Loki:           ${COLOR_YELLOW}loki.${NAMESPACE}:3100${COLOR_NC}"
     echo -e "   OTEL Collector: ${COLOR_YELLOW}otel-collector.${NAMESPACE}:4318${COLOR_NC}"
     echo ""
