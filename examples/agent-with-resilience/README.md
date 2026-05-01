@@ -1367,4 +1367,4 @@ kubectl get pods -n truvag3-examples -l app=research-agent-resilience
 
 ## License
 
-MIT License - See [LICENSE](../../LICENSE) for details.
+Apache License 2.0 — see [LICENSE](../../LICENSE) and [NOTICE](../../NOTICE) for details.

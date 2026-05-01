@@ -1,7 +1,7 @@
 # TruvaG3 - Kubernetes-Native AI Agent Framework for Enterprise Environments
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org/dl/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
 > **Microservices meet AI**: Build and operate agent ecosystems as independent Kubernetes services — discover capabilities dynamically, orchestrate intelligently, and keep the whole system inside your own platform boundaries.
 
@@ -1338,4 +1338,4 @@ We welcome contributions. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
