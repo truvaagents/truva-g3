@@ -5,13 +5,13 @@
 
 > **Microservices meet AI**: Build and operate agent ecosystems as independent Kubernetes services — discover capabilities dynamically, orchestrate intelligently, and keep the whole system inside your own platform boundaries.
 
-> **Note:** TruvaG3 is an open-source framework and reference implementation for teams exploring or building enterprise agent platforms. It demonstrates production-oriented patterns, but it is maintained by a solo developer and is not sold as a commercially supported platform.
+> **Note:** TruvaG3 is an open-source framework and reference implementation for teams exploring or building enterprise agent platforms. It demonstrates production-oriented patterns built on open standards and open-source tools, with a "batteries-included, fully replaceable" philosophy — sensible defaults sit behind interfaces at every layer, so developers can swap not just backends (service discovery, LLM provider, telemetry, memory store) but also the framework's own behaviour (prompt construction, planning, retry and error handling, pipeline hooks for background jobs and cross-cutting middleware).
 
 TruvaG3 is an **open source** framework for building autonomous AI agent networks, inspired by **microservice architecture** principles. It is especially well-suited for enterprises that want to run agentic systems inside their existing Kubernetes estate, including air-gapped or tightly controlled environments. Different teams, departments, and use cases can run isolated agent ecosystems in separate namespaces while still using familiar platform controls around networking, observability, rollout, and security.
 
 **Vendor agnostic by design**: Seamlessly integrate with any LLM provider (OpenAI, Anthropic, Gemini, Groq, DeepSeek) or your own self-hosted models via OpenAI-compatible endpoints. Switch providers without changing your agent code.
 
-**Production-quality patterns**: Redis/Valkey-based service discovery for dynamic tool networks, built-in resilience patterns (circuit breakers, semantic retry, panic recovery), and full observability through OpenTelemetry with distributed tracing and unified metrics. Written in Go for minimal resource footprint (~15-44MB containers, 8-20MB runtime memory) and Kubernetes-native deployment.
+**Production-quality patterns**: dynamic capability-based service discovery (Redis/Valkey by default; pluggable behind the `core.Discovery` interface), built-in resilience patterns (circuit breakers, semantic retry, panic recovery), and full observability through OpenTelemetry with distributed tracing and unified metrics. Written in Go for minimal resource footprint (~15-44MB containers, 8-20MB runtime memory) and Kubernetes-native deployment.
 
 **Distinguishing strength**: TruvaG3 is strongest when the requirement is not just "build an agent", but "run many agent systems safely inside enterprise infrastructure." That includes self-hosted operation, namespace isolation, direct in-cluster service communication, and the ability to grow from isolated experiments to large internal fleets of agents and tools without depending on an external SaaS control plane.
 
@@ -29,11 +29,10 @@ TruvaG3 is an **open source** framework for building autonomous AI agent network
 - [Key Features](#core-capabilities)
   - [Dynamic Service Discovery](#1-agents-that-find-each-other-automatically) - Tools & agents find each other at runtime
   - [AI-Powered Orchestration](#2-talk-to-your-agents-in-plain-english) - Natural language → execution plans
-  - [Predefined Workflows](#3-define-repeatable-agent-workflows) - YAML, code-based, or custom JSON workflows
-  - [Resilience Patterns](#4-agents-that-dont-crash-your-system) - Circuit breakers, retry, panic recovery
-  - [Human-in-the-Loop](#5-human-in-the-loop-approval-checkpoints) - Plan & step approval checkpoints
-  - [Full Observability](#6-know-what-your-agents-are-doing-without-the-hassle) - Metrics, tracing, logging
-  - [Agent Memory](#7-agent-memory) - Cross-agent shared memory + per-user personalization
+  - [Resilience Patterns](#3-agents-that-dont-crash-your-system) - Circuit breakers, retry, panic recovery
+  - [Human-in-the-Loop](#4-human-in-the-loop-approval-checkpoints) - Plan & step approval checkpoints
+  - [Full Observability](#5-know-what-your-agents-are-doing-without-the-hassle) - Metrics, tracing, logging
+  - [Agent Memory](#6-agent-memory) - Cross-agent shared memory + per-user personalization
 
 **3. Guides & Examples**
 - [Real-World Example](#putting-it-all-together-a-real-example) • *Complete system*
@@ -86,7 +85,7 @@ Just as microservices decomposed monolithic applications into specialized, indep
 
 | Capability | Kubernetes Provides | TruvaG3 Adds |
 |------------|---------------------|-------------|
-| **Discovery** | Service DNS for static endpoints | Redis/Valkey-based dynamic capability discovery - agents find tools by what they do, not where they are |
+| **Discovery** | Service DNS for static endpoints | Dynamic capability discovery (Redis/Valkey by default; pluggable) — agents find tools by what they do, not where they are |
 | **Auto-scaling** | HPA scales pods based on metrics | Go's 8-20MB memory footprint can increase pod density compared with heavier interpreter-based stacks |
 | **Health Monitoring** | Restart failed pods | Circuit breakers prevent cascade failures before pods need restarting |
 | **Load Balancing** | Distribute traffic across replicas | Intelligent routing based on tool capabilities and health status |
@@ -153,7 +152,7 @@ TruvaG3 addresses common challenges in building AI agent systems. Study these pa
 
 ## What Makes TruvaG3 Unique: Dynamic Agent Discovery, Vendor-Agnostic, Microservice-Native AI
 
-While many popular frameworks center orchestration around explicit graphs, predefined roles, or conversation patterns, TruvaG3 takes a different approach: **dynamic capability-based discovery** where agents discover tools and other agents at runtime through Redis/Valkey — combined with **vendor-agnostic AI** that works with any LLM provider.
+While many popular frameworks center orchestration around explicit graphs, predefined roles, or conversation patterns, TruvaG3 takes a different approach: **dynamic capability-based discovery** where agents discover tools and other agents at runtime through a pluggable service registry (Redis/Valkey by default) — combined with **vendor-agnostic AI** that works with any LLM provider.
 
 For architects, the practical differentiators are:
 
@@ -166,7 +165,7 @@ For architects, the practical differentiators are:
 - **Observability fits existing OTEL and Kubernetes operations**: TruvaG3 emits OpenTelemetry-native traces and metrics, carries trace context across agents and tools, and produces structured logs that are collected and correlated through the OTEL Collector and Loki/Jaeger stack, so platform teams can troubleshoot distributed agent workflows using the same Grafana, Jaeger, Prometheus, and collector patterns they already know
 - **Well aligned with existing enterprise platform controls**: Kubernetes networking, rollout strategies, service DNS, logs, traces, metrics, and secrets management all remain first-class
 
-> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A TruvaG3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. It is closer to an application that **hosts** callable capabilities than to an MCP client.
+> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP **tool** is a single named function exposed by an MCP **server** for a client/LLM to invoke. A TruvaG3 **Tool** is an independent microservice — it runs in its own container, registers itself with the framework's pluggable service registry, and exposes one or more **capabilities** over HTTP. The cleaner mapping is: a TruvaG3 Tool plays the role of an MCP server, and a TruvaG3 capability plays the role of an MCP tool.
 
 ### Dynamic Orchestration Over Predefined Workflows
 
@@ -179,7 +178,7 @@ For architects, the practical differentiators are:
 **TruvaG3's Approach:**
 - AI generates execution plans at runtime based on natural language requests
 - Tools register themselves with capabilities - no predefined roles needed
-- New tools automatically become available to existing orchestrators via Redis/Valkey discovery
+- New tools automatically become available to existing orchestrators via the service registry
 - LLM dynamically selects tools based on discovered capabilities, not hardcoded references
 
 ### True Vendor Independence
@@ -234,7 +233,7 @@ TruvaG3 implements the same patterns used in production-grade systems, giving yo
 | **Concurrent Agents** | 1000s (goroutines) | Depends on runtime model and deployment architecture |
 | **Health Checks** | Built-in from start | Added via extensions |
 | **Circuit Breakers** | Native support | External libraries needed |
-| **Service Discovery** | Redis/Valkey-based, automatic | Manual configuration |
+| **Service Discovery** | Capability-based, automatic (Redis/Valkey default) | Manual configuration |
 | **Semantic Retry** | LLM computes corrected params | Manual error handling |
 | **Human-in-the-Loop** | Built-in approval checkpoints | Custom implementation |
 
@@ -467,7 +466,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 //   4. Synthesizes results into a coherent response
 ```
 
-In TruvaG3's dynamic mode, there is no per-request tool wiring in the application code. Add a new tool to Redis/Valkey, and it becomes discoverable to orchestrators immediately.
+In TruvaG3's dynamic mode, there is no per-request tool wiring in the application code. Deploy a new tool, and it becomes discoverable to orchestrators immediately.
 
 ### Dual-Mode Orchestration: Choose Your Approach
 
@@ -594,15 +593,15 @@ flowchart TB
 
 - **Agents** are like chefs who use multiple kitchen tools to create a meal. They discover available tools, select the right ones for the task, and orchestrate complex workflows - often using AI to make intelligent decisions. Agents also register their own capabilities and can be discovered by other agents, enabling hierarchical orchestration (e.g., a master-agent delegating to specialized sub-agents).
 
-> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP tool is a function exposed by an MCP server for a client/LLM to invoke. A TruvaG3 Tool is an **independent microservice** that wraps external APIs, runs in its own container, registers capabilities via Redis/Valkey, and responds to HTTP requests from agents. Think of TruvaG3 Tools as the infrastructure layer that *hosts* capabilities, rather than the capabilities themselves.
+> **A note on terminology**: TruvaG3 "Tools" are **not** the same as MCP (Model Context Protocol) tools. An MCP **tool** is a single named function exposed by an MCP **server** for a client/LLM to invoke. A TruvaG3 **Tool** is an independent microservice — it runs in its own container, registers itself with the framework's pluggable service registry, and exposes one or more **capabilities** over HTTP. The cleaner mapping is: a TruvaG3 Tool plays the role of an MCP server, and a TruvaG3 capability plays the role of an MCP tool.
 
 > 📖 For detailed examples and patterns, see the [Core Module README](core/README.md#real-world-tool-examples).
 
 **How It Works**:
 
-1. **Tools Register** → Each tool announces itself to Redis/Valkey with capabilities and a 30-second TTL
+1. **Tools Register** → Each tool announces itself to the service registry with capabilities and a 30-second TTL
 2. **Heartbeat** → Tools refresh their TTL every 15 seconds (automatic via Framework)
-3. **Agents Discover** → Agents query Redis/Valkey to find tools by capability (e.g., "find all tools with `current_weather`")
+3. **Agents Discover** → Agents query the service registry to find tools by capability (e.g., "find all tools with `current_weather`")
 4. **AI Selects** → When processing natural language, AI analyzes available capabilities and generates an execution plan
 5. **Coordinate** → Agent calls selected tools via HTTP, collects responses, synthesizes results
 
@@ -699,6 +698,8 @@ graph TD
 
         AI["<b>AI</b><br/>━━━━━━<br/>• LLM Client<br/>• Intelligent Agent<br/>• Embeddings"]
 
+        Memory["<b>MEMORY</b><br/>━━━━━━<br/>• Episodic Events<br/>• Knowledge Store<br/>• User Memory"]
+
         Resilience["<b>RESILIENCE</b><br/>━━━━━━<br/>• Circuit Breaker<br/>• Retry Logic<br/>• Timeouts"]
 
         Telemetry["<b>TELEMETRY*</b><br/>━━━━━━<br/>• Metrics<br/>• Tracing<br/>• Observability<br/><i>*Cross-cutting</i>"]
@@ -706,11 +707,14 @@ graph TD
         Orchestration["<b>ORCHESTRATION</b><br/>━━━━━━<br/>• Workflow Engine<br/>• Natural Language<br/>• Multi-Agent"]
 
         Core -->|Defines interfaces| AI
-        Core -->|  | Resilience
+        Core -->|Defines interfaces| Memory
+        Core -->|Defines interfaces| Resilience
         Core -->|Defines interfaces| Telemetry
         Core -->|Defines interfaces| Orchestration
 
         Telemetry -.->|Implements| Core
+        AI -->|Uses| Telemetry
+        Memory -->|Uses| Telemetry
         Resilience -->|Uses| Telemetry
         Orchestration -->|Uses| Telemetry
     end
@@ -719,6 +723,7 @@ graph TD
     style Tools fill:#0288d1,stroke:#0277bd,stroke-width:2px,color:#fff
     style Agents fill:#039be5,stroke:#0288d1,stroke-width:2px,color:#fff
     style AI fill:#ef6c00,stroke:#e65100,stroke-width:2px,color:#fff
+    style Memory fill:#00838f,stroke:#006064,stroke-width:2px,color:#fff
     style Resilience fill:#6a1b9a,stroke:#4a148c,stroke-width:2px,color:#fff
     style Telemetry fill:#2e7d32,stroke:#1b5e20,stroke-width:3px,color:#fff
     style Orchestration fill:#ad1457,stroke:#880e4f,stroke-width:2px,color:#fff
@@ -738,15 +743,14 @@ graph TD
   - Configuration management and service discovery
 
 - **Module Dependencies**:
-  - **UI** → Core only
-  - **AI, Resilience, Orchestration** → Core + Telemetry (for metrics and tracing)
+  - **AI, Memory, Resilience, Orchestration** → Core + Telemetry (for metrics and tracing)
   - **Telemetry** → Core (implements the `core.Telemetry` interface)
   - No circular dependencies - proper DAG structure
 
 - **Telemetry as Cross-Cutting Concern**:
   - Core defines the `Telemetry` interface
   - Components receive telemetry via dependency injection
-  - AI/Resilience/Orchestration import telemetry for metrics and distributed tracing
+  - AI/Memory/Resilience/Orchestration import telemetry for metrics and distributed tracing
   - Follows Dependency Inversion Principle - depend on abstractions, not implementations
 
 - **Clean Separation**: Each module has a single responsibility
@@ -759,6 +763,7 @@ graph TD
 import (
     "github.com/truvaagents/truva-g3/core"          // Base agent (always needed)
     "github.com/truvaagents/truva-g3/ai"            // Add if you need LLM integration
+    "github.com/truvaagents/truva-g3/memory"        // Add for cross-agent shared memory
     "github.com/truvaagents/truva-g3/orchestration" // Add for multi-agent coordination
     "github.com/truvaagents/truva-g3/resilience"    // Add for circuit breakers
     "github.com/truvaagents/truva-g3/telemetry"     // Add for metrics
@@ -893,10 +898,10 @@ tools, err := r.Discovery.FindByCapability(ctx, "current_weather")
 ```
 
 **What Happens Behind the Scenes**:
-- Tools register themselves in Redis/Valkey with a TTL (default 30 seconds)
+- Tools register themselves with the service registry with a TTL (default 30 seconds)
 - If a tool crashes, it's automatically removed after TTL expires
-- Agents query Redis/Valkey to find available tools by type or capability
-- No hardcoded IPs, no service mesh needed - just Redis/Valkey
+- Agents query the registry to find available tools by type or capability
+- No hardcoded IPs, no service mesh needed — just a service registry (Redis/Valkey by default; pluggable)
 
 → See [agent-example](examples/agent-example/) for complete implementation with AI-powered tool selection
 
@@ -933,70 +938,7 @@ curl -X POST http://localhost:8080/api/research \
 
 → See [agent-with-orchestration](examples/agent-with-orchestration/) for travel research agent with workflow orchestration
 
-### 3. Define Repeatable Agent Workflows
-
-**The Problem**: Some agent tasks always follow the same pattern. How do you avoid re-orchestrating the same sequence every time?
-
-**The Solution**: Multiple workflow options depending on your needs:
-
-| Mode | Best For | Definition |
-|------|----------|------------|
-| **Predefined Workflows** | Named, reusable patterns | Code-based with parameters |
-| **Natural Language** | Flexible, AI-driven | LLM plans execution dynamically |
-| **Custom JSON** | Dynamic, API-driven | Runtime-submitted steps |
-| **YAML Workflows** | Ops-friendly, version-controlled | Declarative YAML files |
-
-**Predefined Workflow** - Named workflows with parameters:
-```bash
-curl -X POST http://localhost:8094/orchestrate/travel-research \
-  -H "Content-Type: application/json" \
-  -d '{"destination": "Tokyo, Japan", "base_currency": "USD", "amount": 1000}'
-```
-
-**Natural Language** - AI discovers tools and plans execution:
-```bash
-curl -X POST http://localhost:8094/orchestrate/natural \
-  -H "Content-Type: application/json" \
-  -d '{"request": "What is the weather in Paris and what currency do they use?"}'
-```
-
-**Custom JSON** - Define steps at runtime (no LLM needed):
-```bash
-curl -X POST http://localhost:8094/orchestrate/custom \
-  -H "Content-Type: application/json" \
-  -d '{
-    "steps": [
-      {"tool": "geocoding-tool", "capability": "geocode_location", "params": {"location": "Berlin"}},
-      {"tool": "weather-tool-v2", "capability": "get_current_weather", "params": {"lat": 52.52, "lon": 13.405}}
-    ]
-  }'
-```
-
-**YAML Workflow** - Declarative with dependencies:
-```yaml
-name: daily-report
-steps:
-  - name: get-sales
-    agent: sales-agent
-    action: fetch_daily_total
-  - name: get-costs          # Runs in parallel with get-sales
-    agent: finance-agent
-    action: fetch_daily_costs
-  - name: calculate-profit
-    depends_on: [get-sales, get-costs]  # Wait for both
-```
-
-**What Happens Behind the Scenes**:
-- Framework identifies which steps can run in parallel
-- Automatically waits for dependencies before running next steps
-- Passes data between agents using parameter resolution
-- If an agent fails, the workflow stops and reports which step failed
-
-→ See [agent-with-orchestration](examples/agent-with-orchestration/) for complete workflow implementation
-
-→ See [orchestration/README.md](orchestration/README.md) for workflow engine documentation
-
-### 4. Agents That Don't Crash Your System
+### 3. Agents That Don't Crash Your System
 
 **The Problem**: When external APIs are down or slow, your agents keep trying and failing, creating a cascade of failures.
 
@@ -1026,7 +968,7 @@ err := cb.ExecuteWithTimeout(ctx, 5*time.Second, func() error {
 
 → See [agent-with-resilience](examples/agent-with-resilience/) for per-tool circuit breakers with AI-powered error correction
 
-### 5. Human-in-the-Loop Approval Checkpoints
+### 4. Human-in-the-Loop Approval Checkpoints
 
 **The Problem**: Some agent operations are too risky to run automatically. Payment processing, data deletion, or sensitive API calls need human approval.
 
@@ -1067,7 +1009,7 @@ orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
 
 → See [docs/HUMAN_IN_THE_LOOP_USER_GUIDE.md](docs/HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL documentation
 
-### 6. Know What Your Agents Are Doing (Without the Hassle)
+### 5. Know What Your Agents Are Doing (Without the Hassle)
 
 **The Problem**: You need metrics and tracing to debug issues, but don't want vendor lock-in or complex setup.
 
@@ -1097,7 +1039,7 @@ core.WithMiddleware(telemetry.TracingMiddleware(serviceName))
 
 → See [agent-with-telemetry](examples/agent-with-telemetry/) for OTEL integration with Prometheus, Jaeger, and Grafana
 
-### 7. Agent Memory
+### 6. Agent Memory
 
 Two composable memory layers for different concerns:
 
