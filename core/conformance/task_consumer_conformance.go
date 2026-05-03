@@ -11,7 +11,7 @@
 //
 // Dependencies: only stdlib + github.com/truvaagents/truva-g3/core.
 // No testify. No mocks. No orchestration types. Adheres to
-// core/CORE_DESIGN_PRINCIPLES.md §2 Zero Framework Dependencies.
+// core/ARCHITECTURE.md §2 Zero Framework Dependencies.
 package conformance
 
 import (

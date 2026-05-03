@@ -937,7 +937,7 @@ func writeScheduleError(w http.ResponseWriter, status int, toolErr *core.ToolErr
 // setTraceHeaders echoes the current span's trace/span IDs on the response
 // so callers can correlate distributed traces.
 //
-// Per CORE_DESIGN_PRINCIPLES.md §Interface Design, context.Context is always
+// Per core/ARCHITECTURE.md §Interface Design Rules, context.Context is always
 // the first parameter.
 func setTraceHeaders(ctx context.Context, w http.ResponseWriter) {
 	tc := telemetry.GetTraceContext(ctx)

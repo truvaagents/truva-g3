@@ -34,7 +34,7 @@ type KnowledgeExtractionHook struct {
 }
 
 // KnowledgeExtractionOption configures KnowledgeExtractionHook.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type KnowledgeExtractionOption func(*KnowledgeExtractionHook) error
 
 // WithExtractionLogger sets the logger.

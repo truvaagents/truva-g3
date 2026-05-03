@@ -196,7 +196,7 @@ type MemoryEnrichmentHook struct {
 }
 
 // MemoryEnrichmentOption configures MemoryEnrichmentHook.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type MemoryEnrichmentOption func(*MemoryEnrichmentHook) error
 
 // WithEnrichmentKnowledge enables shared knowledge search (Phase 2).
@@ -727,7 +727,7 @@ type MemoryRecordHook struct {
 }
 
 // MemoryRecordOption configures MemoryRecordHook.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type MemoryRecordOption func(*MemoryRecordHook) error
 
 // WithRecordImportanceFunc sets a custom importance scoring function.

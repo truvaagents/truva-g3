@@ -29,7 +29,7 @@ type EpisodicMemoryConfig struct {
 }
 
 // EpisodicMemoryOption configures StreamEpisodicMemory using the WithXXX pattern.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type EpisodicMemoryOption func(*StreamEpisodicMemory) error
 
 // WithEpisodicRedisClient sets the Redis client for episodic memory.
@@ -541,7 +541,7 @@ func containsString(slice []string, s string) bool {
 // --- Atomic Lock Investigation Coordinator (Redis-compatible SET NX) ---
 
 // InvestigationCoordinatorOption configures AtomicLockCoordinator.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type InvestigationCoordinatorOption func(*AtomicLockCoordinator) error
 
 // WithCoordinatorRedisClient sets the Redis client for investigation coordination.

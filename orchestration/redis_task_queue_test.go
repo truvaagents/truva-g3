@@ -15,7 +15,7 @@ import (
 //
 //	Explicit QueueKey > TRUVAG3_K8S_SERVICE_NAME > hardcoded default
 //
-// Per CORE_DESIGN_PRINCIPLES.md configuration checklist: "Test all precedence scenarios."
+// Per core/ARCHITECTURE.md §Configuration Changes checklist: "Test all precedence scenarios."
 func TestQueueKeyPrecedence(t *testing.T) {
 	testCases := []struct {
 		name         string

@@ -1560,7 +1560,7 @@ BenchmarkBaggagePropagation-10          5000000   234.1 ns/op    128 B/op    3 a
 
 - [Telemetry Module README](./README.md) - User-facing documentation and quick start
 - [Framework Design Principles](../FRAMEWORK_DESIGN_PRINCIPLES.md) - Overall framework architecture
-- [Core Module Design](../core/CORE_DESIGN_PRINCIPLES.md) - Core module architectural rules
+- [Core Module Architecture](../core/ARCHITECTURE.md) - Core module architectural rules
 - [OpenTelemetry Specification](https://opentelemetry.io/docs/specs/otel/) - OTLP protocol details
 
 ---

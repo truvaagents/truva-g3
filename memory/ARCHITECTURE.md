@@ -95,7 +95,7 @@ Separate from the four shared memory types above, **User Memory** stores per-use
 | `core.UserMemory` | `VectorUserMemory` (Qdrant) | `InMemoryUserMemory` |
 | `core.UserMemoryAdmin` | `VectorUserMemory` | `InMemoryUserMemory` |
 
-The `VectorUserMemory` backend generates embeddings internally (via injected `core.EmbeddingClient`) — unlike `SharedKnowledge` which receives pre-embedded fragments. This is because `UserFact` in `core` intentionally has no `Embedding` field (core must not assume all backends use client-side vector embeddings — per CORE_DESIGN_PRINCIPLES §Zero Assumptions).
+The `VectorUserMemory` backend generates embeddings internally (via injected `core.EmbeddingClient`) — unlike `SharedKnowledge` which receives pre-embedded fragments. This is because `UserFact` in `core` intentionally has no `Embedding` field (core must not assume all backends use client-side vector embeddings — per core/ARCHITECTURE.md §Zero Assumptions).
 
 **Factory:** `NewUserMemoryBackend(logger, opts...)` auto-detects the backend from `TRUVAG3_VECTOR_DB_URL`. Returns `UserMemoryBackend` with `ToDeps()` for `BuildUserMemoryHooks()`.
 

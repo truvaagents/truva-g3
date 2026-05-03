@@ -21,7 +21,7 @@ type memoryHookConfig struct {
 
 // BuildMemoryHooksOption configures behavioural overrides for BuildMemoryHooks.
 // Only interfaces and functions — numeric tuning uses env vars.
-// Returns error for fail-fast validation (per CORE_DESIGN_PRINCIPLES §Option Functions).
+// Returns error for fail-fast validation (per core/ARCHITECTURE.md §Option Function Pattern).
 type BuildMemoryHooksOption func(*memoryHookConfig) error
 
 // WithMemoryEntityExtractor overrides the entity extractor used by BOTH

@@ -815,7 +815,7 @@ func (l *checkpointTestCapturingLogger) DebugWithContext(ctx context.Context, ms
 // =============================================================================
 
 // TestCheckpointStoreAgentNameFallback verifies TRUVAG3_AGENT_NAME > TRUVAG3_K8S_SERVICE_NAME
-// precedence in NewRedisCheckpointStore key prefix, per CORE_DESIGN_PRINCIPLES.md.
+// precedence in NewRedisCheckpointStore key prefix, per core/ARCHITECTURE.md.
 func TestCheckpointStoreAgentNameFallback(t *testing.T) {
 	testCases := []struct {
 		name           string

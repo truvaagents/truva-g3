@@ -34,7 +34,7 @@ type sharedBackendsConfig struct {
 }
 
 // SharedBackendsOption configures NewSharedBackends.
-// Returns error for fail-fast validation (per CORE_DESIGN_PRINCIPLES §Option Functions).
+// Returns error for fail-fast validation (per core/ARCHITECTURE.md §Option Function Pattern).
 type SharedBackendsOption func(*sharedBackendsConfig) error
 
 // WithDomain overrides the TRUVAG3_AGENT_DOMAIN env var.
@@ -237,7 +237,7 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 
 // ToDeps returns a copy of the SharedMemoryDeps struct for passing to orchestration.BuildMemoryHooks.
 // Returns a copy to prevent external modification of internal state
-// (per CORE_DESIGN_PRINCIPLES §Memory Management).
+// (per core/ARCHITECTURE.md §Memory Management).
 func (sb *SharedBackends) ToDeps() *core.SharedMemoryDeps {
 	if sb == nil {
 		return nil

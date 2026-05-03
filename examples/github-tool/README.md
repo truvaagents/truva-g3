@@ -1,5 +1,7 @@
 # GitHub Tool
 
+> **Work in progress.** This example is incomplete and has not been validated end-to-end.
+
 A passive TruvaG3 tool that wraps the GitHub REST API for the
 [`github-pr-review-agent`](../github-pr-review-agent/). Owns GitHub auth,
 pagination, artifact storage for raw PR patches/files, exact-line file context

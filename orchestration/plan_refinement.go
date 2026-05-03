@@ -57,7 +57,7 @@ func NewPlanRefiner(aiClient core.AIClient, logger core.Logger) *PlanRefiner {
 	if aiClient == nil {
 		return nil
 	}
-	// Nil-safe logger default (per CORE_DESIGN_PRINCIPLES.md)
+	// Nil-safe logger default (per core/ARCHITECTURE.md)
 	if logger == nil {
 		logger = &core.NoOpLogger{}
 	}

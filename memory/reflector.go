@@ -37,7 +37,7 @@ type LLMMemoryReflector struct {
 }
 
 // ReflectorOption configures LLMMemoryReflector.
-// Returns error if the option value is invalid (fail-fast per CORE_DESIGN_PRINCIPLES).
+// Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type ReflectorOption func(*LLMMemoryReflector) error
 
 // WithReflectorLogger sets the logger.

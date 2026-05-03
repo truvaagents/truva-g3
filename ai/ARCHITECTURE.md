@@ -1091,7 +1091,7 @@ client, _ := ai.NewClient(
 
 - [AI Module Logging/Telemetry Audit](./LOGGING_TELEMETRY_AUDIT.md) - Implementation recommendations
 - [Framework Design Principles](../FRAMEWORK_DESIGN_PRINCIPLES.md) - Overall framework architecture
-- [Core Module Design](../core/CORE_DESIGN_PRINCIPLES.md) - Core module rules
+- [Core Module Architecture](../core/ARCHITECTURE.md) - Core module rules
 - [Telemetry Architecture](../telemetry/ARCHITECTURE.md) - Telemetry patterns
 
 ---

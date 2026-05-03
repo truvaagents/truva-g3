@@ -736,7 +736,7 @@ func TestGetContextBaggage(t *testing.T) {
 // =============================================================================
 
 // TestAgentNamePrecedence verifies the TRUVAG3_AGENT_NAME > TRUVAG3_K8S_SERVICE_NAME
-// fallback in LoadFromEnv, per CORE_DESIGN_PRINCIPLES.md configuration checklist.
+// fallback in LoadFromEnv, per core/ARCHITECTURE.md §Configuration Changes checklist.
 func TestAgentNamePrecedence(t *testing.T) {
 	testCases := []struct {
 		name         string

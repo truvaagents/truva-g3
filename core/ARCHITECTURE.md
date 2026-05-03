@@ -1,8 +1,8 @@
-# TruvaG3 Core Module Design Principles
+# TruvaG3 Core Module Architecture
 
 **Version**: 1.0  
 **Module**: `github.com/truvaagents/truva-g3/core`  
-**Purpose**: Foundation module design principles and architectural guidelines  
+**Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
 
 ---

@@ -14,7 +14,7 @@ import (
 // - Provide complete custom prompt logic (Layer 3)
 //
 // The interface is intentionally minimal following the
-// Minimal Interface Principle from CORE_DESIGN_PRINCIPLES.md.
+// Minimal Interface Principle from core/ARCHITECTURE.md.
 type PromptBuilder interface {
 	// BuildPlanningPrompt creates the prompt for LLM-based orchestration.
 	//
