@@ -8,18 +8,24 @@ The agent accumulates findings in `plan.md` (you'll have it create that in
 Step 2) and source files as it progresses. You stay in the loop between
 steps so you can course-correct early instead of late.
 
-> **API-backed tools** follow all 12 steps as written.
-> **Stdlib-only tools** (no external HTTP API): in Step 1 substitute
-> *"explore the Go stdlib packages you'll wrap"* for the API exploration,
-> and skip the API-key bits in `.env.example`. Steps 2–12 apply unchanged.
-
-Reference example for this template: [`examples/stock-market-tool/`](../stock-market-tool/)
-(API-backed) or [`examples/system-utilities-tool/`](../system-utilities-tool/)
-(stdlib-only).
+> **Two tool shapes are supported by this scaffold.** Pick one before
+> pasting any step — the matching reference example threads through
+> Steps 4, 5, and 11.
+>
+> - **External API facade** — wraps a third-party HTTP API. Reference:
+>   [`examples/stock-market-tool/`](../stock-market-tool/). Use Step 1A
+>   below; follow Steps 2–12 as written.
+> - **Local command execution facade** — wraps `kubectl`, shell, `npx`,
+>   or another local binary (no external HTTP). Reference:
+>   [`examples/devops-tool/`](../devops-tool/). Use Step 1B below; skip
+>   the API-key bits in `.env.example`. Steps 4, 5, and 11 reference both
+>   shapes inline — no further substitutions needed.
 
 ---
 
-## Step 1 — Explore the API
+## Step 1 — Explore (pick the prompt that matches your tool shape)
+
+### 1A — External API facade
 
 Before pasting: replace `<DOMAIN>` with what you want this tool to do,
 `<API_DOCS_URL>` with the official docs link, and `<API_KEY>` with a real
@@ -46,9 +52,45 @@ Do not write any Go code yet. When you're done exploring, summarize the
 endpoints you'd expose as capabilities and pause for my review.
 ```
 
-**What to expect:** the agent has read the docs, possibly made test calls,
-and presents a list of capabilities ↔ endpoints. Confirm you agree with
-the scope before moving on.
+**What to expect:** the agent has read the docs, possibly made test
+calls, and presents a list of capabilities ↔ endpoints. Confirm you agree
+with the scope before moving on.
+
+### 1B — Local command execution facade
+
+Before pasting: replace `<DOMAIN>` with what this tool will do, and
+`<BINARY>` with the local command you'll wrap (e.g. `kubectl`,
+`playwright`, `awscli`).
+
+```
+We're going to build a TruvaG3 tool. Domain: <DOMAIN>.
+
+Step 1 of 12: explore the local binary this tool will wrap: <BINARY>.
+
+- Read the binary's documentation / man page / `--help` output and
+  capture, for each subcommand we might expose as a capability:
+  * Required vs optional flags/args, with types and accepted values
+  * Output shape (JSON / table / human prose) and how errors surface
+    (exit code, stderr text)
+  * Authentication / context (config file, env vars, in-cluster
+    ServiceAccount, etc.)
+  * Long-running vs synchronous behaviour — anything that needs a
+    timeout we'll set
+- Run a few real invocations and capture raw stdout and stderr.
+- Identify the safety boundary: which subcommands or flags should the
+  tool refuse to execute? See the blocklist pattern in
+  `examples/devops-tool/kubectl_executor.go` (`blockedSubcommands`,
+  `validateKubectlArgs`).
+
+Do not write any Go code yet. When you're done exploring, summarize the
+subcommands you'd expose as capabilities, name the unsafe ones the tool
+will refuse, and pause for my review.
+```
+
+**What to expect:** the agent has run the binary, knows which
+subcommands map to which capabilities, and has named the unsafe
+operations it will refuse to expose. Confirm scope and the safety
+boundary before moving on.
 
 ---
 
@@ -113,7 +155,10 @@ Step 3 of 12: read `docs/TOOL_DEVELOPMENT_GUIDE.md` end-to-end.
 
 Pay particular attention to:
 - §3 Tool struct shape
-- §4 External API client with distributed tracing
+- §4 External API client with distributed tracing (for local-exec tools:
+  this section's tracing and observability patterns apply equally to your
+  command executor — substitute exec.Command for the HTTP client while
+  reading)
 - §5 Capability registration — the 3-phase AI payload generation and
   InputSummary / OutputSummary shape
 - §6 Handler implementation pattern
@@ -126,37 +171,45 @@ will apply to our tool, given the plan in plan.md. Do not write code yet.
 ```
 
 **What to expect:** a short summary that names the patterns the agent will
-use (traced HTTP client, capability registration shape, handler error
-mapping, observability identity, etc.). If the summary feels generic,
-push back and ask for guide-specific call-outs.
+use (traced integration boundary — HTTP client or command executor;
+capability registration shape; handler error mapping; observability
+identity; etc.). If the summary feels generic, push back and ask for
+guide-specific call-outs.
 
 ---
 
 ## Step 4 — Study the reference example
 
 ```
-Step 4 of 12: read `examples/stock-market-tool/` end-to-end.
+Step 4 of 12: read the reference example end-to-end (the example
+specified at the top of this document for our chosen tool shape — either
+examples/stock-market-tool/ for an external API facade or
+examples/devops-tool/ for a local command execution facade).
 
-This is the canonical reference for an API-backed tool — same pattern we
-need. Read every Go file (main.go, stock_tool.go, finnhub_client.go,
-handlers.go), plus setup.sh, k8-deployment.yaml, Dockerfile.workspace,
-and .env.example.
+This is the canonical reference for our shape — same pattern we need.
+Read every Go file in that example, plus setup.sh, k8-deployment.yaml,
+Dockerfile.workspace, and .env.example.
 
 After reading, list:
-- File layout we'll mirror
-- Where API client lives and how tracing is wired in
+- File layout we'll mirror, naming each file by its role: main entry,
+  per-tool struct (e.g. stock_tool.go / devops_tool.go), integration-
+  boundary file (HTTP API client like finnhub_client.go OR command
+  executor like kubectl_executor.go), handlers.go
+- Where the integration boundary lives and how tracing is wired in around
+  it (otelhttp.Transport for HTTP; span events + duration histograms for
+  exec invocations)
 - How capabilities are registered (Description, InputSummary,
   OutputSummary patterns)
-- Anything in stock-market-tool's setup that we should keep identical
-- Anything in stock-market-tool that's specific to Finnhub and we'll
-  replace with our API
+- Anything in the reference's setup we should keep identical
+- Anything in the reference that's specific to its source (the wrapped
+  API or binary) and we'll replace with our own
 
 Do not write code yet.
 ```
 
-**What to expect:** a concrete mapping from stock-market-tool's structure
-to what the agent plans to write. If the agent says "we'll figure it out
-when coding", push back — it should commit to a layout now.
+**What to expect:** a concrete mapping from the reference example's
+structure to what the agent plans to write. If the agent says "we'll
+figure it out when coding", push back — it should commit to a layout now.
 
 ---
 
@@ -165,8 +218,9 @@ when coding", push back — it should commit to a layout now.
 ```
 Step 5 of 12: implement the tool.
 
-- Mirror examples/stock-market-tool/ file layout: main.go, <tool>_tool.go,
-  <service>_client.go, handlers.go.
+- Mirror the reference example's file layout: main.go, <tool>_tool.go,
+  the integration-boundary file (named <service>_client.go for an
+  external HTTP API or <binary>_executor.go for local-exec), handlers.go.
 - Use the deployment skeleton already in this folder (setup.sh,
   k8-deployment.yaml, Dockerfile.workspace, Dockerfile, .env.example,
   go.mod, README.md). Rename "my-tool" everywhere to the actual tool name
@@ -174,7 +228,11 @@ Step 5 of 12: implement the tool.
   the registry-allocated port.
 - Every capability gets Description + InputSummary + OutputSummary that
   match plan.md exactly.
-- The HTTP client must use otelhttp.NewTransport for distributed tracing.
+- Instrument the integration boundary for distributed tracing: for
+  external-API tools, the HTTP client must use otelhttp.NewTransport; for
+  local-exec tools, every exec.Command invocation must emit span events
+  and duration histograms (see examples/devops-tool/kubectl_executor.go
+  for the pattern).
 - Use core.WithCORS([]string{"*"}, true) — this is server-to-server, not
   browser-facing.
 - After writing all files, run:
@@ -201,7 +259,7 @@ Go through each numbered section of the guide and check:
 
 Report findings as a checklist:
   ✓ §3 Tool struct: <how we comply>
-  ⚠ §4 External API client: <deviation + reason or fix>
+  ⚠ §6 Handler implementation: <deviation + reason or fix>
   ...
 
 Fix any non-justified deviations before proceeding.
@@ -308,22 +366,25 @@ collide with other examples.
 
 ---
 
-## Step 11 — Final review against `stock-market-tool` for deviations
+## Step 11 — Final review against the reference example for deviations
 
 ```
-Step 11 of 12: do a final side-by-side review against
-examples/stock-market-tool/.
+Step 11 of 12: do a final side-by-side review against the reference
+example specified at the top of this document
+(examples/stock-market-tool/ for external-API tools; examples/devops-tool/
+for local-exec tools).
 
-For every file we wrote (main.go, <tool>_tool.go, <service>_client.go,
-handlers.go, setup.sh, k8-deployment.yaml, Dockerfile.workspace,
-Dockerfile, go.mod, .env.example, README.md), compare to the equivalent
-in stock-market-tool and list every deliberate or accidental deviation.
+For every file we wrote (main.go, <tool>_tool.go, the integration-
+boundary file, handlers.go, setup.sh, k8-deployment.yaml,
+Dockerfile.workspace, Dockerfile, go.mod, .env.example, README.md),
+compare to the equivalent in the reference and list every deliberate or
+accidental deviation.
 
 For each deviation, decide: keep it (with a one-line justification) or
 revert to the reference pattern.
 
-Aim for "as similar as possible to stock-market-tool, except where the
-domain forces a difference."
+Aim for "as similar as possible to the reference example, except where
+the domain forces a difference."
 ```
 
 **What to expect:** any drift from the canonical reference is named and

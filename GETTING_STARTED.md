@@ -117,9 +117,12 @@ kubectl version --client
 ## 2. Run the Examples First (Recommended)
 
 The fastest way to understand TruvaG3 is to run a complete example end-to-end.
-We recommend starting with the **travel-chat-agent** — it exercises the full
-framework: discovery, AI orchestration, multi-tool coordination, observability,
-and a browser UI.
+Two quickstarts are provided below — pick **travel** for a traditional
+consumer-style demo (one AI key plus a couple of free public APIs), or
+**devops** if you want the absolute minimum setup (one AI key, no other
+credentials, no third-party APIs) or you're evaluating the framework against
+an SRE/observability use case. Both share the same cluster and infrastructure,
+so you can run them side-by-side.
 
 ### Quick Start: Travel Chat Agent
 
@@ -215,6 +218,77 @@ After all tools are running, verify the agent can see them:
 curl http://travel-chat-agent.localhost/discover  # lists discovered tools
 ```
 
+### Quick Start: DevOps Chat Agent
+
+A minimum-setup alternative to the travel quickstart: needs **only an AI
+provider key** and nothing else. The agent uses in-cluster `kubectl`,
+Prometheus, Loki, and Jaeger to answer questions about the very cluster it
+runs in — no third-party APIs to provision, no external credentials.
+
+#### Step 1: Configure the AI provider key
+
+Same provider table as the travel quickstart's Step 2. If you already set
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the travel agent, the same value
+works here:
+
+```bash
+# From the truva-g3 repo root (clone first if you skipped the travel quickstart):
+cd examples/devops-chat-agent
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY or ANTHROPIC_API_KEY
+```
+
+#### Step 2: Deploy the agent
+
+```bash
+./setup.sh full-deploy
+```
+
+If you already ran the travel quickstart, the cluster and infrastructure are
+in place and `full-deploy` finishes in ~1–2 minutes (it skips the infra phase
+and just builds and rolls out the devops agent itself — note that this
+agent's `setup.sh` does **not** deploy `chat-ui`; that comes from Step 3
+below or from the travel quickstart).
+
+#### Step 3: Deploy the cluster-management tools (and chat-ui)
+
+These six tools all talk to in-cluster services only — no external API keys.
+The trailing `chat-ui` deploy makes the dashboard at http://chat.localhost
+available; it's idempotent if the travel quickstart already deployed it:
+
+```bash
+cd ../devops-tool                && ./setup.sh deploy && cd -
+cd ../devops-observability-tool  && ./setup.sh deploy && cd -
+cd ../prometheus-query-tool      && ./setup.sh deploy && cd -
+cd ../system-utilities-tool      && ./setup.sh deploy && cd -
+cd ../scheduler-tool             && ./setup.sh deploy && cd -
+cd ../agentic-memory-tool        && ./setup.sh deploy && cd -
+cd ../chat-ui                    && ./setup.sh deploy && cd -   # frontend
+```
+
+| Tool | What it does | Talks to |
+|------|--------------|----------|
+| [devops-tool](examples/devops-tool/) | Read-only `kubectl` (get/describe/logs; deletes blocked) | In-cluster ServiceAccount |
+| [devops-observability-tool](examples/devops-observability-tool/) | Search logs and traces | Loki + Jaeger |
+| [prometheus-query-tool](examples/prometheus-query-tool/) | Run PromQL queries | Prometheus |
+| [system-utilities-tool](examples/system-utilities-tool/) | Time, date, timezone math | Go stdlib |
+| [scheduler-tool](examples/scheduler-tool/) | Cron-style scheduled execution | In-cluster |
+| [agentic-memory-tool](examples/agentic-memory-tool/) | Semantic memory recall | Redis + Qdrant |
+
+#### Step 4: Test the agent
+
+Open http://chat.localhost and click the **🛠️ DevOps Chat** card, or go
+directly to http://chat.localhost/devops.html. The agent's API lives at
+http://devops-chat-agent.localhost. Try:
+
+- "What pods are unhealthy in the `truvag3-examples` namespace?"
+- "Show me the last 10 errors from `travel-chat-agent` in Loki"
+- "What's the memory usage trend for `qdrant` over the last hour?"
+
+The agent discovers the deployed tools at runtime via the Redis registry,
+asks the LLM to plan the right sequence of calls, and streams the answer
+back via SSE.
+
 ### Access the Running System
 
 All services are reachable via `*.localhost` ingress — no port-forwarding
@@ -224,7 +298,9 @@ required:
 |---------|-----|-------|
 | Chat dashboard | http://chat.localhost | **Launcher with cards** — your entry point (see below) |
 | Travel Chat UI | http://chat.localhost/index.html | Direct link to the travel chat (the dashboard's "Travel Chat" card opens this) |
-| Agent API | http://travel-chat-agent.localhost | Direct API access (REST + SSE) |
+| DevOps Chat UI | http://chat.localhost/devops.html | Direct link to the devops chat (the dashboard's "DevOps Chat" card opens this) |
+| Travel Agent API | http://travel-chat-agent.localhost | Direct API access (REST + SSE) |
+| DevOps Agent API | http://devops-chat-agent.localhost | Direct API access (REST + SSE) |
 | Grafana | http://grafana.localhost | admin / admin |
 | Prometheus | http://prometheus.localhost | Raw metrics |
 | Jaeger | http://jaeger.localhost | Distributed tracing |
@@ -238,7 +314,9 @@ required:
 > Chat** card (it opens `index.html` in a new tab) or visit
 > `http://chat.localhost/index.html` directly.
 
-### Test the Agent
+### Test the Travel Agent
+
+(For DevOps Chat Agent test queries, see Step 4 of the DevOps quickstart above.)
 
 **Via the Chat UI:**
 
@@ -381,11 +459,69 @@ cp .env.example .env            # if you want to edit before deploying
 
 ---
 
-## 4. Build Your Own Components
+## 4. Build Your Own Components (with a coding agent)
 
-After exploring the examples, you're ready to build your own tools and agents.
+TruvaG3 ships three fill-in-the-blanks scaffolds, each paired with a
+**`PROMPT.md`** that drives a coding agent through the build. Pick the
+scaffold that matches what you're building, copy it, and feed `PROMPT.md`
+to your agent one step at a time.
 
-### Understanding Tools vs Agents
+### Pick a scaffold
+
+| You want to build | Scaffold | Reference example |
+|---|---|---|
+| A capability provider that wraps an **external HTTP API** | [examples/my-tool/](examples/my-tool/) | [examples/stock-market-tool/](examples/stock-market-tool/) |
+| A capability provider that wraps **local command execution** (kubectl, shell, npx, …) | [examples/my-tool/](examples/my-tool/) | [examples/devops-tool/](examples/devops-tool/) |
+| A **streaming chat agent** (SSE, multi-tool orchestration, chat-ui frontend) | [examples/my-streaming-agent/](examples/my-streaming-agent/) | [examples/travel-chat-agent/](examples/travel-chat-agent/) or [examples/devops-chat-agent/](examples/devops-chat-agent/) |
+| An **event-driven async agent** (webhooks, queues, scheduled triggers, optional HITL gating) | [examples/my-async-agent/](examples/my-async-agent/) | [examples/agent-with-async/](examples/agent-with-async/) |
+
+> **`my-tool` covers two tool patterns.** Its `PROMPT.md` opens with a
+> one-time choice — *external API facade* or *local command execution
+> facade* — that selects the matching reference example. Subsequent steps
+> are otherwise identical.
+
+### How the workflow runs
+
+Each `PROMPT.md` is structured as **12 self-contained steps**. You paste
+each step into your coding agent, wait for it to finish, **review what it
+produced**, and only then move on. The agent accumulates a `plan.md` along
+the way — your record of API contracts, capability scope, and design
+decisions.
+
+The 12 steps follow a standard arc:
+
+1. Explore (API docs / domain / tool dependencies)
+2. Capture findings in `plan.md`
+3. Read the relevant framework guide(s)
+4. Study the reference example end-to-end
+5. Implement
+6–9. Vet against four framework guides chosen for your scaffold (one
+   pass per guide; your `PROMPT.md` names which four — for tools they're
+   the development guide, schema discovery, distributed tracing, and
+   logging; for streaming and async agents the second guide is replaced
+   by a shape-specific one such as async orchestration)
+10. Allocate a port from the registry
+11. Final pass against the reference for deviations
+12. Deploy and verify (pod running, registered, traced, logged)
+
+The paste-review-iterate loop is the point — don't queue all 12 prompts at
+once. Course-correcting after each step is cheap; rolling back after
+step 12 is not.
+
+### Get started
+
+```bash
+# Pick a scaffold and copy it under a new name
+cp -r examples/my-tool/ examples/<your-tool>/
+cd examples/<your-tool>/
+
+# Open PROMPT.md (in your editor, or in a pager) and start with Step 1
+${EDITOR:-less} PROMPT.md
+```
+
+Same pattern for `my-streaming-agent` and `my-async-agent`.
+
+### Tools vs agents at a glance
 
 | Aspect | Tool | Agent |
 |--------|------|-------|
@@ -393,294 +529,23 @@ After exploring the examples, you're ready to build your own tools and agents.
 | Discovery | Registers itself (passive) | Can discover others (active) |
 | Base Type | `*core.BaseTool` | `*core.BaseAgent` |
 | Constructor | `core.NewTool(name)` | `core.NewBaseAgent(name)` |
-| Example | Weather service, Calculator | Research assistant, Coordinator |
 
-### Creating a Tool
+For an annotated minimal code example without leaving the doc tree, see
+[examples/tool-example/](examples/tool-example/) and
+[examples/agent-example/](examples/agent-example/) — the same patterns
+your coding agent will study in Step 4.
 
-Tools are focused components that provide specific capabilities. Here's the pattern:
+### Framework guides referenced by the prompts
 
-**main.go:**
-```go
-package main
+`PROMPT.md` will tell you which of these to read at Step 3 and which to
+vet against in Steps 6–9:
 
-import (
-	"context"
-	"errors"
-	"log"
-	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
-
-	"github.com/truvaagents/truva-g3/core"
-)
-
-func main() {
-	tool := NewMyTool()
-
-	port := 8080
-	if p := os.Getenv("PORT"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
-			port = n
-		}
-	}
-
-	framework, err := core.NewFramework(tool,
-		core.WithName("my-tool"),
-		core.WithPort(port),
-		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
-		core.WithDiscovery(true, "redis"),
-		core.WithCORS([]string{"*"}, true), // server-to-server only; if a browser will call this, use WithCORSDefaults() instead — see Section 5
-	)
-	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() { <-sigChan; cancel() }()
-
-	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("Framework error: %v", err)
-	}
-}
-```
-
-**tool.go:**
-```go
-package main
-
-import (
-	"encoding/json"
-	"net/http"
-	"time"
-
-	"github.com/truvaagents/truva-g3/core"
-)
-
-// MyTool provides specific capabilities
-type MyTool struct {
-	*core.BaseTool
-}
-
-func NewMyTool() *MyTool {
-	tool := &MyTool{
-		BaseTool: core.NewTool("my-tool"),
-	}
-	tool.registerCapabilities()
-	return tool
-}
-
-func (t *MyTool) registerCapabilities() {
-	t.RegisterCapability(core.Capability{
-		Name:        "my_capability",
-		Description: "What this does. Required: input (string).",
-		InputTypes:  []string{"json"},
-		OutputTypes: []string{"json"},
-		Handler:     t.handleMyCapability,
-		InputSummary: &core.SchemaSummary{
-			RequiredFields: []core.FieldHint{
-				{Name: "input", Type: "string", Example: "hello", Description: "Input value"},
-			},
-		},
-	})
-}
-
-func (t *MyTool) handleMyCapability(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Input string `json:"input"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	response := map[string]interface{}{
-		"result":    "Processed: " + req.Input,
-		"timestamp": time.Now().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-```
-
-### Creating an Agent
-
-Agents can discover and orchestrate other components:
-
-**agent.go:**
-```go
-package main
-
-import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"time"
-
-	"github.com/truvaagents/truva-g3/core"
-)
-
-// MyAgent discovers and coordinates tools
-type MyAgent struct {
-	*core.BaseAgent
-	httpClient *http.Client
-}
-
-func NewMyAgent() *MyAgent {
-	agent := &MyAgent{
-		BaseAgent: core.NewBaseAgent("my-agent"),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
-	}
-	agent.registerCapabilities()
-	return agent
-}
-
-func (a *MyAgent) registerCapabilities() {
-	a.RegisterCapability(core.Capability{
-		Name:        "orchestrate",
-		Description: "Orchestrates tools to accomplish tasks",
-		InputTypes:  []string{"json"},
-		OutputTypes: []string{"json"},
-		Handler:     a.handleOrchestrate,
-	})
-}
-
-func (a *MyAgent) handleOrchestrate(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Discover available tools using the agent's Discovery field
-	tools, err := a.Discovery.Discover(ctx, core.DiscoveryFilter{
-		Type: core.ComponentTypeTool,
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Discovery failed: %v", err), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Find and call a specific tool
-	var targetTool *core.ServiceInfo
-	for _, tool := range tools {
-		if tool.Name == "my-tool" {
-			targetTool = tool
-			break
-		}
-	}
-
-	if targetTool == nil {
-		http.Error(w, "Required tool not found", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Call the tool
-	result, err := a.callTool(ctx, targetTool, "my_capability", map[string]interface{}{
-		"input": "test",
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Tool call failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-func (a *MyAgent) callTool(ctx context.Context, tool *core.ServiceInfo, capability string, data interface{}) (map[string]interface{}, error) {
-	url := fmt.Sprintf("http://%s:%d/api/capabilities/%s", tool.Address, tool.Port, capability)
-	jsonData, _ := json.Marshal(data)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-	return result, nil
-}
-```
-
-### Kubernetes Deployment
-
-Create a `k8-deployment.yaml` for your component:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: my-tool
-  labels:
-    app: my-tool
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: my-tool
-  template:
-    metadata:
-      labels:
-        app: my-tool
-    spec:
-      containers:
-      - name: my-tool
-        image: my-tool:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 8080
-        env:
-        - name: PORT
-          value: "8080"
-        - name: REDIS_URL
-          value: "redis://redis:6379"
-        - name: NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 3
-          periodSeconds: 5
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-tool
-spec:
-  selector:
-    app: my-tool
-  ports:
-  - port: 8080
-    targetPort: 8080
-```
+- [docs/TOOL_DEVELOPMENT_GUIDE.md](docs/TOOL_DEVELOPMENT_GUIDE.md)
+- [docs/AGENT_DEVELOPMENT_GUIDE.md](docs/AGENT_DEVELOPMENT_GUIDE.md)
+- [docs/ASYNC_ORCHESTRATION_GUIDE.md](docs/ASYNC_ORCHESTRATION_GUIDE.md)
+- [docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md](docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
+- [docs/DISTRIBUTED_TRACING_GUIDE.md](docs/DISTRIBUTED_TRACING_GUIDE.md)
+- [docs/LOGGING_IMPLEMENTATION_GUIDE.md](docs/LOGGING_IMPLEMENTATION_GUIDE.md)
 
 ---
 
