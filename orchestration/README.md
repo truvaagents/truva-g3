@@ -766,7 +766,7 @@ workerPool.RegisterHandler("research", func(ctx context.Context, task *core.Task
 })
 ```
 
-📖 **For complete implementation details, deployment patterns, and production configuration, see the [Async Orchestration Guide](../docs/ASYNC_ORCHESTRATION_GUIDE.md).**
+📖 **For complete implementation details, deployment patterns, and production configuration, see the [Async Orchestration Guide](../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md).**
 
 ## 8. Human-in-the-Loop (HITL) Approval
 
@@ -852,7 +852,7 @@ export TRUVAG3_HITL_EXPIRY_INTERVAL=10s
 export TRUVAG3_HITL_DEFAULT_ACTION=reject
 ```
 
-📖 **For complete HITL documentation including multi-pod deployment, metrics, and troubleshooting, see the [Human-in-the-Loop User Guide](../docs/HUMAN_IN_THE_LOOP_USER_GUIDE.md).**
+📖 **For complete HITL documentation including multi-pod deployment, metrics, and troubleshooting, see the [Human-in-the-Loop User Guide](../docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md).**
 
 ## 8.1 Scheduled Task Execution
 
@@ -868,7 +868,7 @@ This mounts `/api/v1/scheduled` on the agent. The centralized `scheduled-executo
 
 **New interfaces in `core/`:** `TaskConsumer` + `TaskHandle` (borrow-then-settle pattern). Contract testing via `core/conformance/RunTaskConsumerConformance`.
 
-📖 **For the full story -- architecture, delivery semantics, observability, troubleshooting, and extending to non-Redis backends -- see the [Scheduled Tasks Guide](../docs/SCHEDULED_TASKS_GUIDE.md).**
+📖 **For the full story -- architecture, delivery semantics, observability, troubleshooting, and extending to non-Redis backends -- see the [Scheduled Tasks Guide](../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).**
 
 ## 9. Architecture & Design Decisions
 
@@ -1602,7 +1602,7 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-> **Note:** This is a simplified example. For a production implementation with conversation history, session management, and proper error handling, see the [Chat Agent Implementation Guide](../docs/CHAT_AGENT_GUIDE.md). For the dedicated Tier 1 / Tier 2 / Layer 3 conversation-history reference, see the [Conversation History Guide](../docs/CONVERSATION_HISTORY_GUIDE.md).
+> **Note:** This is a simplified example. For a production implementation with conversation history, session management, and proper error handling, see the [Chat Agent Implementation Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md). For the dedicated Tier 1 / Tier 2 / Layer 3 conversation-history reference, see the [Conversation History Guide](../docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ### StreamingOrchestratorResponse
 
@@ -1689,7 +1689,7 @@ ctx = orchestration.WithStepCallback(ctx,
 | Long-running queries | ⚠️ User waits | ✅ Immediate feedback |
 | Progress indicators | ❌ No visibility | ✅ Per-step updates |
 
-**For a complete production example** with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](../docs/CHAT_AGENT_GUIDE.md). For conversation-history-specific guidance and advanced overrides, see the [Conversation History Guide](../docs/CONVERSATION_HISTORY_GUIDE.md).
+**For a complete production example** with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md). For conversation-history-specific guidance and advanced overrides, see the [Conversation History Guide](../docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ## 19. Potential Enhancements
 
@@ -1851,8 +1851,6 @@ analyzer.Enable(true)   // Re-enable
 **Observability:**
 - Span events: `llm.micro_resolution.*`, `error_analyzer.*`
 - All LLM calls are traced in Jaeger with prompts, responses, and token usage
-
-For detailed implementation information, see [INTELLIGENT_PARAMETER_BINDING.md](./INTELLIGENT_PARAMETER_BINDING.md).
 
 ### Layer 4: Semantic Retry (Contextual Re-Resolution)
 
@@ -2062,8 +2060,8 @@ export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536           # Micro-resolution so
 export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=65536     # Agent HTTP parameter max (default: 64KB)
 ```
 
-> For struct details and metadata reference, see [API_REFERENCE.md](../docs/API_REFERENCE.md#resulttrimconfig).
-> For trim span events in Jaeger, see [DISTRIBUTED_TRACING_GUIDE.md](../docs/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic).
+> For struct details and metadata reference, see [API_REFERENCE.md](../docs/reference/API_REFERENCE.md#resulttrimconfig).
+> For trim span events in Jaeger, see [DISTRIBUTED_TRACING_GUIDE.md](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic).
 
 ### Comprehensive Logging System
 The orchestration module now includes production-grade logging for all operations:
@@ -2168,7 +2166,7 @@ The orchestration module provides five built-in pipeline hooks for cross-agent s
 - **`ActivityCoordinator`** — Transient Redis signals with TTL for real-time agent coordination (what agents are currently working on).
 - **`NoOpEntityExtractor` / `LLMEntityExtractor`** — see "Entity Extraction" subsection below.
 
-Wire via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` — see [Agent Memory User Guide](../docs/AGENT_MEMORY_USER_GUIDE.md) for the complete pattern. See [ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md](../docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for building custom hooks.
+Wire via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` — see [Agent Memory User Guide](../docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md) for the complete pattern. See [ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md](../docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for building custom hooks.
 
 #### Entity Extraction
 

@@ -336,7 +336,7 @@ hook, _ := orchestration.NewConversationHistoryHook(
 )
 ```
 
-For the full metadata-first path, Tier 2 recursive compaction, and Layer 3 override patterns, see [Conversation History Guide](CONVERSATION_HISTORY_GUIDE.md).
+For the full metadata-first path, Tier 2 recursive compaction, and Layer 3 override patterns, see [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ### 6.3 Implementing ConversationMemory with Redis
 
@@ -603,7 +603,7 @@ func (h *AnalyticsHook) AfterExecution(ctx context.Context, pctx *core.PipelineC
 }
 ```
 
-The `AfterExecutionHook` is **observe-only** — it cannot mutate the results. This is intentional: execution results feed into the synthesis LLM call, and allowing mutation here could break the synthesis prompt. If you need to transform results, use a custom `ResultProcessor` instead (see [API Reference](API_REFERENCE.md)).
+The `AfterExecutionHook` is **observe-only** — it cannot mutate the results. This is intentional: execution results feed into the synthesis LLM call, and allowing mutation here could break the synthesis prompt. If you need to transform results, use a custom `ResultProcessor` instead (see [API Reference](../reference/API_REFERENCE.md)).
 
 ---
 
@@ -882,7 +882,7 @@ type EmbeddingClient interface {
 
 ### Built-In Memory Pipeline Hooks
 
-The orchestration module provides ready-to-use hooks for cross-agent shared memory. Wire them via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` (see [Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md)), or construct them directly for full control:
+The orchestration module provides ready-to-use hooks for cross-agent shared memory. Wire them via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` (see [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md)), or construct them directly for full control:
 
 | Hook | Stage | Purpose |
 |------|-------|---------|
@@ -892,7 +892,7 @@ The orchestration module provides ready-to-use hooks for cross-agent shared memo
 | `ActivityAnnouncementHook` | BeforePlanning | Announces the agent's current activity and injects other agents' signals into `activity_coordination`. |
 | `ActivityCleanupHook` | AfterSynthesis | Marks the agent's activity as completed (removes the transient signal). |
 
-These hooks are ordered: announcement (first) → enrichment → record → extraction → cleanup (last). See [examples/devops-chat-agent/main.go](../examples/devops-chat-agent/main.go) for wiring via `BuildMemoryHooks`, or construct hooks manually for full control over each option.
+These hooks are ordered: announcement (first) → enrichment → record → extraction → cleanup (last). See [examples/devops-chat-agent/main.go](../../examples/devops-chat-agent/main.go) for wiring via `BuildMemoryHooks`, or construct hooks manually for full control over each option.
 
 #### Entity Extraction Defaults
 
@@ -917,7 +917,7 @@ hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Lo
     orchestration.WithMemoryEntityExtractor(myExtractor))
 ```
 
-The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility. See [Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md#how-entity-extraction-works) for the full design rationale.
+The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility. See [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-entity-extraction-works) for the full design rationale.
 
 ### Built-In User Memory Pipeline Hooks
 
@@ -945,7 +945,7 @@ deps := orchestration.OrchestratorDependencies{
 
 `BuildUserMemoryHooks(...)` uses asynchronous extraction by default so post-synthesis memory work does not delay chat completion. Pass `orchestration.WithSynchronousExtraction()` if you need extraction to finish before the request continues.
 
-User memory requires a `user_id` in `PipelineContext.Metadata["user_id"]`. Agents without user context (e.g., event-driven agents) skip user memory hooks silently. See [API Reference](API_REFERENCE.md) for interface details.
+User memory requires a `user_id` in `PipelineContext.Metadata["user_id"]`. Agents without user context (e.g., event-driven agents) skip user memory hooks silently. See [API Reference](../reference/API_REFERENCE.md) for interface details.
 
 ---
 
@@ -970,10 +970,10 @@ Unlike LangChain (which binds memory to a session at construction), TruvaG3 pass
 
 ## 14. Further Reading
 
-- [API Reference](API_REFERENCE.md) — Full orchestrator API, including `OrchestratorDependencies` and `PromptBuilder`
-- [Conversation History Guide](CONVERSATION_HISTORY_GUIDE.md) — Tier 1 defaults, Tier 2 compaction, and advanced overrides
-- [Orchestration Modes Guide](ORCHESTRATION_MODES_GUIDE.md) — How planning, execution, and synthesis work
+- [API Reference](../reference/API_REFERENCE.md) — Full orchestrator API, including `OrchestratorDependencies` and `PromptBuilder`
+- [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md) — Tier 1 defaults, Tier 2 compaction, and advanced overrides
+- [Orchestration Modes Guide](../orchestration/ORCHESTRATION_MODES_GUIDE.md) — How planning, execution, and synthesis work
 - [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md) — Building tools that hooks can enrich
 - [Agent Development Guide](AGENT_DEVELOPMENT_GUIDE.md) — Building agents with `BaseAgent` (which includes the `ConversationMemory` and `SemanticMemory` fields)
-- [Error Handling Guide](ERROR_HANDLING_GUIDE.md) — How hook errors flow through the resilient error handling system
-- [Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md) — Each hook gets its own telemetry span (e.g. `pipeline.hook.before_planning.rag_qdrant`)
+- [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md) — How hook errors flow through the resilient error handling system
+- [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) — Each hook gets its own telemetry span (e.g. `pipeline.hook.before_planning.rag_qdrant`)

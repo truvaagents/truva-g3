@@ -719,7 +719,7 @@ r.RegisterCapability(core.Capability{
 })
 ```
 
-**Learn More**: See [Tool Schema Discovery Guide](../../docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md) for complete documentation.
+**Learn More**: See [Tool Schema Discovery Guide](../../docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) for complete documentation.
 
 ---
 
@@ -1318,7 +1318,7 @@ func (r *ResearchAgent) callToolWithRetry(ctx context.Context, tool *core.Servic
 }
 ```
 
-> **See Also**: For advanced error handling patterns including AI-powered error correction and intelligent retry strategies, see the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/INTELLIGENT_ERROR_HANDLING.md).
+> **See Also**: For advanced error handling patterns including AI-powered error correction and intelligent retry strategies, see the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/INTELLIGENT_ERROR_HANDLING.md).
 
 ### 5. Structured Logging
 Use structured logging for better observability:

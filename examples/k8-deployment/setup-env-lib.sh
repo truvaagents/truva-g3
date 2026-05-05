@@ -23,7 +23,7 @@
 #   EXAMPLES_DIR              - Path to examples/ directory (auto-detected if not set)
 #   TRUVAG3_DEV_DISABLE_OPENAPI - Optional: set to "true" to suppress the dev-only
 #                               default of TRUVAG3_ENABLE_OPENAPI=true injected
-#                               into every tool/agent ConfigMap. See docs/DEV_TOOLS_GUIDE.md.
+#                               into every tool/agent ConfigMap. See docs/operations/DEV_TOOLS_GUIDE.md.
 #
 # Dev-only defaults injected by this library:
 #   TRUVAG3_ENABLE_OPENAPI=true - Enables the /openapi.json endpoint on every
@@ -38,7 +38,7 @@
 #
 # Variable registry maintained here is the single source of truth.
 # When adding a new AI provider, update ONLY this file.
-# See docs/ENVIRONMENT_VARIABLES_GUIDE.md for full reference.
+# See docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md for full reference.
 
 # ─── MASTER VARIABLE REGISTRY ───────────────────────────────────────────────
 

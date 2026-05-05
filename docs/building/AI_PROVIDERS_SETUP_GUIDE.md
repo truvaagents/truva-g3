@@ -1427,8 +1427,7 @@ func isClientError(err error) bool {
 
 ## See Also
 
-- **[ai/README.md](../ai/README.md)** - AI module overview and quick start
-- **[ai/ARCHITECTURE.md](../ai/ARCHITECTURE.md)** - Technical architecture details
-- **[ai/MODEL_ALIAS_CROSS_PROVIDER_PROPOSAL.md](../ai/MODEL_ALIAS_CROSS_PROVIDER_PROPOSAL.md)** - Implementation details for model aliases and bug fixes
-- **[LOGGING_IMPLEMENTATION_GUIDE.md](./LOGGING_IMPLEMENTATION_GUIDE.md)** - Logging patterns including AI module logging
-- **[DISTRIBUTED_TRACING_GUIDE.md](./DISTRIBUTED_TRACING_GUIDE.md)** - Tracing AI requests in Jaeger
+- **[ai/README.md](../../ai/README.md)** - AI module overview and quick start
+- **[ai/ARCHITECTURE.md](../../ai/ARCHITECTURE.md)** - Technical architecture details
+- **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Logging patterns including AI module logging
+- **[DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md)** - Tracing AI requests in Jaeger

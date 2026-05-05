@@ -22,7 +22,7 @@
 # OTel collector). No ConfigMap or Secret needed — scheduler-tool has no
 # external API keys.
 #
-# Note: Per docs/TOOL_DEVELOPMENT_GUIDE.md §8, the Service is defined BEFORE
+# Note: Per docs/building/TOOL_DEVELOPMENT_GUIDE.md §8, the Service is defined BEFORE
 # the Deployment so the service endpoint is available when pods start.
 
 ---

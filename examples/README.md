@@ -488,7 +488,7 @@ If Ingress is unavailable (e.g., non-Kind cluster without an ingress controller)
 - OpenTelemetry integration and trace visualization
 - User and tenant context tracking
 - Performance monitoring across microservices
-- **See Also:** [Distributed Tracing Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md) for comprehensive tracing patterns
+- **See Also:** [Distributed Tracing Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) for comprehensive tracing patterns
 
 #### [error_handling](error_handling/) - Framework Error Consistency
 - Structured error types and sentinel error patterns
@@ -707,7 +707,7 @@ kubectl set env deployment/research-agent TRUVAG3_LOG_LEVEL=debug -n truvag3-exa
 kubectl logs -f deployment/research-agent -n truvag3-examples | grep -i "ai\|openai\|anthropic"
 ```
 
-For comprehensive logging configuration, see [Logging Configuration](../docs/API_REFERENCE.md#logging-configuration) in the API Reference.
+For comprehensive logging configuration, see [Logging Configuration](../docs/reference/API_REFERENCE.md#logging-configuration) in the API Reference.
 
 ## 12. Development Workflow
 
@@ -807,7 +807,7 @@ The Framework automatically propagates the production logger to your AI client d
 }
 ```
 
-See [Distributed Tracing Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md#ai-module-distributed-tracing) for complete AI telemetry setup.
+See [Distributed Tracing Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md#ai-module-distributed-tracing) for complete AI telemetry setup.
 
 ### 2. Integration Testing
 ```bash
@@ -1438,7 +1438,7 @@ When working with AI assistants (Claude, Copilot, etc.), use these prompts:
 - **[Infrastructure Setup](k8-deployment/setup-infrastructure.sh)** - Ingress Controller + monitoring stack
 - **[Cloud Deployment](CLOUD_DEPLOYMENT_GUIDE.md)** - Production deployment guide
 - **[Getting Started](../GETTING_STARTED.md)** - Framework introduction and prerequisites
-- **[Distributed Tracing Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md)** - End-to-end request tracing and log correlation
+- **[Distributed Tracing Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)** - End-to-end request tracing and log correlation
 - **[Individual Examples](.)** - Each example has its own README
 - **[Framework Core](../core/)** - Core framework documentation
 - **[AI Integration](../ai/)** - AI provider configuration

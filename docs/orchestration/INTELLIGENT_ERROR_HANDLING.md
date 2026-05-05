@@ -236,7 +236,7 @@ func (w *WeatherTool) handleCurrentWeather(rw http.ResponseWriter, r *http.Reque
 > - Upstream 429 → Tool returns 429 → Resilience retry with exponential backoff
 > - Upstream 5xx / unknown → Tool returns 502 → Resilience retry with exponential backoff
 >
-> See: [API Reference — ClassifyUpstreamError](./API_REFERENCE.md#classifyupstreamerror) and [Tool Development Guide — sendUpstreamError](./TOOL_DEVELOPMENT_GUIDE.md#correct-pattern-use-coreclassifyupstreamerror)
+> See: [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) and [Tool Development Guide — sendUpstreamError](../building/TOOL_DEVELOPMENT_GUIDE.md#correct-pattern-use-coreclassifyupstreamerror)
 
 When an external API fails, your tool needs to translate that failure into a structured `ToolError`. This is where you add intelligence - examining the raw error and deciding:
 
@@ -384,7 +384,7 @@ Agents receive errors from tools and decide how to handle them. With AI, agents 
 > - **Automatic Parameter Correction**: AI fixes payloads based on error context
 > - **Workflow-Level Coordination**: Retry logic integrated with multi-step workflows
 >
-> See: [orchestration/README.md](../orchestration/README.md#-when-to-use-the-orchestration-module)
+> See: [orchestration/README.md](../../orchestration/README.md#-when-to-use-the-orchestration-module)
 
 ### The Retry Decision Flow
 
@@ -1014,7 +1014,7 @@ sum(rate(orchestration_validation_feedback_attempts_total[5m]))
 
 The orchestration layer adds automatic type safety *before* requests reach tools, reducing the burden on both tools and agents. When combined with proper tool error reporting and agent retry logic, this creates a robust error handling system that achieves ~99% success rates in production.
 
-For detailed implementation information, see the [orchestration module documentation](../orchestration/README.md#multi-layer-type-safety).
+For detailed implementation information, see the [orchestration module documentation](../../orchestration/README.md#multi-layer-type-safety).
 
 ---
 
@@ -1164,8 +1164,6 @@ With Semantic Retry, the orchestration module provides a **four-layer defense**:
 | **Layer 4** | Semantic Retry | When Layer 3 says "cannot fix" | 1 LLM call |
 
 This creates a robust system that handles the full spectrum of parameter errors—from simple type mismatches to complex computations that require understanding user intent.
-
-For implementation details, see [INTELLIGENT_PARAMETER_BINDING.md](../orchestration/INTELLIGENT_PARAMETER_BINDING.md).
 
 ---
 

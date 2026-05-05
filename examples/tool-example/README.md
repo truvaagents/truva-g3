@@ -1310,7 +1310,7 @@ The 4-file structure provides clear benefits:
 - **Discovery Integration**: Automatic Redis registration and heartbeat
 - **CORS Support**: Browser-friendly API access
 - **Multi-Stage Builds**: Optimized Docker images (~10MB)
-- **Error Handling**: See the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/INTELLIGENT_ERROR_HANDLING.md) for advanced patterns
+- **Error Handling**: See the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/INTELLIGENT_ERROR_HANDLING.md) for advanced patterns
 
 ### Development Workflow
 

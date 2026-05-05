@@ -172,7 +172,7 @@ Agents in TruvaG3:
 - **Make intelligent decisions** (often using AI)
 - **Coordinate multiple components**
 - **Maintain context and state**
-- **Optional memory**: `BaseAgent` has two optional fields — `ConversationMemory` (session-scoped history via `AddTurn`/`GetHistory`/`Clear`) and `SemanticMemory` (cross-session similarity search via `Store`/`Search`/`Delete`). See [Adding Context to Your Agent](../docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)
+- **Optional memory**: `BaseAgent` has two optional fields — `ConversationMemory` (session-scoped history via `AddTurn`/`GetHistory`/`Clear`) and `SemanticMemory` (cross-session similarity search via `Store`/`Search`/`Delete`). See [Adding Context to Your Agent](../docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)
 
 ```go
 // Agents are created with NewBaseAgent()
@@ -1190,7 +1190,7 @@ Beyond per-component KV memory, the core module defines interfaces for **cross-a
 | `EventSummarizer` | Generate factual one-sentence step summaries with key identifiers |
 | `SharedKnowledge` | Store and search reusable knowledge fragments via vector DB |
 
-Each interface has a `NoOp` implementation (safe defaults when unconfigured) and a `Mock` implementation (for testing). See [API_REFERENCE.md](../docs/API_REFERENCE.md#shared-memory-interfaces) for full signatures.
+Each interface has a `NoOp` implementation (safe defaults when unconfigured) and a `Mock` implementation (for testing). See [API_REFERENCE.md](../docs/reference/API_REFERENCE.md#shared-memory-interfaces) for full signatures.
 
 The core module also defines interfaces for the **scheduled-execution subsystem**:
 
@@ -1201,7 +1201,7 @@ The core module also defines interfaces for the **scheduled-execution subsystem*
 | `TaskDispatcher` | Enqueue a task for async consumption |
 | `ScheduleStore` | Persist schedule definitions with time-indexed due queries |
 
-The `core/conformance/` sub-package provides `RunTaskConsumerConformance(t, factory)` -- a contract test suite that validates any `TaskConsumer` implementation in ~5 lines. See [Scheduled Tasks Guide](../docs/SCHEDULED_TASKS_GUIDE.md).
+The `core/conformance/` sub-package provides `RunTaskConsumerConformance(t, factory)` -- a contract test suite that validates any `TaskConsumer` implementation in ~5 lines. See [Scheduled Tasks Guide](../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ### 🚦 CORS Middleware: Opening Doors Safely
 
@@ -1259,7 +1259,7 @@ http.ListenAndServe(":8080", handler)
 
 ### 📊 Logging Interface: Know What's Happening
 
-> **💡 Configuration Tip:** To configure logging levels and formats via environment variables, see [Logging Configuration in API Reference](../docs/API_REFERENCE.md#logging-configuration).
+> **💡 Configuration Tip:** To configure logging levels and formats via environment variables, see [Logging Configuration in API Reference](../docs/reference/API_REFERENCE.md#logging-configuration).
 
 Every component gets a structured logger automatically. It's like having a flight recorder for your code!
 
@@ -1449,7 +1449,7 @@ type StreamingAIClient interface {
 | Long-running queries | ⚠️ User waits | ✅ Immediate feedback |
 | Token tracking | ✅ Simple | ✅ Final chunk includes usage |
 
-For complete streaming examples, see the [Chat Agent Guide](../docs/CHAT_AGENT_GUIDE.md) and the [ai/README.md](../ai/README.md#-streaming-support).
+For complete streaming examples, see the [Chat Agent Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md) and the [ai/README.md](../ai/README.md#-streaming-support).
 
 ### 🔍 Telemetry Interface: Measure Everything
 
@@ -1650,9 +1650,9 @@ if err != nil {
 }
 ```
 
-See [API Reference — Upstream Error Classification](../docs/API_REFERENCE.md#upstream-error-classification) for the full classification mapping.
+See [API Reference — Upstream Error Classification](../docs/reference/API_REFERENCE.md#upstream-error-classification) for the full classification mapping.
 
-📖 **For comprehensive implementation details, see the [Intelligent Error Handling Guide](../docs/INTELLIGENT_ERROR_HANDLING.md).**
+📖 **For comprehensive implementation details, see the [Intelligent Error Handling Guide](../docs/orchestration/INTELLIGENT_ERROR_HANDLING.md).**
 
 ### ⚙️ Configuration System: Three-Layer Magic
 
@@ -1999,7 +1999,7 @@ For a complete deep-dive including:
 - Migration guides
 - Best practices
 
-See the comprehensive guide: [Tool Schema Discovery Guide](../docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
+See the comprehensive guide: [Tool Schema Discovery Guide](../docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
 
 #### Quick Setup Checklist
 

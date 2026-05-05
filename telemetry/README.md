@@ -23,7 +23,7 @@ Welcome to the observability powerhouse of TruvaG3! Think of this guide as your 
 17. [Quick Reference](#17-quick-reference)
 18. [Unified Metrics API](#18-unified-metrics-api)
 19. [Distributed Tracing](#19-distributed-tracing)
-    - [Comprehensive Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md)
+    - [Comprehensive Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)
 20. [AI Module Distributed Tracing](#20-ai-module-distributed-tracing)
 21. [Push-Based Telemetry Limitations](#21-push-based-telemetry-limitations)
 22. [Summary](#22-summary)
@@ -1753,7 +1753,7 @@ For a complete deep-dive into distributed tracing with TruvaG3, including:
 - **Troubleshooting Guide** - Common problems and solutions
 - **Best Practices** - Production-ready patterns
 
-See the **[Distributed Tracing and Log Correlation Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md)**.
+See the **[Distributed Tracing and Log Correlation Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)**.
 
 ## 20. AI Module Distributed Tracing
 

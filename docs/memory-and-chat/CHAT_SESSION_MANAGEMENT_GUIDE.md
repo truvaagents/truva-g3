@@ -14,8 +14,8 @@ you are in the right place.
 
 This guide is based on the real implementations in:
 
-- [`examples/travel-chat-agent/`](../examples/travel-chat-agent/)
-- [`examples/devops-chat-agent/`](../examples/devops-chat-agent/)
+- [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
+- [`examples/devops-chat-agent/`](../../examples/devops-chat-agent)
 
 It is meant to be friendly to someone seeing this system for the first time, while still being precise enough for deeper debugging and design work.
 
@@ -36,7 +36,7 @@ If your question is instead:
 - "What are Tier 1 and Tier 2 conversation-history protection?"
 - "How does the framework prepare `<conversation_history>` for prompts?"
 
-then the better guide is [`CONVERSATION_HISTORY_GUIDE.md`](./CONVERSATION_HISTORY_GUIDE.md).
+then the better guide is [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md).
 
 The short version is:
 
@@ -47,9 +47,9 @@ The short version is:
 
 This repo already had good related documentation, but the story was spread across several places:
 
-- [`CHAT_AGENT_GUIDE.md`](./CHAT_AGENT_GUIDE.md) explains the overall chat-agent pattern
-- [`CONVERSATION_HISTORY_GUIDE.md`](./CONVERSATION_HISTORY_GUIDE.md) explains prompt-side history preparation and compaction
-- [`AGENT_DEVELOPMENT_GUIDE.md`](./AGENT_DEVELOPMENT_GUIDE.md) summarizes the session-store API
+- [`CHAT_AGENT_GUIDE.md`](CHAT_AGENT_GUIDE.md) explains the overall chat-agent pattern
+- [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md) explains prompt-side history preparation and compaction
+- [`AGENT_DEVELOPMENT_GUIDE.md`](../building/AGENT_DEVELOPMENT_GUIDE.md) summarizes the session-store API
 
 What was missing was a single guide that says:
 
@@ -125,26 +125,26 @@ same session ID reused and the conversation resumed if that session still exists
 Both example agents follow the same design, so we mainly need to understand a handful of files:
 
 - Session store:
-  - [`examples/travel-chat-agent/session.go`](../examples/travel-chat-agent/session.go)
-  - [`examples/devops-chat-agent/session.go`](../examples/devops-chat-agent/session.go)
+  - [`examples/travel-chat-agent/session.go`](../../examples/travel-chat-agent/session.go)
+  - [`examples/devops-chat-agent/session.go`](../../examples/devops-chat-agent/session.go)
 - Session-related HTTP handlers:
-  - [`examples/travel-chat-agent/handlers.go`](../examples/travel-chat-agent/handlers.go)
-  - [`examples/devops-chat-agent/handlers.go`](../examples/devops-chat-agent/handlers.go)
+  - [`examples/travel-chat-agent/handlers.go`](../../examples/travel-chat-agent/handlers.go)
+  - [`examples/devops-chat-agent/handlers.go`](../../examples/devops-chat-agent/handlers.go)
 - Streaming entrypoint:
-  - [`examples/travel-chat-agent/sse_handler.go`](../examples/travel-chat-agent/sse_handler.go)
-  - [`examples/devops-chat-agent/sse_handler.go`](../examples/devops-chat-agent/sse_handler.go)
+  - [`examples/travel-chat-agent/sse_handler.go`](../../examples/travel-chat-agent/sse_handler.go)
+  - [`examples/devops-chat-agent/sse_handler.go`](../../examples/devops-chat-agent/sse_handler.go)
 - Orchestrator integration:
-  - [`examples/travel-chat-agent/chat_agent.go`](../examples/travel-chat-agent/chat_agent.go)
-  - [`examples/devops-chat-agent/chat_agent.go`](../examples/devops-chat-agent/chat_agent.go)
+  - [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
+  - [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
 - DevOps-only HITL resume flow:
-  - [`examples/devops-chat-agent/handlers_hitl.go`](../examples/devops-chat-agent/handlers_hitl.go)
+  - [`examples/devops-chat-agent/handlers_hitl.go`](../../examples/devops-chat-agent/handlers_hitl.go)
 
 The framework-side history preparation path lives in:
 
-- [`orchestration/pipeline_hooks.go`](../orchestration/pipeline_hooks.go)
-- [`orchestration/conversation_history_processor.go`](../orchestration/conversation_history_processor.go)
-- [`orchestration/metadata_keys.go`](../orchestration/metadata_keys.go)
-- [`core/interfaces.go`](../core/interfaces.go)
+- [`orchestration/pipeline_hooks.go`](../../orchestration/pipeline_hooks.go)
+- [`orchestration/conversation_history_processor.go`](../../orchestration/conversation_history_processor.go)
+- [`orchestration/metadata_keys.go`](../../orchestration/metadata_keys.go)
+- [`core/interfaces.go`](../../core/interfaces.go)
 
 ## Start With The Short Answer
 
@@ -169,8 +169,8 @@ When either chat agent starts, it creates a Redis-backed `SessionStore`.
 
 That happens in:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../examples/travel-chat-agent/chat_agent.go)
-- [`examples/devops-chat-agent/chat_agent.go`](../examples/devops-chat-agent/chat_agent.go)
+- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
+- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
 
 Both examples use the same constructor settings:
 
@@ -371,7 +371,7 @@ That extra context is what allows HITL checkpoints to remember which session the
 
 ## Step 7: What The Orchestrator Does With That History
 
-This is where [`CONVERSATION_HISTORY_GUIDE.md`](./CONVERSATION_HISTORY_GUIDE.md) takes over in much more detail, but the important idea is simple.
+This is where [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md) takes over in much more detail, but the important idea is simple.
 
 The orchestrator sees metadata like:
 
@@ -674,8 +674,7 @@ That separation is the design.
 
 ## See Also
 
-- [`CHAT_AGENT_GUIDE.md`](./CHAT_AGENT_GUIDE.md)
-- [`CONVERSATION_HISTORY_GUIDE.md`](./CONVERSATION_HISTORY_GUIDE.md)
-- [`AGENT_DEVELOPMENT_GUIDE.md`](./AGENT_DEVELOPMENT_GUIDE.md)
-- [`examples/travel-chat-agent/README.md`](../examples/travel-chat-agent/README.md)
-- [`examples/devops-chat-agent/README.md`](../examples/devops-chat-agent/README.md)
+- [`CHAT_AGENT_GUIDE.md`](CHAT_AGENT_GUIDE.md)
+- [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md)
+- [`AGENT_DEVELOPMENT_GUIDE.md`](../building/AGENT_DEVELOPMENT_GUIDE.md)
+- [`examples/travel-chat-agent/README.md`](../../examples/travel-chat-agent/README.md)

@@ -158,7 +158,7 @@ implementation. Code, tracing, logs, retries — all flow from this file.
 ```
 Step 3 of 12: read these two guides end-to-end:
 
-1. docs/AGENT_DEVELOPMENT_GUIDE.md — focus on:
+1. docs/building/AGENT_DEVELOPMENT_GUIDE.md — focus on:
    - §1 Understanding Agents in TruvaG3
    - §3 Project Structure (focus on the "Non-Streaming Agent" subsection)
    - §4 Step 1: Create the Agent Struct (focus on the "Non-Streaming
@@ -176,7 +176,7 @@ Step 3 of 12: read these two guides end-to-end:
    - §15 Adding Human-in-the-Loop (HITL) Approval — only if plan.md
      said HITL is required for write actions
 
-2. docs/ASYNC_ORCHESTRATION_GUIDE.md — the canonical async patterns
+2. docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md — the canonical async patterns
    doc. Cover all sections.
 
 Summarize in 8–12 bullets the patterns from these guides that apply to
@@ -282,7 +282,7 @@ a common miss).
 ## Step 6 — Review against `AGENT_DEVELOPMENT_GUIDE.md`
 
 ```
-Step 6 of 12: review the implementation against docs/AGENT_DEVELOPMENT_GUIDE.md.
+Step 6 of 12: review the implementation against docs/building/AGENT_DEVELOPMENT_GUIDE.md.
 
 Go through each section that applies to non-streaming/async agents (§1,
 3, 4, 5, 6, 10, 12, 13) and check:
@@ -306,7 +306,7 @@ deviations.
 
 ```
 Step 7 of 12: vet the implementation against
-docs/ASYNC_ORCHESTRATION_GUIDE.md.
+docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md.
 
 Pay particular attention to these sections of the guide:
 - §3 Understanding the Architecture — task pattern + HTTP 202 polling
@@ -343,7 +343,7 @@ subtle bugs (event loss, double-processing, stuck approvals) come from.
 ## Step 8 — Vet against `DISTRIBUTED_TRACING_GUIDE.md`
 
 ```
-Step 8 of 12: vet the implementation against docs/DISTRIBUTED_TRACING_GUIDE.md.
+Step 8 of 12: vet the implementation against docs/observability/DISTRIBUTED_TRACING_GUIDE.md.
 
 Verify:
 - Inbound webhook is traced (spans for receive → enqueue)
@@ -377,7 +377,7 @@ hardest tracing concern in this architecture.
 ## Step 9 — Vet against `LOGGING_IMPLEMENTATION_GUIDE.md`
 
 ```
-Step 9 of 12: vet the implementation against docs/LOGGING_IMPLEMENTATION_GUIDE.md.
+Step 9 of 12: vet the implementation against docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md.
 
 Verify:
 - Logs use the framework's logger

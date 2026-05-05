@@ -1145,7 +1145,7 @@ Each span shows:
 
 ## 11. Required Patterns for Framework-Level Tracing
 
-This section documents the **required patterns** used throughout the TruvaG3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
+This section documents the **required patterns** used throughout the TruvaG3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](../../orchestration/orchestrator.go) and [executor.go](../../orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check
 
@@ -1683,9 +1683,9 @@ In-tree background jobs that follow this pattern: `memory.ReflectionJob` (LLM-dr
 
 | Span Name | Created By | Typical Lifetime | Attributes |
 |-----------|-----------|------------------|------------|
-| `memory.reflection_pass` | `ReflectionJob.RunOnce` ([memory/reflection_job.go](../memory/reflection_job.go)) — root span covering one entire pass | Tens of seconds to a few minutes per pass, depending on how many entities qualify and how fast the LLM responds | `pass_id`, `domain`, `age_threshold` |
-| `memory.reflection` | `LLMMemoryReflector.Reflect` ([memory/reflector.go](../memory/reflector.go)) — child span per entity processed in the pass | A few seconds per entity (one LLM call) | `request_id`, `entity_type`, `entity_id` |
-| `memory.sweep_pass` | `MemoryStoreSweeper.runSweepPass` ([core/memory_store.go](../core/memory_store.go)) — root span covering one eviction-sweep tick. Created only when `WithMemoryStoreSweeperTelemetry` is set; otherwise the sweeper emits metrics + logs without spans | Sub-millisecond to a few milliseconds per pass for typical per-agent caches (~10³ entries) | `sweep_id`, `interval`, `deleted_count`, `duration_ms` |
+| `memory.reflection_pass` | `ReflectionJob.RunOnce` ([memory/reflection_job.go](../../memory/reflection_job.go)) — root span covering one entire pass | Tens of seconds to a few minutes per pass, depending on how many entities qualify and how fast the LLM responds | `pass_id`, `domain`, `age_threshold` |
+| `memory.reflection` | `LLMMemoryReflector.Reflect` ([memory/reflector.go](../../memory/reflector.go)) — child span per entity processed in the pass | A few seconds per entity (one LLM call) | `request_id`, `entity_type`, `entity_id` |
+| `memory.sweep_pass` | `MemoryStoreSweeper.runSweepPass` ([core/memory_store.go](../../core/memory_store.go)) — root span covering one eviction-sweep tick. Created only when `WithMemoryStoreSweeperTelemetry` is set; otherwise the sweeper emits metrics + logs without spans | Sub-millisecond to a few milliseconds per pass for typical per-agent caches (~10³ entries) | `sweep_id`, `interval`, `deleted_count`, `duration_ms` |
 
 **Span tree** for a pass that processes 3 entities:
 
@@ -1707,7 +1707,7 @@ memory.reflection_pass                           pass_id=reflect-19e210c3
 - On each `memory.reflection` span: one `memory.reflection.llm_response` event recording the LLM response length
 - On the `memory.reflection_pass` span: one `memory.reflection.entity_processed` event per entity that produced ≥1 fragment (so 0 to N events per pass, where N is the entity count)
 
-**Trace correlation with user requests**: `pass_id` is also injected into OTel baggage as `request_id`, so both the orchestration `request_id` filter in Jaeger and the `request_id` field in agent logs find reflection-pass traces alongside user-request traces. Reflection passes sort into the same timeline as user activity with IDs of the form `reflect-XXXXXXXX`. See [AGENT_MEMORY_USER_GUIDE.md — Long-Term Knowledge Retention](AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job) for the broader context.
+**Trace correlation with user requests**: `pass_id` is also injected into OTel baggage as `request_id`, so both the orchestration `request_id` filter in Jaeger and the `request_id` field in agent logs find reflection-pass traces alongside user-request traces. Reflection passes sort into the same timeline as user activity with IDs of the form `reflect-XXXXXXXX`. See [AGENT_MEMORY_USER_GUIDE.md — Long-Term Knowledge Retention](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job) for the broader context.
 
 ### What Developers See in Jaeger
 
@@ -1855,18 +1855,18 @@ For **conversation-history preparation**, the orchestration request trace now in
 ### Zero Developer Configuration Required
 
 This telemetry is **built into the orchestration framework** at:
-- [orchestration/orchestrator.go](../orchestration/orchestrator.go) - Plan generation, phase loop short-circuit, termination_reason classification
-- [orchestration/micro_resolver.go](../orchestration/micro_resolver.go) - Parameter resolution
-- [orchestration/synthesizer.go](../orchestration/synthesizer.go) - Result synthesis, clarification mode
-- [orchestration/tiered_capability_provider.go](../orchestration/tiered_capability_provider.go) - Tiered tool selection, semantic-empty short-circuit
-- [orchestration/error_analyzer.go](../orchestration/error_analyzer.go) - Error analysis and recovery
-- [orchestration/contextual_re_resolver.go](../orchestration/contextual_re_resolver.go) - Semantic retry (Layer 4)
-- [orchestration/structural_trimmer.go](../orchestration/structural_trimmer.go) - Result trimming analysis
-- [orchestration/executor.go](../orchestration/executor.go) - Agent input trimming
-- [orchestration/memory_hooks.go](../orchestration/memory_hooks.go) - Memory enrichment and recording
-- [orchestration/activity_compactor.go](../orchestration/activity_compactor.go) - Activity compaction (full + incremental)
-- [orchestration/event_summarizer.go](../orchestration/event_summarizer.go) - Event summarization
-- [orchestration/activity_hooks.go](../orchestration/activity_hooks.go) - Activity coordination signals
+- [orchestration/orchestrator.go](../../orchestration/orchestrator.go) - Plan generation, phase loop short-circuit, termination_reason classification
+- [orchestration/micro_resolver.go](../../orchestration/micro_resolver.go) - Parameter resolution
+- [orchestration/synthesizer.go](../../orchestration/synthesizer.go) - Result synthesis, clarification mode
+- [orchestration/tiered_capability_provider.go](../../orchestration/tiered_capability_provider.go) - Tiered tool selection, semantic-empty short-circuit
+- [orchestration/error_analyzer.go](../../orchestration/error_analyzer.go) - Error analysis and recovery
+- [orchestration/contextual_re_resolver.go](../../orchestration/contextual_re_resolver.go) - Semantic retry (Layer 4)
+- [orchestration/structural_trimmer.go](../../orchestration/structural_trimmer.go) - Result trimming analysis
+- [orchestration/executor.go](../../orchestration/executor.go) - Agent input trimming
+- [orchestration/memory_hooks.go](../../orchestration/memory_hooks.go) - Memory enrichment and recording
+- [orchestration/activity_compactor.go](../../orchestration/activity_compactor.go) - Activity compaction (full + incremental)
+- [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) - Event summarization
+- [orchestration/activity_hooks.go](../../orchestration/activity_hooks.go) - Activity coordination signals
 
 **Developers don't need to add any code** to get LLM visibility. Simply:
 1. Use the orchestration module as documented
@@ -2273,9 +2273,9 @@ Distributed tracing transforms debugging from guesswork into science. Here's wha
 
 ## Related Documentation
 
-- [Telemetry Module README](../telemetry/README.md) - Metrics and configuration
-- [Core Module README](../core/README.md) - Framework fundamentals
-- [API Reference - Tracing Section](./API_REFERENCE.md#distributed-tracing) - API details
-- [Examples](../examples/) - Working code samples
+- [Telemetry Module README](../../telemetry/README.md) - Metrics and configuration
+- [Core Module README](../../core/README.md) - Framework fundamentals
+- [API Reference - Tracing Section](../reference/API_REFERENCE.md#distributed-tracing) - API details
+- [Examples](../../examples) - Working code samples
 
 Happy tracing!

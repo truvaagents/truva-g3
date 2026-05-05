@@ -116,12 +116,12 @@ Start with [Feature Map](#feature-map) for the current framework surface. Each f
 
 For implementation details, prefer the module READMEs and architecture docs:
 
-- [core/README.md](../core/README.md)
-- [ai/README.md](../ai/README.md)
-- [orchestration/README.md](../orchestration/README.md)
-- [memory/README.md](../memory/README.md)
-- [resilience/README.md](../resilience/README.md)
-- [telemetry/README.md](../telemetry/README.md)
+- [core/README.md](../../core/README.md)
+- [ai/README.md](../../ai/README.md)
+- [orchestration/README.md](../../orchestration/README.md)
+- [memory/README.md](../../memory/README.md)
+- [resilience/README.md](../../resilience/README.md)
+- [telemetry/README.md](../../telemetry/README.md)
 
 ## Feature Map
 
@@ -142,7 +142,7 @@ Typical tool features:
 - structured success/error responses
 - optional OpenAPI exposure
 
-See [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md) and [core/README.md](../core/README.md).
+See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) and [core/README.md](../../core/README.md).
 
 #### Agents
 
@@ -156,7 +156,7 @@ Typical agent features:
 - optional session, memory, and telemetry wiring
 - ability to expose capabilities other agents can call
 
-See [Agent Development Guide](AGENT_DEVELOPMENT_GUIDE.md), [Chat Agent Guide](CHAT_AGENT_GUIDE.md), and [core/README.md](../core/README.md).
+See [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md), [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md), and [core/README.md](../../core/README.md).
 
 #### Framework Lifecycle
 
@@ -171,7 +171,7 @@ The core framework handles common runtime plumbing:
 - graceful shutdown
 - logger propagation to framework modules
 
-See [API Reference](API_REFERENCE.md#core-module) and [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md).
+See [API Reference](../reference/API_REFERENCE.md#core-module) and [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md).
 
 #### Capability Registration
 
@@ -189,7 +189,7 @@ Capability metadata can include:
 - internal flag
 - capability type
 
-See [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md#5-step-3-register-capabilities).
+See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#5-step-3-register-capabilities).
 
 #### Generated HTTP APIs
 
@@ -203,7 +203,7 @@ Common generated or framework-managed endpoints include:
 - `/api/capabilities/{name}/schema` when schema metadata is available
 - `/openapi.json` when OpenAPI generation is enabled
 
-See [core/README.md](../core/README.md#registering-capabilities-making-your-components-useful) and [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md#9-testing-your-tool).
+See [core/README.md](../../core/README.md#registering-capabilities-making-your-components-useful) and [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#9-testing-your-tool).
 
 #### CORS And Middleware
 
@@ -211,7 +211,7 @@ The framework can wire HTTP middleware around component handlers. Built-in and d
 
 This is useful when exposing agents or tools to browser clients, service meshes, gateways, or internal platform middleware.
 
-See [core/README.md](../core/README.md), [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md#complete-main-implementation), and [Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md).
+See [core/README.md](../../core/README.md), [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#complete-main-implementation), and [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
 
 ### 2. Runtime Discovery
 
@@ -221,7 +221,7 @@ Discovery lets agents find tools and other agents by what they can do rather tha
 
 Redis/Valkey is the default service registry backend. The registry stores component records and capability indexes. The discovery interface is pluggable, so applications can replace the backend behind the core interfaces.
 
-See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md).
+See [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md).
 
 #### Capability Discovery
 
@@ -235,7 +235,7 @@ Agents can discover components by:
 
 This supports dynamic orchestration: newly deployed tools become available to agents without redeploying those agents.
 
-See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md#how-agents-discover-tools-and-other-agents).
+See [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md#how-agents-discover-tools-and-other-agents).
 
 #### Heartbeat And TTL Leases
 
@@ -248,7 +248,7 @@ Discovery supports:
 - automatic cleanup of dead components
 - multi-pod behavior where healthy replicas keep service-level capability indexes alive
 
-See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md#heartbeat-and-ttl-management).
+See [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md#heartbeat-and-ttl-management).
 
 #### Kubernetes Service-Fronted Discovery
 
@@ -265,7 +265,7 @@ Relevant configuration includes:
 - `TRUVAG3_K8S_NAMESPACE`
 - `TRUVAG3_K8S_POD_IP`
 
-See [Auto-Discovery Guide §"Address Resolution"](guides/AUTO_DISCOVERY_GUIDE.md#address-resolution-pod-ip-vs-service-dns) and [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#kubernetes-deployment-requirements).
+See [Auto-Discovery Guide §"Address Resolution"](../operations/AUTO_DISCOVERY_GUIDE.md#address-resolution-pod-ip-vs-service-dns) and [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#kubernetes-deployment-requirements).
 
 ### 3. Tool Contracts And API Surfacing
 
@@ -275,13 +275,13 @@ TruvaG3 treats tool contracts as runtime metadata, not a separate hand-maintaine
 
 Capability descriptions help both humans and LLM planners understand when a capability should be used. Good descriptions are the baseline for payload generation and tool selection.
 
-See [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md#writing-effective-descriptions).
+See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#writing-effective-descriptions).
 
 #### Input And Output Summaries
 
 `InputSummary` and `OutputSummary` provide structured field hints. They help LLMs generate correct JSON and help the framework generate schemas and OpenAPI.
 
-See [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md#inputsummary-components).
+See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#inputsummary-components).
 
 #### Three-Phase Payload Generation
 
@@ -293,13 +293,13 @@ TruvaG3 uses progressive payload guidance:
 
 This lets simple tools stay simple while production tools can add stronger validation.
 
-See [Tool Schema Discovery Guide](TOOL_SCHEMA_DISCOVERY_GUIDE.md).
+See [Tool Schema Discovery Guide](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md).
 
 #### Schema Validation
 
 When enabled, the orchestrator can fetch capability JSON Schemas from tool endpoints, cache them, and validate LLM-generated payloads before sending tool calls.
 
-See [API Reference](API_REFERENCE.md#schema-cache-phase-3-validation).
+See [API Reference](../reference/API_REFERENCE.md#schema-cache-phase-3-validation).
 
 #### OpenAPI Generation
 
@@ -307,7 +307,7 @@ When enabled, each component can expose `/openapi.json`, generated from register
 
 The endpoint is disabled by default and can be enabled by configuration.
 
-See [Developer Tools Guide](DEV_TOOLS_GUIDE.md#2-the-openapijson-contract).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#2-the-openapijson-contract).
 
 ### 4. AI Provider Layer
 
@@ -317,19 +317,19 @@ The AI module gives agents a provider-neutral interface for LLM calls.
 
 `ai.NewClient()` can scan the environment, detect configured providers, and create a working client without hardcoding a provider in application code. This is useful for local development, promotion between environments, and running the same container image with different provider settings.
 
-See [ai/README.md](../ai/README.md#method-1-zero-configuration-auto-pilot) and [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#how-auto-configuration-works).
+See [ai/README.md](../../ai/README.md#method-1-zero-configuration-auto-pilot) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#how-auto-configuration-works).
 
 #### Single Client
 
 The single client connects to one provider. It can auto-detect configured providers from environment variables or be configured explicitly.
 
-See [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#single-client-the-simple-path).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#single-client-the-simple-path).
 
 #### Chain Client Failover
 
 The chain client tries multiple providers in order and fails over when errors are retryable. This supports high availability and provider outage handling.
 
-See [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#chain-client-production-grade-resilience).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#chain-client-production-grade-resilience).
 
 #### Provider Aliases
 
@@ -349,13 +349,13 @@ Provider aliases allow clean, environment-driven configuration. Current document
 
 The native Bedrock provider is build-tagged and requires importing the Bedrock provider package and building with the `bedrock` tag.
 
-See [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#provider-aliases-the-clean-way-to-configure).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#provider-aliases-the-clean-way-to-configure).
 
 #### Model Aliases
 
 Model aliases provide portable names, including `default`, `fast`, `smart`, `premium`, `code`, and `vision`, that resolve differently per provider. This lets application code request a model role without hardcoding provider-specific model IDs.
 
-See [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#model-aliases-portable-model-names).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#model-aliases-portable-model-names).
 
 #### Provider Registry And Custom Providers
 
@@ -363,7 +363,7 @@ The AI module has a provider registry. Providers register themselves through pac
 
 This matters when evaluating the framework for private endpoints, internal gateways, new provider integrations, or self-hosted models.
 
-See [ai/README.md](../ai/README.md#the-provider-registry---plugin-architecture), [ai/README.md](../ai/README.md#creating-custom-providers), and [ai/README.md](../ai/README.md#adding-new-openai-compatible-services).
+See [ai/README.md](../../ai/README.md#the-provider-registry---plugin-architecture), [ai/README.md](../../ai/README.md#creating-custom-providers), and [ai/README.md](../../ai/README.md#adding-new-openai-compatible-services).
 
 #### Embeddings And Vector Integration
 
@@ -371,7 +371,7 @@ The AI layer includes embedding-capable interfaces for providers that support em
 
 This prevents agents from having to own vectorization code when adding semantic recall, shared knowledge search, or user memory.
 
-See [ai/README.md](../ai/README.md#provider-capabilities), [memory/README.md](../memory/README.md), and [API Reference](API_REFERENCE.md#shared-memory-interfaces).
+See [ai/README.md](../../ai/README.md#provider-capabilities), [memory/README.md](../../memory/README.md), and [API Reference](../reference/API_REFERENCE.md#shared-memory-interfaces).
 
 #### Reasoning Controls And Request Options
 
@@ -379,13 +379,13 @@ AI requests support common portable options such as temperature, max tokens, and
 
 Orchestration can override AI options per phase, including planning, synthesis, micro-resolution, error analysis, tiered selection, and result distillation.
 
-See [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](API_REFERENCE.md#createorchestratorwithoptions).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](../reference/API_REFERENCE.md#createorchestratorwithoptions).
 
 #### Streaming And AI Telemetry
 
 AI clients support non-streaming and streaming responses. When telemetry is initialized before the AI client, AI operations can emit spans and metrics such as provider, model, request duration, and token counts.
 
-See [ai/README.md](../ai/README.md#15-streaming-support) and [telemetry/README.md](../telemetry/README.md#20-ai-module-distributed-tracing).
+See [ai/README.md](../../ai/README.md#15-streaming-support) and [telemetry/README.md](../../telemetry/README.md#20-ai-module-distributed-tracing).
 
 ### 5. Orchestration
 
@@ -397,7 +397,7 @@ Dynamic mode lets users describe a request in natural language. The orchestrator
 
 Use this for chat interfaces, exploratory workflows, and systems where the needed tools vary by request.
 
-See [Orchestration Modes Guide](ORCHESTRATION_MODES_GUIDE.md#3-dynamic-mode-let-the-ai-decide).
+See [Orchestration Modes Guide](../orchestration/ORCHESTRATION_MODES_GUIDE.md#3-dynamic-mode-let-the-ai-decide).
 
 #### DAG Execution
 
@@ -411,7 +411,7 @@ Features include:
 - step-level callbacks
 - retry-aware execution
 
-See [orchestration/README.md](../orchestration/README.md#3-how-it-works).
+See [orchestration/README.md](../../orchestration/README.md#3-how-it-works).
 
 #### Context Window And Token Budget Management
 
@@ -425,7 +425,7 @@ The orchestration layer includes several mechanisms to avoid context-window over
 
 This is the planning-side context optimization layer. Large output handling is covered separately by [Result Trimming And Distillation](#result-trimming-and-distillation), and long chat sessions are covered by [Conversation History Protection](#conversation-history-protection).
 
-See [orchestration/README.md](../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture), [API Reference](API_REFERENCE.md#tieredcapabilityconfig), and [Limits Cheatsheet](LIMITS_CHEATSHEET.md#tiered-capability-resolution).
+See [orchestration/README.md](../../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture), [API Reference](../reference/API_REFERENCE.md#tieredcapabilityconfig), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#tiered-capability-resolution).
 
 #### Iterative Multi-Phase Planning
 
@@ -433,7 +433,7 @@ For complex requests, the planner can generate partial plans, execute a phase, f
 
 This supports research-style workflows where the first phase discovers context and later phases choose different tools based on what was found. Limits exist for maximum phases, total steps, phase timeout, and continuation prompt size.
 
-See [API Reference](API_REFERENCE.md#iterativeplanconfig) and [Limits Cheatsheet](LIMITS_CHEATSHEET.md#iterative-planning-multi-phase-dag).
+See [API Reference](../reference/API_REFERENCE.md#iterativeplanconfig) and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#iterative-planning-multi-phase-dag).
 
 #### Workflow Modes
 
@@ -444,19 +444,19 @@ The framework supports multiple orchestration styles:
 - custom mode for exact step control and debugging
 - YAML workflow engine for declarative workflows
 
-See [Orchestration Modes Guide](ORCHESTRATION_MODES_GUIDE.md).
+See [Orchestration Modes Guide](../orchestration/ORCHESTRATION_MODES_GUIDE.md).
 
 #### Streaming Orchestration
 
 Streaming orchestration emits progress and response events while work is running. This supports chat-style UX and long-running workflows where users need visibility before the final answer is complete.
 
-See [orchestration/README.md](../orchestration/README.md#18-streaming-support).
+See [orchestration/README.md](../../orchestration/README.md#18-streaming-support).
 
 #### Clarification Requests
 
 When the planner needs user-provided information to proceed, the orchestrator can surface a structured clarification request. Simple chat UIs can forward the natural-language response, while richer UIs can render structured prompts from the `Clarification` field.
 
-See [orchestration/README.md](../orchestration/README.md#clarification-requests) and [API Reference](API_REFERENCE.md#processrequeststreaming).
+See [orchestration/README.md](../../orchestration/README.md#clarification-requests) and [API Reference](../reference/API_REFERENCE.md#processrequeststreaming).
 
 #### Execution Controls And Token Usage
 
@@ -470,7 +470,7 @@ Orchestration exposes controls for production behavior and cost management:
 - step completion callbacks
 - aggregated token usage and token usage by orchestration phase
 
-See [API Reference](API_REFERENCE.md#createorchestratorwithoptions), [API Reference](API_REFERENCE.md#processrequeststreaming), and [Limits Cheatsheet](LIMITS_CHEATSHEET.md).
+See [API Reference](../reference/API_REFERENCE.md#createorchestratorwithoptions), [API Reference](../reference/API_REFERENCE.md#processrequeststreaming), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md).
 
 #### Prompt Customization
 
@@ -484,13 +484,13 @@ Prompt customization supports:
 - custom prompt builders
 - iterative planning instructions
 
-See [LLM Planning Prompt Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md) and [Effective Prompts Guide](EFFECTIVE_PROMPTS_GUIDE.md).
+See [LLM Planning Prompt Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) and [Effective Prompts Guide](../building/EFFECTIVE_PROMPTS_GUIDE.md).
 
 #### Large Catalog Support
 
 For large systems, capability providers reduce prompt bloat and help the planner work with relevant subsets of a large tool/agent catalog.
 
-See [orchestration/README.md](../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture).
+See [orchestration/README.md](../../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture).
 
 ### 6. Reliability And Error Recovery
 
@@ -500,19 +500,19 @@ TruvaG3 provides both generic resilience primitives and orchestration-specific r
 
 Tools communicate failures through structured error categories and retry hints. The shared protocol includes `ToolError`, `ToolResponse`, and upstream error classification helpers.
 
-See [Intelligent Error Handling Guide](INTELLIGENT_ERROR_HANDLING.md) and [Error Handling Guide](ERROR_HANDLING_GUIDE.md).
+See [Intelligent Error Handling Guide](../orchestration/INTELLIGENT_ERROR_HANDLING.md) and [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md).
 
 #### LLM Error Analysis
 
 For input-like failures, the orchestrator can ask an LLM to inspect the error, original payload, capability metadata, and user request, then suggest corrected parameters.
 
-See [Error Handling Guide](ERROR_HANDLING_GUIDE.md#5-llm-error-analyzer-layer-3).
+See [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md#5-llm-error-analyzer-layer-3).
 
 #### Semantic Retry
 
 Semantic retry performs contextual re-resolution when the original parameters were wrong or incomplete. This helps recover from failures such as ambiguous locations, invalid codes, or values that need to be derived from prior results.
 
-See [Error Handling Guide](ERROR_HANDLING_GUIDE.md#6-contextual-re-resolution-layer-4).
+See [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md#6-contextual-re-resolution-layer-4).
 
 #### Result Trimming And Distillation
 
@@ -535,7 +535,7 @@ For extremely large or domain-specific outputs, opt-in result distillation adds 
 
 The trimming contract is pluggable through the `ResultProcessor` interface, so teams can replace the default `StructuralTrimmer` with a domain-specific implementation.
 
-See [API Reference](API_REFERENCE.md#resulttrimconfig), [API Reference](API_REFERENCE.md#resultdistillconfig), [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management), and [Limits Cheatsheet](LIMITS_CHEATSHEET.md#result-trimming-large-data).
+See [API Reference](../reference/API_REFERENCE.md#resulttrimconfig), [API Reference](../reference/API_REFERENCE.md#resultdistillconfig), [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#result-trimming-large-data).
 
 #### Schema-Guided Mapping For Large Results
 
@@ -543,25 +543,25 @@ When prior step results are too large for direct LLM parameter extraction, schem
 
 This is controlled by `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD`; setting it to `0` disables schema-guided mapping.
 
-See [API Reference](API_REFERENCE.md#resulttrimconfig) and [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management).
+See [API Reference](../reference/API_REFERENCE.md#resulttrimconfig) and [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management).
 
 #### Circuit Breakers
 
 Circuit breakers prevent cascading failures by failing fast after repeated errors, then testing recovery through half-open probes.
 
-See [resilience/README.md](../resilience/README.md#basic-circuit-breaker).
+See [resilience/README.md](../../resilience/README.md#basic-circuit-breaker).
 
 #### Retry And Backoff
 
 Retry logic supports exponential backoff, jitter, context cancellation, and maximum delay caps.
 
-See [resilience/README.md](../resilience/README.md#smart-retry-with-backoff) and [Error Handling Guide](ERROR_HANDLING_GUIDE.md#7-step-retry-and-backoff).
+See [resilience/README.md](../../resilience/README.md#smart-retry-with-backoff) and [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md#7-step-retry-and-backoff).
 
 #### Panic Recovery
 
 The resilience module includes panic recovery helpers so unexpected panics can be converted into errors, logged, and handled without tearing down the process.
 
-See [resilience/README.md](../resilience/README.md#panic-recovery-system).
+See [resilience/README.md](../../resilience/README.md#panic-recovery-system).
 
 ### 7. Async Execution, HITL, And Scheduling
 
@@ -575,13 +575,13 @@ Async tasks implement the HTTP 202 plus polling pattern:
 2. Worker processes the task in the background.
 3. Client polls for status, progress, and final result.
 
-See [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md).
+See [Async Orchestration Guide](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md).
 
 #### Progress Reporting
 
 Async task handlers can publish progress updates. Orchestration step callbacks can feed task progress so clients see meaningful state while execution runs.
 
-See [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md#7-progress-reporting).
+See [Async Orchestration Guide](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md#7-progress-reporting).
 
 #### Human-in-the-Loop Approval
 
@@ -595,7 +595,7 @@ Supported interrupt points include:
 
 HITL supports Redis-backed checkpoint storage, webhook-style notification patterns, command handling, expiry processing, and resume flows.
 
-See [Human-in-the-Loop User Guide](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
+See [Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 
 #### Scheduled Execution
 
@@ -607,7 +607,7 @@ Scheduled execution lets agents schedule future work:
 
 The scheduler tool creates schedules, the scheduled executor dispatches due work, and target agents receive scheduled instructions through a registered endpoint.
 
-See [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md).
+See [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 #### Pluggable Task Backends
 
@@ -618,7 +618,7 @@ Async tasks and scheduled execution use related but distinct backend interfaces:
 
 Redis list-backed implementations cover the default async path and the default scheduled consumer. Redis Streams supports at-least-once scheduled task consumption, and in-memory implementations support development and tests. Conformance tests help validate custom `TaskConsumer` implementations.
 
-See [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md#extending-writing-your-own-backend).
+See [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md#extending-writing-your-own-backend).
 
 ### 8. Memory And Context
 
@@ -630,7 +630,7 @@ The core module defines a simple component memory interface with `Get`, `Set`, `
 
 This is separate from shared agent memory and user memory: it is the lightweight per-component storage primitive.
 
-See [core/README.md](../core/README.md) and [API Reference](API_REFERENCE.md#memory-implementations).
+See [core/README.md](../../core/README.md) and [API Reference](../reference/API_REFERENCE.md#memory-implementations).
 
 #### Pipeline Hooks
 
@@ -643,7 +643,7 @@ Pipeline hooks run at defined stages:
 
 Hooks can inject context, short-circuit the pipeline, mutate plans, observe results, or post-process responses. Hooks are fail-open by design.
 
-See [Adding Context To Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
+See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
 
 #### Shared Agent Memory
 
@@ -658,7 +658,7 @@ Features include:
 - vector-backed shared knowledge
 - LLM-powered memory reflection
 
-See [memory/README.md](../memory/README.md) and [Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md).
+See [memory/README.md](../../memory/README.md) and [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md).
 
 #### Per-User Memory
 
@@ -671,7 +671,7 @@ Features include:
 - semantic recall
 - GDPR-style forget support
 
-See [Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md#user-memory-per-user-personalization).
+See [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#user-memory-per-user-personalization).
 
 #### Conversation History Protection
 
@@ -685,7 +685,7 @@ Features include:
 - Tier 2 recursive compaction for long sessions
 - reuse across planning, continuation, and synthesis prompts
 
-See [Conversation History Guide](CONVERSATION_HISTORY_GUIDE.md).
+See [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 #### RAG, Caching, And Guardrails
 
@@ -698,7 +698,7 @@ Pipeline hooks can implement:
 - analytics logging
 - custom context enrichment
 
-See [Adding Context To Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
+See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
 
 ### 9. Chat Agent Features
 
@@ -708,25 +708,25 @@ The chat guides describe a reference pattern for production chat agents built on
 
 Server-Sent Events can stream status, step progress, token chunks, errors, and completion events to the frontend.
 
-See [Chat Agent Guide](CHAT_AGENT_GUIDE.md#sse-streaming-real-time-responses).
+See [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md#sse-streaming-real-time-responses).
 
 #### Session Storage
 
 Example chat agents use Redis-backed session storage. Sessions store metadata and bounded message history with TTL.
 
-See [Chat Session Management Guide](CHAT_SESSION_MANAGEMENT_GUIDE.md).
+See [Chat Session Management Guide](../memory-and-chat/CHAT_SESSION_MANAGEMENT_GUIDE.md).
 
 #### Multi-Turn Context
 
 Chat handlers convert stored messages into conversation turns and pass them into orchestration metadata. The orchestration layer prepares the prompt-safe conversation history.
 
-See [Conversation History Guide](CONVERSATION_HISTORY_GUIDE.md).
+See [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 #### HITL Resume For Chat
 
 The DevOps chat example carries session context through HITL interruptions so an approval resume can continue the same conversation when the session is still available.
 
-See [Chat Session Management Guide](CHAT_SESSION_MANAGEMENT_GUIDE.md).
+See [Chat Session Management Guide](../memory-and-chat/CHAT_SESSION_MANAGEMENT_GUIDE.md).
 
 ### 10. Observability And Developer Tools
 
@@ -747,7 +747,7 @@ Features include:
 - cardinality protection
 - graceful degradation if telemetry backends fail
 
-See [telemetry/README.md](../telemetry/README.md) and [API Reference](API_REFERENCE.md#telemetry-module).
+See [telemetry/README.md](../../telemetry/README.md) and [API Reference](../reference/API_REFERENCE.md#telemetry-module).
 
 #### Distributed Tracing
 
@@ -765,19 +765,19 @@ Features include:
 - async boundary linking
 - HITL cross-trace correlation
 
-See [Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md).
+See [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
 
 #### Structured Logging
 
 The framework provides a logger interface with basic and context-aware methods. Context-aware logging carries trace IDs when request context is available.
 
-See [Logging Implementation Guide](LOGGING_IMPLEMENTATION_GUIDE.md).
+See [Logging Implementation Guide](../observability/LOGGING_IMPLEMENTATION_GUIDE.md).
 
 #### LLM And Execution Debug Stores
 
 Debug stores can persist full LLM payloads and execution records with TTLs for troubleshooting orchestration behavior. The telemetry package also includes LLM call recording interfaces for storing request/response metadata outside the request path.
 
-See [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#llm-debug-configuration), [API Reference: LLM Debug Store](API_REFERENCE.md#llm-debug-store), and [API Reference: LLM Call Recording](API_REFERENCE.md#llm-call-recording).
+See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#llm-debug-configuration), [API Reference: LLM Debug Store](../reference/API_REFERENCE.md#llm-debug-store), and [API Reference: LLM Call Recording](../reference/API_REFERENCE.md#llm-call-recording).
 
 #### Registry Viewer
 
@@ -789,13 +789,13 @@ The Registry Viewer is a developer-facing runtime dashboard. It can inspect:
 - execution DAGs
 - shared memory
 
-See [Developer Tools Guide](DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
 
 #### Swagger UI
 
 Swagger UI consumes generated OpenAPI specs from components that expose `/openapi.json`. It supports interactive API exploration and can integrate with developer portals and API gateways.
 
-See [Developer Tools Guide](DEV_TOOLS_GUIDE.md#part-1--swagger-ui-api-exploration).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#part-1--swagger-ui-api-exploration).
 
 ### 11. Security And Request Propagation
 
@@ -814,7 +814,7 @@ This means the framework helps with:
 - exposing runtime metadata only when explicitly enabled
 - adding guardrails, redaction, and audit behavior through hooks and prompt builders
 
-See [README.md](../README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](guides/KUBERNETES.md#security-best-practices).
+See [README.md](../../README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices).
 
 #### OAuth Bearer Propagation
 
@@ -824,25 +824,25 @@ The orchestrator can attach Bearer tokens to outbound tool and agent calls throu
 - runtime token setters
 - per-request context injection
 
-See [OAuth Security Guide](OAUTH_SECURITY_GUIDE.md).
+See [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md).
 
 #### Runtime Token Refresh
 
 OAuth tokens and propagated headers can be updated at runtime. This supports service-to-service token refresh without rebuilding the orchestrator or stopping in-flight requests.
 
-See [OAuth Security Guide](OAUTH_SECURITY_GUIDE.md#runtime-token-refresh).
+See [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#runtime-token-refresh).
 
 #### Custom Header Propagation
 
 Custom headers support multi-tenant routing, audit metadata, and correlation IDs. Context-level headers override config-level defaults, while protected framework headers cannot be overridden by propagated headers.
 
-See [OAuth Security Guide](OAUTH_SECURITY_GUIDE.md#custom-header-propagation).
+See [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#custom-header-propagation).
 
 #### Protected Framework Headers
 
 The executor reserves framework-critical headers such as `Content-Type`, `Authorization`, `X-TruvaG3-Request-ID`, and `X-TruvaG3-Step-ID`. Propagated headers cannot override these reserved values, which prevents accidental breakage of authentication, content handling, or trace/request correlation.
 
-See [OAuth Security Guide](OAUTH_SECURITY_GUIDE.md#header-injection-order).
+See [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#header-injection-order).
 
 #### OpenAPI And Developer Tool Exposure
 
@@ -850,7 +850,7 @@ OpenAPI generation is disabled by default because it exposes component API surfa
 
 Developer tooling has additional privacy boundaries: the Registry Viewer intentionally does not expose per-user memory contents in its shared-memory views.
 
-See [Developer Tools Guide](DEV_TOOLS_GUIDE.md#6-security-considerations) and [Developer Tools Guide](DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#6-security-considerations) and [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
 
 #### Privacy, Guardrails, And Audit Hooks
 
@@ -865,13 +865,13 @@ Pipeline hooks and custom prompt builders provide extension points for applicati
 
 For streaming responses, note that `AfterSynthesis` hooks run after tokens have already streamed; use pre-planning hooks, guarded prompt builders, or non-streaming paths when content must be blocked before user delivery.
 
-See [Adding Context To Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md#7-scenario-response-guardrails-and-content-filtering), [LLM Planning Prompt Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md#detailed-example-soc-2-audit-logging-promptbuilder), and [Developer Tools Guide](DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
+See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md#7-scenario-response-guardrails-and-content-filtering), [LLM Planning Prompt Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md#detailed-example-soc-2-audit-logging-promptbuilder), and [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
 
 #### Kubernetes Secrets And Config
 
 API keys, OAuth tokens, and provider keys should be managed through Kubernetes Secrets. Non-sensitive deployment settings can be managed through ConfigMaps.
 
-See [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md) and [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#kubernetes-deployment).
+See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#kubernetes-deployment).
 
 #### Platform Security Controls
 
@@ -884,7 +884,7 @@ The Kubernetes docs describe the platform controls expected around TruvaG3 deplo
 - ServiceAccounts and RBAC with minimal permissions
 - ingress, gateway, service mesh, or mTLS controls at trust boundaries
 
-See [Kubernetes Deployment Guide](guides/KUBERNETES.md#security-best-practices) and [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
+See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
 
 ### 12. Deployment And Operations
 
@@ -903,19 +903,19 @@ The framework aligns with ordinary Kubernetes primitives:
 - namespace isolation
 - rolling updates
 
-See [Kubernetes Deployment Guide](guides/KUBERNETES.md).
+See [Kubernetes Deployment Guide](../operations/KUBERNETES.md).
 
 #### Environment Configuration
 
 The framework can be configured through environment variables and functional options. The environment guide marks variables by implementation status and groups them by subsystem.
 
-See [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md).
+See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md).
 
 #### Self-Hosted Operation
 
 TruvaG3 is intended for teams that want agents, tools, discovery, traces, and runtime data inside their own environment. This supports restricted, regulated, and air-gapped-friendly deployments.
 
-See [README.md](../README.md#25-enterprise-deployment-model-run-agent-ecosystems-inside-your-existing-kubernetes-platform).
+See [README.md](../../README.md#25-enterprise-deployment-model-run-agent-ecosystems-inside-your-existing-kubernetes-platform).
 
 #### Runtime Backends
 
@@ -926,7 +926,7 @@ Common runtime backends include:
 - OpenTelemetry Collector for metrics and traces
 - Prometheus, Jaeger, Grafana, and Loki in the example stack
 
-See [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md) and [memory/README.md](../memory/README.md).
+See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) and [memory/README.md](../../memory/README.md).
 
 ### 13. Extension Points
 
@@ -945,19 +945,19 @@ Examples include:
 - LLM debug, execution debug, and LLM call recording store interfaces
 - embedding client interface
 
-See [API Reference](API_REFERENCE.md#interfaces).
+See [API Reference](../reference/API_REFERENCE.md#interfaces).
 
 #### Custom Hooks
 
 Pipeline hooks are the main extension point for context engineering, caching, memory, guardrails, auditing, and background side effects.
 
-See [Adding Context To Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
+See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
 
 #### Custom Prompt Builders
 
 Prompt builders allow teams to replace prompt construction logic while preserving the orchestration interfaces.
 
-See [LLM Planning Prompt Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md#advanced-custom-promptbuilder).
+See [LLM Planning Prompt Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md#advanced-custom-promptbuilder).
 
 #### Testing And Conformance Helpers
 
@@ -969,7 +969,7 @@ The framework includes test-friendly implementations and contracts so developers
 - mock memory and discovery implementations
 - `core/conformance` tests for custom `TaskConsumer` backends
 
-See [core/README.md](../core/README.md), [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md#testing-the-conformance-helper), and [API Reference](API_REFERENCE.md#scheduling-interfaces).
+See [core/README.md](../../core/README.md), [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md#testing-the-conformance-helper), and [API Reference](../reference/API_REFERENCE.md#scheduling-interfaces).
 
 #### MCP Integration Paths
 
@@ -978,7 +978,7 @@ TruvaG3 tools and MCP servers solve different problems. The documented direction
 - expose TruvaG3 tools to MCP clients through an MCP gateway
 - consume external MCP servers as virtual TruvaG3 tools
 
-See [TruvaG3 Tools vs MCP Servers](TRUVAG3_TOOLS_VS_MCP_SERVERS.md).
+See [TruvaG3 Tools vs MCP Servers](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md).
 
 ## Feature-To-Module Index
 
@@ -1000,49 +1000,46 @@ See [TruvaG3 Tools vs MCP Servers](TRUVAG3_TOOLS_VS_MCP_SERVERS.md).
 
 Use these docs for deeper feature-level details:
 
-- [README.md](../README.md) - project overview and positioning
-- [GETTING_STARTED.md](../GETTING_STARTED.md) - first-run path
-- [core/README.md](../core/README.md) - tools, agents, framework runtime
-- [ai/README.md](../ai/README.md) - AI provider layer
-- [orchestration/README.md](../orchestration/README.md) - orchestration, workflows, streaming, HITL, production features
-- [memory/README.md](../memory/README.md) - shared memory backend implementations
-- [resilience/README.md](../resilience/README.md) - circuit breakers, retry, panic recovery
-- [telemetry/README.md](../telemetry/README.md) - metrics, tracing, telemetry configuration
-- [API_REFERENCE.md](API_REFERENCE.md) - API surface
+- [README.md](../../README.md) - project overview and positioning
+- [GETTING_STARTED.md](../../GETTING_STARTED.md) - first-run path
+- [core/README.md](../../core/README.md) - tools, agents, framework runtime
+- [ai/README.md](../../ai/README.md) - AI provider layer
+- [orchestration/README.md](../../orchestration/README.md) - orchestration, workflows, streaming, HITL, production features
+- [memory/README.md](../../memory/README.md) - shared memory backend implementations
+- [resilience/README.md](../../resilience/README.md) - circuit breakers, retry, panic recovery
+- [telemetry/README.md](../../telemetry/README.md) - metrics, tracing, telemetry configuration
+- [API_REFERENCE.md](../reference/API_REFERENCE.md) - API surface
 - [ARCHITECTURE.md](ARCHITECTURE.md) - framework architecture
-- [TOOL_DEVELOPMENT_GUIDE.md](TOOL_DEVELOPMENT_GUIDE.md) - building tools
-- [TOOL_SCHEMA_DISCOVERY_GUIDE.md](TOOL_SCHEMA_DISCOVERY_GUIDE.md) - schema discovery and tool payload generation
-- [AGENT_DEVELOPMENT_GUIDE.md](AGENT_DEVELOPMENT_GUIDE.md) - building agents
-- [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) - provider aliases, model aliases, and client setup
-- [ORCHESTRATION_MODES_GUIDE.md](ORCHESTRATION_MODES_GUIDE.md) - orchestration modes
-- [EFFECTIVE_PROMPTS_GUIDE.md](EFFECTIVE_PROMPTS_GUIDE.md) - capability descriptions and prompt quality
-- [ERROR_HANDLING_GUIDE.md](ERROR_HANDLING_GUIDE.md) - structured error patterns
-- [INTELLIGENT_ERROR_HANDLING.md](INTELLIGENT_ERROR_HANDLING.md) - LLM-assisted error analysis
-- [ASYNC_ORCHESTRATION_GUIDE.md](ASYNC_ORCHESTRATION_GUIDE.md) - background task pattern
-- [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md) - HITL approvals
-- [SCHEDULED_TASKS_GUIDE.md](SCHEDULED_TASKS_GUIDE.md) - delayed and recurring execution
-- [AGENT_MEMORY_USER_GUIDE.md](AGENT_MEMORY_USER_GUIDE.md) - shared and user memory
-- [CONVERSATION_HISTORY_GUIDE.md](CONVERSATION_HISTORY_GUIDE.md) - prompt-safe chat history
-- [CHAT_AGENT_GUIDE.md](CHAT_AGENT_GUIDE.md) - chat agent pattern
-- [CHAT_SESSION_MANAGEMENT_GUIDE.md](CHAT_SESSION_MANAGEMENT_GUIDE.md) - Redis-backed session lifecycle
-- [DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md) - trace and log correlation
-- [LOGGING_IMPLEMENTATION_GUIDE.md](LOGGING_IMPLEMENTATION_GUIDE.md) - logging conventions
-- [OAUTH_SECURITY_GUIDE.md](OAUTH_SECURITY_GUIDE.md) - OAuth and header propagation
-- [DEV_TOOLS_GUIDE.md](DEV_TOOLS_GUIDE.md) - Swagger UI and Registry Viewer
-- [ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md) - configuration reference
-- [LIMITS_CHEATSHEET.md](LIMITS_CHEATSHEET.md) - runtime limits and tuning reference
-- [REDIS_DEPENDENCY_ANALYSIS.md](REDIS_DEPENDENCY_ANALYSIS.md) - Redis usage by feature
-- [TRUVAG3_TOOLS_VS_MCP_SERVERS.md](TRUVAG3_TOOLS_VS_MCP_SERVERS.md) - TruvaG3 tool model compared with MCP
-- [guides/AUTO_DISCOVERY_GUIDE.md](guides/AUTO_DISCOVERY_GUIDE.md) - auto-discovery feature guide (registration, lookup, lease architecture, multi-replica, resilience)
-- [guides/KUBERNETES.md](guides/KUBERNETES.md) - Kubernetes deployment
-- [guides/LLM_PLANNING_PROMPT_GUIDE.md](guides/LLM_PLANNING_PROMPT_GUIDE.md) - prompt customization
+- [TOOL_DEVELOPMENT_GUIDE.md](../building/TOOL_DEVELOPMENT_GUIDE.md) - building tools
+- [TOOL_SCHEMA_DISCOVERY_GUIDE.md](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) - schema discovery and tool payload generation
+- [AGENT_DEVELOPMENT_GUIDE.md](../building/AGENT_DEVELOPMENT_GUIDE.md) - building agents
+- [AI_PROVIDERS_SETUP_GUIDE.md](../building/AI_PROVIDERS_SETUP_GUIDE.md) - provider aliases, model aliases, and client setup
+- [ORCHESTRATION_MODES_GUIDE.md](../orchestration/ORCHESTRATION_MODES_GUIDE.md) - orchestration modes
+- [EFFECTIVE_PROMPTS_GUIDE.md](../building/EFFECTIVE_PROMPTS_GUIDE.md) - capability descriptions and prompt quality
+- [ERROR_HANDLING_GUIDE.md](../orchestration/ERROR_HANDLING_GUIDE.md) - structured error patterns
+- [INTELLIGENT_ERROR_HANDLING.md](../orchestration/INTELLIGENT_ERROR_HANDLING.md) - LLM-assisted error analysis
+- [ASYNC_ORCHESTRATION_GUIDE.md](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md) - background task pattern
+- [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) - HITL approvals
+- [SCHEDULED_TASKS_GUIDE.md](../orchestration/SCHEDULED_TASKS_GUIDE.md) - delayed and recurring execution
+- [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md) - shared and user memory
+- [CONVERSATION_HISTORY_GUIDE.md](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md) - prompt-safe chat history
+- [CHAT_AGENT_GUIDE.md](../memory-and-chat/CHAT_AGENT_GUIDE.md) - chat agent pattern
+- [CHAT_SESSION_MANAGEMENT_GUIDE.md](../memory-and-chat/CHAT_SESSION_MANAGEMENT_GUIDE.md) - Redis-backed session lifecycle
+- [DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md) - trace and log correlation
+- [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) - logging conventions
+- [OAUTH_SECURITY_GUIDE.md](../operations/OAUTH_SECURITY_GUIDE.md) - OAuth and header propagation
+- [DEV_TOOLS_GUIDE.md](../operations/DEV_TOOLS_GUIDE.md) - Swagger UI and Registry Viewer
+- [ENVIRONMENT_VARIABLES_GUIDE.md](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) - configuration reference
+- [LIMITS_CHEATSHEET.md](../reference/LIMITS_CHEATSHEET.md) - runtime limits and tuning reference
+- [TRUVAG3_TOOLS_VS_MCP_SERVERS.md](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md) - TruvaG3 tool model compared with MCP
+- [AUTO_DISCOVERY_GUIDE.md](../operations/AUTO_DISCOVERY_GUIDE.md) - auto-discovery feature guide (registration, lookup, lease architecture, multi-replica, resilience)
+- [KUBERNETES.md](../operations/KUBERNETES.md) - Kubernetes deployment
+- [LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) - prompt customization
 
 ## Known Documentation Gaps
 
 Some docs still appear older than the current codebase and should be reviewed before relying on them as authoritative:
 
-- [docs/README.md](README.md) references several `docs/modules/...` and `docs/guides/...` paths that are not present in this repository.
-- [examples/README.md](../examples/README.md) references several example directories that are no longer present.
-- [API_REFERENCE.md](API_REFERENCE.md#ui-module) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
-- [ORCHESTRATION_MODES_GUIDE.md](ORCHESTRATION_MODES_GUIDE.md#6-yaml-workflow-engine-declarative-definitions) references `orchestration/WORKFLOW_README.md`, which is not present. The YAML workflow engine itself exists in code, but that referenced deep-dive document is missing.
+- [examples/README.md](../../examples/README.md) references several example directories that are no longer present.
+- [API_REFERENCE.md](../reference/API_REFERENCE.md#ui-module) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
 This guide is based on the current root/module READMEs and the current guides under `docs/`.

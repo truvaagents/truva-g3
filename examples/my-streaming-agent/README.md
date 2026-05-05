@@ -48,7 +48,7 @@ open http://chat.localhost
 
 ## Required reading for contributors
 
-- [`docs/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/AGENT_DEVELOPMENT_GUIDE.md) (esp. §5 Streaming Agent, §8 SSE Streaming, §9 Session Management)
-- [`docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md`](../../docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md) (only if exposing a public capability for other agents to call)
-- [`docs/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/DISTRIBUTED_TRACING_GUIDE.md)
-- [`docs/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/LOGGING_IMPLEMENTATION_GUIDE.md)
+- [`docs/building/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/building/AGENT_DEVELOPMENT_GUIDE.md) (esp. §5 Streaming Agent, §8 SSE Streaming, §9 Session Management)
+- [`docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md`](../../docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) (only if exposing a public capability for other agents to call)
+- [`docs/observability/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)
+- [`docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md)

@@ -1133,7 +1133,7 @@ func classifyError(err error) string {
 }
 ```
 
-> **See Also**: For advanced error handling patterns including AI-powered error correction and intelligent retry strategies, see the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/INTELLIGENT_ERROR_HANDLING.md).
+> **See Also**: For advanced error handling patterns including AI-powered error correction and intelligent retry strategies, see the [Intelligent Error Handling Guide](https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/INTELLIGENT_ERROR_HANDLING.md).
 
 ---
 
@@ -1251,7 +1251,7 @@ curl -X POST http://localhost:8092/api/capabilities/research_topic \
 ## Learn More
 
 - [TruvaG3 Telemetry Module](../../telemetry/README.md) - Complete telemetry documentation
-- [Distributed Tracing Guide](../../docs/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing, log correlation, and multi-service examples
+- [Distributed Tracing Guide](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing, log correlation, and multi-service examples
 - [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/)
 - [Prometheus Best Practices](https://prometheus.io/docs/practices/naming/)
 

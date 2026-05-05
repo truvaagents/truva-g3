@@ -1114,7 +1114,7 @@ func NewDefaultUserFactPersistencePolicy() *DefaultUserFactPersistencePolicy {
 
 // summaryPromptTemplate generates a one-sentence session summary.
 // Tag names use user_memory_ prefix to avoid conflicts with reserved orchestration
-// tags per docs/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
+// tags per docs/building/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
 const summaryPromptTemplate = `<user_memory_role>You are a session summarizer. You produce one-sentence summaries of user-assistant conversations.</user_memory_role>
 
 <user_memory_summary_rules>
@@ -1150,7 +1150,7 @@ Return ONLY the JSON object.`
 // See Extraction Strategy §Persistence Classification in the proposal for full rationale.
 // Tag names use user_memory_ prefix to avoid conflicts with reserved orchestration
 // tags (<identity>, <instructions>, <example>, <user_request>) per
-// docs/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
+// docs/building/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
 const extractionPromptTemplate = `<user_memory_role>You are a user fact extractor. You store only long-lived personal information that will remain useful for personalization in future conversations, and you return it as structured JSON.</user_memory_role>
 
 <user_memory_extraction_rules>
@@ -2211,7 +2211,7 @@ var _ BatchUserFactReconciler = (*LLMUserFactReconciler)(nil)
 // decisions are independent.
 //
 // Tag names use user_memory_ prefix to avoid conflicts with reserved
-// orchestration tags per docs/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
+// orchestration tags per docs/building/EFFECTIVE_PROMPTS_GUIDE.md §9.2.
 const batchedReconciliationPromptTemplate = `<user_memory_role>You are a user memory reconciliation system. You classify the relationship between each new candidate fact and the existing facts that are similar to it.</user_memory_role>
 
 <user_memory_reconciliation_rules>

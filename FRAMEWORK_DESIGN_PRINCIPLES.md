@@ -188,7 +188,7 @@ When a numeric limit affects LLM prompt construction, token usage, or execution 
 1. Defined as a field in the relevant config struct (e.g., `OrchestratorConfig`)
 2. Set to a sensible default in `DefaultConfig()`
 3. Overridable via a `TRUVAG3_*` environment variable, parsed with `strconv.Atoi` and guarded with `val > 0`
-4. Documented in `docs/ENVIRONMENT_VARIABLES_GUIDE.md` and `docs/LIMITS_CHEATSHEET.md`
+4. Documented in `docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md` and `docs/reference/LIMITS_CHEATSHEET.md`
 
 Hardcoded limits that seem reasonable at development time can cause production failures when workloads differ from expectations (e.g., prompt truncation hiding critical data, timeout too short for cross-agent delegation). Externalizing them allows deployment-specific tuning without code changes.
 

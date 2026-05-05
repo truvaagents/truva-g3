@@ -68,7 +68,7 @@ Build a gateway when:
 
 Do **not** build a gateway when:
 
-- You only need to **send** messages from agents (build a Tool — see [TOOL_DEVELOPMENT_GUIDE.md](../../docs/TOOL_DEVELOPMENT_GUIDE.md)).
+- You only need to **send** messages from agents (build a Tool — see [TOOL_DEVELOPMENT_GUIDE.md](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md)).
 - The external system is a **stateless REST API** and you just call it during a task (Tool).
 - You want to **orchestrate multiple tools** or reason over inputs (Agent).
 
@@ -237,7 +237,7 @@ Response is Server-Sent Events. Each event has a `type` field. Consume them:
 | `error` | Surface a user-readable error; log full detail |
 | `stream.end` | Close the SSE connection cleanly |
 
-**Important:** use `telemetry.NewTracedHTTPClientWithTransport()` (from the framework's `telemetry` module) so the trace context propagates from the platform event into the agent run. See [DISTRIBUTED_TRACING_GUIDE.md](../../docs/DISTRIBUTED_TRACING_GUIDE.md) for details.
+**Important:** use `telemetry.NewTracedHTTPClientWithTransport()` (from the framework's `telemetry` module) so the trace context propagates from the platform event into the agent run. See [DISTRIBUTED_TRACING_GUIDE.md](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) for details.
 
 **Resilience:** wrap the call in retries with exponential backoff for transient errors (connection refused, 5xx). Do **not** retry on user-level errors (4xx), and do not retry if a partial response has already been delivered to the user.
 
@@ -287,7 +287,7 @@ event arrives → ack platform → enqueue Task (payload = PlatformEvent):
 
 **Pros:** tasks survive pod crashes (Redis-backed); worker pool gives natural concurrency control; HITL checkpoints can pause for hours without blocking a goroutine; multi-replica HA works out of the box.
 
-**Cons:** more moving parts, trace context must cross the queue boundary (use `StartLinkedSpan` per [ASYNC_ORCHESTRATION_GUIDE.md §8](../../docs/ASYNC_ORCHESTRATION_GUIDE.md)).
+**Cons:** more moving parts, trace context must cross the queue boundary (use `StartLinkedSpan` per [ASYNC_ORCHESTRATION_GUIDE.md §8](../../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md)).
 
 **Use when:** agent runs may take minutes to hours, you run multiple replicas, HITL checkpoints may sit pending, or you need durability guarantees.
 
@@ -313,7 +313,7 @@ If the target agent uses HITL approval checkpoints, the gateway must surface the
 
 ## 12. Step 7: Main Entry Point
 
-The `main.go` pattern largely mirrors [TOOL_DEVELOPMENT_GUIDE.md §7](../../docs/TOOL_DEVELOPMENT_GUIDE.md) for the **shared** parts (config validation, telemetry init, graceful shutdown, signal handling). What differs:
+The `main.go` pattern largely mirrors [TOOL_DEVELOPMENT_GUIDE.md §7](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md) for the **shared** parts (config validation, telemetry init, graceful shutdown, signal handling). What differs:
 
 - **Component type:** call `core.SetCurrentComponentType(core.ComponentTypeGateway)` if/when the framework adds this enum; otherwise use `ComponentTypeAgent` or a custom label — flag this as a future framework enhancement.
 - **Framework wiring:** use `core.NewFramework` only if you need its HTTP server, middleware, and graceful shutdown. You likely want:
@@ -430,13 +430,13 @@ Gateway testing differs substantially from Tool testing:
 - Token rotation and secret management — deployment-specific.
 - Multi-tenant gateways (one gateway serving many Slack workspaces) — non-goal for the reference; adopters build this themselves.
 - Translation / i18n — adopters handle.
-- Outbound-only patterns (agent posts to Slack without receiving DMs) — that's a [Tool](../../docs/TOOL_DEVELOPMENT_GUIDE.md), not a gateway.
+- Outbound-only patterns (agent posts to Slack without receiving DMs) — that's a [Tool](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md), not a gateway.
 
 ## 19. References
 
-- [TOOL_DEVELOPMENT_GUIDE.md](../../docs/TOOL_DEVELOPMENT_GUIDE.md) — shared infrastructure patterns (telemetry, config, deployment scaffolding)
-- [ASYNC_ORCHESTRATION_GUIDE.md](../../docs/ASYNC_ORCHESTRATION_GUIDE.md) — Pattern B task queue reference; HITL + async combination
-- [DISTRIBUTED_TRACING_GUIDE.md](../../docs/DISTRIBUTED_TRACING_GUIDE.md) — trace context propagation, `StartLinkedSpan` for cross-boundary spans
+- [TOOL_DEVELOPMENT_GUIDE.md](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md) — shared infrastructure patterns (telemetry, config, deployment scaffolding)
+- [ASYNC_ORCHESTRATION_GUIDE.md](../../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md) — Pattern B task queue reference; HITL + async combination
+- [DISTRIBUTED_TRACING_GUIDE.md](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) — trace context propagation, `StartLinkedSpan` for cross-boundary spans
 - [FRAMEWORK_DESIGN_PRINCIPLES.md](../../FRAMEWORK_DESIGN_PRINCIPLES.md) — why gateways are reference implementations, not framework modules
 - [slack-gateway/PLAN.md](./PLAN.md) — concrete first gateway implementation
 - [chat-ui](../chat-ui) — closest architectural sibling (client of agents, same non-mesh category)

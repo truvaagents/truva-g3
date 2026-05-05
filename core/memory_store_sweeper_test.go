@@ -12,7 +12,7 @@ import (
 
 // componentAwareMockLogger captures records AND records WithComponent calls.
 // Used to verify that NewMemoryStoreSweeper wraps the logger with
-// "framework/core" per docs/LOGGING_IMPLEMENTATION_GUIDE.md §14.
+// "framework/core" per docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §14.
 type componentAwareMockLogger struct {
 	mu                 sync.Mutex
 	component          string
@@ -334,7 +334,7 @@ func TestMemoryStoreSweeper_NoOp_NilStore(t *testing.T) {
 	}
 }
 
-// ---- Logging compliance per docs/LOGGING_IMPLEMENTATION_GUIDE.md §16 ----
+// ---- Logging compliance per docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §16 ----
 
 func TestMemoryStoreSweeper_LoggingCompliance(t *testing.T) {
 	mockLogger := newComponentAwareMockLogger()

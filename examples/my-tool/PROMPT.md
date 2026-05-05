@@ -151,7 +151,7 @@ file** — get it right before approving.
 ## Step 3 — Read the Tool Development Guide
 
 ```
-Step 3 of 12: read `docs/TOOL_DEVELOPMENT_GUIDE.md` end-to-end.
+Step 3 of 12: read `docs/building/TOOL_DEVELOPMENT_GUIDE.md` end-to-end.
 
 Pay particular attention to:
 - §3 Tool struct shape
@@ -250,7 +250,7 @@ If errors, debug with the agent before moving on.
 ## Step 6 — Review against `TOOL_DEVELOPMENT_GUIDE.md`
 
 ```
-Step 6 of 12: review the implementation against docs/TOOL_DEVELOPMENT_GUIDE.md.
+Step 6 of 12: review the implementation against docs/building/TOOL_DEVELOPMENT_GUIDE.md.
 
 Go through each numbered section of the guide and check:
 - Does our implementation follow it?
@@ -274,7 +274,7 @@ genuinely-clean impl is rare on first pass.
 ## Step 7 — Vet against `TOOL_SCHEMA_DISCOVERY_GUIDE.md`
 
 ```
-Step 7 of 12: vet the implementation against docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md.
+Step 7 of 12: vet the implementation against docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md.
 
 Verify each capability adheres to the 3-Phase Progressive Enhancement
 model (the guide's actual framing):
@@ -296,7 +296,7 @@ rely on this — gaps here mean the LLM can't generate good payloads.
 ## Step 8 — Vet against `DISTRIBUTED_TRACING_GUIDE.md`
 
 ```
-Step 8 of 12: vet the implementation against docs/DISTRIBUTED_TRACING_GUIDE.md.
+Step 8 of 12: vet the implementation against docs/observability/DISTRIBUTED_TRACING_GUIDE.md.
 
 Verify:
 - Every external HTTP call goes through otelhttp.Transport (or equivalent)
@@ -317,7 +317,7 @@ the agent to point at the exact lines.
 ## Step 9 — Vet against `LOGGING_IMPLEMENTATION_GUIDE.md`
 
 ```
-Step 9 of 12: vet the implementation against docs/LOGGING_IMPLEMENTATION_GUIDE.md.
+Step 9 of 12: vet the implementation against docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md.
 
 Verify:
 - Logs use the framework's logger (not standard log/fmt.Println)

@@ -44,10 +44,10 @@ curl -s http://travel-chat-agent.localhost/discover | \
 
 Before changing this tool, skim:
 
-- [`docs/TOOL_DEVELOPMENT_GUIDE.md`](../../docs/TOOL_DEVELOPMENT_GUIDE.md)
-- [`docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md`](../../docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
-- [`docs/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/DISTRIBUTED_TRACING_GUIDE.md)
-- [`docs/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/LOGGING_IMPLEMENTATION_GUIDE.md)
+- [`docs/building/TOOL_DEVELOPMENT_GUIDE.md`](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md)
+- [`docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md`](../../docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
+- [`docs/observability/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)
+- [`docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md)
 
 ## Configuration
 

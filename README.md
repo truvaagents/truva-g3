@@ -1007,7 +1007,7 @@ orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
 4. Human approves/rejects → execution continues or aborts
 5. Configurable timeout with auto-approve/reject behavior
 
-→ See [docs/HUMAN_IN_THE_LOOP_USER_GUIDE.md](docs/HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL documentation
+→ See [docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md](docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL documentation
 
 ### 5. Know What Your Agents Are Doing (Without the Hassle)
 
@@ -1066,7 +1066,7 @@ deps.PipelineHooks = append(sharedHooks, userHooks...)
 
 `BuildUserMemoryHooks(...)` returns both the hooks and a closer. The Layer 1 preset runs user-memory extraction asynchronously by default so post-synthesis memory work does not delay chat completion; use `orchestration.WithSynchronousExtraction()` if you need extraction to finish before the request continues.
 
-→ See [Agent Memory User Guide](docs/AGENT_MEMORY_USER_GUIDE.md) for shared and per-user memory.
+→ See [Agent Memory User Guide](docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md) for shared and per-user memory.
 
 ## Putting It All Together: A Real Example
 

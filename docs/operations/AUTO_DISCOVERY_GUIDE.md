@@ -268,7 +268,7 @@ The choice is made in [`core/agent.go:1019-1022`](../../core/agent.go#L1019-L102
 
 In service-scoped mode (multiple pods writing the same key), `pod_name` reflects whichever replica heartbeated most recently. In steady state this can be the same pod for extended periods — heartbeat scheduling tends to cluster, and once one pod's write lands last in a round, it can keep winning subsequent rounds. The value flips reliably when the pod set itself changes (rolling update, crash, replacement, scale event). Treat it as a "currently-observed pod" hint, not an authoritative routing target.
 
-The `Capability` struct ([`core/agent.go:70`](../../core/agent.go#L70)) carries more than just a name and description — it also includes optional payload-generation hints (`InputSummary`, `OutputSummary`) and an auto-generated schema endpoint. Those are explained in the [Tool Development Guide](../TOOL_DEVELOPMENT_GUIDE.md); for discovery purposes, you mainly care about `Name`, `Description`, `Endpoint`, and `Internal` (a flag that hides admin-style capabilities from the AI-facing catalog).
+The `Capability` struct ([`core/agent.go:70`](../../core/agent.go#L70)) carries more than just a name and description — it also includes optional payload-generation hints (`InputSummary`, `OutputSummary`) and an auto-generated schema endpoint. Those are explained in the [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md); for discovery purposes, you mainly care about `Name`, `Description`, `Endpoint`, and `Internal` (a flag that hides admin-style capabilities from the AI-facing catalog).
 
 ### What the Registry Stores: Four Key Types
 
@@ -554,7 +554,7 @@ This is the recommended pattern for production Kubernetes deployments. The alter
 
 ### Environment Variables
 
-The discovery-related variables — full reference with precedence rules in [`docs/ENVIRONMENT_VARIABLES_GUIDE.md`](../ENVIRONMENT_VARIABLES_GUIDE.md):
+The discovery-related variables — full reference with precedence rules in [`docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md`](../reference/ENVIRONMENT_VARIABLES_GUIDE.md):
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -589,7 +589,7 @@ For tests:
 |---|---|
 | `core.WithMockDiscovery(true)` | Use the in-memory `MockDiscovery` (no Redis required) |
 
-Full signatures are in [`docs/API_REFERENCE.md`](../API_REFERENCE.md). Precedence rule (project-wide): when both env vars and option functions set the same value, **option functions win**. See [`core/ARCHITECTURE.md`](../../core/ARCHITECTURE.md) §"Environment Variable Loading".
+Full signatures are in [`docs/reference/API_REFERENCE.md`](../reference/API_REFERENCE.md). Precedence rule (project-wide): when both env vars and option functions set the same value, **option functions win**. See [`core/ARCHITECTURE.md`](../../core/ARCHITECTURE.md) §"Environment Variable Loading".
 
 ## Observability
 
@@ -796,10 +796,10 @@ The framework calls `Unregister` for you when its parent context is cancelled (g
 ## See Also
 
 - [Kubernetes Deployment Patterns](KUBERNETES.md) — env-var wiring for service-fronted discovery, NetworkPolicy, ServiceMonitor, troubleshooting in K8s
-- [API Reference](../API_REFERENCE.md) — exact signatures for `Registry`, `Discovery`, `Discover`, `FindService`, `FindByCapability`
-- [Environment Variables Guide](../ENVIRONMENT_VARIABLES_GUIDE.md) — precedence rules and full env-var reference
+- [API Reference](../reference/API_REFERENCE.md) — exact signatures for `Registry`, `Discovery`, `Discover`, `FindService`, `FindByCapability`
+- [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) — precedence rules and full env-var reference
 - [Framework Design Principles](../../FRAMEWORK_DESIGN_PRINCIPLES.md) — why Tool/Agent split is compile-time enforced
 - [Core Module Architecture](../../core/ARCHITECTURE.md) — `Registry`/`Discovery` interface contracts and design rationale
-- [Tool Development Guide](../TOOL_DEVELOPMENT_GUIDE.md) — building tools that register capabilities
-- [Agent Development Guide](../AGENT_DEVELOPMENT_GUIDE.md) — building agents that discover and orchestrate tools
+- [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) — building tools that register capabilities
+- [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md) — building agents that discover and orchestrate tools
 - [Examples: registry-viewer-app](../../examples/registry-viewer-app/) — live registry inspection dashboard

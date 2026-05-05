@@ -1409,8 +1409,8 @@ curl http://localhost:8372/events
 ## Learn More
 
 - [TruvaG3 Orchestration Module](../../orchestration/README.md) - AI orchestration and DAG planning
-- [Distributed Tracing Guide](../../docs/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing and log correlation
-- [Agent Development Guide](../../docs/AGENT_DEVELOPMENT_GUIDE.md) - Building agents with TruvaG3
+- [Distributed Tracing Guide](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing and log correlation
+- [Agent Development Guide](../../docs/building/AGENT_DEVELOPMENT_GUIDE.md) - Building agents with TruvaG3
 - [Prometheus AlertManager Documentation](https://prometheus.io/docs/alerting/latest/alertmanager/)
 - [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/)
 

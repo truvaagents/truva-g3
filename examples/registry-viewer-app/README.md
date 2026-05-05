@@ -335,4 +335,4 @@ export TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES=get_balance,view_orders
 export TRUVAG3_HITL_DEFAULT_TIMEOUT=10m
 ```
 
-See [ENVIRONMENT_VARIABLES_GUIDE.md](../../docs/ENVIRONMENT_VARIABLES_GUIDE.md) for complete documentation of all framework variables.
+See [ENVIRONMENT_VARIABLES_GUIDE.md](../../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md) for complete documentation of all framework variables.

@@ -77,7 +77,7 @@ Depending on the async shape chosen:
 
 ## Required reading for contributors
 
-- [`docs/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/AGENT_DEVELOPMENT_GUIDE.md) (esp. §10 "Background Jobs: `core.Runnable`")
-- [`docs/ASYNC_ORCHESTRATION_GUIDE.md`](../../docs/ASYNC_ORCHESTRATION_GUIDE.md)
-- [`docs/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/DISTRIBUTED_TRACING_GUIDE.md)
-- [`docs/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/LOGGING_IMPLEMENTATION_GUIDE.md)
+- [`docs/building/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/building/AGENT_DEVELOPMENT_GUIDE.md) (esp. §10 "Background Jobs: `core.Runnable`")
+- [`docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md`](../../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md)
+- [`docs/observability/DISTRIBUTED_TRACING_GUIDE.md`](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md)
+- [`docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md`](../../docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md)

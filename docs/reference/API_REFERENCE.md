@@ -1041,7 +1041,7 @@ Numeric tuning uses `TRUVAG3_SHARED_MEMORY_*` env vars.
 - `NoOpEntityExtractor` — honors explicit `metadata["entity_type"]`/`metadata["entity_id"]` or multi-entity `metadata["entities"]`. Performs no extraction of its own — the framework refuses to guess. Domain-agnostic.
 - `LLMEntityExtractor` — reads entities the `EventSummarizer` LLM produced as a side effect of summarization (via the `metadata["llm_entities"]` key plumbed by `MemoryRecordHook`). Zero additional LLM round-trips. Falls through to explicit metadata if no LLM entities are present.
 
-See [Agent Memory User Guide](AGENT_MEMORY_USER_GUIDE.md) for full usage.
+See [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md) for full usage.
 
 #### User Memory Interfaces
 
@@ -1316,7 +1316,7 @@ Contract test suite for `TaskConsumer` implementations.
 func RunTaskConsumerConformance(t *testing.T, factory TaskConsumerFactory)
 ```
 
-Runs 10 sub-tests (roundtrip, settlement, idempotency, cancellation, concurrency, field preservation, double-settlement). Any backend that passes all 10 is contract-compliant. See [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md) for details.
+Runs 10 sub-tests (roundtrip, settlement, idempotency, cancellation, concurrency, field preservation, double-settlement). Any backend that passes all 10 is contract-compliant. See [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md) for details.
 
 ### Upstream Error Classification
 
@@ -1889,7 +1889,7 @@ if errors.Is(err, context.Canceled) {
 | Qwen | ✅ Full | OpenAI-compatible |
 | Ollama | ✅ Full | OpenAI-compatible |
 
-For a complete production example with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](./CHAT_AGENT_GUIDE.md).
+For a complete production example with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md).
 
 **AIOptions parameters:**
 - `Temperature` (0.0-1.0) - Creativity level (0=deterministic, 1=creative)
@@ -2873,7 +2873,7 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 | `PromptBuilder` | `PromptBuilder` | No | Custom prompt building (default: `DefaultPromptBuilder`) |
 | `EnableErrorAnalyzer` | `bool` | No | LLM-based error analysis (Layer 3) |
 | `ResultProcessor` | `ResultProcessor` | No | Custom result trimming |
-| `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
+| `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
 
 **Example - Production Orchestrator:**
 ```go
@@ -2919,7 +2919,7 @@ deps := orchestration.OrchestratorDependencies{
 
 For chat agents, the preferred conversation-history path is request metadata, not a hook. Pass raw turns in `metadata[orchestration.MetadataConversationTurns]` plus the stable session key in `metadata[orchestration.MetadataConversationSessionKey]`, and let the shared `ConversationHistoryPreparer` build the `<conversation_history>` enrichment before planning. `ConversationHistoryHook` remains available as an adapter for memory-backed integrations that cannot supply raw turns directly. For Tier 2 recursive compaction, the ergonomic Layer 2 path is `BuildCompactionEnabledConversationHistoryPreparer(config, aiClient, ...options)`, which installs the default cache and LLM compactor while still allowing `WithConversationSummaryCache(...)` and `WithConversationCompactor(...)` overrides.
 
-For detailed pipeline hook implementation patterns, see [Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md). For the conversation-history metadata path plus Tier 2 / Layer 3 reference implementations, see [Conversation History Guide](CONVERSATION_HISTORY_GUIDE.md).
+For detailed pipeline hook implementation patterns, see [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md). For the conversation-history metadata path plus Tier 2 / Layer 3 reference implementations, see [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ### Orchestrator Interface Methods
 
@@ -3033,7 +3033,7 @@ config.ExecutionOptions.ValidationFeedbackEnabled = true
 config.ExecutionOptions.MaxValidationRetries = 3  // More retries for edge cases
 ```
 
-See [Intelligent Error Handling](./INTELLIGENT_ERROR_HANDLING.md#orchestration-module-multi-layer-type-safety) for details on how type safety layers work together.
+See [Intelligent Error Handling](../orchestration/INTELLIGENT_ERROR_HANDLING.md#orchestration-module-multi-layer-type-safety) for details on how type safety layers work together.
 
 #### Step Retry Backoff
 
@@ -3252,7 +3252,7 @@ type OrchestratorConfig struct {
 }
 ```
 
-**Observability:** Emission is observable via the `orchestrator.remediation.triggered` span event (attribute `has_failure_pattern`) and the `remediation_failure_pattern` DEBUG log (fields `emitted`, `reject_reason`). See [DISTRIBUTED_TRACING_GUIDE](DISTRIBUTED_TRACING_GUIDE.md) and [LOGGING_IMPLEMENTATION_GUIDE](LOGGING_IMPLEMENTATION_GUIDE.md) §11.
+**Observability:** Emission is observable via the `orchestrator.remediation.triggered` span event (attribute `has_failure_pattern`) and the `remediation_failure_pattern` DEBUG log (fields `emitted`, `reject_reason`). See [DISTRIBUTED_TRACING_GUIDE](../observability/DISTRIBUTED_TRACING_GUIDE.md) and [LOGGING_IMPLEMENTATION_GUIDE](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) §11.
 
 ### ResultTrimConfig
 
@@ -3527,7 +3527,7 @@ result, err := orchestrator.ProcessRequestStreaming(ctx, query, nil,
 )
 ```
 
-For a complete implementation with conversation history, session management, and SSE events, see the [Chat Agent Implementation Guide](./CHAT_AGENT_GUIDE.md).
+For a complete implementation with conversation history, session management, and SSE events, see the [Chat Agent Implementation Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md).
 
 ### Orchestration Strategies
 
@@ -3778,7 +3778,7 @@ type LLMDebugRecordSummary struct {
 
 Add human oversight to AI orchestration. HITL pauses execution at critical points (checkpoints) and waits for human approval before proceeding.
 
-For getting started and implementation patterns, see the [Human-in-the-Loop User Guide](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
+For getting started and implementation patterns, see the [Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 
 #### Core Interfaces
 

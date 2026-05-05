@@ -160,9 +160,9 @@ Project-specific architectural rules (compile-time tool/agent separation, layere
 
 Cross-cutting implementation guides — these contain prescriptive rules that apply across modules. Conformance is checked in review:
 
-- [`docs/DISTRIBUTED_TRACING_GUIDE.md`](docs/DISTRIBUTED_TRACING_GUIDE.md) — tracing patterns, context propagation, server/client middleware, and §"Required Patterns for Framework-Level Tracing".
+- [`docs/observability/DISTRIBUTED_TRACING_GUIDE.md`](docs/observability/DISTRIBUTED_TRACING_GUIDE.md) — tracing patterns, context propagation, server/client middleware, and §"Required Patterns for Framework-Level Tracing".
   **Triggers**: any code path that emits spans or propagates trace context.
-- [`docs/LOGGING_IMPLEMENTATION_GUIDE.md`](docs/LOGGING_IMPLEMENTATION_GUIDE.md) — logger interface usage, log levels, structured field naming standards, and §"Required Patterns for Framework-Level Logging".
+- [`docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md`](docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md) — logger interface usage, log levels, structured field naming standards, and §"Required Patterns for Framework-Level Logging".
   **Triggers**: any code path that emits logs.
 - [`telemetry/ARCHITECTURE.md`](telemetry/ARCHITECTURE.md) — especially §"Module Boundaries for Metrics", §"HTTP Middleware Extensibility", and §"Common Pitfalls".
   **Triggers**: changes that emit metrics (`telemetry.Counter` / `Histogram` / `Gauge`), add or rename a metric in `telemetry/unified_metrics.go`, alter telemetry initialization or shutdown in `main()`, or add HTTP middleware that interacts with tracing.
@@ -329,8 +329,8 @@ Do not include AI/assistant attribution lines (`Co-Authored-By: <bot>`, "Generat
 
 1. **Update Documentation**: Reflect any user-visible behavior change in `docs/`, the relevant `*/README.md`, and examples.
 2. **Self-Review Against Cross-Cutting Guides**: Re-read your diff against any of the three cross-cutting guides whose triggers fire for this PR (see [Coding Standards → Read These First](#read-these-first) for the full trigger list):
-   - [`docs/DISTRIBUTED_TRACING_GUIDE.md`](docs/DISTRIBUTED_TRACING_GUIDE.md) — if the change emits spans or propagates trace context.
-   - [`docs/LOGGING_IMPLEMENTATION_GUIDE.md`](docs/LOGGING_IMPLEMENTATION_GUIDE.md) — if the change emits logs.
+   - [`docs/observability/DISTRIBUTED_TRACING_GUIDE.md`](docs/observability/DISTRIBUTED_TRACING_GUIDE.md) — if the change emits spans or propagates trace context.
+   - [`docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md`](docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md) — if the change emits logs.
    - [`telemetry/ARCHITECTURE.md`](telemetry/ARCHITECTURE.md) — if the change emits metrics, modifies `telemetry/unified_metrics.go`, alters telemetry init in `main()`, or adds HTTP middleware that interacts with tracing.
 
    This is a review checkpoint, not a suggestion.
@@ -382,7 +382,7 @@ The project does not currently require a separate Contributor License Agreement 
 
 ## Getting Help
 
-- Read the documentation under [`docs/`](docs/) (architecture, guides, API reference)
+- Read the documentation under [`docs/`](docs/) — organized by topic into `overview/`, `building/`, `orchestration/`, `memory-and-chat/`, `observability/`, `operations/`, and `reference/` subdirectories
 - Check [existing issues](https://github.com/truvaagents/truva-g3/issues)
 - Open a new issue with the `question` label for anything unclear
 
