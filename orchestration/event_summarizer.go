@@ -18,7 +18,7 @@ import (
 var _ core.EventSummarizer = (*LLMEventSummarizer)(nil)
 
 // eventSummarizerSystemPrompt is the system prompt for event summarization LLM calls.
-// Structure follows docs/EFFECTIVE_PROMPTS_GUIDE.md:
+// Structure follows docs/building/EFFECTIVE_PROMPTS_GUIDE.md:
 //   - §2.8 (converged ordering: identity → instructions → example)
 //   - §2.9 (system message for identity and rules)
 //   - §2.10 (XML tags for section boundaries)

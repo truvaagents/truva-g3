@@ -129,9 +129,9 @@ if err != nil {
 
 The tool's `sendUpstreamError` method sets the HTTP status code, `ToolError.Category`, and `ToolError.Retryable` from the classification result — ensuring the `orchestration` module's executor routes the error correctly.
 
-> For the full handler pattern with telemetry and logging, see [Tool Development Guide — Step 4: Implement Handlers](TOOL_DEVELOPMENT_GUIDE.md#6-step-4-implement-handlers).
+> For the full handler pattern with telemetry and logging, see [Tool Development Guide — Step 4: Implement Handlers](../building/TOOL_DEVELOPMENT_GUIDE.md#6-step-4-implement-handlers).
 >
-> For type signatures, see [API Reference — ClassifyUpstreamError](API_REFERENCE.md#classifyupstreamerror).
+> For type signatures, see [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror).
 
 ---
 
@@ -319,7 +319,7 @@ case <-timer.C:
 }
 ```
 
-> For `BackoffConfig` API details, see [API Reference — BackoffConfig](API_REFERENCE.md#backoffconfig).
+> For `BackoffConfig` API details, see [API Reference — BackoffConfig](../reference/API_REFERENCE.md#backoffconfig).
 
 ### The `resilience` Module (Separate from Step Retry)
 
@@ -446,7 +446,7 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 
 `SetStepRetryBackoff()` (explicit) > `TRUVAG3_STEP_RETRY_*` env vars > `core.DefaultBackoffConfig()` defaults.
 
-> For the complete environment variables list, see [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md).
+> For the complete environment variables list, see [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md).
 
 ---
 
@@ -549,8 +549,8 @@ h.sendError(rw, "city_code is required", http.StatusBadRequest, "MISSING_FIELDS"
 ### See Also
 
 - [Intelligent Error Handling](INTELLIGENT_ERROR_HANDLING.md) — Deep dive into LLM error analysis (Layers 3 and 4)
-- [Tool Development Guide — Error Handling](TOOL_DEVELOPMENT_GUIDE.md#10-best-practices) — Tool implementation patterns
-- [API Reference — ClassifyUpstreamError](API_REFERENCE.md#classifyupstreamerror) — Type signatures and function docs
-- [API Reference — BackoffConfig](API_REFERENCE.md#backoffconfig) — Backoff calculation details
-- [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md) — All configurable env vars
-- [Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline hooks error handling: hooks are resilient by design — if a hook returns an error, the orchestrator logs a warning and continues. A failing hook never aborts the pipeline. This follows the principle that optional enhancements (RAG, caching, memory) should degrade gracefully rather than block the response
+- [Tool Development Guide — Error Handling](../building/TOOL_DEVELOPMENT_GUIDE.md#10-best-practices) — Tool implementation patterns
+- [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) — Type signatures and function docs
+- [API Reference — BackoffConfig](../reference/API_REFERENCE.md#backoffconfig) — Backoff calculation details
+- [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) — All configurable env vars
+- [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline hooks error handling: hooks are resilient by design — if a hook returns an error, the orchestrator logs a warning and continues. A failing hook never aborts the pipeline. This follows the principle that optional enhancements (RAG, caching, memory) should degrade gracefully rather than block the response

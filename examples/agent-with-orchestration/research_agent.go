@@ -220,7 +220,7 @@ func NewTravelResearchAgent() (*TravelResearchAgent, error) {
 //   - Configures travel-specific type rules for coordinates, currencies, etc.
 //   - Adds custom instructions for travel research context
 //
-// See: docs/guides/LLM_PLANNING_PROMPT_GUIDE.md for full documentation
+// See: docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md for full documentation
 func (t *TravelResearchAgent) InitializeOrchestrator(discovery core.Discovery) error {
 	if discovery == nil {
 		return fmt.Errorf("discovery service is required for orchestration")
@@ -245,7 +245,7 @@ func (t *TravelResearchAgent) InitializeOrchestrator(discovery core.Discovery) e
 
 	// Configure PromptBuilder with travel-specific type rules
 	// This ensures the LLM generates execution plans with correct JSON types
-	// See: docs/guides/LLM_PLANNING_PROMPT_GUIDE.md
+	// See: docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md
 	config.PromptConfig = orchestration.PromptConfig{
 		// SystemInstructions defines the orchestrator's persona and behavioral context.
 		// This becomes the primary identity, with the orchestrator role as secondary.

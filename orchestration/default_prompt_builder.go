@@ -304,7 +304,7 @@ func (d *DefaultPromptBuilder) BuildPlanningPrompt(ctx context.Context, input Pr
 	}
 
 	// Precedence rule: placed immediately before <user_request> so it lands
-	// in the high-attention tail of the prompt (docs/EFFECTIVE_PROMPTS_GUIDE.md
+	// in the high-attention tail of the prompt (docs/building/EFFECTIVE_PROMPTS_GUIDE.md
 	// §2.1). Emitted only when at least one enrichment block that can conflict
 	// with the live request is present — otherwise the rule is noise.
 	writeContextPrecedence(ctx, &sb, input.Metadata, PromptKindPlanning)
@@ -439,7 +439,7 @@ const defaultOrchestratorPersona = "You are an intelligent orchestrator that cre
 // final-default branch) all emit identical content. Custom PromptBuilders that
 // implement SystemPromptBuilder may opt in by calling this helper too.
 //
-// The tag is registered in docs/EFFECTIVE_PROMPTS_GUIDE.md §9.1.
+// The tag is registered in docs/building/EFFECTIVE_PROMPTS_GUIDE.md §9.1.
 func appendRuntimeContext(persona string) string {
 	var sb strings.Builder
 	sb.WriteString(persona)
@@ -513,7 +513,7 @@ const (
 // <conversation_history> — otherwise the planner/synthesizer can anchor on
 // stale stored context.
 //
-// Placement guidance per docs/EFFECTIVE_PROMPTS_GUIDE.md §2.1: emit the
+// Placement guidance per docs/building/EFFECTIVE_PROMPTS_GUIDE.md §2.1: emit the
 // block close to either the live <user_request> or the conflicting
 // enrichment(s) so it lands in the high-attention region of the prompt.
 //

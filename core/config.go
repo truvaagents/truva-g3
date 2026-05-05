@@ -1828,7 +1828,7 @@ func NewConfig(opts ...Option) (*Config, error) {
 // observabilityIdentityDocRef is the canonical doc pointer cited in the
 // remediation field of the identity-drift warning. Centralized here so the
 // reference can be updated in one place if the doc is ever restructured.
-const observabilityIdentityDocRef = "docs/TOOL_DEVELOPMENT_GUIDE.md §8 Observability Identity"
+const observabilityIdentityDocRef = "docs/building/TOOL_DEVELOPMENT_GUIDE.md §8 Observability Identity"
 
 // checkObservabilityIdentityAlignment verifies that the pod's app: label agrees
 // with the framework's cfg.Name (which drives the log-body "service" field and

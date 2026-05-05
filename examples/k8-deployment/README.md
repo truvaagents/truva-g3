@@ -95,7 +95,7 @@ Loki, Jaeger, and Prometheus report different identities for the same workload.
 
 See [OBSERVABILITY.md — Log Pipeline Identity](OBSERVABILITY.md#-log-pipeline-identity-how-service_name-is-set)
 for the full pipeline walkthrough, and
-[../../docs/TOOL_DEVELOPMENT_GUIDE.md §8](../../docs/TOOL_DEVELOPMENT_GUIDE.md#8-step-6-add-deployment-files)
+[../../docs/building/TOOL_DEVELOPMENT_GUIDE.md §8](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md#8-step-6-add-deployment-files)
 for the developer-facing contract.
 
 ## Quick Start

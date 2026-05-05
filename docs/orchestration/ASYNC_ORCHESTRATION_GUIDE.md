@@ -291,7 +291,7 @@ Before diving into code, let's understand the components.
 
 Let's build an async agent step by step.
 
-> **Working Example**: See [examples/agent-with-async/](../examples/agent-with-async/) for a complete implementation.
+> **Working Example**: See [examples/agent-with-async/](../../examples/agent-with-async) for a complete implementation.
 
 ### 4.1 Step 1: Create Project Structure
 
@@ -347,7 +347,7 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../examples/agent-with-async/main.go) lines 114-132 for complete Redis connection and task infrastructure setup.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 114-132 for complete Redis connection and task infrastructure setup.
 
 ### 4.3 Step 3: Create Worker Pool and Register Handlers
 
@@ -379,7 +379,7 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../examples/agent-with-async/main.go) lines 241-259 for worker pool configuration and handler registration.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 241-259 for worker pool configuration and handler registration.
 
 ### 4.4 Step 4: Set Up HTTP API
 
@@ -421,11 +421,11 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../examples/agent-with-async/main.go) lines 164-226 for API mode setup, or lines 344-486 for embedded mode with both API and workers.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 164-226 for API mode setup, or lines 344-486 for embedded mode with both API and workers.
 
 ### 4.5 Step 5: Implement Task Handler
 
-> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../examples/agent-with-async/travel_research_agent.go) for the complete `AsyncTravelAgent` struct (lines 51-57), `QueryResult` type (lines 67-75), and `InitializeOrchestrator` method (lines 132-174).
+> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) for the complete `AsyncTravelAgent` struct (lines 51-57), `QueryResult` type (lines 67-75), and `InitializeOrchestrator` method (lines 132-174).
 
 ```go
 // handlers.go
@@ -708,7 +708,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 25-244 for the complete `HandleQuery` implementation.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 25-244 for the complete `HandleQuery` implementation.
 
 ##### 2. Progress Reporting
 
@@ -751,7 +751,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 44-51, 125-131, and 206-212 for real progress reporting with `OnStepComplete` callback integration.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 44-51, 125-131, and 206-212 for real progress reporting with `OnStepComplete` callback integration.
 
 ##### 3. Result Handling
 
@@ -793,7 +793,7 @@ type QueryResult struct {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../examples/agent-with-async/travel_research_agent.go) lines 67-83 for the `QueryResult` struct, and [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 216-228 for how it's populated.
+> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) lines 67-83 for the `QueryResult` struct, and [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 216-228 for how it's populated.
 
 ##### 4. Error Handling
 
@@ -831,7 +831,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 34-37 for input validation, and lines 54-70 for graceful fallback when orchestrator is unavailable.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 34-37 for input validation, and lines 54-70 for graceful fallback when orchestrator is unavailable.
 
 ##### 5. Observability (Traces & Metrics)
 
@@ -869,7 +869,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 119-121 and 230-233 for custom metric emission, and [examples/agent-with-async/travel_research_agent.go](../examples/agent-with-async/travel_research_agent.go) lines 117-125 for metric declarations.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 119-121 and 230-233 for custom metric emission, and [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) lines 117-125 for metric declarations.
 
 #### Quick Reference: "Where Does This Happen?"
 
@@ -898,10 +898,10 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 | Redis store | `orchestration/redis_task_store.go` | `Create()`, `Get()`, `Update()`, `Cancel()` |
 | Linked spans | `telemetry/async_span.go` | `StartLinkedSpan()` |
 
-> 📁 **Complete Working Example**: The [examples/agent-with-async/](../examples/agent-with-async/) directory contains a production-ready implementation demonstrating all these patterns:
-> - [main.go](../examples/agent-with-async/main.go) - Entry point with 3 deployment modes (api/worker/embedded)
-> - [handlers.go](../examples/agent-with-async/handlers.go) - Handler implementation with AI orchestration and progress reporting
-> - [travel_research_agent.go](../examples/agent-with-async/travel_research_agent.go) - Agent struct, types, and orchestrator initialization
+> 📁 **Complete Working Example**: The [examples/agent-with-async/](../../examples/agent-with-async) directory contains a production-ready implementation demonstrating all these patterns:
+> - [main.go](../../examples/agent-with-async/main.go) - Entry point with 3 deployment modes (api/worker/embedded)
+> - [handlers.go](../../examples/agent-with-async/handlers.go) - Handler implementation with AI orchestration and progress reporting
+> - [travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) - Agent struct, types, and orchestrator initialization
 
 ---
 
@@ -1213,7 +1213,7 @@ config.ExecutionOptions.OnStepComplete = func(
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../examples/agent-with-async/handlers.go) lines 88-140 for a complete `OnStepComplete` callback implementation that tracks planning, tool execution, and synthesis phases.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 88-140 for a complete `OnStepComplete` callback implementation that tracks planning, tool execution, and synthesis phases.
 
 ### 7.3 Client-Side Polling
 
@@ -1360,8 +1360,8 @@ func main() {
 Async agents benefit from TruvaG3's full observability stack: distributed tracing, log correlation, DAG visualization, and LLM debug payloads. This section shows how to set up observability with accurate code snippets from the `agent-with-async` example.
 
 > **Complete Guides**: For comprehensive details, see:
-> - [Distributed Tracing and Log Correlation Guide](./DISTRIBUTED_TRACING_GUIDE.md)
-> - [Logging Implementation Guide](./LOGGING_IMPLEMENTATION_GUIDE.md)
+> - [Distributed Tracing and Log Correlation Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)
+> - [Logging Implementation Guide](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)
 
 ### 9.1 Distributed Tracing Setup
 
@@ -1486,7 +1486,7 @@ The `WithContext` methods automatically extract from context:
 - `trace.span_id` - Current span ID
 - `request_id` - Correlation ID generated by `ProcessRequest` (via baggage)
 
-> **Important**: Always use `WithContext` methods in handlers to enable log correlation. See [LOGGING_IMPLEMENTATION_GUIDE.md](./LOGGING_IMPLEMENTATION_GUIDE.md#handler-logging-with-trace-correlation) for details.
+> **Important**: Always use `WithContext` methods in handlers to enable log correlation. See [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#handler-logging-with-trace-correlation) for details.
 
 **JSON log output with trace context:**
 
@@ -1690,7 +1690,7 @@ sum(rate(truvag3_tasks_completed_total[5m])) by (task_type)
 
 ### 10.4 Grafana Dashboard
 
-See [examples/k8-deployment/grafana.yaml](../examples/k8-deployment/grafana.yaml) for a pre-built dashboard.
+See [examples/k8-deployment/grafana.yaml](../../examples/k8-deployment/grafana.yaml) for a pre-built dashboard.
 
 ---
 
@@ -1716,7 +1716,7 @@ See [examples/k8-deployment/grafana.yaml](../examples/k8-deployment/grafana.yaml
 | `TRUVAG3_LLM_DEBUG_TTL` | Retention for successful LLM records | `24h` | `48h` |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Retention for error records | `168h` | `336h` |
 
-> 📖 **AI Provider Configuration**: For comprehensive information on configuring AI providers, model aliases, provider chains with failover, and environment variable overrides for models, see the [AI Providers Setup Guide](./AI_PROVIDERS_SETUP_GUIDE.md). It covers:
+> 📖 **AI Provider Configuration**: For comprehensive information on configuring AI providers, model aliases, provider chains with failover, and environment variable overrides for models, see the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md). It covers:
 > - All supported providers (OpenAI, Anthropic, Groq, DeepSeek, Gemini, Ollama, etc.)
 > - Model aliases (`smart`, `fast`, `default`) and how to override them
 > - Chain Client for production-grade failover between providers
@@ -2513,7 +2513,7 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 }
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](../orchestration/hitl_helpers.go#L141)) handles the full resume contract:
+`BuildResumeContext` ([hitl_helpers.go:141](../../orchestration/hitl_helpers.go#L141)) handles the full resume contract:
 - **Validates** the checkpoint status is resumable (`approved`, `edited`, `expired_approved`)
 - **Restores plan** — the stored plan with matching step IDs, so the orchestrator skips re-planning
 - **Restores completed steps** — already-executed step results, so the executor skips them
@@ -2532,7 +2532,7 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 
 > **Complete guide:** For checkpoint store setup, expiry policies, SSE streaming integration, status lifecycle, and configuration reference, see [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 >
-> **Reference implementation:** [examples/event-driven-agent](../examples/event-driven-agent) — Full async + HITL agent with webhook ingestion, alert dedup, worker pool, and approval checkpoints.
+> **Reference implementation:** [examples/event-driven-agent](../../examples/event-driven-agent) — Full async + HITL agent with webhook ingestion, alert dedup, worker pool, and approval checkpoints.
 
 ---
 
@@ -2784,13 +2784,13 @@ containers:
 
 ## 16. Related Documentation
 
-- [Scheduled Tasks Guide](./SCHEDULED_TASKS_GUIDE.md) - Delayed and recurring task execution: architecture, delivery semantics, conformance testing, troubleshooting
-- [Human-in-the-Loop User Guide](./HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Complete HITL guide: checkpoint stores, `BuildResumeContext`, expiry policies, status lifecycle
-- [Agent Development Guide](./AGENT_DEVELOPMENT_GUIDE.md) - Step-by-step agent development with HITL integration
-- [Distributed Tracing Guide](./DISTRIBUTED_TRACING_GUIDE.md) - Complete tracing setup
-- [AI-Powered Payload Generation Guide](./TOOL_SCHEMA_DISCOVERY_GUIDE.md) - Tool schema discovery
-- [Example: agent-with-async](../examples/agent-with-async/) - Complete async working example
-- [Example: event-driven-agent](../examples/event-driven-agent/) - Async + HITL working example
+- [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md) - Delayed and recurring task execution: architecture, delivery semantics, conformance testing, troubleshooting
+- [Human-in-the-Loop User Guide](HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Complete HITL guide: checkpoint stores, `BuildResumeContext`, expiry policies, status lifecycle
+- [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md) - Step-by-step agent development with HITL integration
+- [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Complete tracing setup
+- [AI-Powered Payload Generation Guide](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) - Tool schema discovery
+- [Example: agent-with-async](../../examples/agent-with-async) - Complete async working example
+- [Example: event-driven-agent](../../examples/event-driven-agent) - Async + HITL working example
 
 ---
 

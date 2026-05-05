@@ -5,7 +5,7 @@ Hey there! This guide will help you understand the different ways to orchestrate
 > **Working Example**
 >
 > Everything in this guide is demonstrated in a fully working implementation:
-> - **Agent**: [`examples/agent-with-orchestration/`](../examples/agent-with-orchestration/)
+> - **Agent**: [`examples/agent-with-orchestration/`](../../examples/agent-with-orchestration)
 >
 > We recommend running the example alongside reading this guide. It makes everything click faster.
 
@@ -115,7 +115,7 @@ User: "What's the weather in Tokyo and how much is $100 in Yen?"
 
 ### 3.3 Try It
 
-From [handlers.go:73](../examples/agent-with-orchestration/handlers.go#L73):
+From [handlers.go:73](../../examples/agent-with-orchestration/handlers.go#L73):
 
 ```bash
 curl -X POST http://localhost:8094/orchestrate/natural \
@@ -155,7 +155,7 @@ This is like having a recipe card. You define the exact steps once, and they exe
 
 ### 4.2 How Workflows Are Defined
 
-Workflows are defined as Go structs in [research_agent.go:339-400](../examples/agent-with-orchestration/research_agent.go#L339-L400):
+Workflows are defined as Go structs in [research_agent.go:339-400](../../examples/agent-with-orchestration/research_agent.go#L339-L400):
 
 ```go
 t.workflows["travel-research"] = &TravelWorkflow{
@@ -200,7 +200,7 @@ curl -X POST http://localhost:8094/orchestrate/travel-research \
 
 ### 4.4 How It Executes
 
-From [handlers.go:224-234](../examples/agent-with-orchestration/handlers.go#L224-L234):
+From [handlers.go:224-234](../../examples/agent-with-orchestration/handlers.go#L224-L234):
 
 ```go
 // Convert workflow to routing plan
@@ -271,7 +271,7 @@ curl -X POST http://localhost:8094/orchestrate/custom \
 
 ### 5.3 How It Works
 
-From [handlers.go:368-390](../examples/agent-with-orchestration/handlers.go#L368-L390), the handler builds a routing plan from your inline steps:
+From [handlers.go:368-390](../../examples/agent-with-orchestration/handlers.go#L368-L390), the handler builds a routing plan from your inline steps:
 
 ```go
 plan := &orchestration.RoutingPlan{
@@ -324,11 +324,9 @@ The `WorkflowEngine` is fully implemented in the orchestration module:
 - `ParseWorkflowYAML()` - Parses YAML into executable workflow definitions
 - `ExecuteWorkflow()` - Executes workflows with full DAG support
 
-**However**, the `agent-with-orchestration` example currently uses Go structs instead of YAML files. See the TODO in its [README](../examples/agent-with-orchestration/README.md#todo).
+**However**, the `agent-with-orchestration` example currently uses Go structs instead of YAML files. See the TODO in its [README](../../examples/agent-with-orchestration/README.md#todo).
 
 ### 6.3 YAML Format
-
-From [orchestration/WORKFLOW_README.md](../orchestration/WORKFLOW_README.md):
 
 ```yaml
 name: analyze-stock
@@ -471,11 +469,10 @@ config.PromptConfig.CustomInstructions = []string{
 
 | Topic | Document |
 |-------|----------|
-| Full orchestration module | [orchestration/README.md](../orchestration/README.md) |
-| YAML workflow details | [orchestration/WORKFLOW_README.md](../orchestration/WORKFLOW_README.md) |
-| Async tasks (long-running) | [ASYNC_ORCHESTRATION_GUIDE.md](./ASYNC_ORCHESTRATION_GUIDE.md) |
-| Human-in-the-Loop approval | [HUMAN_IN_THE_LOOP_USER_GUIDE.md](./HUMAN_IN_THE_LOOP_USER_GUIDE.md) |
-| Error recovery (4-layer) | [INTELLIGENT_ERROR_HANDLING.md](./INTELLIGENT_ERROR_HANDLING.md) |
-| Working example | [examples/agent-with-orchestration](../examples/agent-with-orchestration/) |
+| Full orchestration module | [orchestration/README.md](../../orchestration/README.md) |
+| Async tasks (long-running) | [ASYNC_ORCHESTRATION_GUIDE.md](ASYNC_ORCHESTRATION_GUIDE.md) |
+| Human-in-the-Loop approval | [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md) |
+| Error recovery (4-layer) | [INTELLIGENT_ERROR_HANDLING.md](INTELLIGENT_ERROR_HANDLING.md) |
+| Working example | [examples/agent-with-orchestration](../../examples/agent-with-orchestration) |
 
 Happy orchestrating! If something doesn't make sense, run the `agent-with-orchestration` example and poke at the endpoints - it's the best way to understand how everything fits together.

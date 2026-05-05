@@ -33,7 +33,7 @@ type ToolCapabilityPair struct {
 // Intelligent Error Handling Types
 // ============================================================================
 // These types support AI-powered error recovery as described in
-// docs/INTELLIGENT_ERROR_HANDLING.md
+// docs/orchestration/INTELLIGENT_ERROR_HANDLING.md
 
 // IntelligentRetryConfig controls how the agent handles failed tool calls
 // with AI-powered error correction
@@ -508,7 +508,7 @@ Return ONLY the JSON array:`, topic)
 // Intelligent Error Handling Helpers
 // ============================================================================
 // These functions implement AI-powered error recovery as described in
-// docs/INTELLIGENT_ERROR_HANDLING.md
+// docs/orchestration/INTELLIGENT_ERROR_HANDLING.md
 
 // parseToolResponse parses the standard ToolResponse envelope from tool responses
 func (r *ResearchAgent) parseToolResponse(body []byte) *core.ToolResponse {

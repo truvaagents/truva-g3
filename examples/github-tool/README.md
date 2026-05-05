@@ -189,4 +189,4 @@ pods that have completed registration. Check `kubectl get pods -n truvag3-exampl
 ## Related
 
 - [`examples/github-pr-review-agent/`](../github-pr-review-agent/) — the agent that calls this tool
-- [`docs/TOOL_DEVELOPMENT_GUIDE.md`](../../docs/TOOL_DEVELOPMENT_GUIDE.md)
+- [`docs/building/TOOL_DEVELOPMENT_GUIDE.md`](../../docs/building/TOOL_DEVELOPMENT_GUIDE.md)

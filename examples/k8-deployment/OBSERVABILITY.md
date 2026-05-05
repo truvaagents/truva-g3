@@ -151,7 +151,7 @@ everything works; if any one breaks, you lose the clean identity contract.
 
 Keep the pod `app:` label aligned with `OTEL_SERVICE_NAME` (SDK traces/metrics) and
 the logger's `service` field (log body). All three should equal your service name.
-See [LOGGING_IMPLEMENTATION_GUIDE.md §10 — Service Identity Contract](../../docs/LOGGING_IMPLEMENTATION_GUIDE.md#10-structured-logging-field-naming-standards).
+See [LOGGING_IMPLEMENTATION_GUIDE.md §10 — Service Identity Contract](../../docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md#10-structured-logging-field-naming-standards).
 
 ### Querying Loki
 

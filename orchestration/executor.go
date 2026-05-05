@@ -4181,7 +4181,7 @@ func isTypeRelatedError(err error, responseBody string) bool {
 // 1. Type-related errors: Pattern matching for common type mismatches
 // 2. Structured Retryable errors: Parse ToolResponse and check Error.Retryable flag
 //
-// This function ensures compliance with docs/INTELLIGENT_ERROR_HANDLING.md which states
+// This function ensures compliance with docs/orchestration/INTELLIGENT_ERROR_HANDLING.md which states
 // that ANY error with Retryable=true should trigger AI correction, not just type errors.
 func shouldAttemptAICorrection(err error, responseBody string) bool {
 	// Strategy 1: Check for type-related error patterns (legacy support)

@@ -251,8 +251,8 @@ var _ Runnable = (*MemoryStoreSweeper)(nil)
 // cancellation — no Stop()/stopCh per FRAMEWORK_DESIGN_PRINCIPLES.md
 // §"Background Jobs Implement core.Runnable".
 //
-// Observability follows docs/LOGGING_IMPLEMENTATION_GUIDE.md and
-// docs/DISTRIBUTED_TRACING_GUIDE.md (§15 Background-Job Spans). The reference
+// Observability follows docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md and
+// docs/observability/DISTRIBUTED_TRACING_GUIDE.md (§15 Background-Job Spans). The reference
 // in-tree pattern is memory.ReflectionJob.
 //
 // The struct is exported so MemoryStoreSweeperOption can carry an exported
@@ -274,7 +274,7 @@ type MemoryStoreSweeperOption func(*MemoryStoreSweeper) error
 // WithMemoryStoreSweeperTelemetry sets the telemetry provider for span
 // creation. When set, each sweep tick creates a root memory.sweep_pass span
 // grouping the deletion pass under one trace tree (per
-// docs/DISTRIBUTED_TRACING_GUIDE.md §15: background jobs detached from a user
+// docs/observability/DISTRIBUTED_TRACING_GUIDE.md §15: background jobs detached from a user
 // request must create their own root spans). When nil (default), no spans
 // are created — metrics + logs only.
 func WithMemoryStoreSweeperTelemetry(t Telemetry) MemoryStoreSweeperOption {
@@ -298,7 +298,7 @@ func WithMemoryStoreSweeperTelemetry(t Telemetry) MemoryStoreSweeperOption {
 // delete-on-expiry-read in Get/Exists — separate optional optimization.
 //
 // The logger is automatically wrapped via ComponentAwareLogger to
-// "framework/core" per docs/LOGGING_IMPLEMENTATION_GUIDE.md §14.
+// "framework/core" per docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §14.
 //
 // Example (agent):
 //
@@ -356,10 +356,10 @@ func NewMemoryStoreSweeper(
 //     is set), with sweep_id, interval, deleted_count attributes.
 //   - sweep_id is set as request_id via core.WithRequestID so log correlation
 //     and Jaeger filtering work the same way as for user requests
-//     (docs/DISTRIBUTED_TRACING_GUIDE.md §5 Trace-Log Correlation).
+//     (docs/observability/DISTRIBUTED_TRACING_GUIDE.md §5 Trace-Log Correlation).
 //   - On unexpected exit (ctx not cancelled), emits the
 //     memory.sweeper.unexpected_exits counter and a Warn log with
-//     error_type="runnable_exit" (per docs/LOGGING_IMPLEMENTATION_GUIDE.md
+//     error_type="runnable_exit" (per docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md
 //     §10 standard error_type enum).
 func (s *MemoryStoreSweeper) Start(ctx context.Context) error {
 	defer func() {

@@ -233,5 +233,5 @@ gate logs structured deny reasons.
 - [`examples/github-tool/`](../github-tool/) — the GitHub API wrapper this agent calls
 - [`examples/event-driven-agent/`](../event-driven-agent/) — reference async-webhook pattern
 - [`examples/travel-chat-agent/`](../travel-chat-agent/) — reference deployment conventions
-- [`docs/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/AGENT_DEVELOPMENT_GUIDE.md)
-- [`docs/ASYNC_ORCHESTRATION_GUIDE.md`](../../docs/ASYNC_ORCHESTRATION_GUIDE.md)
+- [`docs/building/AGENT_DEVELOPMENT_GUIDE.md`](../../docs/building/AGENT_DEVELOPMENT_GUIDE.md)
+- [`docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md`](../../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md)

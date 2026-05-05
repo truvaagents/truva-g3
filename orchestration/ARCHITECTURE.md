@@ -570,7 +570,7 @@ The prompt builder is pluggable via the `PromptBuilder` interface:
 - **`DefaultPromptBuilder`**: XML-tagged sections with concrete examples (default)
 - **`TemplatePromptBuilder`**: Go `text/template` for full structural customization
 
-> 📖 **For template variables, customization guide, and cross-provider tips, see [LLM_PLANNING_PROMPT_GUIDE.md](../docs/guides/LLM_PLANNING_PROMPT_GUIDE.md).**
+> 📖 **For template variables, customization guide, and cross-provider tips, see [LLM_PLANNING_PROMPT_GUIDE.md](../docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md).**
 ```
 
 ### 1b. Multi-Phase Iterative Planning (AI-Driven Extension)

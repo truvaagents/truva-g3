@@ -176,7 +176,7 @@ This registers `/api/v1/scheduled` on the agent. When a scheduled task fires, th
 
 For customised behaviour (custom query builders, metadata enrichment, filtering), see the Layer 2 options in [orchestration/scheduled_endpoint.go](../../orchestration/scheduled_endpoint.go).
 
-For the full architecture and delivery semantics, see the [Scheduled Tasks Guide](../../docs/SCHEDULED_TASKS_GUIDE.md).
+For the full architecture and delivery semantics, see the [Scheduled Tasks Guide](../../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ---
 
@@ -205,4 +205,4 @@ examples/scheduler-tool/
 | Schedule created but task never dispatched | Scheduler tick not reaching the schedule | Check `TRUVAG3_SCHEDULER_TICK_INTERVAL` and Redis connectivity |
 | Task dispatched but agent returns 404 | Agent's `/api/v1/scheduled` not registered | Ensure `RegisterScheduledEndpoint` is called before `framework.Run()` |
 
-For detailed troubleshooting, see the [Scheduled Tasks Guide](../../docs/SCHEDULED_TASKS_GUIDE.md).
+For detailed troubleshooting, see the [Scheduled Tasks Guide](../../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).

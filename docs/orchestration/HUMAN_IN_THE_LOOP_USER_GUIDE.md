@@ -5,8 +5,8 @@ Hey there! This guide will teach you how to add human oversight to your TruvaG3 
 > **Working Example**
 >
 > Everything in this guide comes from a fully working implementation at:
-> - **Agent**: [`examples/agent-with-human-approval/`](../examples/agent-with-human-approval/)
-> - **Frontend**: [`examples/chat-ui/hitl.html`](../examples/chat-ui/hitl.html)
+> - **Agent**: [`examples/agent-with-human-approval/`](../../examples/agent-with-human-approval)
+> - **Frontend**: [`examples/chat-ui/hitl.html`](../../examples/chat-ui/hitl.html)
 >
 > We recommend running the example alongside reading this guide. It makes everything click faster.
 
@@ -79,8 +79,8 @@ Don't use HITL for everything - that defeats the purpose of automation. Use it s
 
 Before adding HITL, you should have:
 - A working TruvaG3 agent with an orchestrator
-  - For **streaming agents** (SSE/WebSocket): See the [Chat Agent Guide](CHAT_AGENT_GUIDE.md)
-  - For **non-streaming agents** (JSON request/response): See [`examples/agent-with-orchestration/`](../examples/agent-with-orchestration/)
+  - For **streaming agents** (SSE/WebSocket): See the [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md)
+  - For **non-streaming agents** (JSON request/response): See [`examples/agent-with-orchestration/`](../../examples/agent-with-orchestration)
   - For **long-running operations** (HTTP 202 + polling): See the [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md)
 - Redis running (HITL uses Redis to persist checkpoint state)
 - An AI provider API key
@@ -141,7 +141,7 @@ The `SetupHITL` function creates four components that work together:
 3. **Policy**: Decides when to pause (based on your configuration)
 4. **Controller**: Coordinates everything
 
-For the complete `SetupHITL` implementation, see [hitl_setup.go](../examples/agent-with-human-approval/hitl_setup.go).
+For the complete `SetupHITL` implementation, see [hitl_setup.go](../../examples/agent-with-human-approval/hitl_setup.go).
 
 ---
 
@@ -318,7 +318,7 @@ callback.SendDone(result.RequestID, result.AgentsInvolved, result.ExecutionTime.
 
 The `IsInterrupted()` function checks if the error is a HITL pause. If it is, `GetCheckpoint()` extracts the checkpoint data, which you send to the frontend.
 
-See [chat_agent.go:ProcessWithStreaming](../examples/agent-with-human-approval/chat_agent.go) for the complete implementation.
+See [chat_agent.go:ProcessWithStreaming](../../examples/agent-with-human-approval/chat_agent.go) for the complete implementation.
 
 ### Setting Request Mode (Important!)
 
@@ -384,7 +384,7 @@ Without it, the orchestrator would generate a NEW plan. The step IDs would be di
 
 If there are multiple sensitive steps, resuming might trigger another checkpoint. That's fine! The handler will return `IsInterrupted(err) == true` again, and the frontend can show another approval dialog. This is called "chained approvals."
 
-See [handlers.go:handleResumeSSE](../examples/agent-with-human-approval/handlers.go) for the complete implementation.
+See [handlers.go:handleResumeSSE](../../examples/agent-with-human-approval/handlers.go) for the complete implementation.
 
 ---
 
@@ -460,7 +460,7 @@ The `resolved_parameters` field is particularly useful for step-level approval -
 > - **`before_step`**: Includes current step details, resolved parameters, and completed steps
 > - **`on_error`**: Includes error context with retry attempts and recoverability flag
 >
-> For the complete JSON schemas, see [SSE Event Formats by Interrupt Point](API_REFERENCE.md#sse-event-formats-by-interrupt-point) in the API Reference.
+> For the complete JSON schemas, see [SSE Event Formats by Interrupt Point](../reference/API_REFERENCE.md#sse-event-formats-by-interrupt-point) in the API Reference.
 
 ### Submitting the Approval
 
@@ -520,7 +520,7 @@ async function resumeExecution(checkpointId) {
 
 The resume stream uses the same event format as the initial request, so you can reuse your SSE handler. This is nice because you don't need separate logic - chunks, steps, checkpoints (for chained approvals), and done events all work the same way.
 
-See [hitl.html](../examples/chat-ui/hitl.html) for the complete frontend implementation.
+See [hitl.html](../../examples/chat-ui/hitl.html) for the complete frontend implementation.
 
 ### Editing Plans and Parameters
 
@@ -774,13 +774,13 @@ curl -X POST http://localhost:8352/hitl/resume-sync/cp-6b38d8c6-d2b4-46
 }
 ```
 
-See [handlers.go:handleResumeSyncJSON](../examples/agent-with-human-approval/handlers.go) for the implementation.
+See [handlers.go:handleResumeSyncJSON](../../examples/agent-with-human-approval/handlers.go) for the implementation.
 
 ---
 
 ## API Reference
 
-> **Complete API Details**: For SSE event schemas, command type matrices, helper functions, and type definitions, see the [HITL section in API_REFERENCE.md](API_REFERENCE.md#human-in-the-loop-hitl).
+> **Complete API Details**: For SSE event schemas, command type matrices, helper functions, and type definitions, see the [HITL section in API_REFERENCE.md](../reference/API_REFERENCE.md#human-in-the-loop-hitl).
 
 HITL endpoints are split between framework-provided and agent-specific:
 
@@ -818,7 +818,7 @@ mux.HandleFunc("/hitl/checkpoints/", hitlHandler.HandleGetCheckpoint)  // Note: 
 
 Then add your agent-specific resume handlers (see [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) below).
 
-For a complete example, see [chat_agent.go:RegisterHITLCapabilities](../examples/agent-with-human-approval/chat_agent.go).
+For a complete example, see [chat_agent.go:RegisterHITLCapabilities](../../examples/agent-with-human-approval/chat_agent.go).
 
 ### Implementing Resume Handlers (Agent-Specific)
 
@@ -861,7 +861,7 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](../orchestration/hitl_helpers.go#L141)) automatically:
+`BuildResumeContext` ([hitl_helpers.go:141](../../orchestration/hitl_helpers.go#L141)) automatically:
 - Validates the checkpoint has a resumable status
 - Sets resume mode (`WithResumeMode`)
 - Injects the stored plan (`WithPlanOverride`)
@@ -902,7 +902,7 @@ if checkpoint.RequestMode != "" {
 
 **Framework Helpers Reference:**
 
-*Resume Context Helpers* ([hitl_helpers.go](../orchestration/hitl_helpers.go), [orchestrator.go](../orchestration/orchestrator.go))
+*Resume Context Helpers* ([hitl_helpers.go](../../orchestration/hitl_helpers.go), [orchestrator.go](../../orchestration/orchestrator.go))
 
 | Helper | Purpose |
 |--------|---------|
@@ -913,7 +913,7 @@ if checkpoint.RequestMode != "" {
 | `WithPreResolvedParams(ctx, params, stepID)` | Uses approved parameter values |
 | `WithRequestMode(ctx, mode)` | Sets streaming/non-streaming for expiry behavior |
 
-*Metadata & Tracing Helpers* ([orchestrator.go](../orchestration/orchestrator.go))
+*Metadata & Tracing Helpers* ([orchestrator.go](../../orchestration/orchestrator.go))
 
 | Helper | Purpose |
 |--------|---------|
@@ -922,7 +922,7 @@ if checkpoint.RequestMode != "" {
 | `WithMetadata(ctx, metadata)` | Attaches user context (session_id, user_id) to checkpoint |
 | `GetMetadata(ctx)` | Retrieves metadata from context |
 
-*Error Handling Helpers* ([hitl_errors.go](../orchestration/hitl_errors.go))
+*Error Handling Helpers* ([hitl_errors.go](../../orchestration/hitl_errors.go))
 
 | Helper | Purpose |
 |--------|---------|
@@ -934,7 +934,7 @@ if checkpoint.RequestMode != "" {
 | `IsInvalidCommand(err)` | Checks if command type is invalid for checkpoint state |
 | `IsHITLDisabled(err)` | Checks if HITL is disabled in configuration |
 
-*Status Checking Helpers* ([hitl_helpers.go](../orchestration/hitl_helpers.go))
+*Status Checking Helpers* ([hitl_helpers.go](../../orchestration/hitl_helpers.go))
 
 | Helper | Purpose |
 |--------|---------|
@@ -942,7 +942,7 @@ if checkpoint.RequestMode != "" {
 | `IsTerminalStatus(status)` | Returns true for: completed, rejected, aborted, expired, expired_rejected, expired_aborted |
 | `IsPendingStatus(status)` | Returns true for: pending (awaiting human response) |
 
-*Key Types & Constants* ([hitl_interfaces.go](../orchestration/hitl_interfaces.go))
+*Key Types & Constants* ([hitl_interfaces.go](../../orchestration/hitl_interfaces.go))
 
 | Type | Values | Purpose |
 |------|--------|---------|
@@ -973,7 +973,7 @@ curl -X POST http://localhost:8352/hitl/command \
 | `abort` | Stop entire workflow immediately |
 | `retry` | Retry with new parameters |
 
-> **Note:** Not all commands are valid for all interrupt points. For example, `skip` and `retry` are not available for `plan_generated`. See the [Command Types by Interrupt Point](API_REFERENCE.md#command-types-by-interrupt-point) table for the complete matrix.
+> **Note:** Not all commands are valid for all interrupt points. For example, `skip` and `retry` are not available for `plan_generated`. See the [Command Types by Interrupt Point](../reference/API_REFERENCE.md#command-types-by-interrupt-point) table for the complete matrix.
 
 **Response:**
 ```json
@@ -988,7 +988,7 @@ curl -X POST http://localhost:8352/hitl/command \
 
 Resume execution after approval. Returns SSE stream. See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) above for the framework APIs to use.
 
-**Example implementation:** [handlers.go:238](../examples/agent-with-human-approval/handlers.go#L238)
+**Example implementation:** [handlers.go:238](../../examples/agent-with-human-approval/handlers.go#L238)
 
 ```go
 func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request)
@@ -1007,7 +1007,7 @@ The `X-Truvag3-Original-Request-ID` header is optional but recommended for trace
 
 Resume execution after approval. Returns JSON response (for non-streaming clients). See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) above for the framework APIs to use.
 
-**Example implementation:** [handlers.go:793](../examples/agent-with-human-approval/handlers.go#L793)
+**Example implementation:** [handlers.go:793](../../examples/agent-with-human-approval/handlers.go#L793)
 
 ```go
 func (t *HITLChatAgent) handleResumeSyncJSON(w http.ResponseWriter, r *http.Request)
@@ -1194,7 +1194,7 @@ TRUVAG3_HITL_DEFAULT_ACTION=approve
 TRUVAG3_HITL_STREAMING_EXPIRY=apply_default
 ```
 
-See [ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md) for the complete reference.
+See [ENVIRONMENT_VARIABLES_GUIDE.md](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) for the complete reference.
 
 ---
 
@@ -1295,7 +1295,7 @@ func (h *HITLInfrastructure) Close() error {
 }
 ```
 
-See [hitl_setup.go](../examples/agent-with-human-approval/hitl_setup.go) for the complete implementation.
+See [hitl_setup.go](../../examples/agent-with-human-approval/hitl_setup.go) for the complete implementation.
 
 ---
 
@@ -1498,7 +1498,7 @@ async function checkForAutoResume(checkpointId) {
 
 The auto-resume handler uses the same framework APIs as the regular resume handlers. See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) for details.
 
-**Example implementation:** [handlers_auto_resume.go:22](../examples/agent-with-human-approval/handlers_auto_resume.go#L22)
+**Example implementation:** [handlers_auto_resume.go:22](../../examples/agent-with-human-approval/handlers_auto_resume.go#L22)
 
 ```go
 func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Request)
@@ -1510,7 +1510,7 @@ func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Reque
 
 The Registry Viewer app provides a web UI for monitoring and debugging HITL checkpoints. It shows pending checkpoints, their status, and allows inspection of checkpoint details.
 
-**Location:** [`examples/registry-viewer-app/`](../examples/registry-viewer-app/)
+**Location:** [`examples/registry-viewer-app/`](../../examples/registry-viewer-app)
 
 ### Current Capabilities
 
@@ -1797,9 +1797,9 @@ func TestHITL_ExpiryCallback(t *testing.T) {
 
 ## See Also
 
-- [API Reference - HITL Section](API_REFERENCE.md#human-in-the-loop-hitl) - Complete API documentation with types, interfaces, and constructors
-- [Chat Agent Guide](CHAT_AGENT_GUIDE.md) - How to build a streaming chat agent
-- [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md) - Complete configuration reference
-- [Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md) - Trace correlation across HITL flows
-- [agent-with-human-approval/](../examples/agent-with-human-approval/) - Complete working example with all the code
-- [registry-viewer-app/](../examples/registry-viewer-app/) - Registry viewer for monitoring HITL checkpoints
+- [API Reference - HITL Section](../reference/API_REFERENCE.md#human-in-the-loop-hitl) - Complete API documentation with types, interfaces, and constructors
+- [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md) - How to build a streaming chat agent
+- [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) - Complete configuration reference
+- [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Trace correlation across HITL flows
+- [agent-with-human-approval/](../../examples/agent-with-human-approval) - Complete working example with all the code
+- [registry-viewer-app/](../../examples/registry-viewer-app) - Registry viewer for monitoring HITL checkpoints

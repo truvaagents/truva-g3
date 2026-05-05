@@ -51,7 +51,7 @@ func (s *AISynthesizer) SetPrecedenceEntityExtractor(extractor PrecedenceEntityE
 
 // synthesisSystemPrompt is the shared system prompt for synthesis LLM calls.
 // Used by both streaming (orchestrator.go) and non-streaming (synthesizer.go) paths.
-// Structure follows docs/EFFECTIVE_PROMPTS_GUIDE.md §8.3 template.
+// Structure follows docs/building/EFFECTIVE_PROMPTS_GUIDE.md §8.3 template.
 const synthesisSystemPrompt = `<identity>
 You are an AI synthesis engine. You combine responses from multiple specialized
 agents into a single coherent answer for the user.
@@ -71,7 +71,7 @@ agents into a single coherent answer for the user.
 // conversational response that summarizes partial progress and asks the
 // user the clarification question naturally. (ORCH-018)
 //
-// All instructions are positive directives per docs/EFFECTIVE_PROMPTS_GUIDE.md §2.4.
+// All instructions are positive directives per docs/building/EFFECTIVE_PROMPTS_GUIDE.md §2.4.
 const clarificationModeAddendum = `
 
 <clarification_mode>
@@ -134,8 +134,8 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 	}
 
 	// ORCH-018: annotate synthesis span when clarification mode is active.
-	// Follows docs/DISTRIBUTED_TRACING_GUIDE.md §11 and
-	//         docs/LOGGING_IMPLEMENTATION_GUIDE.md §11 patterns.
+	// Follows docs/observability/DISTRIBUTED_TRACING_GUIDE.md §11 and
+	//         docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §11 patterns.
 	if results != nil && results.ClarificationNeeded != nil {
 		// Span attributes — filterable in trace search
 		telemetry.SetSpanAttributes(ctx,

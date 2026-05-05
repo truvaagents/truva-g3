@@ -616,7 +616,7 @@ Inside each provider, `BaseClient.ExecuteWithRetry` may retry on transient error
 
 **To disable retries entirely on a single client**, use `ai.WithMaxRetries(0)` programmatically — the env var path cannot do this because the framework rule rejects `≤ 0`.
 
-See [docs/ENVIRONMENT_VARIABLES_GUIDE.md](../docs/ENVIRONMENT_VARIABLES_GUIDE.md#ai-configuration) for the env var documentation.
+See [docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md](../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md#ai-configuration) for the env var documentation.
 
 ### Metrics for Failover
 
@@ -1089,7 +1089,6 @@ client, _ := ai.NewClient(
 
 ## Related Documentation
 
-- [AI Module Logging/Telemetry Audit](./LOGGING_TELEMETRY_AUDIT.md) - Implementation recommendations
 - [Framework Design Principles](../FRAMEWORK_DESIGN_PRINCIPLES.md) - Overall framework architecture
 - [Core Module Architecture](../core/ARCHITECTURE.md) - Core module rules
 - [Telemetry Architecture](../telemetry/ARCHITECTURE.md) - Telemetry patterns

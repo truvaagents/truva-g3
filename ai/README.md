@@ -69,7 +69,7 @@ response, _ := client.GenerateResponse(ctx, "Hello AI!", nil)
 
 **Failover behavior**: Authentication errors (401) **allow failover** because each provider has its own API key. True client errors (400, malformed input) **do not failover** because the same input would fail everywhere.
 
-> 📖 **For detailed configuration, operational scenarios, and Kubernetes deployment guides, see [AI Providers Setup Guide](../docs/AI_PROVIDERS_SETUP_GUIDE.md).**
+> 📖 **For detailed configuration, operational scenarios, and Kubernetes deployment guides, see [AI Providers Setup Guide](../docs/building/AI_PROVIDERS_SETUP_GUIDE.md).**
 
 ### 📍 How to Read This Document
 
@@ -1441,7 +1441,7 @@ if embedder, ok := client.(ai.EmbeddingClient); ok {
     embeddings, _ := embedder.GenerateEmbeddings(ctx, text)
 }
 // For the core.EmbeddingClient interface with OpenAI, Qdrant,
-// and Redis examples, see docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md §8.
+// and Redis examples, see docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md §8.
 ```
 
 ## 15. Streaming Support
@@ -1652,7 +1652,7 @@ func streamWithBestPractices(ctx context.Context, client core.StreamingAIClient,
 }
 ```
 
-**For a complete working example** of streaming in a production chat agent with SSE, session management, and conversation history, see the [Chat Agent Implementation Guide](../docs/CHAT_AGENT_GUIDE.md). For the dedicated conversation-history integration and compaction guide, see the [Conversation History Guide](../docs/CONVERSATION_HISTORY_GUIDE.md).
+**For a complete working example** of streaming in a production chat agent with SSE, session management, and conversation history, see the [Chat Agent Implementation Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md). For the dedicated conversation-history integration and compaction guide, see the [Conversation History Guide](../docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ## 16. Migration Guide
 
@@ -1782,7 +1782,7 @@ See `examples/agent-with-orchestration/` for a production-ready example with ful
 
 | Document | Description |
 |----------|-------------|
-| **[AI Providers Setup Guide](../docs/AI_PROVIDERS_SETUP_GUIDE.md)** | Comprehensive guide for configuring providers, operational scenarios, Kubernetes deployment, and troubleshooting |
+| **[AI Providers Setup Guide](../docs/building/AI_PROVIDERS_SETUP_GUIDE.md)** | Comprehensive guide for configuring providers, operational scenarios, Kubernetes deployment, and troubleshooting |
 | **[ARCHITECTURE.md](./ARCHITECTURE.md)** | Technical architecture and design decisions |
 
 ## 19. Summary

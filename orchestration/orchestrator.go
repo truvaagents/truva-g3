@@ -2193,8 +2193,8 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// The synthesizer will produce a clarification-aware user-facing response
 		// from clarificationNeeded + already-completed steps in allStepsList.
 		//
-		// All telemetry follows docs/DISTRIBUTED_TRACING_GUIDE.md §11 patterns
-		// and docs/LOGGING_IMPLEMENTATION_GUIDE.md §11 patterns:
+		// All telemetry follows docs/observability/DISTRIBUTED_TRACING_GUIDE.md §11 patterns
+		// and docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §11 patterns:
 		//   - Pattern 1: o.logger nil check
 		//   - Pattern 2: operation field in log
 		//   - Pattern 3: request_id (already available in this scope)
@@ -3603,7 +3603,7 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 
 // buildSynthesisPrompt creates the prompt for synthesizing agent responses.
 // ctx is threaded for OTEL span event correlation in ResultProcessor.
-// Uses XML-tagged structure following docs/EFFECTIVE_PROMPTS_GUIDE.md §8.3.
+// Uses XML-tagged structure following docs/building/EFFECTIVE_PROMPTS_GUIDE.md §8.3.
 // Budget allocation via ProcessMultipleForBudget mirrors synthesizer.go (Gap 1 fix).
 func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request string, result *ExecutionResult) string {
 	var sb strings.Builder
@@ -6358,7 +6358,7 @@ func (o *AIOrchestrator) ExecutePlan(ctx context.Context, plan *RoutingPlan) (*E
 // Follows patterns from:
 // - ARCHITECTURE.md: Telemetry span with NoOp fallback, synthesizer nil check
 // - telemetry/ARCHITECTURE.md: Context propagation, span attributes
-// - docs/DISTRIBUTED_TRACING_GUIDE.md: RecordSpanError, AddSpanEvent, Counter with module label
+// - docs/observability/DISTRIBUTED_TRACING_GUIDE.md: RecordSpanError, AddSpanEvent, Counter with module label
 func (o *AIOrchestrator) ExecutePlanWithSynthesis(
 	ctx context.Context,
 	plan *RoutingPlan,

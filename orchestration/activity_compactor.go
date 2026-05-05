@@ -16,7 +16,7 @@ import (
 // Compile-time interface check.
 var _ core.ActivityCompactor = (*LLMActivityCompactor)(nil)
 
-// activityCompactorSystemPrompt follows docs/EFFECTIVE_PROMPTS_GUIDE.md:
+// activityCompactorSystemPrompt follows docs/building/EFFECTIVE_PROMPTS_GUIDE.md:
 //   - §2.8 (converged ordering: identity → instructions → example)
 //   - §2.9 (system message for identity and rules)
 //   - §2.10 (XML tags for section boundaries)

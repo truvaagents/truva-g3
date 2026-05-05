@@ -38,7 +38,7 @@ This guide ensures every TruvaG3 component logs in a consistent, useful way.
 
 ## 2. The Logger Interface
 
-TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go:11-23`](../core/interfaces.go#L11-L23). This design:
+TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go:11-23`](../../core/interfaces.go#L11-L23). This design:
 
 - **Avoids vendor lock-in** (not tied to zap, logrus, zerolog, etc.)
 - **Is minimal and composable** (easy to test and mock)
@@ -74,7 +74,7 @@ type Logger interface {
 
 ### Default Logger Behavior
 
-When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go:110-121`](../core/interfaces.go#L110-L121)). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
+When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go:110-121`](../../core/interfaces.go#L110-L121)). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
 
 ---
 
@@ -95,7 +95,7 @@ TruvaG3 uses four standard log levels, from most to least verbose:
 DEBUG (0) → INFO (1) → WARN (2) → ERROR (3)
 ```
 
-> **Source**: [`core/config.go:1500-1512`](../core/config.go#L1500-L1512) (LogLevel constants)
+> **Source**: [`core/config.go:1500-1512`](../../core/config.go#L1500-L1512) (LogLevel constants)
 
 When you set `TRUVAG3_LOG_LEVEL=INFO`, you see INFO, WARN, and ERROR logs. DEBUG logs are hidden.
 
@@ -121,7 +121,7 @@ TruvaG3 logging is configured through environment variables:
 | `TRUVAG3_LOG_FORMAT` | json, text | json | Output format |
 | `TRUVAG3_DEBUG` | true, false | false | Enable debug mode |
 
-> **Source**: [`core/config.go:213-218`](../core/config.go#L213-L218) (LoggingConfig struct)
+> **Source**: [`core/config.go:213-218`](../../core/config.go#L213-L218) (LoggingConfig struct)
 
 ### Format Behavior
 
@@ -658,7 +658,7 @@ The `WithContext` methods enable trace-log correlation. Here's how it works:
 2. **Context** carries the trace ID and span ID through your code
 3. **WithContext methods** extract and include these IDs in log output
 
-> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](../telemetry/trace_context.go) and [`telemetry/framework_integration.go:67-83`](../telemetry/framework_integration.go#L67-L83)
+> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](../../telemetry/trace_context.go) and [`telemetry/framework_integration.go:67-83`](../../telemetry/framework_integration.go#L67-L83)
 
 ### What Your Logs Look Like
 
@@ -1065,13 +1065,13 @@ When implementing HITL-related logging:
 
 ### Reference Implementation: agent-with-human-approval
 
-The [`examples/agent-with-human-approval`](../examples/agent-with-human-approval/) directory contains the reference implementation for HITL logging patterns. Key files to study:
+The [`examples/agent-with-human-approval`](../../examples/agent-with-human-approval) directory contains the reference implementation for HITL logging patterns. Key files to study:
 
 | File | Purpose |
 |------|---------|
-| [`handlers.go`](../examples/agent-with-human-approval/handlers.go) | `handleResumeSSE` - Shows complete trace correlation setup with priority-based `original_request_id` resolution |
-| [`handlers_auto_resume.go`](../examples/agent-with-human-approval/handlers_auto_resume.go) | `handleAutoResumeSSE` - Expiry-triggered auto-resume with same trace correlation patterns |
-| [`hitl_setup.go`](../examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
+| [`handlers.go`](../../examples/agent-with-human-approval/handlers.go) | `handleResumeSSE` - Shows complete trace correlation setup with priority-based `original_request_id` resolution |
+| [`handlers_auto_resume.go`](../../examples/agent-with-human-approval/handlers_auto_resume.go) | `handleAutoResumeSSE` - Expiry-triggered auto-resume with same trace correlation patterns |
+| [`hitl_setup.go`](../../examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
 
 **Key patterns demonstrated:**
 
@@ -1112,7 +1112,7 @@ When your app emits a log line, two fields carry identity:
 - **`service`** — the string your application writes in the JSON body. Set at framework
   construction time from `cfg.Name`, which is configured via `core.WithName("…")` in
   your `main.go` (or the `TRUVAG3_AGENT_NAME` env var if you prefer env-based config).
-  See [core/config.go:1817](../core/config.go#L1817). Shown in every log line for
+  See [core/config.go:1817](../../core/config.go#L1817). Shown in every log line for
   human readability.
 - **`service_name`** — an indexed Loki stream label derived from the pod's
   `metadata.labels.app` value by the cluster-wide OTel log collector (via the
@@ -1139,7 +1139,7 @@ logs land under the pod-label identity (thanks to the k8sattributes pipeline), b
 traces and metrics land under the `OTEL_SERVICE_NAME` value. Cleanup is tracked
 separately from the logs-pipeline fix — new examples you create should follow the
 aligned convention from the start. See
-[TOOL_DEVELOPMENT_GUIDE.md §8 — Observability Identity](TOOL_DEVELOPMENT_GUIDE.md#8-step-6-add-deployment-files)
+[TOOL_DEVELOPMENT_GUIDE.md §8 — Observability Identity](../building/TOOL_DEVELOPMENT_GUIDE.md#8-step-6-add-deployment-files)
 for the deployment-side rule.
 
 **Resource attributes Loki indexes as stream labels** (filterable with `{key="value"}`):
@@ -1199,7 +1199,7 @@ logger.Info("Request completed", map[string]interface{}{
 
 ## 11. Required Patterns for Framework-Level Logging
 
-This section documents **required patterns** that MUST be followed when implementing logging in TruvaG3 framework modules. These patterns are used throughout [orchestrator.go](../orchestration/orchestrator.go) and [executor.go](../orchestration/executor.go).
+This section documents **required patterns** that MUST be followed when implementing logging in TruvaG3 framework modules. These patterns are used throughout [orchestrator.go](../../orchestration/orchestrator.go) and [executor.go](../../orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check (REQUIRED)
 
@@ -1463,11 +1463,11 @@ Logging integrates with TruvaG3's telemetry system for metrics and tracing.
 
 ### Three-Layer Observability
 
-TruvaG3's `ProductionLogger` ([`core/config.go:1532-1702`](../core/config.go#L1532-L1702)) implements three layers:
+TruvaG3's `ProductionLogger` ([`core/config.go:1532-1702`](../../core/config.go#L1532-L1702)) implements three layers:
 
-1. **Layer 1 - Console Output**: Always works, immediate visibility ([line 1626-1652](../core/config.go#L1626-L1652))
-2. **Layer 2 - Metrics Emission**: When telemetry is initialized ([line 1674-1676](../core/config.go#L1674-L1676))
-3. **Layer 3 - Trace Context**: When using `WithContext` methods ([line 1636-1643](../core/config.go#L1636-L1643))
+1. **Layer 1 - Console Output**: Always works, immediate visibility ([line 1626-1652](../../core/config.go#L1626-L1652))
+2. **Layer 2 - Metrics Emission**: When telemetry is initialized ([line 1674-1676](../../core/config.go#L1674-L1676))
+3. **Layer 3 - Trace Context**: When using `WithContext` methods ([line 1636-1643](../../core/config.go#L1636-L1643))
 
 ### Enabling Telemetry
 
@@ -1518,7 +1518,7 @@ func initTelemetry(serviceName string) {
 
 When telemetry is enabled, logs automatically emit metrics. Only specific low-cardinality fields are used as metric labels to prevent metric explosion:
 
-**Allowed label fields** (from [`core/config.go:1689-1694`](../core/config.go#L1689-L1694)):
+**Allowed label fields** (from [`core/config.go:1689-1694`](../../core/config.go#L1689-L1694)):
 - `operation`
 - `status`
 - `error_type`
@@ -1955,7 +1955,7 @@ kubectl logs -n truvag3-examples -l app=research-agent-telemetry --since=60s | \
 
 ### The ComponentAwareLogger Interface
 
-The component segregation is powered by the `ComponentAwareLogger` interface defined in [`core/interfaces.go`](../core/interfaces.go):
+The component segregation is powered by the `ComponentAwareLogger` interface defined in [`core/interfaces.go`](../../core/interfaces.go):
 
 ```go
 // ComponentAwareLogger extends Logger with component context support
@@ -1969,14 +1969,6 @@ type ComponentAwareLogger interface {
 The framework's `ProductionLogger` implements this interface, so component segregation works automatically when you use TruvaG3's standard logging setup.
 
 ### For Framework Module Developers
-
-If you're developing new framework modules, see [`core/COMPONENT_LOGGING_DESIGN.md`](../core/COMPONENT_LOGGING_DESIGN.md) for the complete implementation guide including:
-
-- The `ComponentAwareLogger` interface design
-- Standard `SetLogger` pattern for all modules
-- Component naming conventions (`framework/<module>`)
-- Implementation examples for each module (core, ai, orchestration, resilience, ui)
-- Summary table of all implemented files
 
 **Key Pattern**: Every framework module's `SetLogger` method should wrap the logger with `WithComponent("framework/<module>")`:
 
@@ -2191,7 +2183,7 @@ func (a *MyAgent) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 > **Note**: The `WithContext` methods automatically include trace correlation. Manual extraction is only needed for special cases like response headers or external system integration.
 
-For complete distributed tracing setup including infrastructure (Jaeger, OTEL Collector), client-side propagation, and trace visualization, see **[DISTRIBUTED_TRACING_GUIDE.md](./DISTRIBUTED_TRACING_GUIDE.md)**.
+For complete distributed tracing setup including infrastructure (Jaeger, OTEL Collector), client-side propagation, and trace visualization, see **[DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md)**.
 
 ---
 
@@ -2209,9 +2201,8 @@ Following these guidelines ensures your logs are useful in production, easy to s
 
 ## See Also
 
-- **[DISTRIBUTED_TRACING_GUIDE.md](./DISTRIBUTED_TRACING_GUIDE.md)** - Complete guide for distributed tracing setup, including TracingMiddleware, TracedHTTPClient, Jaeger/OTEL infrastructure, and trace visualization
-- **[core/COMPONENT_LOGGING_DESIGN.md](../core/COMPONENT_LOGGING_DESIGN.md)** - Technical design document for component-aware logging architecture, including implementation details for all framework modules
-- **[orchestration/hitl_interfaces.go](../orchestration/hitl_interfaces.go)** - HITL interfaces including `ExecutionCheckpoint` with `OriginalRequestID` field
-- **[telemetry/trace_context.go](../telemetry/trace_context.go)** - Source for `GetTraceContext()`, `AddSpanEvent()`, `RecordSpanError()`
-- **[core/config.go](../core/config.go)** - ProductionLogger implementation and `WithComponent()` method
-- **[core/interfaces.go](../core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions
+- **[DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md)** - Complete guide for distributed tracing setup, including TracingMiddleware, TracedHTTPClient, Jaeger/OTEL infrastructure, and trace visualization
+- **[orchestration/hitl_interfaces.go](../../orchestration/hitl_interfaces.go)** - HITL interfaces including `ExecutionCheckpoint` with `OriginalRequestID` field
+- **[telemetry/trace_context.go](../../telemetry/trace_context.go)** - Source for `GetTraceContext()`, `AddSpanEvent()`, `RecordSpanError()`
+- **[core/config.go](../../core/config.go)** - ProductionLogger implementation and `WithComponent()` method
+- **[core/interfaces.go](../../core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions

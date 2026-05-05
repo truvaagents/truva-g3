@@ -5,8 +5,8 @@ Hey there! This guide will teach you how to secure your TruvaG3 agents with OAut
 > **Reference Example**
 >
 > While there isn't a dedicated OAuth example yet, all the patterns in this guide can be applied to any TruvaG3 agent. We'll use the travel-chat-agent as our reference:
-> - **Agent**: [`examples/travel-chat-agent/`](../examples/travel-chat-agent/)
-> - **Frontend**: [`examples/chat-ui/index.html`](../examples/chat-ui/index.html)
+> - **Agent**: [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
+> - **Frontend**: [`examples/chat-ui/index.html`](../../examples/chat-ui/index.html)
 >
 > The code snippets below show exactly where to add OAuth and header propagation to that agent.
 
@@ -85,8 +85,8 @@ You don't need both - use whichever applies to your setup. They work independent
 
 Before adding OAuth or header propagation, you should have:
 - A working TruvaG3 agent with an orchestrator
-  - For **streaming agents**: See the [Chat Agent Guide](CHAT_AGENT_GUIDE.md)
-  - For **non-streaming agents**: See [`examples/agent-with-orchestration/`](../examples/agent-with-orchestration/)
+  - For **streaming agents**: See the [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md)
+  - For **non-streaming agents**: See [`examples/agent-with-orchestration/`](../../examples/agent-with-orchestration)
 - At least one tool registered in your service mesh
 - An AI provider API key
 
@@ -579,7 +579,7 @@ Let's walk through adding OAuth and custom headers to the travel-chat-agent step
 
 ### Step 1: Add M2M Token via Config
 
-In [`chat_agent.go`](../examples/travel-chat-agent/chat_agent.go), update `InitializeOrchestrator`:
+In [`chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go), update `InitializeOrchestrator`:
 
 ```go
 func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error {
@@ -638,7 +638,7 @@ func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error
 
 ### Step 2: Forward User Token and Headers Per-Request
 
-In [`sse_handler.go`](../examples/travel-chat-agent/sse_handler.go), update the `ServeHTTP` method to extract and forward authentication headers:
+In [`sse_handler.go`](../../examples/travel-chat-agent/sse_handler.go), update the `ServeHTTP` method to extract and forward authentication headers:
 
 ```go
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -669,7 +669,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 ### Step 3: Update CORS to Allow Authorization Header
 
-The travel-chat-agent's current CORS config allows `Content-Type, Accept, X-Requested-With, X-User-ID`. To accept Bearer tokens from browser clients, add `Authorization` to the allowed headers in [`sse_handler.go`](../examples/travel-chat-agent/sse_handler.go):
+The travel-chat-agent's current CORS config allows `Content-Type, Accept, X-Requested-With, X-User-ID`. To accept Bearer tokens from browser clients, add `Authorization` to the allowed headers in [`sse_handler.go`](../../examples/travel-chat-agent/sse_handler.go):
 
 ```go
 // Update CORS to include Authorization header for OAuth
@@ -940,4 +940,4 @@ Watch for these signals that your auth setup is working:
 
 All features are **opt-in** and **backward compatible**. If you don't set any token or headers, the orchestrator behaves exactly as before - no `Authorization` header is sent, no custom headers are injected.
 
-For questions or issues, check the source code in [`orchestration/orchestrator.go`](../orchestration/orchestrator.go) and [`orchestration/executor.go`](../orchestration/executor.go), or open an issue on the repository.
+For questions or issues, check the source code in [`orchestration/orchestrator.go`](../../orchestration/orchestrator.go) and [`orchestration/executor.go`](../../orchestration/executor.go), or open an issue on the repository.

@@ -5,9 +5,9 @@ Hey there! This guide shows you how to give your TruvaG3 agents **shared memory*
 > **Working Example**
 >
 > Everything in this guide comes from a fully working, production-tested implementation:
-> - **Agent**: [`examples/devops-chat-agent/`](../examples/devops-chat-agent/)
-> - **Memory wiring**: [`examples/devops-chat-agent/main.go`](../examples/devops-chat-agent/main.go) (search for `NewSharedBackends`)
-> - **Main entry point**: [`examples/devops-chat-agent/main.go`](../examples/devops-chat-agent/main.go)
+> - **Agent**: [`examples/devops-chat-agent/`](../../examples/devops-chat-agent)
+> - **Memory wiring**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go) (search for `NewSharedBackends`)
+> - **Main entry point**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go)
 >
 > We recommend having the example open alongside this guide.
 
@@ -237,7 +237,7 @@ backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
 - `BuildMemoryHooks` reads `TRUVAG3_SHARED_MEMORY_*` env vars for tuning and creates all 5 pipeline hooks in the correct order (announcement → enrichment → record → extraction → cleanup)
 - Both calls are visible, replaceable, and testable independently
 
-> **Layer 3 (manual control)**: For full control over every hook option, construct hooks individually via `NewMemoryEnrichmentHook`, `NewMemoryRecordHook`, etc. See [Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for the manual hook construction pattern.
+> **Layer 3 (manual control)**: For full control over every hook option, construct hooks individually via `NewMemoryEnrichmentHook`, `NewMemoryRecordHook`, etc. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for the manual hook construction pattern.
 
 ## Customising Memory Behaviour
 
@@ -253,7 +253,7 @@ hooks, activityCoord := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.
 )
 ```
 
-These are **behavioural plugs** — interfaces and functions you swap per-domain. Numeric tuning (token budgets, TTLs, model names) uses [environment variables](ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) instead.
+These are **behavioural plugs** — interfaces and functions you swap per-domain. Numeric tuning (token budgets, TTLs, model names) uses [environment variables](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) instead.
 
 ### How Entity Extraction Works
 
@@ -516,7 +516,7 @@ Reflection writes **durable knowledge that influences every future request**. A 
 | **Aggressive learning** | unset | `2` |
 | **Bulk indexing of historical events** | `fast` | `10` |
 
-Aliases (`fast`, `smart`, `default`) are resolved per-provider by the chain client at call time, so the same setting works across Anthropic, OpenAI, Groq, Gemini, and the rest. The authoritative alias-to-model mappings live in the provider source files — see [ENVIRONMENT_VARIABLES_GUIDE.md — Reflection Job Configuration](ENVIRONMENT_VARIABLES_GUIDE.md#reflection-job-configuration) for the file pointers and per-provider override env vars.
+Aliases (`fast`, `smart`, `default`) are resolved per-provider by the chain client at call time, so the same setting works across Anthropic, OpenAI, Groq, Gemini, and the rest. The authoritative alias-to-model mappings live in the provider source files — see [ENVIRONMENT_VARIABLES_GUIDE.md — Reflection Job Configuration](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#reflection-job-configuration) for the file pointers and per-provider override env vars.
 
 ### How to verify it's working
 
@@ -564,7 +564,7 @@ This affects event summarization and activity compaction LLM calls. Knowledge ex
 
 ### Full configuration reference
 
-See [ENVIRONMENT_VARIABLES_GUIDE.md — Shared Memory](ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) and [LIMITS_CHEATSHEET.md — Shared Memory](LIMITS_CHEATSHEET.md#shared-memory) for the complete list of tunable values.
+See [ENVIRONMENT_VARIABLES_GUIDE.md — Shared Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) and [LIMITS_CHEATSHEET.md — Shared Memory](../reference/LIMITS_CHEATSHEET.md#shared-memory) for the complete list of tunable values.
 
 ---
 
@@ -672,9 +672,9 @@ Session 2: "Plan a trip to Paris"     Session 2: "Plan a trip to Paris"
 > **Working Example**
 >
 > The travel-chat-agent has a fully working user memory implementation:
-> - **Agent**: [`examples/travel-chat-agent/`](../examples/travel-chat-agent/)
-> - **Memory wiring**: [`examples/travel-chat-agent/chat_agent.go`](../examples/travel-chat-agent/chat_agent.go) (search for `NewUserMemoryBackend`)
-> - **User identity**: [`examples/chat-ui/index.html`](../examples/chat-ui/index.html) (dialog + `X-User-ID` header)
+> - **Agent**: [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
+> - **Memory wiring**: [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go) (search for `NewUserMemoryBackend`)
+> - **User identity**: [`examples/chat-ui/index.html`](../../examples/chat-ui/index.html) (dialog + `X-User-ID` header)
 
 ### How Shared Memory and User Memory Compare
 
@@ -755,7 +755,7 @@ TRUVAG3_USER_MEMORY_EXTRACTION_MODEL=fast
 TRUVAG3_USER_MEMORY_RECONCILIATION_THRESHOLD=0.75
 ```
 
-See [Environment Variables Guide — User Memory](ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration) for all 10 env vars.
+See [Environment Variables Guide — User Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration) for all 10 env vars.
 
 ### Adding User Memory to Your Agent
 
@@ -959,17 +959,17 @@ The `<user_profile>` tag must be consumed by the prompt builder. Check the debug
 ## See Also
 
 **Shared Memory:**
-- **[Adding Context to Your Agent](ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** — Building custom pipeline hooks
-- **[Environment Variables Guide — Shared Memory](ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration)** — All configurable env vars
-- **[Limits Cheatsheet — Shared Memory](LIMITS_CHEATSHEET.md#shared-memory)** — Quick reference for all limits
-- **[Distributed Tracing Guide — LLM Telemetry](DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic)** — Span events emitted by memory hooks
-- **[API Reference — Shared Memory Interfaces](API_REFERENCE.md#shared-memory-interfaces)** — Full interface signatures
-- **[Memory Module Architecture](../memory/ARCHITECTURE.md)** — Deep dive into storage backends, sharing topology, and design decisions
-- **[`examples/devops-chat-agent/`](../examples/devops-chat-agent/)** — Full working implementation with all phases
-- **[`examples/event-driven-agent/`](../examples/event-driven-agent/)** — Event-driven agent with the same memory wiring
+- **[Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** — Building custom pipeline hooks
+- **[Environment Variables Guide — Shared Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration)** — All configurable env vars
+- **[Limits Cheatsheet — Shared Memory](../reference/LIMITS_CHEATSHEET.md#shared-memory)** — Quick reference for all limits
+- **[Distributed Tracing Guide — LLM Telemetry](../observability/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic)** — Span events emitted by memory hooks
+- **[API Reference — Shared Memory Interfaces](../reference/API_REFERENCE.md#shared-memory-interfaces)** — Full interface signatures
+- **[Memory Module Architecture](../../memory/ARCHITECTURE.md)** — Deep dive into storage backends, sharing topology, and design decisions
+- **[`examples/devops-chat-agent/`](../../examples/devops-chat-agent)** — Full working implementation with all phases
+- **[`examples/event-driven-agent/`](../../examples/event-driven-agent)** — Event-driven agent with the same memory wiring
 
 **User Memory:**
-- **[API Reference — User Memory Interfaces](API_REFERENCE.md#user-memory-interfaces)** — Interface signatures and convenience constructors
-- **[Environment Variables Guide — User Memory](ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration)** — All configurable env vars
-- **[Limits Cheatsheet — User Memory](LIMITS_CHEATSHEET.md#user-memory)** — Quick reference for all limits
-- **[`examples/travel-chat-agent/`](../examples/travel-chat-agent/)** — Full working implementation with user memory
+- **[API Reference — User Memory Interfaces](../reference/API_REFERENCE.md#user-memory-interfaces)** — Interface signatures and convenience constructors
+- **[Environment Variables Guide — User Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration)** — All configurable env vars
+- **[Limits Cheatsheet — User Memory](../reference/LIMITS_CHEATSHEET.md#user-memory)** — Quick reference for all limits
+- **[`examples/travel-chat-agent/`](../../examples/travel-chat-agent)** — Full working implementation with user memory

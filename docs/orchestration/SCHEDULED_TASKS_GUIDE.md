@@ -7,11 +7,11 @@ The scheduling system is three cooperating components that together give any age
 > **Working Example**
 >
 > Everything in this guide comes from fully working, production-tested implementations:
-> - **Scheduler (producer)**: [`examples/scheduler-tool/`](../examples/scheduler-tool/)
-> - **Executor (consumer)**: [`examples/scheduled-executor/`](../examples/scheduled-executor/)
-> - **Agent wiring**: [`examples/devops-chat-agent/main.go`](../examples/devops-chat-agent/main.go) (search for `RegisterScheduledEndpoint`)
-> - **Core interfaces**: [`core/async_task.go`](../core/async_task.go) (search for `TaskConsumer`, `TaskHandle`)
-> - **Conformance tests**: [`core/conformance/`](../core/conformance/)
+> - **Scheduler (producer)**: [`examples/scheduler-tool/`](../../examples/scheduler-tool)
+> - **Executor (consumer)**: [`examples/scheduled-executor/`](../../examples/scheduled-executor)
+> - **Agent wiring**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go) (search for `RegisterScheduledEndpoint`)
+> - **Core interfaces**: [`core/async_task.go`](../../core/async_task.go) (search for `TaskConsumer`, `TaskHandle`)
+> - **Conformance tests**: [`core/conformance/`](../../core/conformance)
 
 ## Table of Contents
 
@@ -67,7 +67,7 @@ Think of it like a cron job that an AI can create on the fly, except:
 
 ### Prerequisites
 
-- A running TruvaG3 cluster with Redis (see [Getting Started](../examples/README.md))
+- A running TruvaG3 cluster with Redis (see [Getting Started](../../examples/README.md))
 - `scheduler-tool` deployed (the producer side)
 - `scheduled-executor` deployed (the consumer side)
 - At least one agent with an orchestrator (e.g., `devops-chat-agent`)
@@ -561,9 +561,9 @@ Because the scheduled task fires back to the agent's orchestrator, which plans a
 ## See Also
 
 - [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md) -- broader async task system
-- [Agent Development Guide](AGENT_DEVELOPMENT_GUIDE.md) -- how agents are built
-- [Tool Development Guide](TOOL_DEVELOPMENT_GUIDE.md) -- how tools are built (scheduler-tool is the exemplar)
-- [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md) -- full env var reference
-- [API Reference](API_REFERENCE.md) -- `core.TaskConsumer`, `core.TaskHandle`, `core/conformance`
-- [Distributed Tracing Guide](DISTRIBUTED_TRACING_GUIDE.md) -- trace propagation across the scheduling flow
-- [Logging Implementation Guide](LOGGING_IMPLEMENTATION_GUIDE.md) -- `operation` field values for the executor
+- [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md) -- how agents are built
+- [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) -- how tools are built (scheduler-tool is the exemplar)
+- [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) -- full env var reference
+- [API Reference](../reference/API_REFERENCE.md) -- `core.TaskConsumer`, `core.TaskHandle`, `core/conformance`
+- [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) -- trace propagation across the scheduling flow
+- [Logging Implementation Guide](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) -- `operation` field values for the executor

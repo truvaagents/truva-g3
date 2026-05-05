@@ -2414,8 +2414,8 @@ Only these three domains have automatic built-in additions:
 Now that you understand domain configuration, you might want to explore:
 
 - [Orchestration README](../../orchestration/README.md) - Full orchestration module documentation
-- [Chat Agent Guide](../CHAT_AGENT_GUIDE.md) - Building streaming chat agents
-- [Async Orchestration Guide](../ASYNC_ORCHESTRATION_GUIDE.md) - Long-running tasks
-- [Distributed Tracing Guide](../DISTRIBUTED_TRACING_GUIDE.md) - Observability
+- [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md) - Building streaming chat agents
+- [Async Orchestration Guide](ASYNC_ORCHESTRATION_GUIDE.md) - Long-running tasks
+- [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Observability
 
 Happy building! If something doesn't work as expected, check the troubleshooting section or look at the example agents in the `examples/` directory.

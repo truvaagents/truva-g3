@@ -6,9 +6,9 @@ If you've ever had an LLM ignore your instructions, repeat the same mistake acro
 
 This guide is useful for anyone writing prompts for LLM-based systems. While the examples draw from TruvaG3's multi-agent architecture, the principles apply universally — whether you're building agents, chatbots, code generators, or data extraction pipelines.
 
-> **TruvaG3 Configuration**: For `PromptConfig`, `TypeRules`, `SystemInstructions`, and domain-specific prompt setup, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
+> **TruvaG3 Configuration**: For `PromptConfig`, `TypeRules`, `SystemInstructions`, and domain-specific prompt setup, see the [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md).
 >
-> **Architecture**: For TruvaG3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](../orchestration/ARCHITECTURE.md).
+> **Architecture**: For TruvaG3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](../../orchestration/ARCHITECTURE.md).
 
 ---
 
@@ -664,7 +664,7 @@ This context allows the tool selection LLM to pick different (or additional) too
 
 ## 7. TruvaG3 Application
 
-This section maps the universal principles to TruvaG3's specific implementation. For detailed configuration, see the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md).
+This section maps the universal principles to TruvaG3's specific implementation. For detailed configuration, see the [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md).
 
 ### 7.1 Principle-to-Implementation Mapping
 
@@ -723,7 +723,7 @@ USER MESSAGE (per-request — dynamic content):
 - `<phase_budget>` — dynamic phase/step counts with FINAL phase warning
 - `<optimization_reminder>` — prefer intra-phase depends_on over new phases
 
-> **For configuration details**: See the [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md) for `PromptConfig`, `SystemInstructions`, `CustomInstructions`, `TypeRules`, `TemplatePromptBuilder`, and domain-specific examples (healthcare, finance, travel, e-commerce).
+> **For configuration details**: See the [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) for `PromptConfig`, `SystemInstructions`, `CustomInstructions`, `TypeRules`, `TemplatePromptBuilder`, and domain-specific examples (healthcare, finance, travel, e-commerce).
 
 ---
 
@@ -1171,7 +1171,7 @@ type PrecedenceEntityExtractor interface {
 }
 ```
 
-The audit record JSON is stable — adding a registry-viewer card that surfaces it is purely additive JS. See the struct definition in [orchestration/precedence_audit.go](../orchestration/precedence_audit.go).
+The audit record JSON is stable — adding a registry-viewer card that surfaces it is purely additive JS. See the struct definition in [orchestration/precedence_audit.go](../../orchestration/precedence_audit.go).
 
 ---
 
@@ -1221,9 +1221,9 @@ The audit record JSON is stable — adding a registry-viewer card that surfaces 
 
 ### Related TruvaG3 Documentation
 
-- [Domain-Specific Agent Configuration Guide](guides/LLM_PLANNING_PROMPT_GUIDE.md) — `PromptConfig`, `SystemInstructions`, `TypeRules`, domain examples
+- [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) — `PromptConfig`, `SystemInstructions`, `TypeRules`, domain examples
 - [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md) — Provider configuration, API keys, model aliases
-- [Orchestration Architecture](../orchestration/ARCHITECTURE.md) — Prompt builder interfaces, multi-phase planning design
+- [Orchestration Architecture](../../orchestration/ARCHITECTURE.md) — Prompt builder interfaces, multi-phase planning design
 
 ---
 

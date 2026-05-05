@@ -2,7 +2,7 @@
 
 Hey there! Welcome to the TruvaG3 chat agent guide. If you're reading this, you probably want to build something like ChatGPT - a conversational AI that can stream responses in real-time, remember what users said earlier, and maybe even call external tools to get information.
 
-This guide will walk you through everything step-by-step. We'll use the [`travel-chat-agent`](../examples/travel-chat-agent/) example as our reference - it's a working implementation you can run and poke at.
+This guide will walk you through everything step-by-step. We'll use the [`travel-chat-agent`](../../examples/travel-chat-agent) example as our reference - it's a working implementation you can run and poke at.
 
 ## Table of Contents
 
@@ -712,7 +712,7 @@ orchestrator.ProcessRequestStreaming(ctx, "What's the population?", metadata, ..
 
 The shared conversation-history preparer then builds the `<conversation_history>` enrichment before planning, so the LLM still understands that "the population" refers to Paris without you having to bake old turns into the query text yourself.
 
-If you want the full Tier 1 / Tier 2 / Layer 3 story in one place, see [CONVERSATION_HISTORY_GUIDE.md](./CONVERSATION_HISTORY_GUIDE.md).
+If you want the full Tier 1 / Tier 2 / Layer 3 story in one place, see [CONVERSATION_HISTORY_GUIDE.md](CONVERSATION_HISTORY_GUIDE.md).
 
 Tier 1 is the default behavior. If you want Tier 2 recursive compaction, use the Layer 2 helper and inject the preparer explicitly:
 
@@ -844,7 +844,7 @@ orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
 // 4. Continues or aborts based on the response
 ```
 
-→ See [Human-in-the-Loop User Guide](HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL setup and configuration
+→ See [Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL setup and configuration
 
 ---
 
@@ -1656,15 +1656,15 @@ Before deploying, verify:
 
 ## See Also
 
-- **[AGENT_MEMORY_USER_GUIDE.md](./AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and coordination
-- **[CONVERSATION_HISTORY_GUIDE.md](./CONVERSATION_HISTORY_GUIDE.md)** - Tier 1 protection, Tier 2 recursive compaction, and Layer 3 overrides for chat history
-- **[ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md](./ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
-- **[LOGGING_IMPLEMENTATION_GUIDE.md](./LOGGING_IMPLEMENTATION_GUIDE.md)** - Deep dive into logging with trace correlation
-- **[DISTRIBUTED_TRACING_GUIDE.md](./DISTRIBUTED_TRACING_GUIDE.md)** - Setting up distributed tracing
-- **[HUMAN_IN_THE_LOOP_USER_GUIDE.md](./HUMAN_IN_THE_LOOP_USER_GUIDE.md)** - Adding approval workflows for sensitive operations
-- **[orchestration/README.md](../orchestration/README.md)** - Orchestration module documentation
-- **[ai/README.md](../ai/README.md)** - AI module with streaming support
-- **[examples/travel-chat-agent/](../examples/travel-chat-agent/)** - The complete working example
-- **[examples/devops-chat-agent/](../examples/devops-chat-agent/)** - Chat agent with shared memory and cross-agent coordination
+- **[AGENT_MEMORY_USER_GUIDE.md](AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and coordination
+- **[CONVERSATION_HISTORY_GUIDE.md](CONVERSATION_HISTORY_GUIDE.md)** - Tier 1 protection, Tier 2 recursive compaction, and Layer 3 overrides for chat history
+- **[ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
+- **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Deep dive into logging with trace correlation
+- **[DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md)** - Setting up distributed tracing
+- **[HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md)** - Adding approval workflows for sensitive operations
+- **[orchestration/README.md](../../orchestration/README.md)** - Orchestration module documentation
+- **[ai/README.md](../../ai/README.md)** - AI module with streaming support
+- **[examples/travel-chat-agent/](../../examples/travel-chat-agent)** - The complete working example
+- **[examples/devops-chat-agent/](../../examples/devops-chat-agent)** - Chat agent with shared memory and cross-agent coordination
 
 Happy building! If something doesn't make sense, check the travel-chat-agent example - it's a working implementation of everything in this guide.

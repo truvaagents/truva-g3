@@ -155,7 +155,7 @@ Open `.env` and set **one** of the following:
 
 For multi-provider failover, custom model aliases, or other providers
 (DeepSeek, Bedrock, Ollama, etc.), see the
-[**AI Providers Setup Guide**](docs/AI_PROVIDERS_SETUP_GUIDE.md). For this
+[**AI Providers Setup Guide**](docs/building/AI_PROVIDERS_SETUP_GUIDE.md). For this
 quick-start, one key is enough.
 
 #### Step 3: Deploy the agent
@@ -540,12 +540,12 @@ your coding agent will study in Step 4.
 `PROMPT.md` will tell you which of these to read at Step 3 and which to
 vet against in Steps 6–9:
 
-- [docs/TOOL_DEVELOPMENT_GUIDE.md](docs/TOOL_DEVELOPMENT_GUIDE.md)
-- [docs/AGENT_DEVELOPMENT_GUIDE.md](docs/AGENT_DEVELOPMENT_GUIDE.md)
-- [docs/ASYNC_ORCHESTRATION_GUIDE.md](docs/ASYNC_ORCHESTRATION_GUIDE.md)
-- [docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md](docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
-- [docs/DISTRIBUTED_TRACING_GUIDE.md](docs/DISTRIBUTED_TRACING_GUIDE.md)
-- [docs/LOGGING_IMPLEMENTATION_GUIDE.md](docs/LOGGING_IMPLEMENTATION_GUIDE.md)
+- [docs/building/TOOL_DEVELOPMENT_GUIDE.md](docs/building/TOOL_DEVELOPMENT_GUIDE.md)
+- [docs/building/AGENT_DEVELOPMENT_GUIDE.md](docs/building/AGENT_DEVELOPMENT_GUIDE.md)
+- [docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md](docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md)
+- [docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md](docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md)
+- [docs/observability/DISTRIBUTED_TRACING_GUIDE.md](docs/observability/DISTRIBUTED_TRACING_GUIDE.md)
+- [docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md](docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md)
 
 ---
 
@@ -799,13 +799,13 @@ cd examples/travel-chat-agent
 - **[Orchestration Module](orchestration/README.md)** - DAG workflows and AI-generated plans
 - **[Telemetry Module](telemetry/README.md)** - OpenTelemetry integration
 - **[Resilience Module](resilience/README.md)** - Circuit breakers and graceful degradation
-- **[Agent Memory Guide](docs/AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and real-time coordination
-- **[Adding Context to Your Agent](docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
+- **[Agent Memory Guide](docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and real-time coordination
+- **[Adding Context to Your Agent](docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)** - Building custom pipeline hooks
 
 ### Resources
 
 - [Full Documentation](README.md)
-- [API Reference](docs/API_REFERENCE.md)
+- [API Reference](docs/reference/API_REFERENCE.md)
 - [Examples Directory](examples/README.md)
 - [GitHub Issues](https://github.com/truvaagents/truva-g3/issues)
 

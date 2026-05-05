@@ -149,11 +149,11 @@ examples/scheduled-executor/
 | `catalog_agents_known` gauge = 0 | Registry empty | Check Redis and agent registrations |
 | Tasks dispatched but agent returns 404 | `/api/v1/scheduled` not registered | Ensure `RegisterScheduledEndpoint` is called before `framework.Run()` |
 
-For detailed troubleshooting, see the [Scheduled Tasks Guide](../../docs/SCHEDULED_TASKS_GUIDE.md).
+For detailed troubleshooting, see the [Scheduled Tasks Guide](../../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ---
 
 ## Related Components
 
 - [`examples/scheduler-tool/`](../scheduler-tool/) -- producer side of scheduled execution
-- [Scheduled Tasks Guide](../../docs/SCHEDULED_TASKS_GUIDE.md) -- full architecture, delivery semantics, and troubleshooting
+- [Scheduled Tasks Guide](../../docs/orchestration/SCHEDULED_TASKS_GUIDE.md) -- full architecture, delivery semantics, and troubleshooting

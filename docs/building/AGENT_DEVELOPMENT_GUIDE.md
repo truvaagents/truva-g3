@@ -492,7 +492,7 @@ Provide clear, actionable information and warn about potentially destructive ope
 - **CustomInstructions**: One decision per instruction. Use "always", "before", "prefer" to be unambiguous
 - **AdditionalTypeRules**: Teach LLM domain-specific JSON types (e.g., namespace names, replica counts)
 
-> **See also:** [docs/guides/LLM_PLANNING_PROMPT_GUIDE.md](guides/LLM_PLANNING_PROMPT_GUIDE.md) for full PromptConfig documentation.
+> **See also:** [docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) for full PromptConfig documentation.
 
 ---
 
@@ -1022,7 +1022,7 @@ deps := orchestration.OrchestratorDependencies{
 
 That helper creates the default cache and LLM compactor for you, then applies any supplied overrides last, so you can customize one concern without dropping to full direct construction.
 
-For a dedicated walkthrough of Tier 1 defaults, Tier 2 recursive compaction, and full Layer 3 construction, see [CONVERSATION_HISTORY_GUIDE.md](./CONVERSATION_HISTORY_GUIDE.md).
+For a dedicated walkthrough of Tier 1 defaults, Tier 2 recursive compaction, and full Layer 3 construction, see [CONVERSATION_HISTORY_GUIDE.md](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
 ### Health Handler (Common to Both Types)
 
@@ -1548,7 +1548,7 @@ func main() {
 
 Some agents need to do work in the background, parallel to serving HTTP requests — periodic tasks, queue consumers, expiry processors, scheduled jobs. Don't hand-roll a goroutine in `main.go` and try to manage its lifecycle by hand. Use `core.Runnable` instead.
 
-A `Runnable` is anything that satisfies a single-method interface ([core/interfaces.go](../core/interfaces.go)):
+A `Runnable` is anything that satisfies a single-method interface ([core/interfaces.go](../../core/interfaces.go)):
 
 ```go
 type Runnable interface {
@@ -1556,7 +1556,7 @@ type Runnable interface {
 }
 ```
 
-Implement `Start(ctx)`, register the instance with the framework, and the framework starts it in a goroutine alongside the HTTP server, drains it on shutdown, and emits structured lifecycle logs under the `framework_register_runnable`, `framework_runnable_start`, `framework_runnable_exit`, and `framework_runnable_drain` operations (see [LOGGING_IMPLEMENTATION_GUIDE.md](LOGGING_IMPLEMENTATION_GUIDE.md)).
+Implement `Start(ctx)`, register the instance with the framework, and the framework starts it in a goroutine alongside the HTTP server, drains it on shutdown, and emits structured lifecycle logs under the `framework_register_runnable`, `framework_runnable_start`, `framework_runnable_exit`, and `framework_runnable_drain` operations (see [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)).
 
 **Minimal example — a periodic background job:**
 
@@ -1618,7 +1618,7 @@ That's the entire wiring. **Three lines instead of the goroutine + waitgroup + d
 4. **Don't call `Start` yourself.** The framework calls it exactly once per registered runnable when `Run(ctx)` is invoked.
 5. **Register before `Run`.** Calling `RegisterRunnable` after `Run` has started is undefined behaviour.
 
-**Reference implementation:** [`memory.ReflectionJob`](../memory/reflection_job.go) is the in-tree reference `core.Runnable` — a periodic background job that distills episodic events into long-term knowledge. It's registered in the `devops-chat-agent`, `qa-agent`, and `event-driven-agent` examples (the `event-driven-agent` also shows the worker-mode pattern where the runnable is started in a goroutine tied directly to the worker context, since worker mode has no `core.Framework` instance). See [AGENT_MEMORY_USER_GUIDE.md — Long-Term Knowledge Retention](AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job) for the conceptual overview and [examples/devops-chat-agent/main.go](../examples/devops-chat-agent/main.go) for the production wiring.
+**Reference implementation:** [`memory.ReflectionJob`](../../memory/reflection_job.go) is the in-tree reference `core.Runnable` — a periodic background job that distills episodic events into long-term knowledge. It's registered in the `devops-chat-agent`, `qa-agent`, and `event-driven-agent` examples (the `event-driven-agent` also shows the worker-mode pattern where the runnable is started in a goroutine tied directly to the worker context, since worker mode has no `core.Framework` instance). See [AGENT_MEMORY_USER_GUIDE.md — Long-Term Knowledge Retention](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job) for the conceptual overview and [examples/devops-chat-agent/main.go](../../examples/devops-chat-agent/main.go) for the production wiring.
 
 **Use cases that should be a `Runnable`:**
 
@@ -1656,7 +1656,7 @@ This mounts `/api/v1/scheduled` on your agent. When a scheduled task fires, the 
 
 > **Note**: This is different from Runnables. A Runnable is a background job your agent owns end-to-end (like a periodic sweep). Receiving scheduled tasks is an HTTP endpoint where work arrives from the external `scheduled-executor` service. Use Runnables for agent-internal periodic work; use `RegisterScheduledEndpoint` for receiving externally-scheduled tasks.
 
-For the full story on scheduling -- architecture, delivery semantics, observability, troubleshooting, and writing custom backends -- see the [Scheduled Tasks Guide](SCHEDULED_TASKS_GUIDE.md).
+For the full story on scheduling -- architecture, delivery semantics, observability, troubleshooting, and writing custom backends -- see the [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ---
 
@@ -1726,11 +1726,11 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
 | `REDIS_URL` | Yes | — | Service discovery and session storage |
-| `PORT` | Yes | — | HTTP server port ([port allocation](../examples/README.md)) |
+| `PORT` | Yes | — | HTTP server port ([port allocation](../../examples/README.md)) |
 | AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc. |
 | `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `5000` | Max output tokens for LLM synthesis. Chat agents typically need `10000` for detailed responses |
-| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in Redis DB 8 for [Registry Viewer](../examples/registry-viewer-app) inspection |
+| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in Redis DB 8 for [Registry Viewer](../../examples/registry-viewer-app) inspection |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Recommended | `false` | Stores LLM request/response payloads for debugging |
 | `DEV_MODE` | No | `false` | Enables verbose logging |
 | `TRUVAG3_LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
@@ -1833,7 +1833,7 @@ When logs include trace context, you can search in your log aggregator (Loki, Cl
 
 Logs auto-include a `component` field (`agent/<name>`, `framework/orchestration`, `framework/ai`) for filtering. With telemetry enabled, logs auto-emit Prometheus metrics using `operation`, `status`, `error_type` as labels.
 
-> **Reference:** [LOGGING_IMPLEMENTATION_GUIDE.md](LOGGING_IMPLEMENTATION_GUIDE.md) for component filtering, metric emission, HITL tracing, and production recipes.
+> **Reference:** [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) for component filtering, metric emission, HITL tracing, and production recipes.
 
 ---
 
@@ -1860,7 +1860,7 @@ telemetry.RecordRequest(telemetry.ModuleOrchestration, "natural_request", durati
 
 **Critical init order** (already shown in `main.go`): `SetCurrentComponentType` → `initTelemetry` → `NewAgent`. If reversed, AI calls won't generate spans.
 
-> **Reference:** [DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md) for Jaeger setup, cross-service correlation, span event patterns, and troubleshooting.
+> **Reference:** [DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md) for Jaeger setup, cross-service correlation, span event patterns, and troubleshooting.
 
 ---
 
@@ -1984,7 +1984,7 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](../orchestration/hitl_helpers.go#L141)) sets up the full resume contract in a single call:
+`BuildResumeContext` ([hitl_helpers.go:141](../../orchestration/hitl_helpers.go#L141)) sets up the full resume contract in a single call:
 
 | What it sets | Why it matters |
 |---|---|
@@ -2014,11 +2014,11 @@ The orchestrator's `executePhaseLoop` checks `GetPlanOverride(ctx)` and `GetComp
 
 This is a **context drift** problem: as the framework grows the resume contract (from 3 to 6 context values), any manual `With*` call list becomes stale without a compiler error or test failure to warn you. `BuildResumeContext` is the single source of truth and automatically applies the full contract as it evolves.
 
-> **Deep dive:** For the complete HITL setup — checkpoint stores, expiry callbacks, SSE streaming integration, status lifecycle, and configuration reference — see [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
+> **Deep dive:** For the complete HITL setup — checkpoint stores, expiry callbacks, SSE streaming integration, status lifecycle, and configuration reference — see [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 >
 > **Reference implementations:**
-> - [examples/agent-with-human-approval](../examples/agent-with-human-approval) — Streaming SSE agent with approval checkpoints and auto-resume timeouts
-> - [examples/event-driven-agent](../examples/event-driven-agent) — Event-driven async agent with webhook ingestion and HITL approval
+> - [examples/agent-with-human-approval](../../examples/agent-with-human-approval) — Streaming SSE agent with approval checkpoints and auto-resume timeouts
+> - [examples/event-driven-agent](../../examples/event-driven-agent) — Event-driven async agent with webhook ingestion and HITL approval
 
 ---
 
@@ -2048,7 +2048,7 @@ This is a **context drift** problem: as the framework grows the resume contract 
 | **Missing trace_id in logs** | Logs lack `trace_id`/`span_id` | Use `WithContext` methods, `ctx` from `r.Context()` |
 | **SSE events not arriving** | Connection opens, no events | `http.Flusher` supported, `X-Accel-Buffering: no` for Nginx, `flusher.Flush()` called |
 
-> **See also:** [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) for AI provider troubleshooting, [DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md) for trace debugging.
+> **See also:** [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) for AI provider troubleshooting, [DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md) for trace debugging.
 
 ---
 
@@ -2154,26 +2154,26 @@ For additional AI provider keys (`GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API
 ## See Also
 
 ### Core Documentation
-- [orchestration/README.md](../orchestration/README.md) - Orchestration module reference
-- [docs/guides/LLM_PLANNING_PROMPT_GUIDE.md](guides/LLM_PLANNING_PROMPT_GUIDE.md) - PromptConfig deep dive
+- [orchestration/README.md](../../orchestration/README.md) - Orchestration module reference
+- [docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) - PromptConfig deep dive
 - [TOOL_DEVELOPMENT_GUIDE.md](TOOL_DEVELOPMENT_GUIDE.md) - Tool development (counterpart to this guide)
 - [TOOL_SCHEMA_DISCOVERY_GUIDE.md](TOOL_SCHEMA_DISCOVERY_GUIDE.md) - 3-phase AI payload generation (descriptions, field hints, schema validation)
 - [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) - Provider aliases, model aliases, failover behavior, K8s secrets/ConfigMaps, operational scenarios
 
 ### Advanced Features
-- [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Complete HITL guide: checkpoint stores, expiry callbacks, `BuildResumeContext`, status lifecycle, and configuration
-- [ASYNC_ORCHESTRATION_GUIDE.md](ASYNC_ORCHESTRATION_GUIDE.md) - Async task system: HTTP 202 + polling, worker pools, task handlers, progress reporting, HITL integration
+- [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Complete HITL guide: checkpoint stores, expiry callbacks, `BuildResumeContext`, status lifecycle, and configuration
+- [ASYNC_ORCHESTRATION_GUIDE.md](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md) - Async task system: HTTP 202 + polling, worker pools, task handlers, progress reporting, HITL integration
 
 ### Telemetry & Observability
-- [DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md) - Complete distributed tracing guide
-- [LOGGING_IMPLEMENTATION_GUIDE.md](LOGGING_IMPLEMENTATION_GUIDE.md) - Logging patterns and standards
-- [telemetry/README.md](../telemetry/README.md) - Telemetry module API reference
+- [DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Complete distributed tracing guide
+- [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) - Logging patterns and standards
+- [telemetry/README.md](../../telemetry/README.md) - Telemetry module API reference
 
 ### Reference Implementations
 
 | Agent | Type | Key Features |
 |-------|------|--------------|
-| [examples/travel-chat-agent](../examples/travel-chat-agent) | Streaming | SSE streaming, session management, conversation history, multi-phase planning |
-| [examples/agent-with-orchestration](../examples/agent-with-orchestration) | Non-streaming | Natural language + workflow orchestration, predefined DAGs, AI synthesis toggle |
-| [examples/agent-with-human-approval](../examples/agent-with-human-approval) | Streaming + HITL | Human approval checkpoints, auto-resume timeouts, approval audit trail |
-| [examples/event-driven-agent](../examples/event-driven-agent) | Async + HITL | Webhook ingestion, alert dedup, async task queue, HITL approval for high-stakes ops |
+| [examples/travel-chat-agent](../../examples/travel-chat-agent) | Streaming | SSE streaming, session management, conversation history, multi-phase planning |
+| [examples/agent-with-orchestration](../../examples/agent-with-orchestration) | Non-streaming | Natural language + workflow orchestration, predefined DAGs, AI synthesis toggle |
+| [examples/agent-with-human-approval](../../examples/agent-with-human-approval) | Streaming + HITL | Human approval checkpoints, auto-resume timeouts, approval audit trail |
+| [examples/event-driven-agent](../../examples/event-driven-agent) | Async + HITL | Webhook ingestion, alert dedup, async task queue, HITL approval for high-stakes ops |

@@ -126,7 +126,7 @@ implementation flows directly from this file.
 ## Step 3 — Read the Agent Development Guide
 
 ```
-Step 3 of 12: read `docs/AGENT_DEVELOPMENT_GUIDE.md` end-to-end, focused
+Step 3 of 12: read `docs/building/AGENT_DEVELOPMENT_GUIDE.md` end-to-end, focused
 on the Streaming Agent path.
 
 Pay particular attention to:
@@ -231,7 +231,7 @@ the agent before moving on.
 ## Step 6 — Review against `AGENT_DEVELOPMENT_GUIDE.md`
 
 ```
-Step 6 of 12: review the implementation against docs/AGENT_DEVELOPMENT_GUIDE.md.
+Step 6 of 12: review the implementation against docs/building/AGENT_DEVELOPMENT_GUIDE.md.
 
 Go through each numbered section that applies to streaming agents (§1, 3,
 4, 5, 6, 8, 9, 10, 12, 13) and check:
@@ -256,7 +256,7 @@ the agent to push back on its own work.
 
 ```
 Step 7 of 12: vet the public capability against
-docs/TOOL_SCHEMA_DISCOVERY_GUIDE.md.
+docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md.
 
 [Only if plan.md decided this agent exposes a public capability for
 other agents to call.]
@@ -282,7 +282,7 @@ the agent is humans-only via chat-ui).
 ## Step 8 — Vet against `DISTRIBUTED_TRACING_GUIDE.md`
 
 ```
-Step 8 of 12: vet the implementation against docs/DISTRIBUTED_TRACING_GUIDE.md.
+Step 8 of 12: vet the implementation against docs/observability/DISTRIBUTED_TRACING_GUIDE.md.
 
 Verify:
 - Inbound HTTP requests have a trace context (auto-injected by the
@@ -307,7 +307,7 @@ inbound → orchestrator → each tool call → response.
 ## Step 9 — Vet against `LOGGING_IMPLEMENTATION_GUIDE.md`
 
 ```
-Step 9 of 12: vet the implementation against docs/LOGGING_IMPLEMENTATION_GUIDE.md.
+Step 9 of 12: vet the implementation against docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md.
 
 Verify:
 - Logs use the framework's logger (not standard log/fmt.Println)

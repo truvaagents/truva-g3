@@ -83,7 +83,7 @@ func main() {
 	// 4. Create the BaseTool. Its Logger field starts as NoOpLogger and is
 	//    swapped in-place to a ProductionLogger by core.NewFramework
 	//    (applyConfigToComponent in core/agent.go). Per
-	//    docs/LOGGING_IMPLEMENTATION_GUIDE.md §7, any component that needs to
+	//    docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §7, any component that needs to
 	//    LOG must read tool.Logger AFTER core.NewFramework returns —
 	//    otherwise it captures the silent NoOpLogger.
 	tool := core.NewTool(serviceName)

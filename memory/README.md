@@ -45,7 +45,7 @@ deps := orchestration.OrchestratorDependencies{
 }
 ```
 
-See [Agent Memory User Guide](../docs/AGENT_MEMORY_USER_GUIDE.md) for full details including Phase 2 (knowledge search) and behavioural customisation. See [examples/devops-chat-agent/main.go](../examples/devops-chat-agent/main.go) for a production example.
+See [Agent Memory User Guide](../docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md) for full details including Phase 2 (knowledge search) and behavioural customisation. See [examples/devops-chat-agent/main.go](../examples/devops-chat-agent/main.go) for a production example.
 
 ## Key Design Decisions
 
@@ -69,7 +69,7 @@ All configuration via environment variables or `WithXXX()` option functions:
 | `TRUVAG3_EMBEDDING_BASE_URL` | — | Embedding API endpoint (Ollama/OpenAI) |
 | `TRUVAG3_EMBEDDING_MODEL` | — | Embedding model name |
 
-See [ENVIRONMENT_VARIABLES_GUIDE.md](../docs/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) for the complete list.
+See [ENVIRONMENT_VARIABLES_GUIDE.md](../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) for the complete list.
 
 ## Architecture
 
@@ -77,7 +77,7 @@ For detailed architecture, storage topology, backend patterns, and sharing rules
 
 ## Related Documentation
 
-- [API Reference — Shared Memory Interfaces](../docs/API_REFERENCE.md#shared-memory-interfaces)
-- [Adding Context to Your Agent](../docs/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline hooks that consume these backends
-- [Distributed Tracing Guide](../docs/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic) — Span events emitted by memory hooks
-- [Limits Cheatsheet](../docs/LIMITS_CHEATSHEET.md#shared-memory) — All configurable limits
+- [API Reference — Shared Memory Interfaces](../docs/reference/API_REFERENCE.md#shared-memory-interfaces)
+- [Adding Context to Your Agent](../docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline hooks that consume these backends
+- [Distributed Tracing Guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic) — Span events emitted by memory hooks
+- [Limits Cheatsheet](../docs/reference/LIMITS_CHEATSHEET.md#shared-memory) — All configurable limits
