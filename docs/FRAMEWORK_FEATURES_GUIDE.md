@@ -221,7 +221,7 @@ Discovery lets agents find tools and other agents by what they can do rather tha
 
 Redis/Valkey is the default service registry backend. The registry stores component records and capability indexes. The discovery interface is pluggable, so applications can replace the backend behind the core interfaces.
 
-See [Discovery Guide](guides/DISCOVERY.md).
+See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md).
 
 #### Capability Discovery
 
@@ -235,7 +235,7 @@ Agents can discover components by:
 
 This supports dynamic orchestration: newly deployed tools become available to agents without redeploying those agents.
 
-See [Discovery Guide](guides/DISCOVERY.md#how-agents-discover-tools-and-other-agents).
+See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md#how-agents-discover-tools-and-other-agents).
 
 #### Heartbeat And TTL Leases
 
@@ -248,7 +248,7 @@ Discovery supports:
 - automatic cleanup of dead components
 - multi-pod behavior where healthy replicas keep service-level capability indexes alive
 
-See [Discovery Guide](guides/DISCOVERY.md#heartbeat-and-ttl-management).
+See [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md#heartbeat-and-ttl-management).
 
 #### Kubernetes Service-Fronted Discovery
 
@@ -265,7 +265,7 @@ Relevant configuration includes:
 - `TRUVAG3_K8S_NAMESPACE`
 - `TRUVAG3_K8S_POD_IP`
 
-See [Kubernetes Service-Fronted Discovery](k8s-service-fronted-discovery.md) and [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#kubernetes-deployment-requirements).
+See [Auto-Discovery Guide §"Address Resolution"](guides/AUTO_DISCOVERY_GUIDE.md#address-resolution-pod-ip-vs-service-dns) and [Environment Variables Guide](ENVIRONMENT_VARIABLES_GUIDE.md#kubernetes-deployment-requirements).
 
 ### 3. Tool Contracts And API Surfacing
 
@@ -1033,8 +1033,7 @@ Use these docs for deeper feature-level details:
 - [LIMITS_CHEATSHEET.md](LIMITS_CHEATSHEET.md) - runtime limits and tuning reference
 - [REDIS_DEPENDENCY_ANALYSIS.md](REDIS_DEPENDENCY_ANALYSIS.md) - Redis usage by feature
 - [TRUVAG3_TOOLS_VS_MCP_SERVERS.md](TRUVAG3_TOOLS_VS_MCP_SERVERS.md) - TruvaG3 tool model compared with MCP
-- [k8s-service-fronted-discovery.md](k8s-service-fronted-discovery.md) - Kubernetes Service URL registration
-- [guides/DISCOVERY.md](guides/DISCOVERY.md) - discovery internals
+- [guides/AUTO_DISCOVERY_GUIDE.md](guides/AUTO_DISCOVERY_GUIDE.md) - auto-discovery feature guide (registration, lookup, lease architecture, multi-replica, resilience)
 - [guides/KUBERNETES.md](guides/KUBERNETES.md) - Kubernetes deployment
 - [guides/LLM_PLANNING_PROMPT_GUIDE.md](guides/LLM_PLANNING_PROMPT_GUIDE.md) - prompt customization
 
@@ -1046,6 +1045,4 @@ Some docs still appear older than the current codebase and should be reviewed be
 - [examples/README.md](../examples/README.md) references several example directories that are no longer present.
 - [API_REFERENCE.md](API_REFERENCE.md#ui-module) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
 - [ORCHESTRATION_MODES_GUIDE.md](ORCHESTRATION_MODES_GUIDE.md#6-yaml-workflow-engine-declarative-definitions) references `orchestration/WORKFLOW_README.md`, which is not present. The YAML workflow engine itself exists in code, but that referenced deep-dive document is missing.
-- [k8s-service-fronted-discovery.md](k8s-service-fronted-discovery.md) includes planned future features. This guide only lists the currently documented and implemented service-fronted registration behavior.
-
 This guide is based on the current root/module READMEs and the current guides under `docs/`.
