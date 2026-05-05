@@ -1751,4 +1751,5 @@ To use these variables, you would need to either:
 - [Orchestration README](../orchestration/README.md)
 - [AI Module README](../ai/README.md)
 - [Telemetry README](../telemetry/README.md)
-- [Kubernetes Deployment Guide](k8s-service-fronted-discovery.md)
+- [Kubernetes Deployment Guide](guides/KUBERNETES.md)
+- [Auto-Discovery Guide](guides/AUTO_DISCOVERY_GUIDE.md)
