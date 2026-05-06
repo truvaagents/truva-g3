@@ -67,7 +67,7 @@ kind version
 
 # 4. Go (for local development)
 go version
-# Should show go1.21+ (TruvaG3 requires go1.25+, but GOTOOLCHAIN=auto handles this)
+# Should show go1.26+ (TruvaG3's go.mod declares go 1.26.2; older Go installs auto-upgrade via GOTOOLCHAIN=auto by default)
 ```
 
 #### Installation Instructions
@@ -112,8 +112,8 @@ choco install kind
 brew install go
 
 # Linux
-wget https://golang.org/dl/go1.21.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+wget https://golang.org/dl/go1.26.2.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Windows

@@ -151,7 +151,7 @@ sudo mv kubectl /usr/local/bin/
 kubectl version --client
 ```
 
-#### 4. Go 1.23+
+#### 4. Go 1.26+
 
 ```bash
 # macOS (Homebrew)

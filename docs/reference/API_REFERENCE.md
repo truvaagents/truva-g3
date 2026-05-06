@@ -608,7 +608,7 @@ config := core.NewConfig(
 )
 
 // 2. Environment-based (12-factor app)
-// Set: TRUVAG3_NAME=weather-service
+// Set: TRUVAG3_AGENT_NAME=weather-service
 // Set: TRUVAG3_PORT=8080
 // Set: REDIS_URL=redis://localhost:6379
 // Set: TRUVAG3_ORCHESTRATION_TIMEOUT=5m  // For long-running AI workflows
@@ -634,14 +634,14 @@ WithMockDiscovery(bool)            // Use mock for testing
 WithDiscoveryTTL(ttl)              // Registration TTL (default: 30s, min 5s)
 WithHeartbeatInterval(d)           // Heartbeat interval (default: 0 = TTL/2, min 2s)
 
-// Background retry for Redis connection failures (opt-in)
-WithDiscoveryRetry(bool)           // Enable background retry on failure
-WithDiscoveryRetryInterval(d)      // Set initial retry interval (default: 30s)
+// Background retry for Redis connection failures: opt in via the
+// TRUVAG3_DISCOVERY_RETRY=true / TRUVAG3_DISCOVERY_RETRY_INTERVAL env vars
+// (no Go option function exposed today).
 ```
 
 **AI Integration:**
 ```go
-WithAI(enabled bool, model string)  // Enable AI with model
+WithAI(enabled bool, provider, apiKey string)  // Enable AI with provider + API key
 WithOpenAIAPIKey(key string)        // Set OpenAI key
 WithAIModel(model string)           // Choose model (gpt-4, claude-3, etc.)
 WithMockAI(bool)                    // Use mock for testing
@@ -666,11 +666,10 @@ WithCORSDefaults()                  // Permissive CORS for dev
 
 **Advanced:**
 ```go
-WithMemoryProvider(provider string) // "inmemory" or "redis"
-WithCircuitBreaker(config)          // Resilience settings
-WithRetry(config)                   // Retry configuration
-WithKubernetes(discovery, leader)   // K8s integration
-WithDevelopmentMode()               // Debug logging, mock services
+WithCircuitBreaker(threshold int, timeout time.Duration) // Resilience settings
+WithRetry(maxAttempts int, initialInterval time.Duration) // Retry configuration
+WithKubernetes(serviceDiscovery, leaderElection bool)    // K8s integration
+WithDevelopmentMode(enabled bool)                        // Debug logging, mock services
 ```
 
 ### Logging
@@ -831,11 +830,10 @@ TruvaG3 provides an intelligent background retry mechanism for handling Redis co
 // export TRUVAG3_DISCOVERY_TTL=60s
 // export TRUVAG3_DISCOVERY_HEARTBEAT=20s
 
-// Or via code configuration
+// Or via code configuration (background retry stays env-var-driven —
+// set TRUVAG3_DISCOVERY_RETRY=true alongside this code).
 config := core.NewConfig(
     core.WithRedisURL("redis://redis:6379"),
-    core.WithDiscoveryRetry(true),
-    core.WithDiscoveryRetryInterval(30 * time.Second),
     core.WithDiscoveryTTL(60 * time.Second),
     core.WithHeartbeatInterval(20 * time.Second),
 )
@@ -4205,69 +4203,6 @@ HITL emits these Prometheus metrics:
 
 ---
 
-## UI Module
-
-Build interactive chat interfaces and web transports for your TruvaG3 applications.
-
-### Chat Transport
-
-WebSocket-based chat interface for real-time interaction.
-
-```go
-func NewChatTransport(agent Agent, aiClient AIClient) *ChatTransport
-```
-
-**Features:**
-- WebSocket for real-time communication
-- Automatic reconnection
-- Message history
-- Typing indicators
-- File upload support
-
-**Example - Chat Application:**
-```go
-// Create chat-enabled agent
-agent := core.NewBaseAgent("assistant")
-aiClient := ai.MustNewClient()
-
-transport := ui.NewChatTransport(agent, aiClient)
-
-// Attach to HTTP server
-http.Handle("/chat", transport)
-http.Handle("/", http.FileServer(http.Dir("./web")))
-
-log.Println("Chat interface available at http://localhost:8080")
-http.ListenAndServe(":8080", nil)
-```
-
-### REST Transport
-
-RESTful API transport for traditional HTTP interactions.
-
-```go
-func NewRESTTransport(agent Agent) *RESTTransport
-```
-
-**Automatic endpoints:**
-- `GET /api/capabilities` - List available capabilities
-- `POST /api/execute/{capability}` - Execute capability
-- `GET /api/health` - Health check
-- `GET /api/metrics` - Prometheus metrics
-
-**Example:**
-```go
-transport := ui.NewRESTTransport(agent)
-
-// Adds REST endpoints to your agent
-agent.HandleFunc("/api/", transport.Handler())
-
-// Now available:
-// curl http://localhost:8080/api/capabilities
-// curl -X POST http://localhost:8080/api/execute/translate -d '{"text":"Hello"}'
-```
-
----
-
 ## Common Patterns
 
 ### Production Service Template
@@ -4285,7 +4220,6 @@ import (
     "time"
 
     "github.com/truvaagents/truva-g3/core"
-    "github.com/truvaagents/truva-g3/resilience"
 )
 
 func main() {
@@ -4315,7 +4249,7 @@ func main() {
         core.WithCORSDefaults(),
 
         // Resilience
-        core.WithCircuitBreaker(resilience.DefaultConfig()),
+        core.WithCircuitBreaker(5, 30*time.Second),
     )
 
     if err != nil {
@@ -4600,7 +4534,7 @@ func HandleRequest(ctx context.Context, req Request) error {
 TruvaG3 supports configuration through environment variables:
 
 ### Core Configuration
-- `TRUVAG3_NAME` - Component name
+- `TRUVAG3_AGENT_NAME` - Component name
 - `TRUVAG3_PORT` - HTTP port (default: 8080)
 - `REDIS_URL` - Redis connection URL
 - `TRUVAG3_LOG_LEVEL` - Logging level (error/warn/info/debug)
@@ -4666,42 +4600,6 @@ TruvaG3 supports configuration through environment variables:
 - `TRUVAG3_ACTIVITY_SIGNAL_TTL` - Signal auto-expiry (default: `5m`)
 - `TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT` - Max signals in `<agent_coordination>` prompt section (default: `10`)
 - `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` - Max query chars in signals (default: `200`)
-
----
-
-## Migration Guide
-
-### From v0.x to v1.0
-
-The v1.0 release streamlines APIs and improves consistency:
-
-**Component Creation:**
-```go
-// Old (v0.x)
-agent := framework.NewAgent("my-agent")
-
-// New (v1.0)
-agent := core.NewBaseAgent("my-agent")
-```
-
-**Framework Usage:**
-```go
-// Old (v0.x)
-framework.RunAgent(agent, 8080)
-
-// New (v1.0)
-framework, _ := core.NewFramework(agent, core.WithPort(8080))
-framework.Run(ctx)
-```
-
-**AI Client:**
-```go
-// Old (v0.x)
-client := ai.NewOpenAIClient(apiKey)
-
-// New (v1.0) - Provider agnostic
-client, _ := ai.NewClient()  // Auto-detects from environment
-```
 
 ---
 

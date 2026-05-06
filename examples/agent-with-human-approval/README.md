@@ -453,7 +453,7 @@ curl -s http://localhost:8352/discover | python3 -m json.tool
 ## Quick Start
 
 ### Prerequisites
-- Go 1.25+
+- Go 1.26+
 - Redis server running
 - At least one AI provider API key (OpenAI, Anthropic, or Groq)
 - Tool services running (weather, currency, etc.)

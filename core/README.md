@@ -523,7 +523,7 @@ framework.Run(ctx)  // Initializes, connects to Redis, registers, starts server
 ## 4. Quick Start: Your First Components
 
 ### Prerequisites
-- Go 1.21 or later
+- Go 1.26 or later
 - Basic Go knowledge (packages, functions, structs)
 - Redis (optional, for discovery between components)
 

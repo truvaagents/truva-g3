@@ -30,7 +30,7 @@ You need Docker, Kind, kubectl, and Go installed. See the [examples README](../R
 docker --version    # Docker 20.10+
 kind --version      # kind 0.17+
 kubectl version     # Client 1.25+
-go version          # go1.21+
+go version          # go1.26+
 ```
 
 ---

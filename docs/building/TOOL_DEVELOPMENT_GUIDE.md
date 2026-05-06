@@ -1097,7 +1097,7 @@ TruvaG3 uses a multi-module workspace. Each tool depends on `core` and `telemetr
 ```go
 module github.com/truvaagents/truva-g3/examples/your-tool
 
-go 1.25.7
+go 1.26.2
 
 require (
     github.com/truvaagents/truva-g3/core v0.9.1

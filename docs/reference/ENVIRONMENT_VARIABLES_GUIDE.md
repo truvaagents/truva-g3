@@ -47,7 +47,7 @@ These variables are **mandatory** for proper operation in Kubernetes:
 
 | Variable | Why Required | How to Set |
 |----------|--------------|------------|
-| `TRUVAG3_AGENT_NAME` | Validation fails without it ([config.go:894](../../core/config.go#L894)) | Static value |
+| `TRUVAG3_AGENT_NAME` | Validation fails without it ([core/config.go](../../core/config.go) — `if c.Name == ""` check in `Validate`) | Static value |
 | `REDIS_URL` | Required when discovery enabled (auto-enabled in K8s) | ConfigMap or static value |
 | `TRUVAG3_K8S_SERVICE_NAME` | **Critical** for service-fronted discovery URL registration | Must match your K8s Service name |
 | `TRUVAG3_K8S_SERVICE_PORT` | Service port for discovery URL (default: 80) | Must match your K8s Service port |
@@ -162,11 +162,11 @@ These variables configure the fundamental settings of a TruvaG3 agent or tool.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_AGENT_NAME` | `truvag3-agent` | **Implemented** | Name of the agent | [core/config.go:422](../../core/config.go#L422) |
-| `TRUVAG3_AGENT_ID` | (auto-generated) | **Implemented** | Unique identifier for the agent instance | [core/config.go:433](../../core/config.go#L433) |
-| `TRUVAG3_PORT` | `8080` | **Implemented** | HTTP server port | [core/config.go:444](../../core/config.go#L444) |
-| `TRUVAG3_ADDRESS` | `localhost` (local) / `0.0.0.0` (K8s) | **Implemented** | Bind address for the HTTP server | [core/config.go:463](../../core/config.go#L463) |
-| `TRUVAG3_NAMESPACE` | `default` | **Implemented** | Logical namespace for multi-tenancy | [core/config.go:474](../../core/config.go#L474) |
+| `TRUVAG3_AGENT_NAME` | `truvag3-agent` | **Implemented** | Name of the agent | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AGENT_ID` | (auto-generated) | **Implemented** | Unique identifier for the agent instance | [core/config.go](../../core/config.go) |
+| `TRUVAG3_PORT` | `8080` | **Implemented** | HTTP server port | [core/config.go](../../core/config.go) |
+| `TRUVAG3_ADDRESS` | `localhost` (local) / `0.0.0.0` (K8s) | **Implemented** | Bind address for the HTTP server | [core/config.go](../../core/config.go) |
+| `TRUVAG3_NAMESPACE` | `default` | **Implemented** | Logical namespace for multi-tenancy | [core/config.go](../../core/config.go) |
 
 ### Example
 
@@ -184,14 +184,14 @@ Configure HTTP server timeouts and health check settings.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HTTP_READ_TIMEOUT` | `30s` | **Implemented** | Maximum duration for reading the entire request | [core/config.go:487](../../core/config.go#L487) |
-| `TRUVAG3_HTTP_WRITE_TIMEOUT` | `30s` | **Implemented** | Maximum duration for writing the response | [core/config.go:492](../../core/config.go#L492) |
-| `TRUVAG3_HTTP_READ_HEADER_TIMEOUT` | `10s` | Struct Tag Only | Maximum duration for reading request headers | [core/config.go:78](../../core/config.go#L78) |
-| `TRUVAG3_HTTP_IDLE_TIMEOUT` | `120s` | Struct Tag Only | Maximum duration to wait for the next request | [core/config.go:80](../../core/config.go#L80) |
-| `TRUVAG3_HTTP_MAX_HEADER_BYTES` | `1048576` (1MB) | Struct Tag Only | Maximum size of request headers | [core/config.go:81](../../core/config.go#L81) |
-| `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | `10s` | Struct Tag Only | Graceful shutdown timeout | [core/config.go:82](../../core/config.go#L82) |
-| `TRUVAG3_HTTP_HEALTH_CHECK` | `true` | Struct Tag Only | Enable health check endpoint | [core/config.go:83](../../core/config.go#L83) |
-| `TRUVAG3_HTTP_HEALTH_PATH` | `/health` | Struct Tag Only | Path for health check endpoint | [core/config.go:84](../../core/config.go#L84) |
+| `TRUVAG3_HTTP_READ_TIMEOUT` | `30s` | **Implemented** | Maximum duration for reading the entire request | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_WRITE_TIMEOUT` | `30s` | **Implemented** | Maximum duration for writing the response | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_READ_HEADER_TIMEOUT` | `10s` | Struct Tag Only | Maximum duration for reading request headers | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_IDLE_TIMEOUT` | `120s` | Struct Tag Only | Maximum duration to wait for the next request | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_MAX_HEADER_BYTES` | `1048576` (1MB) | Struct Tag Only | Maximum size of request headers | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | `10s` | Struct Tag Only | Graceful shutdown timeout | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_HEALTH_CHECK` | `true` | Struct Tag Only | Enable health check endpoint | [core/config.go](../../core/config.go) |
+| `TRUVAG3_HTTP_HEALTH_PATH` | `/health` | Struct Tag Only | Path for health check endpoint | [core/config.go](../../core/config.go) |
 
 ### Example
 
@@ -209,13 +209,13 @@ Configure Cross-Origin Resource Sharing settings.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_CORS_ENABLED` | `false` | **Implemented** | Enable CORS support | [core/config.go:499](../../core/config.go#L499) |
-| `TRUVAG3_CORS_ORIGINS` | (none) | **Implemented** | Comma-separated list of allowed origins | [core/config.go:502](../../core/config.go#L502) |
-| `TRUVAG3_CORS_METHODS` | `GET,POST,PUT,DELETE,OPTIONS` | **Implemented** | Allowed HTTP methods | [core/config.go:505](../../core/config.go#L505) |
-| `TRUVAG3_CORS_HEADERS` | `Content-Type,Authorization` | **Implemented** | Allowed request headers | [core/config.go:508](../../core/config.go#L508) |
-| `TRUVAG3_CORS_CREDENTIALS` | `false` | **Implemented** | Allow credentials (cookies, auth headers) | [core/config.go:511](../../core/config.go#L511) |
-| `TRUVAG3_CORS_EXPOSED_HEADERS` | (none) | Struct Tag Only | Headers exposed to the browser | [core/config.go:110](../../core/config.go#L110) |
-| `TRUVAG3_CORS_MAX_AGE` | `86400` (24h) | Struct Tag Only | Preflight cache duration in seconds | [core/config.go:112](../../core/config.go#L112) |
+| `TRUVAG3_CORS_ENABLED` | `false` | **Implemented** | Enable CORS support | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_ORIGINS` | (none) | **Implemented** | Comma-separated list of allowed origins | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_METHODS` | `GET,POST,PUT,DELETE,OPTIONS` | **Implemented** | Allowed HTTP methods | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_HEADERS` | `Content-Type,Authorization` | **Implemented** | Allowed request headers | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_CREDENTIALS` | `false` | **Implemented** | Allow credentials (cookies, auth headers) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_EXPOSED_HEADERS` | (none) | Struct Tag Only | Headers exposed to the browser | [core/config.go](../../core/config.go) |
+| `TRUVAG3_CORS_MAX_AGE` | `86400` (24h) | Struct Tag Only | Preflight cache duration in seconds | [core/config.go](../../core/config.go) |
 
 ### Example
 
@@ -233,16 +233,16 @@ Configure service discovery for agent/tool registration and lookup.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_DISCOVERY_ENABLED` | `false` (local) / `true` (K8s) | **Implemented** | Enable service discovery | [core/config.go:516](../../core/config.go#L516) |
-| `TRUVAG3_DISCOVERY_PROVIDER` | `redis` | **Implemented** | Discovery backend provider | [core/config.go:519](../../core/config.go#L519) |
-| `TRUVAG3_REDIS_URL` | `redis://localhost:6379` | **Implemented** | Redis connection URL (takes precedence) | [core/config.go:522](../../core/config.go#L522) |
-| `REDIS_URL` | (fallback) | **Implemented** | Standard Redis URL (fallback if TRUVAG3_REDIS_URL not set) | [core/config.go:533](../../core/config.go#L533) |
-| `TRUVAG3_DISCOVERY_CACHE` | `true` | **Implemented** | Enable local caching of discovery results | [core/config.go:545](../../core/config.go#L545) |
-| `TRUVAG3_DISCOVERY_RETRY` | `false` | **Implemented** | Enable background retry on initial connection failure | [core/config.go:548](../../core/config.go#L548) |
-| `TRUVAG3_DISCOVERY_RETRY_INTERVAL` | `30s` | **Implemented** | Starting retry interval (increases exponentially) | [core/config.go:559](../../core/config.go#L559) |
-| `TRUVAG3_DISCOVERY_TTL` | `30s` | **Implemented** | Registration TTL for service keys (min 5s) | [core/config.go:577](../../core/config.go#L577) |
-| `TRUVAG3_DISCOVERY_HEARTBEAT` | `0` (= TTL/2) | **Implemented** | Heartbeat interval for registration refresh (min 2s) | [core/config.go:596](../../core/config.go#L596) |
-| `TRUVAG3_DISCOVERY_CACHE_TTL` | `5m` | Struct Tag Only | Cache time-to-live | [core/config.go:123](../../core/config.go#L123) |
+| `TRUVAG3_DISCOVERY_ENABLED` | `false` (local) / `true` (K8s) | **Implemented** | Enable service discovery | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_PROVIDER` | `redis` | **Implemented** | Discovery backend provider | [core/config.go](../../core/config.go) |
+| `TRUVAG3_REDIS_URL` | `redis://localhost:6379` | **Implemented** | Redis connection URL (takes precedence) | [core/config.go](../../core/config.go) |
+| `REDIS_URL` | (fallback) | **Implemented** | Standard Redis URL (fallback if TRUVAG3_REDIS_URL not set) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_CACHE` | `true` | **Implemented** | Enable local caching of discovery results | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_RETRY` | `false` | **Implemented** | Enable background retry on initial connection failure | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_RETRY_INTERVAL` | `30s` | **Implemented** | Starting retry interval (increases exponentially) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_TTL` | `30s` | **Implemented** | Registration TTL for service keys (min 5s) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_HEARTBEAT` | `0` (= TTL/2) | **Implemented** | Heartbeat interval for registration refresh (min 2s) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DISCOVERY_CACHE_TTL` | `5m` | Struct Tag Only | Cache time-to-live | [core/config.go](../../core/config.go) |
 
 ### Variable Precedence
 
@@ -282,17 +282,17 @@ Configure AI client settings for LLM integration.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_AI_ENABLED` | `false` | **Implemented** | Enable AI features | [core/config.go:579](../../core/config.go#L579) |
-| `TRUVAG3_AI_API_KEY` | (none) | **Implemented** | API key for the provider (auto-enables AI) | [core/config.go:582](../../core/config.go#L582) |
-| `OPENAI_API_KEY` | (fallback) | **Implemented** | Fallback API key (auto-enables AI) | [core/config.go:592](../../core/config.go#L592) |
-| `TRUVAG3_AI_MODEL` | `gpt-4` | **Implemented** | Model name to use | [core/config.go:603](../../core/config.go#L603) |
-| `TRUVAG3_AI_BASE_URL` | Provider-specific | **Implemented** | Custom base URL for API calls | [core/config.go:606](../../core/config.go#L606) |
-| `TRUVAG3_AI_PROVIDER` | `openai` | Struct Tag Only | AI provider | [core/config.go:138](../../core/config.go#L138) |
-| `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature (0.0-2.0) | [core/config.go:142](../../core/config.go#L142) |
-| `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go:143](../../core/config.go#L143) |
-| `TRUVAG3_AI_TIMEOUT` | `180s` | Struct Tag Only | Request timeout (3 min default for reasoning model support) | [core/config.go:144](../../core/config.go#L144) |
-| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` (single client) / `0` (chain client) | **Implemented** | Per-provider HTTP retry budget for AI API calls. Honored by both `ai.NewClient` and `ai.NewChainClient`, with different defaults: single clients absorb transient blips with 3 retries (no failover layer below), chain clients default to 0 because the chain's failover loop is the retry mechanism. Precedence: explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > `TRUVAG3_AI_RETRY_ATTEMPTS` > default. Per FRAMEWORK_DESIGN_PRINCIPLES §3.5 rule 3, env var values are guarded with `val > 0` — zero, negative, and non-integer values are silently rejected and fall through to the default. To explicitly disable retries on a single client, use `ai.WithMaxRetries(0)` programmatically. | [ai/client.go](../../ai/client.go), [ai/chain_client.go](../../ai/chain_client.go), [core/config.go:165](../../core/config.go#L165) |
-| `TRUVAG3_AI_RETRY_DELAY` | `1s` | Struct Tag Only | Delay between retries | [core/config.go:146](../../core/config.go#L146) |
+| `TRUVAG3_AI_ENABLED` | `false` | **Implemented** | Enable AI features | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_API_KEY` | (none) | **Implemented** | API key for the provider (auto-enables AI) | [core/config.go](../../core/config.go) |
+| `OPENAI_API_KEY` | (fallback) | **Implemented** | Fallback API key (auto-enables AI) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_MODEL` | `gpt-4` | **Implemented** | Model name to use | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_BASE_URL` | Provider-specific | **Implemented** | Custom base URL for API calls | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_PROVIDER` | `openai` | Struct Tag Only | AI provider | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature (0.0-2.0) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_TIMEOUT` | `180s` | Struct Tag Only | Request timeout (3 min default for reasoning model support) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` (single client) / `0` (chain client) | **Implemented** | Per-provider HTTP retry budget for AI API calls. Honored by both `ai.NewClient` and `ai.NewChainClient`, with different defaults: single clients absorb transient blips with 3 retries (no failover layer below), chain clients default to 0 because the chain's failover loop is the retry mechanism. Precedence: explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > `TRUVAG3_AI_RETRY_ATTEMPTS` > default. Per FRAMEWORK_DESIGN_PRINCIPLES §3.5 rule 3, env var values are guarded with `val > 0` — zero, negative, and non-integer values are silently rejected and fall through to the default. To explicitly disable retries on a single client, use `ai.WithMaxRetries(0)` programmatically. | [ai/client.go](../../ai/client.go), [ai/chain_client.go](../../ai/chain_client.go), [core/config.go](../../core/config.go) |
+| `TRUVAG3_AI_RETRY_DELAY` | `1s` | Struct Tag Only | Delay between retries | [core/config.go](../../core/config.go) |
 
 ### Example
 
@@ -312,71 +312,71 @@ The framework supports multiple AI providers with automatic detection based on a
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `OPENAI_API_KEY` | (none) | **Implemented** | OpenAI API key | [ai/providers/openai/factory.go:164](../../ai/providers/openai/factory.go#L164) |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | **Implemented** | OpenAI API base URL | [ai/providers/openai/factory.go:168](../../ai/providers/openai/factory.go#L168) |
+| `OPENAI_API_KEY` | (none) | **Implemented** | OpenAI API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | **Implemented** | OpenAI API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### Anthropic Claude (Priority: 900)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `ANTHROPIC_API_KEY` | (none) | **Implemented** | Anthropic API key | [ai/providers/anthropic/factory.go:37](../../ai/providers/anthropic/factory.go#L37) |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | **Implemented** | Anthropic API base URL | [ai/providers/anthropic/factory.go:43](../../ai/providers/anthropic/factory.go#L43) |
+| `ANTHROPIC_API_KEY` | (none) | **Implemented** | Anthropic API key | [ai/providers/anthropic/factory.go](../../ai/providers/anthropic/factory.go) |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | **Implemented** | Anthropic API base URL | [ai/providers/anthropic/factory.go](../../ai/providers/anthropic/factory.go) |
 
 ### Google Gemini (Priority: 800)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `GEMINI_API_KEY` | (none) | **Implemented** | Google Gemini API key | [ai/providers/gemini/factory.go:37](../../ai/providers/gemini/factory.go#L37) |
-| `GOOGLE_API_KEY` | (fallback) | **Implemented** | Alternative Google API key (either activates Gemini) | [ai/providers/gemini/factory.go:40](../../ai/providers/gemini/factory.go#L40) |
-| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | **Implemented** | Gemini API base URL | [ai/providers/gemini/factory.go:47](../../ai/providers/gemini/factory.go#L47) |
+| `GEMINI_API_KEY` | (none) | **Implemented** | Google Gemini API key | [ai/providers/gemini/factory.go](../../ai/providers/gemini/factory.go) |
+| `GOOGLE_API_KEY` | (fallback) | **Implemented** | Alternative Google API key (either activates Gemini) | [ai/providers/gemini/factory.go](../../ai/providers/gemini/factory.go) |
+| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | **Implemented** | Gemini API base URL | [ai/providers/gemini/factory.go](../../ai/providers/gemini/factory.go) |
 
 ### Groq (Priority: 700)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `GROQ_API_KEY` | (none) | **Implemented** | Groq API key | [ai/providers/openai/factory.go:112](../../ai/providers/openai/factory.go#L112) |
-| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | **Implemented** | Groq API base URL | [ai/providers/openai/factory.go:115](../../ai/providers/openai/factory.go#L115) |
+| `GROQ_API_KEY` | (none) | **Implemented** | Groq API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | **Implemented** | Groq API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### DeepSeek (Priority: 600)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `DEEPSEEK_API_KEY` | (none) | **Implemented** | DeepSeek API key | [ai/providers/openai/factory.go:103](../../ai/providers/openai/factory.go#L103) |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | **Implemented** | DeepSeek API base URL | [ai/providers/openai/factory.go:106](../../ai/providers/openai/factory.go#L106) |
+| `DEEPSEEK_API_KEY` | (none) | **Implemented** | DeepSeek API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | **Implemented** | DeepSeek API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### xAI Grok (Priority: 500)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `XAI_API_KEY` | (none) | **Implemented** | xAI API key | [ai/providers/openai/factory.go:121](../../ai/providers/openai/factory.go#L121) |
-| `XAI_BASE_URL` | `https://api.x.ai/v1` | **Implemented** | xAI API base URL | [ai/providers/openai/factory.go:124](../../ai/providers/openai/factory.go#L124) |
+| `XAI_API_KEY` | (none) | **Implemented** | xAI API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `XAI_BASE_URL` | `https://api.x.ai/v1` | **Implemented** | xAI API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### Mistral AI (Priority: 450)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `MISTRAL_API_KEY` | (none) | **Implemented** | Mistral AI API key | [ai/providers/openai/factory.go:32](../../ai/providers/openai/factory.go#L32) |
-| `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | **Implemented** | Mistral AI API base URL | [ai/providers/openai/factory.go:32](../../ai/providers/openai/factory.go#L32) |
+| `MISTRAL_API_KEY` | (none) | **Implemented** | Mistral AI API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | **Implemented** | Mistral AI API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### Alibaba Qwen (Priority: 400)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `QWEN_API_KEY` | (none) | **Implemented** | Qwen API key | [ai/providers/openai/factory.go:130](../../ai/providers/openai/factory.go#L130) |
-| `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | **Implemented** | Qwen API base URL | [ai/providers/openai/factory.go:133](../../ai/providers/openai/factory.go#L133) |
+| `QWEN_API_KEY` | (none) | **Implemented** | Qwen API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | **Implemented** | Qwen API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### Together AI (Priority: 300)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TOGETHER_API_KEY` | (none) | **Implemented** | Together AI API key | [ai/providers/openai/factory.go:139](../../ai/providers/openai/factory.go#L139) |
-| `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` | **Implemented** | Together AI API base URL | [ai/providers/openai/factory.go:142](../../ai/providers/openai/factory.go#L142) |
+| `TOGETHER_API_KEY` | (none) | **Implemented** | Together AI API key | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
+| `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` | **Implemented** | Together AI API base URL | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 ### Ollama (Priority: 100 - Local)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | **Implemented** | Ollama local server URL (must be explicitly set to activate detection) | [ai/providers/openai/factory.go:151](../../ai/providers/openai/factory.go#L151) |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | **Implemented** | Ollama local server URL (must be explicitly set to activate detection) | [ai/providers/openai/factory.go](../../ai/providers/openai/factory.go) |
 
 > **Note**: Ollama is only auto-detected when `OLLAMA_BASE_URL` is explicitly set. The framework does not probe `localhost:11434` by default to avoid a 2-second timeout penalty in environments where Ollama is not running.
 
@@ -384,15 +384,15 @@ The framework supports multiple AI providers with automatic detection based on a
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `AWS_ACCESS_KEY_ID` | (none) | **Implemented** | AWS access key | [ai/providers/bedrock/factory.go:120](../../ai/providers/bedrock/factory.go#L120) |
-| `AWS_SECRET_ACCESS_KEY` | (none) | **Implemented** | AWS secret key | [ai/providers/bedrock/factory.go:120](../../ai/providers/bedrock/factory.go#L120) |
-| `AWS_SESSION_TOKEN` | (none) | **Implemented** | AWS session token (temporary credentials) | [ai/providers/bedrock/factory.go:64](../../ai/providers/bedrock/factory.go#L64) |
-| `AWS_REGION` | `us-east-1` | **Implemented** | AWS region | [ai/providers/bedrock/factory.go:45](../../ai/providers/bedrock/factory.go#L45) |
-| `AWS_DEFAULT_REGION` | (fallback) | **Implemented** | Alternative region variable | [ai/providers/bedrock/factory.go:47](../../ai/providers/bedrock/factory.go#L47) |
-| `AWS_PROFILE` | (none) | **Implemented** | AWS CLI profile name | [ai/providers/bedrock/factory.go:125](../../ai/providers/bedrock/factory.go#L125) |
-| `AWS_EXECUTION_ENV` | (auto) | **Implemented** | Set by AWS Lambda | [ai/providers/bedrock/factory.go:131](../../ai/providers/bedrock/factory.go#L131) |
-| `AWS_LAMBDA_FUNCTION_NAME` | (auto) | **Implemented** | Set in Lambda environment | [ai/providers/bedrock/factory.go:131](../../ai/providers/bedrock/factory.go#L131) |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | (auto) | **Implemented** | Set in ECS environment | [ai/providers/bedrock/factory.go:136](../../ai/providers/bedrock/factory.go#L136) |
+| `AWS_ACCESS_KEY_ID` | (none) | **Implemented** | AWS access key | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_SECRET_ACCESS_KEY` | (none) | **Implemented** | AWS secret key | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_SESSION_TOKEN` | (none) | **Implemented** | AWS session token (temporary credentials) | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_REGION` | `us-east-1` | **Implemented** | AWS region | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_DEFAULT_REGION` | (fallback) | **Implemented** | Alternative region variable | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_PROFILE` | (none) | **Implemented** | AWS CLI profile name | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_EXECUTION_ENV` | (auto) | **Implemented** | Set by AWS Lambda | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_LAMBDA_FUNCTION_NAME` | (auto) | **Implemented** | Set in Lambda environment | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | (auto) | **Implemented** | Set in ECS environment | [ai/providers/bedrock/factory.go](../../ai/providers/bedrock/factory.go) |
 
 ### Auto-Detection Priority
 
@@ -454,16 +454,16 @@ Configure OpenTelemetry-based observability (metrics and tracing).
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_TELEMETRY_ENABLED` | `false` | **Implemented** | Enable telemetry collection | [core/config.go:611](../../core/config.go#L611) |
-| `TRUVAG3_TELEMETRY_ENDPOINT` | (none) | **Implemented** | OTLP receiver endpoint (auto-enables telemetry) | [core/config.go:614](../../core/config.go#L614) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | (fallback) | **Implemented** | Standard OTEL endpoint variable (auto-enables telemetry) | [core/config.go:624](../../core/config.go#L624) |
-| `TRUVAG3_TELEMETRY_SERVICE_NAME` | Agent name | **Implemented** | Service name for traces/metrics | [core/config.go:635](../../core/config.go#L635) |
-| `OTEL_SERVICE_NAME` | (fallback) | **Implemented** | Standard OTEL service name | [core/config.go:637](../../core/config.go#L637) |
-| `TRUVAG3_TELEMETRY_PROVIDER` | `otel` | Struct Tag Only | Telemetry provider | [core/config.go:154](../../core/config.go#L154) |
-| `TRUVAG3_TELEMETRY_METRICS` | `true` | Struct Tag Only | Enable metrics collection | [core/config.go:157](../../core/config.go#L157) |
-| `TRUVAG3_TELEMETRY_TRACING` | `true` | Struct Tag Only | Enable distributed tracing | [core/config.go:158](../../core/config.go#L158) |
-| `TRUVAG3_TELEMETRY_SAMPLING_RATE` | `1.0` | Struct Tag Only | Trace sampling rate (0.0-1.0) | [core/config.go:159](../../core/config.go#L159) |
-| `TRUVAG3_TELEMETRY_INSECURE` | `true` | Struct Tag Only | Use insecure connection (no TLS) | [core/config.go:160](../../core/config.go#L160) |
+| `TRUVAG3_TELEMETRY_ENABLED` | `false` | **Implemented** | Enable telemetry collection | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_ENDPOINT` | (none) | **Implemented** | OTLP receiver endpoint (auto-enables telemetry) | [core/config.go](../../core/config.go) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (fallback) | **Implemented** | Standard OTEL endpoint variable (auto-enables telemetry) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_SERVICE_NAME` | Agent name | **Implemented** | Service name for traces/metrics | [core/config.go](../../core/config.go) |
+| `OTEL_SERVICE_NAME` | (fallback) | **Implemented** | Standard OTEL service name | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_PROVIDER` | `otel` | Struct Tag Only | Telemetry provider | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_METRICS` | `true` | Struct Tag Only | Enable metrics collection | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_TRACING` | `true` | Struct Tag Only | Enable distributed tracing | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_SAMPLING_RATE` | `1.0` | Struct Tag Only | Trace sampling rate (0.0-1.0) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_TELEMETRY_INSECURE` | `true` | Struct Tag Only | Use insecure connection (no TLS) | [core/config.go](../../core/config.go) |
 
 ### Telemetry Logger Variables
 
@@ -471,11 +471,11 @@ These are used by the telemetry module's internal logger:
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_LOG_LEVEL` | `INFO` | **Implemented** | Log level for telemetry logger | [telemetry/logger.go:65](../../telemetry/logger.go#L65) |
-| `TRUVAG3_DEBUG` | `false` | **Implemented** | Enable debug logging | [telemetry/logger.go:71](../../telemetry/logger.go#L71) |
-| `TELEMETRY_DEBUG` | `false` | **Implemented** | Enable telemetry-specific debug | [telemetry/logger.go:72](../../telemetry/logger.go#L72) |
-| `TRUVAG3_LOG_FORMAT` | `text` (local) / `json` (K8s) | **Implemented** | Log format override | [telemetry/logger.go:81](../../telemetry/logger.go#L81) |
-| `KUBERNETES_SERVICE_HOST` | (auto) | **Implemented** | Auto-detect K8s for JSON logging | [telemetry/logger.go:77](../../telemetry/logger.go#L77) |
+| `TRUVAG3_LOG_LEVEL` | `INFO` | **Implemented** | Log level for telemetry logger | [telemetry/logger.go](../../telemetry/logger.go) |
+| `TRUVAG3_DEBUG` | `false` | **Implemented** | Enable debug logging | [telemetry/logger.go](../../telemetry/logger.go) |
+| `TELEMETRY_DEBUG` | `false` | **Implemented** | Enable telemetry-specific debug | [telemetry/logger.go](../../telemetry/logger.go) |
+| `TRUVAG3_LOG_FORMAT` | `text` (local) / `json` (K8s) | **Implemented** | Log format override | [telemetry/logger.go](../../telemetry/logger.go) |
+| `KUBERNETES_SERVICE_HOST` | (auto) | **Implemented** | Auto-detect K8s for JSON logging | [telemetry/logger.go](../../telemetry/logger.go) |
 
 ### Example
 
@@ -638,10 +638,10 @@ Configure logging output format and level.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_LOG_LEVEL` | `info` | **Implemented** | Minimum log level (debug, info, warn, error) | [core/config.go:652](../../core/config.go#L652) |
-| `TRUVAG3_LOG_FORMAT` | `json` (K8s) / `text` (local) | **Implemented** | Output format | [core/config.go:655](../../core/config.go#L655) |
-| `TRUVAG3_LOG_OUTPUT` | `stdout` | Struct Tag Only | Output destination | [core/config.go:216](../../core/config.go#L216) |
-| `TRUVAG3_LOG_TIME_FORMAT` | RFC3339Nano | Struct Tag Only | Timestamp format | [core/config.go:217](../../core/config.go#L217) |
+| `TRUVAG3_LOG_LEVEL` | `info` | **Implemented** | Minimum log level (debug, info, warn, error) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_LOG_FORMAT` | `json` (K8s) / `text` (local) | **Implemented** | Output format | [core/config.go](../../core/config.go) |
+| `TRUVAG3_LOG_OUTPUT` | `stdout` | Struct Tag Only | Output destination | [core/config.go](../../core/config.go) |
+| `TRUVAG3_LOG_TIME_FORMAT` | RFC3339Nano | Struct Tag Only | Timestamp format | [core/config.go](../../core/config.go) |
 
 ---
 
@@ -651,11 +651,11 @@ Configure development-mode settings.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_DEV_MODE` | `false` | **Implemented** | Enable development mode (sets debug logging, text format) | [core/config.go:660](../../core/config.go#L660) |
-| `TRUVAG3_MOCK_AI` | `false` | **Implemented** | Use mock AI responses | [core/config.go:668](../../core/config.go#L668) |
-| `TRUVAG3_MOCK_DISCOVERY` | `false` | **Implemented** | Use in-memory mock discovery | [core/config.go:671](../../core/config.go#L671) |
-| `TRUVAG3_DEBUG` | `false` | **Implemented** | Enable debug logging | [core/config.go:674](../../core/config.go#L674) |
-| `TRUVAG3_PRETTY_LOGS` | `false` | Struct Tag Only | Enable human-readable logs | [core/config.go:230](../../core/config.go#L230) |
+| `TRUVAG3_DEV_MODE` | `false` | **Implemented** | Enable development mode (sets debug logging, text format) | [core/config.go](../../core/config.go) |
+| `TRUVAG3_MOCK_AI` | `false` | **Implemented** | Use mock AI responses | [core/config.go](../../core/config.go) |
+| `TRUVAG3_MOCK_DISCOVERY` | `false` | **Implemented** | Use in-memory mock discovery | [core/config.go](../../core/config.go) |
+| `TRUVAG3_DEBUG` | `false` | **Implemented** | Enable debug logging | [core/config.go](../../core/config.go) |
+| `TRUVAG3_PRETTY_LOGS` | `false` | Struct Tag Only | Enable human-readable logs | [core/config.go](../../core/config.go) |
 
 ### Effects of `TRUVAG3_DEV_MODE=true`
 
@@ -672,16 +672,16 @@ Kubernetes-specific settings. Most are auto-detected when running in K8s.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `KUBERNETES_SERVICE_HOST` | (auto) | **Implemented** | Auto-set by K8s, triggers K8s mode | [core/config.go:682](../../core/config.go#L682) |
-| `HOSTNAME` | (auto) | **Implemented** | Pod name, auto-set by K8s | [core/config.go:684](../../core/config.go#L684) |
-| `TRUVAG3_K8S_NAMESPACE` | (auto-detected) | **Implemented** | Pod namespace | [core/config.go:687](../../core/config.go#L687) |
-| `TRUVAG3_K8S_SERVICE_NAME` | Agent name | **Implemented** | Kubernetes service name | [core/config.go:696](../../core/config.go#L696) |
-| `TRUVAG3_K8S_SERVICE_PORT` | `80` | **Implemented** | Kubernetes service port | [core/config.go:699](../../core/config.go#L699) |
-| `TRUVAG3_K8S_POD_IP` | (auto) | **Implemented** | Pod IP address | [core/config.go:704](../../core/config.go#L704) |
-| `TRUVAG3_K8S_NODE_NAME` | (auto) | **Implemented** | Node name where pod is running | [core/config.go:707](../../core/config.go#L707) |
-| `TRUVAG3_K8S_SA_PATH` | `/var/run/secrets/kubernetes.io/serviceaccount` | Struct Tag Only | Service account mount path | [core/config.go:246](../../core/config.go#L246) |
-| `TRUVAG3_K8S_SERVICE_DISCOVERY` | `true` | Struct Tag Only | Enable K8s service discovery | [core/config.go:247](../../core/config.go#L247) |
-| `TRUVAG3_K8S_LEADER_ELECTION` | `false` | Struct Tag Only | Enable leader election | [core/config.go:248](../../core/config.go#L248) |
+| `KUBERNETES_SERVICE_HOST` | (auto) | **Implemented** | Auto-set by K8s, triggers K8s mode | [core/config.go](../../core/config.go) |
+| `HOSTNAME` | (auto) | **Implemented** | Pod name, auto-set by K8s | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_NAMESPACE` | (auto-detected) | **Implemented** | Pod namespace | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_SERVICE_NAME` | Agent name | **Implemented** | Kubernetes service name | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_SERVICE_PORT` | `80` | **Implemented** | Kubernetes service port | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_POD_IP` | (auto) | **Implemented** | Pod IP address | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_NODE_NAME` | (auto) | **Implemented** | Node name where pod is running | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_SA_PATH` | `/var/run/secrets/kubernetes.io/serviceaccount` | Struct Tag Only | Service account mount path | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_SERVICE_DISCOVERY` | `true` | Struct Tag Only | Enable K8s service discovery | [core/config.go](../../core/config.go) |
+| `TRUVAG3_K8S_LEADER_ELECTION` | `false` | Struct Tag Only | Enable leader election | [core/config.go](../../core/config.go) |
 
 ### Kubernetes Deployment Example
 
@@ -711,24 +711,24 @@ Configure the AI orchestrator for multi-agent coordination.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `120s` | **Implemented** | HTTP client timeout for tool/agent calls | [orchestration/executor.go:80](../../orchestration/executor.go#L80) |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `120s` | **Implemented** | HTTP client timeout for tool/agent calls | [orchestration/executor.go](../../orchestration/executor.go) |
 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `25` | **Implemented** | Max parallel step executions in DAG. Controls goroutine concurrency during plan execution. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `120s` | **Implemented** | Per-step execution timeout. Each individual step must complete within this duration. Go duration format. For `CapabilityOrchestrator` steps, the effective timeout is `TRUVAG3_HITL_DEFAULT_TIMEOUT` + this value. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_TOKEN_BUDGET` | `48000` | **Implemented** | Maximum estimated tokens allowed for prepared `<conversation_history>` before Tier 1 truncation/elision. Default-on safety net for metadata and hook ingress paths. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_RECENT_TURNS_PRESERVED` | `4` | **Implemented** | Number of newest turns always kept verbatim when turn-aware conversation preparation needs to shed context. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_SUMMARY_CACHE_SIZE` | `256` | **Implemented** | LRU capacity for the optional Tier 2 recursive conversation-summary cache. Only used when the application injects a compaction-enabled conversation-history preparer. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
-| `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | **Implemented** | Initial backoff delay for step retries. Go duration format (e.g., `500ms`, `2s`). Exponential backoff doubles this per attempt. Invalid values are silently ignored. | [orchestration/executor.go:170](../../orchestration/executor.go#L170) |
-| `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | **Implemented** | Maximum backoff delay for step retries. Go duration format. Delay is capped at this value regardless of attempt count. Invalid values are silently ignored. | [orchestration/executor.go:175](../../orchestration/executor.go#L175) |
+| `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | **Implemented** | Initial backoff delay for step retries. Go duration format (e.g., `500ms`, `2s`). Exponential backoff doubles this per attempt. Invalid values are silently ignored. | [orchestration/executor.go](../../orchestration/executor.go) |
+| `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | **Implemented** | Maximum backoff delay for step retries. Go duration format. Delay is capped at this value regardless of attempt count. Invalid values are silently ignored. | [orchestration/executor.go](../../orchestration/executor.go) |
 | `TRUVAG3_OAUTH_TOKEN` | (empty) | **Implemented** | OAuth Bearer token for outbound HTTP calls to tool/agent endpoints. Per-request tokens via `WithOAuthToken()` take priority. When set, executor requests include `Authorization: Bearer <token>`. | [orchestration/executor.go](../../orchestration/executor.go) |
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | **Implemented** | Enable tiered capability resolution for LLM token optimization. Uses 2-phase approach to reduce tokens by 50-75%. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | **Implemented** | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. Research-backed default. | [orchestration/tiered_capability_provider.go](../../orchestration/tiered_capability_provider.go) |
 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `2000` | **Implemented** | Max output tokens for tiered selection LLM calls. Higher values allow complex multi-tool selections but cost more tokens. | [orchestration/tiered_capability_provider.go](../../orchestration/tiered_capability_provider.go) |
 | `TRUVAG3_TIERED_SELECTION_RETRY_ENABLED` | `true` | **Implemented** | Enable retry on empty LLM responses and parse failures during tiered tool selection. Set to `false` to disable. | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_TIERED_SELECTION_RETRY_MAX` | `2` | **Implemented** | Max retry attempts for tiered selection (0 = disabled). 2 means up to 3 total attempts (1 initial + 2 retries). | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
-| `TRUVAG3_CAPABILITY_SERVICE_URL` | (none) | **Implemented** | External capability service URL | [orchestration/capability_provider.go:83](../../orchestration/capability_provider.go#L83) |
-| `CAPABILITY_SERVICE_URL` | (fallback) | **Implemented** | Alternative capability service URL | [orchestration/capability_provider.go:81](../../orchestration/capability_provider.go#L81) |
-| `TRUVAG3_CAPABILITY_TOP_K` | `20` | **Implemented** | Number of capabilities to return | [orchestration/capability_provider.go:91](../../orchestration/capability_provider.go#L91) |
-| `TRUVAG3_CAPABILITY_THRESHOLD` | `0.7` | **Implemented** | Minimum similarity threshold | [orchestration/capability_provider.go:103](../../orchestration/capability_provider.go#L103) |
+| `TRUVAG3_CAPABILITY_SERVICE_URL` | (none) | **Implemented** | External capability service URL | [orchestration/capability_provider.go](../../orchestration/capability_provider.go) |
+| `CAPABILITY_SERVICE_URL` | (fallback) | **Implemented** | Alternative capability service URL | [orchestration/capability_provider.go](../../orchestration/capability_provider.go) |
+| `TRUVAG3_CAPABILITY_TOP_K` | `20` | **Implemented** | Number of capabilities to return | [orchestration/capability_provider.go](../../orchestration/capability_provider.go) |
+| `TRUVAG3_CAPABILITY_THRESHOLD` | `0.7` | **Implemented** | Minimum similarity threshold | [orchestration/capability_provider.go](../../orchestration/capability_provider.go) |
 | `TRUVAG3_PLAN_RETRY_ENABLED` | `true` | **Implemented** | Retry plan generation on JSON parse failures | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_RETRY_MAX` | `2` | **Implemented** | Maximum retry attempts for plan parsing (0 = disabled) | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_MAX_TOKENS` | `15000` | **Implemented** | Max output tokens for plan generation LLM calls (including hallucination and validation retries) | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
@@ -1325,23 +1325,27 @@ Configure Human-in-the-Loop (HITL) checkpoints for human oversight of AI-generat
 
 ### Core HITL Variables
 
+> **Source:** all HITL variables below are loaded by `DefaultConfig()` in
+> [`orchestration/interfaces.go`](../../orchestration/interfaces.go) — look for
+> the `HITLConfig` struct and the "HITL configuration from environment" block.
+
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HITL_ENABLED` | `false` | **Implemented** | Enable/disable HITL globally | [orchestration/interfaces.go:477](../../orchestration/interfaces.go#L477) |
-| `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | `false` | **Implemented** | Require human approval for all LLM-generated plans | [orchestration/interfaces.go:480](../../orchestration/interfaces.go#L480) |
-| `TRUVAG3_HITL_SENSITIVE_CAPABILITIES` | (empty) | **Implemented** | Comma-separated list of capabilities requiring **both plan AND step approval** | [orchestration/interfaces.go:483](../../orchestration/interfaces.go#L483) |
-| `TRUVAG3_HITL_SENSITIVE_AGENTS` | (empty) | **Implemented** | Comma-separated list of agents requiring **both plan AND step approval** | [orchestration/interfaces.go:486](../../orchestration/interfaces.go#L486) |
-| `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | (empty) | **Implemented** | Comma-separated list of capabilities requiring **step-only approval** (no plan approval) | [orchestration/interfaces.go:490](../../orchestration/interfaces.go#L490) |
-| `TRUVAG3_HITL_STEP_SENSITIVE_AGENTS` | (empty) | **Implemented** | Comma-separated list of agents requiring **step-only approval** (no plan approval) | [orchestration/interfaces.go:493](../../orchestration/interfaces.go#L493) |
-| `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | **Implemented** | Timeout for human response before auto-action | [orchestration/interfaces.go:496](../../orchestration/interfaces.go#L496) |
-| `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | **Implemented** | Number of retries before escalating to human | [orchestration/interfaces.go:501](../../orchestration/interfaces.go#L501) |
+| `TRUVAG3_HITL_ENABLED` | `false` | **Implemented** | Enable/disable HITL globally | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | `false` | **Implemented** | Require human approval for all LLM-generated plans | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_SENSITIVE_CAPABILITIES` | (empty) | **Implemented** | Comma-separated list of capabilities requiring **both plan AND step approval** | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_SENSITIVE_AGENTS` | (empty) | **Implemented** | Comma-separated list of agents requiring **both plan AND step approval** | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | (empty) | **Implemented** | Comma-separated list of capabilities requiring **step-only approval** (no plan approval) | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_STEP_SENSITIVE_AGENTS` | (empty) | **Implemented** | Comma-separated list of agents requiring **step-only approval** (no plan approval) | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | **Implemented** | Timeout for human response before auto-action | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | **Implemented** | Number of retries before escalating to human | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
 
 ### HITL Storage Variables
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HITL_REDIS_DB` | `6` | **Implemented** | Redis database number for HITL checkpoint/command data | [orchestration/hitl_checkpoint_store.go:114](../../orchestration/hitl_checkpoint_store.go#L114) |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | **Implemented** | Redis key prefix for HITL data | [orchestration/hitl_checkpoint_store.go:104](../../orchestration/hitl_checkpoint_store.go#L104) |
+| `TRUVAG3_HITL_REDIS_DB` | `6` | **Implemented** | Redis database number for HITL checkpoint/command data | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | **Implemented** | Redis key prefix for HITL data | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
 
 ### HITL Handler Variables
 
@@ -1355,10 +1359,10 @@ These variables control what happens when a checkpoint times out (expires) witho
 
 | Variable | Default | Values | Status | Description | Source |
 |----------|---------|--------|--------|-------------|--------|
-| `TRUVAG3_HITL_DEFAULT_ACTION` | `reject` | `approve`, `reject`, `abort` | **Implemented** | Action to take when `apply_default` expiry behavior is used. Fail-safe default is `reject` (HITL enabled = require explicit approval). | [orchestration/interfaces.go:510](../../orchestration/interfaces.go#L510) |
-| `TRUVAG3_HITL_STREAMING_EXPIRY` | `implicit_deny` | `implicit_deny`, `apply_default` | **Implemented** | Expiry behavior for streaming (SSE) requests. `implicit_deny` = status→expired, no action. `apply_default` = auto-resume with `DefaultAction`. | [orchestration/hitl_checkpoint_store.go:1128](../../orchestration/hitl_checkpoint_store.go#L1128) |
-| `TRUVAG3_HITL_NON_STREAMING_EXPIRY` | `apply_default` | `implicit_deny`, `apply_default` | **Implemented** | Expiry behavior for non-streaming (HTTP 202) requests. `apply_default` = auto-apply `DefaultAction` on timeout. | [orchestration/hitl_checkpoint_store.go:1149](../../orchestration/hitl_checkpoint_store.go#L1149) |
-| `TRUVAG3_HITL_DEFAULT_REQUEST_MODE` | `non_streaming` | `streaming`, `non_streaming` | **Implemented** | Default request mode when not explicitly set via `WithRequestMode()`. A warning is logged when this fallback is used. | [orchestration/hitl_checkpoint_store.go:1097](../../orchestration/hitl_checkpoint_store.go#L1097) |
+| `TRUVAG3_HITL_DEFAULT_ACTION` | `reject` | `approve`, `reject`, `abort` | **Implemented** | Action to take when `apply_default` expiry behavior is used. Fail-safe default is `reject` (HITL enabled = require explicit approval). | [orchestration/interfaces.go](../../orchestration/interfaces.go) |
+| `TRUVAG3_HITL_STREAMING_EXPIRY` | `implicit_deny` | `implicit_deny`, `apply_default` | **Implemented** | Expiry behavior for streaming (SSE) requests. `implicit_deny` = status→expired, no action. `apply_default` = auto-resume with `DefaultAction`. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_NON_STREAMING_EXPIRY` | `apply_default` | `implicit_deny`, `apply_default` | **Implemented** | Expiry behavior for non-streaming (HTTP 202) requests. `apply_default` = auto-apply `DefaultAction` on timeout. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_DEFAULT_REQUEST_MODE` | `non_streaming` | `streaming`, `non_streaming` | **Implemented** | Default request mode when not explicitly set via `WithRequestMode()`. A warning is logged when this fallback is used. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
 
 **Expiry Behavior Matrix** (see [HITL User Guide: Expiry Behavior Matrix](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#expiry-behavior-variables)):
 
@@ -1375,10 +1379,10 @@ The expiry processor is a background goroutine that scans for expired checkpoint
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HITL_EXPIRY_ENABLED` | `true` | **Implemented** | Enable/disable the background expiry processor. Set to `false` to disable automatic checkpoint expiration. | [orchestration/hitl_checkpoint_store.go:127](../../orchestration/hitl_checkpoint_store.go#L127) |
-| `TRUVAG3_HITL_EXPIRY_INTERVAL` | `10s` | **Implemented** | How often the processor scans Redis for expired checkpoints. Lower values = faster detection but more Redis load. | [orchestration/hitl_checkpoint_store.go:130](../../orchestration/hitl_checkpoint_store.go#L130) |
-| `TRUVAG3_HITL_EXPIRY_BATCH_SIZE` | `100` | **Implemented** | Maximum checkpoints processed per scan cycle. Prevents overwhelming the system when many expire simultaneously. | [orchestration/hitl_checkpoint_store.go:133](../../orchestration/hitl_checkpoint_store.go#L133) |
-| `TRUVAG3_HITL_EXPIRY_DELIVERY` | `at_most_once` | **Implemented** | Callback delivery guarantee: `at_most_once` (safe default, no retries) or `at_least_once` (may retry, callback must be idempotent). | [orchestration/hitl_checkpoint_store.go:136](../../orchestration/hitl_checkpoint_store.go#L136) |
+| `TRUVAG3_HITL_EXPIRY_ENABLED` | `true` | **Implemented** | Enable/disable the background expiry processor. Set to `false` to disable automatic checkpoint expiration. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_INTERVAL` | `10s` | **Implemented** | How often the processor scans Redis for expired checkpoints. Lower values = faster detection but more Redis load. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_BATCH_SIZE` | `100` | **Implemented** | Maximum checkpoints processed per scan cycle. Prevents overwhelming the system when many expire simultaneously. | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_DELIVERY` | `at_most_once` | **Implemented** | Callback delivery guarantee: `at_most_once` (safe default, no retries) or `at_least_once` (may retry, callback must be idempotent). | [orchestration/hitl_checkpoint_store.go](../../orchestration/hitl_checkpoint_store.go) |
 
 ### HITL Approval Modes
 
@@ -1504,18 +1508,18 @@ Configure the scheduled-execution subsystem: delayed and recurring task executio
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_SCHEDULER_TICK_INTERVAL` | `5s` | **Implemented** | How often the Scheduler polls for due schedules (Go duration) | [orchestration/scheduler.go:61](../../orchestration/scheduler.go#L61) |
-| `TRUVAG3_SCHEDULER_LOCK_TTL` | `30s` | **Implemented** | Distributed lock TTL for leader election; must be > tick interval (Go duration) | [orchestration/scheduler.go:62](../../orchestration/scheduler.go#L62) |
+| `TRUVAG3_SCHEDULER_TICK_INTERVAL` | `5s` | **Implemented** | How often the Scheduler polls for due schedules (Go duration) | [orchestration/scheduler.go](../../orchestration/scheduler.go) |
+| `TRUVAG3_SCHEDULER_LOCK_TTL` | `30s` | **Implemented** | Distributed lock TTL for leader election; must be > tick interval (Go duration) | [orchestration/scheduler.go](../../orchestration/scheduler.go) |
 
 ### Scheduled-Executor (Consumer)
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_EXECUTOR_WORKER_COUNT` | `5` | **Implemented** | Number of concurrent dispatch goroutines | [examples/scheduled-executor/worker.go:42](../../examples/scheduled-executor/worker.go#L42) |
-| `TRUVAG3_EXECUTOR_MAX_RETRIES` | `3` | **Implemented** | Max retry attempts per task before dead-lettering | [examples/scheduled-executor/worker.go:43](../../examples/scheduled-executor/worker.go#L43) |
-| `TRUVAG3_EXECUTOR_RETRY_BASE_DELAY` | `5s` | **Implemented** | Base delay for exponential backoff (Go duration) | [examples/scheduled-executor/worker.go:44](../../examples/scheduled-executor/worker.go#L44) |
-| `TRUVAG3_EXECUTOR_RETRY_MAX_DELAY` | `60s` | **Implemented** | Maximum backoff cap (Go duration) | [examples/scheduled-executor/worker.go:45](../../examples/scheduled-executor/worker.go#L45) |
-| `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | `15m` | **Implemented** | Per-request HTTP timeout for POST to target agent (Go duration). Must be ≥ the target agent's `TRUVAG3_ORCHESTRATION_TIMEOUT` | [examples/scheduled-executor/worker.go:52](../../examples/scheduled-executor/worker.go#L52) |
+| `TRUVAG3_EXECUTOR_WORKER_COUNT` | `5` | **Implemented** | Number of concurrent dispatch goroutines | [examples/scheduled-executor/worker.go](../../examples/scheduled-executor/worker.go) |
+| `TRUVAG3_EXECUTOR_MAX_RETRIES` | `3` | **Implemented** | Max retry attempts per task before dead-lettering | [examples/scheduled-executor/worker.go](../../examples/scheduled-executor/worker.go) |
+| `TRUVAG3_EXECUTOR_RETRY_BASE_DELAY` | `5s` | **Implemented** | Base delay for exponential backoff (Go duration) | [examples/scheduled-executor/worker.go](../../examples/scheduled-executor/worker.go) |
+| `TRUVAG3_EXECUTOR_RETRY_MAX_DELAY` | `60s` | **Implemented** | Maximum backoff cap (Go duration) | [examples/scheduled-executor/worker.go](../../examples/scheduled-executor/worker.go) |
+| `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | `15m` | **Implemented** | Per-request HTTP timeout for POST to target agent (Go duration). Must be ≥ the target agent's `TRUVAG3_ORCHESTRATION_TIMEOUT` | [examples/scheduled-executor/worker.go](../../examples/scheduled-executor/worker.go) |
 
 Both components require `REDIS_URL` for the task queue and service registry. The scheduled-executor also requires `TRUVAG3_K8S_SERVICE_NAME` and standard framework variables for service registration.
 
@@ -1558,10 +1562,10 @@ Configure LLM prompt customization for orchestration.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_PROMPT_TEMPLATE_FILE` | (none) | **Implemented** | Path to custom prompt template file | [orchestration/prompt_config_env.go:22](../../orchestration/prompt_config_env.go#L22) |
-| `TRUVAG3_PROMPT_DOMAIN` | (none) | **Implemented** | Domain context (healthcare, finance, legal, retail) | [orchestration/prompt_config_env.go:27](../../orchestration/prompt_config_env.go#L27) |
-| `TRUVAG3_PROMPT_TYPE_RULES` | (none) | **Implemented** | JSON array of additional type rules | [orchestration/prompt_config_env.go:32](../../orchestration/prompt_config_env.go#L32) |
-| `TRUVAG3_PROMPT_CUSTOM_INSTRUCTIONS` | (none) | **Implemented** | JSON array of custom instructions | [orchestration/prompt_config_env.go:47](../../orchestration/prompt_config_env.go#L47) |
+| `TRUVAG3_PROMPT_TEMPLATE_FILE` | (none) | **Implemented** | Path to custom prompt template file | [orchestration/prompt_config_env.go](../../orchestration/prompt_config_env.go) |
+| `TRUVAG3_PROMPT_DOMAIN` | (none) | **Implemented** | Domain context (healthcare, finance, legal, retail) | [orchestration/prompt_config_env.go](../../orchestration/prompt_config_env.go) |
+| `TRUVAG3_PROMPT_TYPE_RULES` | (none) | **Implemented** | JSON array of additional type rules | [orchestration/prompt_config_env.go](../../orchestration/prompt_config_env.go) |
+| `TRUVAG3_PROMPT_CUSTOM_INSTRUCTIONS` | (none) | **Implemented** | JSON array of custom instructions | [orchestration/prompt_config_env.go](../../orchestration/prompt_config_env.go) |
 
 ### Example
 

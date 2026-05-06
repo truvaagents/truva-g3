@@ -932,12 +932,12 @@ json: cannot unmarshal string into Go struct field .lat of type float64
 
 ### The Solution: Multi-Layer Defense
 
-The orchestration module implements three layers of defense:
+The orchestration module implements four layers of defense:
 
-#### Layer 1: Prompt Guidance (~70-80% effectiveness)
+#### Layer 1: Prompt Guidance
 The LLM planning prompt includes explicit type rules and examples. While helpful, LLMs don't always follow instructions perfectly.
 
-#### Layer 2: Schema-Based Coercion (~95% effectiveness)
+#### Layer 2: Schema-Based Coercion
 Before calling a tool, the executor automatically coerces parameters to match the capability schema:
 
 ```go
@@ -951,7 +951,7 @@ This layer is:
 - **Schema-driven**: Only coerces when the capability defines expected types
 - **Safe**: If coercion fails, the original value is preserved
 
-#### Layer 3: Validation Feedback Retry (~99% effectiveness)
+#### Layer 3: Validation Feedback Retry
 For edge cases that slip through Layers 1 and 2, if a tool returns a validation error (e.g., "Amount must be greater than 0"), the orchestrator:
 
 1. Detects the type-related or validation error
@@ -972,6 +972,11 @@ For edge cases that slip through Layers 1 and 2, if a tool returns a validation 
 "is required"
 "cannot be empty"
 ```
+
+#### Layer 4: Contextual Re-Resolution (Semantic Retry)
+When Layer 3's analysis concludes that an error **cannot be fixed by adjusting parameters alone** — but the source data needed to compute the correct value is present in the execution trajectory — Layer 4 takes over. It re-runs parameter resolution with the full prior step results in context, letting the LLM compute corrected parameters from upstream data rather than guessing.
+
+Implemented in [`orchestration/contextual_re_resolver.go`](../../orchestration/contextual_re_resolver.go); driven by [`orchestration/error_analyzer.go`](../../orchestration/error_analyzer.go) decisions. See [Error Handling Guide §6 "Contextual Re-Resolution (Layer 4)"](ERROR_HANDLING_GUIDE.md#6-contextual-re-resolution-layer-4) for the full flow, including when Layer 4 fires versus when Layer 3 alone is sufficient.
 
 ### Configuration
 

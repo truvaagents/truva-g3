@@ -88,7 +88,7 @@ Complete, production-ready examples demonstrating AI-enhanced distributed system
 docker --version    # Docker 20.10+
 kind --version      # kind 0.20+
 kubectl version     # Client 1.28+
-go version          # go1.25+
+go version          # go1.26+
 ```
 
 ### One-Command Setup
@@ -958,7 +958,7 @@ Want to create your own tools and agents? Follow these battle-tested patterns le
 // ✅ Every example's go.mod looks like this
 module github.com/truvaagents/truva-g3/examples/your-example
 
-go 1.25
+go 1.26.2
 
 require github.com/truvaagents/truva-g3/core v0.6.4  // Fetches from GitHub
 

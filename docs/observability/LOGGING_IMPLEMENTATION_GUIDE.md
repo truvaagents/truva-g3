@@ -38,7 +38,7 @@ This guide ensures every TruvaG3 component logs in a consistent, useful way.
 
 ## 2. The Logger Interface
 
-TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go:11-23`](../../core/interfaces.go#L11-L23). This design:
+TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go`](../../core/interfaces.go) (search for `type Logger interface`). This design:
 
 - **Avoids vendor lock-in** (not tied to zap, logrus, zerolog, etc.)
 - **Is minimal and composable** (easy to test and mock)
@@ -74,7 +74,7 @@ type Logger interface {
 
 ### Default Logger Behavior
 
-When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go:110-121`](../../core/interfaces.go#L110-L121)). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
+When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go`](../../core/interfaces.go) — search for `type NoOpLogger`). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
 
 ---
 
@@ -95,7 +95,7 @@ TruvaG3 uses four standard log levels, from most to least verbose:
 DEBUG (0) → INFO (1) → WARN (2) → ERROR (3)
 ```
 
-> **Source**: [`core/config.go:1500-1512`](../../core/config.go#L1500-L1512) (LogLevel constants)
+> **Source**: [`core/config.go`](../../core/config.go) (`LogLevel` constants)
 
 When you set `TRUVAG3_LOG_LEVEL=INFO`, you see INFO, WARN, and ERROR logs. DEBUG logs are hidden.
 
@@ -121,7 +121,7 @@ TruvaG3 logging is configured through environment variables:
 | `TRUVAG3_LOG_FORMAT` | json, text | json | Output format |
 | `TRUVAG3_DEBUG` | true, false | false | Enable debug mode |
 
-> **Source**: [`core/config.go:213-218`](../../core/config.go#L213-L218) (LoggingConfig struct)
+> **Source**: [`core/config.go`](../../core/config.go) (`LoggingConfig struct`)
 
 ### Format Behavior
 
@@ -130,7 +130,7 @@ The framework's `ProductionLogger` uses the format from configuration (defaults 
 The telemetry module's `TelemetryLogger` has additional auto-detection logic:
 
 ```go
-// From telemetry/logger.go:76-79
+// From telemetry/logger.go
 if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
     format = "json" // Use JSON in K8s for log aggregation
 }
@@ -658,7 +658,7 @@ The `WithContext` methods enable trace-log correlation. Here's how it works:
 2. **Context** carries the trace ID and span ID through your code
 3. **WithContext methods** extract and include these IDs in log output
 
-> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](../../telemetry/trace_context.go) and [`telemetry/framework_integration.go:67-83`](../../telemetry/framework_integration.go#L67-L83)
+> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](../../telemetry/trace_context.go) and [`telemetry/framework_integration.go`](../../telemetry/framework_integration.go)
 
 ### What Your Logs Look Like
 
@@ -1112,7 +1112,7 @@ When your app emits a log line, two fields carry identity:
 - **`service`** — the string your application writes in the JSON body. Set at framework
   construction time from `cfg.Name`, which is configured via `core.WithName("…")` in
   your `main.go` (or the `TRUVAG3_AGENT_NAME` env var if you prefer env-based config).
-  See [core/config.go:1817](../../core/config.go#L1817). Shown in every log line for
+  See [core/config.go](../../core/config.go). Shown in every log line for
   human readability.
 - **`service_name`** — an indexed Loki stream label derived from the pod's
   `metadata.labels.app` value by the cluster-wide OTel log collector (via the
@@ -1206,7 +1206,7 @@ This section documents **required patterns** that MUST be followed when implemen
 **Always check for nil before calling any logger method.** This is non-negotiable for framework code.
 
 ```go
-// From orchestration/orchestrator.go:573-580
+// From orchestration/orchestrator.go
 if o.logger != nil {
     o.logger.InfoWithContext(ctx, "Starting request processing", map[string]interface{}{
         "operation":      "process_request",
@@ -1215,7 +1215,7 @@ if o.logger != nil {
     })
 }
 
-// From orchestration/executor.go:1229-1235
+// From orchestration/executor.go
 if e.logger != nil {
     e.logger.ErrorWithContext(ctx, "Agent not found in catalog", map[string]interface{}{
         "operation":  "agent_discovery",
@@ -1236,7 +1236,7 @@ if e.logger != nil {
 **Every log entry MUST include an `operation` field.** This is critical for log filtering and analysis.
 
 ```go
-// From orchestration/orchestrator.go:598-604
+// From orchestration/orchestrator.go
 if o.logger != nil {
     o.logger.ErrorWithContext(ctx, "Plan generation failed", map[string]interface{}{
         "operation":   "plan_generation",  // REQUIRED - describes what operation failed
@@ -1246,7 +1246,7 @@ if o.logger != nil {
     })
 }
 
-// From orchestration/orchestrator.go:622-630
+// From orchestration/orchestrator.go
 if o.logger != nil {
     o.logger.InfoWithContext(ctx, "Plan generated successfully", map[string]interface{}{
         "operation":          "plan_generation",  // Same operation, different message
@@ -1305,7 +1305,7 @@ if o.logger != nil {
 **Include `request_id` in all logs within a request context.** This enables request tracing.
 
 ```go
-// From orchestration/orchestrator.go:567-580
+// From orchestration/orchestrator.go
 
 // Step 1: Generate request_id at the entry point
 requestID := generateRequestID()
@@ -1463,11 +1463,11 @@ Logging integrates with TruvaG3's telemetry system for metrics and tracing.
 
 ### Three-Layer Observability
 
-TruvaG3's `ProductionLogger` ([`core/config.go:1532-1702`](../../core/config.go#L1532-L1702)) implements three layers:
+TruvaG3's `ProductionLogger` (defined in [`core/config.go`](../../core/config.go) — search for `type ProductionLogger`) implements three layers:
 
-1. **Layer 1 - Console Output**: Always works, immediate visibility ([line 1626-1652](../../core/config.go#L1626-L1652))
-2. **Layer 2 - Metrics Emission**: When telemetry is initialized ([line 1674-1676](../../core/config.go#L1674-L1676))
-3. **Layer 3 - Trace Context**: When using `WithContext` methods ([line 1636-1643](../../core/config.go#L1636-L1643))
+1. **Layer 1 - Console Output**: Always works, immediate visibility
+2. **Layer 2 - Metrics Emission**: When telemetry is initialized
+3. **Layer 3 - Trace Context**: When using `WithContext` methods
 
 ### Enabling Telemetry
 
@@ -1518,7 +1518,7 @@ func initTelemetry(serviceName string) {
 
 When telemetry is enabled, logs automatically emit metrics. Only specific low-cardinality fields are used as metric labels to prevent metric explosion:
 
-**Allowed label fields** (from [`core/config.go:1689-1694`](../../core/config.go#L1689-L1694)):
+**Allowed label fields** (defined in [`core/config.go`](../../core/config.go)):
 - `operation`
 - `status`
 - `error_type`
