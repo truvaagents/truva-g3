@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</title>
+<meta name="description" content="An educational walkthrough of a micro-agents reference architecture — specialized agents and tools that register their capabilities into a shared dynamic registry, are addressed by logical names, and coordinate without a central conductor. Grounded in the open-source TruvaG3 reference implementation.">
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b6cff;
+    --rule: #e5e5e5;
+    --code-bg: #f6f8fa;
+    --aside-bg: #fafaf7;
+    --aside-border: #d9d4c3;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    line-height: 1.65;
+    max-width: 760px;
+    margin: 2rem auto;
+    padding: 0 1.25rem;
+    font-size: 17px;
+  }
+  header.article-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2rem;
+  }
+  header.article-header h1 {
+    font-size: 1.85rem;
+    line-height: 1.25;
+    margin: 0 0 0.6rem 0;
+    font-weight: 700;
+  }
+  header.article-header p.dek {
+    color: var(--muted);
+    font-size: 1.1rem;
+    margin: 0 0 0.8rem 0;
+    line-height: 1.45;
+  }
+  header.article-header .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin-top: 2.4rem;
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+  }
+  h3 {
+    font-size: 1.1rem;
+    margin-top: 1.6rem;
+    margin-bottom: 0.4rem;
+  }
+  p { margin: 0.7rem 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    border: 1px solid var(--rule);
+  }
+  code {
+    font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border-bottom: 1px solid var(--rule);
+    padding: 0.55rem 0.7rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+  }
+  aside.callout {
+    background: var(--aside-bg);
+    border-left: 3px solid var(--aside-border);
+    padding: 0.85rem 1.1rem;
+    margin: 1.4rem 0;
+    font-size: 0.95rem;
+    border-radius: 3px;
+  }
+  aside.callout strong { color: var(--fg); }
+  figure { margin: 1.5rem 0; }
+  figure pre { margin: 0; }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 0.4rem;
+  }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  a.ref {
+    font-size: 0.78em;
+    vertical-align: super;
+    line-height: 0;
+    margin-left: 1px;
+    text-decoration: none;
+  }
+  ol.references {
+    font-size: 0.95rem;
+    padding-left: 1.4rem;
+  }
+  ol.references li {
+    margin: 0.5rem 0;
+    scroll-margin-top: 1rem;
+    word-break: break-word;
+  }
+  .footer-note {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<article>
+
+<header class="article-header">
+  <h1>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h1>
+  <p class="dek">An introduction to a micro-agents architecture in which specialized tools and agents dynamically register their capabilities into a shared registry, are addressed by logical names rather than hardcoded URLs, and coordinate without a central conductor — with orchestration inside each agent and decentralized coordination across the system. The concepts are grounded in TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation that can be cloned and run on a laptop.</p>
+  <p class="meta">A reference-architecture article. Reading time: about 12 minutes.</p>
+</header>
+
+<section>
+<h2>The wiring problem</h2>
+
+<p>Most agent frameworks today share the same shape. You build an agent, give it a list of tools, and start a loop. The agent reasons, picks a tool, calls it, reads the result, and repeats. If you want a second agent, you usually wire it into the first as another callable, or you put both inside a higher-level orchestrator that decides whose turn it is.</p>
+
+<p>This shape works at the demo scale. It is harder to defend at the production scale. Adding a tool requires redeploying the agent. Sharing a tool across agents means duplicating registration code in every agent that needs it. Adding a new agent that other agents should be able to reach means rebuilding the orchestration graph that decides routing. Mentally, the model works like a single program with internal function calls. That is fine for prototypes, but it does not match how distributed systems are usually built.</p>
+
+<p>This article describes a different shape, borrowed almost entirely from how production microservices are built: a service registry indexed by capability, peers that find each other at runtime, and direct point-to-point calls. There is no central orchestrator routing between participants. There is, however, a per-agent orchestrator that runs each agent's own reasoning loop. The result is a two-layer coordination model that is easier to reason about than a single global one — and one that follows patterns the infrastructure community has refined over the past decade.</p>
+
+<p>The article describes the architecture in concept-first form. The concrete examples — code paths, execution traces, registry screenshots — come from TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation written in Go. TruvaG3 exists to make these patterns easy to inspect. The source code, the example deployments, the design notes, and the registry-viewer web app<a class="ref" href="#ref-13">[13]</a> are all public, and the entire system runs on a laptop in a local Kubernetes cluster. When the article points to a specific behaviour, a numbered citation links to the relevant file or directory in the repository.</p>
+</section>
+
+<section>
+<h2>How today's frameworks coordinate</h2>
+
+<p>Before describing the new shape, it helps to look at what is normal today. Most popular agent frameworks share the same wiring approach: the developer hands the framework a complete list of tools and agents — in code or configuration — before the program runs. The framework does not look outside that list at runtime.</p>
+
+<p>The same point per framework, in everyday terms:</p>
+
+<ul>
+  <li><strong>LangGraph</strong> — Build a graph in code that names every agent and every tool you will use. The graph is fixed once the program starts.</li>
+  <li><strong>CrewAI</strong> — Assemble a <em>crew</em> by listing the agents and the tasks you want them to do. The crew works only with what you have given it.</li>
+  <li><strong>AutoGen</strong> — Group agents into a <em>team</em>. The team's members are set when you construct it; new members do not join at runtime.</li>
+  <li><strong>OpenAI Agents SDK</strong> — Write each agent in code, list its tools, list which other agents it may hand off to. Every reference is something the developer wrote down by name.</li>
+  <li><strong>Microsoft Semantic Kernel</strong> — Register your plugins (groups of functions) with the kernel at startup. The model then chooses which plugin to call from that registered set.</li>
+  <li><strong>LlamaIndex Agents</strong> — Build each agent with an explicit list of tools. For multi-agent setups, a workflow object holds a fixed list of agents.</li>
+  <li><strong>Pydantic AI</strong> — Declare each agent with its tools attached. To compose multiple agents, write code that calls each one by name in the order you want.</li>
+</ul>
+
+<p>Tools and agents that run in another process or service are not an exception to this. To use a tool that lives elsewhere, the agent's own code must contain a wrapper that knows the external tool exists and how to reach it. The wrapper is what the framework treats as "the tool"; the framework still requires that wrapper to be present in the source at startup. None of these frameworks reads a shared, live registry to learn what tools or agents are currently available across the deployment, and none of them lets new tools or agents — deployed elsewhere, after the program has started — become usable to existing callers without a code change.</p>
+
+<p>The shared pattern across all seven is a <em>central coordinator</em>. Some component inside the framework — a graph runner, a crew, a team manager, an LLM-driven dispatch loop, a workflow object — holds the plan, decides the order of operations, and routes work between participants. The participants themselves are passive: they react to being called, against a list of peers and tools that was fixed when the program started. Whether the order is decided by an LLM, a routing graph, or a turn-selection policy, the list it picks from does not change while the program is running. This is the well-known <strong>orchestration</strong> pattern from distributed-systems literature, where one process directs the others.</p>
+
+<p>Orchestration is not wrong. It gives you a global view, easy retries, and clean state machines. It also gives you a single point of failure, a single point of scale, and a single component that must change every time you add a participant. In multi-agent systems, the trade-offs are the same ones the microservices community faced a decade ago, when it moved away from centralized orchestrators (workflow engines, enterprise service buses) toward decentralized service-discovery patterns<a class="ref" href="#ref-11">[11]</a>.</p>
+</section>
+
+<section>
+<h2>The micro-agents architecture</h2>
+
+<p>The architectural class this article describes has begun to acquire a name in industry literature: a <strong>micro-agents architecture</strong>. The term is used in two related senses, and it is worth distinguishing them up front.</p>
+
+<p><strong>At a workflow level</strong>, articulated in a recent CIO article on the agentic enterprise<a class="ref" href="#ref-8">[8]</a>, <em>micro-agents</em> are "specialized AI systems designed to perform narrow, well-defined tasks within a workflow," and <em>macro-agents</em> are components that "coordinate multiple micro agents to complete an end-to-end business process." This framing is about division of labor and governance.</p>
+
+<p><strong>At an architectural level</strong>, which is the focus of this article, a micro-agents architecture is a system with the following properties:</p>
+
+<ul>
+  <li>Agents and tools are <strong>specialized and independently deployable</strong>.</li>
+  <li>They <strong>register their capabilities into a shared registry</strong> at runtime, rather than being wired into a caller's source code.</li>
+  <li>They are <strong>addressed by logical names</strong> — capability names — not by IP addresses or hardcoded URLs.</li>
+  <li>They can be <strong>independently scaled, replaced, or migrated</strong>; callers continue to look them up by the same name.</li>
+  <li>Coordination is <strong>decentralized</strong> — each peer drives its own flow; the registry mediates discovery, not control.</li>
+</ul>
+
+<p>Microsoft's multi-agent reference architecture<a class="ref" href="#ref-6">[6]</a> describes the foundational pattern as a <em>"Dynamic Agent Registry (Service Mesh for Agents)"</em>: an orchestrator consults this registry at runtime to discover and route to specialized agents. Alibaba Cloud's recent reference design<a class="ref" href="#ref-7">[7]</a> emphasizes the location-transparency property explicitly: <em>"Agents do not directly hold each other's physical addresses (IP/Port) but query the Agent Registry and use each other's logical names (agentName) to obtain access endpoints. This achieves complete decoupling with location transparency."</em></p>
+
+<figure>
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Side-by-side comparison of two architectural approaches. On the left, today's agent frameworks place a single Orchestrator at the top — labeled with examples such as graph, crew, runner, team, kernel, workflow — that directs three statically wired participants (a Tool, an Agent, and a Tool) below it. Solid arrows go down from the Orchestrator to each participant, indicating central control. On the right, a micro-agents architecture has a passive Capability Registry at the top, labeled 'no central control logic'. Three participants below — Tool, Agent, Tool — each push solid arrows up to the registry to register themselves. There is no central conductor; coordination is decentralized, with peers finding each other through the registry and calling each other directly. Captions reinforce: 'Participants are wired in source at construction. The orchestrator routes work between them.' on the left; 'Participants register at runtime. Peers find each other through the registry. No central conductor.' on the right.">
+  <defs>
+    <marker id="m-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .panel-divider { stroke: #e5e5e5; stroke-width: 1; stroke-dasharray: 3,4; }
+    .registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.2; }
+    .orchestrator { fill: #0b6cff; stroke: #0858d4; stroke-width: 1.5; }
+    .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .t-section-label { font: 700 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #6e7781; letter-spacing: 0.6px; }
+    .t-section-title { font: 600 14px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-orch-title { font: 600 14px -apple-system, sans-serif; fill: #ffffff; }
+    .t-orch-sub { font: 11px -apple-system, sans-serif; fill: #ffffff; opacity: 0.9; }
+    .t-reg-title { font: 600 14px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-reg-sub { font: 11px -apple-system, sans-serif; fill: #6e7781; }
+    .t-box-title { font: 11.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-caption { font: italic 11px -apple-system, sans-serif; fill: #555; }
+    .arrow-blue { stroke: #0b6cff; stroke-width: 1.5; fill: none; }
+  </style>
+
+  <!-- LEFT: today's frameworks -->
+  <text x="190" y="22" text-anchor="middle" class="t-section-label">TODAY'S FRAMEWORKS</text>
+  <text x="190" y="42" text-anchor="middle" class="t-section-title">Centralized orchestration</text>
+
+  <rect x="125" y="78" width="130" height="65" rx="6" class="orchestrator"/>
+  <text x="190" y="102" text-anchor="middle" class="t-orch-title">Orchestrator</text>
+  <text x="190" y="120" text-anchor="middle" class="t-orch-sub">graph / crew / runner /</text>
+  <text x="190" y="135" text-anchor="middle" class="t-orch-sub">team / kernel / workflow</text>
+
+  <line x1="170" y1="143" x2="92" y2="240" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+  <line x1="190" y1="143" x2="190" y2="240" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+  <line x1="210" y1="143" x2="288" y2="240" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+
+  <rect x="60" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="92" y="265" text-anchor="middle" class="t-box-title">Tool</text>
+
+  <rect x="158" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="190" y="265" text-anchor="middle" class="t-box-title">Agent</text>
+
+  <rect x="256" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="288" y="265" text-anchor="middle" class="t-box-title">Tool</text>
+
+  <text x="190" y="310" text-anchor="middle" class="t-caption">Participants are wired in source at construction.</text>
+  <text x="190" y="326" text-anchor="middle" class="t-caption">The orchestrator routes work between them.</text>
+
+  <line x1="380" y1="50" x2="380" y2="340" class="panel-divider"/>
+
+  <!-- RIGHT: micro-agents architecture -->
+  <text x="570" y="22" text-anchor="middle" class="t-section-label">MICRO-AGENTS ARCHITECTURE</text>
+  <text x="570" y="42" text-anchor="middle" class="t-section-title">Decentralized coordination</text>
+
+  <rect x="490" y="78" width="160" height="65" rx="6" class="registry"/>
+  <text x="570" y="98" text-anchor="middle" class="t-reg-title">Capability Registry</text>
+  <text x="570" y="115" text-anchor="middle" class="t-reg-sub">passive index</text>
+  <text x="570" y="132" text-anchor="middle" class="t-reg-sub">no central control logic</text>
+
+  <line x1="472" y1="240" x2="540" y2="146" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+  <line x1="570" y1="240" x2="570" y2="146" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+  <line x1="668" y1="240" x2="600" y2="146" class="arrow-blue" marker-end="url(#m-arr-blue)"/>
+
+  <rect x="440" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="472" y="265" text-anchor="middle" class="t-box-title">Tool</text>
+
+  <rect x="538" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="570" y="265" text-anchor="middle" class="t-box-title">Agent</text>
+
+  <rect x="636" y="241" width="64" height="40" rx="5" class="box"/>
+  <text x="668" y="265" text-anchor="middle" class="t-box-title">Tool</text>
+
+  <text x="570" y="310" text-anchor="middle" class="t-caption">Participants register at runtime.</text>
+  <text x="570" y="326" text-anchor="middle" class="t-caption">Peers find each other through the registry. No central conductor.</text>
+</svg>
+<figcaption>Two architectural approaches in contrast. <strong>Left</strong>: today's agent frameworks place a central orchestrator at the top, with all participants wired in at construction; the orchestrator routes work between them. <strong>Right</strong>: a micro-agents architecture inverts this — participants register themselves into a passive registry at runtime; coordination is decentralized, with peers finding each other through the registry and calling each other directly, with no central component directing the flow.</figcaption>
+</figure>
+
+<p>The contrast with the seven frameworks in the previous section is direct. Each of those binds every participant at construction; a micro-agents architecture lets participants come and go independently. The registry is the only thing they need to know about each other, and — in this article's variant — the only thing the LLM needs to know about them either.</p>
+
+<p>This article describes one specific reference design for that class — and that design has a working open-source reference implementation in <strong>TruvaG3</strong><a class="ref" href="#ref-1">[1]</a>, the framework this article is grounded in. Everything that follows can be cloned, deployed locally, and observed in the live registry-viewer UI. The dynamic registry pattern itself has decades of precedent in service-discovery infrastructure; the novelty here is the role the registry plays at request time. Its current contents are what the LLM sees in its planning prompt, so the LLM picks among capabilities that are dynamically present rather than capabilities that were configured ahead of time.</p>
+</section>
+
+<section>
+<h2>A different shape: the capability registry</h2>
+
+<p>The architecture is built around a single primitive: a capability registry. Every participant — whether a simple tool or a full reasoning agent — publishes the capabilities it offers into a shared index, each identified by name. These capability names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning context, and the LLM picks which capabilities to invoke. If the LLM chooses <code>financial_analysis</code> for a step, the framework dispatches that step to whichever endpoint the registry currently lists for <code>financial_analysis</code>. Whether that endpoint is a deterministic function or an agent running its own plan-act-observe loop is invisible at the dispatch site. (In the reference implementation, the index is backed by Redis<a class="ref" href="#ref-2">[2]</a>, but the choice of backend does not affect the pattern.)</p>
+
+<figure>
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Self-registration. Three participants — weather-tool-v2 (just booted, highlighted), research-agent (running), and currency-tool (running) — independently push register or heartbeat messages up to the capability registry. weather-tool-v2's register arrow is annotated with the payload structure: name, address, capabilities, and TTL. The registry block at the top accumulates entries with each participant's last-heartbeat status. The registry receives but never initiates; it is a passive index that accepts whoever registers.">
+  <defs>
+    <marker id="r-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+    <marker id="r-arr-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7781"/>
+    </marker>
+  </defs>
+  <style>
+    .registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.2; }
+    .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .box-booting { fill: #fff8e6; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-title { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .t-sub { font: 12px -apple-system, sans-serif; fill: #6e7781; }
+    .t-cap { font: 12px "SF Mono", Menlo, Monaco, monospace; fill: #1a1a1a; }
+    .t-state-cap { font: 11px -apple-system, sans-serif; fill: #6e7781; font-style: italic; }
+    .t-box-title { font: 600 11.5px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-box-state { font: italic 10.5px -apple-system, sans-serif; fill: #6e7781; }
+    .t-arrow-action { font: 600 11.5px -apple-system, sans-serif; fill: #0b6cff; }
+    .t-arrow-payload { font: 10.5px "SF Mono", Menlo, Monaco, monospace; fill: #0b6cff; }
+    .t-arrow-label { font: italic 11px -apple-system, sans-serif; fill: #6e7781; }
+    .t-arrow-sub { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .arrow-blue { stroke: #0b6cff; stroke-width: 1.6; fill: none; }
+    .arrow-gray { stroke: #6e7781; stroke-width: 1.2; fill: none; stroke-dasharray: 4,3; }
+  </style>
+
+  <!-- Registry block -->
+  <rect x="20" y="20" width="720" height="140" rx="8" class="registry"/>
+  <text x="380" y="44" text-anchor="middle" class="t-title">Capability Registry</text>
+  <text x="380" y="62" text-anchor="middle" class="t-sub">passive index · accepts whoever registers · entries expire on missed heartbeat</text>
+  <line x1="40" y1="78" x2="720" y2="78" stroke="#d0d7de" stroke-width="1"/>
+
+  <text x="40" y="98" class="t-cap">capabilities:get_current_weather  → weather-tool-v2</text>
+  <text x="720" y="98" text-anchor="end" class="t-state-cap">just registered</text>
+
+  <text x="40" y="118" class="t-cap">capabilities:financial_analysis   → research-agent</text>
+  <text x="720" y="118" text-anchor="end" class="t-state-cap">heartbeat 5s ago</text>
+
+  <text x="40" y="138" class="t-cap">capabilities:convert_currency     → currency-tool</text>
+  <text x="720" y="138" text-anchor="end" class="t-state-cap">heartbeat 9s ago</text>
+
+  <!-- Arrow 1: register from weather-tool-v2 (highlighted action) -->
+  <line x1="145" y1="289" x2="145" y2="161" class="arrow-blue" marker-end="url(#r-arr-blue)"/>
+  <text x="155" y="190" class="t-arrow-action">register</text>
+  <text x="155" y="210" class="t-arrow-payload">{ name,</text>
+  <text x="155" y="224" class="t-arrow-payload">  address,</text>
+  <text x="155" y="238" class="t-arrow-payload">  capabilities,</text>
+  <text x="155" y="252" class="t-arrow-payload">  ttl: 30s }</text>
+
+  <!-- Arrow 2: heartbeat from research-agent -->
+  <line x1="380" y1="289" x2="380" y2="161" class="arrow-gray" marker-end="url(#r-arr-gray)"/>
+  <text x="390" y="218" class="t-arrow-label">heartbeat</text>
+  <text x="390" y="232" class="t-arrow-sub">(every 15s)</text>
+
+  <!-- Arrow 3: heartbeat from currency-tool -->
+  <line x1="615" y1="289" x2="615" y2="161" class="arrow-gray" marker-end="url(#r-arr-gray)"/>
+  <text x="625" y="218" class="t-arrow-label">heartbeat</text>
+  <text x="625" y="232" class="t-arrow-sub">(every 15s)</text>
+
+  <!-- Participants -->
+  <rect x="80" y="290" width="130" height="55" rx="6" class="box-booting"/>
+  <text x="145" y="312" text-anchor="middle" class="t-box-title">weather-tool-v2</text>
+  <text x="145" y="330" text-anchor="middle" class="t-box-state">just booted</text>
+
+  <rect x="315" y="290" width="130" height="55" rx="6" class="box"/>
+  <text x="380" y="312" text-anchor="middle" class="t-box-title">research-agent</text>
+  <text x="380" y="330" text-anchor="middle" class="t-box-state">running</text>
+
+  <rect x="550" y="290" width="130" height="55" rx="6" class="box"/>
+  <text x="615" y="312" text-anchor="middle" class="t-box-title">currency-tool</text>
+  <text x="615" y="330" text-anchor="middle" class="t-box-state">running</text>
+</svg>
+<figcaption>Self-registration: at boot, each participant pushes its own description to the registry — name, address, capabilities, and TTL — and from then on heartbeats every 15 seconds to refresh that 30-second TTL. The registry never initiates; it accepts whoever registers and evicts whoever stops heartbeating. The set of capabilities the LLM sees in any planning prompt is whatever has registered and is currently heartbeating — nothing was preconfigured anywhere.</figcaption>
+</figure>
+
+<p>There are exactly three roles in the architecture:</p>
+
+<table>
+  <thead>
+    <tr><th>Role</th><th>Registers capabilities?</th><th>Discovers peers?</th><th>Has internal orchestrator?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Tool</strong></td><td>Yes</td><td>No</td><td>No — passive HTTP endpoint</td></tr>
+    <tr><td><strong>Agent</strong></td><td>Yes</td><td>Yes</td><td>Yes — drives a plan-act-observe loop</td></tr>
+    <tr><td><strong>Registry</strong></td><td>—</td><td>—</td><td>No — a passive index</td></tr>
+  </tbody>
+</table>
+
+<p>The difference between Tools and Agents matters. A Tool is a capability provider with no autonomy: it answers calls, returns data, and finishes. An Agent is a provider <em>and</em> a consumer: it answers calls, and while serving them it can find other capabilities in the same registry and call them directly. In a statically-typed language, this difference can be enforced at compile time through interface design. In TruvaG3<a class="ref" href="#ref-1">[1]</a> (written in Go), Tools satisfy a <code>Registry</code> interface (register only); Agents satisfy a <code>Discovery</code> interface that includes <code>Registry</code> (register and discover). Tools cannot call discovery methods, because those methods do not exist on their interface. The framework's design notes<a class="ref" href="#ref-3">[3]</a> document the full contract. The separation becomes a property the type system can check before the code runs.</p>
+
+<aside class="callout">
+<strong>Why this matters in practice.</strong> Most frameworks separate tools from agents only by convention or by runtime configuration. A misbehaving tool that starts making discovery calls becomes a debugging problem. With a typed-interface enforcement, like the one in the reference implementation, the same code does not even compile.
+</aside>
+
+<p>The registry itself is intentionally simple. It is a key-value index: capabilities map to service IDs, and service IDs map to addresses. Entries expire after a TTL and are kept alive by heartbeats. The registry does not route messages, throttle calls, or apply policy. It is to this architecture what etcd is to Kubernetes — coordination data, not a coordinator.</p>
+
+<h3>Self-describing capabilities</h3>
+
+<p>A registration carries more than a name. It includes everything a caller needs in order to reach the participant without any external configuration: a network address, a list of capabilities, and — for each capability — a structured description of its inputs and outputs.</p>
+
+<p>The address resolves to the right form for the deployment. In a Kubernetes cluster the framework writes a Service DNS name, so calls to the participant load-balance across replicas through the cluster's own Service. Outside Kubernetes, it writes a plain host and port. Whichever form ends up in the registry is the form callers use; no agent ever carries a hardcoded URL.</p>
+
+<p>What this looks like in the live registry — here is the top-level shape of the entry for <code>weather-tool-v2</code><a class="ref" href="#ref-9">[9]</a>, with the Kubernetes <code>metadata</code> sub-object trimmed for display:</p>
+
+<pre><code>{
+  "id": "weather-tool-v2",
+  "name": "weather-tool-v2",
+  "type": "tool",
+  "address": "weather-tool-v2-service.truvag3-examples.svc.cluster.local",
+  "port": 80,
+  "health": "healthy",
+  "last_seen": "2026-05-07T01:50:18Z",
+  "capabilities": [
+    { "name": "get_current_weather",  "endpoint": "/api/capabilities/get_current_weather"  },
+    { "name": "get_weather_forecast", "endpoint": "/api/capabilities/get_weather_forecast" }
+  ]
+}</code></pre>
+
+<p>The <code>address</code> and <code>port</code> together are what the framework dials. Each capability inside the <code>capabilities</code> array contributes a relative <code>endpoint</code>. Combined, they yield the full URL the executor calls. For <code>get_current_weather</code> in this deployment, that resolves to:</p>
+
+<pre><code>http://weather-tool-v2-service.truvag3-examples.svc.cluster.local:80/api/capabilities/get_current_weather</code></pre>
+
+<p>In a non-Kubernetes deployment, the same record would carry an <code>address</code> like <code>weather-tool.example.com</code> and a <code>port</code> chosen by the deployment — <code>443</code> for an HTTPS-fronted production service, <code>8080</code> for a self-hosted service without TLS. The registry stores the explicit connection target; how the call is wrapped (HTTP, HTTPS, with or without a reverse proxy or service-mesh sidecar) is a deployment concern, not a registry concern. The agent's source code never sees this URL — the framework reads it from the registry at request time and dials.</p>
+
+<p>The capability description itself comes in three layers, each more precise than the last:</p>
+
+<ul>
+  <li><strong>A natural-language description</strong> of what the capability does. This is what the LLM reads when deciding whether the capability is relevant to a request at all.</li>
+  <li><strong>Structured field hints</strong> for inputs and outputs. For each field, the participant declares a name, a type (string, number, boolean, object, array), an example value, and a short description. The hints are precise enough for the LLM to know the input field is called <code>location</code> and not <code>city</code>; that <code>amount</code> should be a number, not a string; and that the response will contain a field called <code>currency.code</code>. The output side serves as a contract — anything that needs to consume this capability's response has a declared shape to work against.</li>
+  <li><strong>An optional full JSON Schema</strong>, served by the participant on a dedicated schema endpoint. Deployments that need stricter validation can opt into this layer; the field-hint level is sufficient for typical production use.</li>
+</ul>
+
+<p>Each capability inside the <code>capabilities</code> array carries those three description layers. Here is <code>get_current_weather</code> in full:</p>
+
+<pre><code>{
+  "name": "get_current_weather",
+  "description": "Gets current weather conditions for a location including temperature, humidity, and wind.",
+  "endpoint": "/api/capabilities/get_current_weather",
+  "input_types": ["json"],
+  "output_types": ["json"],
+  "input_summary": {
+    "required": [
+      {
+        "name": "lat",
+        "type": "number",
+        "description": "Latitude coordinate (-90 to 90)",
+        "example": "40.7128"
+      },
+      {
+        "name": "lon",
+        "type": "number",
+        "description": "Longitude coordinate (-180 to 180)",
+        "example": "-74.0060"
+      }
+    ]
+  }
+}</code></pre>
+
+<p>And here is <code>math_analysis</code>, an external capability served by an Agent — <code>research-agent-telemetry</code><a class="ref" href="#ref-10">[10]</a> — that runs its own internal plan-act-observe loop behind this endpoint:</p>
+
+<pre><code>{
+  "name": "math_analysis",
+  "description": "AI-powered mathematical analysis with step-by-step solutions and verification.",
+  "endpoint": "/api/capabilities/math_analysis",
+  "input_types": ["json", "text"],
+  "output_types": ["json"],
+  "input_summary": {
+    "required": [
+      {
+        "name": "problem",
+        "type": "string",
+        "description": "Mathematical problem to solve (equation, word problem, or data)",
+        "example": "Find the derivative of f(x) = x^3 * ln(x)"
+      }
+    ],
+    "optional": [
+      {
+        "name": "problem_type",
+        "type": "string",
+        "description": "Type: algebraic, calculus, statistical, optimization, probability, numerical, geometry",
+        "example": "calculus"
+      },
+      {
+        "name": "show_steps",
+        "type": "boolean",
+        "description": "Whether to show detailed step-by-step solution (default: true)",
+        "example": "true"
+      }
+    ]
+  }
+}</code></pre>
+
+<p>The two records are structurally identical. A caller looking up either capability sees the same fields in the same shape — name, description, endpoint, input and output types, and the structured field hints. The fact that one is served by a stateless tool and the other by an agent that runs its own internal plan-act-observe loop is invisible at the registry layer. From the LLM's point of view at planning time, a capability is a capability — it picks by what the capability does, not by what kind of process serves it.</p>
+
+<p>The consequence: a participant's registration is enough, on its own, to know how to reach it and what data its capabilities accept and return. There is no separate API documentation that has to be kept in sync, no client SDK with hardcoded signatures, and no version-pinned schema file. How a multi-step plan actually executes against this data — formatting payloads, dispatching, threading values between steps — belongs to the per-agent orchestrator described later in the article.</p>
+
+<h3>What makes the discovery dynamic</h3>
+
+<p>The discovery is dynamic in three senses, each of which matters in production. To be precise about the term: <em>discovery</em> here does not mean the agent's code calling a lookup function. The agent's code does not know any capability names. It is the chain by which the registry's current state reaches the LLM at planning time, and from there reaches the address that handles each step.</p>
+
+<p>The mechanics behind the three properties below — a key-value registry, TTL-based liveness, additive registration — are borrowed from service-discovery patterns that have been used in microservice systems for over a decade. What is distinctive in the micro-agents version of those mechanics is the role they play: the consumer of the registry's contents is not application code with a known target name; it is an LLM choosing from a runtime menu. The plumbing is standard. The mediation is not. This combination is uncommon in agent frameworks, where tools are usually bound to agents at construction time.</p>
+
+<figure>
+<svg viewBox="0 0 760 350" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Three-panel illustration of dynamic discovery over time. Panel A at t equals zero shows weather-tool-v1 newly registered in the capability registry; an agent's lookup for get_current_weather resolves to v1. Panel B at t equals 30 seconds shows weather-tool-v2 also deployed and registered alongside v1; the same lookup now resolves to either v1 or v2. Panel C at t equals 90 seconds shows weather-tool-v1 evicted because its TTL expired after it stopped heartbeating; the lookup now resolves only to v2.">
+  <defs>
+    <marker id="d-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .panel-divider { stroke: #e5e5e5; stroke-width: 1; stroke-dasharray: 3,4; }
+    .registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.2; }
+    .new-entry { fill: #fff8e6; stroke: #d9b35a; stroke-width: 1; }
+    .expired-entry { fill: #f5f5f5; stroke: #d0d0d0; stroke-width: 1; stroke-dasharray: 2,2; }
+    .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .t-time { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .t-subtime { font: 12px -apple-system, sans-serif; fill: #6e7781; }
+    .t-reg-label { font: 600 10px -apple-system, sans-serif; fill: #6e7781; letter-spacing: 0.5px; }
+    .t-cap-name { font: 11px "SF Mono", Menlo, Monaco, monospace; fill: #1a1a1a; }
+    .t-cap-target { font: 11px "SF Mono", Menlo, Monaco, monospace; fill: #1a1a1a; }
+    .t-cap-target-expired { font: 11px "SF Mono", Menlo, Monaco, monospace; fill: #a0a8b0; }
+    .t-tag-new { font: 700 8px -apple-system, sans-serif; fill: #7a5a16; letter-spacing: 0.6px; }
+    .t-tag-expired { font: 700 8px -apple-system, sans-serif; fill: #b00020; letter-spacing: 0.6px; }
+    .t-box-title { font: 600 11px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-box-sub { font: 10px -apple-system, sans-serif; fill: #6e7781; }
+    .t-mini-cap { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .t-arrow-label { font: italic 10px -apple-system, sans-serif; fill: #0b6cff; }
+    .arrow-blue { stroke: #0b6cff; stroke-width: 1.5; fill: none; }
+  </style>
+
+  <!-- =========== PANEL A: t = 0s =========== -->
+
+  <text x="120" y="22" text-anchor="middle" class="t-time">t = 0s</text>
+  <text x="120" y="38" text-anchor="middle" class="t-subtime">v1 deployed</text>
+
+  <rect x="8" y="50" width="224" height="105" rx="6" class="registry"/>
+  <text x="120" y="68" text-anchor="middle" class="t-reg-label">CAPABILITY REGISTRY</text>
+  <line x1="18" y1="76" x2="222" y2="76" stroke="#d0d7de" stroke-width="1"/>
+  <text x="18" y="94" class="t-cap-name">capabilities:get_current_weather</text>
+
+  <rect x="16" y="103" width="208" height="22" rx="3" class="new-entry"/>
+  <text x="22" y="118" class="t-cap-target">→ weather-tool-v1</text>
+  <text x="218" y="118" text-anchor="end" class="t-tag-new">NEW</text>
+
+  <text x="120" y="146" text-anchor="middle" class="t-mini-cap">heartbeat 15s · TTL 30s</text>
+
+  <rect x="20" y="195" width="60" height="42" rx="6" class="box"/>
+  <text x="50" y="214" text-anchor="middle" class="t-box-title">Agent</text>
+  <text x="50" y="228" text-anchor="middle" class="t-box-sub">+ LLM</text>
+
+  <line x1="83" y1="216" x2="155" y2="216" class="arrow-blue" marker-end="url(#d-arr-blue)"/>
+  <text x="119" y="210" text-anchor="middle" class="t-arrow-label">resolves to</text>
+
+  <rect x="160" y="195" width="68" height="42" rx="6" class="box"/>
+  <text x="194" y="214" text-anchor="middle" class="t-box-title">tool-v1</text>
+  <text x="194" y="228" text-anchor="middle" class="t-box-sub">healthy</text>
+
+  <text x="120" y="270" text-anchor="middle" class="t-mini-cap">Agent's code names no tool.</text>
+  <text x="120" y="284" text-anchor="middle" class="t-mini-cap">Catalog → LLM → resolve, all at runtime.</text>
+
+  <line x1="250" y1="50" x2="250" y2="320" class="panel-divider"/>
+
+  <!-- =========== PANEL B: t = 30s =========== -->
+
+  <text x="380" y="22" text-anchor="middle" class="t-time">t = 30s</text>
+  <text x="380" y="38" text-anchor="middle" class="t-subtime">v2 deployed alongside v1</text>
+
+  <rect x="268" y="50" width="224" height="105" rx="6" class="registry"/>
+  <text x="380" y="68" text-anchor="middle" class="t-reg-label">CAPABILITY REGISTRY</text>
+  <line x1="278" y1="76" x2="482" y2="76" stroke="#d0d7de" stroke-width="1"/>
+  <text x="278" y="91" class="t-cap-name">capabilities:get_current_weather</text>
+  <text x="282" y="106" class="t-cap-target">→ weather-tool-v1</text>
+
+  <rect x="276" y="116" width="208" height="22" rx="3" class="new-entry"/>
+  <text x="282" y="131" class="t-cap-target">→ weather-tool-v2</text>
+  <text x="478" y="131" text-anchor="end" class="t-tag-new">NEW</text>
+
+  <text x="380" y="151" text-anchor="middle" class="t-mini-cap">both heartbeating</text>
+
+  <rect x="280" y="195" width="60" height="42" rx="6" class="box"/>
+  <text x="310" y="214" text-anchor="middle" class="t-box-title">Agent</text>
+  <text x="310" y="228" text-anchor="middle" class="t-box-sub">+ LLM</text>
+
+  <line x1="343" y1="208" x2="415" y2="183" class="arrow-blue" marker-end="url(#d-arr-blue)"/>
+  <line x1="343" y1="225" x2="415" y2="249" class="arrow-blue" marker-end="url(#d-arr-blue)"/>
+  <text x="378" y="219" text-anchor="middle" class="t-arrow-label">either</text>
+
+  <rect x="420" y="162" width="68" height="36" rx="6" class="box"/>
+  <text x="454" y="179" text-anchor="middle" class="t-box-title">tool-v1</text>
+  <text x="454" y="191" text-anchor="middle" class="t-box-sub">healthy</text>
+
+  <rect x="420" y="234" width="68" height="36" rx="6" class="box"/>
+  <text x="454" y="251" text-anchor="middle" class="t-box-title">tool-v2</text>
+  <text x="454" y="263" text-anchor="middle" class="t-box-sub">healthy</text>
+
+  <text x="380" y="295" text-anchor="middle" class="t-mini-cap">The LLM may pick either.</text>
+  <text x="380" y="309" text-anchor="middle" class="t-mini-cap">No agent code changed.</text>
+
+  <line x1="510" y1="50" x2="510" y2="320" class="panel-divider"/>
+
+  <!-- =========== PANEL C: t = 90s =========== -->
+
+  <text x="640" y="22" text-anchor="middle" class="t-time">t = 90s</text>
+  <text x="640" y="38" text-anchor="middle" class="t-subtime">v1 stopped heartbeating</text>
+
+  <rect x="528" y="50" width="224" height="105" rx="6" class="registry"/>
+  <text x="640" y="68" text-anchor="middle" class="t-reg-label">CAPABILITY REGISTRY</text>
+  <line x1="538" y1="76" x2="742" y2="76" stroke="#d0d7de" stroke-width="1"/>
+  <text x="538" y="91" class="t-cap-name">capabilities:get_current_weather</text>
+
+  <rect x="536" y="100" width="208" height="22" rx="3" class="expired-entry"/>
+  <text x="542" y="115" class="t-cap-target-expired" text-decoration="line-through">→ weather-tool-v1</text>
+  <text x="738" y="115" text-anchor="end" class="t-tag-expired">TTL EXPIRED</text>
+
+  <text x="542" y="138" class="t-cap-target">→ weather-tool-v2</text>
+
+  <text x="640" y="151" text-anchor="middle" class="t-mini-cap">v2 still heartbeating</text>
+
+  <rect x="540" y="195" width="60" height="42" rx="6" class="box"/>
+  <text x="570" y="214" text-anchor="middle" class="t-box-title">Agent</text>
+  <text x="570" y="228" text-anchor="middle" class="t-box-sub">+ LLM</text>
+
+  <line x1="603" y1="216" x2="675" y2="216" class="arrow-blue" marker-end="url(#d-arr-blue)"/>
+  <text x="639" y="210" text-anchor="middle" class="t-arrow-label">resolves to</text>
+
+  <rect x="680" y="195" width="68" height="42" rx="6" class="box"/>
+  <text x="714" y="214" text-anchor="middle" class="t-box-title">tool-v2</text>
+  <text x="714" y="228" text-anchor="middle" class="t-box-sub">healthy</text>
+
+  <text x="640" y="270" text-anchor="middle" class="t-mini-cap">v1 dropped out within one</text>
+  <text x="640" y="284" text-anchor="middle" class="t-mini-cap">TTL window. Liveness <tspan font-style="italic">is</tspan> the registration.</text>
+
+</svg>
+<figcaption>How the LLM's planning context changes over time. <strong>(A)</strong> A tool deploys and registers; the registry now lists <code>get_current_weather</code> → v1, and that entry appears in the next planning catalog the LLM sees. The agent's source code names no tool — the menu is read fresh from the registry. <strong>(B)</strong> A second version deploys; the same capability is now served by two providers, and the LLM may pick either when planning. <strong>(C)</strong> The first tool stops heartbeating; its registration expires within one TTL window, and only v2 remains in the LLM's catalog going forward. The three panels visualize the three properties described below: a runtime tool list, a live registry, and zero-config additivity.</figcaption>
+</figure>
+
+<p><strong>The tool list is runtime data, not code.</strong> The agent's source names no tool and no capability. The set of capabilities a request can use is not declared anywhere in the agent's code — it is whatever the registry currently advertises. When a request arrives, the framework reads that current state and presents it to the LLM as the planning context. Only at that moment, when the LLM is shown a fresh menu and asked to plan against the user's request, does any specific capability enter the picture. The LLM picks from the menu; the framework then dispatches each chosen step to the address the registry currently lists for it. The same chosen capability, picked again from a later request, can land on a different address if the topology has shifted in between.</p>
+
+<p><strong>A live registry, not a static catalog.</strong> Every participant sends a heartbeat to the registry every 15 seconds, refreshing a 30-second TTL on its entry. If a participant crashes, shuts down, or loses network connectivity, it drops out of the registry within at most one TTL window. What the LLM sees on its next planning prompt is therefore the set of participants currently running and reachable — nothing more, nothing less. There is no separate health-check system; liveness <em>is</em> the registration.</p>
+
+<p><strong>Zero-config additivity.</strong> Deploying a new tool or agent makes its capabilities part of every running agent's planning catalog within one refresh cycle. No agent code changes. No central manifest is updated. No agent needs to be redeployed. The same property holds in reverse: removing a participant is clean — its registrations expire, and the LLM simply stops seeing it as an option. This is the property that separates a live registry from a static dependency graph.</p>
+
+<p>These three properties together — a runtime tool list, TTL-driven liveness, and additive registration — turn a key-value index into something a multi-agent system can be built on. They also make the architecture easy to extend: adding a participant is purely additive, and the system never needs a coordinated redeploy to support a new capability.</p>
+</section>
+
+<section>
+<h2>Two coordination layers</h2>
+
+<p>One way to see the architecture is as a system with two distinct coordination layers, each using a different pattern.</p>
+
+<figure>
+<svg viewBox="0 0 760 520" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Capability registry architecture. A passive Redis-backed registry holds capability-to-service mappings. Below it sit four participants: two Agents (each containing an internal AIOrchestrator running plan, act, observe) and two Tools (passive HTTP endpoints). Agents register and discover; Tools register only.">
+  <defs>
+    <marker id="arr-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7781"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+    .registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+    .orch-inner { fill: #fff8e6; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-title { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .t-sub { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #6e7781; }
+    .t-capability { font: 12px "SF Mono", Menlo, Monaco, monospace; fill: #1a1a1a; }
+    .t-orch { font: 600 12px -apple-system, sans-serif; fill: #7a5a16; }
+    .t-orch-line { font: 11px -apple-system, sans-serif; fill: #7a5a16; }
+    .t-italic { font: italic 12px -apple-system, sans-serif; fill: #6e7781; }
+    .t-legend { font: 12px -apple-system, sans-serif; fill: #6e7781; }
+    .t-rolelabel { font: 11px -apple-system, sans-serif; fill: #6e7781; }
+    .arrow-gray { stroke: #6e7781; stroke-width: 1.5; fill: none; }
+    .arrow-blue { stroke: #0b6cff; stroke-width: 1.5; fill: none; }
+  </style>
+
+  <rect x="40" y="20" width="680" height="140" rx="8" class="registry"/>
+  <text x="380" y="46" text-anchor="middle" class="t-title">Capability Registry (Redis)</text>
+  <text x="380" y="64" text-anchor="middle" class="t-sub">passive index · TTL 30s · heartbeat 15s · no logic, no routing</text>
+  <line x1="80" y1="80" x2="680" y2="80" stroke="#d0d7de" stroke-width="1"/>
+  <text x="80" y="100" class="t-capability">capabilities:financial_analysis</text>
+  <text x="450" y="100" class="t-capability">→ research-agent-telemetry</text>
+  <text x="80" y="118" class="t-capability">capabilities:web_search</text>
+  <text x="450" y="118" class="t-capability">→ web-search-tool</text>
+  <text x="80" y="136" class="t-capability">capabilities:geocode_location</text>
+  <text x="450" y="136" class="t-capability">→ geocoding-tool</text>
+  <text x="80" y="154" class="t-capability">capabilities:devops_operations</text>
+  <text x="450" y="154" class="t-capability">→ devops-chat-agent</text>
+
+  <line x1="105" y1="289" x2="105" y2="161" class="arrow-gray" marker-end="url(#arr-gray)"/>
+  <line x1="155" y1="161" x2="155" y2="289" class="arrow-blue" marker-end="url(#arr-blue)"/>
+  <line x1="270" y1="289" x2="270" y2="161" class="arrow-gray" marker-end="url(#arr-gray)"/>
+  <line x1="320" y1="161" x2="320" y2="289" class="arrow-blue" marker-end="url(#arr-blue)"/>
+  <line x1="470" y1="289" x2="470" y2="161" class="arrow-gray" marker-end="url(#arr-gray)"/>
+  <line x1="630" y1="289" x2="630" y2="161" class="arrow-gray" marker-end="url(#arr-gray)"/>
+
+  <text x="130" y="226" text-anchor="middle" class="t-rolelabel">register + discover</text>
+  <text x="295" y="226" text-anchor="middle" class="t-rolelabel">register + discover</text>
+  <text x="470" y="226" text-anchor="middle" class="t-rolelabel">register only</text>
+  <text x="630" y="226" text-anchor="middle" class="t-rolelabel">register only</text>
+
+  <rect x="55" y="290" width="150" height="170" rx="8" class="box"/>
+  <text x="130" y="316" text-anchor="middle" class="t-title">Agent A</text>
+  <rect x="73" y="338" width="114" height="108" rx="6" class="orch-inner"/>
+  <text x="130" y="361" text-anchor="middle" class="t-orch">AIOrchestrator</text>
+  <text x="130" y="385" text-anchor="middle" class="t-orch-line">plan</text>
+  <text x="130" y="403" text-anchor="middle" class="t-orch-line">→ act</text>
+  <text x="130" y="421" text-anchor="middle" class="t-orch-line">→ observe</text>
+  <text x="130" y="439" text-anchor="middle" class="t-orch-line">↻</text>
+
+  <rect x="220" y="290" width="150" height="170" rx="8" class="box"/>
+  <text x="295" y="316" text-anchor="middle" class="t-title">Agent B</text>
+  <rect x="238" y="338" width="114" height="108" rx="6" class="orch-inner"/>
+  <text x="295" y="361" text-anchor="middle" class="t-orch">AIOrchestrator</text>
+  <text x="295" y="385" text-anchor="middle" class="t-orch-line">plan</text>
+  <text x="295" y="403" text-anchor="middle" class="t-orch-line">→ act</text>
+  <text x="295" y="421" text-anchor="middle" class="t-orch-line">→ observe</text>
+  <text x="295" y="439" text-anchor="middle" class="t-orch-line">↻</text>
+
+  <rect x="400" y="290" width="140" height="130" rx="8" class="box"/>
+  <text x="470" y="316" text-anchor="middle" class="t-title">Tool 1</text>
+  <text x="470" y="358" text-anchor="middle" class="t-italic">passive</text>
+  <text x="470" y="378" text-anchor="middle" class="t-italic">HTTP endpoint</text>
+  <text x="470" y="402" text-anchor="middle" class="t-orch-line" style="fill:#6e7781;">no orchestrator</text>
+
+  <rect x="560" y="290" width="140" height="130" rx="8" class="box"/>
+  <text x="630" y="316" text-anchor="middle" class="t-title">Tool 2</text>
+  <text x="630" y="358" text-anchor="middle" class="t-italic">passive</text>
+  <text x="630" y="378" text-anchor="middle" class="t-italic">HTTP endpoint</text>
+  <text x="630" y="402" text-anchor="middle" class="t-orch-line" style="fill:#6e7781;">no orchestrator</text>
+
+  <g transform="translate(0, 495)">
+    <line x1="240" y1="0" x2="280" y2="0" class="arrow-gray" marker-end="url(#arr-gray)"/>
+    <text x="288" y="4" class="t-legend">register</text>
+    <line x1="400" y1="0" x2="440" y2="0" class="arrow-blue" marker-end="url(#arr-blue)"/>
+    <text x="448" y="4" class="t-legend">discover</text>
+  </g>
+</svg>
+<figcaption>Tools and Agents are peers in one capability registry. Agents both register and discover; Tools only register. The asymmetry — that Agents carry an internal orchestrator and may call back to other registered peers — sits inside each Agent and is enforced at compile time.</figcaption>
+</figure>
+
+<h3>Inside an agent: orchestration</h3>
+<p>Each Agent has its own per-request orchestrator. When a request arrives, the orchestrator hands the LLM its current capability catalog (kept in sync with the registry), asks for a plan, then executes the plan step by step with parallelism where possible — resolving each capability to a concrete endpoint at execution time, handling retries and parameter resolution, and synthesizing the final response. This is orchestration in the traditional sense: one conductor directing a sequence of steps against a known plan. It is the right pattern for a single agent's reasoning loop, where global state is needed.</p>
+
+<figure>
+<svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Inside one agent's process. A single Agent box with an amber-bordered frame contains three phase boxes connected by amber arrows. PHASE 1 Plan: a single LLM call against the live capability catalog, output is a DAG of steps. PHASE 2 Execute steps: for each step, resolve capability, make HTTP call, gather response; runs in DAG order with parallelism where possible. PHASE 3 Synthesize: assemble all step outputs into a final response for the user. A solid amber loop-back arrow curves from the bottom of Execute back to the bottom of Plan, labeled 'iterative re-plan, if needed', indicating that the orchestrator can loop from execute back to plan when the LLM decides during execution that additional planning is required. The amber framing throughout indicates that the AIOrchestrator is the single conductor driving the entire flow inside this one process.">
+  <defs>
+    <marker id="oa-arr-orch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d9b35a"/>
+    </marker>
+  </defs>
+  <style>
+    .agent-frame { fill: #fffefb; stroke: #d9b35a; stroke-width: 2; }
+    .phase-box { fill: #ffffff; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-title-oa { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .t-orch-label { font: italic 12px -apple-system, sans-serif; fill: #7a5a16; }
+    .t-phase-num { font: 700 10px -apple-system, sans-serif; fill: #d9b35a; letter-spacing: 0.6px; }
+    .t-phase { font: 600 13px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-sub-oa { font: 11px -apple-system, sans-serif; fill: #6e7781; }
+    .t-loop { font: italic 11px -apple-system, sans-serif; fill: #7a5a16; }
+    .arrow-orch { stroke: #d9b35a; stroke-width: 1.8; fill: none; }
+    .arrow-orch-loop { stroke: #d9b35a; stroke-width: 1.5; fill: none; }
+  </style>
+
+  <rect x="40" y="20" width="680" height="245" rx="8" class="agent-frame"/>
+  <text x="60" y="44" class="t-title-oa">Agent (one process)</text>
+  <text x="200" y="44" class="t-orch-label">— AIOrchestrator drives the flow</text>
+
+  <rect x="80" y="80" width="170" height="120" rx="6" class="phase-box"/>
+  <text x="165" y="100" text-anchor="middle" class="t-phase-num">PHASE 1</text>
+  <text x="165" y="120" text-anchor="middle" class="t-phase">Plan</text>
+  <text x="165" y="144" text-anchor="middle" class="t-sub-oa">Single LLM call against</text>
+  <text x="165" y="158" text-anchor="middle" class="t-sub-oa">the live capability catalog.</text>
+  <text x="165" y="184" text-anchor="middle" class="t-sub-oa">Output: a DAG of steps.</text>
+
+  <rect x="290" y="80" width="180" height="120" rx="6" class="phase-box"/>
+  <text x="380" y="100" text-anchor="middle" class="t-phase-num">PHASE 2</text>
+  <text x="380" y="120" text-anchor="middle" class="t-phase">Execute steps</text>
+  <text x="380" y="144" text-anchor="middle" class="t-sub-oa">For each step: resolve</text>
+  <text x="380" y="158" text-anchor="middle" class="t-sub-oa">capability → HTTP call →</text>
+  <text x="380" y="172" text-anchor="middle" class="t-sub-oa">response. Run in DAG order,</text>
+  <text x="380" y="186" text-anchor="middle" class="t-sub-oa">with parallelism where possible.</text>
+
+  <rect x="510" y="80" width="170" height="120" rx="6" class="phase-box"/>
+  <text x="595" y="100" text-anchor="middle" class="t-phase-num">PHASE 3</text>
+  <text x="595" y="120" text-anchor="middle" class="t-phase">Synthesize</text>
+  <text x="595" y="144" text-anchor="middle" class="t-sub-oa">Assemble step outputs</text>
+  <text x="595" y="158" text-anchor="middle" class="t-sub-oa">into a final response</text>
+  <text x="595" y="172" text-anchor="middle" class="t-sub-oa">for the user.</text>
+
+  <line x1="250" y1="140" x2="290" y2="140" class="arrow-orch" marker-end="url(#oa-arr-orch)"/>
+  <line x1="470" y1="140" x2="510" y2="140" class="arrow-orch" marker-end="url(#oa-arr-orch)"/>
+
+  <path d="M 380 200 C 380 240 165 240 165 215 L 165 200" class="arrow-orch-loop" marker-end="url(#oa-arr-orch)"/>
+  <text x="272" y="252" text-anchor="middle" class="t-loop">iterative re-plan, if needed</text>
+</svg>
+<figcaption><strong>Inside an agent: orchestration.</strong> A single AIOrchestrator inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop from execute back to plan when the LLM decides partway through that further planning is needed. One conductor; one process.</figcaption>
+</figure>
+
+<h3>Between participants: decentralized coordination</h3>
+<p>Between participants, no such conductor exists. Each Agent runs its own orchestrator on its own. When one Agent needs a capability that another participant exposes, it asks the registry, gets an address, and calls the endpoint directly over HTTP. The receiving participant — Tool or Agent — handles the call on its own terms. Nothing in the middle routes, sequences, or coordinates. This is decentralized coordination: peers acting on a shared protocol (the capability contract) rather than being directed by a controller.</p>
+
+<figure>
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Between participants. A Capability Registry box at the top is connected by thin dashed gray lines down to four participants below — Agent A and Agent C on the outside (each containing a small inner AIOrchestrator showing plan, act, observe, and a loop), and Tool B and Tool D between them (passive endpoints with no orchestrator). A thick blue arrow labelled 'user query' enters Agent A from outside the diagram on the left, indicating that Agent A is the entry point for the request. From there, thick blue arrows show direct peer-to-peer HTTP calls between participants: Agent A to Tool B, Agent C to Tool D, and Agent A curving downward to Agent C beneath the others. There is no central process between the participants; each one runs its own loop and reaches its peers directly.">
+  <defs>
+    <marker id="bp-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .bp-registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-agent-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-tool-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-orch-inner { fill: #fff8e6; stroke: #d9b35a; stroke-width: 1; }
+    .bp-t-title { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .bp-t-sub { font: 10.5px -apple-system, sans-serif; fill: #6e7781; }
+    .bp-t-orch { font: 600 11px -apple-system, sans-serif; fill: #7a5a16; }
+    .bp-t-orch-line { font: 10px -apple-system, sans-serif; fill: #7a5a16; }
+    .bp-t-arrow-blue { font: 600 11px -apple-system, sans-serif; fill: #0b6cff; }
+    .bp-t-arrow-gray { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .bp-arrow-blue-thick { stroke: #0b6cff; stroke-width: 1.8; fill: none; }
+    .bp-arrow-gray-thin { stroke: #b8bcc2; stroke-width: 1; fill: none; stroke-dasharray: 3,3; }
+  </style>
+
+  <rect x="320" y="20" width="200" height="50" rx="6" class="bp-registry"/>
+  <text x="420" y="40" text-anchor="middle" class="bp-t-title">Capability Registry</text>
+  <text x="420" y="58" text-anchor="middle" class="bp-t-sub">passive index · register and discover</text>
+
+  <rect x="70" y="130" width="150" height="130" rx="6" class="bp-agent-box"/>
+  <text x="145" y="152" text-anchor="middle" class="bp-t-title">Agent A</text>
+  <rect x="80" y="170" width="130" height="78" rx="4" class="bp-orch-inner"/>
+  <text x="145" y="190" text-anchor="middle" class="bp-t-orch">AIOrchestrator</text>
+  <text x="145" y="210" text-anchor="middle" class="bp-t-orch-line">plan → act</text>
+  <text x="145" y="226" text-anchor="middle" class="bp-t-orch-line">→ observe ↻</text>
+
+  <rect x="280" y="160" width="110" height="80" rx="6" class="bp-tool-box"/>
+  <text x="335" y="182" text-anchor="middle" class="bp-t-title">Tool B</text>
+  <text x="335" y="205" text-anchor="middle" class="bp-t-sub">passive endpoint</text>
+  <text x="335" y="220" text-anchor="middle" class="bp-t-sub">no orchestrator</text>
+
+  <rect x="425" y="130" width="150" height="130" rx="6" class="bp-agent-box"/>
+  <text x="500" y="152" text-anchor="middle" class="bp-t-title">Agent C</text>
+  <rect x="435" y="170" width="130" height="78" rx="4" class="bp-orch-inner"/>
+  <text x="500" y="190" text-anchor="middle" class="bp-t-orch">AIOrchestrator</text>
+  <text x="500" y="210" text-anchor="middle" class="bp-t-orch-line">plan → act</text>
+  <text x="500" y="226" text-anchor="middle" class="bp-t-orch-line">→ observe ↻</text>
+
+  <rect x="635" y="160" width="110" height="80" rx="6" class="bp-tool-box"/>
+  <text x="690" y="182" text-anchor="middle" class="bp-t-title">Tool D</text>
+  <text x="690" y="205" text-anchor="middle" class="bp-t-sub">passive endpoint</text>
+  <text x="690" y="220" text-anchor="middle" class="bp-t-sub">no orchestrator</text>
+
+  <line x1="145" y1="130" x2="370" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="335" y1="160" x2="400" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="500" y1="130" x2="440" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="690" y1="160" x2="470" y2="70" class="bp-arrow-gray-thin"/>
+
+  <text x="420" y="100" text-anchor="middle" class="bp-t-arrow-gray">register / discover</text>
+
+  <line x1="8" y1="200" x2="68" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="38" y="194" text-anchor="middle" class="bp-t-arrow-blue">user query</text>
+
+  <line x1="220" y1="200" x2="278" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="250" y="194" text-anchor="middle" class="bp-t-arrow-blue">HTTP</text>
+
+  <line x1="575" y1="200" x2="633" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="605" y="194" text-anchor="middle" class="bp-t-arrow-blue">HTTP</text>
+
+  <path d="M 220 260 C 285 318 360 318 425 260" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="322" y="313" text-anchor="middle" class="bp-t-arrow-blue">HTTP (Agent → Agent)</text>
+</svg>
+<figcaption><strong>Between participants: decentralized coordination.</strong> Agent A receives the user query (the inbound blue arrow on the left) and becomes the request initiator. From there, each participant runs independently. The dashed lines up to the registry carry registration and discovery; the blue arrows between participants carry the actual HTTP calls. There is no process in the middle that coordinates the calls — peers act on the shared protocol, the capability contract, and call each other directly.</figcaption>
+</figure>
+
+<p>The microservices analogy is exact. A microservice has step-by-step business logic on the inside (orchestration) and interacts with peers through service discovery and direct calls (decentralized coordination). The architecture applies the same shape to multi-agent systems: orchestration inside each agent, decentralized coordination between agents and tools. In the reference implementation, the per-agent orchestrator lives in the <code>orchestration/</code> package<a class="ref" href="#ref-4">[4]</a>; the inter-agent call layer lives in <code>core/</code><a class="ref" href="#ref-2">[2]</a>.</p>
+</section>
+
+<section>
+<h2>One execution, examined</h2>
+
+<p>The clearest way to understand an architecture is to look at a real run. Below is one captured execution from the reference implementation, in response to a single user query:</p>
+
+<blockquote><em>"Find out the top 3 destinations for tourists in Switzerland, by popularity, and give me their weather right now and a good place to stay at each of those locations."</em></blockquote>
+
+<p>The agent that received this query — <code>travel-chat-agent</code><a class="ref" href="#ref-12">[12]</a> — is one Agent, the kind described in this article. The query is interesting because the agent cannot plan the full response upfront: it does not know the three top destinations until it has actually performed the web search. Its orchestrator therefore runs the request in <strong>three phases</strong>, returning to plan twice as new information becomes available — directly exercising the loop-back arrow shown in the orchestration diagram earlier in the article.</p>
+
+<figure>
+<img src="switzerland-execution-dag.png" alt="Execution DAG for the Switzerland query, captured from the registry viewer. The diagram is laid out vertically and shows three distinct phases. Top: a Planning node feeds a single web-search-tool call. Then a 'Phase 1 → 2' transition node, followed by a Tier Select node, followed by a Phase Plan node, which branches into three parallel geocoding-tool calls. Then a 'Phase 2 → 3' transition node, followed by another Tier Select and Phase Plan, which branches into six parallel calls — three weather-tool-v2 calls and three hotel-tool calls. All ten tool steps converge into a Synthesis (Stream) node at the bottom. The phase boundaries are visually distinct." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
+<figcaption>Three-phase execution captured from the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. <strong>Phase 1</strong> plans a single web search; the LLM cannot plan further until it knows the destinations. <strong>Phase 2</strong> — generated after Phase 1's results return — plans three parallel geocoding calls (one per destination: Zurich, Zermatt, Interlaken). <strong>Phase 3</strong> — generated after Phase 2's coordinates return — plans six parallel calls (weather and hotel for each destination). Total wall time: 29 seconds. Maximum parallelism: six.</figcaption>
+</figure>
+
+<p>What this run demonstrates about the micro-agents architecture in action:</p>
+
+<ul>
+  <li><strong>The plan referred to capabilities, not addresses.</strong> Each step named a capability — <code>web_search</code>, <code>geocode_location</code>, <code>get_current_weather</code>, <code>find_hotel</code> — never a URL or hostname. The framework resolved each name to a concrete endpoint at execution time by reading the live registry.</li>
+  <li><strong>Dependencies were data-driven, not configured.</strong> Independent steps ran in parallel within each phase (three geocodings together; six weather-and-hotel calls together); cross-phase steps waited for upstream output. The structure was produced by the LLM planning against the catalog, not by a hand-wired routing graph somewhere.</li>
+  <li><strong>Participants were not bound to the agent at construction.</strong> Each Tool registered independently from its own deployment. <code>travel-chat-agent</code> learned of them only because they were currently in the catalog when this request arrived. A tool deployed five minutes earlier would have been just as eligible.</li>
+  <li><strong>Cross-step data flow used registered field schemas.</strong> The destination names from <code>web_search</code>'s response flowed into the geocoding inputs; the latitude and longitude outputs of geocoding flowed into the weather inputs — all via the output field hints each capability had published in its registration. No separate data-pipeline definition was required for any of it.</li>
+  <li><strong>The orchestrator iterated when the LLM could not plan everything upfront.</strong> The agent did not — and could not — plan steps 2 through 10 at the start. It produced a one-step plan for Phase 1 ("search the web"), executed it, then planned Phase 2 from the results, executed that, then planned Phase 3. Each phase boundary in the DAG is the loop-back arrow from the orchestration diagram firing in practice. The trace's plan records make this explicit: Phase 1's plan carries <code>"terminal": false</code> with the continuation note <em>"Please continue after retrieving the destination names."</em></li>
+</ul>
+
+<aside class="callout">
+<strong>What the trace does not show.</strong> Every callee in this run is a Tool. In another run — say, a research query — the same orchestrator would call an Agent's published capability (such as <code>financial_analysis</code> served by <code>research-agent-telemetry</code>) through the same registry lookup and HTTP call. The DAG would look the same. Whether a participant is a Tool or an Agent is invisible at the call site.
+</aside>
+</section>
+
+<section>
+<h2>What this unlocks</h2>
+
+<p>Two architectural properties fall out of this design — properties that are hard to get when participants are wired statically.</p>
+
+<p><strong>Tools and Agents compose interchangeably.</strong> Because the call site does not distinguish between them, a deployment can swap a tool for an agent that exposes the same capability without callers changing. A capability that begins as a deterministic tool (a small service with an HTTP handler) can later be replaced by a reasoning-driven agent that performs its own internal work before responding — under the same capability name. Callers continue to look it up by name and continue to receive structured responses against the same schema. The promotion is a deployment change, not an architectural one.</p>
+
+<p><strong>Adding a participant requires no central change.</strong> Drop a new participant into the deployment. It registers itself, advertises its capabilities, and is immediately discoverable. No orchestrator graph needs editing, no routing table needs updating, no central deployment needs redeploying. Within the registry's normal propagation window, the new participant is visible to every existing caller — and can be invoked by them without any change to their own code or configuration. This is the operational property that service-discovery infrastructure gives to ordinary microservices, carried over to the micro-agents domain.</p>
+
+<p>Some practical consequences (illustrated against a Kubernetes deployment, since that's the most common production setup):</p>
+
+<ul>
+  <li><strong>Heterogeneous, multi-team deployments.</strong> Different teams can publish their own tools and agents to the same registry — their participants live in their own namespaces, follow their own release cadence, and are owned by their own on-call rotations. A team that adds a new "compliance-check" capability can have it consumed by every existing agent without filing a ticket or coordinating a release. Cross-team discovery is the default, not the exception.</li>
+  <li><strong>Horizontal scaling is the standard kind.</strong> A heavily-used tool is just a Deployment whose replicas sit behind a Service. The Service DNS is what the registry holds, and the cluster's own Service load-balances calls across the replicas. The same HPA you use for any other workload scales it; the same rolling-update mechanics handle versioned releases. The architecture doesn't need to know how many replicas exist — the Service does.</li>
+  <li><strong>Cross-deployment composition.</strong> A capability published from one Kubernetes namespace, cluster, or team can be discovered and called from another, as long as the registry is reachable across both. The architecture imposes no notion of a "primary" cluster or a central control point; participants form a flat name space addressable by capability.</li>
+  <li><strong>No specialized orchestration control plane.</strong> A micro-agents deployment uses the same infrastructure you already run microservices on — Deployments, Services, a key-value store for the registry (Redis, etcd, Consul, or any equivalent), the cluster's existing observability stack, optional service-mesh sidecars for mTLS or traffic policy. There is no proprietary orchestrator process, no vendor-specific workflow engine, and no dedicated control plane to license, scale, or operate separately. Standard <code>kubectl</code>, HPA, rollouts, and existing telemetry pipelines handle these participants the same way they handle any other service.</li>
+  <li><strong>Failure isolation matches your existing model.</strong> A misbehaving participant is recovered the same way any pod is — readiness probes, restart policies, PDBs, the cluster's autoscaler. The registry's TTL evicts unreachable entries automatically, so dead participants stop being routed to without any cleanup step. There is no global state to repair, no cross-participant lock to release, and no orchestrator process whose failure cascades into everything else.</li>
+</ul>
+</section>
+
+<section>
+<h2>The trade-offs you should know</h2>
+
+<p>An honest description should also name what you give up.</p>
+
+<p><strong>No global execution view, by default.</strong> Without a central conductor, no single component knows the full state of all in-flight work. Operations and debugging rely on the same distributed-tracing infrastructure that microservice systems use — trace IDs propagated through calls, spans collected per participant, and end-to-end views reassembled from a trace store. This is well-understood and works well in practice, but the absence of a built-in global view is real: there is no point inside the architecture from which to ask <em>"what is happening everywhere right now?"</em></p>
+
+<p><strong>Cross-participant sequencing is harder.</strong> If you need an explicit, system-wide workflow that spans multiple agents and tools — sequenced from a single source of truth, with explicit failure handling and compensations — the decentralized pattern does not give it to you for free. You will need to reintroduce orchestration at the inter-agent layer in whatever form suits the use case: a coordinating agent that drives the others, an external workflow engine, or an event-driven saga with explicit orchestration. The decentralized model handles "each agent can serve and call peers" well; it does not handle "this multi-step process must run in this exact order, with these compensations on failure" — that is a different problem requiring a different shape, and decentralized coordination is not always the right answer.</p>
+
+<p><strong>The registry is a shared dependency.</strong> Agents and tools can keep serving in-flight requests without the registry, but new discoveries cannot resolve while it is down. The architecture moves the single point of failure from a central orchestrator process to a passive data store — a trade-off common to most service-discovery designs.</p>
+</section>
+
+<section>
+<h2>Run it yourself</h2>
+
+<p>The reference implementation, TruvaG3<a class="ref" href="#ref-1">[1]</a>, is open source. Step-by-step setup instructions for the local-Kubernetes deployment — Redis, the registry-viewer web app, and the bundled example tools and agents<a class="ref" href="#ref-5">[5]</a> — are in the project's Getting Started guide<a class="ref" href="#ref-14">[14]</a>. The full deployment runs on a laptop in a kind cluster.</p>
+
+<p>The Switzerland query in the previous section is one such captured trace. The DAG screenshot shown earlier is a direct capture of the registry viewer's <em>Execution DAG</em> tab for that exact run. The phase transitions, the dependency arrows, the timing annotations — all are produced by the framework, and all are inspectable in the running cluster. Nothing in this article is theoretical.</p>
+</section>
+
+<section>
+<h2>Conclusion</h2>
+
+<p>At the scale of an enterprise agentic platform — many teams, many tools and agents, many independent release cadences — the architecture described in this article is the shape that holds up. Dynamic capability discovery, uniform peers, a passive registry, orchestration inside each agent, and decentralized coordination between participants: this combination lets specialized teams own their own participants, ship them on their own schedules, and have their work composed into every other team's agents without coordinated releases or central registration steps. The runtime mechanics ride on infrastructure most organizations already operate — service discovery, load balancing, observability, rolling releases — not on a proprietary orchestration product whose failure modes, scaling characteristics, and cost ceilings become operational concerns of their own.</p>
+
+<p>The mechanics themselves are not new; they borrow from decades of service-discovery practice in distributed systems<a class="ref" href="#ref-11">[11]</a>. What is new is the consumer of the registry's contents — an LLM at planning time, choosing capabilities from a runtime menu rather than a compile-time list. The plumbing is standard. The mediation is not.</p>
+</section>
+
+<section>
+<h2>References</h2>
+<ol class="references">
+  <li id="ref-1"><strong>TruvaG3 — repository.</strong> Open-source reference implementation of the architecture described in this article. <a href="https://github.com/truvaagents/truva-g3">https://github.com/truvaagents/truva-g3</a></li>
+  <li id="ref-2"><strong>TruvaG3 — <code>core/</code> package.</strong> Capability registry, discovery interfaces, and the inter-agent call layer. <a href="https://github.com/truvaagents/truva-g3/tree/main/core">https://github.com/truvaagents/truva-g3/tree/main/core</a></li>
+  <li id="ref-3"><strong>TruvaG3 — <code>FRAMEWORK_DESIGN_PRINCIPLES.md</code>.</strong> The Tool/Agent boundary contract and the rationale behind the typed-interface separation. <a href="https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md">https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md</a></li>
+  <li id="ref-4"><strong>TruvaG3 — <code>orchestration/</code> package.</strong> The per-agent orchestrator (plan, act, observe, synthesize) and its supporting components. <a href="https://github.com/truvaagents/truva-g3/tree/main/orchestration">https://github.com/truvaagents/truva-g3/tree/main/orchestration</a></li>
+  <li id="ref-5"><strong>TruvaG3 — <code>examples/</code> directory.</strong> Sample tools, agents, and end-to-end deployments, including the chat agents used in the walkthrough. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">https://github.com/truvaagents/truva-g3/tree/main/examples</a></li>
+  <li id="ref-6"><strong>Microsoft. <em>Multi-Agent Reference Architecture</em>.</strong> The phrase <em>"Dynamic Agent Registry (Service Mesh for Agents)"</em> quoted in this article appears under the <strong>Patterns</strong> section as item #2 in the list of foundational patterns. URL: <a href="https://microsoft.github.io/multi-agent-reference-architecture/docs/reference-architecture/Reference-Architecture.html">https://microsoft.github.io/multi-agent-reference-architecture/docs/reference-architecture/Reference-Architecture.html</a></li>
+  <li id="ref-7"><strong>Alibaba Cloud. <em>Configuration-Driven Dynamic Agent Architecture Network: Achieving Efficient Orchestration, Dynamic Updates, and Intelligent Governance</em>.</strong> The location-transparency quote — <em>"Agents do not directly hold each other's physical addresses (IP/Port) but query the Agent Registry and use each other's logical names (agentName) to obtain access endpoints. This achieves complete decoupling with location transparency."</em> — appears under <strong>Core Design at the Architectural Level: Peer Collaboration and Decoupling</strong>, in the subsection on A2A Protocol design principles. URL: <a href="https://www.alibabacloud.com/blog/configuration-driven-dynamic-agent-architecture-network-achieving-efficient-orchestration-dynamic-updates-and-intelligent-governance_602564">https://www.alibabacloud.com/blog/configuration-driven-dynamic-agent-architecture-network-achieving-efficient-orchestration-dynamic-updates-and-intelligent-governance_602564</a></li>
+  <li id="ref-8"><strong>Tadepalli, R. <em>Micro and macro agents: The emerging architecture of the agentic enterprise</em>. CIO, April 14, 2026.</strong> Defines <em>micro agents</em> as "specialized AI systems designed to perform narrow, well-defined tasks within a workflow" (under the section <strong>The rise of micro agents</strong>) and <em>macro agents</em> as components that "coordinate multiple micro agents to complete an end-to-end business process" (under <strong>The emergence of macro agents</strong>). URL: <a href="https://www.cio.com/article/4157977/micro-and-macro-agents-the-emerging-architecture-of-the-agentic-enterprise.html">https://www.cio.com/article/4157977/micro-and-macro-agents-the-emerging-architecture-of-the-agentic-enterprise.html</a></li>
+  <li id="ref-9"><strong>TruvaG3 — <code>examples/weather-tool-v2/</code>.</strong> Source code for the Tool whose registration produces the <code>get_current_weather</code> capability shown in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2">https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2</a></li>
+  <li id="ref-10"><strong>TruvaG3 — <code>examples/agent-with-telemetry/</code>.</strong> Source code for the Agent that registers as <code>research-agent-telemetry</code> and exposes <code>math_analysis</code> and other external capabilities shown in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry">https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry</a></li>
+  <li id="ref-11"><strong>Lewis, J. &amp; Fowler, M. <em>Microservices</em>. martinfowler.com, 25 March 2014.</strong> The seminal article in which the microservices community articulated the migration away from centralized integration infrastructure. ESB products, the authors note, "often include sophisticated facilities for message routing, choreography, transformation, and applying business rules"; "the microservice community favours an alternative approach: smart endpoints and dumb pipes." Services in the new pattern are "choreographed using simple RESTish protocols rather than complex protocols such as WS-Choreography or BPEL or orchestration by a central tool." URL: <a href="https://martinfowler.com/articles/microservices.html">https://martinfowler.com/articles/microservices.html</a></li>
+  <li id="ref-12"><strong>TruvaG3 — <code>examples/travel-chat-agent/</code>.</strong> Source code for the Agent that registers as <code>travel-chat-agent</code> — the agent whose Switzerland-query execution is the basis for the trace walkthrough in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent</a></li>
+  <li id="ref-13"><strong>TruvaG3 — <code>examples/registry-viewer-app/</code>.</strong> Source code for the registry-viewer web app that captured the Switzerland-query DAG screenshot shown in this article. The same UI shows registered services, their capabilities, and live execution DAGs at <code>http://registry.localhost/</code> when the bundled local-Kubernetes setup is running. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app">https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app</a></li>
+  <li id="ref-14"><strong>TruvaG3 — <code>GETTING_STARTED.md</code>.</strong> Step-by-step setup guide for the local-Kubernetes deployment of TruvaG3, covering the kind cluster, Redis, the registry-viewer web app, and the bundled example tools and agents. <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md</a></li>
+</ol>
+</section>
+
+<p class="footer-note">The reference implementation referenced throughout — TruvaG3<a class="ref" href="#ref-1">[1]</a> — is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
+
+</article>
+
+</body>
+</html>
