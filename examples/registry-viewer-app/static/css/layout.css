@@ -271,11 +271,26 @@ tbody tr.selected {
     border-left: 3px solid var(--accent-blue);
 }
 
+/* Base type badge.
+ *
+ * Two ways a badge can pick up its color:
+ *   1. The element sets `--badge-rgb` / `--badge-color` inline (preferred,
+ *      driven by the LLM-type registry — see static/js/llm-types.js and
+ *      the `_badgeStyle` helper in static/js/views/llm-debug.js).
+ *   2. A more-specific class rule below sets background/color/border
+ *      explicitly (used by non-LLM badges: .tool, .agent).
+ *
+ * The 136,136,136 / #888 fallbacks make the rule safe for any `.type-badge`
+ * that does not set the variables (e.g. legacy callers, registry/agent
+ * badges in views/registry.js). */
 .type-badge {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 5px 12px; border-radius: 20px;
     font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.5px;
+    background: rgba(var(--badge-rgb, 136, 136, 136), 0.15);
+    color: var(--badge-color, #888);
+    border: 1px solid rgba(var(--badge-rgb, 136, 136, 136), 0.3);
 }
 .interaction-card .type-badge {
     justify-content: center;
@@ -292,71 +307,11 @@ tbody tr.selected {
     color: var(--accent-purple);
     border: 1px solid rgba(218, 143, 255, 0.3);
 }
-.type-badge.plan_generation {
-    background: rgba(50, 215, 75, 0.2);
-    color: var(--accent-green);
-    border: 1px solid rgba(50, 215, 75, 0.3);
-}
-.type-badge.tiered_selection {
-    background: rgba(255, 179, 64, 0.2);
-    color: var(--accent-orange);
-    border: 1px solid rgba(255, 179, 64, 0.3);
-}
-.type-badge.synthesis {
-    background: rgba(218, 143, 255, 0.2);
-    color: var(--accent-purple);
-    border: 1px solid rgba(218, 143, 255, 0.3);
-}
-.type-badge.synthesis_streaming {
-    background: rgba(218, 143, 255, 0.2);
-    color: var(--accent-purple);
-    border: 1px solid rgba(218, 143, 255, 0.3);
-}
-.type-badge.micro_resolution {
-    background: rgba(100, 210, 255, 0.2);
-    color: var(--accent-teal);
-    border: 1px solid rgba(100, 210, 255, 0.3);
-}
-.type-badge.correction {
-    background: rgba(255, 179, 64, 0.2);
-    color: var(--accent-orange);
-    border: 1px solid rgba(255, 179, 64, 0.3);
-}
-.type-badge.semantic_retry {
-    background: rgba(255, 110, 180, 0.2);
-    color: var(--accent-pink);
-    border: 1px solid rgba(255, 110, 180, 0.3);
-}
-.type-badge.agent_llm_call {
-    background: rgba(160, 100, 240, 0.15);
-    color: #a064f0;
-    border: 1px solid rgba(160, 100, 240, 0.3);
-}
-.type-badge.hallucination_detection {
-    background: rgba(255, 80, 80, 0.15);
-    color: #ff5050;
-    border: 1px solid rgba(255, 80, 80, 0.3);
-}
-.type-badge.continuation_plan_generation {
-    background: rgba(50, 215, 75, 0.15);
-    color: var(--accent-green);
-    border: 1px solid rgba(50, 215, 75, 0.3);
-}
-.type-badge.continuation_plan_regeneration {
-    background: rgba(255, 140, 50, 0.15);
-    color: #ff8c32;
-    border: 1px solid rgba(255, 140, 50, 0.3);
-}
-.type-badge.error_analysis {
-    background: rgba(255, 107, 107, 0.15);
-    color: var(--accent-red);
-    border: 1px solid rgba(255, 107, 107, 0.3);
-}
-.type-badge.result_distillation {
-    background: rgba(130, 90, 220, 0.15);
-    color: #8250dc;
-    border: 1px solid rgba(130, 90, 220, 0.3);
-}
+/* Per-LLM-type `.type-badge.<llm-type>` rules removed — they were keeping
+ * 13 LLM types in sync by hand across CSS, dag.js, llm-debug.js, and
+ * card.js. LLM badges now read their colors from inline `--badge-rgb` /
+ * `--badge-color` custom properties set by the renderer from the
+ * LLM-type registry (static/js/llm-types.js). */
 .source-badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 10px; border-radius: 12px;

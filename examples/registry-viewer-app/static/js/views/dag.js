@@ -22,6 +22,12 @@ import {
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
+import {
+    getLLMType,
+    isPlanningType,
+    isPhaseClosingType,
+    getPhaseNumber,
+} from '../llm-types.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -933,21 +939,19 @@ function renderDAGVisualization(container) {
 // Group orchestrator-level planning LLM calls by phase for multi-phase DAG topology.
 // Uses the phase_number on continuation_plan_generation calls; pairs tiered_selection
 // calls with the plan call that immediately follows them in the interaction stream.
+//
+// Type membership and phase-closing semantics are driven by the LLM-type
+// registry at static/js/llm-types.js — see isPlanningType / isPhaseClosingType.
 function groupLLMCallsByPhase(llmInteractions) {
-    const planningTypes = ['tiered_selection', 'plan_generation', 'correction',
-                           'hallucination_detection', 'continuation_plan_generation',
-                           'continuation_plan_regeneration'];
-    const planningCalls = llmInteractions.filter(i => planningTypes.includes(i.type));
+    const planningCalls = llmInteractions.filter(i => isPlanningType(i.type));
 
     const phases = {};
     let currentGroup = [];
 
     for (const call of planningCalls) {
         currentGroup.push(call);
-        if (call.type === 'plan_generation' ||
-            call.type === 'continuation_plan_generation' ||
-            call.type === 'continuation_plan_regeneration') {
-            const phaseNum = call.type === 'plan_generation' ? 1 : (call.phase_number || 1);
+        if (isPhaseClosingType(call.type)) {
+            const phaseNum = getPhaseNumber(call);
             // Append rather than overwrite: a phase may have continuation_plan_generation
             // followed by continuation_plan_regeneration (plan regen flow), and we want
             // all calls for that phase grouped together in the DAG.
@@ -1136,33 +1140,7 @@ function initCytoscape() {
         // after Phase 1 planning LLM calls.
         const planCheckpoints = checkpoints.filter(c => c.interrupt_point === 'before_plan_execution');
 
-        const llmTypeLabels = {
-            'tiered_selection': 'Tier Select',
-            'micro_resolution': 'Resolution',
-            'plan_generation': 'Planning',
-            'continuation_plan_generation': 'Phase Plan',
-            'continuation_plan_regeneration': 'Plan Regen ⚠️',
-            'correction': 'Plan Fix',
-            'hallucination_detection': 'Hallucination',
-            'conversation_history_prepare': 'History Prepare',
-            'conversation_history_compaction': 'History Compact',
-            'activity_compaction_incremental': 'Memory Compact',
-            'event_summarization': 'Event Summary',
-            // User memory types
-            'user_memory_recall_identity': 'Recall Identity',
-            'user_memory_recall_summary': 'Recall Summary',
-            'user_memory_recall_query': 'Recall Query',
-            'user_memory_recall_universal': 'Recall Universal',
-            'user_memory_enrichment_injected': 'Profile Injected',
-            'user_memory_extraction': 'Extract Facts',
-            'user_memory_embed_candidate': 'Embed Candidate',
-            'user_memory_similarity_search': 'Similarity Search',
-            'user_memory_reconciliation': 'Reconcile',
-            'user_memory_reconciliation_skip': 'Reconcile (skip)',
-            'user_memory_remember': 'Store Fact',
-            'user_memory_summary': 'Session Summary',
-            'user_memory_summary_remember': 'Store Summary',
-        };
+        // Type labels live in static/js/llm-types.js — use getLLMType(type).label.
 
         let previousPhaseExitNode = 'orchestrator';
         let globalLLMIndex = 0;
@@ -1183,7 +1161,7 @@ function initCytoscape() {
             nodes.push({
                 data: buildLLMBackedNodeData(call, {
                     id: nodeId,
-                    label: `${nodeIcon} ${llmTypeLabels[call.type] || call.type}`,
+                    label: `${nodeIcon} ${getLLMType(call.type).label}`,
                     nodeType: 'memory_llm',
                 })
             });
@@ -1222,6 +1200,23 @@ function initCytoscape() {
                 const phaseSteps = phasePlan.steps || [];
                 const phaseStepIds = new Set(phaseSteps.map(s => s.step_id));
 
+                // Phase-local topological levels for parallelism counts.
+                // A step's `depends_on` may reference earlier-phase steps;
+                // those are already-satisfied at phase entry, so we strip
+                // them before topo-sorting — otherwise computeStepLevels
+                // would never decrement their in-degree to zero and the
+                // step would be silently dropped from the level list.
+                // Without this scoping, parallelCount falls back to the
+                // global plan's level width, which is incorrect for
+                // multi-phase executions (the popup card showed total
+                // parallelism across the whole execution rather than
+                // within the phase).
+                const phaseScopedSteps = phaseSteps.map(s => ({
+                    ...s,
+                    depends_on: (s.depends_on || []).filter(d => phaseStepIds.has(d)),
+                }));
+                const phaseLevels = computeStepLevels(phaseScopedSteps);
+
                 // 2a. LLM planning nodes for this phase
                 let lastLLMNodeInPhase = previousPhaseExitNode;
                 phaseLLMCalls.forEach(call => {
@@ -1229,7 +1224,7 @@ function initCytoscape() {
                     nodes.push({
                         data: buildLLMBackedNodeData(call, {
                             id: nodeId,
-                            label: `💭 ${llmTypeLabels[call.type] || call.type}`,
+                            label: `💭 ${getLLMType(call.type).label}`,
                             nodeType: 'llm_call',
                             phaseNumber: phaseNum,
                         })
@@ -1271,8 +1266,11 @@ function initCytoscape() {
                         status = 'blocked';
                     }
                     const stepCapability = step.metadata?.capability || result?.metadata?.capability || step.capability || step.agent_name || '';
-                    const level = fullFlowLevels.findIndex(l => l.includes(step.step_id));
-                    const parallelCount = level >= 0 ? fullFlowLevels[level].length : 1;
+                    // Use phase-local levels so the popup card's "(N parallel)"
+                    // count reflects parallelism within this phase, not across
+                    // the whole execution.
+                    const level = phaseLevels.findIndex(l => l.includes(step.step_id));
+                    const parallelCount = level >= 0 ? phaseLevels[level].length : 1;
                     const resInfoFull = getResolutionInfo(result);
                     const baseLabelFull = step.agent_name || stepCapability;
                     const trimMetaFull = result?.metadata?.result_trim;
@@ -1349,11 +1347,12 @@ function initCytoscape() {
             }
         } else {
             // === Fallback: no phase_plans data (single-phase backward compat) ===
-            const planningTypes = ['tiered_selection', 'plan_generation', 'correction',
-                                  'hallucination_detection', 'continuation_plan_generation',
-                                  'continuation_plan_regeneration'];
+            // Type membership comes from the LLM-type registry — see isPlanningType.
+            // Orchestrator-level micro_resolution (without a step_id) is also
+            // pulled in here because it represents pre-execution parameter
+            // resolution that visually belongs in the planner column.
             const planningCalls = llmInteractions.filter(i =>
-                planningTypes.includes(i.type) ||
+                isPlanningType(i.type) ||
                 (i.type === 'micro_resolution' && !i.step_id)
             );
             planningCalls.forEach((call, idx) => {
@@ -1361,7 +1360,7 @@ function initCytoscape() {
                 nodes.push({
                     data: buildLLMBackedNodeData(call, {
                         id: nodeId,
-                        label: `💭 ${llmTypeLabels[call.type] || call.type}`,
+                        label: `💭 ${getLLMType(call.type).label}`,
                         nodeType: 'llm_call',
                     })
                 });
@@ -1514,13 +1513,16 @@ function initCytoscape() {
         stepSpecificLLMCalls.forEach((call, idx) => {
             const nodeId = `llm_step_${idx}`;
             const parentStepId = call.step_id;
-            const llmTypeLabelsStep = {
-                'micro_resolution': '🔍 Resolution',
+            // Step-specific LLM types use a shorter label here than the
+            // generic registry value (e.g. "Distill" vs. "Result Distillation"),
+            // so we override only those four; everything else falls back to
+            // the registry's icon + label.
+            const stepLabelOverrides = {
                 'semantic_retry': '🔄 Retry',
-                'error_analysis': '⚠️ Error Analysis',
-                'result_distillation': '🔬 Distill'
+                'result_distillation': '🔬 Distill',
             };
-            const llmType = llmTypeLabelsStep[call.type] || call.type;
+            const cfg = getLLMType(call.type);
+            const llmType = stepLabelOverrides[call.type] || `${cfg.icon} ${cfg.label}`;
 
             nodes.push({
                 data: buildLLMBackedNodeData(call, {
@@ -1617,7 +1619,7 @@ function initCytoscape() {
                 nodes.push({
                     data: buildLLMBackedNodeData(call, {
                         id: nodeId,
-                        label: `📝 ${llmTypeLabels[call.type] || call.type}`,
+                        label: `📝 ${getLLMType(call.type).label}`,
                         nodeType: 'memory_llm',
                     })
                 });
@@ -3893,64 +3895,54 @@ function renderPostExecution(container) {
     // [data-copy-llm] inside the rendered LLM cards.
 }
 
-// LLM card type config — shared between initial render and batch loading.
-// Display labels are humanized for UI presentation. The raw `type` field
-// remains the source of truth for filtering and backend correlation.
-//
-// NOTE: components/card.js has a parallel `defaultTypeLabels` map used by
-// the generic interaction card. When adding a new type here, keep that
-// map in sync (or consolidate into a shared module when the drift starts
-// to bite). Both cover overlapping but non-identical type sets today.
-const llmTypeConfig = {
-    'tiered_selection': { rgb: '140, 150, 255', bg: 'rgba(140, 150, 255, 0.15)', border: 'rgba(140, 150, 255, 0.3)', color: '#a0a8ff', icon: '🎯', label: 'Tool Catalog Selection' },
-    'plan_generation': { rgb: '218, 143, 255', bg: 'rgba(218, 143, 255, 0.15)', border: 'rgba(218, 143, 255, 0.3)', color: 'var(--accent-purple)', icon: '📋', label: 'Plan Generation' },
-    'synthesis': { rgb: '52, 211, 153', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.25)', color: '#34d399', icon: '🔗', label: 'Synthesis' },
-    'synthesis_streaming': { rgb: '52, 211, 153', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.25)', color: '#34d399', icon: '🔗', label: 'Synthesis (streaming)' },
-    'micro_resolution': { rgb: '100, 210, 255', bg: 'rgba(100, 210, 255, 0.15)', border: 'rgba(100, 210, 255, 0.3)', color: 'var(--accent-teal)', icon: '🔍', label: 'Micro Resolution' },
-    'semantic_retry': { rgb: '255, 110, 180', bg: 'rgba(255, 110, 180, 0.15)', border: 'rgba(255, 110, 180, 0.3)', color: 'var(--accent-pink)', icon: '🔄', label: 'Semantic Retry' },
-    'correction': { rgb: '255, 179, 64', bg: 'rgba(255, 179, 64, 0.15)', border: 'rgba(255, 179, 64, 0.3)', color: 'var(--accent-orange)', icon: '🔧', label: 'Correction' },
-    'error_analysis': { rgb: '255, 107, 107', bg: 'rgba(255, 107, 107, 0.15)', border: 'rgba(255, 107, 107, 0.3)', color: 'var(--accent-red)', icon: '⚠️', label: 'Error Analysis' },
-    'agent_llm_call': { rgb: '160, 100, 240', bg: 'rgba(160, 100, 240, 0.15)', border: 'rgba(160, 100, 240, 0.3)', color: '#a064f0', icon: '🔧', label: 'Agent LLM Call' },
-    'hallucination_detection': { rgb: '255, 80, 80', bg: 'rgba(255, 80, 80, 0.15)', border: 'rgba(255, 80, 80, 0.3)', color: '#ff5050', icon: '⚠️', label: 'Hallucination Detection' },
-    'result_distillation': { rgb: '130, 90, 220', bg: 'rgba(130, 90, 220, 0.15)', border: 'rgba(130, 90, 220, 0.3)', color: '#8250dc', icon: '🔬', label: 'Result Distillation' },
-    'continuation_plan_generation': { rgb: '190, 120, 255', bg: 'rgba(190, 120, 255, 0.15)', border: 'rgba(190, 120, 255, 0.3)', color: '#be78ff', icon: '📋', label: 'Continuation Plan' },
-    'continuation_plan_regeneration': { rgb: '190, 120, 255', bg: 'rgba(190, 120, 255, 0.15)', border: 'rgba(190, 120, 255, 0.3)', color: '#be78ff', icon: '🔄', label: 'Continuation Plan (retry)' },
-    'schema_mapping': { rgb: '0, 200, 170', bg: 'rgba(0, 200, 170, 0.15)', border: 'rgba(0, 200, 170, 0.3)', color: '#00c8aa', icon: '🗺️', label: 'Schema Mapping' },
-    'conversation_history_prepare': { rgb: '108, 194, 255', bg: 'rgba(108, 194, 255, 0.12)', border: 'rgba(108, 194, 255, 0.25)', color: '#6cc2ff', icon: '🛡️', label: 'History Preparation' },
-    'conversation_history_compaction': { rgb: '108, 194, 255', bg: 'rgba(108, 194, 255, 0.15)', border: 'rgba(108, 194, 255, 0.3)', color: '#6cc2ff', icon: '🗜️', label: 'History Compaction' },
-    // User memory types — amber color family
-    'user_memory_recall_identity': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '↩', label: 'Recall: identity facts' },
-    'user_memory_recall_summary': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '↩', label: 'Recall: session summaries' },
-    'user_memory_recall_stable_namespace': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '↩', label: 'Recall: durable profile' },
-    'user_memory_recall_query': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '↩', label: 'Recall: query-relevant' },
-    'user_memory_recall_universal': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '↩', label: 'Recall: universal facts' },
-    'user_memory_enrichment_injected': { rgb: '180, 140, 60', bg: 'rgba(180, 140, 60, 0.15)', border: 'rgba(180, 140, 60, 0.3)', color: '#b48c3c', icon: '✓', label: 'Prompt enrichment' },
-    'user_memory_extraction': { rgb: '240, 160, 48', bg: 'rgba(240, 160, 48, 0.15)', border: 'rgba(240, 160, 48, 0.3)', color: '#f0a030', icon: '✦', label: 'Fact extraction' },
-    'user_memory_embed_candidate': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '◈', label: 'Embed candidate' },
-    'user_memory_similarity_search': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '◎', label: 'Similarity search' },
-    'user_memory_reconciliation': { rgb: '240, 160, 48', bg: 'rgba(240, 160, 48, 0.15)', border: 'rgba(240, 160, 48, 0.3)', color: '#f0a030', icon: '⇄', label: 'Reconciliation' },
-    'user_memory_reconciliation_skip': { rgb: '180, 140, 60', bg: 'rgba(180, 140, 60, 0.15)', border: 'rgba(180, 140, 60, 0.3)', color: '#b48c3c', icon: '⇄', label: 'Reconciliation (skipped)' },
-    'user_memory_reconciliation_batch': { rgb: '240, 160, 48', bg: 'rgba(240, 160, 48, 0.15)', border: 'rgba(240, 160, 48, 0.3)', color: '#f0a030', icon: '⇄', label: 'Reconciliation (batch)' },
-    'user_memory_reconciliation_batch_item': { rgb: '180, 140, 60', bg: 'rgba(180, 140, 60, 0.15)', border: 'rgba(180, 140, 60, 0.3)', color: '#b48c3c', icon: '·', label: 'Reconciliation (batch item)' },
-    'user_memory_persistence_policy': { rgb: '180, 140, 60', bg: 'rgba(180, 140, 60, 0.15)', border: 'rgba(180, 140, 60, 0.3)', color: '#b48c3c', icon: '⚖', label: 'Persistence policy' },
-    'user_memory_summary_persistence_policy': { rgb: '180, 140, 60', bg: 'rgba(180, 140, 60, 0.15)', border: 'rgba(180, 140, 60, 0.3)', color: '#b48c3c', icon: '⚖', label: 'Persistence policy: summary' },
-    'user_memory_remember': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '✎', label: 'Remember' },
-    'user_memory_summary': { rgb: '240, 160, 48', bg: 'rgba(240, 160, 48, 0.15)', border: 'rgba(240, 160, 48, 0.3)', color: '#f0a030', icon: '≡', label: 'Summary generation' },
-    'user_memory_summary_remember': { rgb: '200, 140, 48', bg: 'rgba(200, 140, 48, 0.15)', border: 'rgba(200, 140, 48, 0.3)', color: '#c88c30', icon: '✎', label: 'Persist summary' },
+// LLM card-detail label overrides — used only by getLLMCardConfig() below.
+// These verbose labels are shown in the LLM card detail panel inside the
+// DAG, where space is plentiful; the planner-column node labels (shorter,
+// e.g. "Tier Select" vs. "Tool Catalog Selection") come from the registry's
+// primary `label` field. Migrating these into the registry as a third
+// label dimension would propagate context-specific labels everywhere; we
+// keep them localized here instead.
+const dagCardLabelOverrides = {
+    tiered_selection: 'Tool Catalog Selection',
+    plan_generation: 'Plan Generation',
+    plan_regeneration_fallback: 'Plan Regeneration (retry)',
+    synthesis_streaming: 'Synthesis (streaming)',
+    micro_resolution: 'Micro Resolution',
+    correction: 'Correction',
+    hallucination_detection: 'Hallucination Detection',
+    result_distillation: 'Result Distillation',
+    continuation_plan_generation: 'Continuation Plan',
+    continuation_plan_regeneration: 'Continuation Plan (retry)',
+    conversation_history_prepare: 'History Preparation',
+    conversation_history_compaction: 'History Compaction',
 };
 
+// Returns the per-type card-detail config: { rgb, bg, border, color, icon, label }.
+// Reads colors/icon from the LLM-type registry. Label resolution is a
+// three-tier fallback so the card detail (which has space for verbose
+// labels) keeps the labels it had before this migration:
+//   1. dagCardLabelOverrides — for ~12 types whose card-detail label is
+//      neither the short DAG primary nor the LLM Debug listLabel
+//      (e.g. tiered_selection -> "Tool Catalog Selection").
+//   2. cfg.listLabel — for the ~16 user_memory_* types and a few others
+//      whose old card-detail label happens to match the LLM Debug list
+//      label exactly (e.g. user_memory_recall_identity ->
+//      "Recall: identity facts").
+//   3. cfg.label — the short DAG primary, used when neither override
+//      exists.
+// For unknown types, the registry's HSL hash fallback supplies stable
+// colors and a default "💬" icon, and `cfg.label` is the snake-case-with-
+// spaces type name.
 function getLLMCardConfig(type) {
-    if (llmTypeConfig[type]) return llmTypeConfig[type];
-    let hash = 0;
-    const t = type || '';
-    for (let i = 0; i < t.length; i++) hash = ((hash << 5) - hash + t.charCodeAt(i)) | 0;
-    const hue = ((hash % 360) + 360) % 360;
-    const r = Math.round(150 + 80 * Math.cos(hue * Math.PI / 180));
-    const g = Math.round(150 + 80 * Math.cos((hue - 120) * Math.PI / 180));
-    const b = Math.round(150 + 80 * Math.cos((hue - 240) * Math.PI / 180));
-    const rgb = `${r}, ${g}, ${b}`;
-    const hex = '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
-    return { rgb, bg: `rgba(${rgb}, 0.15)`, border: `rgba(${rgb}, 0.3)`, color: hex, icon: '💬' };
+    const cfg = getLLMType(type);
+    return {
+        rgb: cfg.rgb,
+        bg: `rgba(${cfg.rgb}, 0.15)`,
+        border: `rgba(${cfg.rgb}, 0.3)`,
+        color: cfg.accent,
+        icon: cfg.icon,
+        label: dagCardLabelOverrides[type] || cfg.listLabel || cfg.label,
+    };
 }
 
 // `idx` is the original index into selected.llm_interactions — used for
@@ -4243,7 +4235,7 @@ function showUserMemoryGroupPopup(node, nodeData) {
 
     steps.forEach(step => {
         const category = step.category || 'llm';
-        const label = llmTypeConfig[step.type]?.icon || '·';
+        const label = getLLMType(step.type).icon || '·';
         const typeName = step.type?.replace('user_memory_', '').replace(/_/g, ' ') || step.type;
         const opacity = category === 'llm' ? '1.0' : '0.7';
         const categoryBadges = {

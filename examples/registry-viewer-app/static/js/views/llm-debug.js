@@ -21,6 +21,11 @@ import {
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
+import {
+    isRetryType,
+    getListLabel,
+    getListStyledColors,
+} from '../llm-types.js';
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -448,7 +453,7 @@ function renderLLMInteractionsView(record) {
         ${interactions.length > 0 ? `<div class="info-label">Output Tokens</div><div class="info-value">${formatTokens(totalCompletionTokens)}</div>` : ''}
         ${models.length > 0 ? `<div class="info-label">Model${models.length > 1 ? 's' : ''}</div><div class="info-value">${models.join(', ')}</div>` : ''}
         ${providers.length > 0 ? `<div class="info-label">Provider${providers.length > 1 ? 's' : ''}</div><div class="info-value">${providers.join(', ')}</div>` : ''}
-        ${(() => { const rc = interactions.filter(i => i.type === 'continuation_plan_regeneration').length; return rc > 0 ? `<div class="info-label">Regenerations</div><div class="info-value"><span style="background: rgba(255,140,50,0.15); border: 1px solid rgba(255,140,50,0.3); color: #ff8c32; padding: 2px 8px; border-radius: 4px; font-size: 11px;">⚠️ ${rc} regeneration${rc > 1 ? 's' : ''}</span></div>` : ''; })()}
+        ${(() => { const rc = interactions.filter(i => isRetryType(i.type)).length; return rc > 0 ? `<div class="info-label">Regenerations</div><div class="info-value"><span style="background: rgba(255,140,50,0.15); border: 1px solid rgba(255,140,50,0.3); color: #ff8c32; padding: 2px 8px; border-radius: 4px; font-size: 11px;">⚠️ ${rc} regeneration${rc > 1 ? 's' : ''}</span></div>` : ''; })()}
     </div></div>`;
 
     // Show message if no interactions available
@@ -476,33 +481,29 @@ function renderLLMInteractionsView(record) {
         const promptPreview = truncateText(interaction.prompt, 80);
         const isExpanded = expandedInteractions.has(index);
         const noteState = getInteractionNoteState(interaction);
-        const llmTypeLabels = {
-            tiered_selection: 'Tier Select',
-            plan_generation: 'Planning',
-            continuation_plan_generation: 'Continuation Plan',
-            continuation_plan_regeneration: 'Continuation Plan Retry',
-            synthesis: 'Synthesis',
-            synthesis_streaming: 'Streaming Synthesis',
-            micro_resolution: 'Resolution',
-            semantic_retry: 'Semantic Retry',
-            correction: 'Plan Fix',
-            error_analysis: 'Error Analysis',
-            agent_llm_call: 'Agent LLM Call',
-            hallucination_detection: 'Hallucination Check',
-            result_distillation: 'Result Distillation',
-            conversation_history_prepare: 'History Preparation',
-            conversation_history_compaction: 'History Compaction',
-        };
-        const _ic = { tiered_selection: [255,179,64], plan_generation: [50,215,75], continuation_plan_generation: [50,215,75], continuation_plan_regeneration: [255,140,50], synthesis: [218,143,255], synthesis_streaming: [218,143,255], micro_resolution: [100,210,255], semantic_retry: [255,110,180], correction: [255,179,64], error_analysis: [255,107,107], agent_llm_call: [160,100,240], hallucination_detection: [255,80,80], result_distillation: [130,90,220], conversation_history_prepare: [108,194,255], conversation_history_compaction: [108,194,255] }[interaction.type] || [180,180,200];
-        const _rgb = `${_ic[0]}, ${_ic[1]}, ${_ic[2]}`;
+        // Label, palette, and CSS-badge custom-properties all come from
+        // the LLM-type registry. List palette (orange for retry types,
+        // green for plan_generation, etc.) is preserved by getListStyledColors.
+        const _rgb = getListStyledColors(interaction.type).rgb;
+        const _accent = getListStyledColors(interaction.type).accent;
         const _baseShadow = `0 0 16px rgba(${_rgb}, 0.12), 0 0 5px rgba(${_rgb}, 0.2), 0 4px 20px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.08)`;
         const _hoverShadow = `0 0 28px rgba(${_rgb}, 0.2), 0 0 10px rgba(${_rgb}, 0.38), 0 8px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.14)`;
-        const interactionLabel = llmTypeLabels[interaction.type] || interaction.type.replace(/_/g, ' ');
+        const interactionLabel = getListLabel(interaction.type);
+        // Per-type CSS custom properties for the .type-badge rule. Set
+        // inline on the badge element so the base CSS rule reads them
+        // (see static/css/layout.css `.type-badge { background: rgba(var(--badge-rgb)…) }`).
+        const _badgeStyle = `--badge-rgb: ${_rgb}; --badge-color: ${_accent};`;
         if ((interaction.category || 'llm') !== 'llm') {
-            html += `<div class="interaction-card" data-index="${index}" id="interaction-${index}" style="border-color: rgba(${_rgb}, 0.22); box-shadow: ${_baseShadow};" onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.38)';" onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.22)';">
+            // Non-LLM (hook / memory) cards collapse by default and respect
+            // expandedInteractions like the LLM cards do — driven by the
+            // .expanded class plus the CSS rule .interaction-card.expanded
+            // .interaction-body { display: block; }. Earlier this body had an
+            // inline `style="display: block;"` that overrode the CSS,
+            // forcing these cards always-expanded.
+            html += `<div class="interaction-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="border-color: rgba(${_rgb}, 0.22); box-shadow: ${_baseShadow};" onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.38)';" onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.22)';">
                 <div class="interaction-header">
                     <div class="interaction-type-row">
-                        <span class="type-badge ${interaction.type}">${interactionLabel}</span>
+                        <span class="type-badge ${interaction.type}" style="${_badgeStyle}">${interactionLabel}</span>
                         <span class="status-badge ${interaction.success ? 'success' : 'error'}">${noteState.statusLabel}</span>
                         <span class="interaction-preview">${escapeHtml(interaction.response || interaction.call_description || '')}</span>
                     </div>
@@ -510,9 +511,10 @@ function renderLLMInteractionsView(record) {
                         <div class="interaction-meta-item col-model" style="color: rgba(180, 160, 210, 0.8); font-size: 10.5px;">Logic</div>
                         <div class="interaction-meta-item col-time" style="color: rgba(130, 200, 180, 0.75); font-size: 10.5px;">${formatDuration(interaction.duration_ms)}</div>
                         <div class="interaction-meta-item col-tokens"></div>
+                        <span class="expand-indicator">▼</span>
                     </div>
                 </div>
-                <div class="interaction-body" style="display: block;">
+                <div class="interaction-body">
                     <div class="prompt-section">
                         <div class="prompt-label">ℹ Summary</div>
                         <div class="prompt-content">${escapeHtml(interaction.response || interaction.call_description || '')}</div>
@@ -524,10 +526,10 @@ function renderLLMInteractionsView(record) {
         html += `<div class="interaction-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="border-color: rgba(${_rgb}, 0.25); box-shadow: ${_baseShadow};" onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.4)';" onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.25)';">
             <div class="interaction-header">
                 <div class="interaction-type-row">
-                    <span class="type-badge ${interaction.type}">${interactionLabel}</span>
+                    <span class="type-badge ${interaction.type}" style="${_badgeStyle}">${interactionLabel}</span>
                     ${interaction.source_component ? `<span class="type-badge" style="background: rgba(160,100,240,0.15); color: #a064f0; border: 1px solid rgba(160,100,240,0.3); font-size: 9px; padding: 1px 6px;">🔧 ${interaction.source_component}</span>` : ''}
                     ${interaction.call_description ? (
-                        interaction.type === 'continuation_plan_regeneration'
+                        isRetryType(interaction.type)
                             ? `<div style="background: rgba(255,140,50,0.1); border: 1px solid rgba(255,140,50,0.3); border-radius: 4px; padding: 3px 8px; margin-top: 4px; font-size: 10px; color: #ff8c32;">⚠️ ${escapeHtml(interaction.call_description)}</div>`
                             : `<span style="color: var(--text-muted); font-size: 10px; font-style: italic; margin-left: 4px;">${escapeHtml(interaction.call_description)}</span>`
                     ) : ''}

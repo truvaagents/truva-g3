@@ -14,68 +14,39 @@
  */
 
 import { formatDuration, escapeHtml, formatResponseJson } from '../utils/format.js';
+import { LLM_TYPES, getLLMType } from '../llm-types.js';
 
 /**
  * Default type configuration — maps interaction type to display properties.
- * Views can extend this with additional types (e.g., user memory types).
+ *
+ * Backed by the LLM-type registry at static/js/llm-types.js. Exported as a
+ * lazily-derived object for backward compatibility with any consumer that
+ * spreads it (`{ ...defaultTypeConfig }`); new code should prefer
+ * `getLLMType(type)` directly.
  */
-export const defaultTypeConfig = {
-    'tiered_selection': { rgb: '140, 150, 255', icon: '🎯' },
-    'plan_generation': { rgb: '218, 143, 255', icon: '📋' },
-    'continuation_plan_generation': { rgb: '190, 120, 255', icon: '📋' },
-    'continuation_plan_regeneration': { rgb: '190, 120, 255', icon: '🔄' },
-    'synthesis': { rgb: '52, 211, 153', icon: '🔗' },
-    'synthesis_streaming': { rgb: '52, 211, 153', icon: '🔗' },
-    'micro_resolution': { rgb: '100, 210, 255', icon: '🔍' },
-    'semantic_retry': { rgb: '255, 110, 180', icon: '🔄' },
-    'correction': { rgb: '255, 179, 64', icon: '🔧' },
-    'error_analysis': { rgb: '255, 107, 107', icon: '⚠️' },
-    'agent_llm_call': { rgb: '160, 100, 240', icon: '🔧' },
-    'hallucination_detection': { rgb: '255, 80, 80', icon: '⚠️' },
-    'result_distillation': { rgb: '130, 90, 220', icon: '🔬' },
-    'schema_mapping': { rgb: '0, 200, 170', icon: '🗺️' },
-    'conversation_history_prepare': { rgb: '108, 194, 255', icon: '🛡️' },
-    'conversation_history_compaction': { rgb: '108, 194, 255', icon: '🗜️' },
-    'activity_compaction_incremental': { rgb: '240, 160, 48', icon: '📝' },
-    'event_summarization': { rgb: '240, 160, 48', icon: '📝' },
-};
+export const defaultTypeConfig = Object.fromEntries(
+    Object.entries(LLM_TYPES).map(([type, cfg]) => [type, { rgb: cfg.rgb, icon: cfg.icon }])
+);
 
 /**
  * Default type labels — maps interaction type to display label.
+ *
+ * Backed by the LLM-type registry. See `defaultTypeConfig` note above.
  */
-export const defaultTypeLabels = {
-    'tiered_selection': 'Tier Select',
-    'micro_resolution': 'Resolution',
-    'plan_generation': 'Planning',
-    'continuation_plan_generation': 'Phase Plan',
-    'continuation_plan_regeneration': 'Plan Regen ⚠️',
-    'correction': 'Plan Fix',
-    'hallucination_detection': 'Hallucination',
-    'conversation_history_prepare': 'History Prepare',
-    'conversation_history_compaction': 'History Compact',
-    'activity_compaction_incremental': 'Memory Compact',
-    'event_summarization': 'Event Summary',
-};
+export const defaultTypeLabels = Object.fromEntries(
+    Object.entries(LLM_TYPES).map(([type, cfg]) => [type, cfg.label])
+);
 
 /**
  * Get type config for an interaction, with fallback to a deterministic hash color.
  * @param {string} type
- * @param {object} [typeConfig] - custom type config (merged with defaults)
+ * @param {object} [typeConfig] - custom type config entries that override registry values
  * @returns {{rgb: string, icon: string}}
  */
 export function getTypeConfig(type, typeConfig) {
-    const merged = typeConfig ? { ...defaultTypeConfig, ...typeConfig } : defaultTypeConfig;
-    if (merged[type]) return merged[type];
-
-    // Deterministic hash color for unknown types
-    let hash = 0;
-    for (let i = 0; i < type.length; i++) {
-        hash = type.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const r = (hash >> 16) & 0xFF;
-    const g = (hash >> 8) & 0xFF;
-    const b = hash & 0xFF;
-    return { rgb: `${r}, ${g}, ${b}`, icon: '💬' };
+    if (typeConfig && typeConfig[type]) return typeConfig[type];
+    const cfg = getLLMType(type);
+    return { rgb: cfg.rgb, icon: cfg.icon };
 }
 
 /**
