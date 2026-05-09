@@ -21,7 +21,6 @@ A comprehensive guide to TruvaG3's APIs with practical examples and best practic
 - [Resilience](#resilience-module) - Circuit breakers and retry mechanisms
 - [Telemetry](#telemetry-module) - Metrics, tracing, and observability
 - [Orchestration](#orchestration-module) - Multi-agent coordination
-- [UI](#ui-module) - Chat interfaces and web transports
 
 ---
 
@@ -448,15 +447,16 @@ go func() {
 Every component follows a three-phase lifecycle: Initialize → Start → Stop/Shutdown. Understanding this lifecycle is crucial for building robust services.
 
 ```go
-// Initialize - Connect to dependencies, load config
-func (c *Component) Initialize(ctx context.Context) error
+// Initialize is the only lifecycle method on the Component interface itself
+// (see "Component Interface" above) — every component implements it.
+//
+// Start is a concrete method on BaseAgent and BaseTool, not on the interface:
+func (b *BaseAgent) Start(ctx context.Context, port int) error
+func (t *BaseTool)  Start(ctx context.Context, port int) error
 
-// Start - Begin serving HTTP requests
-func (c *Component) Start(ctx context.Context, port int) error
-
-// Stop/Shutdown - Graceful shutdown with timeout
-func (c *Component) Stop(ctx context.Context) error     // Agents
-func (c *Component) Shutdown(ctx context.Context) error  // Tools
+// Graceful shutdown is asymmetric — agents use Stop, tools use Shutdown:
+func (b *BaseAgent) Stop(ctx context.Context) error
+func (t *BaseTool)  Shutdown(ctx context.Context) error
 ```
 
 **Lifecycle best practices:**
@@ -759,10 +759,11 @@ type LoadBalancer struct {
 }
 
 func (lb *LoadBalancer) GetService(ctx context.Context, capability string) (*core.ServiceInfo, error) {
-    // Find all healthy services
+    // Find services advertising this capability. The Redis-backed discovery
+    // implementation only returns services that are passing their heartbeat,
+    // so there is no separate "healthy only" filter on DiscoveryFilter.
     services, err := lb.discovery.Discover(ctx, core.DiscoveryFilter{
-        Capability: capability,
-        HealthOnly: true,
+        Capabilities: []string{capability},
     })
 
     if len(services) == 0 {
@@ -1618,22 +1619,23 @@ Use portable model names across different providers. Model aliases allow you to 
 - `"vision"` - Multimodal/vision capabilities (if available)
 - `"default"` - Provider's recommended default
 
-**Model alias resolution examples:**
+**Model alias resolution examples** (snapshot — see [ai/providers/openai/models.go](../../ai/providers/openai/models.go) for the canonical mapping):
+
 ```go
 // "smart" resolves differently per provider
-ai.WithProviderAlias("openai")         // → gpt-4
+ai.WithProviderAlias("openai")          // → o3
 ai.WithProviderAlias("openai.deepseek") // → deepseek-reasoner
-ai.WithProviderAlias("openai.groq")     // → mixtral-8x7b-32768
+ai.WithProviderAlias("openai.groq")     // → llama-3.3-70b-versatile
 
 // "fast" for quick responses
-ai.WithProviderAlias("openai")         // → gpt-3.5-turbo
+ai.WithProviderAlias("openai")          // → gpt-4.1-mini
 ai.WithProviderAlias("openai.deepseek") // → deepseek-chat
-ai.WithProviderAlias("openai.groq")     // → llama-3.3-70b-versatile
+ai.WithProviderAlias("openai.groq")     // → llama-3.1-8b-instant
 
 // Direct model names still work (pass-through)
 client, _ := ai.NewClient(
     ai.WithProviderAlias("openai.deepseek"),
-    ai.WithModel("deepseek-coder-v2"), // Exact model, not an alias
+    ai.WithModel("deepseek-chat"), // Exact model, not an alias
 )
 ```
 
@@ -1780,7 +1782,7 @@ chainClient, _ := ai.NewChainClient(
 | `WithAPIKey(key)` | `string` | from env | Override API key |
 | `WithBaseURL(url)` | `string` | provider default | Custom API endpoint |
 | `WithTemperature(t)` | `float32` | 0.7 | Sampling temperature (0.0-2.0) |
-| `WithMaxTokens(n)` | `int` | 4096 | Default max tokens |
+| `WithMaxTokens(n)` | `int` | 1000 | Default max tokens (per `ai/providers/base.go`) |
 | `WithTimeout(d)` | `time.Duration` | 180s | HTTP request timeout |
 | `WithReasoningTokenMultiplier(n)` | `int` | 5 | Token multiplier for reasoning models |
 | `WithLogger(l)` | `core.Logger` | nil | Logger for AI operations |
@@ -1791,8 +1793,11 @@ chainClient, _ := ai.NewChainClient(
 Generate AI responses with optional parameters for fine-tuning behavior.
 
 ```go
-func (c *AIClient) GenerateResponse(ctx context.Context, prompt string, options *AIOptions) (*AIResponse, error)
-func (c *ChainClient) GenerateResponse(ctx context.Context, prompt string, options *AIOptions) (*AIResponse, error)
+// On the core.AIClient interface:
+GenerateResponse(ctx context.Context, prompt string, options *AIOptions) (*AIResponse, error)
+
+// Same shape on the concrete *ChainClient (failover wrapper):
+func (c *ChainClient) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error)
 ```
 
 ### StreamResponse
@@ -1800,8 +1805,13 @@ func (c *ChainClient) GenerateResponse(ctx context.Context, prompt string, optio
 Generate AI responses with real-time streaming. Tokens are delivered as they're generated by the AI provider, enabling lower time-to-first-token and real-time UX.
 
 ```go
-func (c *AIClient) StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) error
-func (c *ChainClient) StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) error
+// Streaming lives on the core.StreamingAIClient interface (which embeds AIClient).
+// All built-in providers implement it; type-assert with `client.(core.StreamingAIClient)`
+// when you need to call StreamResponse on a value typed as core.AIClient.
+StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) (*AIResponse, error)
+
+// Same shape on the concrete *ChainClient:
+func (c *ChainClient) StreamResponse(ctx context.Context, prompt string, options *core.AIOptions, callback core.StreamCallback) (*core.AIResponse, error)
 ```
 
 **StreamCallback type:**
@@ -1812,28 +1822,36 @@ type StreamCallback func(chunk StreamChunk) error
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
     Content      string                 // The text content of this chunk
-    Done         bool                   // True if this is the final chunk
-    FinishReason string                 // Why generation stopped (e.g., "stop", "length")
-    Usage        *AIUsage               // Token usage (only on final chunk)
-    Error        error                  // Error if streaming failed
+    Delta        bool                   // True for incremental delta chunks; false on the final chunk
+    Index        int                    // Zero-based chunk index within the stream
+    FinishReason string                 // Why generation stopped (set on the final chunk: "stop", "length", ...)
+    Model        string                 // Model identifier
+    Usage        *core.TokenUsage       // Token usage (set on the final chunk)
     Metadata     map[string]interface{} // Provider-specific metadata
 }
 ```
+
+Streaming errors are surfaced via the `error` returned from `StreamResponse`,
+not through a field on `StreamChunk`. The end of the stream is signalled by a
+final chunk with `Delta: false` and a populated `FinishReason` (and `Usage`).
 
 **Example - Basic Streaming:**
 ```go
 client, _ := ai.NewClient()
 
-err := client.StreamResponse(ctx, "Explain quantum computing", nil,
-    func(chunk core.StreamChunk) error {
-        if chunk.Error != nil {
-            return chunk.Error
-        }
+// NewClient returns core.AIClient; type-assert to StreamingAIClient for streaming.
+streaming, ok := client.(core.StreamingAIClient)
+if !ok {
+    log.Fatal("provider does not support streaming")
+}
 
+resp, err := streaming.StreamResponse(ctx, "Explain quantum computing", nil,
+    func(chunk core.StreamChunk) error {
         // Print each token as it arrives
         fmt.Print(chunk.Content)
 
-        if chunk.Done {
+        // Final chunk has Delta=false and a populated FinishReason
+        if !chunk.Delta && chunk.FinishReason != "" {
             fmt.Println("\n--- Complete ---")
             if chunk.Usage != nil {
                 fmt.Printf("Tokens: %d\n", chunk.Usage.TotalTokens)
@@ -1843,6 +1861,10 @@ err := client.StreamResponse(ctx, "Explain quantum computing", nil,
         return nil
     },
 )
+if err != nil {
+    log.Printf("stream failed: %v", err)
+}
+_ = resp // resp.Content holds the accumulated text; resp.Usage holds totals.
 ```
 
 **Example - Streaming with Chain Client (Failover):**
@@ -1851,8 +1873,8 @@ chain, _ := ai.NewChainClient(
     ai.WithProviderChain("openai", "anthropic", "openai.groq"),
 )
 
-// Streaming with automatic failover
-err := chain.StreamResponse(ctx, prompt, nil, func(chunk core.StreamChunk) error {
+// ChainClient exposes StreamResponse directly — no type assertion needed.
+_, err := chain.StreamResponse(ctx, prompt, nil, func(chunk core.StreamChunk) error {
     sendToUI(chunk.Content)
     return nil
 })
@@ -1868,7 +1890,7 @@ go func() {
     cancel() // Stop streaming after 5 seconds
 }()
 
-err := client.StreamResponse(ctx, prompt, nil, callback)
+_, err := streaming.StreamResponse(ctx, prompt, nil, callback)
 if errors.Is(err, context.Canceled) {
     fmt.Println("Stream was canceled")
 }
@@ -1884,7 +1906,9 @@ if errors.Is(err, context.Canceled) {
 | Groq | ✅ Full | OpenAI-compatible |
 | DeepSeek | ✅ Full | OpenAI-compatible |
 | xAI | ✅ Full | OpenAI-compatible |
+| Mistral | ✅ Full | OpenAI-compatible |
 | Qwen | ✅ Full | OpenAI-compatible |
+| Together | ✅ Full | OpenAI-compatible |
 | Ollama | ✅ Full | OpenAI-compatible |
 
 For a complete production example with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md).
@@ -1975,7 +1999,15 @@ result := agent.ProcessRequest(ctx,
 Create an AI-powered tool that exposes AI capabilities as a service. Unlike AIAgent, tools are passive and cannot discover other services.
 
 ```go
-func NewAITool(name string, capability string, apiKey string) (*AITool, error)
+func NewAITool(name string, apiKey string, opts ...AIToolOption) (*AITool, error)
+
+// Options
+func WithAIToolLogger(logger core.Logger) AIToolOption
+
+// Capabilities are registered after construction. Each call mounts an HTTP
+// endpoint at /ai/<name> that runs `prompt` against the tool's AI client and
+// returns the response body.
+func (t *AITool) RegisterAICapability(name, description, prompt string)
 ```
 
 **When to use AITool vs AIAgent:**
@@ -1989,45 +2021,51 @@ func NewAITool(name string, capability string, apiKey string) (*AITool, error)
 
 **Example - AI Microservices:**
 ```go
-// Create specialized AI tools
-translator, _ := ai.NewAITool(
-    "translator-service",
+// Create a specialized AI tool, then attach one or more AI-backed capabilities
+translator, _ := ai.NewAITool("translator-service", apiKey)
+translator.RegisterAICapability(
     "translate",
-    apiKey,
+    "Translate text between languages",
+    "You are a translation assistant. Translate the user's input faithfully.",
 )
 
-summarizer, _ := ai.NewAITool(
-    "summarizer-service",
+summarizer, _ := ai.NewAITool("summarizer-service", apiKey)
+summarizer.RegisterAICapability(
     "summarize",
-    apiKey,
+    "Summarize long-form text",
+    "Summarize the user's input in 3 sentences or fewer.",
 )
 
-sentiment, _ := ai.NewAITool(
-    "sentiment-service",
-    "analyze_sentiment",
-    apiKey,
-)
-
-// Each runs as independent microservice
+// Each runs as an independent microservice
 go translator.Start(ctx, 8081)
 go summarizer.Start(ctx, 8082)
-go sentiment.Start(ctx, 8083)
 
 // Agents can discover and use these tools
-// POST http://localhost:8081/api/capabilities/translate
-// {"text": "Hello", "target_lang": "es"}
+// POST http://localhost:8081/ai/translate
+// (request body is forwarded to the LLM as input)
 ```
 
 ### AI Provider Support
 
-TruvaG3 supports multiple AI providers with consistent APIs.
+TruvaG3 supports the same set of providers documented in the auto-detection
+order above, all behind the unified `core.AIClient` API. Pick a model with the
+portable `"smart"`/`"fast"`/`"code"`/`"vision"` aliases or a provider-specific
+identifier; concrete model lists evolve faster than this doc, so use
+`ai/providers/openai/models.go` for the current alias resolutions.
 
-| Provider | Models | Best For |
-|----------|--------|----------|
-| **OpenAI** | gpt-4, gpt-4-turbo, gpt-3.5-turbo | General purpose, code generation |
-| **Anthropic** | claude-3-opus, claude-3-sonnet | Complex reasoning, analysis |
-| **Google** | gemini-pro, gemini-1.5-pro | Multimodal, long context |
-| **Groq** | llama3, mixtral, gemma | Fast inference, open models |
+| Provider | Alias | Best For |
+|----------|-------|----------|
+| **OpenAI** | `openai` (native) | General purpose, code generation |
+| **Anthropic** | `anthropic` (native) | Complex reasoning, analysis |
+| **Google Gemini** | `gemini` (native) | Multimodal, long context |
+| **AWS Bedrock** | `bedrock` (native) | Enterprise/regulated workloads |
+| **Groq** | `openai.groq` | Fastest inference (Llama family) |
+| **DeepSeek** | `openai.deepseek` | Reasoning + chat at low cost |
+| **xAI Grok** | `openai.xai` | Grok 3/4 family |
+| **Mistral** | `openai.mistral` | European-hosted Mistral models |
+| **Qwen** | `openai.qwen` | Alibaba Qwen family |
+| **Together AI** | `openai.together` | Open-weights models with Turbo |
+| **Ollama** | `openai.ollama` | Local/self-hosted models |
 
 **Example - Multi-Provider Strategy:**
 ```go
@@ -2049,26 +2087,34 @@ func NewAIService() *AIService {
             ai.WithModel("gpt-4"),
         ),
         fast: ai.MustNewClient(
-            ai.WithProvider("groq"),
-            ai.WithModel("llama3-70b"),
+            ai.WithProviderAlias("openai.groq"),
+            ai.WithModel("fast"), // resolves to llama-3.1-8b-instant; see ai/providers/openai/models.go
         ),
     }
 }
 
-func (s *AIService) AnalyzeCode(code string) (string, error) {
+func (s *AIService) AnalyzeCode(ctx context.Context, code string) (string, error) {
     // Use Claude for code analysis
-    return s.reasoning.GenerateResponse(ctx,
+    resp, err := s.reasoning.GenerateResponse(ctx,
         fmt.Sprintf("Analyze this code:\n%s", code),
         &core.AIOptions{Temperature: 0.3},
     )
+    if err != nil {
+        return "", err
+    }
+    return resp.Content, nil
 }
 
-func (s *AIService) GenerateDocumentation(code string) (string, error) {
+func (s *AIService) GenerateDocumentation(ctx context.Context, code string) (string, error) {
     // Use GPT-4 for documentation
-    return s.creative.GenerateResponse(ctx,
+    resp, err := s.creative.GenerateResponse(ctx,
         fmt.Sprintf("Generate comprehensive docs for:\n%s", code),
         &core.AIOptions{Temperature: 0.7},
     )
+    if err != nil {
+        return "", err
+    }
+    return resp.Content, nil
 }
 ```
 
@@ -2388,9 +2434,19 @@ Advanced telemetry that automatically correlates metrics with distributed traces
 
 ```go
 func EmitWithContext(ctx context.Context, name string, value float64, labels ...string)
-func GetBaggage(ctx context.Context) map[string]string
-func SetBaggage(ctx context.Context, key, value string) context.Context
+
+// Baggage is `type Baggage map[string]string`.
+func GetBaggage(ctx context.Context) Baggage
+
+// WithBaggage attaches W3C baggage labels to the context. Pass flat
+// key-value pairs (variadic), not a map.
+func WithBaggage(ctx context.Context, labels ...string) context.Context
 ```
+
+Span creation is **not** a top-level function. Spans are started through a
+`core.Telemetry` instance — typically the one stored on your component
+(`agent.Telemetry.StartSpan(ctx, name)`). The framework wires this for you when
+you enable telemetry; bypassing it is rarely needed.
 
 **Why use context-aware telemetry:**
 - Automatic trace correlation
@@ -2402,12 +2458,15 @@ func SetBaggage(ctx context.Context, key, value string) context.Context
 ```go
 // API Gateway
 func (gw *Gateway) Handle(ctx context.Context, req Request) error {
-    // Start trace and add metadata
-    ctx, span := telemetry.StartSpan(ctx, "gateway.handle")
+    // Start a span using the component's Telemetry instance, then attach
+    // baggage that downstream services and metrics will see.
+    ctx, span := gw.Telemetry.StartSpan(ctx, "gateway.handle")
     defer span.End()
 
-    ctx = telemetry.SetBaggage(ctx, "request_id", req.ID)
-    ctx = telemetry.SetBaggage(ctx, "user_id", req.UserID)
+    ctx = telemetry.WithBaggage(ctx,
+        "request_id", req.ID,
+        "user_id", req.UserID,
+    )
 
     // Metrics include trace context
     telemetry.EmitWithContext(ctx, "gateway.requests", 1,
@@ -2529,7 +2588,7 @@ func handleResearchRequest(w http.ResponseWriter, r *http.Request) {
 func executeWithAI(ctx context.Context, prompt string) (string, error) {
     startTime := time.Now()
 
-    response, err := aiClient.GenerateResponse(ctx, prompt)
+    response, err := aiClient.GenerateResponse(ctx, prompt, nil)
 
     // Record AI metrics
     status := "success"
@@ -2539,7 +2598,10 @@ func executeWithAI(ctx context.Context, prompt string) (string, error) {
     telemetry.RecordAIRequest(telemetry.ModuleOrchestration, "openai",
         float64(time.Since(startTime).Milliseconds()), status)
 
-    return response, err
+    if err != nil {
+        return "", err
+    }
+    return response.Content, nil
 }
 ```
 
@@ -2844,7 +2906,6 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithTieredSelectionRetry(enabled, maxRetries)` - Retry tiered selection on empty LLM responses and parse failures (default: true, 2)
 - `WithTelemetry(enabled)` - Enable metrics and tracing
 - `WithFallback(enabled)` - Graceful degradation
-- `WithCache(enabled, ttl)` - Cache discovery results
 - `WithPlanParseRetry(enabled, maxRetries)` - Retry plan generation on JSON parse failures
 - `WithHallucinationRetry(enabled, maxRetries)` - Retry on hallucinated agent names
 - `WithPlanAIOptions(opts)` - Per-phase overrides for planning LLM calls
@@ -2872,6 +2933,8 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 | `EnableErrorAnalyzer` | `bool` | No | LLM-based error analysis (Layer 3) |
 | `ResultProcessor` | `ResultProcessor` | No | Custom result trimming |
 | `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
+| `ConversationHistoryPreparer` | `ConversationHistoryPreparer` | No | Shared conversation-history preparer for the metadata and hook ingress paths. If nil, the factory auto-builds the default Tier 1 processor from config. |
+| `ActivityCoordinator` | `core.ActivityCoordinator` | No | Real-time agent coordination signals — typically the second return value of `orchestration.BuildMemoryHooks` |
 
 **Example - Production Orchestrator:**
 ```go
@@ -2887,7 +2950,6 @@ orchestrator, err := orchestration.CreateOrchestratorWithOptions(deps,
     orchestration.WithCapabilityProvider("service", "http://capability-service:8080"),
     orchestration.WithTelemetry(true),
     orchestration.WithFallback(true),
-    orchestration.WithCache(true, 5*time.Minute),
     orchestration.WithPlanAIOptions(&orchestration.AIOptionsOverride{
         MaxTokens: orchestration.IntPtr(15000),
     }),
@@ -3003,7 +3065,7 @@ type ExecutionOptions struct {
     MaxConcurrency           int           // Default: 25 | Env: TRUVAG3_EXECUTION_MAX_CONCURRENCY
     StepTimeout              time.Duration // Default: 120s | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
     TotalTimeout             time.Duration // Default: 600s | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
-    RetryAttempts            int           // Retry failed steps (default: 2)
+    RetryAttempts            int           // Total attempts per step (default: 3 = 1 initial + 2 retries; overridable via TRUVAG3_STEP_RETRY_MAX_ATTEMPTS)
     RetryDelay               time.Duration // Delay between retries (default: 2s)
     CircuitBreaker           bool          // Enable circuit breaker (default: true)
     FailureThreshold         int           // Circuit breaker threshold (default: 5)
@@ -4072,8 +4134,9 @@ func GetMetadata(ctx context.Context) map[string]interface{}
 
 **Resume Context:**
 ```go
-// Recommended: one-call context setup
-func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (context.Context, error)
+// Recommended: one-call context setup. The returned func() releases any
+// resources held by the resume context — defer it immediately.
+func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (context.Context, func(), error)
 
 // Manual context building (for more control)
 func WithResumeMode(ctx context.Context, checkpointID string) context.Context
@@ -4214,6 +4277,8 @@ package main
 
 import (
     "context"
+    "errors"
+    "log"
     "os"
     "os/signal"
     "syscall"
@@ -4223,7 +4288,11 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
+    // signal.NotifyContext returns a context that is cancelled on SIGINT/SIGTERM.
+    // Framework.Run() blocks until this context is cancelled, then drains
+    // registered runnables within TRUVAG3_FRAMEWORK_RUNNABLE_DRAIN_TIMEOUT.
+    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
 
     // Create component
     agent := core.NewBaseAgent("production-service")
@@ -4251,38 +4320,14 @@ func main() {
         // Resilience
         core.WithCircuitBreaker(5, 30*time.Second),
     )
-
     if err != nil {
-        log.Fatal("Failed to create framework:", err)
+        log.Fatalf("Failed to create framework: %v", err)
     }
 
-    // Run with graceful shutdown
-    errChan := make(chan error, 1)
-    go func() {
-        errChan <- framework.Run(ctx)
-    }()
-
-    // Wait for shutdown signal
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    select {
-    case <-sigChan:
-        log.Info("Shutdown signal received")
-    case err := <-errChan:
-        log.Error("Framework error:", err)
+    // Run blocks until ctx is cancelled, then performs the graceful drain.
+    if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+        log.Fatalf("Framework error: %v", err)
     }
-
-    // Graceful shutdown
-    shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-    defer cancel()
-
-    if err := framework.Shutdown(shutdownCtx); err != nil {
-        log.Error("Shutdown error:", err)
-        os.Exit(1)
-    }
-
-    log.Info("Graceful shutdown complete")
 }
 ```
 
@@ -4483,17 +4528,13 @@ func LongRunningOperation(ctx context.Context) error {
 TruvaG3 uses typed errors for better error handling:
 
 ```go
-// Circuit breaker errors
-var ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
-
-// Retry errors
-var ErrMaxRetriesExceeded = errors.New("max retries exceeded")
-
-// Discovery errors
-var ErrServiceNotFound = errors.New("service not found")
-
-// Configuration errors
-var ErrInvalidConfiguration = errors.New("invalid configuration")
+// Defined in core/errors.go — match against them with errors.Is(err, core.Err...)
+var (
+    ErrCircuitBreakerOpen   = errors.New("circuit breaker open")
+    ErrMaxRetriesExceeded   = errors.New("maximum retries exceeded")
+    ErrServiceNotFound      = errors.New("service not found")
+    ErrInvalidConfiguration = errors.New("invalid configuration")
+)
 ```
 
 **Example - Comprehensive Error Handling:**
