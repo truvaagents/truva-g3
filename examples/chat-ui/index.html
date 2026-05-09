@@ -1504,7 +1504,14 @@
         let responseText = '';
 
         // Stats tracking
-        let stats = { messages: 0, toolsUsed: 0, totalLatencyMs: 0, latencyCount: 0, tokens: 0, promptTokens: 0, completionTokens: 0 };
+        // Single source of truth for stats shape — every reset site (new chat,
+        // load session, delete session) must use this, otherwise updateStatsDisplay
+        // will throw "Cannot read properties of undefined (reading 'toLocaleString')"
+        // on whichever field is missing from the partial literal.
+        function makeEmptyStats() {
+            return { messages: 0, toolsUsed: 0, totalLatencyMs: 0, latencyCount: 0, tokens: 0, promptTokens: 0, completionTokens: 0 };
+        }
+        let stats = makeEmptyStats();
         let lastByPhase = null;  // per-phase breakdown from most recent usage event
         let lastUsageTokens = 0; // total tokens from most recent usage event
 
@@ -1658,7 +1665,7 @@
             messagesDiv.innerHTML = '';
             showWelcome();
             // Reset stats
-            stats = { messages: 0, toolsUsed: 0, totalLatencyMs: 0, latencyCount: 0, tokens: 0 };
+            stats = makeEmptyStats();
             updateStatsDisplay();
             // Update header
             updateChatTitle('New Chat');
@@ -1727,7 +1734,7 @@
             updateChatTitle(title || 'Chat');
 
             // Reset stats
-            stats = { messages: 0, toolsUsed: 0, totalLatencyMs: 0, latencyCount: 0, tokens: 0 };
+            stats = makeEmptyStats();
 
             // Load history
             await loadHistory(sessionId);
@@ -1746,7 +1753,7 @@
                         sessionId = null;
                         localStorage.removeItem('sessionId');
                         updateChatTitle('New Chat');
-                        stats = { messages: 0, toolsUsed: 0, totalLatencyMs: 0, latencyCount: 0, tokens: 0 };
+                        stats = makeEmptyStats();
                         updateStatsDisplay();
                         showWelcome();
                     }
