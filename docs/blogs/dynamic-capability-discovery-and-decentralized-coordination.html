@@ -171,22 +171,22 @@
 <p>The same point per framework, in everyday terms:</p>
 
 <ul>
-  <li><strong>LangGraph</strong> — Build a graph in code that names every agent and every tool you will use. The graph is fixed once the program starts.</li>
-  <li><strong>CrewAI</strong> — Assemble a <em>crew</em> by listing the agents and the tasks you want them to do. The crew works only with what you have given it.</li>
-  <li><strong>AutoGen</strong> — Group agents into a <em>team</em>. The team's members are set when you construct it; new members do not join at runtime.</li>
-  <li><strong>OpenAI Agents SDK</strong> — Write each agent in code, list its tools, list which other agents it may hand off to. Every reference is something the developer wrote down by name.</li>
-  <li><strong>Microsoft Semantic Kernel</strong> — Register your plugins (groups of functions) with the kernel at startup. The model then chooses which plugin to call from that registered set.</li>
-  <li><strong>LlamaIndex Agents</strong> — Build each agent with an explicit list of tools. For multi-agent setups, a workflow object holds a fixed list of agents.</li>
-  <li><strong>Pydantic AI</strong> — Declare each agent with its tools attached. To compose multiple agents, write code that calls each one by name in the order you want.</li>
+  <li><strong>LangGraph</strong><a class="ref" href="#ref-17">[17]</a> — Build a graph in code that names every agent and every tool you will use. The graph is fixed once the program starts.</li>
+  <li><strong>Microsoft Agent Framework</strong><a class="ref" href="#ref-18">[18]</a> — Attach tools to each agent at construction. For multi-agent coordination, declare a graph-based <em>Workflow</em> up front. Both the tools and the workflow are fixed when the program starts.</li>
+  <li><strong>OpenAI Agents SDK</strong><a class="ref" href="#ref-19">[19]</a> — Write each agent in code, list its tools, list which other agents it may hand off to. Every reference is something the developer wrote down by name.</li>
+  <li><strong>Google ADK</strong><a class="ref" href="#ref-20">[20]</a> — Define each agent in code, list its tools and its sub-agents. The set of tools and the agent hierarchy are fixed when the program starts.</li>
+  <li><strong>CrewAI</strong><a class="ref" href="#ref-21">[21]</a> — Assemble a <em>crew</em> by listing the agents and the tasks you want them to do. The crew works only with what you have given it.</li>
+  <li><strong>LlamaIndex Agents</strong><a class="ref" href="#ref-22">[22]</a> — Build each agent with an explicit list of tools. For multi-agent setups, a workflow object holds a fixed list of agents.</li>
+  <li><strong>Pydantic AI</strong><a class="ref" href="#ref-23">[23]</a> — Declare each agent with its tools attached. To compose multiple agents, write code that calls each one by name in the order you want.</li>
 </ul>
 
-<p>Tools and agents that run in another process or service are not an exception to this. To use a tool that lives elsewhere, the agent's own code must contain a wrapper that knows the external tool exists and how to reach it. The wrapper is what the framework treats as "the tool"; the framework still requires that wrapper to be present in the source at startup. None of these frameworks reads a shared, live registry to learn what tools or agents are currently available across the deployment, and none of them lets new tools or agents — deployed elsewhere, after the program has started — become usable to existing callers without a code change.</p>
+<p>Tools and agents that run in another process or service are not an exception to this. To use a tool that lives elsewhere, the agent's own code must contain a wrapper that knows the external tool exists and how to reach it. The wrapper is what the framework treats as "the tool"; the framework still requires that wrapper to be present in the source at startup. By default, none of these frameworks reads a shared, live registry to learn what tools or agents are currently available across the deployment, and none lets new tools or agents — deployed elsewhere, after the program has started — become usable to existing callers without a code change.</p>
 
-<figure>
+<figure id="fig-frameworks-build-vs-runtime">
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
-     aria-label="Build time versus runtime in today's agent frameworks. On the left under the heading BUILD TIME with subtitle 'Tools and peers are wired in source', a large rounded rectangle labeled 'Agent program (compiled binary)' contains an Agent loop component near the top with three smaller boxes inside it — Tool A, Tool B, and Sub-agent C — connected to the loop by direct blue arrows, indicating that all peers and tools are part of the same compiled program. A code-style line below reads 'agent.tools = [tool_a, tool_b, sub_agent_c]'. Captions explain that all participants are bound into the agent's program before it starts, and no outside list is consulted at runtime. On the right under the heading RUNTIME with subtitle 'A new tool deployed elsewhere cannot be picked up', the same agent program is shown running with the same three tools still sealed inside. To the right of the program, outside its boundary, a separate Tool D box drawn in a dashed red border is labeled 'deployed later, separate process'. Between them, a broken red dashed line with a large red X symbol in the middle indicates there is no link. Captions explain that the running agent has no way to discover the new tool, and a code change and redeploy are required to use it.">
+     aria-label="Build time versus runtime in popular agent frameworks. On the left under the heading BUILD TIME with subtitle 'Tools and peers are wired in source', a large rounded rectangle labeled 'Agent program (compiled binary)' contains an Agent loop component near the top with three smaller boxes inside it — Tool A, Tool B, and Sub-agent C — connected to the loop by direct blue arrows, indicating that all peers and tools are part of the same compiled program. A code-style line below reads 'agent.tools = [tool_a, tool_b, sub_agent_c]'. Captions explain that all participants are bound into the agent's program before it starts, and no outside list is consulted at runtime. On the right under the heading RUNTIME with subtitle 'A new tool deployed elsewhere cannot be picked up', the same agent program is shown running with the same three tools still sealed inside. To the right of the program, outside its boundary, a separate Tool D box drawn in a dashed red border is labeled 'deployed later, separate process'. Between them, a broken red dashed line with a large red X symbol in the middle indicates there is no link. Captions explain that the running agent has no way to discover the new tool, and a code change and redeploy are required to use it.">
   <defs>
     <marker id="m-fc-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
@@ -278,7 +278,7 @@
   <text x="570" y="290" text-anchor="middle" class="fc-caption">The running agent has no way to discover it.</text>
   <text x="570" y="306" text-anchor="middle" class="fc-caption">A code change and redeploy are required to use it.</text>
 </svg>
-<figcaption>Build time vs runtime in today's frameworks. <strong>Left:</strong> tools and peers are referenced by name in the agent's source code; once compiled, they are part of the same program. <strong>Right:</strong> a tool deployed separately after the agent starts is invisible to the running agent — there is no shared registry the agent consults at runtime, so the only way to use the new tool is to add a reference to it in source and redeploy.</figcaption>
+<figcaption><strong>Figure 1.</strong> Build time vs runtime in popular agent frameworks. <strong>Left:</strong> tools and peers are referenced by name in the agent's source code; once compiled, they are part of the same program. <strong>Right:</strong> a tool deployed separately after the agent starts is invisible to the running agent — there is no shared registry the agent consults at runtime, so the only way to use the new tool is to add a reference to it in source and redeploy.</figcaption>
 </figure>
 
 <p>The shared pattern across all seven is a <em>central coordinator</em>. Some component inside the framework — a graph runner, a crew, a team manager, an LLM-driven dispatch loop, a workflow object — holds the plan, decides the order of operations, and routes work between participants. The participants themselves are passive: they react to being called, against a list of peers and tools that was fixed when the program started. Whether the order is decided by an LLM, a routing graph, or a turn-selection policy, the list it picks from does not change while the program is running. This is the well-known <strong>orchestration</strong> pattern from distributed-systems literature, where one process directs the others.</p>
@@ -305,11 +305,11 @@
 
 <p>Microsoft's multi-agent reference architecture<a class="ref" href="#ref-6">[6]</a> describes the foundational pattern as a <em>"Dynamic Agent Registry (Service Mesh for Agents)"</em>: an orchestrator consults this registry at runtime to discover and route to specialized agents. Alibaba Cloud's recent reference design<a class="ref" href="#ref-7">[7]</a> emphasizes the location-transparency property explicitly: <em>"Agents do not directly hold each other's physical addresses (IP/Port) but query the Agent Registry and use each other's logical names (agentName) to obtain access endpoints. This achieves complete decoupling with location transparency."</em></p>
 
-<figure>
+<figure id="fig-orchestration-vs-decentralized">
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
-     aria-label="Side-by-side comparison of two architectural approaches. On the left, today's agent frameworks place a single Orchestrator at the top — labeled with examples such as graph, crew, runner, team, kernel, workflow — that directs three statically wired participants (a Tool, an Agent, and a Tool) below it. Solid arrows go down from the Orchestrator to each participant, indicating central control. On the right, a micro-agents architecture has a passive Capability Registry at the top, labeled 'no central control logic'. Three participants below — Tool, Agent, Tool — each push solid arrows up to the registry to register themselves. There is no central conductor; coordination is decentralized, with peers finding each other through the registry and calling each other directly. Captions reinforce: 'Participants are wired in source at construction. The orchestrator routes work between them.' on the left; 'Participants register at runtime. Peers find each other through the registry. No central conductor.' on the right.">
+     aria-label="Side-by-side comparison of two architectural approaches. On the left, popular agent frameworks place a single Orchestrator at the top — labeled with examples such as graph, crew, runner, team, kernel, workflow — that directs three statically wired participants (a Tool, an Agent, and a Tool) below it. Solid arrows go down from the Orchestrator to each participant, indicating central control. On the right, a micro-agents architecture has a passive Capability Registry at the top, labeled 'no central control logic'. Three participants below — Tool, Agent, Tool — each push solid arrows up to the registry to register themselves. There is no central conductor; coordination is decentralized, with peers finding each other through the registry and calling each other directly. Captions reinforce: 'Participants are wired in source at construction. The orchestrator routes work between them.' on the left; 'Participants register at runtime. Peers find each other through the registry. No central conductor.' on the right.">
   <defs>
     <marker id="m-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
@@ -332,7 +332,7 @@
   </style>
 
   <!-- LEFT: today's frameworks -->
-  <text x="190" y="22" text-anchor="middle" class="t-section-label">TODAY'S FRAMEWORKS</text>
+  <text x="190" y="22" text-anchor="middle" class="t-section-label">POPULAR FRAMEWORKS</text>
   <text x="190" y="42" text-anchor="middle" class="t-section-title">Centralized orchestration</text>
 
   <rect x="125" y="78" width="130" height="65" rx="6" class="orchestrator"/>
@@ -383,12 +383,12 @@
   <text x="570" y="310" text-anchor="middle" class="t-caption">Participants register at runtime.</text>
   <text x="570" y="326" text-anchor="middle" class="t-caption">Peers find each other through the registry. No central conductor.</text>
 </svg>
-<figcaption>Two architectural approaches in contrast. <strong>Left</strong>: today's agent frameworks place a central orchestrator at the top, with all participants wired in at construction; the orchestrator routes work between them. <strong>Right</strong>: a micro-agents architecture inverts this — participants register themselves into a passive registry at runtime; coordination is decentralized, with peers finding each other through the registry and calling each other directly, with no central component directing the flow.</figcaption>
+<figcaption><strong>Figure 2.</strong> Two architectural approaches in contrast. <strong>Left</strong>: popular agent frameworks place a central orchestrator at the top, with all participants wired in at construction; the orchestrator routes work between them. <strong>Right</strong>: a micro-agents architecture inverts this — participants register themselves into a passive registry at runtime; coordination is decentralized, with peers finding each other through the registry and calling each other directly, with no central component directing the flow.</figcaption>
 </figure>
 
 <p>The contrast with the seven frameworks in the previous section is direct. Each of those binds every participant at construction; a micro-agents architecture lets participants come and go independently. The registry is the only thing they need to know about each other, and — in this article's variant — the only thing the LLM needs to know about them either.</p>
 
-<figure>
+<figure id="fig-microagents-build-vs-runtime">
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -475,18 +475,30 @@
   <text x="570" y="290" text-anchor="middle" class="mc-caption">Tool D registers on startup; the agent sees it on its next registry read.</text>
   <text x="570" y="306" text-anchor="middle" class="mc-caption">No code change. No redeploy.</text>
 </svg>
-<figcaption>Build time vs runtime in a micro-agents architecture. <strong>Left:</strong> the agent program ships with no peer references in source — only a registry client. Tools and peers are not bound at compile time. <strong>Right:</strong> a tool deployed separately registers itself into the shared registry on startup; the agent picks it up on its next read, with no code change and no redeploy.</figcaption>
+<figcaption><strong>Figure 3.</strong> Build time vs runtime in a micro-agents architecture. <strong>Left:</strong> the agent program ships with no peer references in source — only a registry client. Tools and peers are not bound at compile time. <strong>Right:</strong> a tool deployed separately registers itself into the shared registry on startup; the agent picks it up on its next read, with no code change and no redeploy.</figcaption>
 </figure>
 
-<p>This article describes one specific reference design for that class — and that design has a working open-source reference implementation in <strong>TruvaG3</strong><a class="ref" href="#ref-1">[1]</a>, the framework this article is grounded in. Everything that follows can be cloned, deployed locally, and observed in the live registry-viewer UI. The dynamic registry pattern itself has decades of precedent in service-discovery infrastructure; the novelty here is the role the registry plays at request time. Its current contents are what the LLM sees in its planning prompt, so the LLM picks among capabilities that are dynamically present rather than capabilities that were configured ahead of time.</p>
+<p>This article describes one specific reference design for that class — and that design has a working open-source reference implementation in <strong>TruvaG3</strong><a class="ref" href="#ref-1">[1]</a>, the framework this article is grounded in. Everything that follows can be cloned, deployed locally, and observed in the live registry-viewer UI. The dynamic registry pattern itself has decades of precedent in service-discovery infrastructure, and the LLM-as-registry-consumer extension is also available in other open-source systems<a class="ref" href="#ref-16">[16]</a>. The architectural point here is the role the registry plays at request time: its current contents are what the LLM sees in its planning prompt, so the LLM picks among capabilities that are dynamically present rather than capabilities that were configured ahead of time.</p>
+
+<aside class="callout">
+<strong>The architecture in five steps.</strong>
+<ol>
+  <li>Tool or agent starts up and publishes its capabilities to a shared registry.</li>
+  <li>A user request arrives at an agent.</li>
+  <li>The agent reads the registry's current contents — that becomes the LLM's planning catalog.</li>
+  <li>The LLM picks capabilities by name; the framework resolves each name to an endpoint via the registry.</li>
+  <li>The agent makes direct HTTP calls to those endpoints; peers respond.</li>
+</ol>
+For plans that can't be made upfront, the agent loops back to step 3 with new context.
+</aside>
 </section>
 
 <section>
 <h2>A different approach: the capability registry</h2>
 
-<p>The architecture is built around a single primitive: a capability registry. Every participant — whether a simple tool or a full reasoning agent — publishes the capabilities it offers into a shared index, each identified by name. These capability names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning context, and the LLM picks which capabilities to invoke. If the LLM chooses <code>financial_analysis</code> for a step, the framework dispatches that step to whichever endpoint the registry currently lists for <code>financial_analysis</code>. Whether that endpoint is a deterministic function or an agent running its own plan-act-observe loop is invisible at the dispatch site. (In the reference implementation, the index is backed by Redis<a class="ref" href="#ref-2">[2]</a>, but the choice of backend does not affect the pattern.)</p>
+<p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant — whether a simple tool or a full reasoning agent — publishes the capabilities it offers into a shared index, each identified by name. These capability names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning context, and the LLM picks which capabilities to invoke. For example, if the LLM chooses <code>financial_analysis</code> for a step, the framework dispatches that step to whichever endpoint the registry currently lists for <code>financial_analysis</code>. Whether that endpoint is a deterministic function or an agent running its own plan-act-observe loop is invisible at the dispatch site. (In the reference implementation, the index is backed by Redis<a class="ref" href="#ref-2">[2]</a>, but the choice of backend does not affect the pattern.)</p>
 
-<figure>
+<figure id="fig-self-registration">
 <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -518,19 +530,19 @@
   </style>
 
   <!-- Registry block -->
-  <rect x="20" y="20" width="720" height="140" rx="8" class="registry"/>
+  <rect x="80" y="20" width="600" height="140" rx="8" class="registry"/>
   <text x="380" y="44" text-anchor="middle" class="t-title">Capability Registry</text>
   <text x="380" y="62" text-anchor="middle" class="t-sub">passive index · accepts whoever registers · entries expire on missed heartbeat</text>
-  <line x1="40" y1="78" x2="720" y2="78" stroke="#d0d7de" stroke-width="1"/>
+  <line x1="100" y1="78" x2="660" y2="78" stroke="#d0d7de" stroke-width="1"/>
 
-  <text x="40" y="98" class="t-cap">capabilities:get_current_weather  → weather-tool-v2</text>
-  <text x="720" y="98" text-anchor="end" class="t-state-cap">just registered</text>
+  <text x="100" y="98" class="t-cap">capabilities:get_current_weather  → weather-tool-v2</text>
+  <text x="660" y="98" text-anchor="end" class="t-state-cap">just registered</text>
 
-  <text x="40" y="118" class="t-cap">capabilities:financial_analysis   → research-agent</text>
-  <text x="720" y="118" text-anchor="end" class="t-state-cap">heartbeat 5s ago</text>
+  <text x="100" y="118" class="t-cap">capabilities:financial_analysis   → research-agent</text>
+  <text x="660" y="118" text-anchor="end" class="t-state-cap">heartbeat 5s ago</text>
 
-  <text x="40" y="138" class="t-cap">capabilities:convert_currency     → currency-tool</text>
-  <text x="720" y="138" text-anchor="end" class="t-state-cap">heartbeat 9s ago</text>
+  <text x="100" y="138" class="t-cap">capabilities:convert_currency     → currency-tool</text>
+  <text x="660" y="138" text-anchor="end" class="t-state-cap">heartbeat 9s ago</text>
 
   <!-- Arrow 1: register from weather-tool-v2 (highlighted action) -->
   <line x1="145" y1="289" x2="145" y2="161" class="arrow-blue" marker-end="url(#r-arr-blue)"/>
@@ -563,10 +575,10 @@
   <text x="615" y="312" text-anchor="middle" class="t-box-title">currency-tool</text>
   <text x="615" y="330" text-anchor="middle" class="t-box-state">running</text>
 </svg>
-<figcaption>Self-registration: at boot, each participant pushes its own description to the registry — name, address, capabilities, and TTL — and from then on heartbeats every 15 seconds to refresh that 30-second TTL. The registry never initiates; it accepts whoever registers and evicts whoever stops heartbeating. The set of capabilities the LLM sees in any planning prompt is whatever has registered and is currently heartbeating — nothing was preconfigured anywhere.</figcaption>
+<figcaption><strong>Figure 4.</strong> Self-registration: at boot, each participant pushes its own description to the registry — name, address, capabilities, and TTL — and from then on heartbeats every 15 seconds to refresh that 30-second TTL. The registry never initiates; it accepts whoever registers and evicts whoever stops heartbeating. The set of capabilities the LLM sees in any planning prompt is whatever has registered and is currently heartbeating — nothing was preconfigured anywhere.</figcaption>
 </figure>
 
-<p>There are exactly three roles in the architecture:</p>
+<p>There are three core roles in the architecture:</p>
 
 <table>
   <thead>
@@ -693,7 +705,7 @@
 
 <p>The mechanics behind the three properties below — a key-value registry, TTL-based liveness, additive registration — are borrowed from service-discovery patterns that have been used in microservice systems for over a decade. What is distinctive in the micro-agents version of those mechanics is the role they play: the consumer of the registry's contents is not application code with a known target name; it is an LLM choosing from a runtime menu. The plumbing is standard. The mediation is not. This combination is uncommon in agent frameworks, where tools are usually bound to agents at construction time.</p>
 
-<figure>
+<figure id="fig-tool-registration-timelapse">
 <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -841,12 +853,12 @@
   <text x="640" y="320" text-anchor="middle" class="t-mini-cap">Liveness <tspan font-style="italic">is</tspan> the registration.</text>
 
 </svg>
-<figcaption>How the LLM's planning catalog changes over time, drawn from a live local cluster running <code>flight-tool</code> and <code>hotel-tool</code>. (Two capabilities are shown per tool for clarity; <code>flight-tool</code> publishes four in total and <code>hotel-tool</code> publishes three.) <strong>(A)</strong> <code>flight-tool</code> deploys and registers; the registry now contains <code>search_flights</code> and <code>cheapest_dates</code>, each mapped to <code>flight-tool</code> — entries that did not exist a moment ago. <strong>(B)</strong> <code>hotel-tool</code> deploys alongside and contributes new capabilities — <code>search_hotels</code> and <code>hotel_ratings</code>; the catalog grows, and the LLM can now plan a multi-step "find a flight and find a hotel" request, all without any agent code change. <strong>(C)</strong> <code>hotel-tool</code> stops heartbeating; its entries expire within one TTL window, and the catalog shrinks back to where it was after Panel A. The three panels visualize the three properties described below: a runtime tool list, a live registry, and zero-config additivity.</figcaption>
+<figcaption><strong>Figure 5.</strong> How the LLM's planning catalog changes over time, drawn from a live local cluster running <code>flight-tool</code> and <code>hotel-tool</code>. (Two capabilities are shown per tool for clarity; <code>flight-tool</code> publishes four in total and <code>hotel-tool</code> publishes three.) <strong>(A)</strong> <code>flight-tool</code> deploys and registers; the registry now contains <code>search_flights</code> and <code>cheapest_dates</code>, each mapped to <code>flight-tool</code> — entries that did not exist a moment ago. <strong>(B)</strong> <code>hotel-tool</code> deploys alongside and contributes new capabilities — <code>search_hotels</code> and <code>hotel_ratings</code>; the catalog grows, and the LLM can now plan a multi-step "find a flight and find a hotel" request, all without any agent code change. <strong>(C)</strong> <code>hotel-tool</code> stops heartbeating; its entries expire within one TTL window, and the catalog shrinks back to where it was after Panel A. The three panels visualize the three properties described below: a runtime tool list, a live registry, and zero-config additivity.</figcaption>
 </figure>
 
 <p>The same mechanism applies to agents. <code>research-agent-telemetry</code><a class="ref" href="#ref-10">[10]</a> publishes capabilities like <code>financial_analysis</code> and <code>sentiment_analysis</code>; <code>devops-chat-agent</code><a class="ref" href="#ref-15">[15]</a> publishes <code>devops_operations</code>. Each agent registers into the same shared registry, exactly the way a tool would. The only structural difference, invisible at the registry layer, is what runs behind those endpoints: a plan-act-observe loop instead of a deterministic function.</p>
 
-<figure>
+<figure id="fig-agent-registration-timelapse">
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -939,10 +951,10 @@
   <text x="570" y="290" text-anchor="middle" class="ag-orch">Agent loop</text>
   <text x="570" y="312" text-anchor="middle" class="ag-orch-line">plan → act → observe <tspan font-weight="700">↻</tspan></text>
 </svg>
-<figcaption>How agents publish their capabilities, shown as a time-lapse like the earlier tool figure. <strong>(A)</strong> At <code>t = 0s</code>, <code>research-agent-telemetry</code> deploys; the registry now lists <code>financial_analysis</code> and <code>sentiment_analysis</code>, both newly added. <strong>(B)</strong> At <code>t = 90s</code>, <code>devops-chat-agent</code> deploys alongside; the registry now also contains <code>devops_operations</code>. Both agents register the same way a tool would — capability name, endpoint, field hints, and TTL-driven liveness — and the registry treats both kinds of participants identically. From the LLM's planning prompt, all three capabilities look like any other. The structural difference is invisible at the registry layer: behind these endpoints runs a plan-act-observe loop, not a stateless function.</figcaption>
+<figcaption><strong>Figure 6.</strong> How agents publish their capabilities, shown as a time-lapse like the earlier tool figure. <strong>(A)</strong> At <code>t = 0s</code>, <code>research-agent-telemetry</code> deploys; the registry now lists <code>financial_analysis</code> and <code>sentiment_analysis</code>, both newly added. <strong>(B)</strong> At <code>t = 90s</code>, <code>devops-chat-agent</code> deploys alongside; the registry now also contains <code>devops_operations</code>. Both agents register the same way a tool would — capability name, endpoint, field hints, and TTL-driven liveness — and the registry treats both kinds of participants identically. From the LLM's planning prompt, all three capabilities look like any other. The structural difference is invisible at the registry layer: behind these endpoints runs a plan-act-observe loop, not a stateless function.</figcaption>
 </figure>
 
-<p><strong>The tool list is runtime data, not code.</strong> The agent's source names no tool and no capability. The set of capabilities a request can use is not declared anywhere in the agent's code — it is whatever the registry currently advertises. When a request arrives, the framework reads that current state and presents it to the LLM as the planning context. Only at that moment, when the LLM is shown a fresh menu and asked to plan against the user's request, does any specific capability enter the picture. The LLM picks from the menu; the framework then dispatches each chosen step to the address the registry currently lists for it. The same chosen capability, picked again from a later request, can land on a different address if the topology has shifted in between.</p>
+<p><strong>The tool list is runtime data, not code.</strong> The agent's source names no tool and no capability. The set of capabilities a request can use is not declared anywhere in the agent's code — it is whatever the registry currently advertises. When a request arrives, the framework reads that current state and presents it to the LLM as the planning context. Only at that moment, when the LLM is shown a fresh menu and asked to plan against the incoming request, does any specific capability enter the picture. The LLM picks from the menu; the framework then dispatches each chosen step to the address the registry currently lists for it. The same chosen capability, picked again from a later request, can land on a different address if the topology has shifted in between.</p>
 
 <p><strong>A live registry, not a static catalog.</strong> Every participant sends a heartbeat to the registry every 15 seconds, refreshing a 30-second TTL on its entry. If a participant crashes, shuts down, or loses network connectivity, it drops out of the registry within at most one TTL window. What the LLM sees on its next planning prompt is therefore the set of participants currently running and reachable — nothing more, nothing less. There is no separate health-check system; liveness <em>is</em> the registration.</p>
 
@@ -956,7 +968,7 @@
 
 <p>One way to see the architecture is as a system with two distinct coordination layers, each using a different pattern.</p>
 
-<figure>
+<figure id="fig-registry-architecture">
 <svg viewBox="0 0 760 520" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -1047,13 +1059,13 @@
     <text x="448" y="4" class="t-legend">discover</text>
   </g>
 </svg>
-<figcaption>Tools and Agents are peers in one capability registry. Agents both register and discover; Tools only register. The asymmetry — that Agents carry an internal orchestrator and may call back to other registered peers — sits inside each Agent and is enforced at compile time.</figcaption>
+<figcaption><strong>Figure 7.</strong> Tools and Agents are peers in one capability registry. Agents both register and discover; Tools only register. The asymmetry — that Agents carry an internal orchestrator and may call back to other registered peers — sits inside each Agent and is enforced at compile time.</figcaption>
 </figure>
 
 <h3>Inside an agent: orchestration</h3>
 <p>Each Agent has its own per-request orchestrator. When a request arrives, the orchestrator hands the LLM its current capability catalog (kept in sync with the registry), asks for a plan, then executes the plan step by step with parallelism where possible — resolving each capability to a concrete endpoint at execution time, handling retries and parameter resolution, and synthesizing the final response. This is orchestration in the traditional sense: one conductor directing a sequence of steps against a known plan. It is the right pattern for a single agent's reasoning loop, where global state is needed.</p>
 
-<figure>
+<figure id="fig-orchestration-inside-agent">
 <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -1108,13 +1120,13 @@
   <path d="M 380 200 C 380 240 165 240 165 215 L 165 200" class="arrow-orch-loop" marker-end="url(#oa-arr-orch)"/>
   <text x="272" y="252" text-anchor="middle" class="t-loop">iterative re-plan, if needed</text>
 </svg>
-<figcaption><strong>Inside an agent: orchestration.</strong> A single AIOrchestrator inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop from execute back to plan when the LLM decides partway through that further planning is needed. One conductor; one process.</figcaption>
+<figcaption><strong>Figure 8.</strong> <strong>Inside an agent: orchestration.</strong> A single AIOrchestrator inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop from execute back to plan when the LLM decides partway through that further planning is needed. One conductor; one process.</figcaption>
 </figure>
 
 <h3>Between participants: decentralized coordination</h3>
 <p>Between participants, no such conductor exists. Each Agent runs its own orchestrator on its own. When one Agent needs a capability that another participant exposes, it asks the registry, gets an address, and calls the endpoint directly over HTTP. The receiving participant — Tool or Agent — handles the call on its own terms. Nothing in the middle routes, sequences, or coordinates. This is decentralized coordination: peers acting on a shared protocol (the capability contract) rather than being directed by a controller.</p>
 
-<figure>
+<figure id="fig-decentralized-coordination">
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
@@ -1186,24 +1198,28 @@
   <path d="M 220 260 C 285 318 360 318 425 260" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
   <text x="322" y="313" text-anchor="middle" class="bp-t-arrow-blue">HTTP (Agent → Agent)</text>
 </svg>
-<figcaption><strong>Between participants: decentralized coordination.</strong> Agent A receives the user query (the inbound blue arrow on the left) and becomes the request initiator. From there, each participant runs independently. The dashed lines up to the registry carry registration and discovery; the blue arrows between participants carry the actual HTTP calls. There is no process in the middle that coordinates the calls — peers act on the shared protocol, the capability contract, and call each other directly.</figcaption>
+<figcaption><strong>Figure 9.</strong> <strong>Between participants: decentralized coordination.</strong> Agent A receives the user query (the inbound blue arrow on the left) and becomes the request initiator. From there, each participant runs independently. The dashed lines up to the registry carry registration and discovery; the blue arrows between participants carry the actual HTTP calls. There is no process in the middle that coordinates the calls — peers act on the shared protocol, the capability contract, and call each other directly.</figcaption>
 </figure>
 
-<p>The microservices analogy is exact. A microservice has step-by-step business logic on the inside (orchestration) and interacts with peers through service discovery and direct calls (decentralized coordination). The architecture applies the same pattern to multi-agent systems: orchestration inside each agent, decentralized coordination between agents and tools. In the reference implementation, the per-agent orchestrator lives in the <code>orchestration/</code> package<a class="ref" href="#ref-4">[4]</a>; the inter-agent call layer lives in <code>core/</code><a class="ref" href="#ref-2">[2]</a>.</p>
+<p>The microservices analogy is direct. A microservice has step-by-step business logic on the inside (orchestration) and interacts with peers through service discovery and direct calls (decentralized coordination). The architecture applies the same pattern to multi-agent systems: orchestration inside each agent, decentralized coordination between agents and tools. In the reference implementation, the per-agent orchestrator lives in the <code>orchestration/</code> package<a class="ref" href="#ref-4">[4]</a>; the inter-agent call layer lives in <code>core/</code><a class="ref" href="#ref-2">[2]</a>.</p>
 </section>
 
 <section>
-<h2>One execution, examined</h2>
+<h2>Two executions, examined</h2>
 
-<p>The clearest way to understand an architecture is to look at a real run. Below is one captured execution from the reference implementation, in response to a single user query:</p>
+<p>The clearest way to understand an architecture is to look at real runs. Below are two captured executions from the reference implementation — one showing orchestration <em>inside</em> an agent, the other showing one agent <em>calling</em> another.</p>
+
+<h3>Switzerland trip planning: orchestration with tools</h3>
+
+<p>The first run is in response to a single query:</p>
 
 <blockquote><em>"Find out the top 3 destinations for tourists in Switzerland, by popularity, and give me their weather right now and a good place to stay at each of those locations."</em></blockquote>
 
 <p>The agent that received this query — <code>travel-chat-agent</code><a class="ref" href="#ref-12">[12]</a> — is one Agent, the kind described in this article. The query is interesting because the agent cannot plan the full response upfront: it does not know the three top destinations until it has actually performed the web search. Its orchestrator therefore runs the request in <strong>three phases</strong>, returning to plan twice as new information becomes available — directly exercising the loop-back arrow shown in the orchestration diagram earlier in the article.</p>
 
-<figure>
+<figure id="fig-switzerland-dag">
 <img src="switzerland-execution-dag.png" alt="Execution DAG for the Switzerland query, captured from the registry viewer. The diagram is laid out vertically and shows three distinct phases. Top: a Planning node feeds a single web-search-tool call. Then a 'Phase 1 → 2' transition node, followed by a Tier Select node, followed by a Phase Plan node, which branches into three parallel geocoding-tool calls. Then a 'Phase 2 → 3' transition node, followed by another Tier Select and Phase Plan, which branches into six parallel calls — three weather-tool-v2 calls and three hotel-tool calls. All ten tool steps converge into a Synthesis (Stream) node at the bottom. The phase boundaries are visually distinct." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
-<figcaption>Three-phase execution captured from the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. <strong>Phase 1</strong> plans a single web search; the LLM cannot plan further until it knows the destinations. <strong>Phase 2</strong> — generated after Phase 1's results return — plans three parallel geocoding calls (one per destination: Zurich, Zermatt, Interlaken). <strong>Phase 3</strong> — generated after Phase 2's coordinates return — plans six parallel calls (weather and hotel for each destination). Total wall time: 29 seconds. Maximum parallelism: six.</figcaption>
+<figcaption><strong>Figure 10.</strong> Three-phase execution captured from the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. <strong>Phase 1</strong> plans a single web search; the LLM cannot plan further until it knows the destinations. <strong>Phase 2</strong> — generated after Phase 1's results return — plans three parallel geocoding calls (one per destination: Zurich, Zermatt, Interlaken). <strong>Phase 3</strong> — generated after Phase 2's coordinates return — plans six parallel calls (weather and hotel for each destination). Total wall time: 29 seconds. Maximum parallelism: six.</figcaption>
 </figure>
 
 <p>What this run demonstrates about the micro-agents architecture in action:</p>
@@ -1213,11 +1229,50 @@
   <li><strong>Dependencies were data-driven, not configured.</strong> Independent steps ran in parallel within each phase (three geocodings together; six weather-and-hotel calls together); cross-phase steps waited for upstream output. The structure was produced by the LLM planning against the catalog, not by a hand-wired routing graph somewhere.</li>
   <li><strong>Participants were not bound to the agent at construction.</strong> Each Tool registered independently from its own deployment. <code>travel-chat-agent</code> learned of them only because they were currently in the catalog when this request arrived. A tool deployed five minutes earlier would have been just as eligible.</li>
   <li><strong>Cross-step data flow used registered field schemas.</strong> The destination names from <code>web_search</code>'s response flowed into the geocoding inputs; the latitude and longitude outputs of geocoding flowed into the weather inputs — all via the output field hints each capability had published in its registration. No separate data-pipeline definition was required for any of it.</li>
-  <li><strong>The orchestrator iterated when the LLM could not plan everything upfront.</strong> The agent did not — and could not — plan steps 2 through 10 at the start. It produced a one-step plan for Phase 1 ("search the web"), executed it, then planned Phase 2 from the results, executed that, then planned Phase 3. Each phase boundary in the DAG is the loop-back arrow from the orchestration diagram firing in practice. The trace's plan records make this explicit: Phase 1's plan carries <code>"terminal": false</code> with the continuation note <em>"Please continue after retrieving the destination names."</em></li>
+  <li><strong>The LLM controls how many phases the run takes.</strong> It plans only what it can plan with the data already in hand. Phase 1's web search is all the LLM could plan before knowing the destinations. Once those came back, the LLM planned Phase 2 (three geocoding calls) — and only after coordinates came back did it plan Phase 3 (six weather-and-hotel calls). Each phase boundary is the LLM seeing fresh results and deciding what comes next.</li>
 </ul>
 
 <aside class="callout">
-<strong>What the trace does not show.</strong> Every callee in this run is a Tool. In another run — say, a research query — the same orchestrator would call an Agent's published capability (such as <code>financial_analysis</code> served by <code>research-agent-telemetry</code>) through the same registry lookup and HTTP call. The DAG would look the same. Whether a participant is a Tool or an Agent is invisible at the call site.
+<strong>Trace data.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for this execution are available as a single JSON file<a class="ref" href="#ref-24">[24]</a> — useful for inspecting the LLM plans, the data flow between steps, and the per-step timing that the figure abstracts away.
+</aside>
+
+<h3>A multi-domain query: agents and tools as peers</h3>
+
+<p>The Switzerland run shows the inside of one agent. To see the other coordination layer in practice — and to make the article's central claim visible <em>in a single plan</em> — here is a second captured execution. The query crosses three unrelated domains:</p>
+
+<blockquote><em>"Can you analyze the status of the local kubernetes cluster? Also, let me know the current weather at NYC, and the stock price of Tesla."</em></blockquote>
+
+<p><code>travel-chat-agent</code> reads the registry's current contents — a catalog of <em>capabilities</em>, not a typed list of tools and agents — and plans a four-step response. The LLM doesn't know (and doesn't need to know) which capabilities are served by tools and which by agents:</p>
+
+<ul>
+  <li><code>devops_operations</code> — served by <code>devops-chat-agent</code><a class="ref" href="#ref-15">[15]</a>, an agent</li>
+  <li><code>geocode_location</code> — served by <code>geocoding-tool</code>, a tool</li>
+  <li><code>stock_quote</code> — served by <code>stock-market-tool</code>, a tool</li>
+  <li><code>get_current_weather</code> — served by <code>weather-tool-v2</code>, a tool (its inputs depend on the geocoding output)</li>
+</ul>
+
+<figure id="fig-a2a-outer-trace">
+<img src="agent-to-agent-execution-dag-p1.png" alt="Outer execution DAG: travel-chat-agent's four-step plan invokes one agent capability (devops_operations) and three tool capabilities (geocode_location, stock_quote, get_current_weather) from the same catalog, with no special handling for the agent step." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
+<figcaption><strong>Figure 11.</strong> The outer trace, captured from <code>travel-chat-agent</code>'s perspective in the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. Four capability invocations sit side by side in one plan. One of them — <code>devops_operations</code> — happens to be served by an agent; the other three by tools. From the dispatch site there is no visible difference between them.</figcaption>
+</figure>
+
+<p>Behind the <code>devops_operations</code> step is a complete second execution. <code>devops-chat-agent</code> receives the request, plans its own response against its own catalog, and runs three tool calls — <code>get_cluster_status</code> and two scoped <code>get_pods</code> calls against <code>devops-tool</code> — then synthesizes a single answer and returns it to <code>travel-chat-agent</code>.</p>
+
+<figure id="fig-a2a-inner-trace">
+<img src="agent-to-agent-execution-dag-p2.png" alt="Inner execution DAG: devops-chat-agent receives the call and runs its own plan-act-observe loop, calling three tool capabilities before synthesizing a response." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
+<figcaption><strong>Figure 12.</strong> The inner trace, captured from <code>devops-chat-agent</code>'s perspective in the same UI. The orchestration pattern shown earlier in the article — plan, execute, synthesize — runs entirely inside this agent's process. The structured response of this whole DAG is what gets returned through Figure 11's <code>devops_operations</code> step.</figcaption>
+</figure>
+
+<p>What this run demonstrates, in concrete form:</p>
+
+<ul>
+  <li><strong>The LLM cannot — and need not — distinguish agents from tools.</strong> The four capabilities in Figure 11's plan came from the same catalog and were chosen on what they do, not on what kind of process serves them. The architectural claim that "tools and agents are uniform peers" is not a design ideal here; it is what the LLM literally observed and acted on. <code>travel-chat-agent</code> didn't see (and didn't need to see) that the <code>devops_operations</code> step would require three further tool calls inside another process — it received structured JSON matching the capability's published schema.</li>
+  <li><strong>Decentralized coordination between participants.</strong> Each of the four steps in Figure 11 is a registry lookup followed by a direct HTTP call. There is no central process directing the handoff to <code>devops-chat-agent</code>, and no special agent-to-agent protocol — just the same dispatch mechanism every other step uses.</li>
+  <li><strong>Orchestration inside each agent.</strong> Figure 12 is the plan-act-observe loop running inside <code>devops-chat-agent</code>: a multi-step plan, parallel tool calls, a synthesis step. Identical pattern to the Switzerland execution above — same orchestrator, different agent.</li>
+</ul>
+
+<aside class="callout">
+<strong>Trace data.</strong> The full plans, step-by-step results, LLM interactions, and DAG metadata for both executions are available as JSON files: the outer trace from <code>travel-chat-agent</code><a class="ref" href="#ref-25">[25]</a> and the inner trace from <code>devops-chat-agent</code><a class="ref" href="#ref-26">[26]</a> — useful for inspecting the LLM plans, the cross-agent handoff, and per-step timing that the figures abstract away.
 </aside>
 </section>
 
@@ -1265,9 +1320,9 @@
 <section>
 <h2>Conclusion</h2>
 
-<p>At the scale of an enterprise agentic platform — many teams, many tools and agents, many independent release cadences — the architecture described in this article is the pattern that holds up. Dynamic capability discovery, uniform peers, a passive registry, orchestration inside each agent, and decentralized coordination between participants: this combination lets specialized teams own their own participants, ship them on their own schedules, and have their work composed into every other team's agents without coordinated releases or central registration steps. The runtime mechanics ride on infrastructure most organizations already operate — service discovery, load balancing, observability, rolling releases — not on a proprietary orchestration product whose failure modes, scaling characteristics, and cost ceilings become operational concerns of their own.</p>
+<p>At the scale of an enterprise agentic platform — many teams, many tools and agents, many independent release cadences — the architecture described in this article is a pattern well-matched to that scale. Dynamic capability discovery, uniform peers, a passive registry, orchestration inside each agent, and decentralized coordination between participants: this combination lets specialized teams own their own participants, ship them on their own schedules, and have their work composed into every other team's agents without coordinated releases or central registration steps. The runtime mechanics ride on infrastructure most organizations already operate — service discovery, load balancing, observability, rolling releases — not on a proprietary orchestration product whose failure modes, scaling characteristics, and cost ceilings become operational concerns of their own.</p>
 
-<p>The mechanics themselves are not new; they borrow from decades of service-discovery practice in distributed systems<a class="ref" href="#ref-11">[11]</a>. What is new is the consumer of the registry's contents — an LLM at planning time, choosing capabilities from a runtime menu rather than a compile-time list. The plumbing is standard. The mediation is not.</p>
+<p>The mechanics themselves are not new. They borrow from decades of service-discovery practice in distributed systems<a class="ref" href="#ref-11">[11]</a>, and the LLM-as-registry-consumer extension is also available in other open-source systems<a class="ref" href="#ref-16">[16]</a>. What this article contributes is a vendor-neutral architecture treatment paired with a Go reference implementation that runs on a laptop — an architecture doc with a clone-and-run companion.</p>
 </section>
 
 <section>
@@ -1288,6 +1343,17 @@
   <li id="ref-13"><strong>TruvaG3 — <code>examples/registry-viewer-app/</code>.</strong> Source code for the registry-viewer web app that captured the Switzerland-query DAG screenshot shown in this article. The same UI shows registered services, their capabilities, and live execution DAGs at <code>http://registry.localhost/</code> when the bundled local-Kubernetes setup is running. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app">https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app</a></li>
   <li id="ref-14"><strong>TruvaG3 — <code>GETTING_STARTED.md</code>.</strong> Step-by-step setup guide for the local-Kubernetes deployment of TruvaG3, covering the kind cluster, Redis, the registry-viewer web app, and the bundled example tools and agents. <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md</a></li>
   <li id="ref-15"><strong>TruvaG3 — <code>examples/devops-chat-agent/</code>.</strong> Source code for the Agent that registers as <code>devops-chat-agent</code> and exposes <code>devops_operations</code> as its public capability shown in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent</a></li>
+  <li id="ref-16"><strong>Nacos — <em>A2A Agent Registry</em>.</strong> Open-source service-discovery platform extended with an A2A agent-registry feature (generally available since Nacos 3.1.0, September 2025), implementing the same pattern described in this article. Integrated with multi-agent frameworks including AgentScope, Spring AI Alibaba, and the Dify A2A plugin. URL: <a href="https://nacos.io/en/docs/latest/manual/user/ai/agent-registry/">https://nacos.io/en/docs/latest/manual/user/ai/agent-registry/</a></li>
+  <li id="ref-17"><strong>LangGraph — Overview.</strong> Official LangGraph documentation showing the construction-time wiring pattern: <code>StateGraph(...)</code>, <code>add_node()</code>, <code>add_edge()</code>, then <code>graph.compile()</code> — the graph is named and fixed at definition time. URL: <a href="https://docs.langchain.com/oss/python/langgraph/overview">https://docs.langchain.com/oss/python/langgraph/overview</a></li>
+  <li id="ref-18"><strong>Microsoft Agent Framework — Overview.</strong> The successor to AutoGen and Semantic Kernel (GA April 2026, .NET and Python). Official quickstart shows tools attached at construction (<code>tools: [...]</code>) and graph-based Workflows for multi-agent coordination. URL: <a href="https://learn.microsoft.com/en-us/agent-framework/overview/">https://learn.microsoft.com/en-us/agent-framework/overview/</a></li>
+  <li id="ref-19"><strong>OpenAI Agents SDK — Quickstart.</strong> Official quickstart showing <code>Agent(name=..., handoffs=[history_tutor_agent, math_tutor_agent])</code> — both tools and inter-agent handoffs are named at agent declaration. URL: <a href="https://openai.github.io/openai-agents-python/quickstart/">https://openai.github.io/openai-agents-python/quickstart/</a></li>
+  <li id="ref-20"><strong>Google ADK — Quickstart.</strong> Official Google ADK quickstart showing the construction-time wiring pattern: <code>Agent(name=..., model=..., tools=[google_search])</code> — tools are passed to the agent constructor as a fixed list. Multi-agent setups extend this with <code>sub_agents=[...]</code>. URL: <a href="https://adk.dev/get-started/quickstart/">https://adk.dev/get-started/quickstart/</a></li>
+  <li id="ref-21"><strong>CrewAI — Quickstart.</strong> Official CrewAI quickstart showing the crew construction pattern: <code>Crew(agents=self.agents, tasks=self.tasks, process=Process.sequential, ...)</code> — agents and tasks are passed to the constructor as fixed lists. URL: <a href="https://docs.crewai.com/en/quickstart">https://docs.crewai.com/en/quickstart</a></li>
+  <li id="ref-22"><strong>LlamaIndex — Understanding agents.</strong> Official LlamaIndex documentation showing <code>FunctionAgent(tools=[multiply, add], llm=llm, ...)</code> — agents are built with an explicit tool list at construction time. URL: <a href="https://developers.llamaindex.ai/python/framework/understanding/agent/">https://developers.llamaindex.ai/python/framework/understanding/agent/</a></li>
+  <li id="ref-23"><strong>Pydantic AI — Tools.</strong> Official Pydantic AI tools documentation showing both <code>tools=[roll_dice, get_player_name]</code> as a constructor argument and the <code>@agent.tool</code> / <code>@agent.tool_plain</code> decorators — both bind tools to the agent at construction time. URL: <a href="https://pydantic.dev/docs/ai/tools-toolsets/tools/">https://pydantic.dev/docs/ai/tools-toolsets/tools/</a></li>
+  <li id="ref-24"><strong>TruvaG3 — execution trace JSON for the Switzerland run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for the three-phase Switzerland execution shown in Figure 10. Captured from the registry-viewer UI's <em>Execution DAG</em> tab. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json</a></li>
+  <li id="ref-25"><strong>TruvaG3 — execution trace JSON for the multi-domain outer run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for travel-chat-agent's four-step plan shown in Figure 11. The user-profile RAG context (memorized via the agentic-memory tool) is shown with its identifying values redacted to neutral placeholders. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json</a></li>
+  <li id="ref-26"><strong>TruvaG3 — execution trace JSON for the multi-domain inner run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for devops-chat-agent's three-step plan shown in Figure 12 (the inner trace returned through Figure 11's <code>devops_operations</code> step). URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json</a></li>
 </ol>
 </section>
 

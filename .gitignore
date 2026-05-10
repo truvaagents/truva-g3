@@ -61,6 +61,7 @@ Screenshot *.png
 
 # Debug/sample data files
 dag-*.json
+!docs/blogs/dag-*.json
 
 # Coverage files
 coverage.txt
