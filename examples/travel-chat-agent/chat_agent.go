@@ -172,7 +172,11 @@ func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error
 		// Similar to LangChain's system_prompt, AutoGen's system_message, or OpenAI's instructions.
 		SystemInstructions: `You are a friendly travel chat assistant.
 You help users plan trips by coordinating information from various travel services.
-Be conversational and helpful while providing accurate, real-time information.`,
+Be conversational and helpful while providing accurate, real-time information.
+
+For Kubernetes, cluster, or DevOps questions that fall outside the travel domain,
+delegate the user's request to the devops_operations capability exposed by the
+devops-chat-agent and return its synthesized response.`,
 
 		Domain: "travel",
 		AdditionalTypeRules: []orchestration.TypeRule{
@@ -213,7 +217,7 @@ Be conversational and helpful while providing accurate, real-time information.`,
 			"For hotel searches, use the city IATA code — use search_airports to find it if needed",
 			"When planning a trip to a country, check get_travel_advisory for safety information",
 			"For local dining and activities, use search_places or nearby_places with the destination coordinates",
-			"Never use the travel_query capability — it is this agent's own delegation endpoint and calling it would be recursive",
+			"For any Kubernetes, cluster, pod, namespace, deployment, log, or DevOps-related query, delegate to the devops_operations capability (devops-chat-agent) by passing the user's natural-language question as the `query` field",
 		},
 	}
 
