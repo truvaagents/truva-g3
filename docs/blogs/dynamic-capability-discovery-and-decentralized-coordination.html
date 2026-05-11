@@ -148,7 +148,7 @@
 <header class="article-header">
   <h1>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h1>
   <p class="dek">An introduction to a micro-agents architecture in which specialized tools and agents dynamically register their capabilities into a shared registry, are addressed by logical names rather than hardcoded URLs, and coordinate without a central conductor — with orchestration inside each agent and decentralized coordination across the system. The concepts are grounded in TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation that can be cloned and run on a laptop.</p>
-  <p class="meta">A reference-architecture article. Reading time: about 25 minutes.</p>
+  <p class="meta">A reference-architecture article. Reading time: about 30 minutes.</p>
 </header>
 
 <section>
@@ -489,14 +489,14 @@
   <li>The LLM picks capabilities by name; the framework resolves each name to an endpoint via the registry.</li>
   <li>The agent makes direct HTTP calls to those endpoints; peers respond.</li>
 </ol>
-For plans that can't be made upfront, the agent loops back to step 3 with new context.
+When the LLM can't plan all the steps upfront, it makes a partial plan; the loop returns to step 3 with the results of those steps in hand, and the LLM plans the next phase. This can iterate across several phases.
 </aside>
 </section>
 
 <section>
 <h2>A different approach: the capability registry</h2>
 
-<p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant — whether a simple tool or a full reasoning agent — publishes the capabilities it offers into a shared index, each identified by name. These capability names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning context, and the LLM picks which capabilities to invoke. For example, if the LLM chooses <code>financial_analysis</code> for a step, the framework dispatches that step to whichever endpoint the registry currently lists for <code>financial_analysis</code>. Whether that endpoint is a deterministic function or an agent running its own plan-act-observe loop is invisible at the dispatch site. (In the reference implementation, the index is backed by Redis<a class="ref" href="#ref-2">[2]</a>, but the choice of backend does not affect the pattern.)</p>
+<p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant — whether a simple tool or a full reasoning agent — publishes the capabilities it offers into a shared index, each identified by name. These capability names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning context, and the LLM picks which capabilities to invoke. For example, if the LLM chooses <code>financial_analysis</code> for a step, the framework dispatches that step to whichever endpoint the registry currently lists for <code>financial_analysis</code>. Whether that endpoint is a deterministic function or an agent running its own plan-act-observe loop is invisible at the dispatch site. (In the reference implementation, the index is backed by Redis<a class="ref" href="#ref-27">[27]</a>, but the choice of backend does not affect the pattern.)</p>
 
 <figure id="fig-self-registration">
 <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg"
@@ -601,7 +601,7 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 
 <h3>Self-describing capabilities</h3>
 
-<p>A registration carries more than a name. It includes everything a caller needs in order to reach the participant without any external configuration: a network address, a list of capabilities, and — for each capability — a structured description of its inputs and outputs.</p>
+<p>A registration carries more than a name. It serves two distinct consumers. The framework reads it for dispatch — a network address and an endpoint per capability. The LLM reads it for planning — a natural-language description of each capability and a structured schema for its inputs and outputs, so it can decide which capability matches a step and what payload to send.</p>
 
 <p>The address resolves to the right form for the deployment. In a Kubernetes cluster the framework writes a Service DNS name, so calls to the participant load-balance across replicas through the cluster's own Service. Outside Kubernetes, it writes a plain host and port. Whichever form ends up in the registry is the form callers use; no agent ever carries a hardcoded URL.</p>
 
@@ -661,35 +661,29 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
   }
 }</code></pre>
 
-<p>And here is <code>math_analysis</code>, an external capability served by an Agent — <code>research-agent-telemetry</code><a class="ref" href="#ref-10">[10]</a> — that runs its own internal plan-act-observe loop behind this endpoint:</p>
+<p>And here is <code>devops_operations</code>, an external capability served by an Agent — <code>devops-chat-agent</code><a class="ref" href="#ref-15">[15]</a>, the same agent featured in the multi-domain execution example later in the article — that runs its own internal plan-act-observe loop behind this endpoint:</p>
 
 <pre><code>{
-  "name": "math_analysis",
-  "description": "AI-powered mathematical analysis with step-by-step solutions and verification.",
-  "endpoint": "/api/capabilities/math_analysis",
-  "input_types": ["json", "text"],
+  "name": "devops_operations",
+  "description": "Handles Kubernetes and infrastructure operations end-to-end: from investigation and diagnostics to remediation and verification. Delegate any DevOps task as a natural language request and receive a synthesized response with findings, actions taken, and current state.",
+  "endpoint": "/query",
+  "input_types": ["json"],
   "output_types": ["json"],
   "input_summary": {
     "required": [
       {
-        "name": "problem",
+        "name": "query",
         "type": "string",
-        "description": "Mathematical problem to solve (equation, word problem, or data)",
-        "example": "Find the derivative of f(x) = x^3 * ln(x)"
+        "description": "Natural language DevOps or infrastructure question to delegate",
+        "example": "Which pods in truvag3-examples are not Ready and what do their logs say?"
       }
     ],
     "optional": [
       {
-        "name": "problem_type",
+        "name": "session_id",
         "type": "string",
-        "description": "Type: algebraic, calculus, statistical, optimization, probability, numerical, geometry",
-        "example": "calculus"
-      },
-      {
-        "name": "show_steps",
-        "type": "boolean",
-        "description": "Whether to show detailed step-by-step solution (default: true)",
-        "example": "true"
+        "description": "Session ID for conversational context (omit for stateless one-shot queries)",
+        "example": "sess_abc123"
       }
     ]
   }
@@ -1063,16 +1057,19 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 </figure>
 
 <h3>Inside an agent: orchestration</h3>
-<p>Each Agent has its own per-request orchestrator. When a request arrives, the orchestrator hands the LLM its current capability catalog (kept in sync with the registry), asks for a plan, then executes the plan step by step with parallelism where possible — resolving each capability to a concrete endpoint at execution time, handling retries and parameter resolution, and synthesizing the final response. This is orchestration in the traditional sense: one conductor directing a sequence of steps against a known plan. It is the right pattern for a single agent's reasoning loop, where global state is needed.</p>
+<p>Each Agent has its own per-request orchestrator. When a request arrives, the orchestrator hands the LLM its current capability catalog (kept in sync with the registry), and asks for a plan. The plan it gets back is structured as a <strong>directed acyclic graph (DAG)</strong><a class="ref" href="#ref-28">[28]</a><a class="ref" href="#ref-29">[29]</a> — each step names a capability and lists its upstream dependencies, but no step ever loops back to itself. The orchestrator then executes that DAG step by step with parallelism where possible — resolving each capability to a concrete endpoint at execution time, handling retries and parameter resolution, and synthesizing the final response. This is orchestration in the traditional sense: one conductor directing a sequence of steps against a known plan. It is the right pattern for a single agent's reasoning loop, where global state is needed.</p>
 
 <figure id="fig-orchestration-inside-agent">
-<svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg"
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
-     aria-label="Inside one agent's process. A single Agent box with an amber-bordered frame contains three phase boxes connected by amber arrows. PHASE 1 Plan: a single LLM call against the live capability catalog, output is a DAG of steps. PHASE 2 Execute steps: for each step, resolve capability, make HTTP call, gather response; runs in DAG order with parallelism where possible. PHASE 3 Synthesize: assemble all step outputs into a final response for the user. A solid amber loop-back arrow curves from the bottom of Execute back to the bottom of Plan, labeled 'iterative re-plan, if needed', indicating that the orchestrator can loop from execute back to plan when the LLM decides during execution that additional planning is required. The amber framing throughout indicates that the AIOrchestrator is the single conductor driving the entire flow inside this one process.">
+     aria-label="Inside one agent's process. A single Agent box with an amber-bordered frame contains three phase boxes connected by amber arrows. PHASE 1 Plan: a single LLM call against the live capability catalog, output is a DAG of steps. PHASE 2 Execute steps: for each step, resolve capability, make HTTP call, gather response; runs in DAG order with parallelism where possible. PHASE 3 Synthesize: assemble all step outputs into a final response for the user. A solid amber loop-back arrow curves from the bottom of Execute back to the bottom of Plan, labeled 'iterative re-plan, if needed', indicating that the orchestrator can loop from execute back to plan when the LLM decides during execution that additional planning is required. From the Execute phase, two outbound blue arrows pierce the agent's process boundary and reach two peer boxes below — one labeled Tool with a gray border (a passive peer endpoint) and one labeled Agent with an amber border (another orchestrating peer) — illustrating that the HTTP calls made during Execute leave this agent's process and reach participants running in their own processes. The blue colour matches the convention used in the next figure (Figure 9) for inter-participant HTTP calls. The amber framing throughout indicates that the AIOrchestrator is the single conductor driving the entire flow inside this one process; but the calls it dispatches leave that process to reach peers.">
   <defs>
     <marker id="oa-arr-orch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#d9b35a"/>
+    </marker>
+    <marker id="oa-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
     </marker>
   </defs>
   <style>
@@ -1086,6 +1083,12 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
     .t-loop { font: italic 11px -apple-system, sans-serif; fill: #7a5a16; }
     .arrow-orch { stroke: #d9b35a; stroke-width: 1.8; fill: none; }
     .arrow-orch-loop { stroke: #d9b35a; stroke-width: 1.5; fill: none; }
+    .peer-tool { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .peer-agent { fill: #ffffff; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-peer-title { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-peer-sub { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .arrow-outbound { stroke: #0b6cff; stroke-width: 1.6; fill: none; }
+    .t-arrow-http { font: italic 11px -apple-system, sans-serif; fill: #0b6cff; }
   </style>
 
   <rect x="40" y="20" width="680" height="245" rx="8" class="agent-frame"/>
@@ -1119,8 +1122,23 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 
   <path d="M 380 200 C 380 240 165 240 165 215 L 165 200" class="arrow-orch-loop" marker-end="url(#oa-arr-orch)"/>
   <text x="272" y="252" text-anchor="middle" class="t-loop">iterative re-plan, if needed</text>
+
+  <!-- Peer boxes below the agent frame -->
+  <rect x="310" y="300" width="130" height="50" rx="5" class="peer-tool"/>
+  <text x="375" y="324" text-anchor="middle" class="t-peer-title">Tool</text>
+  <text x="375" y="340" text-anchor="middle" class="t-peer-sub">(in its own process)</text>
+
+  <rect x="490" y="300" width="130" height="50" rx="5" class="peer-agent"/>
+  <text x="555" y="324" text-anchor="middle" class="t-peer-title">Agent</text>
+  <text x="555" y="340" text-anchor="middle" class="t-peer-sub">(in its own process)</text>
+
+  <!-- Outbound HTTP calls from Phase 2 to peers, piercing the agent's process boundary -->
+  <line x1="400" y1="200" x2="375" y2="300" class="arrow-outbound" marker-end="url(#oa-arr-blue)"/>
+  <line x1="450" y1="200" x2="555" y2="300" class="arrow-outbound" marker-end="url(#oa-arr-blue)"/>
+  <text x="358" y="248" class="t-arrow-http">HTTP</text>
+  <text x="520" y="248" class="t-arrow-http">HTTP</text>
 </svg>
-<figcaption><strong>Figure 8.</strong> <strong>Inside an agent: orchestration.</strong> A single AIOrchestrator inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop from execute back to plan when the LLM decides partway through that further planning is needed. One conductor; one process.</figcaption>
+<figcaption><strong>Figure 8.</strong> <strong>Inside an agent: orchestration.</strong> A single AIOrchestrator<a class="ref" href="#ref-4">[4]</a> inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop from execute back to plan when the LLM decides partway through that further planning is needed. The Execute phase's HTTP calls leave the process and reach peers — tools or other agents — that run in their own. One conductor inside one process; dispatched calls cross the boundary.</figcaption>
 </figure>
 
 <h3>Between participants: decentralized coordination</h3>
@@ -1201,7 +1219,7 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 <figcaption><strong>Figure 9.</strong> <strong>Between participants: decentralized coordination.</strong> Agent A receives the user query (the inbound blue arrow on the left) and becomes the request initiator. From there, each participant runs independently. The dashed lines up to the registry carry registration and discovery; the blue arrows between participants carry the actual HTTP calls. There is no process in the middle that coordinates the calls — peers act on the shared protocol, the capability contract, and call each other directly.</figcaption>
 </figure>
 
-<p>The microservices analogy is direct. A microservice has step-by-step business logic on the inside (orchestration) and interacts with peers through service discovery and direct calls (decentralized coordination). The architecture applies the same pattern to multi-agent systems: orchestration inside each agent, decentralized coordination between agents and tools. In the reference implementation, the per-agent orchestrator lives in the <code>orchestration/</code> package<a class="ref" href="#ref-4">[4]</a>; the inter-agent call layer lives in <code>core/</code><a class="ref" href="#ref-2">[2]</a>.</p>
+<p>The microservices analogy is direct. A microservice has step-by-step business logic on the inside (orchestration) and interacts with peers through service discovery and direct calls (decentralized coordination). The architecture applies the same pattern to multi-agent systems: orchestration inside each agent, decentralized coordination between agents and tools. In the reference implementation, the per-agent orchestrator and its outbound HTTP dispatch live in the <code>orchestration/</code> package<a class="ref" href="#ref-4">[4]</a>; the registry and discovery interfaces that participants use to find each other live in <code>core/</code><a class="ref" href="#ref-2">[2]</a>.</p>
 </section>
 
 <section>
@@ -1233,7 +1251,7 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 </ul>
 
 <aside class="callout">
-<strong>Trace data.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for this execution are available as a single JSON file<a class="ref" href="#ref-24">[24]</a> — useful for inspecting the LLM plans, the data flow between steps, and the per-step timing that the figure abstracts away.
+<strong>Trace data.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for this execution are available as a single JSON file<a class="ref" href="#ref-24">[24]</a> — useful for inspecting the LLM plans, the data flow between steps, and the per-step timing that the figure abstracts away. (To capture your own, see <a href="#run-it-yourself">Run it yourself</a>.)
 </aside>
 
 <h3>A multi-domain query: agents and tools as peers</h3>
@@ -1251,14 +1269,14 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
   <li><code>get_current_weather</code> — served by <code>weather-tool-v2</code>, a tool (its inputs depend on the geocoding output)</li>
 </ul>
 
-<figure id="fig-a2a-outer-trace">
+<figure id="fig-multidomain-outer-dag">
 <img src="agent-to-agent-execution-dag-p1.png" alt="Outer execution DAG: travel-chat-agent's four-step plan invokes one agent capability (devops_operations) and three tool capabilities (geocode_location, stock_quote, get_current_weather) from the same catalog, with no special handling for the agent step." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
 <figcaption><strong>Figure 11.</strong> The outer trace, captured from <code>travel-chat-agent</code>'s perspective in the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. Four capability invocations sit side by side in one plan. One of them — <code>devops_operations</code> — happens to be served by an agent; the other three by tools. From the dispatch site there is no visible difference between them.</figcaption>
 </figure>
 
 <p>Behind the <code>devops_operations</code> step is a complete second execution. <code>devops-chat-agent</code> receives the request, plans its own response against its own catalog, and runs three tool calls — <code>get_cluster_status</code> and two scoped <code>get_pods</code> calls against <code>devops-tool</code> — then synthesizes a single answer and returns it to <code>travel-chat-agent</code>.</p>
 
-<figure id="fig-a2a-inner-trace">
+<figure id="fig-multidomain-inner-dag">
 <img src="agent-to-agent-execution-dag-p2.png" alt="Inner execution DAG: devops-chat-agent receives the call and runs its own plan-act-observe loop, calling three tool capabilities before synthesizing a response." style="width:100%;height:auto;display:block;margin:0 auto;border:1px solid #d0d7de;border-radius:6px;background:#0b1220;">
 <figcaption><strong>Figure 12.</strong> The inner trace, captured from <code>devops-chat-agent</code>'s perspective in the same UI. The orchestration pattern shown earlier in the article — plan, execute, synthesize — runs entirely inside this agent's process. The structured response of this whole DAG is what gets returned through Figure 11's <code>devops_operations</code> step.</figcaption>
 </figure>
@@ -1272,7 +1290,7 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 </ul>
 
 <aside class="callout">
-<strong>Trace data.</strong> The full plans, step-by-step results, LLM interactions, and DAG metadata for both executions are available as JSON files: the outer trace from <code>travel-chat-agent</code><a class="ref" href="#ref-25">[25]</a> and the inner trace from <code>devops-chat-agent</code><a class="ref" href="#ref-26">[26]</a> — useful for inspecting the LLM plans, the cross-agent handoff, and per-step timing that the figures abstract away.
+<strong>Trace data.</strong> The full plans, step-by-step results, LLM interactions, and DAG metadata for both executions are available as JSON files: the outer trace from <code>travel-chat-agent</code><a class="ref" href="#ref-25">[25]</a> and the inner trace from <code>devops-chat-agent</code><a class="ref" href="#ref-26">[26]</a> — useful for inspecting the LLM plans, the cross-agent handoff, and per-step timing that the figures abstract away. (To capture your own, see <a href="#run-it-yourself">Run it yourself</a>.)
 </aside>
 </section>
 
@@ -1310,11 +1328,11 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 </section>
 
 <section>
-<h2>Run it yourself</h2>
+<h2 id="run-it-yourself">Run it yourself</h2>
 
 <p>The reference implementation, TruvaG3<a class="ref" href="#ref-1">[1]</a>, is open source. Step-by-step setup instructions for the local-Kubernetes deployment — Redis, the registry-viewer web app, and the bundled example tools and agents<a class="ref" href="#ref-5">[5]</a> — are in the project's Getting Started guide<a class="ref" href="#ref-14">[14]</a>. The full deployment runs on a laptop in a kind cluster.</p>
 
-<p>The Switzerland query in the previous section is one such captured trace. The DAG screenshot shown earlier is a direct capture of the registry viewer's <em>Execution DAG</em> tab for that exact run. The phase transitions, the dependency arrows, the timing annotations — all are produced by the framework, and all are inspectable in the running cluster. Nothing in this article is theoretical.</p>
+<p>Both captured executions in "Two executions, examined" come from this same setup. Once the bundled examples<a class="ref" href="#ref-5">[5]</a> are deployed, the two user queries shown there can be run verbatim against your own <code>travel-chat-agent</code>, and the registry-viewer's <em>Execution DAG</em> tab will produce screenshots and trace JSONs equivalent to Figures 10–12 and references [24]–[26]. All the agents and tools involved — <code>travel-chat-agent</code>, <code>devops-chat-agent</code>, and the half-dozen tools they invoke — are part of the bundled examples; no additional setup is needed. Nothing in this article is theoretical.</p>
 </section>
 
 <section>
@@ -1329,15 +1347,15 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
 <h2>References</h2>
 <ol class="references">
   <li id="ref-1"><strong>TruvaG3 — repository.</strong> Open-source reference implementation of the architecture described in this article. <a href="https://github.com/truvaagents/truva-g3">https://github.com/truvaagents/truva-g3</a></li>
-  <li id="ref-2"><strong>TruvaG3 — <code>core/</code> package.</strong> Capability registry, discovery interfaces, and the inter-agent call layer. <a href="https://github.com/truvaagents/truva-g3/tree/main/core">https://github.com/truvaagents/truva-g3/tree/main/core</a></li>
+  <li id="ref-2"><strong>TruvaG3 — <code>core/</code> package.</strong> Framework interfaces (<code>Registry</code>, <code>Discovery</code>, <code>Component</code>, <code>AIClient</code>) and base implementations (<code>BaseTool</code>, <code>BaseAgent</code>), plus the Redis-backed service-discovery layer that participants use to find each other. <a href="https://github.com/truvaagents/truva-g3/tree/main/core">https://github.com/truvaagents/truva-g3/tree/main/core</a></li>
   <li id="ref-3"><strong>TruvaG3 — <code>FRAMEWORK_DESIGN_PRINCIPLES.md</code>.</strong> The Tool/Agent boundary contract and the rationale behind the typed-interface separation. <a href="https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md">https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md</a></li>
-  <li id="ref-4"><strong>TruvaG3 — <code>orchestration/</code> package.</strong> The per-agent orchestrator (plan, act, observe, synthesize) and its supporting components. <a href="https://github.com/truvaagents/truva-g3/tree/main/orchestration">https://github.com/truvaagents/truva-g3/tree/main/orchestration</a></li>
+  <li id="ref-4"><strong>TruvaG3 — <code>orchestration/README.md</code>.</strong> The orchestration module's user-facing readme. Section 4, "AI Orchestration in Detail", walks through how the AIOrchestrator processes an AI-driven request — interpreting the user query, discovering capabilities in the catalog, building the execution plan, and synthesizing the response. The corresponding source code lives under the same directory. <a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md">https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md</a></li>
   <li id="ref-5"><strong>TruvaG3 — <code>examples/</code> directory.</strong> Sample tools, agents, and end-to-end deployments, including the chat agents used in the walkthrough. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">https://github.com/truvaagents/truva-g3/tree/main/examples</a></li>
   <li id="ref-6"><strong>Microsoft. <em>Multi-Agent Reference Architecture</em>.</strong> The phrase <em>"Dynamic Agent Registry (Service Mesh for Agents)"</em> quoted in this article appears under the <strong>Patterns</strong> section as item #2 in the list of foundational patterns. URL: <a href="https://microsoft.github.io/multi-agent-reference-architecture/docs/reference-architecture/Reference-Architecture.html">https://microsoft.github.io/multi-agent-reference-architecture/docs/reference-architecture/Reference-Architecture.html</a></li>
   <li id="ref-7"><strong>Alibaba Cloud. <em>Configuration-Driven Dynamic Agent Architecture Network: Achieving Efficient Orchestration, Dynamic Updates, and Intelligent Governance</em>.</strong> The location-transparency quote — <em>"Agents do not directly hold each other's physical addresses (IP/Port) but query the Agent Registry and use each other's logical names (agentName) to obtain access endpoints. This achieves complete decoupling with location transparency."</em> — appears under <strong>Core Design at the Architectural Level: Peer Collaboration and Decoupling</strong>, in the subsection on A2A Protocol design principles. URL: <a href="https://www.alibabacloud.com/blog/configuration-driven-dynamic-agent-architecture-network-achieving-efficient-orchestration-dynamic-updates-and-intelligent-governance_602564">https://www.alibabacloud.com/blog/configuration-driven-dynamic-agent-architecture-network-achieving-efficient-orchestration-dynamic-updates-and-intelligent-governance_602564</a></li>
   <li id="ref-8"><strong>Tadepalli, R. <em>Micro and macro agents: The emerging architecture of the agentic enterprise</em>. CIO, April 14, 2026.</strong> Defines <em>micro agents</em> as "specialized AI systems designed to perform narrow, well-defined tasks within a workflow" (under the section <strong>The rise of micro agents</strong>) and <em>macro agents</em> as components that "coordinate multiple micro agents to complete an end-to-end business process" (under <strong>The emergence of macro agents</strong>). URL: <a href="https://www.cio.com/article/4157977/micro-and-macro-agents-the-emerging-architecture-of-the-agentic-enterprise.html">https://www.cio.com/article/4157977/micro-and-macro-agents-the-emerging-architecture-of-the-agentic-enterprise.html</a></li>
   <li id="ref-9"><strong>TruvaG3 — <code>examples/weather-tool-v2/</code>.</strong> Source code for the Tool whose registration produces the <code>get_current_weather</code> capability shown in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2">https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2</a></li>
-  <li id="ref-10"><strong>TruvaG3 — <code>examples/agent-with-telemetry/</code>.</strong> Source code for the Agent that registers as <code>research-agent-telemetry</code> and exposes <code>math_analysis</code> and other external capabilities shown in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry">https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry</a></li>
+  <li id="ref-10"><strong>TruvaG3 — <code>examples/agent-with-telemetry/</code>.</strong> Source code for the Agent that registers as <code>research-agent-telemetry</code>, used as an example agent in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry">https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry</a></li>
   <li id="ref-11"><strong>Lewis, J. &amp; Fowler, M. <em>Microservices</em>. martinfowler.com, 25 March 2014.</strong> The seminal article in which the microservices community articulated the migration away from centralized integration infrastructure. ESB products, the authors note, "often include sophisticated facilities for message routing, choreography, transformation, and applying business rules"; "the microservice community favours an alternative approach: smart endpoints and dumb pipes." Services in the new pattern are "choreographed using simple RESTish protocols rather than complex protocols such as WS-Choreography or BPEL or orchestration by a central tool." URL: <a href="https://martinfowler.com/articles/microservices.html">https://martinfowler.com/articles/microservices.html</a></li>
   <li id="ref-12"><strong>TruvaG3 — <code>examples/travel-chat-agent/</code>.</strong> Source code for the Agent that registers as <code>travel-chat-agent</code> — the agent whose Switzerland-query execution is the basis for the trace walkthrough in this article. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent</a></li>
   <li id="ref-13"><strong>TruvaG3 — <code>examples/registry-viewer-app/</code>.</strong> Source code for the registry-viewer web app that captured the Switzerland-query DAG screenshot shown in this article. The same UI shows registered services, their capabilities, and live execution DAGs at <code>http://registry.localhost/</code> when the bundled local-Kubernetes setup is running. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app">https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app</a></li>
@@ -1354,6 +1372,9 @@ For plans that can't be made upfront, the agent loops back to step 3 with new co
   <li id="ref-24"><strong>TruvaG3 — execution trace JSON for the Switzerland run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for the three-phase Switzerland execution shown in Figure 10. Captured from the registry-viewer UI's <em>Execution DAG</em> tab. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json</a></li>
   <li id="ref-25"><strong>TruvaG3 — execution trace JSON for the multi-domain outer run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for travel-chat-agent's four-step plan shown in Figure 11. The user-profile RAG context (memorized via the agentic-memory tool) is shown with its identifying values redacted to neutral placeholders. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json</a></li>
   <li id="ref-26"><strong>TruvaG3 — execution trace JSON for the multi-domain inner run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for devops-chat-agent's three-step plan shown in Figure 12 (the inner trace returned through Figure 11's <code>devops_operations</code> step). URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json</a></li>
+  <li id="ref-27"><strong>TruvaG3 — <code>AUTO_DISCOVERY_GUIDE.md</code>.</strong> The framework's operations guide for the auto-discovery subsystem. Its "Extending: Pluggable Backends" section documents how to swap Redis for alternatives: <em>"The framework ships with a Redis/Valkey-backed registry as the default, but the registry is pluggable behind the <code>core.Discovery</code> interface. You can swap in etcd, Consul, an in-memory mock for tests, or anything else that satisfies the contract."</em> URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/AUTO_DISCOVERY_GUIDE.md">https://github.com/truvaagents/truva-g3/blob/main/docs/operations/AUTO_DISCOVERY_GUIDE.md</a></li>
+  <li id="ref-28"><strong>Wikipedia, "Directed acyclic graph."</strong> Comprehensive open-access reference with multiple diagrams (DAG examples, topological ordering, PERT charts, citation networks), plain-language definition, and an applications section covering job scheduling, version control, compilation order, causal models, and dependency tracking — the same patterns used in the article's execution plans. URL: <a href="https://en.wikipedia.org/wiki/Directed_acyclic_graph">https://en.wikipedia.org/wiki/Directed_acyclic_graph</a></li>
+  <li id="ref-29"><strong>Sedgewick, R., &amp; Wayne, K. <em>Algorithms, 4th Edition</em> booksite, Section 4.2 — Directed Graphs.</strong> Princeton University. Freely accessible companion to the textbook. Defines directed acyclic graphs (DAGs), states the topological-order equivalence, and lists real-world applications including job scheduling, build/compilation order, and dependency resolution — the same shape the article uses for the orchestrator's plan steps. URL: <a href="https://algs4.cs.princeton.edu/42digraph/">https://algs4.cs.princeton.edu/42digraph/</a></li>
 </ol>
 </section>
 
