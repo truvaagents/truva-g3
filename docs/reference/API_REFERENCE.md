@@ -3287,7 +3287,7 @@ type OrchestratorConfig struct {
 
 ### RemediationFailurePattern
 
-Tunes the shared-error pattern summary that is embedded into the remediation continuation prompt when multiple upstream steps fail with the same error. When one or more steps are skipped because their template-referenced dependencies failed, the orchestrator forces a remediation continuation so the planner can adapt. If the causal failures share a dominant error signature, a one-line summary — e.g. `"Upstream failure pattern: 2 of 2 prior steps failed with the same error; retries exhausted (flight-tool/search_airports): Amadeus API error 500"` — is prepended to that prompt so the planner has concrete evidence that the upstream is persistently unavailable.
+Tunes the shared-error pattern summary that is embedded into the remediation continuation prompt when multiple upstream steps fail with the same error. When one or more steps are skipped because their template-referenced dependencies failed, the orchestrator forces a remediation continuation so the planner can adapt. If the causal failures share a dominant error signature, a one-line summary — e.g. `"Upstream failure pattern: 2 of 2 prior steps failed with the same error; retries exhausted (flight-tool/search_airports): upstream API error 500"` — is prepended to that prompt so the planner has concrete evidence that the upstream is persistently unavailable.
 
 ```go
 type OrchestratorConfig struct {

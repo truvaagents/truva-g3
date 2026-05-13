@@ -855,7 +855,7 @@ go run .
 - [devops-chat-agent](../devops-chat-agent/) - DevOps chat agent that can use this tool
 - [agent-with-orchestration](../agent-with-orchestration/) - Orchestration example
 - [stock-market-tool](../stock-market-tool/) - Stock market data tool
-- [hotel-tool](../hotel-tool/) - Hotel search tool (Amadeus API)
+- [hotel-tool](../hotel-tool/) - Hotel search tool (LiteAPI)
 - [web-search-tool](../web-search-tool/) - Web search tool
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).

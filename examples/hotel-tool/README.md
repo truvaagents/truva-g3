@@ -1,6 +1,8 @@
 # Hotel Tool
 
-A TruvaG3 tool that provides hotel search and booking capabilities using the [Amadeus Self-Service API](https://developers.amadeus.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides hotel search and review-sentiment capabilities using the [LiteAPI](https://www.liteapi.travel/) hotel data API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+
+> **Note:** LiteAPI takes **ISO country code + city name** (e.g., `FR` + `Paris`) for hotel search, not IATA city codes. Hotel IDs returned by the search are LiteAPI internal IDs.
 
 ## Table of Contents
 
@@ -341,19 +343,18 @@ go version
 
 ---
 
-#### 5. Amadeus API Key
+#### 5. LiteAPI Key
 
-The Amadeus API key is **required** for hotel data. The free test environment provides realistic data for development.
+A LiteAPI sandbox key is **required** for hotel data. The free sandbox tier hits real hotel inventory and is sufficient for examples and agent demos.
 
-1. Visit [developers.amadeus.com](https://developers.amadeus.com/)
-2. Sign up for a free account
-3. Create a new app in your dashboard
-4. Copy your **API Key** (Client ID) and **API Secret** (Client Secret)
+1. Sign up at [dashboard.liteapi.travel](https://dashboard.liteapi.travel)
+2. In the dashboard, copy your **Sandbox API Key** (sandbox keys are not prefixed; production keys are prefixed with `prod_` and require a paid plan)
 
-**Free test tier includes:**
-- Hotel search and offers
-- Hotel reference data
-- Hotel sentiment analysis
+The key authenticates a single header (`X-API-Key`) — no OAuth flow, no client-id/secret pair.
+
+**Free sandbox tier includes:**
+- ~1,000 requests/month
+- Real hotel inventory (sandbox pricing, not live booking quotes)
 - No credit card required
 
 ---
@@ -398,14 +399,13 @@ cd examples/hotel-tool
 [ ! -f .env ] && cp .env.example .env
 ```
 
-**Edit `.env`** with your Amadeus credentials:
+**Edit `.env`** with your LiteAPI key:
 
 ```bash
 nano .env    # or: code .env / vim .env
 ```
 
-- `AMADEUS_CLIENT_ID=your-client-id` (Get from [developers.amadeus.com](https://developers.amadeus.com/))
-- `AMADEUS_CLIENT_SECRET=your-client-secret`
+- `LITEAPI_KEY=your-sandbox-key` (Get from [dashboard.liteapi.travel](https://dashboard.liteapi.travel))
 
 After configuring your credentials, continue with deployment:
 
@@ -463,22 +463,22 @@ kubectl get pods -n truvag3-examples -l app=hotel-tool
 
 ```bash
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/hotel-service 8343:80
+kubectl port-forward -n truvag3-examples svc/hotel-tool-service 8343:80
 
-# Test hotel search
+# Test hotel search (LiteAPI uses city_name + country_code, not IATA codes)
 curl -X POST http://localhost:8343/api/capabilities/search_hotels \
   -H "Content-Type: application/json" \
-  -d '{"city_code": "PAR", "check_in": "2026-04-15", "check_out": "2026-04-18"}'
+  -d '{"city_name": "Paris", "country_code": "FR", "check_in": "2026-04-15", "check_out": "2026-04-18"}'
 ```
 
 ---
 
 ## Features
 
-- **Hotel Search** - Search for available hotels with real-time pricing in any city
-- **Hotel Listing** - Browse all known hotels in a city with coordinates and ratings
-- **Hotel Ratings** - Get guest sentiment analysis from review data
-- **OAuth2 Token Management** - Automatic Amadeus token refresh with thread-safe caching
+- **Hotel Search** - Available hotels with rates in a city (by ISO country + city name)
+- **Hotel Listing** - Browse all known hotels in a city with coordinates and chain info
+- **Hotel Ratings** - Aggregate review sentiment for a single hotel ID
+- **Single-Key Auth** - One `X-API-Key` header; no OAuth flow or token refresh
 - **Automatic Service Discovery** - Registers with Redis for agent discovery
 - **Distributed Tracing** - Full OpenTelemetry integration with W3C TraceContext
 
@@ -492,35 +492,39 @@ The tool registers these capabilities with the service mesh:
 
 **Endpoint:** `/api/capabilities/search_hotels`
 
-Searches for available hotels with real-time pricing in a city.
+Searches for available hotels with rates in a city.
 
 **Request:**
 ```json
 {
-  "city_code": "PAR",
+  "city_name": "Paris",
+  "country_code": "FR",
   "check_in": "2026-04-15",
   "check_out": "2026-04-18",
   "adults": 2,
-  "rooms": 1,
   "max_results": 5,
-  "currency": "EUR"
+  "currency": "EUR",
+  "guest_nationality": "US"
 }
 ```
+
+Required: `city_name`, `country_code` (ISO-2), `check_in`, `check_out` (`YYYY-MM-DD`).
+Optional: `adults` (default 2), `max_results` (default 10), `currency` (ISO 4217, default `USD`), `guest_nationality` (ISO-2, default `US`).
 
 **Response:**
 ```json
 {
-  "city_code": "PAR",
+  "city_name": "Paris",
+  "country_code": "FR",
   "check_in": "2026-04-15",
   "check_out": "2026-04-18",
   "hotels": [
     {
-      "hotel_id": "MSPARIDC",
+      "hotel_id": "lp1a2b3",
       "name": "Mercure Paris Centre",
       "rating": "4",
       "latitude": 48.8566,
       "longitude": 2.3522,
-      "distance": "0.5 km",
       "rooms": [
         {
           "type": "STANDARD",
@@ -532,7 +536,7 @@ Searches for available hotels with real-time pricing in a city.
       ]
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "LiteAPI"
 }
 ```
 
@@ -540,33 +544,36 @@ Searches for available hotels with real-time pricing in a city.
 
 **Endpoint:** `/api/capabilities/list_hotels_by_city`
 
-Lists all known hotels in a city for browsing and discovery.
+Lists known hotels in a city for browsing and discovery (no live pricing).
 
 **Request:**
 ```json
 {
-  "city_code": "NYC",
-  "radius": 5,
-  "ratings": "4,5"
+  "city_name": "New York",
+  "country_code": "US",
+  "limit": 25
 }
 ```
+
+Required: `city_name`, `country_code` (ISO-2).
+Optional: `limit` (max hotels returned).
 
 **Response:**
 ```json
 {
-  "city_code": "NYC",
+  "city_name": "New York",
+  "country_code": "US",
   "hotels": [
     {
-      "hotel_id": "MCLONGHM",
+      "hotel_id": "lp9x8y7",
       "name": "The Langham New York",
-      "chain_code": "MC",
+      "chain_code": "LH",
       "latitude": 40.7128,
       "longitude": -74.006,
-      "distance": "1.2 km",
       "country_code": "US"
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "LiteAPI"
 }
 ```
 
@@ -574,12 +581,12 @@ Lists all known hotels in a city for browsing and discovery.
 
 **Endpoint:** `/api/capabilities/hotel_ratings`
 
-Gets guest sentiment analysis for hotels from review data.
+Returns aggregate review sentiment for a single hotel ID. LiteAPI accepts one hotel ID per call (not a comma-separated list).
 
 **Request:**
 ```json
 {
-  "hotel_ids": "MCLONGHM,MSPARIDC"
+  "hotel_id": "lp9x8y7"
 }
 ```
 
@@ -588,22 +595,20 @@ Gets guest sentiment analysis for hotels from review data.
 {
   "hotels": [
     {
-      "hotel_id": "MCLONGHM",
-      "overall_rating": 88.5,
-      "number_of_reviews": 1250,
-      "number_of_ratings": 980,
+      "hotel_id": "lp9x8y7",
+      "overall_rating": 8.85,
+      "number_of_reviews": 32,
+      "number_of_ratings": 1250,
       "sentiments": {
-        "location": 95,
-        "comfort": 88,
-        "staff": 92,
-        "value": 78,
-        "cleanliness": 90
+        "average_score": 8.85
       }
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "LiteAPI"
 }
 ```
+
+`overall_rating` is a 0–10 average. `number_of_reviews` is what came back in this call; `number_of_ratings` is the total on file for the hotel.
 
 ---
 
@@ -614,8 +619,8 @@ Hotel Tool (Passive)
     |
     +-- Registers capabilities in Redis
     +-- Receives requests from agents
-    +-- Authenticates via Amadeus OAuth2
-    +-- Calls Amadeus Self-Service API
+    +-- Sends X-API-Key header with each request
+    +-- Calls LiteAPI v3.0 hotel + review endpoints
     +-- Returns standardized responses
 
 Agents (Active)
@@ -631,13 +636,11 @@ Agents (Active)
 Once deployed, the hotel tool is automatically discovered by agents via Redis. You can query hotel data through natural language:
 
 ```bash
-# Query through the travel chat agent
-curl -X POST http://localhost:8356/api/capabilities/research_topic \
+# Query through the travel-chat-agent (streaming SSE response).
+# The agent's LLM picks tools dynamically based on the query.
+curl -N -X POST http://travel-chat-agent.localhost/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{
-    "topic": "Find hotels in Paris for 3 nights next month",
-    "ai_synthesis": true
-  }'
+  -d '{"message": "Find hotels in Paris for 3 nights next month"}'
 ```
 
 ---
@@ -648,9 +651,7 @@ curl -X POST http://localhost:8356/api/capabilities/research_topic \
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `AMADEUS_CLIENT_ID` | Amadeus API client ID | - | Yes |
-| `AMADEUS_CLIENT_SECRET` | Amadeus API client secret | - | Yes |
-| `AMADEUS_ENV` | Amadeus environment (test\|production) | `test` | No |
+| `LITEAPI_KEY` | LiteAPI key (single-header `X-API-Key`; sandbox keys unprefixed, production keys prefixed with `prod_`) | - | Yes |
 | `REDIS_URL` | Redis connection URL | - | Yes |
 | `PORT` | HTTP server port | `8343` | No |
 | `NAMESPACE` | Kubernetes namespace | `default` | No |
@@ -662,19 +663,12 @@ curl -X POST http://localhost:8356/api/capabilities/research_topic \
 
 ## API Rate Limits
 
-Free tier limits (Amadeus Test Environment):
-
-| Limit | Value |
-|-------|-------|
-| **Hotel Offers** | Generous test limits |
-| **Hotel Reference Data** | Generous test limits |
-| **Hotel Sentiment** | Generous test limits |
+LiteAPI's free sandbox tier allows ~1,000 requests/month against real hotel inventory. Production keys (prefixed `prod_`) require a paid plan with separate rate-limit terms. See [liteapi.travel](https://www.liteapi.travel/) for the current pricing and limits.
 
 The tool implements:
-- OAuth2 token caching with automatic refresh
-- Two-step hotel search (list hotels by city, then get offers)
-- Structured error logging for rate limit tracking
-- Graceful error responses on API failures
+- Two-step hotel search (`/data/hotels` to resolve hotel IDs, then `/hotels/rates` for rates)
+- Structured error logging for API failures
+- Graceful error responses on upstream errors and timeouts
 
 ---
 
@@ -682,17 +676,16 @@ The tool implements:
 
 ```
 hotel-tool/
-├── main.go                 # Entry point, framework setup, telemetry init
-├── hotel_tool.go           # Tool definition, capability registration
-├── amadeus_auth.go         # OAuth2 token manager (mutex + expiry caching)
-├── amadeus_client.go       # Amadeus API client (3 endpoints)
-├── handlers.go             # HTTP handlers for each capability
-├── go.mod                  # Go module definition
-├── Dockerfile              # Standalone container image
-├── Dockerfile.workspace    # Development build from workspace root
-├── k8-deployment.yaml      # Kubernetes manifests
-├── setup.sh                # Full lifecycle management script
-└── README.md               # This file
+├── main.go                  # Entry point, framework setup, telemetry init
+├── hotel_tool.go            # Tool definition, capability registration
+├── liteapi_client.go        # LiteAPI v3.0 client (hotels + rates + reviews)
+├── handlers.go              # HTTP handlers for each capability
+├── go.mod                   # Go module definition
+├── Dockerfile               # Standalone container image
+├── Dockerfile.workspace     # Development build from workspace root
+├── k8-deployment.yaml       # Kubernetes manifests
+├── setup.sh                 # Full lifecycle management script
+└── README.md                # This file
 ```
 
 ---
@@ -708,18 +701,20 @@ Ensure the tool is registered with Redis:
 # Check Redis connection
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 
-# Should show: truvag3:service:hotel-service
+# Should show a key containing "hotel-tool"
 ```
 
-**2. OAuth2 authentication errors**
+**2. Authentication / 401 errors**
 
 ```bash
-# Check logs for auth issues
-kubectl logs -n truvag3-examples -l app=hotel-tool | grep -i "auth\|token"
+# Check logs for key issues
+kubectl logs -n truvag3-examples -l app=hotel-tool | grep -i "key\|401\|unauthorized"
 
 # Common issues:
-# - Invalid credentials: Check AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET
-# - Wrong environment: Ensure AMADEUS_ENV matches your credentials (test vs production)
+# - Empty LITEAPI_KEY: check the hotel-tool-secrets secret
+#     kubectl get secret -n truvag3-examples hotel-tool-secrets -o yaml
+# - Wrong key: re-copy from https://dashboard.liteapi.travel
+# - Production key (prod_*) used without a paid plan: switch back to a sandbox key
 ```
 
 **3. API errors or empty results**
@@ -729,9 +724,11 @@ kubectl logs -n truvag3-examples -l app=hotel-tool | grep -i "auth\|token"
 kubectl logs -n truvag3-examples -l app=hotel-tool | grep -i "api\|error"
 
 # Common issues:
-# - Invalid city code: Use IATA city codes (PAR, NYC, LON), not airport codes
+# - Wrong city/country: LiteAPI takes ISO country code + city name
+#   (e.g. country_code="FR", city_name="Paris") — not IATA codes like "PAR"
 # - Past dates: Ensure check_in is in the future
-# - Rate limit: Wait or check your Amadeus dashboard
+# - Empty sandbox result: niche city pairs may have no sandbox inventory.
+#   Try a major city (e.g. Paris/FR or London/GB) to confirm the tool works.
 ```
 
 **4. Docker build fails**
@@ -761,12 +758,12 @@ kubectl logs -n truvag3-examples -l app=hotel-tool
 kubectl get pods -n truvag3-examples -l app=hotel-tool
 
 # Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/hotel-service 8343:80
+kubectl port-forward -n truvag3-examples svc/hotel-tool-service 8343:80
 
 # Test hotel search
 curl -X POST http://localhost:8343/api/capabilities/search_hotels \
   -H "Content-Type: application/json" \
-  -d '{"city_code": "PAR", "check_in": "2026-04-15", "check_out": "2026-04-18"}'
+  -d '{"city_name": "Paris", "country_code": "FR", "check_in": "2026-04-15", "check_out": "2026-04-18"}'
 ```
 
 ---
@@ -777,9 +774,7 @@ curl -X POST http://localhost:8343/api/capabilities/search_hotels \
 
 ```bash
 # Set environment variables
-export AMADEUS_CLIENT_ID="your-client-id"
-export AMADEUS_CLIENT_SECRET="your-client-secret"
-export AMADEUS_ENV="test"
+export LITEAPI_KEY="your-sandbox-key"
 export REDIS_URL="redis://localhost:6379"
 export PORT=8343
 
@@ -792,14 +787,14 @@ go run .
 1. Add request/response types in `hotel_tool.go`
 2. Register capability in `registerCapabilities()`
 3. Implement handler in `handlers.go`
-4. Add Amadeus client method in `amadeus_client.go` if needed
+4. Add a LiteAPI client method in `liteapi_client.go` if needed
 
 ---
 
 ## Related Examples
 
 - [travel-chat-agent](../travel-chat-agent/) - Streaming chat agent that can use this tool
-- [flight-tool](../flight-tool/) - Flight search tool (also uses Amadeus)
+- [flight-tool](../flight-tool/) - Flight search tool (uses Travelpayouts)
 - [places-tool](../places-tool/) - Local places and restaurants search
 - [travel-advisory-tool](../travel-advisory-tool/) - Travel safety advisories
 - [stock-market-tool](../stock-market-tool/) - Stock market data tool

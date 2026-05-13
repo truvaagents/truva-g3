@@ -1,6 +1,8 @@
 # Flight Tool
 
-A TruvaG3 tool that provides flight search capabilities using the [Amadeus Self-Service API](https://developers.amadeus.com/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides flight search capabilities using the [Travelpayouts Data API](https://www.travelpayouts.com/developers/api) (cached Aviasales prices) plus the public Travelpayouts autocomplete service. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+
+> **Note:** Travelpayouts serves **cached** flight prices (up to 48h old) — adequate for examples and agent demos, not for real bookings.
 
 ## Table of Contents
 
@@ -456,20 +458,15 @@ go version
 
 ---
 
-#### 5. Amadeus API Key
+#### 5. Travelpayouts API Token
 
-The Amadeus API key is **required** for flight data. The free test environment provides realistic data for development.
+The Travelpayouts token is **required** for flight data. The token is free and auto-generated at signup.
 
-1. Visit [developers.amadeus.com](https://developers.amadeus.com/)
-2. Sign up for a free account
-3. Create a new app in your dashboard
-4. Copy your **API Key** (Client ID) and **API Secret** (Client Secret)
+1. Sign up at [travelpayouts.com](https://www.travelpayouts.com)
+2. Open [travelpayouts.com/developers/api](https://www.travelpayouts.com/developers/api) (Profile → API token)
+3. Copy the auto-generated **API token**
 
-**Free test tier includes:**
-- ~2,000 flight-offers calls/month
-- ~3,000 pricing calls/month
-- Test environment with realistic data
-- No credit card required
+The token authenticates a single header (`X-Access-Token`) — no OAuth flow, no client-id/secret pair, no credit card required.
 
 ---
 
@@ -513,14 +510,13 @@ cd examples/flight-tool
 [ ! -f .env ] && cp .env.example .env
 ```
 
-**Edit `.env`** with your Amadeus credentials:
+**Edit `.env`** with your Travelpayouts token:
 
 ```bash
 nano .env    # or: code .env / vim .env
 ```
 
-- `AMADEUS_CLIENT_ID=your-client-id` (Get from [developers.amadeus.com](https://developers.amadeus.com/))
-- `AMADEUS_CLIENT_SECRET=your-client-secret`
+- `TRAVELPAYOUTS_TOKEN=your-token` (Get from [travelpayouts.com/developers/api](https://www.travelpayouts.com/developers/api))
 
 After configuring your credentials, continue with deployment:
 
@@ -578,7 +574,7 @@ kubectl get pods -n truvag3-examples -l app=flight-tool
 
 ```bash
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/flight-service 8342:80
+kubectl port-forward -n truvag3-examples svc/flight-tool-service 8342:80
 
 # Test flight search
 curl -X POST http://localhost:8342/api/capabilities/search_flights \
@@ -590,11 +586,11 @@ curl -X POST http://localhost:8342/api/capabilities/search_flights \
 
 ## Features
 
-- **Flight Search** - Search for available flights with pricing between any two airports
-- **Airport Search** - Resolve city names to IATA airport codes for autocomplete
+- **Flight Search** - Cached flight offers (Aviasales) between any two airports, with price/airline/segments
+- **Airport Search** - Resolve city names to IATA airport codes via Travelpayouts autocomplete
 - **Cheapest Dates** - Find the cheapest travel dates for flexible planning
 - **Airport Routes** - Discover all direct destinations from any airport
-- **OAuth2 Token Management** - Automatic Amadeus token refresh with thread-safe caching
+- **Single-Token Auth** - One `X-Access-Token` header; no OAuth flow or token refresh
 - **Automatic Service Discovery** - Registers with Redis for agent discovery
 - **Distributed Tracing** - Full OpenTelemetry integration with W3C TraceContext
 
@@ -652,7 +648,7 @@ Searches for available flights between two airports with pricing.
     }
   ],
   "currency": "USD",
-  "source": "Amadeus API (test)"
+  "source": "Travelpayouts Aviasales (cached)"
 }
 ```
 
@@ -693,7 +689,7 @@ Searches for airports and cities by keyword for autocomplete and IATA code resol
       "longitude": 139.7798
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "Travelpayouts Autocomplete"
 }
 ```
 
@@ -731,7 +727,7 @@ Finds the cheapest travel dates between two airports for flexible date planning.
       "currency": "USD"
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "Travelpayouts Aviasales (cached)"
 }
 ```
 
@@ -764,7 +760,7 @@ Lists all direct flight destinations from an airport.
       "type": "airport"
     }
   ],
-  "source": "Amadeus API (test)"
+  "source": "Travelpayouts Aviasales (cached)"
 }
 ```
 
@@ -777,8 +773,8 @@ Flight Tool (Passive)
     |
     +-- Registers capabilities in Redis
     +-- Receives requests from agents
-    +-- Authenticates via Amadeus OAuth2
-    +-- Calls Amadeus Self-Service API
+    +-- Sends X-Access-Token with each request
+    +-- Calls Travelpayouts Data API + autocomplete service
     +-- Returns standardized responses
 
 Agents (Active)
@@ -794,13 +790,11 @@ Agents (Active)
 Once deployed, the flight tool is automatically discovered by agents via Redis. You can query flight data through natural language:
 
 ```bash
-# Query through the travel chat agent
-curl -X POST http://localhost:8356/api/capabilities/research_topic \
+# Query through the travel-chat-agent (streaming SSE response).
+# The agent's LLM picks tools dynamically based on the query.
+curl -N -X POST http://travel-chat-agent.localhost/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{
-    "topic": "Find me flights from New York to Tokyo next month",
-    "ai_synthesis": true
-  }'
+  -d '{"message": "Find me flights from New York to Tokyo next month"}'
 ```
 
 ---
@@ -811,9 +805,7 @@ curl -X POST http://localhost:8356/api/capabilities/research_topic \
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `AMADEUS_CLIENT_ID` | Amadeus API client ID | - | Yes |
-| `AMADEUS_CLIENT_SECRET` | Amadeus API client secret | - | Yes |
-| `AMADEUS_ENV` | Amadeus environment (test\|production) | `test` | No |
+| `TRAVELPAYOUTS_TOKEN` | Travelpayouts Data API token (single-header `X-Access-Token`) | - | Yes |
 | `REDIS_URL` | Redis connection URL | - | Yes |
 | `PORT` | HTTP server port | `8342` | No |
 | `NAMESPACE` | Kubernetes namespace | `default` | No |
@@ -825,18 +817,11 @@ curl -X POST http://localhost:8356/api/capabilities/research_topic \
 
 ## API Rate Limits
 
-Free tier limits (Amadeus Test Environment):
-
-| Limit | Value |
-|-------|-------|
-| **Flight Offers** | ~2,000 calls/month |
-| **Pricing** | ~3,000 calls/month |
-| **Airport Search** | Generous limits |
+Travelpayouts does not publish strict per-endpoint quotas for the Data API. The price/calendar/city-directions endpoints are backed by a cache (Aviasales) and are generous for non-commercial use; the public autocomplete endpoint does not require a token at all. Check the [Travelpayouts API docs](https://support.travelpayouts.com/hc/en-us/categories/200358578) for the current terms before high-volume use.
 
 The tool implements:
-- OAuth2 token caching with automatic refresh
-- Structured error logging for rate limit tracking
-- Graceful error responses on API failures
+- Structured error logging for API failures
+- Graceful error responses on upstream errors and timeouts (30s HTTP timeout per call)
 
 ---
 
@@ -844,17 +829,16 @@ The tool implements:
 
 ```
 flight-tool/
-├── main.go                 # Entry point, framework setup, telemetry init
-├── flight_tool.go          # Tool definition, capability registration
-├── amadeus_auth.go         # OAuth2 token manager (mutex + expiry caching)
-├── amadeus_client.go       # Amadeus API client (4 endpoints)
-├── handlers.go             # HTTP handlers for each capability
-├── go.mod                  # Go module definition
-├── Dockerfile              # Standalone container image
-├── Dockerfile.workspace    # Development build from workspace root
-├── k8-deployment.yaml      # Kubernetes manifests
-├── setup.sh                # Full lifecycle management script
-└── README.md               # This file
+├── main.go                  # Entry point, framework setup, telemetry init
+├── flight_tool.go           # Tool definition, capability registration
+├── travelpayouts_client.go  # Travelpayouts Data API + autocomplete client
+├── handlers.go              # HTTP handlers for each capability
+├── go.mod                   # Go module definition
+├── Dockerfile               # Standalone container image
+├── Dockerfile.workspace     # Development build from workspace root
+├── k8-deployment.yaml       # Kubernetes manifests
+├── setup.sh                 # Full lifecycle management script
+└── README.md                # This file
 ```
 
 ---
@@ -870,18 +854,19 @@ Ensure the tool is registered with Redis:
 # Check Redis connection
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 
-# Should show: truvag3:service:flight-service
+# Should show a key containing "flight-tool"
 ```
 
-**2. OAuth2 authentication errors**
+**2. Authentication / 401 errors**
 
 ```bash
-# Check logs for auth issues
-kubectl logs -n truvag3-examples -l app=flight-tool | grep -i "auth\|token"
+# Check logs for token issues
+kubectl logs -n truvag3-examples -l app=flight-tool | grep -i "token\|401\|unauthorized"
 
 # Common issues:
-# - Invalid credentials: Check AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET
-# - Wrong environment: Ensure AMADEUS_ENV matches your credentials (test vs production)
+# - Empty TRAVELPAYOUTS_TOKEN: check the flight-tool-secrets secret
+#     kubectl get secret -n truvag3-examples flight-tool-secrets -o yaml
+# - Wrong token: re-copy from https://www.travelpayouts.com/developers/api
 ```
 
 **3. API errors or empty results**
@@ -893,7 +878,8 @@ kubectl logs -n truvag3-examples -l app=flight-tool | grep -i "api\|error"
 # Common issues:
 # - Invalid IATA code: Use valid 3-letter codes (JFK, NRT, LHR)
 # - Past dates: Ensure departure_date is in the future
-# - Rate limit: Wait or check your Amadeus dashboard
+# - Empty result set: Travelpayouts only returns cached routes — niche city pairs
+#   may have no offers. Try a major route (e.g. JFK→LHR) to confirm the tool works.
 ```
 
 **4. Docker build fails**
@@ -926,7 +912,7 @@ kubectl logs -n truvag3-examples -l app=flight-tool
 kubectl get pods -n truvag3-examples -l app=flight-tool
 
 # Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/flight-service 8342:80
+kubectl port-forward -n truvag3-examples svc/flight-tool-service 8342:80
 
 # Test flight search
 curl -X POST http://localhost:8342/api/capabilities/search_flights \
@@ -942,9 +928,7 @@ curl -X POST http://localhost:8342/api/capabilities/search_flights \
 
 ```bash
 # Set environment variables
-export AMADEUS_CLIENT_ID="your-client-id"
-export AMADEUS_CLIENT_SECRET="your-client-secret"
-export AMADEUS_ENV="test"
+export TRAVELPAYOUTS_TOKEN="your-token"
 export REDIS_URL="redis://localhost:6379"
 export PORT=8342
 
@@ -957,14 +941,14 @@ go run .
 1. Add request/response types in `flight_tool.go`
 2. Register capability in `registerCapabilities()`
 3. Implement handler in `handlers.go`
-4. Add Amadeus client method in `amadeus_client.go` if needed
+4. Add a Travelpayouts client method in `travelpayouts_client.go` if needed
 
 ---
 
 ## Related Examples
 
 - [travel-chat-agent](../travel-chat-agent/) - Streaming chat agent that can use this tool
-- [hotel-tool](../hotel-tool/) - Hotel search tool (also uses Amadeus)
+- [hotel-tool](../hotel-tool/) - Hotel search tool (uses LiteAPI)
 - [places-tool](../places-tool/) - Local places and restaurants search
 - [travel-advisory-tool](../travel-advisory-tool/) - Travel safety advisories
 - [stock-market-tool](../stock-market-tool/) - Stock market data tool
