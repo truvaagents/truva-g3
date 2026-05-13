@@ -186,7 +186,7 @@ cmd_test() {
 
     # Start port forward in background
     print_info "Starting port forward..."
-    kubectl port-forward -n $NAMESPACE svc/flight-service 8342:80 >/dev/null 2>&1 &
+    kubectl port-forward -n $NAMESPACE svc/flight-tool-service 8342:80 >/dev/null 2>&1 &
     PF_PID=$!
     sleep 3
 
@@ -226,13 +226,13 @@ cmd_test() {
 
 # Port forward for tool only
 cmd_forward() {
-    truvag3_forward "flight-service" 8342 80
+    truvag3_forward "flight-tool-service" 8342 80
 }
 
 # Port forward for tool and monitoring
 cmd_forward_all() {
     truvag3_forward_all \
-        "flight-service:8342:80" \
+        "flight-tool-service:8342:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"

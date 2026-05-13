@@ -268,13 +268,13 @@ test() {
 
 # Port forward for agent only (background)
 forward() {
-    truvag3_forward "my-async-agent" 8392 80
+    truvag3_forward "my-async-agent-service" 8392 80
 }
 
 # Port forward for agent and monitoring
 forward_all() {
     truvag3_forward_all \
-        "my-async-agent:8392:80" \
+        "my-async-agent-service:8392:80" \
         "alertmanager:9093:9093" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \

@@ -239,7 +239,7 @@ cmd_test() {
 
     # Start port forward in background
     print_info "Starting port forward..."
-    kubectl port-forward -n $NAMESPACE svc/confluence-service 8376:80 >/dev/null 2>&1 &
+    kubectl port-forward -n $NAMESPACE svc/confluence-tool-service 8376:80 >/dev/null 2>&1 &
     PF_PID=$!
     sleep 3
 
@@ -272,13 +272,13 @@ cmd_test() {
 
 # Port forward for local access
 cmd_forward() {
-    truvag3_forward "confluence-service" 8376 80
+    truvag3_forward "confluence-tool-service" 8376 80
 }
 
 # Port forward all services
 cmd_forward_all() {
     truvag3_forward_all \
-        "confluence-service:8376:80" \
+        "confluence-tool-service:8376:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"

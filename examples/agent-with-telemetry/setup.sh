@@ -234,13 +234,13 @@ test() {
 
 # Port forward for agent only (background)
 forward() {
-    truvag3_forward "research-agent-telemetry" 8355 80
+    truvag3_forward "research-agent-telemetry-service" 8355 80
 }
 
 # Port forward for agent and monitoring
 forward_all() {
     truvag3_forward_all \
-        "research-agent-telemetry:8355:80" \
+        "research-agent-telemetry-service:8355:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"

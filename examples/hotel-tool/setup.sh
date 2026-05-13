@@ -98,7 +98,7 @@ cmd_full_deploy() {
 
 cmd_test() {
     print_header "Running Tests"
-    kubectl port-forward -n $NAMESPACE svc/hotel-service 8343:80 >/dev/null 2>&1 &
+    kubectl port-forward -n $NAMESPACE svc/hotel-tool-service 8343:80 >/dev/null 2>&1 &
     PF_PID=$!; sleep 3
     echo "Testing health..."; curl -s http://localhost:8343/health | grep -q "healthy" && print_success "Health OK" || print_error "Health failed"
     echo "Testing capabilities..."; curl -s http://localhost:8343/api/capabilities | grep -q "capabilities" && print_success "Capabilities OK" || print_error "Capabilities failed"
@@ -110,12 +110,12 @@ cmd_test() {
 }
 
 cmd_forward() {
-    truvag3_forward "hotel-service" 8343 80
+    truvag3_forward "hotel-tool-service" 8343 80
 }
 
 cmd_forward_all() {
     truvag3_forward_all \
-        "hotel-service:8343:80" \
+        "hotel-tool-service:8343:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"

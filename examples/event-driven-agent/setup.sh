@@ -268,13 +268,13 @@ test() {
 
 # Port forward for agent only (background)
 forward() {
-    truvag3_forward "event-driven-agent" 8372 80
+    truvag3_forward "event-driven-agent-service" 8372 80
 }
 
 # Port forward for agent and monitoring
 forward_all() {
     truvag3_forward_all \
-        "event-driven-agent:8372:80" \
+        "event-driven-agent-service:8372:80" \
         "alertmanager:9093:9093" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \

@@ -51,7 +51,7 @@ cmd_status() { kubectl get pods -n $NAMESPACE -l app=$APP_NAME; }
 cmd_rollout() { load_env; setup_api_keys; setup_config; kubectl apply -f k8-deployment.yaml; kubectl rollout restart deployment/$APP_NAME -n $NAMESPACE; }
 cmd_forward_all() {
     truvag3_forward_all \
-        "places-service:8344:80" \
+        "places-tool-service:8344:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"
@@ -70,7 +70,7 @@ cmd_full_deploy() { load_env; cmd_cluster; cmd_infra; cmd_deploy; echo "Deploy c
 
 cmd_test() {
     print_header "Running Tests"
-    kubectl port-forward -n $NAMESPACE svc/places-service 8344:80 >/dev/null 2>&1 &
+    kubectl port-forward -n $NAMESPACE svc/places-tool-service 8344:80 >/dev/null 2>&1 &
     PF_PID=$!; sleep 3
     curl -s http://localhost:8344/health | grep -q "healthy" && print_success "Health OK" || print_error "Health failed"
     print_info "Testing place search..."
@@ -81,7 +81,7 @@ cmd_test() {
 }
 
 cmd_forward() {
-    truvag3_forward "places-service" 8344 80
+    truvag3_forward "places-tool-service" 8344 80
 }
 cmd_clean() { kubectl delete -f k8-deployment.yaml --ignore-not-found; }
 cmd_clean_all() { kubectl delete -f k8-deployment.yaml --ignore-not-found 2>/dev/null || true; truvag3_delete_cluster; }

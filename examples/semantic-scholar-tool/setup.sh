@@ -199,7 +199,7 @@ cmd_test() {
 
     # Start port forward in background
     print_info "Starting port forward..."
-    kubectl port-forward -n $NAMESPACE svc/semantic-scholar-service 8370:80 >/dev/null 2>&1 &
+    kubectl port-forward -n $NAMESPACE svc/semantic-scholar-tool-service 8370:80 >/dev/null 2>&1 &
     PF_PID=$!
     sleep 3
 
@@ -232,13 +232,13 @@ cmd_test() {
 
 # Port forward for local access
 cmd_forward() {
-    truvag3_forward "semantic-scholar-service" 8370 80
+    truvag3_forward "semantic-scholar-tool-service" 8370 80
 }
 
 # Port forward all services (tool + monitoring)
 cmd_forward_all() {
     truvag3_forward_all \
-        "semantic-scholar-service:8370:80" \
+        "semantic-scholar-tool-service:8370:80" \
         "grafana:3000:80" \
         "prometheus:9090:9090" \
         "jaeger-query:16686:80"
