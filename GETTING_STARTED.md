@@ -187,23 +187,39 @@ cd ../geocoding-tool        && ./setup.sh deploy && cd -
 cd ../currency-tool         && ./setup.sh deploy && cd -
 cd ../country-info-tool     && ./setup.sh deploy && cd -
 cd ../system-utilities-tool && ./setup.sh deploy && cd -
-# (optional, see table below) cd ../news-tool && ./setup.sh deploy && cd -
+cd ../travel-advisory-tool  && ./setup.sh deploy && cd -
+# (optional, see table below) cd ../news-tool          && ./setup.sh deploy && cd -
+# (optional, see table below) cd ../flight-tool        && ./setup.sh deploy && cd -
+# (optional, see table below) cd ../hotel-tool         && ./setup.sh deploy && cd -
+# (optional, see table below) cd ../places-tool        && ./setup.sh deploy && cd -
 ```
 
-The travel-chat-agent orchestrates these tools to fulfil user queries:
+The travel-chat-agent has no built-in travel knowledge — its LLM plans and
+calls the tools below to answer questions. Each tool covers one slice of a
+travel query; the more you deploy, the richer the answers the agent can
+produce. Deploy the no-key tools at minimum; add the keyed tools to unlock
+flights, hotels, local places, and headlines.
 
-| Tool | API Key Required? | External Service | Path |
-|------|-------------------|------------------|------|
-| weather-tool-v2 | No (free, no auth) | [Open-Meteo](https://open-meteo.com/) | [examples/weather-tool-v2/](examples/weather-tool-v2/) |
-| geocoding-tool | No (free, no auth) | [Nominatim / OpenStreetMap](https://nominatim.org/) | [examples/geocoding-tool/](examples/geocoding-tool/) |
-| currency-tool | No (free, no auth) | [Frankfurter](https://frankfurter.dev/) | [examples/currency-tool/](examples/currency-tool/) |
-| country-info-tool | No (free, no auth) | [RestCountries](https://restcountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
-| system-utilities-tool | No (self-contained) | None — Go stdlib (timezone DB, date math) | [examples/system-utilities-tool/](examples/system-utilities-tool/) |
-| news-tool | **Yes** — `GNEWS_API_KEY` | [GNews.io](https://gnews.io/) (free tier: 100 req/day) | [examples/news-tool/](examples/news-tool/) |
+| Tool | What it gives the agent | API Key Required? | External Service | Path |
+|------|-------------------------|-------------------|------------------|------|
+| weather-tool-v2 | Current conditions and forecasts for any coordinate | No (free, no auth) | [Open-Meteo](https://open-meteo.com/) | [examples/weather-tool-v2/](examples/weather-tool-v2/) |
+| geocoding-tool | City/landmark name → latitude/longitude (input for weather and places) | No (free, no auth) | [Nominatim / OpenStreetMap](https://nominatim.org/) | [examples/geocoding-tool/](examples/geocoding-tool/) |
+| currency-tool | Currency conversion across 31 ECB currencies | No (free, no auth) | [Frankfurter](https://frankfurter.dev/) | [examples/currency-tool/](examples/currency-tool/) |
+| country-info-tool | Country facts — capital, languages, currency code, region | No (free, no auth) | [RestCountries](https://restcountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
+| system-utilities-tool | Current time, timezone conversion, date math (e.g. "next Friday") | No (self-contained) | None — Go stdlib (timezone DB, date math) | [examples/system-utilities-tool/](examples/system-utilities-tool/) |
+| travel-advisory-tool | Official US State Department safety advisories per country | No (free, no auth) | [Travel Advisories API](https://cadataapi.state.gov/) | [examples/travel-advisory-tool/](examples/travel-advisory-tool/) |
+| news-tool | Destination news / current events | **Yes** — `GNEWS_API_KEY` | [GNews.io](https://gnews.io/) (free tier: 100 req/day) | [examples/news-tool/](examples/news-tool/) |
+| flight-tool | Flight search and airport/city IATA-code lookup | **Yes** — `TRAVELPAYOUTS_TOKEN` | [Travelpayouts](https://www.travelpayouts.com/) (free signup) | [examples/flight-tool/](examples/flight-tool/) |
+| hotel-tool | Hotel search by ISO country code + city name | **Yes** — `LITEAPI_KEY` | [LiteAPI](https://liteapi.travel/) | [examples/hotel-tool/](examples/hotel-tool/) |
+| places-tool | Restaurants, attractions, and "nearby" search around coordinates | **Yes** — `FOURSQUARE_API_KEY` and/or `GEOAPIFY_API_KEY` | [Foursquare](https://location.foursquare.com/developer/) / [Geoapify](https://www.geoapify.com/places-api) | [examples/places-tool/](examples/places-tool/) |
+| currency-global-tool | Currency conversion across 170+ currencies (richer alternative to currency-tool) | **Yes** — `CURRENCYBEACON_API_KEY` | [CurrencyBeacon](https://currencybeacon.com/) | [examples/currency-global-tool/](examples/currency-global-tool/) |
 
-The first five are deployed in step 4 above and require no additional
-configuration. For `news-tool`, edit `examples/news-tool/.env` and set
-`GNEWS_API_KEY=...` before running `./setup.sh deploy`.
+The first six tools (no-key) are deployed by the commands in step 4 above and
+require no additional configuration. For each keyed tool, edit its `.env`
+(e.g. `examples/flight-tool/.env`) and set the relevant key before running
+`./setup.sh deploy`. The agent discovers whatever is running via Redis — you
+can add or remove tools at any time and re-hit `/discover` to see the
+updated catalog.
 
 > **Why `system-utilities-tool`?** The agent has no built-in clock — without
 > this tool it can't answer time-aware queries ("what time is it in Tokyo?",
@@ -268,7 +284,7 @@ cd ../chat-ui                    && ./setup.sh deploy && cd -   # frontend
 
 | Tool | What it does | Talks to |
 |------|--------------|----------|
-| [devops-tool](examples/devops-tool/) | Read-only `kubectl` (get/describe/logs; deletes blocked) | In-cluster ServiceAccount |
+| [devops-tool](examples/devops-tool/) | Flexible `kubectl` access (only `delete` blocked) | In-cluster ServiceAccount |
 | [devops-observability-tool](examples/devops-observability-tool/) | Search logs and traces | Loki + Jaeger |
 | [prometheus-query-tool](examples/prometheus-query-tool/) | Run PromQL queries | Prometheus |
 | [system-utilities-tool](examples/system-utilities-tool/) | Time, date, timezone math | Go stdlib |
