@@ -174,6 +174,33 @@ TRUVAG3_EMBEDDING_MODEL=nomic-embed-text
 
 **What's a domain?** Agents in the same domain see each other's events. A DevOps agent and an event-driven alert agent should share the same domain (e.g., `infrastructure`) because they operate on the same entities (pods, services, deployments). A commerce order agent would use a different domain.
 
+### Embedding provider options
+
+The framework's embedding client speaks any OpenAI-compatible `/v1/embeddings` endpoint, so the same three env vars work across providers — switch by changing `TRUVAG3_EMBEDDING_BASE_URL`, `TRUVAG3_EMBEDDING_MODEL`, and (where required) `TRUVAG3_EMBEDDING_API_KEY`:
+
+```bash
+TRUVAG3_EMBEDDING_BASE_URL=<provider base URL ending in /v1>
+TRUVAG3_EMBEDDING_MODEL=<model ID>
+TRUVAG3_EMBEDDING_API_KEY=<api key, if required>
+```
+
+`TRUVAG3_EMBEDDING_API_KEY` is omitted for local Ollama (no auth) and required for hosted providers. Precedence is: explicit `With...` options > env vars > defaults (`http://localhost:11434/v1` + `nomic-embed-text`).
+
+| Provider | Base URL | Models (ID — output dim) |
+|---|---|---|
+| Ollama (local) | `http://<host>:11434/v1` | Any pulled embedding model (e.g., `nomic-embed-text` — 768, `mxbai-embed-large` — 1024) |
+| OpenAI | `https://api.openai.com/v1` | `text-embedding-3-small` — 1536; `text-embedding-3-large` — 3072; `text-embedding-ada-002` — 1536 (legacy). All accept a `dimensions` parameter to truncate. Max input: 8192 tokens. |
+| Mistral | `https://api.mistral.ai/v1` | `mistral-embed` — 1024 (8k tokens); `codestral-embed` — up to 3072, configurable (8k tokens) |
+| Voyage AI | `https://api.voyageai.com/v1` | Hosted: `voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-3` — 1024 default (configurable to 256 / 512 / 2048, 32k tokens); `voyage-finance-2` — 1024 (32k); `voyage-law-2` — 1024 (16k); `voyage-code-2` — 1536 (16k, legacy). Note: Voyage's recommended usage includes an `input_type` parameter ("query"/"document") that the framework's client does not send, so retrieval quality may be lower than Voyage's recommended setup. |
+| Jina AI | `https://api.jina.ai/v1` | `jina-embeddings-v4` — 2048, truncatable to 128 (32k tokens); `jina-embeddings-v3` — 1024, truncatable to 32 (8k tokens). A v5 family (`jina-embeddings-v5-text`, `jina-embeddings-v5-omni`) has also been announced — check Jina's docs for current hosted-API availability and model IDs. |
+| Together AI | `https://api.together.xyz/v1` | Multiple open-weight models served via `/v1/embeddings` (e.g., `BAAI/bge-large-en-v1.5` — 1024; `BAAI/bge-base-en-v1.5` — 768; `WhereIsAI/UAE-Large-V1` — 1024; `intfloat/multilingual-e5-large-instruct` — 1024; `togethercomputer/m2-bert-80M-{2k,8k,32k}-retrieval` — 768). See [Together's serverless models catalog](https://docs.together.ai/docs/serverless-models) for the current list. |
+| Cohere (Compatibility API) | `https://api.cohere.ai/compatibility/v1` | `embed-v4.0` — 1536 default (Matryoshka: 256, 512, 1024, 1536). Note: Cohere's standard API at `api.cohere.com/v1` is **not** OpenAI-schema-compatible — only the `/compatibility/v1` path works with this client. |
+
+Model IDs, output dimensions, and context lengths above are sourced from each provider's official documentation at the time of writing; verify against the provider's docs before deploying.
+
+> **Switching providers and Qdrant collections.**
+> A Qdrant collection is created with the embedding dimension of the model that first writes to it. Switching to a different dimension (e.g., 768 → 1536) requires recreating the affected collections — Qdrant vector dimensions cannot change in place. Either drop the relevant collections in Qdrant and let the framework rebuild them, or use a fresh `TRUVAG3_AGENT_DOMAIN`.
+
 ---
 
 ## Step 2: Add Memory to Your Agent
@@ -737,6 +764,8 @@ TRUVAG3_VECTOR_DB_URL=qdrant.truvag3-examples:6334
 TRUVAG3_EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1
 TRUVAG3_EMBEDDING_MODEL=nomic-embed-text
 ```
+
+To use a hosted provider (OpenAI, Mistral, Voyage, Jina, Together, Cohere) instead of local Ollama, see **Embedding provider options** in Step 1 for the full list of supported base URLs and model IDs.
 
 Without a vector DB, user memory falls back to `InMemoryUserMemory` — functional for development but facts are lost on restart.
 
