@@ -49,7 +49,10 @@ spec:
         - name: grafana-dashboards
           mountPath: /var/lib/grafana/dashboards
         - name: grafana-dashboards-new
-          mountPath: /var/lib/grafana/dashboards/new
+          # Sibling, not nested under dashboards/ — nesting causes Grafana's
+          # `truvag3` provider to also recurse into this directory, producing
+          # duplicate-title warnings and locking provisioning writes.
+          mountPath: /var/lib/grafana/dashboards-new
         livenessProbe:
           httpGet:
             path: /api/health
@@ -192,7 +195,11 @@ data:
       updateIntervalSeconds: 10
       allowUiUpdates: true
       options:
-        path: /var/lib/grafana/dashboards/new
+        # Must be a sibling of /var/lib/grafana/dashboards (the `truvag3`
+        # provider's path) — nesting causes both providers to scan the same
+        # files, which Grafana detects as duplicate dashboards and uses to
+        # disable provisioning writes for both providers.
+        path: /var/lib/grafana/dashboards-new
 ---
 apiVersion: v1
 kind: ConfigMap

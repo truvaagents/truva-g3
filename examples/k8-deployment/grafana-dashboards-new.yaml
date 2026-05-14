@@ -1011,7 +1011,7 @@ data:
       "liveNow": false,
       "weekStart": "",
       "editable": true,
-      "graphTooltip": 1,
+      "graphTooltip": 0,
       "links": [
         {
           "type": "dashboards",
@@ -1451,7 +1451,7 @@ data:
         },
         {
           "id": 18,
-          "title": "Requests by Provider",
+          "title": "Requests by Model",
           "type": "piechart",
           "gridPos": {
             "h": 8,
@@ -1465,8 +1465,8 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (provider) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"})",
-              "legendFormat": "{{provider}}",
+              "expr": "sum by (model) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", model!=\"\"})",
+              "legendFormat": "{{model}}",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -1501,7 +1501,7 @@ data:
         },
         {
           "id": 19,
-          "title": "Tokens by Provider",
+          "title": "Tokens by Model",
           "type": "piechart",
           "gridPos": {
             "h": 8,
@@ -1515,8 +1515,8 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\"})",
-              "legendFormat": "{{provider}}",
+              "expr": "sum by (model) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", model!=\"\"})",
+              "legendFormat": "{{model}}",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -1553,7 +1553,7 @@ data:
         },
         {
           "id": 20,
-          "title": "Provider Detail",
+          "title": "Provider & Model Detail",
           "type": "table",
           "gridPos": {
             "h": 8,
@@ -1567,7 +1567,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (provider) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"})",
+              "expr": "sum by (provider, model) (truvag3_ai_request_total{module=\"ai\", job=\"otel-collector-metrics\", model!=\"\"})",
               "legendFormat": "Requests",
               "refId": "A",
               "instant": true,
@@ -1578,7 +1578,7 @@ data:
               }
             },
             {
-              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"input\"})",
+              "expr": "sum by (provider, model) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"input\", model!=\"\"})",
               "legendFormat": "Input Tokens",
               "refId": "B",
               "instant": true,
@@ -1589,7 +1589,7 @@ data:
               }
             },
             {
-              "expr": "sum by (provider) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"output\"})",
+              "expr": "sum by (provider, model) (truvag3_ai_tokens_used_sum{module=\"ai\", job=\"otel-collector-metrics\", type=\"output\", model!=\"\"})",
               "legendFormat": "Output Tokens",
               "refId": "C",
               "instant": true,
@@ -1600,7 +1600,7 @@ data:
               }
             },
             {
-              "expr": "sum by (provider) (truvag3_ai_request_duration_ms_sum{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"}) / clamp_min(sum by (provider) (truvag3_ai_request_duration_ms_count{module=\"ai\", job=\"otel-collector-metrics\", provider!=\"\"}), 1e-10)",
+              "expr": "sum by (provider, model) (truvag3_ai_request_duration_ms_sum{module=\"ai\", job=\"otel-collector-metrics\", model!=\"\"}) / clamp_min(sum by (provider, model) (truvag3_ai_request_duration_ms_count{module=\"ai\", job=\"otel-collector-metrics\", model!=\"\"}), 1e-10)",
               "legendFormat": "Avg Latency (ms)",
               "refId": "D",
               "instant": true,
@@ -1633,6 +1633,7 @@ data:
                 },
                 "renameByName": {
                   "provider": "Provider",
+                  "model": "Model",
                   "Value #A": "Requests",
                   "Value #B": "Input Tokens",
                   "Value #C": "Output Tokens",
@@ -1778,7 +1779,7 @@ data:
         },
         {
           "id": 9,
-          "title": "Chain Attempts",
+          "title": "Chain Attempts (Total)",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
@@ -1792,8 +1793,8 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(truvag3_ai_chain_attempt_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
-              "legendFormat": "{{service_name}}",
+              "expr": "round(sum(increase(truvag3_ai_chain_attempt_count{job=\"otel-collector-metrics\"}[15m])) by (service_name, provider, status))",
+              "legendFormat": "{{service_name}} \u2192 {{provider}} ({{status}})",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -1814,26 +1815,27 @@ data:
           },
           "fieldConfig": {
             "defaults": {
+              "unit": "short",
               "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
-                "fillOpacity": 10,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false,
+                "drawStyle": "bars",
+                "fillOpacity": 80,
                 "stacking": {
-                  "mode": "none"
+                  "mode": "normal"
                 },
-                "axisPlacement": "auto",
-                "lineWidth": 1
-              }
+                "lineWidth": 0,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisPlacement": "auto"
+              },
+              "decimals": 0
             },
             "overrides": []
           }
         },
         {
           "id": 10,
-          "title": "Chain Failovers",
+          "title": "Chain Failovers (Total)",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
@@ -1847,8 +1849,8 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(truvag3_ai_chain_failover_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
-              "legendFormat": "{{service_name}}",
+              "expr": "round(sum(increase(truvag3_ai_chain_failover_count{job=\"otel-collector-metrics\"}[15m])) by (service_name, provider))",
+              "legendFormat": "{{service_name}} \u2192 {{provider}}",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -1869,44 +1871,30 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
+              "unit": "short",
               "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
-                "fillOpacity": 10,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false,
+                "drawStyle": "bars",
+                "fillOpacity": 80,
                 "stacking": {
-                  "mode": "none"
+                  "mode": "normal"
                 },
-                "axisPlacement": "auto",
-                "lineWidth": 1
-              }
+                "lineWidth": 0,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisPlacement": "auto"
+              },
+              "color": {
+                "mode": "continuous-reds"
+              },
+              "decimals": 0
             },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byFrameRefID",
-                  "options": "A"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "mode": "continuous-reds"
-                    }
-                  }
-                ]
-              }
-            ]
+            "overrides": []
           }
         },
         {
           "id": 11,
-          "title": "Stream Success Rate",
+          "title": "LLM Streaming Completions",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
@@ -1920,7 +1908,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(truvag3_ai_chain_stream_success_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "expr": "round(sum(increase(truvag3_ai_chain_stream_success_total{job=\"otel-collector-metrics\"}[15m])) by (service_name))",
               "legendFormat": "{{service_name}}",
               "refId": "A",
               "datasource": {
@@ -1942,23 +1930,24 @@ data:
           },
           "fieldConfig": {
             "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 80,
+                "stacking": {
+                  "mode": "normal"
+                },
+                "lineWidth": 0,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisPlacement": "auto"
+              },
               "color": {
                 "mode": "fixed",
                 "fixedColor": "green"
               },
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "smooth",
-                "fillOpacity": 10,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false,
-                "stacking": {
-                  "mode": "none"
-                },
-                "axisPlacement": "auto",
-                "lineWidth": 1
-              }
+              "decimals": 0
             },
             "overrides": []
           }
@@ -2219,6 +2208,7 @@ data:
         }
       ]
     }
+
   orchestration.json: |
     {
       "uid": "truvag3-orchestration",
