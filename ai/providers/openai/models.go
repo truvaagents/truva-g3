@@ -111,12 +111,14 @@ var ModelAliases = map[string]map[string]string{
 		"default": "deepseek-chat",
 	},
 	// Groq - Ultra-fast inference (December 2025)
-	// Known for extremely fast token generation speeds
+	// Known for extremely fast token generation speeds. The gpt-oss family
+	// (OpenAI-namespaced model IDs) is the strongest generalist choice on
+	// Groq today; Llama variants remain available for the fastest tier.
 	"openai.groq": {
-		"fast":    "llama-3.1-8b-instant",    // 560 T/sec, fastest
-		"smart":   "llama-3.3-70b-versatile", // 280 T/sec, best quality
-		"code":    "llama-3.3-70b-versatile", // Best for coding on Groq
-		"default": "llama-3.3-70b-versatile",
+		"fast":    "llama-3.1-8b-instant", // 560 T/sec, fastest
+		"smart":   "openai/gpt-oss-120b",  // gpt-oss 120B: best quality on Groq
+		"code":    "openai/gpt-oss-120b",  // gpt-oss 120B: strong coding capability
+		"default": "openai/gpt-oss-120b",
 	},
 	// Together AI - Open source models (December 2025)
 	// Hosts popular open models with Turbo optimizations
@@ -180,7 +182,7 @@ var ModelAliases = map[string]map[string]string{
 // Example:
 //
 //	ResolveModel("openai.deepseek", "smart") → "deepseek-reasoner"
-//	ResolveModel("openai.groq", "fast") → "llama-3.3-70b-versatile"
+//	ResolveModel("openai.groq", "default") → "openai/gpt-oss-120b"
 //	ResolveModel("openai", "gpt-4") → "gpt-4" (pass-through, not an alias)
 func ResolveModel(providerAlias string, model string) string {
 	// If no alias is set, use vanilla OpenAI

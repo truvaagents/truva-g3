@@ -64,7 +64,7 @@ func TestEstimateCostUSD(t *testing.T) {
 			promptTokens:     1_000_000,
 			completionTokens: 1_000_000,
 			wantKnown:        true,
-			wantApprox:       0.15 + 0.75,
+			wantApprox:       0.15 + 0.60,
 		},
 		{
 			name:             "claude sonnet 4 partial token count",

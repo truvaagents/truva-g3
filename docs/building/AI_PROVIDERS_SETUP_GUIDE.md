@@ -166,7 +166,7 @@ response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
 | Bedrock | `bedrock` | 200 |
 | Ollama | `openai.ollama` | 100 |
 
-**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `o3`, Anthropic resolves it to `claude-sonnet-4-5`, and Groq resolves it to `llama-3.3-70b-versatile`. You don't need different code for different providers.
+**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `o3`, Anthropic resolves it to `claude-sonnet-4-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
 
 ### When to Use Which
 
@@ -197,7 +197,7 @@ client, _ := ai.NewClient(
     ai.WithProvider("openai"),
     ai.WithBaseURL("https://api.groq.com/openai/v1"),  // Have to remember this
     ai.WithAPIKey(os.Getenv("GROQ_API_KEY")),          // Different env var
-    ai.WithModel("llama-3.3-70b-versatile"),           // Provider-specific model
+    ai.WithModel("openai/gpt-oss-120b"),               // Provider-specific model
 )
 ```
 
@@ -271,7 +271,7 @@ No code changes needed. The proxy gets all Groq traffic for logging/monitoring.
 Every AI provider has different model names:
 - OpenAI: `gpt-4.1-mini`, `o3`, `gpt-4.1`
 - Anthropic: `claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`
-- Groq: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
+- Groq: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
 
 If you hardcode model names, switching providers means changing code everywhere. And when providers release new models? More code changes.
 
@@ -289,11 +289,11 @@ client, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | Gemini | Groq | DeepSeek |
 |-------|---------|--------|-----------|--------|------|----------|
-| `default` | General use, balanced cost/quality | `gpt-4.1-mini` | `claude-sonnet-4-5` | `gemini-2.5-flash` | `llama-3.3-70b-versatile` | `deepseek-chat` |
+| `default` | General use, balanced cost/quality | `gpt-4.1-mini` | `claude-sonnet-4-5` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
 | `fast` | Speed and cost optimized | `gpt-4.1-mini` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
-| `smart` | Best reasoning quality | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `llama-3.3-70b-versatile` | `deepseek-reasoner` |
+| `smart` | Best reasoning quality | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
 | `premium` | Maximum intelligence | _(N/A)_ | `claude-opus-4-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
-| `code` | Code generation | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `llama-3.3-70b-versatile` | `deepseek-chat` |
+| `code` | Code generation | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
 | `vision` | Image understanding | `gpt-4.1` | `claude-sonnet-4-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
 
 > **Note**: The `premium` alias is only available for Anthropic and Gemini. For other providers, use `smart` for best reasoning quality.
@@ -627,7 +627,7 @@ GROQ_API_KEY=gsk-prod-key
 # Use best models in production
 TRUVAG3_OPENAI_MODEL_SMART=o3
 TRUVAG3_ANTHROPIC_MODEL_SMART=claude-sonnet-4-5-20250929
-TRUVAG3_GROQ_MODEL_SMART=llama-3.3-70b-versatile
+TRUVAG3_GROQ_MODEL_SMART=openai/gpt-oss-120b
 ```
 
 **Code**:
@@ -803,7 +803,7 @@ metadata:
 data:
   TRUVAG3_OPENAI_MODEL_SMART: "o3"
   TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-sonnet-4-5-20250929"
-  TRUVAG3_GROQ_MODEL_DEFAULT: "llama-3.3-70b-versatile"
+  TRUVAG3_GROQ_MODEL_DEFAULT: "openai/gpt-oss-120b"
 ```
 
 ### Same Image, Different Behavior
@@ -1373,7 +1373,7 @@ OLLAMA_BASE_URL=http://...
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}
 TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
 TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
-TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.3-70b-versatile
+TRUVAG3_GROQ_MODEL_DEFAULT=openai/gpt-oss-120b
 TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b
 # For openai.deepseek, strip prefix → TRUVAG3_DEEPSEEK_MODEL_*
 ```

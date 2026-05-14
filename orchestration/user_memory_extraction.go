@@ -617,8 +617,12 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 
 		summaryPrompt := fmt.Sprintf(summaryPromptTemplate, in.request, truncatedResponse)
 
+		// 1024 leaves room for reasoning-model internal CoT (e.g., gpt-oss-120b
+		// on Groq saturates 200 tokens on reasoning alone and returns empty
+		// content). Non-reasoning models still use only ~50 tokens for the
+		// one-sentence summary, so the headroom is free.
 		summaryOpts := &core.AIOptions{
-			MaxTokens:   200,
+			MaxTokens:   1024,
 			Temperature: 0.1,
 		}
 		if h.summaryModel != "" {

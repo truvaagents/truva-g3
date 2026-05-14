@@ -25,6 +25,9 @@ var modelCapabilities = []ModelCapabilities{
 
 	{ProviderAlias: "openai.groq", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.groq", ModelPrefix: "gpt-oss", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
+	// Groq serves the gpt-oss family under the canonical OpenAI-namespaced ID (openai/gpt-oss-120b).
+	// The matcher uses strings.HasPrefix, so this second row is needed for the slashed form.
+	{ProviderAlias: "openai.groq", ModelPrefix: "openai/gpt-oss", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 
 	{ProviderAlias: "openai.deepseek", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.deepseek", ModelPrefix: "deepseek-reasoner", ReasoningStyle: "deepseek", SupportsJSONMode: true, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},

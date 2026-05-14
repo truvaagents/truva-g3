@@ -421,7 +421,7 @@ client, _ := ai.NewClient(
     ai.WithProvider("openai"),
     ai.WithBaseURL("https://api.groq.com/openai/v1"),  // Different URL to remember
     ai.WithAPIKey(os.Getenv("GROQ_API_KEY")),
-    ai.WithModel("llama-3.3-70b-versatile"),  // Different model names
+    ai.WithModel("openai/gpt-oss-120b"),  // Different model names
 )
 ```
 
@@ -737,7 +737,7 @@ This is useful for:
 
 ### Real-World Analogy: T-Shirt Sizes
 
-When you buy a t-shirt, you don't say "I want a garment measuring 22 inches across the chest" - you say "Size Medium." Similarly, instead of remembering "llama-3.3-70b-versatile" or "deepseek-reasoner," just say "smart"!
+When you buy a t-shirt, you don't say "I want a garment measuring 22 inches across the chest" - you say "Size Medium." Similarly, instead of remembering "openai/gpt-oss-120b" or "deepseek-reasoner," just say "smart"!
 
 ### The Problem: Every Provider Has Different Model Names
 
@@ -756,7 +756,7 @@ deepseek, _ := ai.NewClient(
 
 groq, _ := ai.NewClient(
     ai.WithProviderAlias("openai.groq"),
-    ai.WithModel("llama-3.3-70b-versatile"),  // Groq's name for smart model
+    ai.WithModel("openai/gpt-oss-120b"),  // Groq's name for smart model
 )
 ```
 
@@ -775,7 +775,7 @@ deepseek, _ := ai.NewClient(
 
 groq, _ := ai.NewClient(
     ai.WithProviderAlias("openai.groq"),
-    ai.WithModel("smart"),  // Automatically uses llama-3.3-70b-versatile
+    ai.WithModel("smart"),  // Automatically uses openai/gpt-oss-120b
 )
 ```
 
@@ -783,11 +783,11 @@ groq, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | Gemini | DeepSeek | Groq | xAI | Qwen |
 |-------|---------|--------|-----------|--------|----------|------|-----|------|
-| **`default`** | General use, balanced | `gpt-4.1-mini` | `claude-sonnet-4-5` | `gemini-2.5-flash` | `deepseek-chat` | `llama-3.3-70b-versatile` | `grok-3-beta` | `qwen-plus` |
+| **`default`** | General use, balanced | `gpt-4.1-mini` | `claude-sonnet-4-5` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-plus` |
 | **`fast`** | Quick responses, lower cost | `gpt-4.1-mini` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Best reasoning, higher quality | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `deepseek-reasoner` | `llama-3.3-70b-versatile` | `grok-3-beta` | `qwen-max` |
+| **`smart`** | Best reasoning, higher quality | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
 | **`premium`** | Maximum intelligence | _(N/A)_ | `claude-opus-4-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| **`code`** | Code generation & analysis | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `deepseek-chat` | `llama-3.3-70b-versatile` | `grok-3-mini-beta` | `qwen3-coder-plus` |
+| **`code`** | Code generation & analysis | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
 | **`vision`** | Image understanding | `gpt-4.1` | `claude-sonnet-4-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
 
 > **Note**: The `premium` alias is only available for Anthropic (claude-opus-4-5) and Gemini (gemini-3-pro-preview). For OpenAI and other providers, use `smart` for best reasoning quality. Model names shown are abbreviated; actual IDs include version dates (e.g., `claude-sonnet-4-5-20250929`).
@@ -812,7 +812,7 @@ export TRUVAG3_GEMINI_MODEL_FAST=gemini-2.0-flash
 
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_DEEPSEEK_MODEL_SMART=deepseek-reasoner
-export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.3-70b-versatile
+export TRUVAG3_GROQ_MODEL_DEFAULT=openai/gpt-oss-120b
 export TRUVAG3_XAI_MODEL_SMART=grok-3-beta
 export TRUVAG3_QWEN_MODEL_CODE=qwen3-coder-plus
 export TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b
@@ -844,7 +844,7 @@ func createAIClient(provider string) (core.AIClient, error) {
 // Switch providers just by changing the argument!
 client, _ := createAIClient("openai")          // Uses o3
 client, _ := createAIClient("openai.deepseek") // Uses deepseek-reasoner
-client, _ := createAIClient("openai.groq")     // Uses llama-3.3-70b-versatile
+client, _ := createAIClient("openai.groq")     // Uses openai/gpt-oss-120b
 
 // Your business logic never changes!
 response, _ := client.GenerateResponse(ctx, "Analyze this data...", nil)
@@ -888,7 +888,7 @@ client, _ := ai.NewChainClient(
     ai.WithProviderChain(
         "openai",           // Primary: Use OpenAI's "smart" model (o3)
         "openai.deepseek",  // Backup: Use DeepSeek's "smart" model (deepseek-reasoner)
-        "openai.groq",      // Emergency: Use Groq's "smart" model (llama-3.3-70b-versatile)
+        "openai.groq",      // Emergency: Use Groq's "smart" model (openai/gpt-oss-120b)
     ),
 )
 
@@ -921,7 +921,7 @@ client, _ := ai.NewClient(
     ai.WithProvider("openai"),  // Same provider!
     ai.WithBaseURL("https://api.groq.com/openai/v1"),
     ai.WithAPIKey("your-groq-key"),
-    ai.WithModel("llama-3.3-70b-versatile"),
+    ai.WithModel("openai/gpt-oss-120b"),
 )
 
 // Using DeepSeek (advanced reasoning)

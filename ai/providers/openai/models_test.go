@@ -29,10 +29,11 @@ func TestResolveModel(t *testing.T) {
 		{"deepseek code", "openai.deepseek", "code", "deepseek-chat"},
 		{"deepseek pass-through", "openai.deepseek", "deepseek-v3.2", "deepseek-v3.2"},
 
-		// Groq - Llama models
+		// Groq - gpt-oss family (smart/code/default) + Llama for fast
 		{"groq fast", "openai.groq", "fast", "llama-3.1-8b-instant"},
-		{"groq smart", "openai.groq", "smart", "llama-3.3-70b-versatile"},
-		{"groq code", "openai.groq", "code", "llama-3.3-70b-versatile"},
+		{"groq smart", "openai.groq", "smart", "openai/gpt-oss-120b"},
+		{"groq code", "openai.groq", "code", "openai/gpt-oss-120b"},
+		{"groq default", "openai.groq", "default", "openai/gpt-oss-120b"},
 
 		// Together - Llama models
 		{"together fast", "openai.together", "fast", "meta-llama/Llama-3.1-8B-Instruct-Turbo"},

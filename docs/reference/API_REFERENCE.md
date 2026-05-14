@@ -1578,7 +1578,7 @@ client, _ := ai.NewClient(
 // Use Groq for fast inference
 client, _ := ai.NewClient(
     ai.WithProviderAlias("openai.groq"),
-    ai.WithModel("fast"),   // Resolves to "llama-3.3-70b-versatile"
+    ai.WithModel("fast"),   // Resolves to "llama-3.1-8b-instant"
 )
 
 // Use Together AI with explicit model
@@ -1625,7 +1625,7 @@ Use portable model names across different providers. Model aliases allow you to 
 // "smart" resolves differently per provider
 ai.WithProviderAlias("openai")          // → o3
 ai.WithProviderAlias("openai.deepseek") // → deepseek-reasoner
-ai.WithProviderAlias("openai.groq")     // → llama-3.3-70b-versatile
+ai.WithProviderAlias("openai.groq")     // → openai/gpt-oss-120b
 
 // "fast" for quick responses
 ai.WithProviderAlias("openai")          // → gpt-4.1-mini

@@ -393,9 +393,9 @@ func TestPhase2_ModelAliasResolution(t *testing.T) {
 		{"openai.deepseek", "smart", "deepseek-reasoner", "DeepSeek smart model"},
 		{"openai.deepseek", "code", "deepseek-chat", "DeepSeek code model"},
 
-		// Groq aliases - Llama models
+		// Groq aliases - gpt-oss family for smart; Llama for fast
 		{"openai.groq", "fast", "llama-3.1-8b-instant", "Groq fast model"},
-		{"openai.groq", "smart", "llama-3.3-70b-versatile", "Groq smart model"},
+		{"openai.groq", "smart", "openai/gpt-oss-120b", "Groq smart model"},
 
 		// Together AI aliases - Llama models
 		{"openai.together", "fast", "meta-llama/Llama-3.1-8B-Instruct-Turbo", "Together fast model"},

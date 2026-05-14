@@ -47,7 +47,8 @@ var pricingTable = map[string]modelPricing{
 	"claude-3-5-haiku":  {inputPerMTok: 0.80, outputPerMTok: 4.00},
 	"claude-3-opus":     {inputPerMTok: 15.00, outputPerMTok: 75.00},
 	// Groq (gpt-oss-120b through Groq's API)
-	"openai/gpt-oss-120b": {inputPerMTok: 0.15, outputPerMTok: 0.75},
+	// Source: https://console.groq.com/docs/model/openai/gpt-oss-120b
+	"openai/gpt-oss-120b": {inputPerMTok: 0.15, outputPerMTok: 0.60},
 	// Google Gemini
 	"gemini-2.5-pro":   {inputPerMTok: 1.25, outputPerMTok: 5.00},
 	"gemini-2.5-flash": {inputPerMTok: 0.075, outputPerMTok: 0.30},

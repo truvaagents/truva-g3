@@ -161,6 +161,46 @@ func TestClient_GenerateResponse_GroqGPTOSSAllowsJSONButStripsReasoning(t *testi
 	}
 }
 
+// Same contract as the slashless test above, but using Groq's canonical
+// OpenAI-namespaced model ID ("openai/gpt-oss-120b"). Guards the slashed
+// capability row in capabilities.go against accidental removal — without
+// that row, response_format would be silently stripped because the matcher
+// would fall back to the empty-prefix openai.groq row (SupportsJSONMode:
+// false).
+func TestClient_GenerateResponse_GroqGPTOSSSlashedIDAllowsJSON(t *testing.T) {
+	var captured map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			_ = r.Body.Close()
+		}()
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"model":"openai/gpt-oss-120b"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "openai.groq", &core.NoOpLogger{})
+	_, err := client.GenerateResponse(context.Background(), "hello", &core.AIOptions{
+		Model:           "openai/gpt-oss-120b",
+		ReasoningEffort: "high",
+		ResponseFormat:  "json",
+		MaxTokens:       100,
+	})
+	if err != nil {
+		t.Fatalf("GenerateResponse returned error: %v", err)
+	}
+
+	if _, ok := captured["reasoning"]; ok {
+		t.Fatalf("expected reasoning field to be stripped for groq gpt-oss slashed-ID model, got %#v", captured["reasoning"])
+	}
+	if _, ok := captured["response_format"]; !ok {
+		t.Fatalf("expected response_format field for groq gpt-oss slashed-ID model, got %#v", captured)
+	}
+}
+
 func TestClient_GenerateResponse_OllamaAllowsReasoningEffortForNonOpenAIModel(t *testing.T) {
 	var captured map[string]interface{}
 

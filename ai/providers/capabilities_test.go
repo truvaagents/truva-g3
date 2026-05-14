@@ -9,6 +9,25 @@ func TestLookupModelCapabilities_LongestPrefixWins(t *testing.T) {
 	}
 }
 
+// Groq serves the gpt-oss family under the canonical OpenAI-namespaced ID
+// (openai/gpt-oss-120b). The matcher uses strings.HasPrefix, so the slashed
+// form does not match the bare "gpt-oss" prefix — there is a dedicated
+// "openai/gpt-oss" capability row, and this test guards it against
+// accidental removal (the alias map currently resolves smart/code/default
+// for openai.groq to this slashed ID).
+func TestLookupModelCapabilities_GroqGPTOSS_SlashedID(t *testing.T) {
+	caps := LookupModelCapabilities("openai.groq", "openai/gpt-oss-120b")
+	if !caps.SupportsJSONMode {
+		t.Fatal("expected openai/gpt-oss-120b to support JSON mode (slashed-name capability row missing?)")
+	}
+	if !caps.SupportsJSONSchema {
+		t.Fatal("expected openai/gpt-oss-120b to support JSON schema")
+	}
+	if !caps.SupportsHeaderPassthrough {
+		t.Fatal("expected openai/gpt-oss-120b to support header passthrough")
+	}
+}
+
 func TestLookupModelCapabilities_UnknownAliasDefaultsConservative(t *testing.T) {
 	caps := LookupModelCapabilities("openai.custom", "custom-model")
 	if caps.ProviderAlias != "openai.custom" {

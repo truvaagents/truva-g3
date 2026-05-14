@@ -188,8 +188,8 @@ func main() {
 	// Groq via alias - even simpler than manual configuration
 	if os.Getenv("GROQ_API_KEY") != "" {
 		client, err := ai.NewClient(
-			ai.WithProviderAlias("openai.groq"),     // Auto-configures base URL and API key
-			ai.WithModel("llama-3.3-70b-versatile"), // Groq's fast Llama model
+			ai.WithProviderAlias("openai.groq"), // Auto-configures base URL and API key
+			ai.WithModel("openai/gpt-oss-120b"), // Groq's gpt-oss 120B (default smart/code model)
 		)
 		if err != nil {
 			log.Printf("Failed to create Groq client: %v", err)
