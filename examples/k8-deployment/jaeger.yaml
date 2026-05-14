@@ -51,7 +51,7 @@ data:
         backends:
           mem_store:
             memory:
-              max_traces: 50000
+              max_traces: 1000
 
       healthcheckv2:
         use_v2: true
@@ -134,12 +134,16 @@ spec:
             port: 13133
           initialDelaySeconds: 15
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /status
             port: 13133
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: config
         configMap:
