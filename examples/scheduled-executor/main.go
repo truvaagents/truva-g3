@@ -91,7 +91,8 @@ func main() {
 		DisableKeepAlives:   false,
 		ForceAttemptHTTP2:   true,
 	})
-	tracedClient.Timeout = 60 * time.Second
+	// No http.Client.Timeout: per-request context.WithTimeout in worker.postOnce
+	// (driven by DispatchTimeout / TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT) is the sole authority.
 
 	// Build the worker.
 	worker, err := NewWorker(ExecutorDeps{
