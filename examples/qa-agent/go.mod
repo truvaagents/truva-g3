@@ -12,7 +12,7 @@ require (
 	go.opentelemetry.io/otel v1.43.0
 )
 
-require github.com/qdrant/go-client v1.13.0 // indirect
+require github.com/qdrant/go-client v1.17.1 // indirect
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
