@@ -96,6 +96,9 @@ Here's a minimal `.env` file to get started:
 REDIS_URL=redis://localhost:6379
 PORT=8352
 
+# Agent identity — required when multiple HITL agents share Redis (see "Agent Isolation")
+TRUVAG3_AGENT_NAME=my-agent
+
 # AI provider (at least one)
 OPENAI_API_KEY=your-key
 # or ANTHROPIC_API_KEY=your-key
@@ -108,6 +111,7 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m              # 5 minute approval window
 
 **What do these settings mean?**
 
+- `TRUVAG3_AGENT_NAME`: Scopes this agent's HITL state in Redis to `truvag3:hitl:<agent_name>:*`. Without it, all agents pointed at the same Redis share `truvag3:hitl:pending`, and anything that fans out across agents (such as the registry viewer's HITL list) will see duplicates. K8s manifests typically set this; for local dev with more than one HITL agent on the same Redis, set it explicitly. The framework logs a startup Warn if it detects the shared-prefix configuration. See [Agent Isolation](#agent-isolation) for the full mechanism.
 - `TRUVAG3_HITL_ENABLED`: The master switch. Without this, nothing HITL-related happens.
 - `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL`: When true, the AI pauses after generating a plan but before executing anything. This lets you review the entire plan at once.
 - `TRUVAG3_HITL_DEFAULT_TIMEOUT`: How long to wait for human response. After this, the system takes a default action (usually reject for safety).
@@ -1159,10 +1163,20 @@ When a checkpoint times out (decision timeout expires), what happens?
 | Variable | Default | What It Does |
 |----------|---------|--------------|
 | `TRUVAG3_HITL_REDIS_DB` | `6` | Redis database number for HITL data |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Redis key prefix |
-| `TRUVAG3_AGENT_NAME` | `""` | Agent name for multi-agent isolation |
+| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Base Redis key prefix. Setting this explicitly counts as an isolation choice and suppresses the shared-prefix Warn |
+| `TRUVAG3_AGENT_NAME` | `""` | Agent name appended to the base prefix for multi-agent isolation |
+| `TRUVAG3_K8S_SERVICE_NAME` | `""` | K8s Service name; used as `TRUVAG3_AGENT_NAME` fallback when unset |
 
-The `TRUVAG3_AGENT_NAME` is important in production. If you have multiple agents sharing the same Redis, set this to isolate their checkpoints.
+**The agent identity is structural, not optional.** At construction, the HITL checkpoint store builds its Redis key prefix as `{TRUVAG3_HITL_KEY_PREFIX}:{TRUVAG3_AGENT_NAME}` — defaulting to `truvag3:hitl` for the base and falling back to `TRUVAG3_K8S_SERVICE_NAME` for the agent-name segment. With an agent name set, this agent's pending index is `truvag3:hitl:<agent_name>:pending`. Without one, the agent-name suffix is omitted entirely and the pending index becomes `truvag3:hitl:pending` — shared by every other agent in the same regime pointed at the same Redis. (Substitute your custom value for `truvag3:hitl` if you've set `TRUVAG3_HITL_KEY_PREFIX`.)
+
+When the framework detects the shared-prefix configuration at construction, it emits a startup Warn:
+
+```
+HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME
+(or TRUVAG3_K8S_SERVICE_NAME) to isolate per-agent state
+```
+
+The warning suppresses when isolation has been supplied through any of the available paths: `TRUVAG3_AGENT_NAME`, `TRUVAG3_K8S_SERVICE_NAME`, an explicit `TRUVAG3_HITL_KEY_PREFIX`, or the `WithCheckpointKeyPrefix` option. K8s deployments using the framework's standard manifests already set the env var; for local dev with more than one HITL-enabled agent, set it explicitly.
 
 ### Example Configurations
 
@@ -1410,6 +1424,37 @@ checkpointStore, _ := orchestration.NewRedisCheckpointStore(
     orchestration.WithInstanceID(os.Getenv("HOSTNAME")),  // Add this!
 )
 ```
+
+### Duplicate Checkpoints in the Registry Viewer (Visual Only)
+
+**What you see:** The viewer's "HITL interrupted" screen shows several rows that all have the same `checkpoint_id`, `request_id`, and timestamps. Approving one row doesn't make the others disappear until the next refresh.
+
+**Why it happens:** Multiple agents are sharing the same Redis pending index (`truvag3:hitl:pending`) because none of them have an agent identity configured. Each agent's `GET /hitl/checkpoints` endpoint legitimately returns the full shared list, and the viewer's fan-out concatenates the responses. This is distinct from the multi-pod processing issue above — the underlying checkpoint is processed once correctly; only the *display* duplicates.
+
+**Diagnostic:** Inspect the viewer API response directly and count distinct vs. total `checkpoint_id` values:
+
+```bash
+curl -s http://<viewer>/api/hitl/checkpoints | jq '.checkpoints | length, (map(.checkpoint_id) | unique | length)'
+```
+
+If total > distinct, you're hitting this case. If total == distinct and growing, you're seeing genuine checkpoint accumulation (tune `TRUVAG3_HITL_DEFAULT_TIMEOUT`).
+
+**How to fix:** Give each agent a distinct identity so their Redis prefixes don't collide. Any of these works:
+
+```bash
+# Most common — set the env var
+TRUVAG3_AGENT_NAME=my-agent
+
+# K8s standard — set via Service name (falls back if TRUVAG3_AGENT_NAME is unset)
+TRUVAG3_K8S_SERVICE_NAME=my-agent
+
+# Custom prefix path — set a fully-isolated key prefix
+TRUVAG3_HITL_KEY_PREFIX=truvag3:hitl:my-agent
+```
+
+Or pass `orchestration.WithCheckpointKeyPrefix("…")` to `NewRedisCheckpointStore`. The framework logs a startup Warn pointing at this — check agent logs for "using shared key prefix" before the duplication appears in the UI.
+
+See [Agent Isolation](#agent-isolation) for the full mechanism and why each path works.
 
 ### Checkpoint Expires Immediately
 
@@ -1697,17 +1742,60 @@ func (h *HITLInfrastructure) HealthCheck() error {
 
 ### Agent Isolation
 
-In multi-agent deployments sharing the same Redis, set `TRUVAG3_AGENT_NAME` to isolate checkpoints:
+When multiple HITL-enabled agents share the same Redis, each one must have a distinct identity. Without it, all agents write to the **same** pending-checkpoint index (`truvag3:hitl:pending`), and the registry viewer's HITL list ends up showing each checkpoint once per agent that's running — N agents reporting the same M checkpoints produces N × M rows in the UI. Approvals still route correctly (the owning agent is stamped inside the checkpoint blob), but the screen becomes unusable for diagnosis.
+
+#### How identity resolves
+
+At `NewRedisCheckpointStore` construction, the framework builds the Redis key prefix in two parts.
+
+**Part 1 — the base prefix** comes from `TRUVAG3_HITL_KEY_PREFIX`, defaulting to `truvag3:hitl`. The `WithCheckpointKeyPrefix` option overrides this entirely (option wins over env).
+
+**Part 2 — the agent-name suffix** is appended to the base. Resolved in priority order:
+
+1. `TRUVAG3_AGENT_NAME` (preferred — explicit agent identity)
+2. `TRUVAG3_K8S_SERVICE_NAME` (fallback — K8s manifests typically set this on the Service)
+3. Empty — no suffix appended; the prefix stays at the base
+
+Final prefix = `{base}:{agent_name}` if an agent name was resolved, otherwise just `{base}`. The shared-prefix Warn fires only when (a) no agent name was supplied, **and** (b) `TRUVAG3_HITL_KEY_PREFIX` wasn't set explicitly, **and** (c) `WithCheckpointKeyPrefix` didn't override. Any one of those paths suppresses the Warn — the framework treats them all as explicit operator choices.
+
+#### Configure isolation through any of these paths
 
 ```bash
-# Agent 1
+# Path 1 — explicit env var (most common, K8s and local)
 TRUVAG3_AGENT_NAME=trading-agent
 
-# Agent 2
-TRUVAG3_AGENT_NAME=support-agent
+# Path 2 — Service name fallback (K8s sets this on the Deployment manifest)
+TRUVAG3_K8S_SERVICE_NAME=trading-agent
+
+# Path 3 — custom base prefix (e.g., separate staging from prod sharing one Redis,
+# or scope a multi-tenant Redis to a single team)
+TRUVAG3_HITL_KEY_PREFIX=truvag3:hitl:staging
 ```
 
-Checkpoints are keyed as `{prefix}:{agent_name}:checkpoint:{id}`, preventing collision.
+```go
+// Path 4 — in-code override
+checkpointStore, _ := orchestration.NewRedisCheckpointStore(
+    orchestration.WithCheckpointRedisURL(redisURL),
+    orchestration.WithCheckpointKeyPrefix("truvag3:hitl:trading-agent"),
+)
+```
+
+Whichever path you choose, this agent's checkpoints are stored at `{prefix}:checkpoint:{id}` and the pending index at `{prefix}:pending` — disjoint from every other agent.
+
+#### What the framework does on its own
+
+K8s replicas of one Deployment naturally share `TRUVAG3_K8S_SERVICE_NAME`, but `applyConfigToComponent` collapses them to a single service-discovery entry (`base.ID = config.Name`), so the registry viewer hits only one replica per logical agent. Replica sharing is intentional and doesn't produce duplicates. The duplication surfaces only when (a) multiple **logical** agents share a prefix, or (b) operators force instance-scoped registration via per-pod `TRUVAG3_AGENT_ID`.
+
+If isolation isn't configured, you'll see this in the agent's startup logs:
+
+```
+WARN HITL checkpoint store using shared key prefix —
+     set TRUVAG3_AGENT_NAME (or TRUVAG3_K8S_SERVICE_NAME)
+     to isolate per-agent state
+     key_prefix=truvag3:hitl
+```
+
+The Warn is the framework's signal that something downstream — typically the registry viewer — will misbehave. Address it at the source rather than working around the symptom.
 
 ---
 

@@ -157,6 +157,10 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	// Build key prefix with optional agent name for multi-agent isolation.
 	// Format: {base_prefix}:{agent_name} or just {base_prefix} if no agent name.
 	// Capture source before config/options so we can log accurately after options applied.
+	// basePrefixExplicit tracks whether the operator explicitly set TRUVAG3_HITL_KEY_PREFIX
+	// — used by the shared-prefix warning below to suppress false positives when the
+	// operator has already chosen an isolating prefix via that env var.
+	basePrefixExplicit := os.Getenv("TRUVAG3_HITL_KEY_PREFIX") != ""
 	basePrefix := getEnvOrDefault("TRUVAG3_HITL_KEY_PREFIX", "truvag3:hitl")
 	agentName := getEnvOrDefault("TRUVAG3_AGENT_NAME", "")
 	agentNameSource := "TRUVAG3_AGENT_NAME"
@@ -165,6 +169,12 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 		// Uses core.EnvServiceName constant — single source of truth per design principles §3.3.
 		agentName = getEnvOrDefault(core.EnvServiceName, "")
 		agentNameSource = core.EnvServiceName
+	}
+	if agentName == "" {
+		// Neither env var supplied a value. Mark the source as "none" so the
+		// startup log doesn't falsely attribute the prefix to an env var that
+		// was checked but empty.
+		agentNameSource = "none"
 	}
 	keyPrefix := basePrefix
 	if agentName != "" {
@@ -188,11 +198,32 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	}
 
 	// Log resolved key prefix AFTER options so a real logger (if injected) is used.
-	if agentName != "" && config.logger != nil {
+	// Read from config.keyPrefix (not the local keyPrefix) so WithCheckpointKeyPrefix
+	// overrides are reflected accurately. Emit unconditionally — operators should be
+	// able to confirm which prefix this process is actually using.
+	if config.logger != nil {
 		config.logger.Debug("Checkpoint store key prefix resolved", map[string]interface{}{
 			"operation":  "checkpoint_store_init",
-			"key_prefix": keyPrefix,
+			"key_prefix": config.keyPrefix,
 			"source":     agentNameSource,
+		})
+	}
+
+	// Warn when no isolating identifier has been supplied through any of the
+	// available paths. Multiple agents that all land in this branch share a single
+	// pending index in Redis — anything that fans out across agents (e.g., the
+	// registry viewer's HITL list) will see duplicate checkpoints.
+	//
+	// Suppress the warning when the operator has chosen isolation through any of:
+	//   - TRUVAG3_AGENT_NAME / TRUVAG3_K8S_SERVICE_NAME (covered by agentName != "")
+	//   - TRUVAG3_HITL_KEY_PREFIX (covered by basePrefixExplicit — they made a deliberate choice)
+	//   - WithCheckpointKeyPrefix option (covered by config.keyPrefix != basePrefix)
+	if agentName == "" && !basePrefixExplicit && config.keyPrefix == basePrefix && config.logger != nil {
+		config.logger.Warn("HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME (or TRUVAG3_K8S_SERVICE_NAME) to isolate per-agent state", map[string]interface{}{
+			"operation":   "checkpoint_store_init",
+			"key_prefix":  config.keyPrefix,
+			"impact":      "multiple agents sharing this Redis will share the pending index; viewer may show duplicate HITL checkpoints",
+			"remediation": "set TRUVAG3_AGENT_NAME, TRUVAG3_K8S_SERVICE_NAME, TRUVAG3_HITL_KEY_PREFIX, or pass WithCheckpointKeyPrefix",
 		})
 	}
 

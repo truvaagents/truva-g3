@@ -504,8 +504,25 @@ func main() {
 		port = envPort
 	}
 	// USE_MOCK env var: "false" or "0" disables mock mode
-	if envMock := os.Getenv("USE_MOCK"); envMock != "" {
+	mockEnv := os.Getenv("USE_MOCK")
+	if mockEnv != "" {
 		useMock = getEnvBool("USE_MOCK", useMock)
+	}
+
+	// Auto-disable mock when REDIS_URL is set and the operator hasn't asked
+	// for mock explicitly. The flag's default is true so a bare `go run`
+	// still works for UI-only exploration, but as soon as Redis is wired up
+	// the viewer should show live data by default. Honor explicit -mock=true
+	// (e.g., from the Dockerfile CMD) and USE_MOCK=true env.
+	mockFlagExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "mock" {
+			mockFlagExplicit = true
+		}
+	})
+	if useMock && redisURL != "" && !mockFlagExplicit && mockEnv == "" {
+		useMock = false
+		log.Printf("REDIS_URL is set and -mock/-USE_MOCK not explicitly provided — auto-disabling mock mode")
 	}
 
 	// Validate Redis URL is provided when not in mock mode
@@ -2853,12 +2870,19 @@ func getMockExecution(requestID string) *StoredExecution {
 // getAgentHITLCheckpointSummaries fans out GET /hitl/checkpoints to all registered
 // agents and merges the results. Unavailable agents are skipped gracefully.
 // Only agents (type="agent") are queried — tools do not have HITL endpoints.
+//
+// Results are deduplicated by CheckpointID — multiple agents can legitimately
+// return the same checkpoint when they share a Redis pending index (e.g.,
+// instance-scoped registrations under a shared keyPrefix). The merged view
+// should reflect unique checkpoints regardless of how many sources reported
+// them. Mirrors the dedup pattern in getAgentHITLCheckpointsByRequestID below.
 func getAgentHITLCheckpointSummaries(ctx context.Context) ([]HITLCheckpointSummary, error) {
 	services, err := getRedisServices()
 	if err != nil {
 		return nil, err
 	}
 	var all []HITLCheckpointSummary
+	seen := make(map[string]bool)
 	for _, svc := range services {
 		if svc.Address == "" || svc.Port == 0 || svc.Type != "agent" {
 			continue
@@ -2879,6 +2903,10 @@ func getAgentHITLCheckpointSummaries(ctx context.Context) ([]HITLCheckpointSumma
 			continue
 		}
 		for _, cp := range result.Checkpoints {
+			if seen[cp.CheckpointID] {
+				continue
+			}
+			seen[cp.CheckpointID] = true
 			all = append(all, toHITLCheckpointSummary(cp))
 		}
 	}

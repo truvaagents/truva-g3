@@ -1951,9 +1951,16 @@ Mark these capabilities as sensitive in your `.env`:
 ```bash
 TRUVAG3_HITL_ENABLED=true
 TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES=rollout_restart,scale_deployment,send_message,create_ticket
+
+# Required when multiple HITL-enabled agents share the same Redis instance.
+# Without it, agents share a single pending-checkpoint index and the registry
+# viewer's HITL list will show duplicate rows. K8s manifests set this via the
+# Deployment env; for local dev with more than one HITL agent, set it explicitly.
+# See HUMAN_IN_THE_LOOP_USER_GUIDE.md#agent-isolation for the full mechanism.
+TRUVAG3_AGENT_NAME=my-agent
 ```
 
-The orchestrator will automatically pause before executing any step that uses a sensitive capability, creating a checkpoint that stores the full execution state (plan, completed steps, resolved parameters).
+The orchestrator will automatically pause before executing any step that uses a sensitive capability, creating a checkpoint that stores the full execution state (plan, completed steps, resolved parameters). At construction, the framework logs a startup `WARN HITL checkpoint store using shared key prefix` if no isolating identifier was supplied — treat that log line as a configuration error, not noise.
 
 ### 15.2 Resume Context: The Critical Contract
 

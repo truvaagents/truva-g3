@@ -56,6 +56,9 @@ ENV PORT=8100
 # Expose port
 EXPOSE ${PORT}
 
-# Run with mock mode by default (override with -mock=false for Redis mode)
+# Defaults: mock mode if no REDIS_URL is provided, real mode otherwise.
+# The flag default is -mock=true so a bare container start still serves the UI
+# without a Redis dependency; main.go auto-disables mock when REDIS_URL is set
+# and the operator hasn't passed -mock or USE_MOCK explicitly. Pass -mock=true
+# (or USE_MOCK=true) to force mock mode even when REDIS_URL is configured.
 ENTRYPOINT ["./registry-viewer"]
-CMD ["-mock=true"]
