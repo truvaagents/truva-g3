@@ -29,7 +29,7 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
   - [2.11 Standard Models Need Precision; Reasoning Models Prefer Brevity](#211-standard-models-need-precision-reasoning-models-prefer-brevity)
 - [3. Common Anti-Patterns](#3-common-anti-patterns)
 - [4. 6 Design Principles for Prompt Restructuring](#4-6-design-principles-for-prompt-restructuring)
-  - [4.1 Schema + Example > Rules](#41-schema--example---rules)
+  - [4.1 Schema + Example > Rules](#41-schema--example--rules)
   - [4.2 Industry-Converged Ordering](#42-industry-converged-ordering)
   - [4.3 Eliminate Negative Instructions](#43-eliminate-negative-instructions)
   - [4.4 Deduplicate Ruthlessly](#44-deduplicate-ruthlessly)

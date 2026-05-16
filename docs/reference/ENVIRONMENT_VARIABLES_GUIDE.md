@@ -27,7 +27,7 @@ This document provides a comprehensive reference for all environment variables s
 14. [Kubernetes Configuration](#kubernetes-configuration)
 15. [Orchestration Configuration](#orchestration-configuration)
 16. [LLM Debug Configuration](#llm-debug-configuration)
-17. [Execution Store Configuration](#execution-store-configuration)
+17. [Execution Debug Store Configuration](#execution-debug-store-configuration)
 18. [Human-in-the-Loop (HITL) Configuration](#human-in-the-loop-hitl-configuration)
 19. [Async Task Configuration](#async-task-configuration)
 20. [Prompt Configuration](#prompt-configuration)
@@ -1355,7 +1355,7 @@ Configure Human-in-the-Loop (HITL) checkpoints for human oversight of AI-generat
 
 ### HITL Expiry Behavior Variables
 
-These variables control what happens when a checkpoint times out (expires) without a human response. See [HITL User Guide: Expiry Behavior](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#expiry-behavior-variables) for detailed usage.
+These variables control what happens when a checkpoint times out (expires) without a human response. See [HITL User Guide: Expiry Behavior](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#expiry-behavior) for detailed usage.
 
 | Variable | Default | Values | Status | Description | Source |
 |----------|---------|--------|--------|-------------|--------|
@@ -1364,18 +1364,18 @@ These variables control what happens when a checkpoint times out (expires) witho
 | `TRUVAG3_HITL_NON_STREAMING_EXPIRY` | `apply_default` | `implicit_deny`, `apply_default` | **Implemented** | Expiry behavior for non-streaming (HTTP 202) requests. `apply_default` = auto-apply `DefaultAction` on timeout. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
 | `TRUVAG3_HITL_DEFAULT_REQUEST_MODE` | `non_streaming` | `streaming`, `non_streaming` | **Implemented** | Default request mode when not explicitly set via `WithRequestMode()`. A warning is logged when this fallback is used. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
 
-**Expiry Behavior Matrix** (see [HITL User Guide: Expiry Behavior Matrix](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#expiry-behavior-variables)):
+**Expiry Behavior Matrix** (see [HITL User Guide: Expiry Behavior Matrix](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#expiry-behavior)):
 
 | Request Mode | Expiry Behavior | What Happens |
 |--------------|-----------------|--------------|
 | Streaming + `implicit_deny` | Status → `expired` | User saw dialog but didn't respond. No action taken. |
-| Streaming + `apply_default` | Status → `expired_approved/rejected` | Auto-resume enabled (see [Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#13-auto-resume-timeout-auto-approval)) |
+| Streaming + `apply_default` | Status → `expired_approved/rejected` | Auto-resume enabled (see [Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#auto-resume-timeout-auto-approval)) |
 | Non-Streaming + `apply_default` | Status → `expired_approved/rejected` | DefaultAction applied automatically |
 | Non-Streaming + `implicit_deny` | Status → `expired` | Require manual intervention |
 
 ### HITL Expiry Processor Variables
 
-The expiry processor is a background goroutine that scans for expired checkpoints and processes them according to the configured action. See [HITL User Guide: Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#13-auto-resume-timeout-auto-approval) for the auto-approval flow.
+The expiry processor is a background goroutine that scans for expired checkpoints and processes them according to the configured action. See [HITL User Guide: Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#auto-resume-timeout-auto-approval) for the auto-approval flow.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|

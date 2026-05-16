@@ -795,7 +795,7 @@ See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-o
 
 Swagger UI consumes generated OpenAPI specs from components that expose `/openapi.json`. It supports interactive API exploration and can integrate with developer portals and API gateways.
 
-See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#part-1--swagger-ui-api-exploration).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#2-the-openapijson-contract).
 
 ### 11. Security And Request Propagation
 
@@ -814,7 +814,7 @@ This means the framework helps with:
 - exposing runtime metadata only when explicitly enabled
 - adding guardrails, redaction, and audit behavior through hooks and prompt builders
 
-See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices).
+See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices).
 
 #### OAuth Bearer Propagation
 
@@ -884,7 +884,7 @@ The Kubernetes docs describe the platform controls expected around TruvaG3 deplo
 - ServiceAccounts and RBAC with minimal permissions
 - ingress, gateway, service mesh, or mTLS controls at trust boundaries
 
-See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
+See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
 
 ### 12. Deployment And Operations
 
@@ -1041,5 +1041,5 @@ Use these docs for deeper feature-level details:
 Some docs still appear older than the current codebase and should be reviewed before relying on them as authoritative:
 
 - [examples/README.md](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md) references several example directories that are no longer present.
-- [API_REFERENCE.md](../reference/API_REFERENCE.md#ui-module) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
+- [API_REFERENCE.md](../reference/API_REFERENCE.md) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
 This guide is based on the current root/module READMEs and the current guides under `docs/`.

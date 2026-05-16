@@ -236,7 +236,7 @@ func (w *WeatherTool) handleCurrentWeather(rw http.ResponseWriter, r *http.Reque
 > - Upstream 429 → Tool returns 429 → Resilience retry with exponential backoff
 > - Upstream 5xx / unknown → Tool returns 502 → Resilience retry with exponential backoff
 >
-> See: [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) and [Tool Development Guide — sendUpstreamError](../building/TOOL_DEVELOPMENT_GUIDE.md#correct-pattern-use-coreclassifyupstreamerror)
+> See: [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) and [Tool Development Guide — Upstream Error Handling](../building/TOOL_DEVELOPMENT_GUIDE.md#upstream-error-handling)
 
 When an external API fails, your tool needs to translate that failure into a structured `ToolError`. This is where you add intelligence - examining the raw error and deciding:
 

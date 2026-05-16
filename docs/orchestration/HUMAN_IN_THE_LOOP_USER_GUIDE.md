@@ -464,7 +464,7 @@ The `resolved_parameters` field is particularly useful for step-level approval -
 > - **`before_step`**: Includes current step details, resolved parameters, and completed steps
 > - **`on_error`**: Includes error context with retry attempts and recoverability flag
 >
-> For the complete JSON schemas, see [SSE Event Formats by Interrupt Point](../reference/API_REFERENCE.md#sse-event-formats-by-interrupt-point) in the API Reference.
+> For the complete JSON schemas, see [Interrupt Points](../reference/API_REFERENCE.md#interrupt-points) in the API Reference.
 
 ### Submitting the Approval
 

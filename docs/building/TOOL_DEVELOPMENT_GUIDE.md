@@ -2092,7 +2092,7 @@ func (t *YourTool) handleGetData(rw http.ResponseWriter, r *http.Request) {
 - Support tickets lack trace correlation information
 - External logging systems cannot link to Jaeger traces
 
-> **Reference:** For complete trace correlation patterns, see [DISTRIBUTED_TRACING_GUIDE.md - Section 5: Trace-Log Correlation](#5-trace-log-correlation-the-magic-glue).
+> **Reference:** For complete trace correlation patterns, see [DISTRIBUTED_TRACING_GUIDE.md - Section 5: Trace-Log Correlation](../observability/DISTRIBUTED_TRACING_GUIDE.md#5-trace-log-correlation-the-magic-glue).
 
 ### Span Enrichment with SetSpanAttributes
 
@@ -2130,7 +2130,7 @@ func (t *YourTool) handleGetData(rw http.ResponseWriter, r *http.Request) {
 - Cannot search traces by business identifiers
 - Debugging requires correlating multiple data sources manually
 
-> **Reference:** For attribute naming conventions and best practices, see [DISTRIBUTED_TRACING_GUIDE.md - Section 11: Required Patterns](#11-required-patterns-for-framework-level-tracing).
+> **Reference:** For attribute naming conventions and best practices, see [DISTRIBUTED_TRACING_GUIDE.md - Section 11: Required Patterns](../observability/DISTRIBUTED_TRACING_GUIDE.md#11-required-patterns-for-framework-level-tracing).
 
 ### Unified Metrics API
 

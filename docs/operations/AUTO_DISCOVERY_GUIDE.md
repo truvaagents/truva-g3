@@ -37,7 +37,8 @@ Auto-discovery is what lets you deploy a new tool to your cluster and have exist
   - [Heartbeat Interval](#heartbeat-interval)
   - [What the Heartbeat Actually Does](#what-the-heartbeat-actually-does)
 - [Multi-Replica Behaviour](#multi-replica-behaviour)
-  - [Each Replica Gets a Unique ID](#each-replica-gets-a-unique-id)
+  - [Mode 1 — Service-Scoped Registration (the K8s default)](#mode-1--service-scoped-registration-the-k8s-default)
+  - [Mode 2 — Instance-Scoped Registration (non-K8s, or K8s without `TRUVAG3_K8S_SERVICE_NAME`)](#mode-2--instance-scoped-registration-non-k8s-or-k8s-without-truvag3_k8s_service_name)
   - [Last-Writer-Wins on Shared Indexes](#last-writer-wins-on-shared-indexes)
   - [What Happens When One Replica Crashes](#what-happens-when-one-replica-crashes)
 - [Resilience](#resilience)
@@ -298,7 +299,7 @@ What the framework writes into `ServiceInfo.Address` depends on where it's runni
 - **In Kubernetes with `TRUVAG3_K8S_SERVICE_NAME` set**: the address becomes `<svc>.<ns>.svc.cluster.local`, and the port becomes `TRUVAG3_K8S_SERVICE_PORT` (default 80). This is what you want — agents dial through the K8s Service, not pod IPs, so traffic load-balances across replicas. Logic at [`core/address_resolver.go:32`](https://github.com/truvaagents/truva-g3/blob/main/core/address_resolver.go#L32).
 - **Outside K8s** (or in K8s without those env vars set): falls back to `config.Address` (default `localhost`) and `config.Port` (default 8080).
 
-If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. The fix is wiring the env vars correctly — see [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#service-discovery-on-kubernetes).
+If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. The fix is wiring the env vars correctly — see [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns).
 
 ## How Agents Discover Tools and Other Agents
 
@@ -568,7 +569,7 @@ The discovery-related variables — full reference with precedence rules in [`do
 | `TRUVAG3_DISCOVERY_RETRY` | `false` | Enable background retry on initial connection failure. **Recommended for production K8s.** |
 | `TRUVAG3_DISCOVERY_RETRY_INTERVAL` | `30s` | Initial retry interval; doubles on failure, caps at 5 minutes. |
 
-For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record. See [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#service-discovery-on-kubernetes) for the deployment wiring.
+For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record. See [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns) for the deployment wiring.
 
 ### Programmatic Options
 
