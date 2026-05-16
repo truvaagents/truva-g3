@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 1 · Observability — Operational Excellence in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #22d3ee;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #0a3a4a; border-color: var(--ch); color: #a5f3fc; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #a5f3fc 60%, #22d3ee 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #0a3a4a; border: 1px solid var(--ch); color: #a5f3fc; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0a3a4a; color: #a5f3fc; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a class="active" href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 1 of 5 · Operational Excellence</div>
+    <h1>Observability</h1>
+    <p class="subtitle">
+      An agent in production is opaque by default. The model picks tools and arguments based on
+      reasoning you cannot directly inspect; tools call other services that themselves call models;
+      a single user request fans out into a tree of LLM calls, retries, and database hits.
+      Observability is what makes this tree legible — what tracing surfaces does each framework
+      ship, how does it integrate with OpenTelemetry, what metrics does it emit, and what vendor
+      dashboards can you point it at? This chapter walks through each surface in plain language,
+      then catalogs the concrete primitives across <b>ten frameworks</b> spanning Python,
+      TypeScript, .NET, Java, Go, and Rust.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#tracing">Tracing surfaces &amp; span hierarchy</a></li>
+        <li><a href="#otel">OpenTelemetry adoption</a></li>
+        <li><a href="#metrics">Metrics emission</a></li>
+        <li><a href="#logging">Structured logging</a></li>
+        <li><a href="#vendors">Vendor integrations</a></li>
+      </ol>
+    </div>
+    <p class="lede" style="margin-top: 18px;">
+      The ten frameworks under comparison: <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>,
+      <b>Google ADK</b>, <b>Microsoft Semantic Kernel</b> (Python), <b>Mastra</b> (TypeScript),
+      <b>Microsoft Agent Framework</b> (.NET), <b>LangChain4j</b> (Java), <b>Genkit</b> (Go),
+      and <b>Rig</b> (Rust).
+    </p>
+  </div>
+</section>
+
+<!-- TRACING -->
+<section id="tracing">
+  <div class="container">
+    <h2><span class="num">1</span>Tracing surfaces &amp; span hierarchy</h2>
+    <p class="lede">
+      A trace is the structured record of an agent run — who called whom, in what order, and how
+      long each step took. The shape of the trace determines what kind of debugging you can do
+      after the fact: a flat list of "events" tells you what happened; a properly nested span
+      hierarchy lets you see why a particular tool call took eight seconds when the rest of the
+      run took two.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user asks your agent a question. Behind the scenes the run produces: one outer "agent
+        run" span, three "model call" spans (one per reasoning step), four "tool call" spans
+        (search, lookup, search again, summarise), and one final "agent response" span. With a
+        properly nested trace, your dashboard renders this as a waterfall: you can see the
+        third model call took 6 seconds, and inside it the only thing that ran was a single
+        tool call that took 5.8 seconds — so the slowdown was the downstream service, not the
+        LLM. Without a properly nested trace, you have a flat list of timestamped events and
+        have to reconstruct the parent-child relationship by hand.
+      </p>
+      <p>
+        Frameworks differ on three axes here: (1) <b>do they emit spans at all out of the
+        box</b>, (2) <b>what's the span hierarchy</b> (flat events, or modelled run → step →
+        tool / agent → model call), and (3) <b>do they emit through OpenTelemetry's standard
+        APIs</b> so any OTel-compatible backend can ingest them, or through a framework-specific
+        callback you have to translate yourself.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>What you get out of the box</th><th>Trace shape</th><th>Wiring effort</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Callback events, not spans. To see a real trace you either use LangSmith (which translates callbacks to spans for you) or write your own translator.</td>
+            <td>Flat events; the tree is reconstructed downstream.</td>
+            <td>High — sign up for LangSmith, or write a custom callback-to-tracer adapter.</td>
+            <td><code>callbacks/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Same as LangChain — callback events, no spans of its own. LangSmith remains the path of least resistance.</td>
+            <td>Flat events; super-step boundaries are implicit.</td>
+            <td>High — same as LangChain.</td>
+            <td><code>pregel/_messages.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>OTel spans named at each layer (Crew Execution, Task Execution, Tool Usage). Plug in any OTel-compatible backend.</td>
+            <td>Named-but-flat — uses <code>tracer.start_span()</code> without <code>with</code> blocks, so spans are emitted top-level rather than as nested children.</td>
+            <td>Low — point an OTLP endpoint env var at your collector.</td>
+            <td><code>telemetry/telemetry.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Production-ready OTel spans following Gen AI semantic conventions.</td>
+            <td>Naturally nested — agent → tool / model spans because the flow itself nests.</td>
+            <td>Low — wire an OTel exporter, or use the bundled Cloud Trace integration.</td>
+            <td><code>telemetry/tracing.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>OTel spans applied via decorators on agent and model methods.</td>
+            <td>Two-tier — agent layer + model layer; not as deeply nested as CrewAI / ADK.</td>
+            <td>Low — wire an OTel exporter; integrates cleanly with Application Insights.</td>
+            <td><code>utils/telemetry/agent_diagnostics/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Production-ready OTel spans across agent, tool, memory, and workflow layers.</td>
+            <td>Naturally nested — workflow steps and tool calls roll up under the agent run.</td>
+            <td>Low — pick from nine bundled vendor packages, or wire a generic OTel exporter.</td>
+            <td><code>core/src/observability/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Production-ready spans via .NET's built-in <code>ActivitySource</code> (OTel-compatible). Token usage and latency emitted out of the box.</td>
+            <td>Two-tier — outer agent activity wraps inner chat-client activities.</td>
+            <td>Low — register the OTel exporter in your ASP.NET Core startup.</td>
+            <td><code>OpenTelemetryAgent.cs</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>No tracing in core — only listener events. To get spans you add the Micrometer adapter package.</td>
+            <td>Whatever Micrometer + your exporter produce; no agent-level hierarchy out of the box.</td>
+            <td>Medium — add the metrics module, configure Micrometer with an OTel registry.</td>
+            <td><code>chat/listener/ChatModelListener.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Production-ready OTel spans for flows, tool calls, and model calls.</td>
+            <td>Naturally nested per flow invocation.</td>
+            <td>Low — wire an OTel exporter, or use the bundled Google Cloud plugin.</td>
+            <td><code>core/tracing/tracing.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Structured log events from the <code>tracing</code> crate, but no agent-level spans. The developer instruments their own application code.</td>
+            <td>Whatever the surrounding application's <code>tracing-subscriber</code> configures.</td>
+            <td>High — set up <code>tracing-subscriber</code>, add the <code>tracing-opentelemetry</code> bridge, and decide where the spans go yourself.</td>
+            <td><code>crates/rig-core/src/streaming.rs</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Six frameworks (CrewAI, ADK, Semantic Kernel, Mastra, MS Agent Framework, Genkit Go)
+        give you usable spans on day one — pick a backend, wire an exporter, you're done. Three
+        require meaningful additional work: LangChain and LangGraph need LangSmith or a custom
+        translator to turn callback events into spans; LangChain4j needs the Micrometer adapter
+        to turn listener events into anything observable. Rig sits at the far end — you get
+        structured log events and nothing else; agent-level tracing is something you build.
+      </p>
+      <p>
+        Trace nesting matters less than it sounds when reading source code, but it matters a
+        lot when reading a dashboard. ADK, Mastra, and Genkit Go produce naturally nested
+        traces because their flows nest (ADK uses <code>start_as_current_span</code> inside
+        <code>with</code> blocks). SK and MS Agent Framework give you a clean two-tier view.
+        CrewAI emits spans named like a hierarchy (Crew Execution, Task Execution, Tool Usage)
+        but they aren't actually nested — they show up as separate top-level spans you can
+        filter by name. The flat-events + downstream-reassembly pattern (LangChain, LangGraph,
+        LangChain4j) works once your tracer is configured but means more steps before the
+        first useful waterfall renders.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- OTEL -->
+<section id="otel">
+  <div class="container">
+    <h2><span class="num">2</span>OpenTelemetry adoption</h2>
+    <p class="lede">
+      OpenTelemetry is the de facto standard for distributed tracing — vendor-neutral APIs and
+      semantic conventions that let you swap dashboards without rewriting instrumentation. For
+      agents specifically, the Gen AI semantic-convention working group has standardised
+      attribute names like <code>gen_ai.client.token.usage</code> and <code>gen_ai.operation.name</code>.
+      Eight of the ten frameworks ship native or first-party OTel; two integrate via plugins.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your platform team standardised on Datadog APM. A new team wants to ship an agent
+        feature and they're using a different framework than the rest of the company. With OTel
+        as a native dependency, the new team gets working dashboards on day one — Datadog's
+        OTel-compatible ingestion sees the spans, recognises the <code>gen_ai.*</code> attributes,
+        and renders token-usage and latency panels automatically. Without OTel, the team writes
+        a translator from the framework's callback interface to Datadog's API, maintains it
+        forever, and inevitably discovers that retries / nested calls / streaming aren't quite
+        right in the translation.
+      </p>
+      <p>
+        "Native OTel" means the framework imports the OTel library directly, declares spans
+        through it, and follows the Gen AI semantic conventions. "First-party plugin" means the
+        framework ships a separate package that bridges its own callback model to OTel.
+        "Plugin" means OTel is reachable but the developer wires it. "Absent" means there's no
+        official path and you have to write your own.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Will any OTel backend work?</th><th>Standard attribute names?</th><th>What you have to do</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Through LangSmith — LangSmith is the bridge between callbacks and OTel.</td>
+            <td>No — uses LangChain's own callback event names.</td>
+            <td>Use LangSmith, or write a callback-to-OTel translator yourself.</td>
+            <td><code>callbacks/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Through LangSmith — same path as LangChain.</td>
+            <td>No.</td>
+            <td>Same as LangChain.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Yes — direct OTel SDK; ships a hardened OTLP exporter.</td>
+            <td>Mostly — token/latency follow standard names; adds CrewAI-specific span attrs.</td>
+            <td>Set <code>CREWAI_TELEMETRY_BASE_URL</code> to your OTel collector.</td>
+            <td><code>telemetry/telemetry.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Yes — direct OTel SDK.</td>
+            <td>Yes — imports Gen AI semantic conventions directly.</td>
+            <td>Wire any OTel exporter, or use the bundled Cloud Trace plugin.</td>
+            <td><code>telemetry/_experimental_semconv.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Yes — direct OTel SDK.</td>
+            <td>Yes — emits standard token-usage and operation attributes via Meter.</td>
+            <td>Register an OTel exporter (Application Insights, or any OTel-compatible backend).</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Yes — direct <code>@opentelemetry/api</code> dependency.</td>
+            <td>Partial — token attributes match standards; adds Mastra-specific attribute names that vendor exporters translate.</td>
+            <td>Pick from nine bundled vendor exporters, or wire a generic OTel exporter.</td>
+            <td><code>core/src/observability/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Yes — uses .NET's built-in <code>ActivitySource</code>, which is OTel-compatible.</td>
+            <td>Yes — Gen AI semantic conventions v1.37.</td>
+            <td>Register OTel in your ASP.NET Core startup.</td>
+            <td><code>OpenTelemetryConsts.cs</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Through Micrometer — add the metrics module to bridge listeners to OTel.</td>
+            <td>Yes — Micrometer ships <code>OTelGenAiAttributes</code> / <code>OTelGenAiMetricName</code> that match standards.</td>
+            <td>Add the <code>langchain4j-micrometer-metrics</code> module and configure Micrometer with an OTel registry.</td>
+            <td><code>langchain4j-micrometer-metrics/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Yes — direct Go OTel imports.</td>
+            <td>Partial — uses standard Go OTel attributes plus Genkit-specific ones.</td>
+            <td>Wire any OTel exporter, or use the bundled Google Cloud plugin.</td>
+            <td><code>core/tracing/tracing.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Through the <code>tracing-opentelemetry</code> bridge.</td>
+            <td>No — agent-level attributes aren't modelled out of the box.</td>
+            <td>Set up <code>tracing-subscriber</code>, add the OTel bridge, define your own attribute schema.</td>
+            <td><code>Cargo.toml</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Six frameworks (CrewAI, ADK, SK, Mastra, MS Agent Framework, Genkit Go) work directly
+        with any OTel-compatible backend the moment you register an exporter. LangChain and
+        LangGraph route through LangSmith; LangChain4j routes through Micrometer; Rig routes
+        through the Rust tracing-opentelemetry bridge. All three of those routes work, but each
+        adds a layer of translation you have to set up and maintain.
+      </p>
+      <p>
+        On standard attribute names — the ones a Datadog or Grafana Gen AI dashboard expects —
+        ADK, MS Agent Framework, Semantic Kernel, and LangChain4j are the most aligned. Mastra,
+        CrewAI, and Genkit Go follow the conventions partially and add their own. LangChain,
+        LangGraph, and Rig don't follow them at all without extra work. If you're picking a
+        framework specifically because you want existing dashboards to "just work," the first
+        group is the safest starting point.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- METRICS -->
+<section id="metrics">
+  <div class="container">
+    <h2><span class="num">3</span>Metrics emission</h2>
+    <p class="lede">
+      Tracing tells you what happened in one specific run. Metrics tell you what's been
+      happening across millions of runs — token usage rates, p99 latency, error counts per
+      tenant. Six of the ten frameworks emit first-class metrics out of the box; the others
+      surface the data through traces or callbacks but don't aggregate it.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        It's Tuesday morning. Your CFO asks why the OpenAI bill spiked 40% over the weekend.
+        With first-class metrics emission, you open Grafana, filter the
+        <code>gen_ai.client.token.usage</code> histogram by tenant and model, and within a minute
+        you see one customer ramped their usage of GPT-4o-mini by 5×. Without metrics emission,
+        you're querying every individual trace, summing token counts by hand, and presenting an
+        estimate three days later.
+      </p>
+      <p>
+        Out-of-the-box metrics matter because retrofitting them after the fact is laborious.
+        A framework that ships metrics with sensible defaults (token usage as a histogram, not
+        a counter; tagged with model and operation; emitted at the chat-client layer not the
+        agent layer) gives you a running production view from day one.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Token &amp; latency dashboards day one?</th><th>Wiring effort</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>No — token counts are on individual response objects but never aggregated.</td>
+            <td>Use LangSmith for aggregated metrics, or build your own Meter from callbacks.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>No — same as LangChain.</td>
+            <td>Same as LangChain.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Through span attributes — your backend computes the aggregates from spans.</td>
+            <td>Configure the OTLP endpoint; your backend (Datadog, Grafana, etc.) builds the dashboard.</td>
+            <td><code>telemetry/utils.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Yes — first-class metric definitions for tool calls, model responses, latency.</td>
+            <td>Wire an OTel meter exporter.</td>
+            <td><code>telemetry/_metrics.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Yes — Meter-based token-usage histograms and latency, with error type attributes.</td>
+            <td>Wire an OTel meter exporter.</td>
+            <td><code>utils/telemetry/model_diagnostics/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Yes — through bundled vendor packages (token usage, latency, custom counters).</td>
+            <td>Pick a vendor package (Arize, BrainTrust, Datadog) or wire a generic OTel meter.</td>
+            <td><code>core/src/observability/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Yes — input/output token usage and latency that follow Gen AI semantic conventions.</td>
+            <td>Add OTel SDK in your DI startup.</td>
+            <td><code>OpenTelemetryAgent.cs</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Yes — <code>gen_ai.client.token.usage</code> histogram via Micrometer.</td>
+            <td>Add the <code>langchain4j-micrometer-metrics</code> module; pick any Micrometer registry (Prometheus, Datadog, New Relic, etc.).</td>
+            <td><code>MicrometerMetricsChatModelListener.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Yes — OTel metrics API for tool calls, model responses, latency.</td>
+            <td>Wire an OTel meter exporter.</td>
+            <td><code>core/tracing/telemetry.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No — no agent-level metrics.</td>
+            <td>Define your own Meter and emit token/latency from your tools.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Six frameworks give you a token-usage and latency dashboard with minimal wiring (ADK,
+        Semantic Kernel, Mastra, MS Agent Framework, LangChain4j, Genkit Go). CrewAI gets you
+        most of the way there through span attributes — your backend does the aggregation, but
+        the data is all present. LangChain, LangGraph, and Rig don't aggregate metrics out of
+        the box: you either route through their canonical product (LangSmith for the
+        LangChain family) or build the metrics layer yourself.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- LOGGING -->
+<section id="logging">
+  <div class="container">
+    <h2><span class="num">4</span>Structured logging</h2>
+    <p class="lede">
+      Logs are the third leg of the observability tripod, alongside traces and metrics. The
+      question isn't whether the framework writes logs — they all do — but whether those logs
+      are structured (key-value pairs you can filter on in your log search) or plain text you
+      have to grep. The shape of the logging layer also tells you how it integrates with your
+      host language's standard library: Python's <code>logging</code>, Go's <code>slog</code>,
+      .NET's <code>ILogger</code>, Rust's <code>tracing</code>, and so on.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user reports their agent gave a wrong answer. With structured logs, you search your
+        log aggregator for <code>{trace_id: "abc123"}</code>, get every log line from that run
+        in chronological order, and see the model's tool selection and the tool's response. With
+        plain-text logs, you have an approximate timestamp and a transcript of free-form lines —
+        you spend half an hour grepping by the user's question phrase and stitching together
+        what happened.
+      </p>
+      <p>
+        The defining feature is correlation: every log line should carry a trace ID so it can
+        be joined back to the trace and the metrics. Frameworks that use the host language's
+        modern structured logging library (slog in Go, ILogger in .NET, tracing in Rust) get
+        this for free; frameworks that use older logging surfaces (Python's standard
+        <code>logging</code> module, Java's SLF4J without context) require the developer to
+        propagate trace IDs manually.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Log format</th><th>Auto-correlated with traces?</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Plain text via Python <code>logging</code> — you grep, not filter.</td>
+            <td>No — you propagate trace IDs yourself.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Plain text via Python <code>logging</code>.</td>
+            <td>No.</td>
+            <td><code>_internal/_log.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Plain text via Python <code>logging</code>.</td>
+            <td>No — telemetry module logs failures, but log lines aren't joined to span IDs.</td>
+            <td><code>utilities/logger.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Structured via OTel logs (key-value records).</td>
+            <td>Yes — OTel context propagation joins logs to their spans.</td>
+            <td><code>telemetry/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Structured via OTel logs; error attributes follow standard OTel error semantics.</td>
+            <td>Yes — joined to OTel spans.</td>
+            <td><code>utils/telemetry/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Structured custom logger with pluggable sinks.</td>
+            <td>Yes — uses <code>@opentelemetry/api</code> context to thread trace IDs.</td>
+            <td><code>core/src/logger/logger.ts</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Structured via .NET <code>ILogger</code> (key-value scopes).</td>
+            <td>Yes — <code>ILogger</code> and <code>ActivitySource</code> share context automatically.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Whatever your host app's SLF4J / Log4j config produces.</td>
+            <td>No — depends on host MDC configuration; not framework-managed.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Structured via Go <code>log/slog</code> (Go 1.21+).</td>
+            <td>Yes — context-scoped logger via <code>logger.FromContext(ctx)</code>.</td>
+            <td><code>core/logger/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Structured via the <code>tracing</code> crate's events.</td>
+            <td>Yes — <code>tracing</code> spans automatically carry trace IDs into nested events.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Six frameworks give you structured logs that join automatically to traces (ADK, SK,
+        Mastra, MS Agent Framework, Genkit Go, Rig), which means a "show me everything from
+        this run" query in your log search just works. LangChain, LangGraph, and CrewAI default
+        to Python's plain <code>logging</code> module and require manual trace-ID propagation.
+        LangChain4j defers entirely to host configuration — you get whatever Spring Boot or
+        Quarkus is set up to do.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- VENDORS -->
+<section id="vendors">
+  <div class="container">
+    <h2><span class="num">5</span>Vendor integrations</h2>
+    <p class="lede">
+      "Open standards" sounds good in principle, but in production you almost always want a
+      pre-built integration with whatever observability vendor your team has already adopted.
+      The frameworks vary wildly here: Mastra ships nine vendor integrations in-tree; LangChain
+      ships one (LangSmith); Rig ships none and expects you to use the OTel ecosystem.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your team standardised on Langfuse for prompt experimentation and Datadog for production
+        APM. With a framework that ships both integrations, the agent's traces show up in both
+        dashboards on day one — the framework knows how to translate its internal spans into
+        each vendor's format. With a framework that ships only its own dashboard (e.g.
+        LangSmith for LangChain), getting traces into Langfuse means writing or maintaining a
+        bridge yourself, and you'll discover edge cases like streaming or partial-tool-call
+        spans aren't quite right.
+      </p>
+      <p>
+        The number and breadth of in-tree integrations is also a signal of where each
+        framework's contributors come from. Mastra's nine vendors include both observability
+        SaaS (Langfuse, LangSmith, Datadog) and AI-eval platforms (Arize, BrainTrust). LangChain
+        leans on its own LangSmith product. CrewAI ships a configurable OTLP endpoint instead
+        of dedicated integrations. Rig leans on the broader Rust + OTel ecosystem.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Bundled integrations</th><th>If your vendor isn't bundled</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>LangSmith (native); LangChain Hub for prompts.</td>
+            <td>OTel via LangSmith, or write your own callback adapter.</td>
+            <td><code>callbacks/tracers/langchain.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Inherits LangSmith from LangChain; LangSmith Deployment for hosted runtime.</td>
+            <td>Same as LangChain.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>None bundled — only a configurable OTLP endpoint env var.</td>
+            <td>Point <code>CREWAI_TELEMETRY_BASE_URL</code> at any OTel-compatible collector.</td>
+            <td><code>telemetry/telemetry.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Google Cloud Trace plugin.</td>
+            <td>Wire any OTel exporter.</td>
+            <td><code>telemetry/google_cloud.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Azure Application Insights (via OTel exporter).</td>
+            <td>Wire any OTel exporter.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td><b>Nine</b>: LangSmith, Langfuse, Datadog, Arize, BrainTrust, Arthur, PostHog, Sentry, ClickHouse.</td>
+            <td>Wire a generic OTel exporter.</td>
+            <td><code>core/src/observability/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Application Insights via OTel exporter.</td>
+            <td>Wire any OTel exporter (the .NET ecosystem has one for almost everything).</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Micrometer's full vendor catalogue: Prometheus, Datadog, New Relic, AppDynamics, Dynatrace, etc.</td>
+            <td>Add a different Micrometer registry — virtually every monitoring vendor ships one.</td>
+            <td><code>langchain4j-micrometer-metrics/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Google Cloud (native plugin).</td>
+            <td>Wire any OTel exporter.</td>
+            <td><code>go/plugins/googlecloud/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>None in-tree.</td>
+            <td>Use the Rust <code>tracing-opentelemetry</code> ecosystem to send to any OTel backend.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Mastra and LangChain4j are the two extremes — Mastra ships nine specific vendor
+        integrations covering observability and AI-eval tooling; LangChain4j ships zero
+        agent-specific integrations but inherits Micrometer's enormous vendor reach. Most
+        frameworks ship one or two cloud-vendor-specific integrations (Cloud Trace,
+        Application Insights, LangSmith) and expect you to wire generic OTel for anything else.
+        CrewAI and Rig are at the other end: neither ships dedicated vendor integrations and
+        both rely entirely on OTel as the integration layer.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on observability surfaces across the ten frameworks.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">OTEL</span>
+        <h4>1 · OTel is now table stakes</h4>
+        <p>
+          Six frameworks ship direct OTel SDK dependencies: CrewAI, ADK, Semantic Kernel,
+          Mastra, MS Agent Framework, Genkit Go. The other four reach OTel through a bridge —
+          LangChain4j via Micrometer, Rig via <code>tracing-opentelemetry</code>, LangChain
+          and LangGraph via LangSmith. Every framework gets there; only the wiring effort
+          differs.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SEMCONV</span>
+        <h4>2 · Gen AI semantic conventions are the unifier</h4>
+        <p>
+          Frameworks emitting <code>gen_ai.client.token.usage</code> and Gen AI attributes:
+          ADK (<code>_experimental_semconv.py</code>), MS Agent Framework
+          (<code>OpenTelemetryConsts.cs</code> v1.37), SK, LangChain4j (Micrometer
+          <code>OTelGenAiAttributes</code>). Means a Datadog or Grafana dashboard built once
+          works across these frameworks unchanged.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SPANS</span>
+        <h4>3 · Properly nested traces only ship in three frameworks</h4>
+        <p>
+          ADK and Genkit Go produce nested traces via <code>start_as_current_span</code>
+          inside <code>with</code> blocks; Mastra's flow steps roll up under the agent run.
+          MS Agent Framework's <code>OpenTelemetryAgent</code> gives a two-level wrap. CrewAI
+          emits descriptively named spans (Crew Execution, Task Execution, Tool Usage) but as
+          flat top-level events, not parent-child children. Rig has no agent-level span concept.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">METRICS</span>
+        <h4>4 · First-class metrics emission ships in six</h4>
+        <p>
+          ADK (<code>_metrics.py</code>), Semantic Kernel (OTel Meter), Mastra (vendor packages),
+          MS Agent Framework (<code>OpenTelemetryChatClient</code> token + latency),
+          LangChain4j (<code>MicrometerMetricsChatModelListener</code>), and Genkit Go (OTel
+          metrics API). CrewAI surfaces the data through span attributes — your backend
+          aggregates. LangChain, LangGraph, and Rig don't aggregate at all.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">LOGGING</span>
+        <h4>5 · Structured logging tracks the host language</h4>
+        <p>
+          Frameworks using modern structured logging by default: ADK and SK (OTel logs), Mastra
+          (custom structured logger), MS Agent Framework (<code>ILogger</code>), Genkit Go
+          (<code>log/slog</code>), Rig (<code>tracing</code> events). LangChain, LangGraph,
+          CrewAI default to plain Python <code>logging</code>; LangChain4j defers to host
+          SLF4J/Log4j config.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">VENDORS</span>
+        <h4>6 · Mastra ships nine in-tree integrations</h4>
+        <p>
+          Mastra: LangSmith, Langfuse, Datadog, Arize, BrainTrust, Arthur, PostHog, Sentry,
+          ClickHouse. LangChain ships one (LangSmith); ADK and Genkit ship Google Cloud; SK and
+          MS Agent Framework ship Application Insights; CrewAI ships only a configurable OTLP
+          endpoint; LangChain4j leans on Micrometer's vendor reach; Rig ships none in-tree.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-index.html">← Back to index</a> ·
+    Next: <a href="operational-excellence-performance.html">Chapter 2 · Performance →</a>
+  </div>
+</footer>
+
+</body>
+</html>

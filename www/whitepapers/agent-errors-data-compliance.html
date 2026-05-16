@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 5 · Data &amp; compliance failures</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #a78bfa;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #2a1a3d; border-color: var(--ch); color: #ddd6fe; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #c4b5fd 60%, #a78bfa 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #2a1a3d; border: 1px solid var(--ch); color: #ddd6fe; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #2a1a3d; color: #ddd6fe; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="agent-errors-index.html">← Index</a>
+    <a href="agent-errors.html"><span class="num">1</span>In-loop</a>
+    <a href="agent-errors-provider.html"><span class="num">2</span>Provider</a>
+    <a href="agent-errors-multi-agent.html"><span class="num">3</span>Multi-agent</a>
+    <a href="agent-errors-operational.html"><span class="num">4</span>Operational</a>
+    <a class="active" href="agent-errors-data-compliance.html"><span class="num">5</span>Data &amp; compliance</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 5 of 5</div>
+    <h1>Data &amp; compliance failures</h1>
+    <p class="subtitle">
+      These are the failures that happen at the data boundary — malformed payloads coming in,
+      personal data leaking out into prompts and logs, the model producing answers that violate
+      your organisation's policy, and the inability to reconstruct what the agent saw and said
+      when a regulator asks. None of these are about whether the LLM is "smart enough"; they're
+      about what the system around the LLM is allowed to do with data. This chapter walks
+      through each failure in plain language, then catalogs the validation, redaction,
+      filtering, and tracing surfaces the five frameworks expose for these conditions.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#bad-input">Bad upstream input</a></li>
+        <li><a href="#pii">PII redaction</a></li>
+        <li><a href="#policy">Output policy hooks</a></li>
+        <li><a href="#audit">Audit &amp; trace surfaces</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- BAD INPUT -->
+<section id="bad-input">
+  <div class="container">
+    <h2><span class="num">1</span>Bad upstream input</h2>
+    <p class="lede">
+      Whatever calls your agent — a web frontend, a backend service, a queue worker — eventually
+      hands it a chunk of text and says "do something with this." If that text is malformed,
+      empty, or maliciously crafted, the agent doesn't know. To the framework, all input is just
+      a string. Validation has to happen <i>before</i> the agent runtime sees the request,
+      because once the LLM is involved, every wasted tool call costs tokens and time.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A calling service has a bug and starts sending payloads where a customer ID field is the
+        literal string <code>"undefined"</code>. The agent dutifully calls a "lookup customer"
+        tool with that value, gets back an empty record, decides to "search by phone number"
+        instead, calls a different tool, gets nothing, asks the user for clarification — except
+        there is no user, this is a backend job. Forty token-burning hops in, the job times out
+        and the upstream service gets a vague error. With validation at the API boundary, the
+        bad payload is rejected in microseconds before any LLM tokens are spent.
+      </p>
+      <p>
+        None of the frameworks treat the user-facing message as anything but opaque text. The
+        only validation the frameworks <i>do</i> ship is at the tool boundary, where Pydantic
+        models or annotated function signatures define the shape of arguments the LLM is
+        allowed to pass. That catches "model called the tool with the wrong arg types" — it
+        does not catch "upstream sent us garbage."
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Inbound message validation</th><th>Tool-arg validation</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>String or <code>BaseMessage</code> sequence; no semantic checks.</td>
+            <td><code>StructuredTool</code> uses Pydantic <code>args_schema</code>; validation errors surface as <code>ToolException</code> handled by <code>handle_tool_error</code>.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>Whatever the state schema accepts; the developer-defined <code>State</code> TypedDict is the contract.</td>
+            <td>Tools defined via <code>@tool</code> reuse LangChain's Pydantic-based validation.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Task.description</code> is a string template; no schema validation on inputs interpolated into it.</td>
+            <td><code>BaseTool.args_schema</code> Pydantic class enforces tool-arg shape.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td>Free-form text in <code>Content</code>; no inbound validator.</td>
+            <td>Function tools infer schemas from Python type hints; mismatches raise at the runtime boundary.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Free-form text on <code>ChatHistory</code>; no validator.</td>
+            <td><code>@kernel_function</code> with annotated parameters drives JSON-schema generation for tool calls.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- PII -->
+<section id="pii">
+  <div class="container">
+    <h2><span class="num">2</span>PII redaction</h2>
+    <p class="lede">
+      Personally identifiable information — emails, phone numbers, credit-card numbers, SSNs —
+      slips into agent runs in three ways. Users paste it into questions. Tools return more of
+      it than the agent asked for. The model itself repeats it (or hallucinates near-PII that
+      looks real) in its output. Once it's in the prompt, it's in your trace store, your
+      provider's logs, and possibly your provider's training-data retention. Removing PII before
+      it gets there means scanning text at every boundary.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user submits a customer-support question and pastes their account number, email, and
+        last four credit-card digits as "context." Your agent forwards the whole message to the
+        model. The provider logs the request — depending on the data-retention policy, that PII
+        may sit in the provider's storage for 30 days. Your trace system also stores it, in
+        plaintext. A few weeks later, compliance reviews trace logs and finds a treasure trove
+        of customer PAN numbers. Now you owe the security team a write-up.
+      </p>
+      <p>
+        Catching this means scanning text at three points: incoming user input (before the model
+        sees it), outgoing tool results (before they're added to the prompt), and outgoing model
+        responses (before they reach the user or the trace store). LangChain v1's
+        <code>PIIMiddleware</code> is the only first-class implementation in the catalog — it
+        ships built-in detectors for email, credit-card, IP, MAC, and URL with four redaction
+        strategies (<code>"block"</code>, <code>"redact"</code>, <code>"mask"</code>,
+        <code>"hash"</code>). Every other framework provides generic interception hooks
+        (callbacks, filters, guardrails) where a developer-supplied detector — typically a
+        third-party service like Microsoft Presidio, AWS Comprehend, or Google DLP — does the
+        actual work.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>PII surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain v1</td>
+            <td><code>PIIMiddleware</code> with built-in detectors for <code>email</code>, <code>credit_card</code>, <code>ip</code>, <code>mac_address</code>, <code>url</code>; redaction strategies <code>"block"</code>, <code>"redact"</code>, <code>"mask"</code>, <code>"hash"</code>; flags <code>apply_to_input</code>, <code>apply_to_output</code>, <code>apply_to_tool_results</code>.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/pii.py:32</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>No native PII surface. Detection runs in a node placed before or after the agent node, mutating <code>messages</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>No native PII surface. <code>Task.guardrail: GuardrailType | None</code> is the validation hook on tasks; the detector implementation is supplied by the developer.</td>
+            <td><code>src/crewai/task.py:244</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>before_model_callback</code> (line 376), <code>after_model_callback</code> (line 391), <code>before_tool_callback</code> (line 420), <code>after_tool_callback</code> (line 435) on <code>LlmAgent</code> are the interception points.</td>
+            <td><code>src/google/adk/agents/llm_agent.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Three filter pipelines registered via <code>kernel_filters_extension</code>: <code>function_invocation_filters</code>, <code>prompt_rendering_filters</code>, <code>auto_function_invocation_filters</code>. Each filter receives <code>(context, next)</code> middleware-style.</td>
+            <td><code>filters/kernel_filters_extension.py:33</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- POLICY -->
+<section id="policy">
+  <div class="container">
+    <h2><span class="num">3</span>Output policy hooks</h2>
+    <p class="lede">
+      Provider safety filters block the obvious — explicit content, weapons instructions, hate
+      speech. They're generic and they don't know your business. A healthcare agent can't give
+      diagnosis-shaped advice; a fintech agent can't recommend specific investments; a brand
+      agent can't sound off-tone or mention competitors. These are domain-specific policies that
+      have to be enforced after the model has spoken but before the answer leaves your service.
+      Every framework ships a hook for this; the work of writing the policy is yours.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your fintech support agent gets asked, "Should I move my savings into bitcoin?" The
+        model — being helpful — produces a thoughtful pros-and-cons analysis that ends with
+        "for someone with your risk tolerance, a small allocation may make sense." That's
+        investment advice. Your legal team will not be amused. With a post-output policy hook,
+        a classifier (or a smaller LLM acting as a judge) inspects the response, recognises it
+        as advice, and substitutes a neutral message: "I can share educational resources but
+        cannot make investment recommendations."
+      </p>
+      <p>
+        The hook shape varies: LangChain v1 wraps the call middleware-style and lets you mutate
+        the response on the way out; ADK's <code>after_model_callback</code> takes a
+        return-the-modified-response shape; CrewAI's <code>guardrail</code> uses a
+        validate-or-retry loop bounded by <code>guardrail_max_retries</code>; SK filters and
+        LangGraph nodes sit in the same call chain. The placement (last step before the answer
+        leaves the agent) is the same; the API ergonomics differ.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Post-model interception</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain v1</td>
+            <td>Middleware <code>wrap_model_call</code> wraps the model invocation; the same
+              <code>PIIMiddleware</code> mechanism applies arbitrary policy via <code>apply_to_output</code>.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain (classic)</td>
+            <td><code>BaseCallbackHandler</code> exposes <code>on_llm_end</code>, <code>on_chain_end</code>, <code>on_agent_finish</code>; output mutation requires custom subclassing.</td>
+            <td><code>libs/core/langchain_core/callbacks/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>Insert a node between the agent node and <code>END</code>; the node reads the latest
+              message from state and either passes it through or rewrites it.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Task.guardrail</code> (single) and <code>Task.guardrails</code> (list, line 255)
+              run after task execution; <code>guardrail_max_retries</code> (line 271) bounds retry
+              loops on guardrail failure.</td>
+            <td><code>src/crewai/task.py:244</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>after_model_callback</code> on <code>LlmAgent</code> (line 391) returns the
+              modified or original response; plugin-level <code>after_model_callback</code> mirrors it
+              at the runtime layer.</td>
+            <td><code>src/google/adk/agents/llm_agent.py:391</code> · <code>plugins/base_plugin.py:220</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>function_invocation_filter</code> wraps the call in middleware fashion: the
+              filter awaits <code>next(context)</code> and may mutate <code>context.result</code> on
+              the way out.</td>
+            <td><code>filters/kernel_filters_extension.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- AUDIT -->
+<section id="audit">
+  <div class="container">
+    <h2><span class="num">4</span>Audit &amp; trace surfaces</h2>
+    <p class="lede">
+      A regulator asks: "Did your bot ever give medical advice to this customer?" "Did this user
+      receive a refund recommendation they shouldn't have?" If the answer is "I don't know,"
+      that's a compliance failure regardless of what the bot actually did. Audit isn't optional
+      in regulated industries — it's the ability to reconstruct, after the fact, every prompt,
+      every tool call, and every response for any run. All five frameworks expose hooks rich
+      enough to capture this; the shape of the hook determines what gets captured and where it
+      lands.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Six months after launch, a customer disputes a charge and claims your support bot told
+        them they'd be refunded. Without an audit trail, your team has no way to verify or
+        refute the claim — the conversation is gone, the LLM responses unrecorded. With a full
+        audit trail, you can pull the exact run by correlation ID and see every message:
+        timestamps, the prompts that went to the model, the model's responses with token
+        counts, every tool call with its arguments and results, and any retries or fallbacks.
+        The dispute resolves quickly because you have evidence either way.
+      </p>
+      <p>
+        The hooks for capturing this are different in shape across the catalog. LangChain's
+        <code>BaseCallbackHandler</code> exposes the broadest lifecycle (17 methods covering
+        chat models, tools, chains, agents, retrievers, retry). ADK ships a 12-method
+        <code>BasePlugin</code> with the same coverage spread across plugin events. SK runs
+        three filter pipelines (function-invocation, prompt-rendering, auto-function-invocation).
+        CrewAI provides <code>step_callback</code>, <code>task_callback</code>, and
+        kickoff-level callbacks. LangGraph is unique: the same checkpointer that powers
+        durable resume (Chapter 4) also serves as the audit log — every super-step is recorded
+        and replayable via <code>BaseCheckpointSaver.list()</code>.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Trace surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td><code>BaseCallbackHandler</code> with lifecycle methods <code>on_llm_start</code>, <code>on_llm_end</code>, <code>on_llm_error</code>, <code>on_chat_model_start</code>, <code>on_tool_start</code>, <code>on_tool_end</code>, <code>on_tool_error</code>, <code>on_chain_start</code>, <code>on_chain_end</code>, <code>on_chain_error</code>, <code>on_agent_action</code>, <code>on_agent_finish</code>, <code>on_retriever_start</code>, <code>on_retriever_end</code>, <code>on_retriever_error</code>, <code>on_retry</code>, <code>on_text</code>.</td>
+            <td><code>libs/core/langchain_core/callbacks/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>BaseCheckpointSaver.list(config, *, filter, before, limit) -&gt; Iterator[CheckpointTuple]</code> (line 234) returns the full sequence of super-step checkpoints with metadata, supplying audit trail and replay state from one surface.</td>
+            <td><code>libs/checkpoint/langgraph/checkpoint/base/__init__.py:157</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Crew.step_callback: SerializableCallable | None</code> (line 257) and
+              <code>Crew.task_callback</code> (line 261) plus <code>before_kickoff_callbacks</code> /
+              <code>after_kickoff_callbacks</code>; <code>crewai/telemetry/</code> module ships an
+              event bus.</td>
+            <td><code>src/crewai/crew.py:257</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>BasePlugin</code> exposes 12 lifecycle hooks: <code>on_user_message_callback</code>, <code>before_run_callback</code>, <code>on_event_callback</code>, <code>after_run_callback</code>, <code>before_agent_callback</code>, <code>after_agent_callback</code>, <code>before_model_callback</code>, <code>after_model_callback</code>, <code>on_model_error_callback</code>, <code>before_tool_callback</code>, <code>after_tool_callback</code>, <code>on_tool_error_callback</code>.</td>
+            <td><code>src/google/adk/plugins/base_plugin.py:37</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Three filter chains registered through <code>kernel_filters_extension</code>:
+              <code>function_invocation_filters</code>, <code>prompt_rendering_filters</code>,
+              <code>auto_function_invocation_filters</code>; each filter is invoked with a context
+              and a <code>next</code> awaitable.</td>
+            <td><code>filters/kernel_filters_extension.py:33</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on data and compliance surfaces.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">VALIDATION</span>
+        <h4>1 · Inbound text is unvalidated everywhere</h4>
+        <p>
+          None of the five frameworks ship semantic input validation for the user-facing message.
+          Validation lives at the tool boundary via Pydantic <code>args_schema</code> (LangChain,
+          CrewAI), annotated function signatures (ADK, SK), or whatever the developer-defined
+          state schema enforces (LangGraph).
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PII</span>
+        <h4>2 · LangChain v1 is the only first-class PII surface</h4>
+        <p>
+          <code>PIIMiddleware</code> at <code>middleware/pii.py:32</code> ships built-in detectors
+          for email, credit-card, IP, MAC, URL, and four redaction strategies
+          (<code>"block"</code>, <code>"redact"</code>, <code>"mask"</code>, <code>"hash"</code>).
+          The other four frameworks expose generic hooks where a developer-supplied detector runs.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">HOOK SHAPE</span>
+        <h4>3 · Three different post-output mutation models</h4>
+        <p>
+          ADK <code>after_model_callback</code> (line 391) returns the modified response. SK
+          filters and LangChain v1 middlewares wrap the call middleware-style with
+          <code>next(context)</code>. CrewAI <code>Task.guardrail</code> + <code>guardrails</code>
+          (lines 244, 255) uses a validate-or-retry loop bounded by
+          <code>guardrail_max_retries</code> (line 271).
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CALLBACKS</span>
+        <h4>4 · LangChain has the broadest lifecycle</h4>
+        <p>
+          <code>BaseCallbackHandler</code> in <code>langchain_core/callbacks/base.py</code> defines
+          17 lifecycle methods covering chat models, tools, chains, agents, retrievers, and retry.
+          ADK's <code>BasePlugin</code> ships 12 hooks; SK runs three filter chains; CrewAI
+          provides <code>step_callback</code>, <code>task_callback</code>, and kickoff callbacks.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CHECKPOINT AUDIT</span>
+        <h4>5 · LangGraph reuses its checkpointer as audit log</h4>
+        <p>
+          <code>BaseCheckpointSaver.list(config, *, filter, before, limit)</code> at line 234
+          yields <code>CheckpointTuple</code> entries with checkpoint, metadata, and config —
+          the same persistence layer that drives durable resume. No other framework conflates
+          state persistence with audit recording.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">FILTER SCOPE</span>
+        <h4>6 · SK separates filter concerns into three pipelines</h4>
+        <p>
+          <code>filters/kernel_filters_extension.py:33</code> registers
+          <code>function_invocation_filters</code>, <code>prompt_rendering_filters</code>, and
+          <code>auto_function_invocation_filters</code> as distinct lists. The signature is the
+          same — <code>(context, next)</code> middleware — but the trigger points are explicit.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="agent-errors-index.html">← Back to index</a> ·
+    Previous: <a href="agent-errors-operational.html">Chapter 4 · Operational</a> ·
+    First: <a href="agent-errors.html">Chapter 1 · In-loop</a>
+  </div>
+</footer>
+
+</body>
+</html>

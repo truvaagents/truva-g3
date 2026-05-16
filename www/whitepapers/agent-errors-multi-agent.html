@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 3 · Multi-agent failures</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #facc15;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #3a3514; border-color: var(--ch); color: #fef9c3; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #fde68a 60%, #facc15 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #3a3514; border: 1px solid var(--ch); color: #fef9c3; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #3a3514; color: #fef9c3; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="agent-errors-index.html">← Index</a>
+    <a href="agent-errors.html"><span class="num">1</span>In-loop</a>
+    <a href="agent-errors-provider.html"><span class="num">2</span>Provider</a>
+    <a class="active" href="agent-errors-multi-agent.html"><span class="num">3</span>Multi-agent</a>
+    <a href="agent-errors-operational.html"><span class="num">4</span>Operational</a>
+    <a href="agent-errors-data-compliance.html"><span class="num">5</span>Data &amp; compliance</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 3 of 5</div>
+    <h1>Multi-agent failures</h1>
+    <p class="subtitle">
+      Once you connect agents to other agents, a new class of failure shows up that single-agent
+      systems never see: agents tossing work back and forth without finishing, supervisors that
+      can't tell whether their workers are actually making progress, and parallel branches that
+      quietly overwrite each other's results. This chapter walks through each failure mode in
+      plain language, then catalogs the iteration caps, plan-tracking surfaces, and state-merging
+      primitives the five frameworks expose for these conditions.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#cycles">Cyclic handoffs</a></li>
+        <li><a href="#deadlock">Deadlocks &amp; spinning supervisors</a></li>
+        <li><a href="#state-drift">State across parallel branches</a></li>
+        <li><a href="#guards">Iteration limits — the catalog</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- CYCLES -->
+<section id="cycles">
+  <div class="container">
+    <h2><span class="num">1</span>Cyclic handoffs</h2>
+    <p class="lede">
+      Two agents end up tossing the same piece of work back and forth instead of finishing it.
+      Each one decides the other is better positioned to handle the next step, so neither ever
+      commits to closing the task. None of the frameworks recognise this as a cycle — they
+      only notice that <i>some</i> loop has run too many times and trip a global iteration
+      counter.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Picture a researcher agent and a writer agent collaborating on a one-page report. The
+        writer drafts something, decides it lacks facts, and hands the draft back to the
+        researcher. The researcher pulls more facts and hands them back. The writer drafts again,
+        decides the structure could be tighter, and asks the researcher for a "better-sourced"
+        version. There's no shared sense of "done" — each agent's prompt says "delegate when you
+        need help", and each one sees the other as the one who should make the final call. With
+        no fixed plan and no progress tracking, this can repeat indefinitely.
+      </p>
+      <p>
+        What the frameworks actually detect: not the cycle itself, but the symptom. The iteration
+        cap fires after N total rounds regardless of <i>why</i> the loop is long — productive
+        long-running work and pointless ping-pong look identical to the counter. The cap exists
+        as a budget guard, not a cycle detector.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Cycle-detection lever</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>Classic <code>AgentExecutor.max_iterations</code> caps round-trips of the outer agent (default <b>15</b>). For agents-as-tools, only the outer cap counts inner round-trips.</td>
+            <td><code>libs/langchain/langchain_classic/agents/agent.py:1023</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>recursion_limit</code> on the runnable config; on reach, raises <code>GraphRecursionError</code>.</td>
+            <td><code>libs/langgraph/langgraph/pregel/main.py:2974</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Agent.max_iter</code> (default <b>25</b>) caps per-task iterations. In hierarchical Process the manager's iterations cap delegations.</td>
+            <td><code>lib/crewai/.../agents/agent_builder/base_agent.py:251</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td>No global cap on transfer chains. <code>LoopAgent.max_iterations</code> caps loops at the LoopAgent boundary; <code>AutoFlow.agent_transfer</code> does not track cycles.</td>
+            <td><code>src/google/adk/agents/loop_agent.py:62</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>AgentGroupChat</code>'s <code>TerminationStrategy.maximum_iterations</code>: base default <b>99</b>; <code>DefaultTerminationStrategy</code> sets it to <b>5</b>.</td>
+            <td><code>strategies/termination/{termination_strategy,default_termination_strategy}.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- DEADLOCKS -->
+<section id="deadlock">
+  <div class="container">
+    <h2><span class="num">2</span>Deadlocks &amp; spinning supervisors</h2>
+    <p class="lede">
+      In a supervisor pattern, one agent decides which worker handles each step. If the
+      supervisor's prompt says "keep going until the task is complete" but the supervisor can't
+      tell whether work is actually moving forward, it will keep dispatching similar-looking
+      sub-tasks. Each round produces a slightly different output, so to the supervisor it
+      <i>feels</i> like progress — but the goal never gets closer.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A "research lead" agent supervises a team of specialist sub-agents. The user asks: "Find
+        five competitor pricing models." The supervisor dispatches a sub-agent and gets back four
+        pricing models. It dispatches again — "find one more" — and gets the same four with a
+        new fifth entry. It dispatches again to "verify the fifth", and this time receives three
+        of the originals plus a different fifth. Every round produces new content, which to the
+        supervisor reads as forward motion. But the actual deliverable — a stable list of five —
+        never settles.
+      </p>
+      <p>
+        This is exactly what plan-progression tracking is designed to catch. Instead of just
+        counting rounds, the orchestrator records each step's intended outcome, compares it to
+        what the step actually produced, and flags "no real progress" so a re-plan can fire. SK's
+        <code>StandardMagenticManager</code> is the only framework in the catalog that ships
+        this surface; the other four rely on the iteration cap to eventually halt the spin.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Surface</th><th>Where</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Plan-progression tracking</td>
+            <td>SK <code>StandardMagenticManager</code> uses a <code>ProgressLedger</code> to track whether each step is making progress; <code>plan</code> / <code>replan</code> methods adjust the plan when stuck.</td>
+            <td><code>orchestration/magentic.py:92, 144, 158, 205</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Time budget</td>
+            <td>LangChain <code>AgentExecutor.max_execution_time</code>; everywhere else, time-bounding sits outside the framework.</td>
+            <td><code>libs/langchain/langchain_classic/agents/agent.py:1028</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Per-call cap</td>
+            <td>LangChain v1 <code>ModelCallLimitMiddleware</code> caps total model calls per <code>thread</code> and per <code>run</code>.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/model_call_limit.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Iteration cap</td>
+            <td>The same iteration limits from the previous section act as a final guard.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- STATE DRIFT -->
+<section id="state-drift">
+  <div class="container">
+    <h2><span class="num">3</span>State across parallel branches</h2>
+    <p class="lede">
+      When two agents run in parallel, they share a workspace — a dict-like object the
+      framework keeps around for the run. If both agents write to the same field, the framework
+      has to decide how to combine their outputs. Each of the five frameworks makes this decision
+      differently, and in some defaults the answer is "silently throw one of them away."
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Imagine a planner kicks off two sub-agents to work in parallel: one researches Vendor A,
+        the other researches Vendor B. Both write their findings into a shared <code>notes</code>
+        field on the run state. Without any merge logic, whichever sub-agent finishes second
+        overwrites the first — the planner reads <code>notes</code>, sees only Vendor B's
+        research, and continues. There's no error and no warning. The user gets an answer that
+        quietly ignored half the work.
+      </p>
+      <p>
+        Each framework provides a different primitive for handling this. LangGraph requires you
+        to declare a <i>reducer</i> per state channel — a small function that says "when there's
+        a new value, here's how to combine it with the old one" (e.g. <code>add_messages</code>
+        appends to a list instead of replacing it). ADK's <code>ParallelAgent</code> doesn't fan
+        into a shared field at all; sub-agents append events to a single session log, and the
+        ordering between branches is whatever order the events arrive in. SK's
+        <code>ConcurrentOrchestration</code> sidesteps the merge entirely by giving every parallel
+        agent its own private input copy and explicitly aggregating the results at the end. CrewAI
+        and classic LangChain don't expose true parallel state — execution is serialised, so the
+        problem doesn't arise.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Merge / aggregation semantics</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>Classic <code>AgentExecutor</code> is single-threaded — no parallel branches.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>Each channel declares a reducer (e.g. <code>add_messages</code> for the <code>messages</code> channel). Without an explicit reducer, the channel is last-writer-wins.</td>
+            <td><code>libs/langgraph/langgraph/graph/message.py</code> · <code>add_messages</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>Sequential and hierarchical Process serialise tasks. <code>Task.async_execution=True</code> opts a task into asynchronous execution; outputs propagate as context to the next task.</td>
+            <td><code>lib/crewai/.../task.py</code> · <code>async_execution</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>ParallelAgent</code> runs sub-agents concurrently against the same <code>Session</code>. The <code>Session</code> is an append-only event log; event ordering between branches is nondeterministic.</td>
+            <td><code>src/google/adk/agents/parallel_agent.py:150</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>ConcurrentOrchestration</code> dispatches each agent against its own copy of the input; the orchestration aggregates results.</td>
+            <td><code>orchestration/concurrent.py:131</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- GUARDS -->
+<section id="guards">
+  <div class="container">
+    <h2><span class="num">4</span>Iteration limits — the catalog</h2>
+    <p class="lede">
+      All three failures above eventually get caught by the same blunt safety net: an iteration
+      counter that raises after the loop has run too many times. None of these caps know whether
+      progress is being made — they just know the count. This section gathers every cap the five
+      frameworks expose, with their defaults; the values vary by three orders of magnitude.
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Limit</th><th>Default</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td><code>AgentExecutor.max_iterations</code></td>
+            <td>15</td>
+            <td><code>agent.py:1023</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td><code>AgentExecutor.max_execution_time</code></td>
+            <td><code>None</code></td>
+            <td><code>agent.py:1028</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>recursion_limit</code> (on <code>RunnableConfig</code>)</td>
+            <td>10,007 (env-overridable via <code>LANGGRAPH_DEFAULT_RECURSION_LIMIT</code>)</td>
+            <td><code>_internal/_config.py:31</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Agent.max_iter</code></td>
+            <td>25</td>
+            <td><code>agents/agent_builder/base_agent.py:251</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Agent.max_retry_limit</code> (counts tool / parse retries)</td>
+            <td>2</td>
+            <td><code>agent/core.py:233</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>LoopAgent.max_iterations</code></td>
+            <td><code>None</code> (must be set explicitly)</td>
+            <td><code>agents/loop_agent.py:62</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>TerminationStrategy.maximum_iterations</code> (base)</td>
+            <td>99</td>
+            <td><code>strategies/termination/termination_strategy.py:22</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>DefaultTerminationStrategy.maximum_iterations</code></td>
+            <td>5</td>
+            <td><code>strategies/termination/default_termination_strategy.py:19</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>FunctionChoiceBehavior.Auto.maximum_auto_invoke_attempts</code></td>
+            <td>5</td>
+            <td><code>connectors/ai/function_choice_behavior.py:18</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on multi-agent failure surfaces.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">CYCLES</span>
+        <h4>1 · Every framework ships an iteration cap</h4>
+        <p>
+          LangChain <code>max_iterations=15</code>, LangGraph <code>recursion_limit=10,007</code>,
+          CrewAI <code>max_iter=25</code>, ADK <code>LoopAgent.max_iterations=None</code> (explicit
+          set required), SK <code>DefaultTerminationStrategy.maximum_iterations=5</code>. Spread
+          spans three orders of magnitude.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PROGRESS</span>
+        <h4>2 · Plan-progression tracking is SK-specific</h4>
+        <p>
+          <code>StandardMagenticManager</code> in <code>orchestration/magentic.py:205</code> uses
+          a <code>ProgressLedger</code> (line 92) and <code>plan</code> / <code>replan</code>
+          methods (lines 144, 158) to detect when a step isn't making progress. No equivalent
+          ships in LangChain, LangGraph, CrewAI, or ADK.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">REDUCERS</span>
+        <h4>3 · Parallel-state semantics differ by framework</h4>
+        <p>
+          LangGraph: per-channel reducer (e.g. <code>add_messages</code>); without a reducer,
+          last-writer-wins. ADK: shared append-only <code>Session</code>; event ordering between
+          parallel branches is nondeterministic. SK: each agent gets its own input copy; the
+          orchestration aggregates. CrewAI: serial by default. LangChain classic: single-threaded.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RECURSION</span>
+        <h4>4 · LangGraph's <code>recursion_limit</code> is env-overridable</h4>
+        <p>
+          <code>libs/langgraph/langgraph/_internal/_config.py:31</code> defines
+          <code>DEFAULT_RECURSION_LIMIT = int(getenv("LANGGRAPH_DEFAULT_RECURSION_LIMIT", "10007"))</code>.
+          The 10,007 baseline can be lowered globally via the environment without touching call
+          sites.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">STRATEGIES</span>
+        <h4>5 · SK exposes two layered iteration caps</h4>
+        <p>
+          <code>TerminationStrategy.maximum_iterations</code> (base default 99) on
+          <code>AgentGroupChat</code> bounds the conversation; the orthogonal
+          <code>FunctionChoiceBehavior.Auto.maximum_auto_invoke_attempts</code> (default 5) bounds
+          the auto-function-call loop within a single agent turn.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">TRANSFER</span>
+        <h4>6 · ADK <code>AutoFlow</code> agent transfer has no global cycle cap</h4>
+        <p>
+          <code>flows/llm_flows/agent_transfer.py</code> issues <code>transfer_to_agent</code>
+          actions; the runner switches active agent without an integrated cycle counter. The only
+          per-shape cap is <code>LoopAgent.max_iterations</code> on the explicit
+          <code>LoopAgent</code> wrapper.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="agent-errors-index.html">← Back to index</a> ·
+    Previous: <a href="agent-errors-provider.html">Chapter 2 · Provider</a> ·
+    Next: <a href="agent-errors-operational.html">Chapter 4 · Operational →</a>
+  </div>
+</footer>
+
+</body>
+</html>

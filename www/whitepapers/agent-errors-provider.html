@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 2 · Provider-side failures</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #fb923c;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #3a1c0d; border-color: var(--ch); color: #fed7aa; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #fdba74 60%, #fbbf24 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #3a1c0d; border: 1px solid var(--ch); color: #fed7aa; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  /* Takeaways grid (matches Chapter 1 convention) */
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #3a1c0d; color: #fed7aa; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="agent-errors-index.html">← Index</a>
+    <a href="agent-errors.html"><span class="num">1</span>In-loop</a>
+    <a class="active" href="agent-errors-provider.html"><span class="num">2</span>Provider</a>
+    <a href="agent-errors-multi-agent.html"><span class="num">3</span>Multi-agent</a>
+    <a href="agent-errors-operational.html"><span class="num">4</span>Operational</a>
+    <a href="agent-errors-data-compliance.html"><span class="num">5</span>Data &amp; compliance</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 2 of 5</div>
+    <h1>Provider-side failures</h1>
+    <p class="subtitle">
+      These are the failures that originate <i>before</i> your code runs at all — the LLM
+      provider is rate-limiting your account, having an outage, refusing the request on safety
+      grounds, rejecting an expired API key, or dropping a streaming connection partway through.
+      Your agent loop receives an exception or an unexpected response and has to decide what to
+      do about it. This chapter walks through each failure in plain language, then catalogs the
+      retry, fallback, and post-response hooks the five frameworks expose for these conditions.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#rate-limits">Rate limits (HTTP 429)</a></li>
+        <li><a href="#outages">Provider outages &amp; 5xx</a></li>
+        <li><a href="#auth">API-key expiration &amp; auth rotation</a></li>
+        <li><a href="#moderation">Content-moderation refusals</a></li>
+        <li><a href="#streaming">Streaming disconnects</a></li>
+        <li><a href="#truncation">Output truncation</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- 1. RATE LIMITS -->
+<section id="rate-limits">
+  <div class="container">
+    <h2><span class="num">1</span>Rate limits (HTTP 429)</h2>
+    <p class="lede">
+      Every LLM provider caps how often you can call them. When you exceed the cap they return
+      <code>HTTP 429</code> — sometimes with a <code>Retry-After</code> header telling you how long
+      to wait. To your agent loop this looks like an exception thrown by the model client. The
+      framework's job is to decide whether to back off and try again, switch to a different model,
+      or give up and propagate the error to the caller.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your agent is humming along when traffic spikes. The third tool-call cycle hits OpenAI's
+        per-minute token budget for your account; the next request gets a 429. If your framework
+        retries automatically with exponential backoff, the user sees a 2–8 second delay and the
+        run finishes. If it doesn't retry, the exception bubbles up and the user gets a generic
+        error — even though the provider explicitly told you "wait 4 seconds and try again."
+      </p>
+      <p>
+        Two things to check in any framework's behaviour. First, <i>does it retry at all by
+        default?</i> Some ship retry off and require explicit configuration. Second, <i>does it
+        honour the <code>Retry-After</code> header?</i> A framework whose backoff is hard-coded
+        will retry too aggressively when the provider says "wait longer", and too slowly when it
+        says "you can come back immediately." None of the five frameworks parse this header
+        automatically — the retry intervals come from each framework's own backoff configuration.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Surface</th><th>Default</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>v1 <code>ModelRetryMiddleware</code> · v1 <code>ModelFallbackMiddleware</code></td>
+            <td>Off until added; <code>ModelFallbackMiddleware</code> walks an ordered list of alternative models on exception.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/model_fallback.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>RetryPolicy(retry_on=…)</code> attached to the agent node</td>
+            <td><code>max_attempts=3</code>, <code>backoff_factor=2.0</code>, <code>initial_interval=0.5</code>, <code>max_interval=128.0</code>, <code>jitter=True</code> — when attached.</td>
+            <td><code>libs/langgraph/langgraph/types.py:406</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>RPMController</code> (preventive throttle via <code>Agent.max_rpm</code>)</td>
+            <td>No retry of the 429 itself; pauses outgoing requests when the per-minute counter is reached.</td>
+            <td><code>lib/crewai/.../utilities/rpm_controller.py:12</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>on_model_error_callback</code> on <code>LlmAgent</code></td>
+            <td>Callback receives the exception; can return an alternative <code>LlmResponse</code> or re-raise. No automatic backoff.</td>
+            <td><code>src/google/adk/agents/llm_agent.py:405</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>RetryMechanismBase</code> (pluggable)</td>
+            <td>Default is <code>PassThroughWithoutRetry</code> — no retry.</td>
+            <td><code>python/semantic_kernel/reliability/{retry_mechanism_base,pass_through_without_retry}.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- 2. OUTAGES -->
+<section id="outages">
+  <div class="container">
+    <h2><span class="num">2</span>Provider outages &amp; 5xx</h2>
+    <p class="lede">
+      Sometimes the provider itself is having a bad day — its servers return <code>500</code>,
+      <code>502</code>, <code>503</code>. Retrying against the same provider may or may not help;
+      what helps reliably is sending the same request to a <i>different</i> provider. This is
+      where multi-model fallback matters: instead of failing the run, the framework walks down a
+      pre-configured list of alternative models until one responds.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        OpenAI is down for the next eleven minutes. Your agent is in the middle of step 4 of a
+        multi-tool task. With a plain retry policy, the framework retries against the same
+        endpoint two or three times — each one fails — and then the run aborts. With
+        multi-model fallback configured, the same exception triggers a switch to your second-choice
+        model (Anthropic, Google, an OSS model on a different provider), the call succeeds, and
+        the run continues. The user never sees the outage.
+      </p>
+      <p>
+        The trade-off is consistency. Different models behave differently — they format JSON
+        slightly differently, follow tool schemas with different fidelity, hallucinate at
+        different rates. A run that started on GPT-4o and finished on Claude Sonnet may produce
+        a slightly different answer than one that ran end-to-end on either model. The fallback
+        is a reliability mechanism, not an equivalence guarantee.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Multi-provider fallback</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>v1 <code>ModelFallbackMiddleware(first_model, *additional_models)</code> — receives a list of alternative models; iterates on exception until success or list exhausted.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/model_fallback.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>No first-class fallback. <code>RetryPolicy</code> targets the same node; switching models requires a custom node.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>Per-agent <code>llm</code> attribute is bound at agent construction; no built-in switch on failure.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>on_model_error_callback</code> can return an <code>LlmResponse</code> from any source — including a different provider — but the routing logic is in the user's callback.</td>
+            <td><code>src/google/adk/agents/llm_agent.py:405</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Multiple chat services can be registered with the kernel and selected by service ID; no built-in switch-on-failure.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 3. AUTH -->
+<section id="auth">
+  <div class="container">
+    <h2><span class="num">3</span>API-key expiration &amp; auth rotation</h2>
+    <p class="lede">
+      Most security teams require API keys to be rotated regularly — every 30, 60, or 90 days.
+      When a key expires, the next request returns <code>HTTP 401</code>. To the agent loop this
+      looks like a generic exception from the model client, indistinguishable from a transient
+      network error. There's no provider convention that says "this is auth, refresh your
+      credentials" — the agent just sees a failed call.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        It's 9:00 AM on a Monday. Your platform team rotated the OpenAI key over the weekend, but
+        the secrets-manager refresh hasn't propagated to all your agent pods yet. The first
+        request from a stale pod gets a 401. With no auth-aware handling, the framework's retry
+        policy kicks in and retries the same request with the same expired key — three times,
+        with backoff — and finally raises. The user gets an error; the on-call engineer gets a
+        page. With explicit auth-rotation logic (a credential refresh hook in front of the model
+        client), the 401 triggers a fetch of the new key and the retry succeeds silently.
+      </p>
+      <p>
+        None of the five frameworks ships a dedicated handler for this. The 401 is treated as
+        whatever exception the underlying LLM client raises and flows through the same retry or
+        error-callback paths as any other transient error. Credential refresh is implemented one
+        layer below the framework — in the model client wrapper or the platform's secrets layer.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- 4. MODERATION -->
+<section id="moderation">
+  <div class="container">
+    <h2><span class="num">4</span>Content-moderation refusals</h2>
+    <p class="lede">
+      When a provider's safety system blocks a request, the API call doesn't fail in the
+      programmatic sense — you get back a perfectly valid response. The model just says "I can't
+      help with that" instead of doing the task. Because nothing throws, the agent loop continues
+      as if everything succeeded. Detecting a refusal means inspecting the model's response
+      <i>after</i> it returns, before it propagates as the agent's answer.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user asks your customer-service agent for help with a billing dispute. The agent calls
+        a "lookup_account" tool, gets back the customer's record, and on the next model call the
+        provider's safety filter triggers — perhaps the customer's last name resembles a
+        sanctions-list entry. The model returns: "I'm not able to assist with this request." The
+        agent loop sees a successful response, doesn't recognise it as a refusal, and forwards
+        the apology to the user as the final answer. The user concludes the bot is broken.
+      </p>
+      <p>
+        Catching this requires a post-response hook that reads the actual text and either
+        substitutes a useful fallback message, escalates to a human, or retries with a different
+        prompt. Every framework provides such a hook — a middleware in LangChain v1, a node in
+        LangGraph, a guardrail in CrewAI, an <code>after_model_callback</code> in ADK, a filter in
+        SK — but the detection logic itself (refusal-classifier, regex, or LLM judge) is
+        developer-supplied.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Post-LLM hook</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>v1 middleware — <code>wrap_model_call</code> override on an <code>AgentMiddleware</code> sees the model's response object before it's used.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/types.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>A node placed after the agent node sees the last <code>AIMessage</code>; conditional edges can route on its content.</td>
+            <td><code>libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>Task.guardrail</code> / <code>Task.guardrails</code> — callable validators run on each task's output before it propagates; failure causes re-execution.</td>
+            <td><code>lib/crewai/.../task.py:244, 255</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>after_model_callback</code> on <code>LlmAgent</code> — receives the <code>LlmResponse</code>, can return an alternative response.</td>
+            <td><code>src/google/adk/agents/llm_agent.py:391</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Auto-function-invocation filter sees the model's <code>function_call_content</code>; for a refusal (no function call) the filter chain doesn't fire.</td>
+            <td><code>python/semantic_kernel/filters/auto_function_invocation/auto_function_invocation_context.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 5. STREAMING -->
+<section id="streaming">
+  <div class="container">
+    <h2><span class="num">5</span>Streaming disconnects</h2>
+    <p class="lede">
+      Streaming responses are how chat UIs feel responsive — tokens arrive one at a time over a
+      long-lived HTTP connection. That connection can drop midway: a load-balancer timeout, a
+      transient network blip, a provider-side hiccup. When that happens you have most of an
+      answer and no way to ask the model to "continue from where you left off" without losing
+      context. Recovery means re-invoking the model with the partial output already in scope.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your agent is generating a 600-word summary as a streaming response. After 350 words the
+        connection drops. With no resumption support, the framework raises an exception and the
+        user sees a half-finished answer with an error overlay. With resumption support, the
+        framework reconnects to the model — typically using a session handle the provider issued
+        with the original request — and the model picks up where the stream cut off. The user
+        sees a brief stutter and then the rest of the answer.
+      </p>
+      <p>
+        The hard part is that resumption is a <i>provider-coupled</i> capability: the model has
+        to support a session handle, and the framework has to know how to use it. Most providers
+        don't expose this; Google's Live API does. Of the five frameworks, only ADK ships a
+        reconnect loop wired to that handle (<code>BaseLlmFlow.run_live</code> with
+        <code>session_resumption_handle</code>). For everyone else, a streaming disconnect raises
+        and recovery is the caller's problem.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain</td>
+            <td>No native resumption. The exception propagates to the caller.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>Checkpointer captures messages already received as state; resumption replays from the last checkpoint, the model regenerates the truncated message.</td>
+            <td><code>libs/langgraph/langgraph/checkpoint/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>No native resumption. <code>step_callback</code> sees partial output as it arrives.</td>
+            <td><code>lib/crewai/.../agent/core.py</code> · <code>step_callback</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>BaseLlmFlow.run_live</code> implements automatic reconnect using <code>session_resumption_handle</code>: on disconnect the loop increments an <code>attempt</code> counter and reconnects with the saved handle.</td>
+            <td><code>src/google/adk/flows/llm_flows/base_llm_flow.py:475–517</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Streaming is exposed via <code>invoke_stream</code>; disconnects raise and the caller decides how to recover.</td>
+            <td><code>python/semantic_kernel/agents/chat_completion/chat_completion_agent.py</code> · <code>invoke_stream</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 6. TRUNCATION -->
+<section id="truncation">
+  <div class="container">
+    <h2><span class="num">6</span>Output truncation</h2>
+    <p class="lede">
+      Every model call has a maximum output length — the <code>max_tokens</code> setting plus
+      whatever ceiling the model itself imposes. When the model hits that ceiling mid-sentence,
+      it stops. The response is technically complete (no exception, no error), but the content
+      is half-finished. Providers signal this by setting <code>finish_reason="length"</code> on
+      the response — but the agent loop has to actually look at that field to notice.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user asks your agent to draft an email. The model generates 4,096 tokens — exactly the
+        configured ceiling — and the response cuts off in the middle of the closing paragraph.
+        The agent loop sees a successful response and forwards the half-email to the user. The
+        user has no idea the model wanted to keep going; they just see a weird, incomplete
+        message and assume the agent broke.
+      </p>
+      <p>
+        Detecting this is one line of code: check whether <code>finish_reason</code> equals
+        <code>"length"</code>. Acting on it is harder. The "right" recovery is to issue a
+        continuation call where the prompt now includes the partial output and asks the model
+        to keep going — but the agent loop doesn't do this for you. Every framework surfaces
+        <code>finish_reason</code> on its response object; none of them auto-continues.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Where finish_reason is exposed</th></tr></thead>
+        <tbody>
+          <tr><td class="row-hd">LangChain</td><td>On <code>AIMessage.response_metadata</code>; not acted on by the agent loop.</td></tr>
+          <tr><td class="row-hd">LangGraph</td><td>Same — flows through state metadata; no built-in handler.</td></tr>
+          <tr><td class="row-hd">CrewAI</td><td>Not surfaced in the standard executor flow.</td></tr>
+          <tr><td class="row-hd">Google ADK</td><td>Available on <code>LlmResponse</code>; visible in <code>after_model_callback</code>.</td></tr>
+          <tr><td class="row-hd">Semantic Kernel</td><td>Available on <code>FunctionResult.metadata</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Concrete observations from the source on what each framework exposes for provider failures.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">FALLBACK</span>
+        <h4>1 · Multi-model fallback ships in LangChain v1 only</h4>
+        <p>
+          <code>ModelFallbackMiddleware</code> takes <code>(first_model, *additional_models)</code>
+          and walks the list on exception. The other four frameworks expose hooks where a custom
+          callback could route to a different model, but no first-class fallback class is shipped.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RETRY DEFAULTS</span>
+        <h4>2 · Different baselines per framework</h4>
+        <p>
+          LangGraph <code>RetryPolicy</code>: <code>max_attempts=3</code>, <code>backoff_factor=2.0</code>,
+          <code>jitter=True</code>. LangChain v1 <code>ModelRetryMiddleware</code>: opt-in, no
+          attempt cap by default. SK reliability: <code>PassThroughWithoutRetry</code>. ADK: per-callback,
+          no automatic backoff. CrewAI: <code>RPMController</code> throttles outbound rather than retries.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RESUMPTION</span>
+        <h4>3 · Streaming resumption is ADK-only</h4>
+        <p>
+          <code>BaseLlmFlow.run_live</code> at <code>base_llm_flow.py:475–517</code> reconnects using a
+          <code>session_resumption_handle</code> and an <code>attempt</code> counter. No equivalent
+          ships in LangChain, LangGraph, CrewAI, or Semantic Kernel — disconnects raise and recovery
+          is the caller's responsibility.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">REFUSALS</span>
+        <h4>4 · Refusals reach a hook in every framework</h4>
+        <p>
+          A content-moderation refusal is a successful API response. Each framework exposes a
+          post-LLM hook where the response can be inspected: LangChain v1 middleware
+          <code>wrap_model_call</code>, LangGraph post-agent node, CrewAI <code>Task.guardrail</code>,
+          ADK <code>after_model_callback</code>, SK auto-function-invocation filter.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">AUTH</span>
+        <h4>5 · No framework ships auth-rotation handling</h4>
+        <p>
+          A 401 from the provider surfaces as whatever exception the underlying LLM client raises
+          and is routed through the same retry / error-callback paths as any other transient error.
+          No dedicated mechanism for credential rotation appears in any of the five repos.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">FINISH_REASON</span>
+        <h4>6 · finish_reason is exposed but not acted on</h4>
+        <p>
+          Every framework surfaces <code>finish_reason="length"</code> on its response object
+          (<code>AIMessage.response_metadata</code> in LangChain/LangGraph, <code>LlmResponse</code>
+          in ADK, <code>FunctionResult.metadata</code> in SK). None of the agent loops continues
+          generation automatically when truncation is detected.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="agent-errors-index.html">← Back to index</a> ·
+    Previous: <a href="agent-errors.html">Chapter 1 · In-loop</a> ·
+    Next: <a href="agent-errors-multi-agent.html">Chapter 3 · Multi-agent →</a>
+  </div>
+</footer>
+
+</body>
+</html>

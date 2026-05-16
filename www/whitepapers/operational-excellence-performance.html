@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 2 · Performance — Operational Excellence in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #f59e0b;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #3a2509; border-color: var(--ch); color: #fde68a; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #fde68a 60%, #f59e0b 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #3a2509; border: 1px solid var(--ch); color: #fde68a; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #3a2509; color: #fde68a; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a class="active" href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 2 of 5 · Operational Excellence</div>
+    <h1>Performance</h1>
+    <p class="subtitle">
+      An agent loop that takes 8 seconds to answer a question feels broken even when it's
+      working — users tab away before the response finishes. Every framework gives you the same
+      basic tools to make agents feel fast: stream tokens as they arrive, cache repeat answers,
+      run tool calls in parallel, batch many calls together, and pick the right concurrency
+      model for your runtime. What differs is which of these ship out of the box and which you
+      have to bolt on yourself. This chapter walks through each lever in plain language and
+      compares how the ten frameworks expose them.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#streaming">Streaming</a></li>
+        <li><a href="#caching">Caching</a></li>
+        <li><a href="#parallel">Parallel tool execution</a></li>
+        <li><a href="#concurrency">Concurrency model</a></li>
+        <li><a href="#batching">Batching</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- STREAMING -->
+<section id="streaming">
+  <div class="container">
+    <h2><span class="num">1</span>Streaming</h2>
+    <p class="lede">
+      Streaming is the difference between "stare at a spinner for 6 seconds" and "watch the
+      answer appear word by word." All ten frameworks support streaming in some form — but the
+      API shapes vary widely, and getting tokens to actually flow over HTTP / Server-Sent Events
+      / WebSockets to a browser is on you. None of the ten frameworks ships built-in HTTP
+      streaming transport.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user types a question into your chat UI. Without streaming, the request opens, the
+        server holds the connection for 6 seconds while the model generates a 600-token answer,
+        then the entire answer arrives at once. The user has stared at a loading dot the whole
+        time. With streaming, the first token reaches the browser ~200 ms after the model
+        starts, and the user sees the answer appear progressively while later tokens are still
+        being generated. The total time hasn't changed; the perceived time has dropped to
+        almost nothing.
+      </p>
+      <p>
+        Frameworks differ on three things: (1) <b>what the API looks like</b> in your code
+        (async generator, callback, IAsyncEnumerable, Go channel, Tokio stream), (2)
+        <b>what's available to stream</b> — just text tokens, or tool-call deltas and reasoning
+        steps as well, and (3) <b>what you have to build for HTTP streaming</b> — every
+        framework expects you to wire up SSE / WebSockets / chunked transfer yourself.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>API shape</th><th>What's available to stream</th><th>HTTP wiring</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Async iterator via <code>astream</code>; sync via <code>stream</code>.</td>
+            <td>Text tokens, tool-call deltas, intermediate steps.</td>
+            <td>Wire SSE/chunked HTTP yourself, or use LangServe.</td>
+            <td><code>core/runnables/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Iterator of <code>StreamPart</code>; mode flags for <code>values</code> / <code>updates</code> / <code>messages</code>.</td>
+            <td>Node updates, message tokens, value snapshots — pick what you want.</td>
+            <td>Wire it yourself; LangGraph dev server includes an SSE wrapper.</td>
+            <td><code>pregel/_messages.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Event handlers via <code>step_callback</code>; async iterator on agent calls.</td>
+            <td>Step events, agent thoughts, tool results.</td>
+            <td>Wire it yourself.</td>
+            <td><code>agent/core.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Async generator from <code>run_async</code>.</td>
+            <td>Tokens, tool calls, function responses, agent transfer events.</td>
+            <td>Wire it yourself; <code>adk web</code> includes an HTTP server with built-in streaming.</td>
+            <td><code>agents/base_agent.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Async iterator via <code>invoke_stream</code> on agent / chat completion.</td>
+            <td>Tokens, function-call deltas.</td>
+            <td>Wire it yourself.</td>
+            <td><code>agents/chat_completion/chat_completion_agent.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Async iterator via Vercel AI SDK primitives.</td>
+            <td>Tokens, tool-call deltas, custom events from workflows.</td>
+            <td>Vercel AI SDK ships SSE handlers ready to drop into Next.js / edge routes.</td>
+            <td><code>core/src/agent/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td><code>RunStreamingAsync</code> returning <code>IAsyncEnumerable&lt;AgentResponseUpdate&gt;</code>.</td>
+            <td>Token deltas, tool-call updates, response status.</td>
+            <td>Wire SSE/WebSockets via ASP.NET Core; <code>AddA2AServer</code> handles A2A streaming protocol.</td>
+            <td><code>Microsoft.Agents.AI.Abstractions/AIAgent.cs</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Handler interface (<code>onPartialResponse</code>, <code>onCompleteResponse</code>) — push-based, not pull.</td>
+            <td>Partial response strings, tool-execution events.</td>
+            <td>Bridge to your reactive stack (Spring WebFlux, Quarkus Mutiny) yourself.</td>
+            <td><code>StreamingChatLanguageModel.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td><code>ModelStreamCallback</code> — a callback function passed alongside the request; no Go channel exposed by default.</td>
+            <td>Token chunks (<code>ModelResponseChunk</code>), tool-call updates.</td>
+            <td>Genkit's HTTP handler ships SSE; or wire your own with the callback.</td>
+            <td><code>go/ai/generate.go:71</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Tokio <code>Stream</code> via <code>StreamingPrompt</code> / <code>StreamingChat</code> traits.</td>
+            <td>Text tokens, reasoning content, tool calls.</td>
+            <td>Wire SSE on top with <code>axum</code> or <code>actix-web</code>.</td>
+            <td><code>crates/rig-core/src/streaming.rs</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        All ten frameworks support streaming, so the practical question is how much glue you
+        have to write between the framework's stream and the user's browser. Mastra is the
+        standout — its Vercel AI SDK foundation ships SSE handlers tuned for Next.js / edge
+        deployment, so you can ship a streaming chat UI in a couple of lines. ADK and Genkit Go
+        give you ready-made HTTP servers with streaming built in. Everyone else expects you to
+        write the HTTP transport yourself, which is straightforward but adds a layer to test.
+      </p>
+      <p>
+        On API shape, the pull-based async iterator (Python / TypeScript / Rust) is the
+        easiest to reason about — you write a <code>for await</code> / <code>while let
+        Some(chunk)</code> loop and you're done. LangChain4j's push-based handler interface is
+        the outlier — it works, but reactive-stream conversions are needed to plug into the
+        rest of the JVM ecosystem.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CACHING -->
+<section id="caching">
+  <div class="container">
+    <h2><span class="num">2</span>Caching</h2>
+    <p class="lede">
+      Two users ask "what's our return policy?" within a minute. With response caching, the
+      second call hits an in-memory or Redis cache and returns in 5 ms; without it, the model
+      runs again and the user waits 1.5 seconds. Only three of the ten frameworks ship a
+      response-caching primitive in the box. Everyone else expects you to put a cache in front
+      of the model client yourself.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        At scale, a meaningful percentage of agent traffic is repeat or near-repeat requests —
+        common questions, repeat document lookups, identical summarisation prompts. A
+        well-placed response cache can drop the answer for those down to milliseconds and shave
+        a real percentage off the model bill at the same time. The trade-off is staleness: a
+        cached answer might be wrong if the underlying data has changed.
+      </p>
+      <p>
+        Two layers worth distinguishing. <b>Exact-match cache</b> — keyed by a hash of the
+        prompt, returns the previous response if the prompt is byte-identical. Cheap and safe;
+        only catches true repeats. <b>Semantic cache</b> — keyed by an embedding, returns the
+        previous response if the new prompt is similar enough. Catches paraphrases too, but
+        you have to tune the similarity threshold to avoid wrong answers.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Built-in cache?</th><th>Backends shipped</th><th>For other backends</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Yes — <code>BaseCache</code> abstraction with <code>set_llm_cache()</code> activator.</td>
+            <td>In-memory, SQLite, Redis, Cassandra, MongoDB, Upstash, Astra DB, semantic (embedding-based).</td>
+            <td>Implement <code>BaseCache</code> for any custom store.</td>
+            <td><code>core/langchain_core/caches.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Yes — <code>CachePolicy</code> on individual nodes; reuses LangChain backends.</td>
+            <td>Same as LangChain, applied per node.</td>
+            <td>Implement <code>BaseCache</code>.</td>
+            <td><code>pregel/_runner.py</code> (<code>cache_policy: CachePolicy</code>)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Tool-level only — no agent-level response cache.</td>
+            <td>—</td>
+            <td>Put a cache layer in front of your LLM client.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>No agent-level cache — auth tokens have their own cache.</td>
+            <td>—</td>
+            <td>Put a cache layer in front of your model client.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>No built-in cache.</td>
+            <td>—</td>
+            <td>Use Azure-side prompt caching, or wrap the chat-completion service.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Yes — abstract <code>MastraServerCache</code> with concrete in-memory + Redis + Upstash backends.</td>
+            <td><code>InMemoryServerCache</code> (uses <code>@isaacs/ttlcache</code>) in core; Redis + Upstash backends ship as separate <code>stores/</code> packages.</td>
+            <td>Extend <code>MastraServerCache</code> for any other store.</td>
+            <td><code>packages/core/src/cache/base.ts</code> · <code>stores/redis/src/cache.ts</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>No agent-level cache (MCP client maintains its own dict).</td>
+            <td>—</td>
+            <td>Wire <code>IDistributedCache</code> / <code>IMemoryCache</code> in front of <code>IChatClient</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>No response cache (thread pools used elsewhere).</td>
+            <td>—</td>
+            <td>Wrap the <code>ChatLanguageModel</code>, or use a Spring/Quarkus cache layer in front.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>No core cache; provider plugins may cache.</td>
+            <td>—</td>
+            <td>Implement a flow wrapper that consults a cache before delegating.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No built-in cache.</td>
+            <td>—</td>
+            <td>Wrap the model trait yourself, or use a crate like <code>moka</code>.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        LangChain ships the most complete cache story — <code>BaseCache</code> with backends
+        for nearly every store you'd consider, plus a separate semantic-cache implementation.
+        LangGraph layers a per-node cache policy on top of the same backends. Mastra ships a
+        TTL primitive aimed at TS / edge deployment. Everyone else delegates: you put your
+        favourite cache (Redis with a hash-of-prompt key, Azure prompt caching, your edge
+        runtime's KV store) in front of the model client and the agent framework never knows
+        the difference.
+      </p>
+      <p>
+        The "delegate to your cache" pattern is fine in production but it costs you the
+        ability to express cache rules at the agent level — e.g. "cache this tool response for
+        5 minutes but not this other one." The frameworks that ship a cache primitive let you
+        express that without leaving the framework.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- PARALLEL TOOL EXECUTION -->
+<section id="parallel">
+  <div class="container">
+    <h2><span class="num">3</span>Parallel tool execution</h2>
+    <p class="lede">
+      Modern models can return multiple tool calls in a single response — "search for X, look
+      up Y, and check Z." Each call is independent. If your framework runs them serially, the
+      total time is the sum; if it runs them in parallel, the total time is the slowest one.
+      For multi-tool agents this is often the biggest single performance lever — and most
+      frameworks default to serial.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A research agent gets asked to compare three vendors. The model responds with three
+        tool calls at once: <code>search("Vendor A pricing")</code>, <code>search("Vendor B
+        pricing")</code>, <code>search("Vendor C pricing")</code>. Each search takes ~1.5
+        seconds. With serial execution, the next model call doesn't fire for 4.5 seconds; with
+        parallel execution, all three searches run together and the next model call fires
+        after 1.5 seconds. Across the rest of the agent loop the user sees a 3-second
+        improvement on every turn.
+      </p>
+      <p>
+        Parallel execution requires both <i>concurrency</i> (the runtime can issue overlapping
+        I/O) and <i>orchestration</i> (the framework knows that multiple tool calls in one
+        response are independent and can be fanned out). All ten frameworks have the
+        concurrency; only some default to fanning out. The rest leave it to you to write the
+        parallel orchestration with whatever async / threading primitive your runtime exposes.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Default behaviour</th><th>How to override</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Parallel on the async path — classic <code>AgentExecutor</code> uses <code>asyncio.gather</code> over <code>tool.arun()</code> calls.</td>
+            <td>Already on by default for async agents; sync agents iterate serially.</td>
+            <td><code>langchain_classic/agents/agent.py:1510</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Parallel — the prebuilt <code>ToolNode</code> calls <code>await asyncio.gather(*coros)</code> over the model's tool-call list.</td>
+            <td>Already on by default; control via graph topology.</td>
+            <td><code>libs/prebuilt/langgraph/prebuilt/tool_node.py:858</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Serial — tool calls execute one after the other.</td>
+            <td>Wrap with <code>asyncio.gather</code> in a custom agent step.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Concurrency-enabled but explicit — you fan out via <code>asyncio.gather</code> in your flow.</td>
+            <td>Spawn parallel <code>run_async</code> tasks yourself.</td>
+            <td><code>flows/llm_flows/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Serial by default in auto-function-invocation.</td>
+            <td>Issue <code>asyncio.gather</code> manually around independent calls.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Concurrency-enabled — tool calls run in parallel when wrapped in <code>Promise.all</code> within a workflow step.</td>
+            <td>Workflow steps make parallel execution explicit.</td>
+            <td><code>packages/core/src/workflows/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Serial by default.</td>
+            <td>Use <code>Task.WhenAll</code> in your tool wrapper, or chain via the workflow framework.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Parallel via <code>ExecutorService</code> when configured — the core ships <code>VirtualThreadUtils</code> + <code>DefaultExecutorProvider</code> aimed at Java 21+ virtual threads.</td>
+            <td>Configure the executor; on JDK 21+ virtual threads make this near-free.</td>
+            <td><code>internal/VirtualThreadUtils.java</code> · <code>DefaultExecutorProvider.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Concurrency-enabled — fan out with goroutines in your flow.</td>
+            <td>Spawn goroutines around independent calls; use <code>sync.WaitGroup</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Concurrency-enabled — fan out with Tokio tasks.</td>
+            <td>Use <code>tokio::join!</code> or <code>FuturesUnordered</code>.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Three frameworks fan out tool calls automatically: LangChain (classic <code>AgentExecutor</code>
+        on the async path), LangGraph (prebuilt <code>ToolNode</code>), and LangChain4j
+        (configurable <code>ExecutorService</code>; effectively free on Java 21+ with virtual
+        threads). Everywhere else, the language runtime <i>can</i> do it but the framework leaves
+        the orchestration to you. For multi-tool agents that's a meaningful piece of glue you
+        have to write — and easy to forget. If parallel-tool dispatch is critical to your
+        latency budget, the LangChain family and LangChain4j get you there with the least effort.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CONCURRENCY MODEL -->
+<section id="concurrency">
+  <div class="container">
+    <h2><span class="num">4</span>Concurrency model</h2>
+    <p class="lede">
+      Whether you call an agent with <code>await</code>, with a blocking <code>.run()</code>,
+      with a callback, or with a goroutine determines how easily you can scale it up — and how
+      well it fits your existing application. Most frameworks pick one model and stick to it;
+      a few support both sync and async surfaces.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        You're building a chat backend that handles 200 concurrent users. With an async-first
+        framework on Python's <code>asyncio</code>, Node.js's event loop, .NET's <code>Task</code>,
+        Go's goroutines, or Rust's Tokio, those 200 users share a small pool of OS threads —
+        each agent call yields control while waiting for the model, and the runtime
+        multiplexes. With a sync-first framework, each user occupies a thread for the duration
+        of their request; you scale by adding threads, which costs memory.
+      </p>
+      <p>
+        The async-vs-sync distinction matters less than it used to thanks to runtime advances
+        — Java 21+ virtual threads make sync code on the JVM behave like async without code
+        changes. But the API shape still matters for ergonomics: an async API integrates
+        cleanly with FastAPI, Next.js, ASP.NET Core, Tokio-based servers; a sync API requires
+        a thread pool to bridge.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>How you call an agent</th><th>Best fit for</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Both — sync <code>invoke()</code> and async <code>ainvoke()</code> on every Runnable.</td>
+            <td>Either FastAPI / async stacks or scripts / batch jobs.</td>
+            <td><code>core/runnables/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Both — same Runnable surface as LangChain.</td>
+            <td>Async servers; long-running stateful runs.</td>
+            <td><code>core/runnables/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Both — <code>kickoff()</code> is the sync entry point at <code>crew.py:899</code>; <code>kickoff_async()</code> at <code>:1028</code>.</td>
+            <td>Long-running multi-agent flows; less ideal for high-concurrency request servers.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Async-first — <code>run_async</code> is the primary entry point.</td>
+            <td>FastAPI / Cloud Run agents; high-concurrency request servers.</td>
+            <td><code>agents/base_agent.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Async-first — agents expose <code>async def get_response</code>.</td>
+            <td>FastAPI / async stacks.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Async-first — Promise-based, single-threaded JS event loop.</td>
+            <td>Next.js, Vercel, Cloudflare Workers, Deno Deploy.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Async-first — Task-based <code>async</code>/<code>await</code>.</td>
+            <td>ASP.NET Core, Azure Container Apps, Azure Functions.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Sync-first — blocking calls; reactive bridges via Spring WebFlux / Quarkus Mutiny.</td>
+            <td>Spring Boot apps; Quarkus + virtual threads on Java 21+.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Goroutines — flows take <code>context.Context</code> and run inside a goroutine.</td>
+            <td>Cloud Run, Cloud Functions, native binary servers.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Async — Tokio <code>async</code>/<code>await</code>.</td>
+            <td>Axum / actix-web, Lambda custom runtime, native binary servers.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Eight of ten frameworks are async-first or async-only. LangChain4j is the lone
+        sync-first holdout — and on Java 21+ that's largely a non-issue thanks to virtual
+        threads, which let blocking code scale like async without rewrites. LangChain (and by
+        extension LangGraph) is the only Python framework that exposes both sync and async
+        surfaces equally — useful when an existing sync codebase is being incrementally
+        modernised.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- BATCHING -->
+<section id="batching">
+  <div class="container">
+    <h2><span class="num">5</span>Batching</h2>
+    <p class="lede">
+      Sometimes you want to issue 100 model calls at once — to summarise 100 documents, score
+      100 candidate answers, or embed 100 queries. A batch API lets you express this as a
+      single call instead of writing your own concurrency loop. Only LangChain and LangGraph
+      ship a first-class batch surface; everywhere else you write the loop yourself.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        You have 1,000 customer reviews to classify. With a batch API, you call <code>batch(reviews)</code>
+        and the framework dispatches them with controlled concurrency (configurable max
+        in-flight) and returns the results in order. With no batch API, you write a loop that
+        spawns 1,000 tasks, manages a semaphore to bound concurrency, handles partial
+        failures, and reassembles results — which works but is repeat infrastructure work
+        every team writes from scratch.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Batch API?</th><th>What it gives you</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Yes — <code>batch()</code> / <code>abatch()</code> on every Runnable, plus <code>batch_as_completed()</code> for streaming results.</td>
+            <td>Configurable max concurrency, returns results in input order.</td>
+            <td><code>core/runnables/base.py</code> (<code>def batch</code> at L872)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Yes — same Runnable surface.</td>
+            <td>Same as LangChain.</td>
+            <td><code>core/runnables/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>No agent-level batch.</td>
+            <td>Write the loop with <code>asyncio.gather</code> + a <code>Semaphore</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>No agent-level batch.</td>
+            <td>Spawn parallel <code>run_async</code> tasks yourself.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>No agent-level batch.</td>
+            <td>Use <code>asyncio.gather</code> around independent kernel invocations.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>No first-class batch — workflows handle parallel maps.</td>
+            <td>Use a parallel workflow step or <code>Promise.all</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>No first-class batch.</td>
+            <td><code>Task.WhenAll</code> + <code>SemaphoreSlim</code> for bounded concurrency.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>No first-class batch.</td>
+            <td>Use <code>ExecutorService</code> with virtual threads on JDK 21+.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>No first-class batch.</td>
+            <td>Spawn goroutines + <code>errgroup.Group</code> with <code>SetLimit</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No first-class batch.</td>
+            <td>Use <code>FuturesUnordered</code> or <code>tokio::join!</code>.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Batching lives in only one part of the catalogue: LangChain's Runnable interface and
+        LangGraph's reuse of it. If your workload is "process N items independently and gather
+        results," LangChain saves you a clean piece of concurrency-management work. Every
+        other framework expects you to write the bounded-parallel loop in your host
+        language's idiom — well-trodden territory in each language, but not framework-managed.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on performance surfaces across the ten frameworks.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">STREAMING</span>
+        <h4>1 · Streaming is universal; HTTP transport is not</h4>
+        <p>
+          All ten frameworks expose a streaming API. None ships HTTP/SSE/WebSocket transport
+          out of the box. Mastra (via Vercel AI SDK), Genkit Go, and ADK come closest with
+          built-in HTTP servers that include streaming; everywhere else the wire format is
+          your responsibility.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CACHING</span>
+        <h4>2 · Only three ship a response-cache primitive</h4>
+        <p>
+          LangChain (<code>BaseCache</code> + multiple backends including semantic), LangGraph
+          (<code>CachePolicy</code> per node, reuses LangChain backends), and Mastra (TTL +
+          Redis/Upstash). The other seven expect you to put a cache in front of the model
+          client yourself.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PARALLEL</span>
+        <h4>3 · Auto-parallel tool dispatch is rare</h4>
+        <p>
+          Three frameworks fan out multi-tool responses automatically: LangChain (classic
+          <code>AgentExecutor</code> async path uses <code>asyncio.gather</code>), LangGraph
+          (prebuilt <code>ToolNode</code> at <code>tool_node.py:858</code>), and LangChain4j
+          (via configurable <code>ExecutorService</code>; effectively free on Java 21+ virtual
+          threads). Everyone else needs explicit <code>asyncio.gather</code> /
+          <code>Promise.all</code> / <code>Task.WhenAll</code>.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">ASYNC</span>
+        <h4>4 · Non-blocking concurrency is the default</h4>
+        <p>
+          Five frameworks are async-first: ADK, Semantic Kernel, Mastra, MS Agent Framework,
+          and Rig (Tokio). Two expose both sync and async equally (LangChain, LangGraph). One
+          uses goroutines (Genkit Go). CrewAI ships both <code>kickoff()</code> and
+          <code>kickoff_async()</code>. LangChain4j is the lone sync-first holdout — and on
+          Java 21+ that gap closes via virtual threads.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">BATCH</span>
+        <h4>5 · Batch APIs ship in only LangChain and LangGraph</h4>
+        <p>
+          <code>batch()</code> / <code>abatch()</code> at <code>core/runnables/base.py:872</code>
+          give you bounded-concurrency dispatch with ordered results. Every other framework
+          expects you to write the loop in your host language's idiom (<code>asyncio.gather</code>,
+          <code>Promise.all</code>, <code>Task.WhenAll</code>, <code>errgroup</code>,
+          <code>FuturesUnordered</code>).
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RUNTIME</span>
+        <h4>6 · Language runtime shapes the perf story</h4>
+        <p>
+          Tokio for Rust (Rig), goroutines for Go (Genkit), virtual threads for Java 21+
+          (LangChain4j), single-threaded event loop for TS (Mastra), Task-based async for .NET
+          (MS Agent Framework), <code>asyncio</code> for Python. Concurrency primitives in the
+          host language largely determine your scaling profile; the framework's job is to play
+          nicely with them.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-index.html">← Back to index</a> ·
+    Previous: <a href="operational-excellence-observability.html">Chapter 1 · Observability</a> ·
+    Next: <a href="operational-excellence-deployment.html">Chapter 3 · Deployment →</a>
+  </div>
+</footer>
+
+</body>
+</html>
