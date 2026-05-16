@@ -892,7 +892,7 @@ The orchestration module provides ready-to-use hooks for cross-agent shared memo
 | `ActivityAnnouncementHook` | BeforePlanning | Announces the agent's current activity and injects other agents' signals into `activity_coordination`. |
 | `ActivityCleanupHook` | AfterSynthesis | Marks the agent's activity as completed (removes the transient signal). |
 
-These hooks are ordered: announcement (first) → enrichment → record → extraction → cleanup (last). See [examples/devops-chat-agent/main.go](../../examples/devops-chat-agent/main.go) for wiring via `BuildMemoryHooks`, or construct hooks manually for full control over each option.
+These hooks are ordered: announcement (first) → enrichment → record → extraction → cleanup (last). See [examples/devops-chat-agent/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/main.go) for wiring via `BuildMemoryHooks`, or construct hooks manually for full control over each option.
 
 #### Entity Extraction Defaults
 

@@ -8,7 +8,7 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
 
 > **TruvaG3 Configuration**: For `PromptConfig`, `TypeRules`, `SystemInstructions`, and domain-specific prompt setup, see the [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md).
 >
-> **Architecture**: For TruvaG3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](../../orchestration/ARCHITECTURE.md).
+> **Architecture**: For TruvaG3's prompt builder interfaces and multi-phase planning design, see [orchestration/ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/ARCHITECTURE.md).
 
 ---
 
@@ -1171,7 +1171,7 @@ type PrecedenceEntityExtractor interface {
 }
 ```
 
-The audit record JSON is stable — adding a registry-viewer card that surfaces it is purely additive JS. See the struct definition in [orchestration/precedence_audit.go](../../orchestration/precedence_audit.go).
+The audit record JSON is stable — adding a registry-viewer card that surfaces it is purely additive JS. See the struct definition in [orchestration/precedence_audit.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/precedence_audit.go).
 
 ---
 
@@ -1223,7 +1223,7 @@ The audit record JSON is stable — adding a registry-viewer card that surfaces 
 
 - [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) — `PromptConfig`, `SystemInstructions`, `TypeRules`, domain examples
 - [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md) — Provider configuration, API keys, model aliases
-- [Orchestration Architecture](../../orchestration/ARCHITECTURE.md) — Prompt builder interfaces, multi-phase planning design
+- [Orchestration Architecture](https://github.com/truvaagents/truva-g3/blob/main/orchestration/ARCHITECTURE.md) — Prompt builder interfaces, multi-phase planning design
 
 ---
 

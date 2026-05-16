@@ -5,12 +5,12 @@ Hey there! This guide shows you how to give your TruvaG3 chat agents **multi-tur
 > **Working Examples**
 >
 > Everything in this guide maps to working agents in this repo:
-> - **Travel chat agent**: [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
-> - **DevOps chat agent**: [`examples/devops-chat-agent/`](../../examples/devops-chat-agent)
-> - **Agent with human approval**: [`examples/agent-with-human-approval/`](../../examples/agent-with-human-approval)
+> - **Travel chat agent**: [`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)
+> - **DevOps chat agent**: [`examples/devops-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent)
+> - **Agent with human approval**: [`examples/agent-with-human-approval/`](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-human-approval)
 >
 > The simplest Tier 2 reference wiring lives in:
-> - [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
+> - [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
 
 ---
 
@@ -296,9 +296,9 @@ This is where you:
 
 Look at these examples:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go) — simplest Tier 2 wiring
-- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go) — Tier 2 plus memory and HITL wiring
-- [`examples/agent-with-human-approval/chat_agent.go`](../../examples/agent-with-human-approval/chat_agent.go) — Tier 2 plus human-approval flow
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go) — simplest Tier 2 wiring
+- [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go) — Tier 2 plus memory and HITL wiring
+- [`examples/agent-with-human-approval/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/chat_agent.go) — Tier 2 plus human-approval flow
 
 ### Per-request handling
 
@@ -359,9 +359,9 @@ func (a *YourChatAgent) addConversationHistoryMetadata(
 
 This is what all three reference chat agents do:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
-- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
-- [`examples/agent-with-human-approval/chat_agent.go`](../../examples/agent-with-human-approval/chat_agent.go)
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
+- [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go)
+- [`examples/agent-with-human-approval/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/chat_agent.go)
 
 Those examples demonstrate the **right framework entry point**. One nuance: their example session stores still use a bounded sliding window, which is fine for many practical chat deployments but is not the strongest possible Tier 2 contract for very long-lived sessions.
 
@@ -371,7 +371,7 @@ If you only have a pre-formatted history string and cannot provide raw turns yet
 
 If you want a concrete reference, start with:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
 
 It has the cleanest small example of:
 
@@ -441,8 +441,8 @@ This is enough for many chat agents, especially if sessions are not extremely lo
 
 If you want to see this in a real agent constructor, use:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
-- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
+- [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go)
 
 The relative position to remember is:
 
@@ -578,9 +578,9 @@ This is the recommended **Layer 2 reference implementation** because it keeps Ti
 
 For a real production-shaped example, see:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go) for the simplest version
-- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go) for the same pattern in a larger agent
-- [`examples/agent-with-human-approval/chat_agent.go`](../../examples/agent-with-human-approval/chat_agent.go) for the same pattern in a HITL agent
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go) for the simplest version
+- [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go) for the same pattern in a larger agent
+- [`examples/agent-with-human-approval/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/chat_agent.go) for the same pattern in a HITL agent
 
 The relative position to remember is:
 
@@ -985,4 +985,4 @@ No. This feature is specifically for **conversation history**. Large inbound eve
 - [ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) - Pipeline hooks and context engineering patterns
 - [AGENT_DEVELOPMENT_GUIDE.md](../building/AGENT_DEVELOPMENT_GUIDE.md) - Production agent structure and chat-agent patterns
 - [API_REFERENCE.md](../reference/API_REFERENCE.md) - Constructor and interface details
-- [orchestration/ARCHITECTURE.md](../../orchestration/ARCHITECTURE.md) - Framework-side orchestration architecture
+- [orchestration/ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/ARCHITECTURE.md) - Framework-side orchestration architecture

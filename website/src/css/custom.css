@@ -1,0 +1,124 @@
+/**
+ * TruvaG3 docs site theme.
+ * Brand tokens sampled from TruvaG3-Logo.png; see
+ * examples/registry-viewer-app/GLASSMORPHISM_DESIGN.md for context.
+ * Tier 1 only: brand color tokens + two-tone navbar mark.
+ * Heavy theming (glassmorphism cards, blurred backgrounds) is intentionally
+ * NOT applied to docs surfaces — see DOCUMENTATION_STRATEGY.md line 1412.
+ */
+
+:root {
+  /* TruvaG3 brand tokens */
+  --brand-truva:       #8FCBED;  /* icy blue, mid-tone */
+  --brand-truva-light: #DBEEFB;  /* icy blue, highlight */
+  --brand-truva-dark:  #4A8AB8;  /* icy blue, shadow */
+  --brand-g3:          #FFA040;  /* warm amber, mid-tone */
+  --brand-g3-light:    #FFD080;  /* warm amber, highlight */
+  --brand-g3-dark:     #C56710;  /* warm amber, shadow */
+
+  /* Infima primary = darker brand-truva for AA contrast on white. */
+  --ifm-color-primary:         #4A8AB8;
+  --ifm-color-primary-dark:    #3F7AA3;
+  --ifm-color-primary-darker:  #3A739B;
+  --ifm-color-primary-darkest: #305F80;
+  --ifm-color-primary-light:   #5895C0;
+  --ifm-color-primary-lighter: #639DC4;
+  --ifm-color-primary-lightest:#80B0CF;
+
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='dark'] {
+  /* Lighter brand-truva for contrast on dark backgrounds. */
+  --ifm-color-primary:         #8FCBED;
+  --ifm-color-primary-dark:    #75BAE5;
+  --ifm-color-primary-darker:  #69B2E2;
+  --ifm-color-primary-darkest: #4A99D2;
+  --ifm-color-primary-light:   #A9D7F1;
+  --ifm-color-primary-lighter: #B3DBF3;
+  --ifm-color-primary-lightest:#D0E8F8;
+
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+/* -------------------------------------------------------------------------
+ * Two-tone brand mark in the navbar.
+ *
+ * Docusaurus renders the navbar title as <b class="navbar__title">TruvaG3</b>.
+ * We hide the literal text and paint the two-tone via pseudo-elements.
+ *
+ * Property order matters: declare `background` BEFORE `background-clip` and
+ * `-webkit-text-fill-color` — the shorthand resets background-clip otherwise.
+ * See GLASSMORPHISM_DESIGN.md "Gotchas" §1.
+ * ------------------------------------------------------------------------- */
+.navbar__title {
+  /* Hide the literal "TruvaG3" text. */
+  font-size: 0;
+  line-height: 1;
+}
+
+.navbar__title::before,
+.navbar__title::after {
+  font-size: 1.25rem;
+  font-weight: 800;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* Fallback for browsers without background-clip: text. */
+  color: var(--ifm-color-primary);
+}
+
+.navbar__title::before {
+  content: 'Truva';
+  background: linear-gradient(
+    135deg,
+    var(--brand-truva-light),
+    var(--brand-truva-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* Close the gap between "a" and "G". */
+  letter-spacing: -0.04em;
+}
+
+.navbar__title::after {
+  content: 'G3';
+  background: linear-gradient(
+    135deg,
+    var(--brand-g3-light),
+    var(--brand-g3-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* -------------------------------------------------------------------------
+ * Reusable two-tone brand mark classes — for use in the landing hero and
+ * anywhere else outside the navbar. Mirrors examples/registry-viewer-app
+ * and examples/chat-ui usage.
+ * ------------------------------------------------------------------------- */
+.brand-truva {
+  background: linear-gradient(
+    135deg,
+    var(--brand-truva-light),
+    var(--brand-truva-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.04em;
+}
+
+.brand-g3 {
+  background: linear-gradient(
+    135deg,
+    var(--brand-g3-light),
+    var(--brand-g3-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

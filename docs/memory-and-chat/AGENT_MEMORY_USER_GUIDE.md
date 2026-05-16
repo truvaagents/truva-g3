@@ -5,9 +5,9 @@ Hey there! This guide shows you how to give your TruvaG3 agents **shared memory*
 > **Working Example**
 >
 > Everything in this guide comes from a fully working, production-tested implementation:
-> - **Agent**: [`examples/devops-chat-agent/`](../../examples/devops-chat-agent)
-> - **Memory wiring**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go) (search for `NewSharedBackends`)
-> - **Main entry point**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go)
+> - **Agent**: [`examples/devops-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent)
+> - **Memory wiring**: [`examples/devops-chat-agent/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/main.go) (search for `NewSharedBackends`)
+> - **Main entry point**: [`examples/devops-chat-agent/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/main.go)
 >
 > We recommend having the example open alongside this guide.
 
@@ -699,9 +699,9 @@ Session 2: "Plan a trip to Paris"     Session 2: "Plan a trip to Paris"
 > **Working Example**
 >
 > The travel-chat-agent has a fully working user memory implementation:
-> - **Agent**: [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
-> - **Memory wiring**: [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go) (search for `NewUserMemoryBackend`)
-> - **User identity**: [`examples/chat-ui/index.html`](../../examples/chat-ui/index.html) (dialog + `X-User-ID` header)
+> - **Agent**: [`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)
+> - **Memory wiring**: [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go) (search for `NewUserMemoryBackend`)
+> - **User identity**: [`examples/chat-ui/index.html`](https://github.com/truvaagents/truva-g3/blob/main/examples/chat-ui/index.html) (dialog + `X-User-ID` header)
 
 ### How Shared Memory and User Memory Compare
 
@@ -993,12 +993,12 @@ The `<user_profile>` tag must be consumed by the prompt builder. Check the debug
 - **[Limits Cheatsheet — Shared Memory](../reference/LIMITS_CHEATSHEET.md#shared-memory)** — Quick reference for all limits
 - **[Distributed Tracing Guide — LLM Telemetry](../observability/DISTRIBUTED_TRACING_GUIDE.md#15-llm-telemetry-in-orchestration-automatic)** — Span events emitted by memory hooks
 - **[API Reference — Shared Memory Interfaces](../reference/API_REFERENCE.md#shared-memory-interfaces)** — Full interface signatures
-- **[Memory Module Architecture](../../memory/ARCHITECTURE.md)** — Deep dive into storage backends, sharing topology, and design decisions
-- **[`examples/devops-chat-agent/`](../../examples/devops-chat-agent)** — Full working implementation with all phases
-- **[`examples/event-driven-agent/`](../../examples/event-driven-agent)** — Event-driven agent with the same memory wiring
+- **[Memory Module Architecture](https://github.com/truvaagents/truva-g3/blob/main/memory/ARCHITECTURE.md)** — Deep dive into storage backends, sharing topology, and design decisions
+- **[`examples/devops-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent)** — Full working implementation with all phases
+- **[`examples/event-driven-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/event-driven-agent)** — Event-driven agent with the same memory wiring
 
 **User Memory:**
 - **[API Reference — User Memory Interfaces](../reference/API_REFERENCE.md#user-memory-interfaces)** — Interface signatures and convenience constructors
 - **[Environment Variables Guide — User Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration)** — All configurable env vars
 - **[Limits Cheatsheet — User Memory](../reference/LIMITS_CHEATSHEET.md#user-memory)** — Quick reference for all limits
-- **[`examples/travel-chat-agent/`](../../examples/travel-chat-agent)** — Full working implementation with user memory
+- **[`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)** — Full working implementation with user memory

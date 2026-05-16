@@ -1145,7 +1145,7 @@ Each span shows:
 
 ## 11. Required Patterns for Framework-Level Tracing
 
-This section documents the **required patterns** used throughout the TruvaG3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](../../orchestration/orchestrator.go) and [executor.go](../../orchestration/executor.go).
+This section documents the **required patterns** used throughout the TruvaG3 framework for consistent distributed tracing. These patterns are implemented in [orchestrator.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/orchestrator.go) and [executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check
 
@@ -1683,9 +1683,9 @@ In-tree background jobs that follow this pattern: `memory.ReflectionJob` (LLM-dr
 
 | Span Name | Created By | Typical Lifetime | Attributes |
 |-----------|-----------|------------------|------------|
-| `memory.reflection_pass` | `ReflectionJob.RunOnce` ([memory/reflection_job.go](../../memory/reflection_job.go)) — root span covering one entire pass | Tens of seconds to a few minutes per pass, depending on how many entities qualify and how fast the LLM responds | `pass_id`, `domain`, `age_threshold` |
-| `memory.reflection` | `LLMMemoryReflector.Reflect` ([memory/reflector.go](../../memory/reflector.go)) — child span per entity processed in the pass | A few seconds per entity (one LLM call) | `request_id`, `entity_type`, `entity_id` |
-| `memory.sweep_pass` | `MemoryStoreSweeper.runSweepPass` ([core/memory_store.go](../../core/memory_store.go)) — root span covering one eviction-sweep tick. Created only when `WithMemoryStoreSweeperTelemetry` is set; otherwise the sweeper emits metrics + logs without spans | Sub-millisecond to a few milliseconds per pass for typical per-agent caches (~10³ entries) | `sweep_id`, `interval`, `deleted_count`, `duration_ms` |
+| `memory.reflection_pass` | `ReflectionJob.RunOnce` ([memory/reflection_job.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go)) — root span covering one entire pass | Tens of seconds to a few minutes per pass, depending on how many entities qualify and how fast the LLM responds | `pass_id`, `domain`, `age_threshold` |
+| `memory.reflection` | `LLMMemoryReflector.Reflect` ([memory/reflector.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflector.go)) — child span per entity processed in the pass | A few seconds per entity (one LLM call) | `request_id`, `entity_type`, `entity_id` |
+| `memory.sweep_pass` | `MemoryStoreSweeper.runSweepPass` ([core/memory_store.go](https://github.com/truvaagents/truva-g3/blob/main/core/memory_store.go)) — root span covering one eviction-sweep tick. Created only when `WithMemoryStoreSweeperTelemetry` is set; otherwise the sweeper emits metrics + logs without spans | Sub-millisecond to a few milliseconds per pass for typical per-agent caches (~10³ entries) | `sweep_id`, `interval`, `deleted_count`, `duration_ms` |
 
 **Span tree** for a pass that processes 3 entities:
 
@@ -1855,18 +1855,18 @@ For **conversation-history preparation**, the orchestration request trace now in
 ### Zero Developer Configuration Required
 
 This telemetry is **built into the orchestration framework** at:
-- [orchestration/orchestrator.go](../../orchestration/orchestrator.go) - Plan generation, phase loop short-circuit, termination_reason classification
-- [orchestration/micro_resolver.go](../../orchestration/micro_resolver.go) - Parameter resolution
-- [orchestration/synthesizer.go](../../orchestration/synthesizer.go) - Result synthesis, clarification mode
-- [orchestration/tiered_capability_provider.go](../../orchestration/tiered_capability_provider.go) - Tiered tool selection, semantic-empty short-circuit
-- [orchestration/error_analyzer.go](../../orchestration/error_analyzer.go) - Error analysis and recovery
-- [orchestration/contextual_re_resolver.go](../../orchestration/contextual_re_resolver.go) - Semantic retry (Layer 4)
-- [orchestration/structural_trimmer.go](../../orchestration/structural_trimmer.go) - Result trimming analysis
-- [orchestration/executor.go](../../orchestration/executor.go) - Agent input trimming
-- [orchestration/memory_hooks.go](../../orchestration/memory_hooks.go) - Memory enrichment and recording
-- [orchestration/activity_compactor.go](../../orchestration/activity_compactor.go) - Activity compaction (full + incremental)
-- [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) - Event summarization
-- [orchestration/activity_hooks.go](../../orchestration/activity_hooks.go) - Activity coordination signals
+- [orchestration/orchestrator.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/orchestrator.go) - Plan generation, phase loop short-circuit, termination_reason classification
+- [orchestration/micro_resolver.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/micro_resolver.go) - Parameter resolution
+- [orchestration/synthesizer.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/synthesizer.go) - Result synthesis, clarification mode
+- [orchestration/tiered_capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/tiered_capability_provider.go) - Tiered tool selection, semantic-empty short-circuit
+- [orchestration/error_analyzer.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/error_analyzer.go) - Error analysis and recovery
+- [orchestration/contextual_re_resolver.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/contextual_re_resolver.go) - Semantic retry (Layer 4)
+- [orchestration/structural_trimmer.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/structural_trimmer.go) - Result trimming analysis
+- [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) - Agent input trimming
+- [orchestration/memory_hooks.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/memory_hooks.go) - Memory enrichment and recording
+- [orchestration/activity_compactor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/activity_compactor.go) - Activity compaction (full + incremental)
+- [orchestration/event_summarizer.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/event_summarizer.go) - Event summarization
+- [orchestration/activity_hooks.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/activity_hooks.go) - Activity coordination signals
 
 **Developers don't need to add any code** to get LLM visibility. Simply:
 1. Use the orchestration module as documented
@@ -2273,9 +2273,9 @@ Distributed tracing transforms debugging from guesswork into science. Here's wha
 
 ## Related Documentation
 
-- [Telemetry Module README](../../telemetry/README.md) - Metrics and configuration
-- [Core Module README](../../core/README.md) - Framework fundamentals
+- [Telemetry Module README](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md) - Metrics and configuration
+- [Core Module README](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) - Framework fundamentals
 - [API Reference - Tracing Section](../reference/API_REFERENCE.md#distributed-tracing) - API details
-- [Examples](../../examples) - Working code samples
+- [Examples](https://github.com/truvaagents/truva-g3/tree/main/examples) - Working code samples
 
 Happy tracing!

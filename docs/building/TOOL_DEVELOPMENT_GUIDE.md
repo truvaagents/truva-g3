@@ -804,7 +804,7 @@ func (t *YourTool) sendUpstreamError(rw http.ResponseWriter, message string, inf
 > visualization to show failed steps as green/completed.
 >
 > Always use a `sendError()` helper (shown above) or `core.HTTPStatusForCategory()` to set
-> the correct HTTP status code. See [core/tool_error.go](../../core/tool_error.go) for the
+> the correct HTTP status code. See [core/tool_error.go](https://github.com/truvaagents/truva-g3/blob/main/core/tool_error.go) for the
 > category-to-status mapping (e.g., `CategoryServiceError` → 503).
 
 ### Handler Checklist
@@ -1380,7 +1380,7 @@ for the audit. New tools should follow the convention below from the start.)
 |-------|----------|-------------|
 | Pod template `metadata.labels.app` | Canonical K8s identity | `service_name` label in **Loki**, plus `k8s.deployment.name` and related K8s resource attributes |
 | `core.WithName("…")` functional option in `main.go` (or `TRUVAG3_AGENT_NAME` env var, if used) | Framework's `cfg.Name` | The `service` field in the JSON log body; service registration name in Redis discovery |
-| `TRUVAG3_TELEMETRY_SERVICE_NAME` / `OTEL_SERVICE_NAME` env var (falls back to `cfg.Name` if unset — see [core/config.go:831-836](../../core/config.go#L831-L836)) | `cfg.Telemetry.ServiceName` | `service.name` resource on **Jaeger** traces and **Prometheus** metrics (SDK-exported) |
+| `TRUVAG3_TELEMETRY_SERVICE_NAME` / `OTEL_SERVICE_NAME` env var (falls back to `cfg.Name` if unset — see [core/config.go:831-836](https://github.com/truvaagents/truva-g3/blob/main/core/config.go#L831-L836)) | `cfg.Telemetry.ServiceName` | `service.name` resource on **Jaeger** traces and **Prometheus** metrics (SDK-exported) |
 
 All three **must equal the same string** (typically the tool name). If they drift, you
 get split-brain observability: Loki labels one name, Jaeger another, the log body says
@@ -1397,7 +1397,7 @@ var, it should also say `your-tool`. The log body `service` field is driven by
 > in its log body. Omitting the label lands your logs under `unknown_service`. Misaligning
 > the label against `OTEL_SERVICE_NAME` means a Loki filter by `service_name` and a
 > Jaeger filter by `service.name` won't return the same set of records. See
-> [examples/k8-deployment/OBSERVABILITY.md](../../examples/k8-deployment/OBSERVABILITY.md)
+> [examples/k8-deployment/OBSERVABILITY.md](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/OBSERVABILITY.md)
 > for the pipeline details.
 
 ##### Recommended: let the framework catch drift at startup
@@ -1440,16 +1440,16 @@ cheap insurance against silent drift.
 
 ### setup.sh
 
-A comprehensive setup script should support the full development lifecycle. See [examples/stock-market-tool/setup.sh](../../examples/stock-market-tool/setup.sh) for a complete reference implementation (~500 lines).
+A comprehensive setup script should support the full development lifecycle. See [examples/stock-market-tool/setup.sh](https://github.com/truvaagents/truva-g3/blob/main/examples/stock-market-tool/setup.sh) for a complete reference implementation (~500 lines).
 
-**Shared Library:** All setup scripts source [`examples/k8-deployment/setup-env-lib.sh`](../../examples/k8-deployment/setup-env-lib.sh) — the single source of truth for deployment helpers. Source it from your tool's `setup.sh`:
+**Shared Library:** All setup scripts source [`examples/k8-deployment/setup-env-lib.sh`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/setup-env-lib.sh) — the single source of truth for deployment helpers. Source it from your tool's `setup.sh`:
 
 ```bash
 EXAMPLES_DIR="$(dirname "$SCRIPT_DIR")"
 source "$EXAMPLES_DIR/k8-deployment/setup-env-lib.sh"
 ```
 
-The library exposes these helpers (read [setup-env-lib.sh](../../examples/k8-deployment/setup-env-lib.sh) for full argument docs):
+The library exposes these helpers (read [setup-env-lib.sh](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/setup-env-lib.sh) for full argument docs):
 
 **Cluster lifecycle:**
 
@@ -1600,7 +1600,7 @@ case "${1:-help}" in
 esac
 ```
 
-> **Note:** For a full-featured setup script with cluster creation, infrastructure setup, and comprehensive help, copy and adapt from [examples/stock-market-tool/setup.sh](../../examples/stock-market-tool/setup.sh).
+> **Note:** For a full-featured setup script with cluster creation, infrastructure setup, and comprehensive help, copy and adapt from [examples/stock-market-tool/setup.sh](https://github.com/truvaagents/truva-g3/blob/main/examples/stock-market-tool/setup.sh).
 
 ---
 
@@ -1691,7 +1691,7 @@ curl http://localhost:8081/api/registry
 
 1. **Two error helpers, two use cases**: Every tool should have both `sendError` and `sendUpstreamError`:
    - `sendError(rw, message, status, code)` — for **local** errors where you control the status code. Use for: decode failures, missing/invalid fields, Go interface errors (Redis client failures, framework interface errors).
-   - `sendUpstreamError(rw, message, info)` — **only** for errors from outbound **HTTP API** calls. Uses `core.ClassifyUpstreamError(err)` which extracts the upstream HTTP status via regex `(?:status|error|code)[:\s]+(\d{3})` (see [core/tool_error.go](../../core/tool_error.go)). If the regex doesn't match, defaults to 502/SERVICE_ERROR.
+   - `sendUpstreamError(rw, message, info)` — **only** for errors from outbound **HTTP API** calls. Uses `core.ClassifyUpstreamError(err)` which extracts the upstream HTTP status via regex `(?:status|error|code)[:\s]+(\d{3})` (see [core/tool_error.go](https://github.com/truvaagents/truva-g3/blob/main/core/tool_error.go)). If the regex doesn't match, defaults to 502/SERVICE_ERROR.
 
    **Decision rule:** Does the error come from an HTTP call where the upstream status code is embedded in the error message? → `sendUpstreamError`. Everything else → `sendError`. Tools backed by Go interfaces (e.g., `core.EpisodicMemory`, Redis clients) should use `sendError` with `http.StatusServiceUnavailable` for backend failures — these errors don't carry HTTP status codes that `ClassifyUpstreamError` can extract.
 2. **Always set HTTP status codes for errors**: Call `rw.WriteHeader(status)` before encoding any `core.ToolResponse{Success: false, ...}`. Omitting this causes Go to default to HTTP 200, which makes the orchestrator treat the step as successful.
@@ -1852,7 +1852,7 @@ Not all tools wrap external HTTP APIs. Some tools expose **framework interfaces*
 - Skip `api_latency` in logs — interface calls don't have separate upstream timing
 - Keep all other checklist items (ctx extraction, requestID, nil-checked logging, Counter/Histogram/RecordToolCall, span events)
 
-**Example:** [examples/agentic-memory-tool](../../examples/agentic-memory-tool) — reads from `core.EpisodicMemory`, `core.SharedKnowledge`, and `core.InvestigationCoordinator` interfaces. Uses `sendError` for all backend failures. No traced HTTP client.
+**Example:** [examples/agentic-memory-tool](https://github.com/truvaagents/truva-g3/tree/main/examples/agentic-memory-tool) — reads from `core.EpisodicMemory`, `core.SharedKnowledge`, and `core.InvestigationCoordinator` interfaces. Uses `sendError` for all backend failures. No traced HTTP client.
 
 ### Graceful Degradation for Optional Backends
 
@@ -1898,11 +1898,11 @@ The framework ships several fully-tested tools that serve as copy-paste starting
 
 | Tool | Type | Capabilities | Pattern |
 |---|---|---|---|
-| [`examples/stock-market-tool/`](../../examples/stock-market-tool) | HTTP API tool | 4 (stock data) | Traced HTTP client, API key secret, upstream error classification |
-| [`examples/scheduler-tool/`](../../examples/scheduler-tool) | Interface-backed tool | 5 (schedule CRUD) | Framework interfaces (`ScheduleStore`, `TaskDispatcher`), leader-elected `Runnable`, distributed lock |
-| [`examples/playwright-tool/`](../../examples/playwright-tool) | Script execution tool | 3 (browser automation) | Script directory, S3 artifact storage, security context |
+| [`examples/stock-market-tool/`](https://github.com/truvaagents/truva-g3/tree/main/examples/stock-market-tool) | HTTP API tool | 4 (stock data) | Traced HTTP client, API key secret, upstream error classification |
+| [`examples/scheduler-tool/`](https://github.com/truvaagents/truva-g3/tree/main/examples/scheduler-tool) | Interface-backed tool | 5 (schedule CRUD) | Framework interfaces (`ScheduleStore`, `TaskDispatcher`), leader-elected `Runnable`, distributed lock |
+| [`examples/playwright-tool/`](https://github.com/truvaagents/truva-g3/tree/main/examples/playwright-tool) | Script execution tool | 3 (browser automation) | Script directory, S3 artifact storage, security context |
 
-> **Note**: [`examples/scheduled-executor/`](../../examples/scheduled-executor) is a `core.BaseAgent`, not a `BaseTool` -- it needs Discovery access for target-agent resolution. It's documented in the [Agent Development Guide](AGENT_DEVELOPMENT_GUIDE.md) and the [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md).
+> **Note**: [`examples/scheduled-executor/`](https://github.com/truvaagents/truva-g3/tree/main/examples/scheduled-executor) is a `core.BaseAgent`, not a `BaseTool` -- it needs Discovery access for target-agent resolution. It's documented in the [Agent Development Guide](AGENT_DEVELOPMENT_GUIDE.md) and the [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ---
 
@@ -2041,7 +2041,7 @@ func (t *YourTool) updatePoolMetrics() {
 - Business-level metrics (conversion rates, data volumes)
 - Alerting based on application-specific thresholds
 
-> **Reference:** For complete metrics API details, see [telemetry/README.md - Section 3: The Three Types of Metrics](../../telemetry/README.md#3-the-three-types-of-metrics-and-when-to-use-each).
+> **Reference:** For complete metrics API details, see [telemetry/README.md - Section 3: The Three Types of Metrics](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md#3-the-three-types-of-metrics-and-when-to-use-each).
 
 ### Log-Trace Correlation with GetTraceContext
 
@@ -2199,7 +2199,7 @@ func (t *YourTool) handleGetData(rw http.ResponseWriter, r *http.Request) {
 - Business context (user tier, feature flags) must be passed explicitly
 - Request routing decisions cannot be based on upstream context
 
-> **Reference:** For baggage implementation details, see [telemetry/README.md - Section 5: Progressive Disclosure](../../telemetry/README.md#5-progressive-disclosure-from-simple-to-advanced).
+> **Reference:** For baggage implementation details, see [telemetry/README.md - Section 5: Progressive Disclosure](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md#5-progressive-disclosure-from-simple-to-advanced).
 
 ### When to Use Advanced Telemetry
 
@@ -2421,7 +2421,7 @@ type ToolError struct {
 
 ### Core Documentation
 - [TOOL_SCHEMA_DISCOVERY_GUIDE.md](TOOL_SCHEMA_DISCOVERY_GUIDE.md) - Deep dive into AI payload generation
-- [core/README.md](../../core/README.md) - Framework architecture reference
+- [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) - Framework architecture reference
 
 ### Telemetry & Observability
 - [DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Complete tracing implementation
@@ -2434,14 +2434,14 @@ type ToolError struct {
   - [Section 7: Tool Logging Complete Example](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#7-tool-logging-complete-example)
   - [Section 8: Handler Logging with Trace Correlation](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#8-handler-logging-with-trace-correlation)
   - [Section 10: Structured Logging Field Naming Standards](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#10-structured-logging-field-naming-standards)
-- [telemetry/README.md](../../telemetry/README.md) - Telemetry module API reference
+- [telemetry/README.md](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md) - Telemetry module API reference
 
 ### Reference Implementations
 
 | Tool | Key Features | HTTP Client Tracing |
 |------|--------------|---------------------|
-| [examples/stock-market-tool](../../examples/stock-market-tool) | Separate API client file (`finnhub_client.go`), mock data fallback, Finnhub integration | Plain `http.Client` (external API) |
-| [examples/weather-tool-v2](../../examples/weather-tool-v2) | Embedded HTTP calls in handlers, `core.ToolResponse` wrapper, coordinate validation | `otelhttp.NewTransport()` |
-| [examples/agent-with-telemetry](../../examples/agent-with-telemetry) | **Recommended pattern**: `telemetry.NewTracedHTTPClientWithTransport()` | Traced client (for TruvaG3 service calls) |
+| [examples/stock-market-tool](https://github.com/truvaagents/truva-g3/tree/main/examples/stock-market-tool) | Separate API client file (`finnhub_client.go`), mock data fallback, Finnhub integration | Plain `http.Client` (external API) |
+| [examples/weather-tool-v2](https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2) | Embedded HTTP calls in handlers, `core.ToolResponse` wrapper, coordinate validation | `otelhttp.NewTransport()` |
+| [examples/agent-with-telemetry](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-telemetry) | **Recommended pattern**: `telemetry.NewTracedHTTPClientWithTransport()` | Traced client (for TruvaG3 service calls) |
 
 > **Best Practice:** Use `telemetry.NewTracedHTTPClient*()` when your tool calls other TruvaG3 services. Use plain `http.Client` when calling external third-party APIs.

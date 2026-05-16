@@ -1723,7 +1723,7 @@ TruvaG3 uses a **three-layer configuration system**:
 | `TRUVAG3_K8S_NODE_NAME` | Optional | Use fieldRef | Node name for metadata (set via fieldRef to spec.nodeName) |
 | `HOSTNAME` | Auto-set | `my-agent-abc123` | Current pod name (auto-set by K8s) |
 
-**How Service Discovery Works** (from [core/address_resolver.go:32-65](../../core/address_resolver.go#L32-L65)):
+**How Service Discovery Works** (from [core/address_resolver.go:32-65](https://github.com/truvaagents/truva-g3/blob/main/core/address_resolver.go#L32-L65)):
 
 ```go
 // Framework checks two conditions:

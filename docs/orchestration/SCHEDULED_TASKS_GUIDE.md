@@ -7,11 +7,11 @@ The scheduling system is three cooperating components that together give any age
 > **Working Example**
 >
 > Everything in this guide comes from fully working, production-tested implementations:
-> - **Scheduler (producer)**: [`examples/scheduler-tool/`](../../examples/scheduler-tool)
-> - **Executor (consumer)**: [`examples/scheduled-executor/`](../../examples/scheduled-executor)
-> - **Agent wiring**: [`examples/devops-chat-agent/main.go`](../../examples/devops-chat-agent/main.go) (search for `RegisterScheduledEndpoint`)
-> - **Core interfaces**: [`core/async_task.go`](../../core/async_task.go) (search for `TaskConsumer`, `TaskHandle`)
-> - **Conformance tests**: [`core/conformance/`](../../core/conformance)
+> - **Scheduler (producer)**: [`examples/scheduler-tool/`](https://github.com/truvaagents/truva-g3/tree/main/examples/scheduler-tool)
+> - **Executor (consumer)**: [`examples/scheduled-executor/`](https://github.com/truvaagents/truva-g3/tree/main/examples/scheduled-executor)
+> - **Agent wiring**: [`examples/devops-chat-agent/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/main.go) (search for `RegisterScheduledEndpoint`)
+> - **Core interfaces**: [`core/async_task.go`](https://github.com/truvaagents/truva-g3/blob/main/core/async_task.go) (search for `TaskConsumer`, `TaskHandle`)
+> - **Conformance tests**: [`core/conformance/`](https://github.com/truvaagents/truva-g3/tree/main/core/conformance)
 
 ## Table of Contents
 
@@ -67,7 +67,7 @@ Think of it like a cron job that an AI can create on the fly, except:
 
 ### Prerequisites
 
-- A running TruvaG3 cluster with Redis (see [Getting Started](../../examples/README.md))
+- A running TruvaG3 cluster with Redis (see [Getting Started](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md))
 - `scheduler-tool` deployed (the producer side)
 - `scheduled-executor` deployed (the consumer side)
 - At least one agent with an orchestrator (e.g., `devops-chat-agent`)

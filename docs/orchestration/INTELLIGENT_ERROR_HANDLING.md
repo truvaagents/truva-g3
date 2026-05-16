@@ -384,7 +384,7 @@ Agents receive errors from tools and decide how to handle them. With AI, agents 
 > - **Automatic Parameter Correction**: AI fixes payloads based on error context
 > - **Workflow-Level Coordination**: Retry logic integrated with multi-step workflows
 >
-> See: [orchestration/README.md](../../orchestration/README.md#-when-to-use-the-orchestration-module)
+> See: [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#-when-to-use-the-orchestration-module)
 
 ### The Retry Decision Flow
 
@@ -976,7 +976,7 @@ For edge cases that slip through Layers 1 and 2, if a tool returns a validation 
 #### Layer 4: Contextual Re-Resolution (Semantic Retry)
 When Layer 3's analysis concludes that an error **cannot be fixed by adjusting parameters alone** — but the source data needed to compute the correct value is present in the execution trajectory — Layer 4 takes over. It re-runs parameter resolution with the full prior step results in context, letting the LLM compute corrected parameters from upstream data rather than guessing.
 
-Implemented in [`orchestration/contextual_re_resolver.go`](../../orchestration/contextual_re_resolver.go); driven by [`orchestration/error_analyzer.go`](../../orchestration/error_analyzer.go) decisions. See [Error Handling Guide §6 "Contextual Re-Resolution (Layer 4)"](ERROR_HANDLING_GUIDE.md#6-contextual-re-resolution-layer-4) for the full flow, including when Layer 4 fires versus when Layer 3 alone is sufficient.
+Implemented in [`orchestration/contextual_re_resolver.go`](https://github.com/truvaagents/truva-g3/blob/main/orchestration/contextual_re_resolver.go); driven by [`orchestration/error_analyzer.go`](https://github.com/truvaagents/truva-g3/blob/main/orchestration/error_analyzer.go) decisions. See [Error Handling Guide §6 "Contextual Re-Resolution (Layer 4)"](ERROR_HANDLING_GUIDE.md#6-contextual-re-resolution-layer-4) for the full flow, including when Layer 4 fires versus when Layer 3 alone is sufficient.
 
 ### Configuration
 
@@ -1019,7 +1019,7 @@ sum(rate(orchestration_validation_feedback_attempts_total[5m]))
 
 The orchestration layer adds automatic type safety *before* requests reach tools, reducing the burden on both tools and agents. When combined with proper tool error reporting and agent retry logic, this creates a robust error handling system that achieves ~99% success rates in production.
 
-For detailed implementation information, see the [orchestration module documentation](../../orchestration/README.md#multi-layer-type-safety).
+For detailed implementation information, see the [orchestration module documentation](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#multi-layer-type-safety).
 
 ---
 

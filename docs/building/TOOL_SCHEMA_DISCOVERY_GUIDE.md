@@ -2079,14 +2079,14 @@ Mission-critical: Phase 1 + 2 + 3
    - See `examples/agent-example/` for complete implementation
 
 3. **Learn More:**
-   - [Core Module README](../../core/README.md) - Framework fundamentals
-   - [AI Module README](../../ai/README.md) - AI client integration
-   - [Examples](../../examples) - Working code samples
+   - [Core Module README](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) - Framework fundamentals
+   - [AI Module README](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md) - AI client integration
+   - [Examples](https://github.com/truvaagents/truva-g3/tree/main/examples) - Working code samples
 
 ### Questions?
 
 - Check the [troubleshooting section](#-troubleshooting) above
-- Review the [examples](../../examples) for working code
+- Review the [examples](https://github.com/truvaagents/truva-g3/tree/main/examples) for working code
 - Open an issue on GitHub for additional help
 
 Happy building! 🚀
