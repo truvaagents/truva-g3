@@ -73,7 +73,7 @@ The principle the original doc named ([line 304](./DOCUMENTATION_STRATEGY.md#L30
             │   ┌─────────────────────────────┐ │
             └───┤  Same repo, two projects    ├─┘
                 │  truva-g3-www  / www/       │
-                │  truva-g3-docs / website/   │
+                │  truva-g3-docs / docs-site/ │
                 └─────────────────────────────┘
                               ▲
                               │
@@ -103,7 +103,7 @@ The current Docusaurus build (everything done on the `docs/site-launch` branch) 
 
 | Asset | Status under new architecture |
 |---|---|
-| `website/` Docusaurus scaffold + config | Preserved. Becomes the `docs.truvag3.dev` surface. |
+| `docs-site/` Docusaurus scaffold + config | Preserved. Becomes the `docs.truvag3.dev` surface. |
 | 30 markdown docs with cross-source links rewritten (601 links) | Preserved. |
 | `docs/intro.md` (architectural orientation page) | Preserved. |
 | `docs/reference/GO_PACKAGE_REFERENCE.md` | Preserved. |
@@ -112,7 +112,7 @@ The current Docusaurus build (everything done on the `docs/site-launch` branch) 
 | `scripts/rewrite-cross-source-links.py` and `scripts/rewrite-getting-started-links.py` | Preserved. Same tooling pattern. |
 | MDX fixes (`{id}` headings backticked) | Preserved. |
 | `docs/overview/ARCHITECTURE.md` exclusion | Preserved. |
-| Docusaurus glassmorphism landing (`website/src/pages/index.tsx`) | **Deprecated** — `docs.truvag3.dev/` will redirect or show a minimal "Welcome — try /docs/intro" page. The website surface owns the homepage. |
+| Docusaurus glassmorphism landing (`docs-site/src/pages/index.tsx`) | **Deprecated** — `docs.truvag3.dev/` will redirect or show a minimal "Welcome — try /docs/intro" page. The website surface owns the homepage. |
 | Planned GitHub Actions workflow (`.github/workflows/docs.yml`) | **Obsolete** — Cloudflare Pages handles CI/CD for both surfaces. No workflow file needed. |
 
 **Net change to docs side: minimal.** The Docusaurus build keeps running. Only the homepage (landing page) loses its top-of-funnel role; everything else continues as-is.
@@ -160,7 +160,7 @@ Single source of truth for "what belongs where":
 
 ## Repository structure
 
-Proposed layout — adds `www/` next to existing `website/`:
+Proposed layout — adds `www/` next to existing `docs-site/`:
 
 ```
 truva-g3/
@@ -177,7 +177,7 @@ truva-g3/
 │   ├── DOCUMENTATION_STRATEGY.md          # original strategy (reference)
 │   └── DOCUMENTATION_STRATEGY_NEW.md      # this file
 │
-├── website/                               # Docusaurus (unchanged)
+├── docs-site/                               # Docusaurus (unchanged)
 │   ├── docusaurus.config.ts
 │   ├── sidebars.ts
 │   ├── src/
@@ -196,7 +196,7 @@ truva-g3/
 │   │   └── <whitepaper-files>.html        # copied from ~/Documents/…
 │   ├── assets/
 │   │   ├── css/
-│   │   │   ├── brand.css                  # shared brand tokens (mirrors website/src/css)
+│   │   │   ├── brand.css                  # shared brand tokens (mirrors docs-site/src/css)
 │   │   │   ├── article.css                # long-form article styles
 │   │   │   └── landing.css                # homepage-specific
 │   │   ├── img/
@@ -219,7 +219,7 @@ truva-g3/
 
 **`www/` is fully committed to git.** Unlike `docs/getting-started.md` (generated), the website HTML is the source of truth. No build step is required; Cloudflare Pages serves it verbatim.
 
-**A naming note.** The Docusaurus folder is called `website/` — that's the scaffolder's default and renaming it would touch the prebuild scripts, `package.json`, and several config paths for no functional benefit. So the folder named `website/` actually holds the docs (served at `docs.truvag3.dev`), and the folder named `www/` holds the website (served at `truvag3.dev`). When prose in this doc says "the website," it means the `www/` contents — the docs surface is always referred to as "Docusaurus" or "the docs" to avoid the ambiguity. If the asymmetry ever bothers you enough, rename `website/` → `docs-site/` and update the four or five paths that reference it.
+**A naming note.** Folder names map directly to their roles: `docs-site/` holds the Docusaurus app that renders `docs.truvag3.dev`; `www/` holds the hand-crafted HTML for `truvag3.dev`. (`docs-site/` started life as Docusaurus's scaffolder-default `website/` and was renamed in Phase 1 to remove the docs-folder-called-"website" ambiguity. The Cloudflare project name `truva-g3-docs` now matches the folder name, and "website" in the rest of this doc unambiguously refers to the `www/` surface.)
 
 ---
 
@@ -233,14 +233,14 @@ truva-g3/
 
 | Project | Root directory | Build command | Build output | Custom domain |
 |---|---|---|---|---|
-| `truva-g3-docs` | `website/` | `npm install && npm run build` | `build` | `docs.truvag3.dev` |
+| `truva-g3-docs` | `docs-site/` | `npm install && npm run build` | `build` | `docs.truvag3.dev` |
 | `truva-g3-www` | `www/` | _(empty — static HTML)_ | `.` | `truvag3.dev` |
 
 4. **Configure build watch paths** to prevent unnecessary rebuilds:
 
 | Project | Include |
 |---|---|
-| `truva-g3-docs` | `website/*`, `docs/*`, `GETTING_STARTED.md`, `scripts/rewrite-getting-started-links.py` |
+| `truva-g3-docs` | `docs-site/*`, `docs/*`, `GETTING_STARTED.md`, `scripts/rewrite-getting-started-links.py` |
 | `truva-g3-www` | `www/*` |
 
    A change to `docs/` won't kick a `www/` rebuild; a change to `www/` won't kick a docs rebuild.
@@ -259,7 +259,7 @@ Cloudflare evaluates build watch paths per project
 Only the project(s) whose watched paths changed build
    │
    ├── truva-g3-docs build path:
-   │     cd website
+   │     cd docs-site
    │     npm install
    │     npm run build       ← prebuild hook fires: Python sync script runs
    │     deploy ./build → docs.truvag3.dev
@@ -396,7 +396,7 @@ Currently embodied by `www/blogs/micro-agents-architecture.html`. Worth standard
 
 ### Shared brand styling
 
-- `www/assets/css/brand.css` should define the same brand-color tokens already defined in `website/src/css/custom.css`. Keeping them in sync requires discipline (no shared build for this; consider a Python script if drift becomes a problem).
+- `www/assets/css/brand.css` should define the same brand-color tokens already defined in `docs-site/src/css/custom.css`. Keeping them in sync requires discipline (no shared build for this; consider a Python script if drift becomes a problem).
 - The two-tone "Truva / G3" mark should appear identically on both surfaces.
 
 ### What the website does NOT need
@@ -443,20 +443,20 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 5. Create minimal placeholder `www/index.html` (just enough to verify deployment): brand mark + "Site under construction — see [docs](https://docs.truvag3.dev)" link.
 
-6. Add `www/assets/css/brand.css` mirroring the brand tokens from `website/src/css/custom.css`.
+6. Add `www/assets/css/brand.css` mirroring the brand tokens from `docs-site/src/css/custom.css`.
 
 ### Phase 2 — Cloudflare Pages — docs surface (~30 min)
 
 > **Order matters.** Update Docusaurus config *before* the first Cloudflare deploy. The current `baseUrl: '/truva-g3/'` is correct only for GitHub Pages — leaving it in place during the first `pages.dev` deploy produces an unstyled site (asset paths break because `pages.dev` serves at `/`, not `/truva-g3/`).
 
-7. **Update `website/docusaurus.config.ts` first:**
+7. **Update `docs-site/docusaurus.config.ts` first:**
    - `baseUrl: '/'` (was `'/truva-g3/'`)
    - `url: 'https://docs.truvag3.dev'` (was `'https://truvaagents.github.io'`)
    - Commit and push.
    - **Until the custom domain is live**, the local dev server URL changes — `npm run start` now serves at `http://localhost:3000/` (no `/truva-g3` prefix).
 8. Push repo to GitHub if not already pushed.
 9. Create Cloudflare account.
-10. Create Pages project `truva-g3-docs`: connect to repo, root directory `website/`, build command `npm install && npm run build`, output `build`.
+10. Create Pages project `truva-g3-docs`: connect to repo, root directory `docs-site/`, build command `npm install && npm run build`, output `build`.
 11. First deploy lands at `https://truva-g3-docs.pages.dev/`. **Verify the site renders with styles and links work before adding the custom domain.** (If you skipped step 7, you'll see unstyled pages here — that's the failure mode the ordering prevents.)
 12. Add custom domain `docs.truvag3.dev`. Add DNS record per your chosen DNS strategy (D1 or D2). Wait for SSL cert (~5 min).
 13. Verify `docs.truvag3.dev/docs/intro` resolves and renders styled.
@@ -471,8 +471,8 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 ### Phase 4 — Cross-link cleanup (~30 min)
 
 18. Update `docs/intro.md` and any other docs-site pages that link to the architecture article or whitepapers — change GitHub blob URLs to `https://truvag3.dev/blogs/…` and `https://truvag3.dev/whitepapers/…`.
-19. Decommission the Docusaurus glassmorphism landing: replace `website/src/pages/index.tsx` with a minimal redirect-or-welcome page that either redirects to `/docs/intro` or shows a one-line "Welcome — try the docs" page. (The website now owns the homepage role.)
-20. Update `website/docusaurus.config.ts` navbar to add a "Blog" link → `https://truvag3.dev/blogs/` and a "Whitepapers" link → `https://truvag3.dev/whitepapers/`.
+19. Decommission the Docusaurus glassmorphism landing: replace `docs-site/src/pages/index.tsx` with a minimal redirect-or-welcome page that either redirects to `/docs/intro` or shows a one-line "Welcome — try the docs" page. (The website now owns the homepage role.)
+20. Update `docs-site/docusaurus.config.ts` navbar to add a "Blog" link → `https://truvag3.dev/blogs/` and a "Whitepapers" link → `https://truvag3.dev/whitepapers/`.
 
 ### Phase 5 — Build the actual homepage (variable: 2–5 days)
 
@@ -491,7 +491,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 ### Phase 7 — Launch readiness (~1 day)
 
 29. **Pre-launch gate — flip the GitHub repo to public.** Required before attaching either Cloudflare custom domain. The following features all depend on anonymous read access; missing this step ships visibly broken UX:
-    - **Edit-on-GitHub** links on every docs page (Docusaurus `editUrl` config at [website/docusaurus.config.ts:51](../website/docusaurus.config.ts#L51) — leads to a sign-in / 404 page for private repos)
+    - **Edit-on-GitHub** links on every docs page (Docusaurus `editUrl` config at [docs-site/docusaurus.config.ts:51](../docs-site/docusaurus.config.ts#L51) — leads to a sign-in / 404 page for private repos)
     - **~601 GitHub blob URLs** from the cross-source link rewrite (the doc set explicitly links out to source files; all return 404 for anonymous visitors on a private repo)
     - **Module-level README links** in `docs/getting-started.md` (`core/README.md`, `ai/README.md`, etc. — all blob URLs)
     - **Architecture article link** (until migrated to `www/`)
@@ -499,7 +499,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
     
     Verify each works by visiting the live `docs.truvag3.dev` in a fresh browser session (no GitHub cookie) before announcing.
 
-30. **Clean up known broken anchors.** Run `npm run build` in `website/` — Docusaurus reports broken anchors across these files as of 2026-05-16: `building/EFFECTIVE_PROMPTS_GUIDE.md`, `building/TOOL_DEVELOPMENT_GUIDE.md`, `building/TOOL_SCHEMA_DISCOVERY_GUIDE.md`, `operations/AUTO_DISCOVERY_GUIDE.md`, `orchestration/ASYNC_ORCHESTRATION_GUIDE.md`, `orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md`, `orchestration/INTELLIGENT_ERROR_HANDLING.md`, `overview/FRAMEWORK_FEATURES_GUIDE.md`, `reference/ENVIRONMENT_VARIABLES_GUIDE.md`. Budget ~30–60 min; warnings don't fail the build but visibly degrade docs polish.
+30. **Clean up known broken anchors.** Run `npm run build` in `docs-site/` — Docusaurus reports broken anchors across these files as of 2026-05-16: `building/EFFECTIVE_PROMPTS_GUIDE.md`, `building/TOOL_DEVELOPMENT_GUIDE.md`, `building/TOOL_SCHEMA_DISCOVERY_GUIDE.md`, `operations/AUTO_DISCOVERY_GUIDE.md`, `orchestration/ASYNC_ORCHESTRATION_GUIDE.md`, `orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md`, `orchestration/INTELLIGENT_ERROR_HANDLING.md`, `overview/FRAMEWORK_FEATURES_GUIDE.md`, `reference/ENVIRONMENT_VARIABLES_GUIDE.md`. Budget ~30–60 min; warnings don't fail the build but visibly degrade docs polish.
 
 31. Add GA4 to both surfaces (one `<script>` tag in the `www/` HTML `<head>`; Docusaurus has built-in GA4 config).
 
@@ -535,9 +535,9 @@ This is comparable to the original strategy's 10–14 day estimate, but with a m
 | Edit a doc | per PR | 0 extra |
 | Publish a new blog post | as needed | ~30 min (write HTML, drop in `www/blogs/`, update index) |
 | Publish a new whitepaper | as needed | ~10 min (copy HTML, update index) |
-| Docusaurus minor `npm update` in `website/` | quarterly | ~10 min |
+| Docusaurus minor `npm update` in `docs-site/` | quarterly | ~10 min |
 | Cloudflare Pages config drift | rare | ~5 min |
-| Brand-token sync between `website/` and `www/` | when changed | manual; script-able later if it becomes a problem |
+| Brand-token sync between `docs-site/` and `www/` | when changed | manual; script-able later if it becomes a problem |
 | GA4 dashboards | weekly glance | ~5 min |
 
 **Total ongoing maintenance: ~1–2 hours per month**, same as the original Solo Developer Minimal Track estimated, dominated by writing actual content (which you'd do anyway).
@@ -550,9 +550,9 @@ This is comparable to the original strategy's 10–14 day estimate, but with a m
 
 1. **Two surfaces = two design responsibilities.** The website's CSS is hand-maintained. Drift between website and docs brand styling is possible. Mitigation: keep brand tokens in a single CSS file, mirrored verbatim.
 2. **Cloudflare is a vendor dependency.** Free tier is generous and stable, but corporate priorities can shift. Migration cost off Cloudflare Pages is low (repo is unchanged; you change DNS), but switching CDNs is friction.
-3. **No CMS for blog posts.** Adding a post means writing HTML. For a low-cadence blog (1–2 posts/month) this is fine. If the blog grows beyond ~20 posts and edit cadence matters, consider migrating blogs into Docusaurus's `blog` plugin (already supported, just disabled in `website/docusaurus.config.ts`).
+3. **No CMS for blog posts.** Adding a post means writing HTML. For a low-cadence blog (1–2 posts/month) this is fine. If the blog grows beyond ~20 posts and edit cadence matters, consider migrating blogs into Docusaurus's `blog` plugin (already supported, just disabled in `docs-site/docusaurus.config.ts`).
 4. **Lose the Docusaurus landing's React reactivity.** The website is static HTML — no dynamic GitHub stars badge fetched at page load, no live announcement banners. Workarounds: hard-code stars and refresh occasionally; or use Cloudflare Workers for dynamic content (more setup).
-5. **Brand-color tokens duplicated.** `website/src/css/custom.css` and `www/assets/css/brand.css` both define the same `--brand-truva*` and `--brand-g3*` tokens. Edits to brand need two file edits.
+5. **Brand-color tokens duplicated.** `docs-site/src/css/custom.css` and `www/assets/css/brand.css` both define the same `--brand-truva*` and `--brand-g3*` tokens. Edits to brand need two file edits.
 
 ### Open decisions (mark these explicit, do not assume defaults)
 

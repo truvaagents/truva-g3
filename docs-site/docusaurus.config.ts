@@ -11,11 +11,13 @@ const config: Config = {
     v4: true,
   },
 
-  // Until the custom domain is live, the site deploys to
-  // https://truvaagents.github.io/truva-g3/. Flip baseUrl to '/' and url to
-  // 'https://truvag3.dev' when the custom domain lands.
-  url: 'https://truvaagents.github.io',
-  baseUrl: '/truva-g3/',
+  // Docs surface is deployed at docs.truvag3.dev via Cloudflare Pages
+  // (truva-g3-docs project, root directory: docs-site/). The marketing-free
+  // root site lives at truvag3.dev (separate www/ folder, separate CF Pages
+  // project). The pages.dev preview URL during initial CF setup will be
+  // https://truva-g3-docs.pages.dev/ — same baseUrl works there too.
+  url: 'https://docs.truvag3.dev',
+  baseUrl: '/',
 
   organizationName: 'truvaagents',
   projectName: 'truva-g3',
@@ -69,7 +71,7 @@ const config: Config = {
     navbar: {
       title: 'TruvaG3',
       // No logo image yet — the two-tone "TruvaG3" brand mark is painted via
-      // CSS on `.navbar__title`. See website/src/css/custom.css.
+      // CSS on `.navbar__title`. See docs-site/src/css/custom.css.
       items: [
         {
           type: 'docSidebar',
