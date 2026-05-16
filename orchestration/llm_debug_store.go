@@ -67,6 +67,13 @@ type LLMDebugRecord struct {
 	// Interactions contains all LLM calls for this request
 	Interactions []LLMInteraction `json:"interactions"`
 
+	// OriginatingAgent is the agent whose orchestrator (or background job) initiated
+	// this request — the "originator" surfaced in the registry-viewer LLM Debug
+	// table Source column. Sourced from OTel baggage key "agent_name" (which the
+	// orchestrator stamps from o.config.Name) and persisted via HSetNX so the
+	// first writer wins. Empty for records written before this field was added.
+	OriginatingAgent string `json:"originating_agent,omitempty"`
+
 	// Metadata contains additional key-value pairs for investigation
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
@@ -198,6 +205,10 @@ type LLMDebugRecordSummary struct {
 	// in this record. Empty for orchestrator-only records (plan_generation, synthesis, etc.).
 	// Populated when agents use InstrumentedAIClient with WithComponentName().
 	SourceComponents []string `json:"source_components,omitempty"`
+
+	// OriginatingAgent is the agent whose orchestrator (or background job) initiated
+	// this request. See LLMDebugRecord.OriginatingAgent for the full description.
+	OriginatingAgent string `json:"originating_agent,omitempty"`
 }
 
 // LLMDebugConfig holds configuration for LLM debug storage.

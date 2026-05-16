@@ -189,10 +189,18 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		// Extract trace context from baggage
 		traceID := telemetry.GetTraceContext(ctx).TraceID
 		originalRequestID := requestID
+		// originatingAgent is the agent whose orchestrator (or background job) initiated
+		// this request. The orchestrator stamps this into baggage as "agent_name" from
+		// o.config.Name (orchestrator.go). HSetNX below ensures first writer wins, so when
+		// an orchestrator-hosted agent dispatches to a downstream agent, the originator's
+		// name lands first and the downstream worker's write no-ops — giving the LLM Debug
+		// table a stable, semantically correct Source column.
+		originatingAgent := ""
 		if bag := telemetry.GetBaggage(ctx); bag != nil {
 			if origID := bag["original_request_id"]; origID != "" {
 				originalRequestID = origID
 			}
+			originatingAgent = bag["agent_name"]
 		}
 
 		now := time.Now()
@@ -217,6 +225,9 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
 		if interaction.SourceComponent != "" {
 			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
+		}
+		if originatingAgent != "" {
+			pipe.HSetNX(ctx, metaKey, "originating_agent", originatingAgent)
 		}
 		pipe.Expire(ctx, metaKey, ttl)
 		pipe.Expire(ctx, interKey, ttl)
@@ -285,6 +296,7 @@ func (s *RedisLLMDebugStore) getRecordFromList(ctx context.Context, requestID, m
 		RequestID:         meta["request_id"],
 		OriginalRequestID: meta["original_request_id"],
 		TraceID:           meta["trace_id"],
+		OriginatingAgent:  meta["originating_agent"],
 		Interactions:      make([]LLMInteraction, 0, len(interData)),
 		Metadata:          make(map[string]string),
 	}
@@ -469,6 +481,7 @@ func (s *RedisLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMDe
 			TotalTokens:       totalTokens,
 			HasErrors:         hasErrors,
 			SourceComponents:  sourceComponents,
+			OriginatingAgent:  record.OriginatingAgent,
 		})
 	}
 

@@ -35,10 +35,12 @@ func (s *MemoryLLMDebugStore) RecordInteraction(ctx context.Context, requestID s
 		// For initial requests: original_request_id == requestID
 		// For resume requests: original_request_id is the conversation's first requestID
 		originalRequestID := requestID
+		originatingAgent := ""
 		if bag := telemetry.GetBaggage(ctx); bag != nil {
 			if origID := bag["original_request_id"]; origID != "" {
 				originalRequestID = origID
 			}
+			originatingAgent = bag["agent_name"]
 		}
 
 		record = &LLMDebugRecord{
@@ -47,9 +49,22 @@ func (s *MemoryLLMDebugStore) RecordInteraction(ctx context.Context, requestID s
 			TraceID:           getTraceIDFromContext(ctx),
 			CreatedAt:         time.Now(),
 			Interactions:      []LLMInteraction{},
+			OriginatingAgent:  originatingAgent,
 			Metadata:          make(map[string]string),
 		}
 		s.records[requestID] = record
+	} else if record.OriginatingAgent == "" {
+		// "First writer with a value wins" — mirrors RedisLLMDebugStore, which gates
+		// its HSetNX call on non-empty baggage so an empty first write never locks
+		// the field. A later write that carries agent_name baggage backfills it
+		// here; once non-empty, it sticks. See the two
+		// TestXxxLLMDebugStore_OriginatingAgent_BackfillOnLaterWrite tests for the
+		// parity assertion.
+		if bag := telemetry.GetBaggage(ctx); bag != nil {
+			if name := bag["agent_name"]; name != "" {
+				record.OriginatingAgent = name
+			}
+		}
 	}
 
 	record.Interactions = append(record.Interactions, interaction)
@@ -170,6 +185,7 @@ func (s *MemoryLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMD
 			TotalTokens:       totalTokens,
 			HasErrors:         hasErrors,
 			SourceComponents:  sourceComponents,
+			OriginatingAgent:  record.OriginatingAgent,
 		}
 	}
 

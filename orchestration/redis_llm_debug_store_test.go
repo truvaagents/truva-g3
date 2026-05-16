@@ -8,6 +8,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 // setupRedisLLMDebugTestStore creates a RedisLLMDebugStore backed by
@@ -188,5 +189,132 @@ func TestRedisLLMDebugStore_ListRecent_NonWrappingUnchanged(t *testing.T) {
 	}
 	if s.TotalTokens != 1700 {
 		t.Errorf("non-wrapping trace must report full sum; got %d (expected 1700)", s.TotalTokens)
+	}
+}
+
+// TestRedisLLMDebugStore_OriginatingAgent_FirstWriterWins is the regression
+// guard for the LLM Debug Source column. The originator is the agent whose
+// orchestrator (or background job) initiated the request — it must persist
+// across the typical flow where an orchestrator-hosted agent dispatches to
+// a downstream agent that also records LLM calls.
+//
+// Invariants:
+//   - First non-empty agent_name baggage value wins (HSetNX semantics).
+//   - Subsequent writes from downstream agents do NOT overwrite it.
+//   - GetRecord + ListRecent both surface the field.
+//   - Empty baggage yields an empty field (no spurious default).
+func TestRedisLLMDebugStore_OriginatingAgent_FirstWriterWins(t *testing.T) {
+	_, store := setupRedisLLMDebugTestStore(t)
+	base := context.Background()
+
+	// First write: orchestrator-hosted agent stamps its own name into baggage.
+	// This mirrors the orchestrator stamping o.config.Name at orchestrator.go:2876.
+	ctxOrch := telemetry.WithBaggage(base, "agent_name", "travel-chat-agent")
+	if err := store.RecordInteraction(ctxOrch, "req-orig", LLMInteraction{
+		Type:        "plan_generation",
+		Prompt:      "plan",
+		Response:    "ok",
+		PhaseNumber: 1,
+		Success:     true,
+	}); err != nil {
+		t.Fatalf("orchestrator-side record failed: %v", err)
+	}
+
+	// Second write: downstream agent (different baggage value). Must NOT
+	// overwrite the originator — HSetNX should swallow this write of the
+	// originating_agent field while still appending the interaction.
+	ctxDown := telemetry.WithBaggage(base, "agent_name", "research-agent-telemetry-service")
+	if err := store.RecordInteraction(ctxDown, "req-orig", LLMInteraction{
+		Type:            "agent_llm_call",
+		SourceComponent: "research-agent-telemetry-service",
+		Prompt:          "math",
+		Response:        "42",
+		Success:         true,
+	}); err != nil {
+		t.Fatalf("downstream-side record failed: %v", err)
+	}
+
+	rec, err := store.GetRecord(base, "req-orig")
+	if err != nil {
+		t.Fatalf("GetRecord failed: %v", err)
+	}
+	if rec.OriginatingAgent != "travel-chat-agent" {
+		t.Errorf("OriginatingAgent must be first writer's value; got %q (expected travel-chat-agent)", rec.OriginatingAgent)
+	}
+
+	summaries, err := store.ListRecent(base, 10)
+	if err != nil {
+		t.Fatalf("ListRecent failed: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].OriginatingAgent != "travel-chat-agent" {
+		t.Errorf("summary OriginatingAgent must match record; got %q", summaries[0].OriginatingAgent)
+	}
+}
+
+// TestRedisLLMDebugStore_OriginatingAgent_BackfillOnLaterWrite mirrors the
+// MemoryLLMDebugStore test of the same name to lock in parity across the two
+// production implementations. When the first write carries no agent_name
+// baggage, the HSetNX write is skipped (gated on non-empty value), so the
+// meta hash field stays unset. A later write that DOES carry baggage can
+// then populate it — this is "first writer with a value wins," not the
+// stricter "first writer wins regardless of value."
+func TestRedisLLMDebugStore_OriginatingAgent_BackfillOnLaterWrite(t *testing.T) {
+	_, store := setupRedisLLMDebugTestStore(t)
+
+	// First write: no baggage. Field should NOT be stamped.
+	if err := store.RecordInteraction(context.Background(), "req-backfill", LLMInteraction{
+		Type:    "plan_generation",
+		Success: true,
+	}); err != nil {
+		t.Fatalf("first (no-baggage) write failed: %v", err)
+	}
+
+	// Second write: baggage present. Field should now backfill.
+	ctxNamed := telemetry.WithBaggage(context.Background(), "agent_name", "devops-chat-agent")
+	if err := store.RecordInteraction(ctxNamed, "req-backfill", LLMInteraction{
+		Type:            "agent_llm_call",
+		SourceComponent: "devops-chat-agent",
+		Success:         true,
+	}); err != nil {
+		t.Fatalf("second (with-baggage) write failed: %v", err)
+	}
+
+	rec, err := store.GetRecord(context.Background(), "req-backfill")
+	if err != nil {
+		t.Fatalf("GetRecord failed: %v", err)
+	}
+	if rec.OriginatingAgent != "devops-chat-agent" {
+		t.Errorf("OriginatingAgent must backfill from later baggage when first write had none; got %q", rec.OriginatingAgent)
+	}
+}
+
+// TestRedisLLMDebugStore_OriginatingAgent_EmptyBaggage covers the
+// pre-instrumented historical path: writes with no agent_name baggage must
+// leave the field empty rather than stamping a placeholder. This is what
+// keeps old records rendering via the existing source_components fallback
+// in the viewer instead of misattributing the originator.
+func TestRedisLLMDebugStore_OriginatingAgent_EmptyBaggage(t *testing.T) {
+	_, store := setupRedisLLMDebugTestStore(t)
+	ctx := context.Background()
+
+	if err := store.RecordInteraction(ctx, "req-no-bag", LLMInteraction{
+		Type:        "plan_generation",
+		Prompt:      "x",
+		Response:    "y",
+		PhaseNumber: 1,
+		Success:     true,
+	}); err != nil {
+		t.Fatalf("record failed: %v", err)
+	}
+
+	rec, err := store.GetRecord(ctx, "req-no-bag")
+	if err != nil {
+		t.Fatalf("GetRecord failed: %v", err)
+	}
+	if rec.OriginatingAgent != "" {
+		t.Errorf("OriginatingAgent must be empty when baggage carries no agent_name; got %q", rec.OriginatingAgent)
 	}
 }

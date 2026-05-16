@@ -212,10 +212,18 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		// Extract trace context from baggage (matches orchestration store pattern)
 		traceID := GetTraceContext(ctx).TraceID
 		originalRequestID := requestID
+		// originatingAgent mirrors the orchestration store's field (see
+		// orchestration/redis_llm_debug_store.go). Sourced from the same
+		// "agent_name" baggage key the orchestrator stamps from o.config.Name.
+		// HSetNX below ensures first-writer-wins so the format-twin invariant
+		// holds even when both writers target the same record.
+		// See orchestration/ARCHITECTURE.md "LLM Debug Payload Store" — Alternative Writer.
+		originatingAgent := ""
 		if bag := GetBaggage(ctx); bag != nil {
 			if origID := bag["original_request_id"]; origID != "" {
 				originalRequestID = origID
 			}
+			originatingAgent = bag["agent_name"]
 		}
 
 		now := time.Now()
@@ -239,6 +247,9 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
 		if interaction.SourceComponent != "" {
 			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
+		}
+		if originatingAgent != "" {
+			pipe.HSetNX(ctx, metaKey, "originating_agent", originatingAgent)
 		}
 		pipe.Expire(ctx, metaKey, ttl)
 		pipe.Expire(ctx, interKey, ttl)

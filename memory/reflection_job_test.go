@@ -419,6 +419,67 @@ func TestRunOnce_PropagatesRequestIDForLLMDebugCapture(t *testing.T) {
 		"pass_id baggage should equal the request_id for log correlation")
 }
 
+// TestRunOnce_PropagatesAgentNameForOriginatorAttribution proves that the
+// reflection job stamps "agent_name" baggage from the TRUVAG3_AGENT_NAME env var,
+// so LLM debug stores (telemetry.RedisLLMCallRecorder, orchestration.RedisLLMDebugStore,
+// orchestration.MemoryLLMDebugStore) can attribute background-pass records to
+// the hosting agent in the registry-viewer Source column.
+//
+// Without this stamp, reflect-* records render with an empty originating_agent
+// and fall back to the source_components badges — usable, but inconsistent with
+// orchestrator-initiated records which DO get the originator attribution.
+func TestRunOnce_PropagatesAgentNameForOriginatorAttribution(t *testing.T) {
+	t.Setenv("TRUVAG3_AGENT_NAME", "devops-chat-agent")
+
+	episodic := NewInMemoryEpisodicMemory("test", 100)
+	reflector := &stubReflector{
+		fragments: []core.KnowledgeFragment{{Content: "x", Namespace: "patterns", Importance: 5}},
+	}
+	job, _ := NewReflectionJob(reflector, episodic, &recordingKnowledge{}, &recordingEmbedder{}, "test", &core.NoOpLogger{},
+		func(j *ReflectionJob) error { j.minEvents = 1; j.ageThreshold = 1 * time.Nanosecond; return nil },
+	)
+	_ = episodic.RecordEvent(context.Background(), core.AgentEvent{
+		AgentName: "test", AgentDomain: "test", ActionType: "a",
+		EntityType: "pod", EntityID: "p1",
+		Timestamp: time.Now().Add(-1 * time.Hour), Scope: core.ScopeSharedDomain,
+	})
+
+	require.NoError(t, job.RunOnce(context.Background()))
+	require.Equal(t, 1, reflector.ReflectCalls(), "reflector should have been called")
+
+	bag := telemetry.GetBaggage(reflector.lastContext)
+	require.NotNil(t, bag, "baggage must be present in ctx passed to reflector")
+	assert.Equal(t, "devops-chat-agent", bag["agent_name"],
+		"agent_name baggage must be set from TRUVAG3_AGENT_NAME so InstrumentedAIClient → RedisLLMCallRecorder stamps the originator")
+}
+
+// TestRunOnce_NoAgentName_LeavesBaggageUnset covers the historical/fallback case:
+// when TRUVAG3_AGENT_NAME is not set, the reflection job must NOT stamp an empty
+// or placeholder agent_name. This keeps reflect-* records rendering via the
+// existing source_components badges in the viewer instead of misattributing.
+func TestRunOnce_NoAgentName_LeavesBaggageUnset(t *testing.T) {
+	t.Setenv("TRUVAG3_AGENT_NAME", "")
+
+	episodic := NewInMemoryEpisodicMemory("test", 100)
+	reflector := &stubReflector{
+		fragments: []core.KnowledgeFragment{{Content: "x", Namespace: "patterns", Importance: 5}},
+	}
+	job, _ := NewReflectionJob(reflector, episodic, &recordingKnowledge{}, &recordingEmbedder{}, "test", &core.NoOpLogger{},
+		func(j *ReflectionJob) error { j.minEvents = 1; j.ageThreshold = 1 * time.Nanosecond; return nil },
+	)
+	_ = episodic.RecordEvent(context.Background(), core.AgentEvent{
+		AgentName: "test", AgentDomain: "test", ActionType: "a",
+		EntityType: "pod", EntityID: "p1",
+		Timestamp: time.Now().Add(-1 * time.Hour), Scope: core.ScopeSharedDomain,
+	})
+
+	require.NoError(t, job.RunOnce(context.Background()))
+	bag := telemetry.GetBaggage(reflector.lastContext)
+	require.NotNil(t, bag)
+	assert.Equal(t, "", bag["agent_name"],
+		"agent_name baggage must be unset when TRUVAG3_AGENT_NAME is empty — no placeholder")
+}
+
 // TestRunOnce_PassIDFormat48BitEntropy pins the pass_id format so a future
 // contributor can't accidentally narrow the entropy. The pass_id is the
 // reflection job's only defense against LLM-debug-store key collision:

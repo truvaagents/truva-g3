@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -326,5 +328,114 @@ func TestRecorderKeyPatterns_MatchOrchestration(t *testing.T) {
 	}
 	if recorderInterSuffix != ":interactions" {
 		t.Errorf("recorderInterSuffix = %q, want :interactions", recorderInterSuffix)
+	}
+}
+
+// setupRedisLLMRecorderTest constructs a RedisLLMCallRecorder backed by miniredis
+// so the actual write path (HSet/HSetNX into the meta hash) is exercised without
+// a real Redis dependency. Mirrors the pattern used in orchestration tests.
+func setupRedisLLMRecorderTest(t *testing.T) (*miniredis.Miniredis, *RedisLLMCallRecorder) {
+	t.Helper()
+
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	r := &RedisLLMCallRecorder{
+		client: client,
+		logger: &core.NoOpLogger{},
+		ttl:    recorderDefaultTTL,
+		errTTL: recorderErrorTTL,
+	}
+	return mr, r
+}
+
+// TestRecordLLMCall_StampsOriginatingAgentFromBaggage is the format-twin
+// invariant regression guard. The telemetry recorder MUST mirror the
+// orchestration store's "originating_agent" meta hash field so that records
+// written only by the agent-side path (no orchestrator involvement —
+// e.g. reflect-* background-job records) still surface the originator in
+// the registry-viewer Source column.
+// See orchestration/ARCHITECTURE.md "LLM Debug Payload Store — Alternative Writer".
+func TestRecordLLMCall_StampsOriginatingAgentFromBaggage(t *testing.T) {
+	mr, r := setupRedisLLMRecorderTest(t)
+
+	ctx := WithBaggage(context.Background(), "agent_name", "devops-chat-agent")
+	err := r.RecordLLMCall(ctx, "reflect-test-abc", LLMCallRecord{
+		CallType:        "agent_llm_call",
+		SourceComponent: "devops-chat-agent",
+		Prompt:          "what is the kubernetes pod restart count for nginx?",
+		Response:        "12 in the last hour",
+		Success:         true,
+	})
+	if err != nil {
+		t.Fatalf("RecordLLMCall failed: %v", err)
+	}
+
+	metaKey := recorderKeyPrefix + "reflect-test-abc" + recorderMetaSuffix
+	got := mr.HGet(metaKey, "originating_agent")
+	if got != "devops-chat-agent" {
+		t.Errorf("meta hash originating_agent = %q, want devops-chat-agent", got)
+	}
+}
+
+// TestRecordLLMCall_OriginatingAgent_FirstWriterWins locks in HSetNX
+// semantics: a second write from a different agent_name baggage value
+// must NOT overwrite the originator. This is the same invariant the
+// orchestration store tests guard — they must hold together since both
+// writers target the same Redis keys.
+func TestRecordLLMCall_OriginatingAgent_FirstWriterWins(t *testing.T) {
+	mr, r := setupRedisLLMRecorderTest(t)
+
+	ctxA := WithBaggage(context.Background(), "agent_name", "travel-chat-agent")
+	if err := r.RecordLLMCall(ctxA, "req-shared", LLMCallRecord{
+		CallType: "agent_llm_call",
+		Prompt:   "first",
+		Response: "ok",
+		Success:  true,
+	}); err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+
+	ctxB := WithBaggage(context.Background(), "agent_name", "research-agent-telemetry-service")
+	if err := r.RecordLLMCall(ctxB, "req-shared", LLMCallRecord{
+		CallType:        "agent_llm_call",
+		SourceComponent: "research-agent-telemetry-service",
+		Prompt:          "second",
+		Response:        "ok",
+		Success:         true,
+	}); err != nil {
+		t.Fatalf("second write failed: %v", err)
+	}
+
+	metaKey := recorderKeyPrefix + "req-shared" + recorderMetaSuffix
+	got := mr.HGet(metaKey, "originating_agent")
+	if got != "travel-chat-agent" {
+		t.Errorf("originating_agent must be first writer's value (HSetNX); got %q", got)
+	}
+}
+
+// TestRecordLLMCall_EmptyBaggage_NoOriginatingAgent covers the pre-instrumented
+// historical path: a write with no agent_name baggage must NOT stamp a placeholder.
+// This keeps historical records rendering via the existing source_components
+// fallback in the viewer instead of misattributing the originator.
+func TestRecordLLMCall_EmptyBaggage_NoOriginatingAgent(t *testing.T) {
+	mr, r := setupRedisLLMRecorderTest(t)
+
+	if err := r.RecordLLMCall(context.Background(), "req-no-bag", LLMCallRecord{
+		CallType: "agent_llm_call",
+		Prompt:   "p",
+		Response: "r",
+		Success:  true,
+	}); err != nil {
+		t.Fatalf("RecordLLMCall failed: %v", err)
+	}
+
+	metaKey := recorderKeyPrefix + "req-no-bag" + recorderMetaSuffix
+	if got := mr.HGet(metaKey, "originating_agent"); got != "" {
+		t.Errorf("originating_agent must be empty when baggage carries no agent_name; got %q", got)
 	}
 }

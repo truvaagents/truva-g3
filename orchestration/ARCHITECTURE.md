@@ -1519,10 +1519,26 @@ The orchestration module includes a debug store that captures complete LLM reque
 │  └── Category: rendering hint ("llm", "logic", "vector_db",     │
 │      "storage", "embedding") for non-LLM hook activity          │
 │                                                                  │
+│  Record-Level Attribution:                                       │
+│  └── OriginatingAgent: the agent whose orchestrator (or         │
+│      background job) initiated this request — surfaced in the    │
+│      registry-viewer Source column. Sourced from the "agent_    │
+│      name" OTel baggage key the orchestrator stamps from         │
+│      o.config.Name (TRUVAG3_AGENT_NAME). Persisted via HSetNX    │
+│      on the meta hash so first writer with a non-empty value     │
+│      wins — keeps the originator stable across multi-writer      │
+│      requests (orchestrator + downstream agent writing to the    │
+│      same record). Background-job writers must stamp the         │
+│      baggage themselves before recording (see                    │
+│      memory.ReflectionJob.RunOnce).                              │
+│                                                                  │
 │  Summary Listing:                                                │
-│  └── LLMDebugRecordSummary.SourceComponents: sorted, unique     │
-│      agent names extracted from interactions. Used by registry   │
-│      viewer to show which agents triggered each record.          │
+│  ├── LLMDebugRecordSummary.SourceComponents: sorted, unique     │
+│  │   agent names extracted from interactions. Used by registry   │
+│  │   viewer to show which agents triggered each record.          │
+│  └── LLMDebugRecordSummary.OriginatingAgent: mirror of the       │
+│      record field above — table Source column prefers this       │
+│      when non-empty, falls back to SourceComponents otherwise.   │
 │                                                                  │
 │  Storage Layer:                                                  │
 │  ├── RedisLLMDebugStore (production) - Redis DB 7               │

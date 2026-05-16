@@ -242,6 +242,17 @@ func (j *ReflectionJob) RunOnce(ctx context.Context) error {
 	ctx = telemetry.WithBaggage(ctx, "pass_id", passID, "request_id", passID)
 	ctx = core.WithRequestID(ctx, passID)
 
+	// Stamp agent_name baggage so LLM debug stores can record the originating agent
+	// for background-job records. The orchestrator stamps the same key in its request
+	// path (see orchestration/orchestrator.go ProcessRequest/ProcessRequestStreaming);
+	// background jobs that run outside an orchestrator must stamp it themselves so
+	// the registry-viewer Source column attributes the record correctly.
+	// Uses TRUVAG3_AGENT_NAME — the canonical agent identity env var
+	// (see FRAMEWORK_DESIGN_PRINCIPLES.md §3.3 "One concept = One variable").
+	if agentName := os.Getenv("TRUVAG3_AGENT_NAME"); agentName != "" {
+		ctx = telemetry.WithBaggage(ctx, "agent_name", agentName)
+	}
+
 	// Root span for the entire pass — groups LLM + embedding calls under one trace
 	var span core.Span
 	if j.telemetry != nil {

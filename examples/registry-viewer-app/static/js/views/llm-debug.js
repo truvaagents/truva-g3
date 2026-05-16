@@ -210,6 +210,7 @@ function filterLLMRecords() {
             record.request_id.toLowerCase().includes(searchTerm) ||
             (origReqId && origReqId.toLowerCase().includes(searchTerm)) ||
             (record.trace_id && record.trace_id.toLowerCase().includes(searchTerm)) ||
+            (record.originating_agent && record.originating_agent.toLowerCase().includes(searchTerm)) ||
             (record.source_components && record.source_components.some(s => s.toLowerCase().includes(searchTerm)));
         return matchesFilter && matchesSearch;
     });
@@ -267,6 +268,18 @@ function renderSourceBadges(sourceComponents) {
     ).join(' ');
 }
 
+// Prefer the originating agent (the orchestrator/job that initiated the request)
+// for the table Source column. Falls back to the participant badges for records
+// written before originating_agent was persisted (no backfill by design).
+// Uses the .orchestrator badge style to visually group with the existing
+// orchestrator-fallback badge — originator IS an orchestrator (or background job).
+function renderSourceCell(record) {
+    if (record.originating_agent) {
+        return `<span class="source-badge orchestrator">${record.originating_agent}</span>`;
+    }
+    return renderSourceBadges(record.source_components);
+}
+
 function renderLLMTable(list) {
     const tbody = document.getElementById('llmTableBody');
     if (!tbody) return;
@@ -295,7 +308,7 @@ function renderLLMTable(list) {
                     ${isResumed ? '🔗 ' : ''}${origReqId}
                 </span>
             </td>
-            <td>${renderSourceBadges(record.source_components)}</td>
+            <td>${renderSourceCell(record)}</td>
             <td>${interactionCount}</td>
             <td>${formatTokens(totalTokens)}</td>
             <td><span class="status-badge ${hasErrors ? 'error' : 'success'}">${hasErrors ? '⚠ Has Errors' : '✓ Success'}</span></td>
