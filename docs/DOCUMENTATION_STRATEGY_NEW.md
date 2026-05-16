@@ -38,7 +38,7 @@ This revises the single-surface plan in the original strategy doc, motivated by 
 
 The original strategy assumed a single Docusaurus site at `truvag3.dev` with subpaths for docs, blog, examples, and whitepapers. That works for projects whose content is mostly reference docs with light supporting material. TruvaG3's content shape is different:
 
-1. **Article-style long-form already exists and works.** `docs/blogs/micro-agents-architecture.html` is a 1389-line standalone HTML article with custom typography (760px max-width, 17px body, 1.65 line-height, custom aside/code styles). Re-implementing this in MDX would lose the magazine-style polish that the format actually benefits from.
+1. **Article-style long-form already exists and works.** `www/blogs/micro-agents-architecture.html` (migrated from `docs/blogs/` in Phase 1) is a 1389-line standalone HTML article with custom typography (760px max-width, 17px body, 1.65 line-height, custom aside/code styles). Re-implementing this in MDX would lose the magazine-style polish that the format actually benefits from.
 2. **Whitepapers are an entire content category.** A handful of HTML whitepapers live at `~/Documents/Documents/TruvaG3/whitepapers/` and need a home. Each is standalone, formatted, self-contained.
 3. **The Docusaurus homepage is structurally constrained.** A serious framework landing typically needs: code-snippet hero, architecture diagrams, customer/showcase signals, recent blog posts, GitHub stars badge, registry-viewer screenshots, multi-section narrative. None of those are comfortable to author in a Docusaurus `index.tsx` — every visual choice fights the underlying theme.
 4. **One author = no coordination tax.** Splitting surfaces only makes sense when the team can afford the operational overhead. A solo maintainer with a single Cloudflare Pages account can ship and maintain two surfaces with no more friction than one — provided the boundary is clean.
@@ -381,7 +381,7 @@ Should answer "why should I care about TruvaG3?" within the first viewport. Requ
 
 ### Blog post template
 
-Currently embodied by `docs/blogs/micro-agents-architecture.html`. Worth standardizing into a shared template:
+Currently embodied by `www/blogs/micro-agents-architecture.html`. Worth standardizing into a shared template:
 
 - Header with article title, date, author, reading time.
 - 760px max-width body, 17px font, 1.65 line-height (matches existing).
@@ -482,7 +482,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 ### Phase 6 — Polish surrounding pages (~1 day)
 
-24. Standardize the blog template using `www/blogs/micro-agents-architecture.html` as the reference. Extract shared CSS into `www/assets/css/article.css`.
+24. Standardize the blog template using `www/blogs/micro-agents-architecture.html` as the reference (already at this path after Phase 1 migration). Extract shared CSS into `www/assets/css/article.css`.
 25. Build `www/blogs/index.html` listing all blog posts.
 26. Build `www/whitepapers/index.html` listing all whitepapers.
 27. Ensure the second blog (90% done) is finished and added to `www/blogs/`.

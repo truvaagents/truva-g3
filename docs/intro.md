@@ -15,7 +15,7 @@ gets the call.
 It's the open-source reference implementation of the architecture
 described in [*A Micro-Agents Reference Architecture: Dynamic Capability
 Discovery and Decentralized
-Coordination*](https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/micro-agents-architecture.html)
+Coordination*](https://github.com/truvaagents/truva-g3/blob/main/www/blogs/micro-agents-architecture.html)
 — and adds the operational features a multi-agent system tends to need
 on top: a vendor-agnostic AI client, DAG-based execution with iterative
 re-plan, circuit breakers and semantic retry, OpenTelemetry

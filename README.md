@@ -5,7 +5,7 @@
 
 > **A different way to wire agents and tools.** Specialized agents and tools register their capabilities with a shared registry, find each other by logical name at runtime, and coordinate without a central conductor — the microservices pattern, applied to multi-agent systems.
 
-> **About this framework.** TruvaG3 is the open-source reference implementation of the micro-agents architecture described in [A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](docs/blogs/micro-agents-architecture.html). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
+> **About this framework.** TruvaG3 is the open-source reference implementation of the micro-agents architecture described in [A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](www/blogs/micro-agents-architecture.html). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
 
 The architecture has five defining properties, each implemented here:
 
@@ -584,8 +584,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 ### Guides
 
 **Architecture deep-dives:**
-- [A Micro-Agents Reference Architecture](docs/blogs/micro-agents-architecture.html) — the reference-architecture article this framework implements
-- [Introduction to TruvaG3](docs/blogs/truvag3-introduction.html) — framework overview
+- [A Micro-Agents Reference Architecture](www/blogs/micro-agents-architecture.html) — the reference-architecture article this framework implements
 
 **Building:**
 - [Tool Development Guide](docs/building/TOOL_DEVELOPMENT_GUIDE.md) — building a Tool from scratch
@@ -678,7 +677,7 @@ See the [examples/](examples/) directory for the full set of bundled Tools — d
 ## Next Steps
 
 1. **Run it locally** → [GETTING_STARTED.md](GETTING_STARTED.md) — set up a kind cluster, deploy the bundled examples, and (in section 4) build your own components with the included scaffolds
-2. **Read the architecture article** → [A Micro-Agents Reference Architecture](docs/blogs/micro-agents-architecture.html) — the design this framework implements
+2. **Read the architecture article** → [A Micro-Agents Reference Architecture](www/blogs/micro-agents-architecture.html) — the design this framework implements
 3. **Survey the framework's capabilities** → [Framework Features Guide](docs/overview/FRAMEWORK_FEATURES_GUIDE.md) — comprehensive feature map across modules
 
 ## Contributing
