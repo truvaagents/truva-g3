@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TruvaG3: An Introduction to the Micro-Agents Framework</title>
+<meta name="description" content="A guided tour of TruvaG3 — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.">
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b6cff;
+    --rule: #e5e5e5;
+    --code-bg: #f6f8fa;
+    --aside-bg: #fafaf7;
+    --aside-border: #d9d4c3;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    line-height: 1.65;
+    max-width: 760px;
+    margin: 2rem auto;
+    padding: 0 1.25rem;
+    font-size: 17px;
+  }
+  header.article-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2rem;
+  }
+  header.article-header h1 {
+    font-size: 1.85rem;
+    line-height: 1.25;
+    margin: 0 0 0.6rem 0;
+    font-weight: 700;
+  }
+  header.article-header p.dek {
+    color: var(--muted);
+    font-size: 1.1rem;
+    margin: 0 0 0.8rem 0;
+    line-height: 1.45;
+  }
+  header.article-header .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin-top: 2.4rem;
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+  }
+  h3 {
+    font-size: 1.25rem;
+    margin-top: 1.8rem;
+    margin-bottom: 0.4rem;
+  }
+  p { margin: 0.7rem 0; }
+  p > strong:first-child,
+  li > strong:first-child {
+    font-weight: 600;
+    font-size: 0.95em;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    border: 1px solid var(--rule);
+  }
+  code {
+    font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border-bottom: 1px solid var(--rule);
+    padding: 0.55rem 0.7rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+  }
+  aside.callout {
+    background: var(--aside-bg);
+    border-left: 3px solid var(--aside-border);
+    padding: 0.85rem 1.1rem;
+    margin: 1.4rem 0;
+    font-size: 0.95rem;
+    border-radius: 3px;
+  }
+  aside.callout strong { color: var(--fg); }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  figure { margin: 1.5rem 0; }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 0.4rem;
+  }
+  .footer-note {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+</style>
+</head>
+<body>
+
+<article>
+
+<header class="article-header">
+  <h1>TruvaG3: An Introduction to the Micro-Agents Framework</h1>
+  <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
+  <p class="meta">Neelabh Tripathi · May 16, 2026</p>
+</header>
+
+<section>
+<h2 id="two-problems">Two problems, one framework</h2>
+
+<p>Two things make most agent platforms difficult to run in production.</p>
+
+<p>The first is architectural. Most agent frameworks ask the developer to name every tool and every peer agent in source code before the program starts. After that, the framework does not look outside that fixed list. Adding a tool means changing source code and redeploying the agent. Adding a new agent that other agents need to reach means rewriting the routing layer that decides who talks to whom. This works for a demo. It does not match how distributed systems are usually built.</p>
+
+<p>The second is operational. Even when an agent framework gets the architecture right, it often brings its own runtime: its own orchestrator process, a hosted control plane, a vendor-specific workflow engine, or all three. For a platform team that already runs a working Kubernetes environment, that is not a feature — it is a new system to learn, scale, secure, and pay for. The team has to either accept a parallel operating model for agent workloads, or rebuild parts of the platform they already trust.</p>
+
+<p><strong>TruvaG3 is a Go framework that takes a different position on both counts.</strong> The architecture is the micro-agents reference described in <a href="micro-agents-architecture.html">a separate article</a> — capabilities registered into a shared registry at runtime, peers addressed by logical name, orchestration inside each agent, decentralized coordination between participants. The runtime is ordinary Kubernetes: Deployments, Services, ConfigMaps, Secrets, ingress, service mesh, autoscaling, OpenTelemetry. The framework adds the agent-specific pieces — discovery, an LLM client, an orchestrator, resilience and memory primitives — and does not require anything else.</p>
+
+<p>This article walks through both halves. It is meant to be read in one sitting; sections can be skipped without losing the thread.</p>
+</section>
+
+<section>
+<h2 id="why-truvag3-exists">Why TruvaG3 exists</h2>
+
+<h3 id="architectural-reason">The architectural reason</h3>
+
+<p>The <a href="micro-agents-architecture.html">companion article on the micro-agents architecture</a> argues the case in detail, with primary-source evidence from production teams. The short version follows.</p>
+
+<p>Most agent frameworks today share one wiring pattern. The developer builds an agent, gives it a list of tools, and starts a loop. If a second agent is needed, the developer either wires it into the first agent as another callable, or places both agents inside a higher-level orchestrator that decides whose turn it is. In every case, the set of participants is fixed in source code before the program runs.</p>
+
+<p>Production teams report that this pattern hits real limits. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic's engineering account</a> of their multi-agent Research feature describes synchronous lead-subagent coordination as a bottleneck — the lead agent cannot steer subagents, subagents cannot coordinate, and the whole system can block on one slow subagent. <a href="https://arxiv.org/abs/2411.04468">Microsoft Research, writing about Magentic-One</a>, names the static composition itself as a limitation: <em>"Magentic-One's composition is fixed to a common set of five agents... When agents are not needed, they simply serve as a distraction to the Orchestrator... Conversely, when extra expertise might be needed, it is simply unavailable. We can easily imagine an alternative approach where agents are added or removed dynamically, based on the task need."</em> The fix the Magentic-One authors describe — agents added or removed dynamically — is exactly the micro-agents approach.</p>
+
+<p>The micro-agents architecture has five defining properties:</p>
+
+<ul>
+  <li><strong>Specialized and independently deployable.</strong> Agents and tools run in their own processes, with their own release cadence and ownership.</li>
+  <li><strong>Runtime registration into a shared registry.</strong> Capabilities are advertised at runtime, not wired into a caller's source code.</li>
+  <li><strong>Capability-based addressing.</strong> Callers ask for a logical name, such as <code>geocode_location</code>; the framework resolves the name to whichever endpoint currently serves it.</li>
+  <li><strong>Independently scalable, replaceable, and migratable.</strong> Callers continue to look up participants by the same name; the registry tracks where the name currently points.</li>
+  <li><strong>Decentralized coordination.</strong> Each peer drives its own work. The registry mediates discovery, not control.</li>
+</ul>
+
+<p>Two coordination layers fall out of this design. <em>Inside</em> each agent, a single orchestrator runs the request: it plans against the current capability catalog, executes the plan as a directed acyclic graph (DAG) with parallelism where dependencies allow, and synthesizes the response. It can return to planning when fresh data unlocks the next phase. <em>Between</em> participants, no such orchestrator exists. Each agent reads the registry, resolves capabilities to endpoints, and calls peers directly over HTTP. Nothing in the middle routes, sequences, or coordinates.</p>
+
+<figure id="fig-orchestration-inside-agent">
+<svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Inside one agent's process. A single Agent box with an amber-bordered frame contains three phase boxes connected by amber arrows. PHASE 1 Plan: a single LLM call against the live capability catalog, output is a DAG of steps. PHASE 2 Execute steps: for each step, resolve capability, make HTTP call, gather response; runs in DAG order with parallelism where possible. PHASE 3 Synthesize: assemble all step outputs into a final response for the user. A solid amber loop-back arrow curves from the bottom of Execute back to the bottom of Plan, labeled 'iterative re-plan, if needed', indicating that the orchestrator can loop from execute back to plan when the LLM decides during execution that additional planning is required. From the Execute phase, two outbound blue arrows pierce the agent's process boundary and reach two peer boxes below — one labeled Tool with a gray border (a passive peer endpoint) and one labeled Agent with an amber border (another orchestrating peer) — illustrating that the HTTP calls made during Execute leave this agent's process and reach participants running in their own processes. The blue color matches the convention used in the next figure for inter-participant HTTP calls. The amber framing throughout indicates that the AIOrchestrator is the single conductor driving the entire flow inside this one process; but the calls it dispatches leave that process to reach peers.">
+  <defs>
+    <marker id="oa-arr-orch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d9b35a"/>
+    </marker>
+    <marker id="oa-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .agent-frame { fill: #fffefb; stroke: #d9b35a; stroke-width: 2; }
+    .phase-box { fill: #ffffff; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-title-oa { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .t-orch-label { font: italic 12px -apple-system, sans-serif; fill: #7a5a16; }
+    .t-phase-num { font: 700 10px -apple-system, sans-serif; fill: #d9b35a; letter-spacing: 0.6px; }
+    .t-phase { font: 600 13px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-sub-oa { font: 11px -apple-system, sans-serif; fill: #6e7781; }
+    .t-loop { font: italic 11px -apple-system, sans-serif; fill: #7a5a16; }
+    .arrow-orch { stroke: #d9b35a; stroke-width: 1.8; fill: none; }
+    .arrow-orch-loop { stroke: #d9b35a; stroke-width: 1.5; fill: none; }
+    .peer-tool { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .peer-agent { fill: #ffffff; stroke: #d9b35a; stroke-width: 1.2; }
+    .t-peer-title { font: 600 12px -apple-system, sans-serif; fill: #1a1a1a; }
+    .t-peer-sub { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .arrow-outbound { stroke: #0b6cff; stroke-width: 1.6; fill: none; }
+    .t-arrow-http { font: italic 11px -apple-system, sans-serif; fill: #0b6cff; }
+  </style>
+
+  <rect x="40" y="20" width="680" height="245" rx="8" class="agent-frame"/>
+  <text x="60" y="44" class="t-title-oa">Agent (one process)</text>
+  <text x="200" y="44" class="t-orch-label">— AIOrchestrator drives the flow</text>
+
+  <rect x="80" y="80" width="170" height="120" rx="6" class="phase-box"/>
+  <text x="165" y="100" text-anchor="middle" class="t-phase-num">PHASE 1</text>
+  <text x="165" y="120" text-anchor="middle" class="t-phase">Plan</text>
+  <text x="165" y="144" text-anchor="middle" class="t-sub-oa">Single LLM call against</text>
+  <text x="165" y="158" text-anchor="middle" class="t-sub-oa">the live capability catalog.</text>
+  <text x="165" y="184" text-anchor="middle" class="t-sub-oa">Output: a DAG of steps.</text>
+
+  <rect x="290" y="80" width="180" height="120" rx="6" class="phase-box"/>
+  <text x="380" y="100" text-anchor="middle" class="t-phase-num">PHASE 2</text>
+  <text x="380" y="120" text-anchor="middle" class="t-phase">Execute steps</text>
+  <text x="380" y="144" text-anchor="middle" class="t-sub-oa">For each step: resolve</text>
+  <text x="380" y="158" text-anchor="middle" class="t-sub-oa">capability → HTTP call →</text>
+  <text x="380" y="172" text-anchor="middle" class="t-sub-oa">response. Run in DAG order,</text>
+  <text x="380" y="186" text-anchor="middle" class="t-sub-oa">with parallelism where possible.</text>
+
+  <rect x="510" y="80" width="170" height="120" rx="6" class="phase-box"/>
+  <text x="595" y="100" text-anchor="middle" class="t-phase-num">PHASE 3</text>
+  <text x="595" y="120" text-anchor="middle" class="t-phase">Synthesize</text>
+  <text x="595" y="144" text-anchor="middle" class="t-sub-oa">Assemble step outputs</text>
+  <text x="595" y="158" text-anchor="middle" class="t-sub-oa">into a final response</text>
+  <text x="595" y="172" text-anchor="middle" class="t-sub-oa">for the user.</text>
+
+  <line x1="250" y1="140" x2="290" y2="140" class="arrow-orch" marker-end="url(#oa-arr-orch)"/>
+  <line x1="470" y1="140" x2="510" y2="140" class="arrow-orch" marker-end="url(#oa-arr-orch)"/>
+
+  <path d="M 380 200 C 380 240 165 240 165 215 L 165 200" class="arrow-orch-loop" marker-end="url(#oa-arr-orch)"/>
+  <text x="272" y="252" text-anchor="middle" class="t-loop">iterative re-plan, if needed</text>
+
+  <!-- Peer boxes below the agent frame -->
+  <rect x="310" y="300" width="130" height="50" rx="5" class="peer-tool"/>
+  <text x="375" y="324" text-anchor="middle" class="t-peer-title">Tool</text>
+  <text x="375" y="340" text-anchor="middle" class="t-peer-sub">(in its own process)</text>
+
+  <rect x="490" y="300" width="130" height="50" rx="5" class="peer-agent"/>
+  <text x="555" y="324" text-anchor="middle" class="t-peer-title">Agent</text>
+  <text x="555" y="340" text-anchor="middle" class="t-peer-sub">(in its own process)</text>
+
+  <!-- Outbound HTTP calls from Phase 2 to peers, piercing the agent's process boundary -->
+  <line x1="400" y1="200" x2="375" y2="300" class="arrow-outbound" marker-end="url(#oa-arr-blue)"/>
+  <line x1="450" y1="200" x2="555" y2="300" class="arrow-outbound" marker-end="url(#oa-arr-blue)"/>
+  <text x="358" y="248" class="t-arrow-http">HTTP</text>
+  <text x="520" y="248" class="t-arrow-http">HTTP</text>
+</svg>
+<figcaption><strong>Figure 1.</strong> <strong>Inside an agent: orchestration.</strong> A single AIOrchestrator inside the agent's process drives three phases — plan against the catalog, execute the resulting DAG, synthesize the response — and can loop back to plan when fresh data unlocks the next phase. The Execute phase's HTTP calls leave the process and reach peers — tools or other agents — that run in their own processes. One conductor inside one process; dispatched calls cross the boundary.</figcaption>
+</figure>
+
+<figure id="fig-decentralized-coordination">
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     role="img"
+     aria-label="Between participants. A Capability Registry box at the top is connected by thin dashed gray lines down to four participants below — Agent A and Agent C on the outside (each containing a small inner AIOrchestrator showing plan, act, observe, and a loop), and Tool B and Tool D between them (passive endpoints with no orchestrator). A thick blue arrow labelled 'user query' enters Agent A from outside the diagram on the left, indicating that Agent A is the entry point for the request. From there, thick blue arrows show direct peer-to-peer HTTP calls between participants: Agent A to Tool B, Agent C to Tool D, and Agent A curving downward to Agent C beneath the others. There is no central process between the participants; each one runs its own loop and reaches its peers directly.">
+  <defs>
+    <marker id="bp-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
+    </marker>
+  </defs>
+  <style>
+    .bp-registry { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-agent-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-tool-box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.2; }
+    .bp-orch-inner { fill: #fff8e6; stroke: #d9b35a; stroke-width: 1; }
+    .bp-t-title { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .bp-t-sub { font: 10.5px -apple-system, sans-serif; fill: #6e7781; }
+    .bp-t-orch { font: 600 11px -apple-system, sans-serif; fill: #7a5a16; }
+    .bp-t-orch-line { font: 10px -apple-system, sans-serif; fill: #7a5a16; }
+    .bp-t-arrow-blue { font: 600 11px -apple-system, sans-serif; fill: #0b6cff; }
+    .bp-t-arrow-gray { font: italic 10px -apple-system, sans-serif; fill: #6e7781; }
+    .bp-arrow-blue-thick { stroke: #0b6cff; stroke-width: 1.8; fill: none; }
+    .bp-arrow-gray-thin { stroke: #b8bcc2; stroke-width: 1; fill: none; stroke-dasharray: 3,3; }
+  </style>
+
+  <rect x="320" y="20" width="200" height="50" rx="6" class="bp-registry"/>
+  <text x="420" y="40" text-anchor="middle" class="bp-t-title">Capability Registry</text>
+  <text x="420" y="58" text-anchor="middle" class="bp-t-sub">passive index · register and discover</text>
+
+  <rect x="70" y="130" width="150" height="130" rx="6" class="bp-agent-box"/>
+  <text x="145" y="152" text-anchor="middle" class="bp-t-title">Agent A</text>
+  <rect x="80" y="170" width="130" height="78" rx="4" class="bp-orch-inner"/>
+  <text x="145" y="190" text-anchor="middle" class="bp-t-orch">AIOrchestrator</text>
+  <text x="145" y="210" text-anchor="middle" class="bp-t-orch-line">plan → act</text>
+  <text x="145" y="226" text-anchor="middle" class="bp-t-orch-line">→ observe ↻</text>
+
+  <rect x="280" y="160" width="110" height="80" rx="6" class="bp-tool-box"/>
+  <text x="335" y="182" text-anchor="middle" class="bp-t-title">Tool B</text>
+  <text x="335" y="205" text-anchor="middle" class="bp-t-sub">passive endpoint</text>
+  <text x="335" y="220" text-anchor="middle" class="bp-t-sub">no orchestrator</text>
+
+  <rect x="425" y="130" width="150" height="130" rx="6" class="bp-agent-box"/>
+  <text x="500" y="152" text-anchor="middle" class="bp-t-title">Agent C</text>
+  <rect x="435" y="170" width="130" height="78" rx="4" class="bp-orch-inner"/>
+  <text x="500" y="190" text-anchor="middle" class="bp-t-orch">AIOrchestrator</text>
+  <text x="500" y="210" text-anchor="middle" class="bp-t-orch-line">plan → act</text>
+  <text x="500" y="226" text-anchor="middle" class="bp-t-orch-line">→ observe ↻</text>
+
+  <rect x="635" y="160" width="110" height="80" rx="6" class="bp-tool-box"/>
+  <text x="690" y="182" text-anchor="middle" class="bp-t-title">Tool D</text>
+  <text x="690" y="205" text-anchor="middle" class="bp-t-sub">passive endpoint</text>
+  <text x="690" y="220" text-anchor="middle" class="bp-t-sub">no orchestrator</text>
+
+  <line x1="145" y1="130" x2="370" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="335" y1="160" x2="400" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="500" y1="130" x2="440" y2="70" class="bp-arrow-gray-thin"/>
+  <line x1="690" y1="160" x2="470" y2="70" class="bp-arrow-gray-thin"/>
+
+  <text x="420" y="100" text-anchor="middle" class="bp-t-arrow-gray">register / discover</text>
+
+  <line x1="8" y1="200" x2="68" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="38" y="194" text-anchor="middle" class="bp-t-arrow-blue">user query</text>
+
+  <line x1="220" y1="200" x2="278" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="250" y="194" text-anchor="middle" class="bp-t-arrow-blue">HTTP</text>
+
+  <line x1="575" y1="200" x2="633" y2="200" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="605" y="194" text-anchor="middle" class="bp-t-arrow-blue">HTTP</text>
+
+  <path d="M 220 260 C 285 318 360 318 425 260" class="bp-arrow-blue-thick" marker-end="url(#bp-arr-blue)"/>
+  <text x="322" y="313" text-anchor="middle" class="bp-t-arrow-blue">HTTP (Agent → Agent)</text>
+</svg>
+<figcaption><strong>Figure 2.</strong> <strong>Between participants: decentralized coordination.</strong> Agent A receives the user query (the inbound blue arrow on the left) and becomes the request initiator. From there, each participant runs independently. The dashed lines up to the registry carry registration and discovery; the blue arrows between participants carry the actual HTTP calls. There is no process in the middle that coordinates the calls — peers act on the shared protocol, the capability contract, and call each other directly.</figcaption>
+</figure>
+
+<p>The result: tools and agents look the same to the LLM. A capability is a capability. Adding a new participant is purely additive — no central manifest changes, no caller code changes, no redeploys elsewhere. Within one refresh cycle of the registry, the new participant is visible to every existing caller.</p>
+
+<p>One architectural property is worth surfacing here, because it underpins everything that follows: <strong>the wire protocol between agents and tools is plain HTTP/REST</strong>. Each participant exposes its capability descriptions, JSON schemas, health, and OpenAPI document over HTTP. Calls between peers are HTTP. The shared registry — Redis or Valkey by default; pluggable — sits behind the discovery interface, but everything visible to an agent, a tool, or a piece of platform tooling on the network is an HTTP/REST surface. The architecture introduces no new wire protocol for agent-tool communication — it composes well-understood distributed-systems primitives (service discovery, REST endpoints, structured contracts) into a model that fits multi-agent systems. The pattern is credible at scale not because it is new, but because every component of it has been operated in production microservice systems for years. The next subsection covers what that choice means operationally.</p>
+
+<h3 id="operational-reason">The operational reason</h3>
+
+<p>The architectural argument is necessary but not sufficient. Plenty of agent frameworks have interesting architectures and still struggle to land in enterprise environments. The reason is rarely the architecture itself; it is the operational footprint that comes with it.</p>
+
+<p>Most popular agent frameworks expect one or more of the following:</p>
+
+<ul>
+  <li>A managed SaaS control plane that hosts the orchestration logic and stores execution state.</li>
+  <li>A new runtime process — a workflow engine, an agent runtime daemon, a vendor-specific scheduler — that platform teams need to deploy, monitor, scale, and upgrade separately from the rest of the system.</li>
+  <li>A vendor-specific data plane: a proprietary message bus, a custom storage layer, or a control plane database that does not fit into the existing observability and backup strategy.</li>
+  <li>A different operational model for failure handling, secrets management, deployments, and access control.</li>
+</ul>
+
+<p>For a team that has spent years building a Kubernetes platform — Deployments, Services, Ingress, NetworkPolicies, mTLS, ConfigMaps, Secrets, HPA, an OpenTelemetry pipeline, a CI/CD path, on-call rotations — none of this is welcome. It is a parallel operating model for agent workloads. It also has real consequences: regulated and air-gapped deployments cannot use a SaaS control plane; namespace-based team isolation does not fit a single global orchestrator; on-call rotations have to learn a new failure mode set.</p>
+
+<p>TruvaG3 takes the opposite position. Every agent and every tool is an ordinary HTTP service, deployed and operated the way any other workload in the cluster is deployed and operated. Specifically:</p>
+
+<ul>
+  <li>Agents and tools are <strong>Deployments behind Services</strong>. The framework registers the Kubernetes Service DNS name, not pod IPs. The cluster's own Service load-balances calls across replicas. Horizontal Pod Autoscaler scales them like any other workload.</li>
+  <li>Configuration is through <strong>environment variables and ConfigMaps</strong>. Secrets are managed through <strong>Kubernetes Secrets</strong>.</li>
+  <li>Observability is <strong>native OpenTelemetry</strong>. Traces and metrics flow to the existing OTLP-compatible backend — Prometheus, Jaeger, Grafana, Loki, Tempo, or a commercial equivalent. No adapters.</li>
+  <li>The default registry is <strong>Redis or Valkey</strong>. Most teams already operate one or both. The interface is pluggable, so etcd, Consul, or a custom backend can replace it.</li>
+  <li>There is <strong>no required SaaS control plane</strong>. Self-hosted is the default. Air-gapped operation is supported, via namespaces.</li>
+</ul>
+
+<p>One of these choices is worth pulling out, because it changes the operational story for the whole framework.</p>
+
+<p><strong>The component-facing interface is HTTP/REST.</strong> Runtime calls between agents and tools are HTTP. Each component exposes its capability contract over HTTP at standard paths: the catalog at <code>/api/capabilities</code>, the individual capability endpoints at <code>/api/capabilities/{name}</code>, the auto-generated JSON Schema at <code>/api/capabilities/{name}/schema</code>, and the full OpenAPI document at <code>/openapi.json</code>. Health checks are HTTP. Telemetry export is OTLP over HTTP. There is no proprietary wire format and no sidecar to inject. Agents look up peers through the shared registry (Redis or Valkey by default; pluggable), but everything visible on the network between participants — runtime, contract, observability — is the same REST surface that any well-built microservice in your cluster already presents.</p>
+
+<p>This is a structural property, not a compatibility claim. Because the protocol is the one your platform team already operates, every piece of infrastructure that already works on your REST services works on TruvaG3 components in the same way: API gateways (Kong, Ambassador, Nginx), service meshes (Istio, Linkerd), ingress controllers, network policies, identity providers, mTLS, OAuth and JWT validation, RBAC, audit logging, rate limiters, web application firewalls, monitoring, API governance tools, OpenAPI consumers (Swagger UI, Postman, code generators). Nothing has to be re-built or re-secured for agent workloads. Security and authentication and authorization patterns the team has already standardized on apply by default, because the thing being secured is just an HTTP service.</p>
+
+<p>The combined claim is straightforward. TruvaG3 is architecturally different from most agent frameworks, because it inherits the micro-agents pattern. It is also operationally familiar, because the platform layer is the same Kubernetes platform the team is already running — and because the wire protocol is the same HTTP/REST contract every other service in the cluster already follows. Most frameworks pick one or the other; TruvaG3 is shaped around the assumption that both matter.</p>
+</section>
+
+<section>
+<h2 id="how-it-works">How the architecture works, briefly</h2>
+
+<p>This section is a compressed restatement of the architecture, enough to follow the rest of the article. For the full treatment — including production-team citations, the wiring problem in detail, and two captured execution traces from a running cluster — see the <a href="micro-agents-architecture.html">architecture article</a>.</p>
+
+<p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant publishes the capabilities it offers into a shared index, each identified by a logical name. These names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning catalog. The LLM picks capabilities; the framework dispatches each chosen step to the address the registry currently lists for that name.</p>
+
+<p>A registration carries more than a name. It also carries:</p>
+
+<ul>
+  <li>The network address (a Kubernetes Service DNS name, in cluster deployments) and the endpoint path.</li>
+  <li>A natural-language description, so the LLM can decide whether a capability is relevant to a request.</li>
+  <li>Structured field hints for inputs and outputs: name, type, example value, short description. These hints let the LLM generate correct JSON and let the framework validate it.</li>
+  <li>An optional full JSON Schema for deployments that want stricter validation.</li>
+</ul>
+
+<p>Registrations are kept alive by heartbeats. Each participant refreshes its entry every 15 seconds against a 30-second TTL. If a participant crashes or loses network connectivity, its entry expires within one TTL window. Liveness is the registration — there is no separate health-check system to keep in sync.</p>
+
+<p>Three roles run on top of the registry:</p>
+
+<table>
+  <thead>
+    <tr><th>Role</th><th>Registers capabilities?</th><th>Discovers peers?</th><th>Has internal orchestrator?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Tool</strong></td><td>Yes</td><td>No</td><td>No — passive HTTP endpoint</td></tr>
+    <tr><td><strong>Agent</strong></td><td>Yes</td><td>Yes</td><td>Yes — runs a plan-execute-synthesize loop</td></tr>
+    <tr><td><strong>Registry</strong></td><td>—</td><td>—</td><td>No — passive index</td></tr>
+  </tbody>
+</table>
+
+<p>The difference between tools and agents matters, and TruvaG3 enforces it at compile time. A <code>Registry</code> interface lets a component register but not discover. A <code>Discovery</code> interface extends <code>Registry</code> with the lookup methods. Tools satisfy <code>Registry</code> only. Agents satisfy <code>Discovery</code>. A tool cannot call discovery methods, because those methods do not exist on its interface. The check happens before the code runs:</p>
+
+<pre><code>// Tools can only register themselves (passive components)
+type Registry interface {
+    Register(ctx context.Context, info *ServiceInfo) error
+    UpdateHealth(ctx context.Context, id string, status HealthStatus) error
+    Unregister(ctx context.Context, id string) error
+    // No discovery methods — tools cannot find other components
+}
+
+// Agents can both register and discover (active orchestrators)
+type Discovery interface {
+    Registry  // Embeds registration capability
+    Discover(ctx context.Context, filter DiscoveryFilter) ([]*ServiceInfo, error)
+    FindService(ctx context.Context, serviceName string) ([]*ServiceInfo, error)
+    FindByCapability(ctx context.Context, capability string) ([]*ServiceInfo, error)
+}</code></pre>
+
+<p>In most frameworks the tool/agent boundary is a convention. In TruvaG3 it is a property the type system checks.</p>
+
+<aside class="callout">
+<strong>Naming note.</strong> A TruvaG3 <em>Tool</em> is not the same as an MCP (Model Context Protocol) tool. A TruvaG3 Tool is an independent microservice running in its own container, exposing one or more capabilities over HTTP. An MCP tool is a single named function inside an MCP server. The cleaner mapping is: a TruvaG3 Tool plays the role of an MCP server, and a TruvaG3 capability plays the role of an MCP tool.
+</aside>
+</section>
+
+<section>
+<h2 id="what-it-ships-with">What TruvaG3 ships with</h2>
+
+<p>The framework is intentionally modular. The <code>core</code> module is the only required dependency; everything else is opt-in. Six modules ship in the box:</p>
+
+<ul>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/core/README.md"><strong><code>core</code></strong></a> — defines the framework's interfaces (<code>Component</code>, <code>Registry</code>, <code>Discovery</code>, <code>AIClient</code>, <code>Telemetry</code>), base implementations for tools and agents, configuration loading, the pluggable service registry, and the auto-generated HTTP surface (capability endpoints, <code>/health</code>, <code>/openapi.json</code>). Every component depends on it.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md"><strong><code>ai</code></strong></a> — provider-neutral LLM client with zero-configuration provider detection, provider and model aliases, chain-client failover, and embeddings. Add it when an agent needs to call an LLM.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md"><strong><code>orchestration</code></strong></a> — the per-agent reasoning loop: dynamic LLM-driven planning, DAG execution with parallelism, iterative multi-phase plans, streaming, human-in-the-loop approvals, async tasks, and scheduled execution. Add it when an agent coordinates multi-step work.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/memory/README.md"><strong><code>memory</code></strong></a> — shared agent memory (episodic events, knowledge store, semantic recall) and per-user memory (extraction, reconciliation, forget). Add it when agents need state across requests.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md"><strong><code>resilience</code></strong></a> — circuit breakers, retry with exponential backoff and jitter, panic recovery. Add it for robust fault isolation between components.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md"><strong><code>telemetry</code></strong></a> — OpenTelemetry-native metrics, traces, and structured logging. Cross-cutting; the other modules wire it in through dependency injection.</li>
+</ul>
+
+<p>The walk below is a tour through what each of these modules provides, not a manual — each subsection has a link to the corresponding section of the <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/overview/FRAMEWORK_FEATURES_GUIDE.md">Framework Features Guide</a> for the details that matter at implementation time.</p>
+
+<h3 id="component-runtime">1. Component runtime</h3>
+
+<p>Behind every TruvaG3 component — tool or agent — is a small runtime that handles the work of being a service: starting an HTTP server, wiring middleware, registering capabilities with the discovery layer, propagating loggers and telemetry into handlers, refreshing heartbeats, and shutting down cleanly when the process gets a termination signal. The developer writes the business logic. The runtime handles everything else. A tool wrapping an external API typically needs less than 30 lines of glue code; the framework supplies the rest.</p>
+
+<p><strong>Functional-options API, predictable defaults.</strong> A component starts life with <code>core.NewFramework(component, opts...)</code>. Every operational property is set through a <code>With...</code> option — explicit when you need to override, invisible when defaults are fine. The options that come up in practice:</p>
+
+<ul>
+  <li><strong><code>WithName</code></strong> — the logical name the framework registers in discovery and uses in logs, metrics, and traces.</li>
+  <li><strong><code>WithPort</code></strong> — the HTTP port to listen on. Standard Kubernetes deployments leave this at the container port (e.g., 8080).</li>
+  <li><strong><code>WithNamespace</code></strong> — the logical namespace for multi-tenant isolation in the registry. Maps cleanly to Kubernetes namespaces.</li>
+  <li><strong><code>WithRedisURL</code></strong> / <strong><code>WithDiscovery</code></strong> — turn on the registry connection. Pluggable backends sit behind these.</li>
+  <li><strong><code>WithCORS</code></strong> / <strong><code>WithCORSDefaults</code></strong> — opt in to CORS for browser-facing components. Off by default, since most internal services do not need it.</li>
+  <li><strong><code>WithMiddleware</code></strong> — wire arbitrary HTTP middleware into the handler chain. The framework's own tracing, telemetry, and logger-propagation middleware are wired automatically; this is the hook for application-specific middleware (auth, rate-limiting, audit).</li>
+  <li><strong><code>WithOpenAPI</code></strong> — opt in to the auto-generated OpenAPI document at <code>/openapi.json</code>. Off by default for security; see <a href="#capability-contracts">§3</a> for what the document contains and <a href="#security">§12</a> for when to enable it.</li>
+  <li><strong><code>WithDevelopmentMode</code></strong> — looser defaults, verbose logging, less strict TTLs. Off in production deployments.</li>
+</ul>
+
+<p>Every option has a corresponding environment variable (<code>TRUVAG3_*</code>) so the same binary can run in many environments without recompilation. The precedence order is documented and predictable: explicit code overrides take priority, environment variables come next, framework defaults are the fallback.</p>
+
+<p><strong>Standard endpoints, no boilerplate.</strong> The framework auto-mounts a small set of endpoints on every component. Hit any running tool or agent and these are always there:</p>
+
+<ul>
+  <li><strong><code>GET /health</code></strong> — liveness probe. Returns the component's ID, name, type, and current health status. The live <code>weather-tool-v2</code> in the bundled examples returns exactly this: <code>{"id":"weather-tool-v2","name":"weather-tool-v2","status":"healthy","type":"tool"}</code>. The path is configurable; the default <code>/health</code> works with Kubernetes liveness and readiness probes without any extra configuration.</li>
+  <li><strong><code>GET /api/capabilities</code></strong> — the component's capability catalog. See <a href="#capability-contracts">§3</a>.</li>
+  <li><strong><code>POST /api/capabilities/{name}</code></strong> — the auto-generated endpoint per capability. Components do not have to write HTTP handlers; the framework binds the capability handler function to this path automatically when the capability is registered without an explicit endpoint.</li>
+  <li><strong><code>GET /api/capabilities/{name}/schema</code></strong> — auto-generated JSON Schema per capability. See <a href="#capability-contracts">§3</a>.</li>
+  <li><strong><code>GET /openapi.json</code></strong> — full OpenAPI document (when enabled).</li>
+  <li><strong><code>GET /discover</code></strong> — the registry snapshot from this component's point of view. See <a href="#runtime-discovery">§2</a>.</li>
+</ul>
+
+<p><strong>Lifecycle, signal-aware.</strong> The framework manages the component's full lifespan in a predictable order:</p>
+
+<ol>
+  <li><strong>Setup</strong> — configuration loading, dependency injection (registry, telemetry, memory store), middleware chain wiring.</li>
+  <li><strong>Background runnables start</strong> — anything registered via <code>RegisterRunnable</code> (memory sweepers, heartbeat goroutines, custom periodic jobs) starts in parallel.</li>
+  <li><strong>HTTP server starts</strong> — the component begins serving requests. Registration in the discovery registry is atomic and happens here; heartbeats begin firing immediately.</li>
+  <li><strong>Graceful shutdown on signal</strong> — when the process receives <code>SIGTERM</code> or <code>SIGINT</code> (the signals Kubernetes uses), the framework stops accepting new connections, waits for in-flight requests to complete (capped at <code>ShutdownTimeout</code>, default 10s, configurable via <code>TRUVAG3_HTTP_SHUTDOWN_TIMEOUT</code>), deregisters from discovery, stops background runnables, and exits cleanly. No connection cut mid-response, no orphan registry entries.</li>
+</ol>
+
+<p>The 10-second shutdown timeout aligns with Kubernetes' default <code>terminationGracePeriodSeconds</code> of 30 seconds, giving the framework headroom to drain requests before Kubernetes force-kills the pod.</p>
+
+<p><strong>Dependency injection by default.</strong> The framework gives every handler access to a logger, the discovery client, telemetry, memory, and the AI client (when configured) through dependency injection — no globals, no implicit state. Tests can substitute mocks for any of these through the standard interfaces (<code>core.Discovery</code>, <code>core.Memory</code>, <code>core.Telemetry</code>, <code>core.AIClient</code>); the in-memory implementations bundled with the framework are designed specifically for tests.</p>
+
+<p><strong>Background runnables.</strong> Long-running work that needs its own goroutine — a memory eviction sweeper, a metric reporter, a periodic refresh job — registers through <code>RegisterRunnable</code>. The framework starts it before the HTTP server, supplies a cancellation context, and stops it during graceful shutdown. The bundled scheduled-executor is built on this pattern; so are custom jobs application teams write for their own deployments.</p>
+
+<p><strong>Working examples in the cluster.</strong> Every tool and agent in the bundled examples uses this runtime — from the smallest single-capability tool to the full chat agents. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/my-tool">my-tool</a> example is a deliberately minimal demonstration (one capability, one handler, &lt; 30 lines of glue code) showing the smallest viable component. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a> shows what the same runtime looks like when an agent uses the full feature set — discovery, AI client, memory hooks, HITL, streaming.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/core/README.md">core/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/TOOL_DEVELOPMENT_GUIDE.md">Tool Development Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/AGENT_DEVELOPMENT_GUIDE.md">Agent Development Guide</a>.</p>
+
+<h3 id="runtime-discovery">2. Runtime discovery</h3>
+
+<p>Discovery is the primitive that makes the whole micro-agents architecture possible: agents find tools and other agents <em>by what they can do</em>, not by hardcoded addresses. A capability registered by one component becomes visible to every other component on the next read. Add a new tool, and every existing agent sees it within seconds — no agent code change, no redeploy. Remove a tool, and it disappears within seconds too.</p>
+
+<p>A single registry holds tools and agents on equal footing — any number of either — each publishing one or more capabilities that any other component can look up by name. All of it sits behind one Go interface called <code>core.Discovery</code>. Capability lookups are key-value reads, so the registry scales with the number of distinct capability names in the deployment, not with the wiring complexity between components.</p>
+
+<p><strong>Pluggable backend.</strong> Redis or Valkey is the default registry — they are key-value stores most platforms already operate for sessions, caching, or queuing. Behind <code>core.Discovery</code>, anything that satisfies the contract works: etcd, Consul, an in-memory mock for tests, or a custom backend the team writes. Switching backends is a deployment configuration change, not an application code change.</p>
+
+<p><strong>Three lookup methods, each for a different question.</strong></p>
+
+<ul>
+  <li><strong><code>FindByCapability(ctx, "geocode_location")</code></strong> — "give me every component that can do this." The workhorse. The orchestrator uses this when the LLM has chosen a capability and the framework needs the address that currently serves it. Most calls in a running system go through this path.</li>
+  <li><strong><code>FindService(ctx, "weather-tool-v2")</code></strong> — "give me this specific component, regardless of what it does." Useful for health checks, admin operations, or any case where the caller already knows the participant by name.</li>
+  <li><strong><code>Discover(ctx, filter)</code></strong> — "give me everything that matches these criteria." The filter can combine component type (tool vs agent), namespace, metadata, and capability — useful for cross-cutting queries like "list all agents in the <code>finance</code> namespace that expose a streaming capability."</li>
+</ul>
+
+<p><strong>TTL-backed leases, not separate health checks.</strong> Every registration carries a 30-second TTL. Each component refreshes its entry every 15 seconds (half the TTL, with jitter to spread load). If a component crashes, loses network, or simply stops responding, its entry expires within one TTL window — no separate liveness probe required, no orphan entries to clean up. The metric <code>truvag3_discovery_last_health_check_timestamp</code> exposes the timestamp of each component's last heartbeat per registry, so a stale value is the canonical signal that something is wrong.</p>
+
+<p><strong>Kubernetes Service DNS by default — replicas just work.</strong> In a Kubernetes deployment, the framework registers the Kubernetes Service DNS name (for example, <code>weather-tool-v2-service.truvag3-examples.svc.cluster.local</code>), not individual pod IPs. A discovered call therefore goes through the cluster's own Service, which load-balances across all healthy pods that match the selector. The practical consequence:</p>
+
+<ul>
+  <li>Horizontal Pod Autoscaler can scale a tool from 1 to 50 replicas without changing a single registry entry.</li>
+  <li>Rolling updates, pod restarts, and node failures are handled by Kubernetes; discovery does not even notice.</li>
+  <li>Outside Kubernetes (bare-metal, Docker Compose), the framework falls back to pod-scoped addresses — same registry shape, different default for what gets registered.</li>
+</ul>
+
+<p><strong>Service mesh compatibility.</strong> Because the framework advertises the Service DNS name and nothing else, transparent service meshes like Istio and Linkerd work without any special configuration. The mesh handles mTLS, traffic policy, retries, circuit breaking, and mesh telemetry at the network layer; the framework handles capability discovery at the application layer. The two are orthogonal — neither needs to know the other exists.</p>
+
+<p><strong>Live metrics, end-to-end.</strong></p>
+
+<ul>
+  <li><code>truvag3_discovery_registrations</code>, <code>_deregistrations</code> — components joining and leaving the registry. A spike in registrations on a deployment is expected; a spike at any other time is investigation-worthy.</li>
+  <li><code>truvag3_discovery_lookups</code> + <code>_duration_ms</code> — read traffic against the registry, with latency. Tells you whether the registry itself is healthy under load.</li>
+  <li><code>truvag3_discovery_services_found</code> — distribution of how many results each lookup returned. A drop to zero means a capability is currently unavailable; a sudden jump may indicate duplicate registrations.</li>
+  <li><code>truvag3_discovery_health_checks</code> + <code>_duration_ms</code> — heartbeat traffic and how long the registry takes to acknowledge each refresh.</li>
+</ul>
+
+<p>All of these metrics are emitted in the OTLP standard, so they flow into any OpenTelemetry-compatible backend your team already operates — Prometheus + Grafana, Datadog, Honeycomb, New Relic, Grafana Cloud, or any equivalent. No framework-specific monitoring tooling needs to be introduced for agent workloads.</p>
+
+<p><strong>Inspect the live registry.</strong> Every running framework component exposes <code>GET /discover</code>, which returns the full registry snapshot from that component's point of view (agents and tools, each with their capabilities and addresses). The Registry Viewer web app reads the same data and renders it as a browsable dashboard. Both are useful during development and incident response — they answer the basic question "what does my system currently look like?" without reading any logs.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/AUTO_DISCOVERY_GUIDE.md">Auto-Discovery Guide</a>.</p>
+
+<h3 id="capability-contracts">3. Self-describing capability contracts</h3>
+
+<p>How does an agent know what JSON to send a tool? In most frameworks, the agent's source code holds a hand-written wrapper for each tool — signature, field names, types — which has to stay in sync with the tool's actual API. When the tool changes, the wrapper drifts. When wrappers drift, the agent stops working in subtle ways that are hard to debug. TruvaG3 takes a different approach: the contract is part of the registration, not part of the caller. Every capability publishes everything an LLM needs to generate a valid payload, everything the framework needs to validate it before sending, and everything a developer needs to inspect it from a browser — all from the same source of truth.</p>
+
+<p><strong>Three layers, each more precise than the last.</strong> A registered capability carries:</p>
+
+<ol>
+  <li><strong>Natural-language description</strong> — what the capability does, what inputs it expects, what outputs it returns. The LLM reads this when deciding whether the capability is relevant to a request at all. Research on JSON-schema-aware LLM generation suggests good descriptions land roughly 85-90% accuracy on payload generation by themselves.</li>
+  <li><strong>Structured field hints</strong> — for each input and output field: name, type (string, number, boolean, object, array), example value, and short description. Precise enough that the LLM knows the input field is called <code>location</code> and not <code>city</code>, that <code>amount</code> should be a number, and that the response will contain <code>currency.code</code>. Field hints typically lift payload accuracy to ~95%.</li>
+  <li><strong>JSON Schema (optional)</strong> — for deployments that need strict validation, the framework auto-generates a JSON Schema draft-07 document from the field hints, served at <code>/api/capabilities/{name}/schema</code>. The orchestrator can fetch this schema and validate the LLM-generated payload before sending the request, catching the remaining edge cases — wrong types, missing required fields, values outside the allowed set.</li>
+</ol>
+
+<p>The layers stack. Phase 1 ships by default for every registered capability. Phase 2 is the recommended baseline for any production tool. Phase 3 is opt-in for the small set of cases where validation has to be perfect.</p>
+
+<p><strong>Everything is reachable over HTTP.</strong> The same self-describing data that the framework uses internally is reachable by anyone on the network through standard REST endpoints — auto-generated, no extra code:</p>
+
+<ul>
+  <li><code>GET /api/capabilities</code> — the component's full capability catalog, including descriptions, input and output field hints, endpoint paths, and input/output content types.</li>
+  <li><code>GET /api/capabilities/{name}</code> — the capability endpoint itself (the handler that runs the work).</li>
+  <li><code>GET /api/capabilities/{name}/schema</code> — the auto-generated JSON Schema for that capability's input. Useful for code generators, validators, and contract tests.</li>
+  <li><code>GET /openapi.json</code> — a complete OpenAPI document covering every capability the component exposes, with both Input and Output schemas registered as named components. Drops straight into Swagger UI, Postman, code generators, and API gateways that consume OpenAPI.</li>
+</ul>
+
+<p>The practical consequence: the people, scripts, and platforms that already integrate with REST services in your organization can integrate with TruvaG3 tools the same way. There is no separate API documentation site that has to be kept in sync with the code, no client SDK with hardcoded signatures, no version-pinned schema file checked into a wiki — the registration <em>is</em> the documentation.</p>
+
+<p><strong>Output schemas catch a class of LLM mistakes.</strong> Most planning systems only describe inputs; output structure is left implicit. TruvaG3 also publishes an <code>OutputSummary</code> for every capability. When a multi-step plan references upstream output — <code>{{step-1.response.data.products}}</code> — the orchestrator validates that <code>products</code> is actually a declared field in step 1's output. If the LLM hallucinated a field that does not exist, the validation rejects the plan before any step runs and asks for a corrected plan. Field-level hallucination becomes a recoverable retry instead of a confusing runtime error.</p>
+
+<p><strong>Schema cache for high-traffic deployments.</strong> When strict validation is enabled, the orchestrator caches fetched schemas in Redis (the default backend) with a 24-hour TTL — shared across all agent replicas, so even with horizontal scaling each schema fetch happens at most once per TTL window. The cache exposes hit-rate statistics through standard metrics; configurable TTL and key prefix for multi-tenant deployments.</p>
+
+<p><strong>Working examples in the cluster.</strong> Every bundled tool ships with all three layers wired. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2">weather-tool-v2</a> example, for instance, publishes <code>get_current_weather</code> with a natural-language description, field hints declaring <code>lat</code> and <code>lon</code> as required numbers with realistic example values, an auto-generated JSON Schema reachable at <code>/api/capabilities/get_current_weather/schema</code>, and the capability appearing in the tool's <code>/openapi.json</code> with separate Input and Output schema components.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md">Tool Schema Discovery Guide</a>.</p>
+
+<h3 id="observability">4. Observability</h3>
+
+<p>The depth of telemetry is one of the framework's most distinctive properties. Every meaningful operation across every layer of the stack emits a span and one or more metrics — not just at the agent boundary, but <em>inside</em> the orchestrator, the AI client, the discovery layer, the memory subsystem, the pipeline hooks, and the prompt builder. A single user request that crosses three services typically produces 40+ spans across roughly 28 distinct operation types, with rich attributes on each.</p>
+
+<p><strong>Distributed traces.</strong> W3C TraceContext propagation reassembles a request that spans several agents and tools into one trace in any OTLP-compatible backend (Jaeger, Tempo, Honeycomb, Datadog, etc.). Each span carries operation-specific attributes:</p>
+
+<ul>
+  <li><strong>AI calls</strong> — provider, model, prompt and completion token counts, total tokens, cost in USD, finish reason, streaming flag, retry attempt, max retries, chain provider index, attempt status.</li>
+  <li><strong>Orchestrator phases and steps</strong> — plan ID, phase number, total phases, steps per phase, terminal flag, termination reason; per step: agent name, capability invoked, attempt count, success status, duration.</li>
+  <li><strong>Synthesis</strong> — model, provider, prompt/completion/total tokens, step count, success and failure counts, finish reason, streaming flag.</li>
+  <li><strong>Pipeline hooks</strong> — hook name and stage (before-planning, after-planning, after-execution, after-synthesis), duration, short-circuit outcome.</li>
+  <li><strong>Memory operations</strong> — recall path (identity, query, stable namespace, summary, universal), candidate count, neighbors found, facts recalled, search duration.</li>
+  <li><strong>Prompt building</strong> — builder type, prompt size, request size, capability info size, type-rule count, custom-persona flag.</li>
+</ul>
+
+<p><strong>Metrics.</strong> 240+ base metric families exported via OTLP/HTTP to any OpenTelemetry-compatible backend, with cardinality-protected labels. Coverage spans every framework layer:</p>
+
+<ul>
+  <li><strong>Orchestration</strong> — plans generated, plan success rate, average phases per request, plan-generation duration, continuation re-plan rate, parse-error counts.</li>
+  <li><strong>AI</strong> — requests per provider and model, token usage, request duration, failure counts, chain failover and exhaustion events, embedding requests, embedding tokens.</li>
+  <li><strong>Discovery</strong> — lookups, registrations, deregistrations, health-check duration, services found per lookup.</li>
+  <li><strong>Memory</strong> — cache hits and misses, eviction rate, ops rate, conversation-history compaction duration, episodic events recorded.</li>
+  <li><strong>HITL</strong> — checkpoints created, decisions per outcome (approved, rejected, edited, expired).</li>
+  <li><strong>HTTP</strong> — request and response sizes, durations, status codes — at both client and server.</li>
+</ul>
+
+<p><strong>Structured logging.</strong> JSON logs carry trace IDs from request context, so logs and traces correlate in Loki and Jaeger without any extra wiring.</p>
+
+<p><strong>Pre-built Grafana dashboards.</strong> The bundled local deployment installs nine dashboards under a <em>TruvaG3</em> folder: Platform Overview, Agent Telemetry, LLM &amp; AI Analytics, Orchestration &amp; Execution, Memory &amp; Knowledge, Logs &amp; Traces, Resource Usage, plus two for the sample workload. Turn-key visibility from a fresh install — the dashboards work because the metrics they query are the standard ones the framework emits by default.</p>
+
+<p>For developers, two additional tools help during build and debug:</p>
+
+<ul>
+  <li><strong>Registry Viewer</strong> — a web app that inspects the live service registry, captured LLM payloads, HITL checkpoints, execution DAGs, and shared memory. It is the same viewer used to capture the screenshots in the architecture article.</li>
+  <li><strong>Swagger UI</strong> — consumes the per-component <code>/openapi.json</code> document and provides interactive API exploration.</li>
+</ul>
+
+<p>This depth is unusual. Most agent frameworks expose logs and a few LLM-call traces; orchestrator-internal state, memory operations, discovery behavior, pipeline-hook execution, and chain-failover paths are typically not instrumented. Because TruvaG3 components are ordinary HTTP services emitting OTLP, all of this data lands in the observability stack the platform team already operates — Prometheus + Jaeger + Grafana + Loki by default, or any commercial equivalent.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md">telemetry/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/observability/DISTRIBUTED_TRACING_GUIDE.md">Distributed Tracing Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md">Logging Implementation Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/DEV_TOOLS_GUIDE.md">Developer Tools Guide</a>.</p>
+
+<h3 id="ai-provider-layer">5. Vendor-agnostic AI provider layer</h3>
+
+<p>The <code>ai</code> module sits behind a single Go interface — <code>core.AIClient</code> — that every agent talks to. Behind that interface, the framework supports eleven providers out of the box and lets teams plug in their own. Application code never names a provider in source; it asks for a client and gets one wired to whichever provider the deployment has configured. The same agent image runs against OpenAI in one environment, a self-hosted Ollama model in another, and an Anthropic-with-Groq-fallback chain in a third — without recompiling.</p>
+
+<p><strong>Eleven providers ship in the box.</strong> Four native (each with first-class support for that provider's API features) and seven OpenAI-compatible (any service that exposes an OpenAI-compatible HTTP API):</p>
+
+<ul>
+  <li><strong>Native:</strong> <code>openai</code>, <code>anthropic</code>, <code>gemini</code>, <code>bedrock</code></li>
+  <li><strong>OpenAI-compatible:</strong> <code>openai.groq</code>, <code>openai.deepseek</code>, <code>openai.xai</code>, <code>openai.mistral</code>, <code>openai.qwen</code>, <code>openai.together</code>, <code>openai.ollama</code></li>
+</ul>
+
+<p>Provider names are logical; they map to concrete endpoints at runtime through environment variables. Switching a deployment from <code>openai</code> to <code>openai.groq</code> is one env-var change — no code change, no rebuild.</p>
+
+<p><strong>Zero-configuration provider detection.</strong> <code>ai.NewClient()</code> scans environment variables, detects which API key is present (<code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, …), picks the highest-priority configured provider, and returns a ready-to-use client. Two metrics expose what happened:</p>
+
+<ul>
+  <li><code>truvag3_ai_provider_detection</code> — counter of detection runs.</li>
+  <li><code>truvag3_ai_provider_selected</code> — counter labeled by which provider won, so dashboards can show provider mix across environments at a glance.</li>
+</ul>
+
+<p><strong>Six portable model aliases.</strong> Instead of hardcoding model IDs like <code>gpt-4.1-mini</code> or <code>claude-sonnet-4-5-20250929</code>, application code requests a role. Each provider has its own mapping:</p>
+
+<ul>
+  <li><strong><code>default</code></strong> — provider-recommended workhorse (OpenAI → gpt-4.1-mini, Anthropic → claude-sonnet-4-5, Gemini → gemini-2.5-flash)</li>
+  <li><strong><code>fast</code></strong> — cheapest / lowest-latency option</li>
+  <li><strong><code>smart</code></strong> — best-reasoning model (OpenAI → o3, Anthropic → sonnet-4-5, Gemini → gemini-2.5-pro)</li>
+  <li><strong><code>premium</code></strong> — maximum-intelligence model (Anthropic → opus-4-5, Gemini → gemini-3-pro-preview)</li>
+  <li><strong><code>code</code></strong> — best for code generation</li>
+  <li><strong><code>vision</code></strong> — supports multimodal image input</li>
+</ul>
+
+<p>Each alias can be overridden per environment with <code>TRUVAG3_{PROVIDER}_MODEL_{ALIAS}</code> env vars — so you can pin a specific model in production while letting development float to the latest.</p>
+
+<p><strong>Chain client with automatic failover.</strong> A chain client wraps multiple providers and tries them in order; if a request gets a retryable error (rate limit, 5xx, transient failure), it fails over to the next provider transparently. The chain is instrumented at every level:</p>
+
+<ul>
+  <li><code>truvag3_ai_chain_attempt</code> — every provider attempt, labeled by provider and attempt index.</li>
+  <li><code>truvag3_ai_chain_failover</code> — counter of failover events. A rising rate is the canonical signal that the primary provider is degraded.</li>
+  <li><code>truvag3_ai_chain_exhausted</code> — counter of requests where every provider in the chain failed. Should be near zero in healthy operation.</li>
+  <li><code>truvag3_ai_chain_stream_success</code>, <code>_partial</code>, <code>_failure</code> — outcomes for streaming requests, which can succeed, partially succeed (some tokens before failure), or fail.</li>
+</ul>
+
+<p>The trace view of a failover looks like this: a parent <code>ai.chain.generate_response</code> span containing one or more <code>ai.chain.provider_attempt</code> spans, each carrying <code>ai.chain.provider</code>, <code>ai.chain.provider_alias</code>, <code>ai.chain.provider_index</code>, <code>ai.chain.attempt_status</code>, and <code>ai.chain.attempt_duration_ms</code>. The reason a request took two seconds is visible without reading logs.</p>
+
+<p><strong>Per-request cost annotation.</strong> Every <code>ai.generate_response</code> and <code>ai.stream_response</code> span carries an <code>ai.cost_usd</code> attribute computed from prompt and completion token counts at the model's list price. The pricing table covers about 20 model families (current OpenAI, Anthropic, Gemini, Groq's gpt-oss) and is treated as an estimate rather than a billing source of truth. The point is per-trace cost visibility in Jaeger or any tracing backend — clicking on a slow trace also tells you what that request cost.</p>
+
+<p><strong>Standard AI metrics across all providers.</strong></p>
+
+<ul>
+  <li><code>truvag3_ai_request</code> + <code>truvag3_ai_request_duration_ms</code> + <code>truvag3_ai_request_failures</code> — request rate, latency, and error rate per provider/model.</li>
+  <li><code>truvag3_ai_tokens_used</code> — token throughput, labeled by provider, model, and token type (prompt vs completion).</li>
+  <li><code>truvag3_ai_embedding_duration_ms</code>, <code>_tokens</code>, <code>_success</code>, <code>_errors</code> — separate instrumentation for embeddings, which most agent frameworks bundle into the same metric as generation.</li>
+</ul>
+
+<p><strong>Custom providers.</strong> Internal gateways, private endpoints, or new external services all plug in behind the same <code>AIClient</code> interface. The provider registry is what auto-detection consults, so a custom provider becomes a first-class option once registered. <code>truvag3_ai_provider_detection_duration_ms</code> tracks how long detection itself takes, which becomes useful when a registry has many providers.</p>
+
+<p><strong>Working examples in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-orchestration">agent-with-orchestration</a> example wires <code>ai.NewChainClient</code> with explicit ordering. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a> uses the same chain pattern with auto-detection.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md">ai/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/AI_PROVIDERS_SETUP_GUIDE.md">AI Providers Setup Guide</a>.</p>
+
+<h3 id="orchestration">6. Orchestration</h3>
+
+<p>The orchestrator is what turns a list of capabilities and a natural-language request into an answer. It is the per-agent reasoning loop, and it is built around dynamic LLM-driven planning — the part of the framework that most directly uses the micro-agents architecture. No hand-written routing graphs, no pre-wired tool list in source code: the plan is generated against whatever is in the registry at the moment the request arrives.</p>
+
+<p><strong>The plan-execute-synthesize loop.</strong> A request enters the orchestrator. The orchestrator hands the live capability catalog to the LLM and asks for a plan. The LLM returns a directed acyclic graph (DAG) of steps — each step names a capability and lists the steps it depends on. The executor then runs the DAG: independent steps in parallel, dependent steps in topological order. When all steps finish, a synthesis call composes the response. Every operation along this path is instrumented, with one span per layer:</p>
+
+<ul>
+  <li><strong><code>orchestrator.process_request_streaming</code></strong> — the top-level span. Attributes: <code>iterative_planning</code>, <code>phase_count</code>.</li>
+  <li><strong><code>orchestrator.phase.N</code></strong> — one per planning phase. Attributes: <code>phase_number</code>, <code>plan_id</code>, <code>plan_source</code>, <code>steps_in_phase</code>.</li>
+  <li><strong><code>orchestrator.step.step-N</code></strong> — one per step. Attributes: <code>step.agent_name</code>, <code>step.capability</code>, <code>step.attempts</code>, <code>step.duration_ms</code>, <code>step.success</code>, <code>step.namespace</code>.</li>
+  <li><strong><code>orchestrator.synthesis</code></strong> — the final composition call. 14 attributes: model, provider, prompt and completion tokens, total tokens, prompt and response length, finish reason, streaming flag, step count, success and failure step counts, chunks sent, duration.</li>
+</ul>
+
+<p><strong>Iterative multi-phase planning.</strong> When the LLM cannot plan the full response upfront — because the destinations come from a search, or the coordinates come from geocoding, or the next step depends on what the previous step returned — the orchestrator returns to planning after a phase completes and feeds fresh results back as planning context. Plans are capped at 5 phases by default (<code>MaxPhases</code>), tunable through environment variables. The Switzerland trip example in the architecture article shows this in practice: phase 1 calls one web search, phase 2 fans out three parallel geocoding calls, phase 3 fans out six parallel weather and hotel calls — 10 tool invocations in three phases, 6-way parallelism at peak, 29 seconds wall time. The metric <code>truvag3_orchestration_phases_per_request</code> exposes the actual phase count distribution so a production team can see whether their workload is mostly single-phase, multi-phase, or both.</p>
+
+<p><strong>Plan validation, before any step runs.</strong> The LLM occasionally produces plans that are structurally invalid — references to dependencies that do not exist, references to steps in earlier phases that were never created, references to plan macros that are not registered. The orchestrator catches each of these classes before execution starts and emits a metric per rejection class:</p>
+
+<ul>
+  <li><code>truvag3_orchestration_plan_rejected_missing_dependency</code></li>
+  <li><code>truvag3_orchestration_plan_rejected_cross_phase_missing_step</code></li>
+  <li><code>truvag3_orchestration_plan_rejected_unknown_macro</code></li>
+</ul>
+
+<p>A rising rejection count is the canonical signal that the planning prompt has drifted, the LLM provider has been swapped to a less capable model, or a new tool's schema has confused the planner — visible without reading a single log line.</p>
+
+<p><strong>Tiered capability selection (large-catalog mode).</strong> Once a deployment grows past 20 registered capabilities (the default <code>TRUVAG3_TIERED_MIN_TOOLS</code> threshold), sending all schemas to every planning call wastes tokens and can exceed the context window. Instead, the orchestrator sends lightweight tool summaries to the planner first, asks for the tool selection, then fetches full schemas only for the chosen tools. The selection step is capped at 2000 tokens by default (<code>TRUVAG3_TIERED_SELECTION_MAX_TOKENS</code>). This is enabled by default and configurable per deployment.</p>
+
+<p><strong>Per-step retry, with semantic re-resolution.</strong> Each step gets an initial attempt plus two retries by default (<code>TRUVAG3_STEP_RETRY_MAX_ATTEMPTS</code>). Generic retry with exponential backoff handles transient transport errors. For input-level failures — wrong field name, missing required value, ambiguous parameter — the orchestrator goes further: it can ask the LLM to read the error, the original payload, and the capability's input schema, then propose corrected parameters before the next attempt. The metrics <code>truvag3_orchestration_error_analysis_retry</code> and <code>_no_retry</code> track whether the LLM judged the error recoverable; <code>truvag3_orchestration_error_analyzer_llm_latency_ms</code> tracks how long the analysis itself took.</p>
+
+<p><strong>Result trimming for large step outputs.</strong> Tool responses sometimes weigh in at tens of kilobytes — a clinical record, a full Confluence page, a deep telemetry payload. Pushing these raw into the next planning prompt would waste tokens and confuse the LLM. The orchestrator trims them before they enter the next prompt: structural trimming first (preserves JSON shape, key names, representative samples), with an optional LLM-summarization pass for very large outputs. Tracked by <code>truvag3_orchestration_result_trim_*</code> and <code>truvag3_orchestration_result_distill_triggered</code>; the original byte size is recorded in <code>truvag3_orchestration_result_original_size_bytes</code>, which makes it easy to identify which tools are producing oversized responses.</p>
+
+<p><strong>Streaming and clarification.</strong> The orchestrator can emit progress events while work is running — phase started, step completed, synthesis token chunks — suitable for chat UIs and long-running operations. When the planner needs information it cannot infer (a date, a destination, an account ID), it surfaces a structured <code>Clarification</code> request rather than hallucinating a value. Simple chat UIs forward the natural-language response; richer UIs can render structured prompts from the clarification field.</p>
+
+<p><strong>Working examples in the cluster.</strong> The bundled <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a>, <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">devops-chat-agent</a>, and <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-orchestration">agent-with-orchestration</a> all wire the dynamic orchestrator. The Jaeger traces they emit (40+ spans per request across multiple services) are what the architecture article's captured executions are based on.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md">orchestration/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md">LLM Planning Prompt Guide</a>.</p>
+
+<h3 id="reliability">7. Reliability and error recovery</h3>
+
+<p>Failure is a normal part of running distributed systems. Networks degrade, external APIs rate-limit, downstream services go through deployments, and LLMs sometimes pass slightly wrong arguments. A framework that ignores this turns every transient problem into a user-facing error. TruvaG3 builds error handling into the request path as a layered, instrumented system — so most failures are absorbed and recovered from before they ever reach the user. The orchestrator-internal recovery layers (semantic re-resolution, LLM error analysis, result trimming) are covered in <a href="#orchestration">§6 above</a>; this section is about the foundation underneath them: how tools report errors and the resilience primitives the framework provides.</p>
+
+<p><strong>Structured tool errors, not opaque strings.</strong> Every tool that returns an error returns a typed <code>ToolError</code> with a <code>Category</code> field. There are five categories, and each one tells the orchestrator something specific about what to do next:</p>
+
+<ul>
+  <li><strong><code>INPUT_ERROR</code></strong> — the request was malformed (wrong field name, wrong type, value out of range). The orchestrator can route this to the LLM error analyzer, which will read the error and propose corrected parameters before the next attempt.</li>
+  <li><strong><code>NOT_FOUND</code></strong> — the requested resource does not exist. Usually non-retryable; the orchestrator surfaces it to the synthesis step so the response can tell the user the resource is missing.</li>
+  <li><strong><code>RATE_LIMIT</code></strong> — the upstream API quota was exceeded. Retryable with backoff; the framework waits and tries again.</li>
+  <li><strong><code>AUTH_ERROR</code></strong> — credentials are invalid or missing. Non-retryable on its own (no point in retrying the same bad token); escalates to operator attention.</li>
+  <li><strong><code>SERVICE_ERROR</code></strong> — the upstream service is temporarily unhealthy (5xx, network error). Retryable with backoff.</li>
+</ul>
+
+<p>Because the category is explicit, the orchestrator's response is deterministic rather than guessed from the error message text. A tool that returns <code>RATE_LIMIT</code> gets retried with backoff; a tool that returns <code>AUTH_ERROR</code> does not.</p>
+
+<p><strong>Step retry with exponential backoff and jitter.</strong> Each step in a plan gets an initial attempt plus two retries by default (<code>TRUVAG3_STEP_RETRY_MAX_ATTEMPTS</code>, total 3). The wait between attempts grows exponentially — 100ms initial, doubling each attempt, capped at 5 seconds — with random jitter added so that a fleet of agents retrying against the same backend does not synchronize into a thundering-herd retry storm. These defaults come from the resilience module's <code>DefaultRetryConfig</code>; every value is configurable per call.</p>
+
+<p><strong>Circuit breakers for failure isolation.</strong> A single misbehaving tool can affect every agent that calls it. TruvaG3 ships a circuit breaker primitive (<code>resilience.CircuitBreaker</code>) that any agent can wrap around outbound calls. Three states:</p>
+
+<ul>
+  <li><strong>Closed</strong> — normal operation; calls flow through.</li>
+  <li><strong>Open</strong> — too many failures in the recent window; calls fail fast without touching the upstream service, giving it time to recover.</li>
+  <li><strong>Half-open</strong> — after a recovery timeout, a limited number of calls is allowed through to test whether the downstream is healthy again. Success closes the breaker; failure reopens it.</li>
+</ul>
+
+<p>Thresholds are configurable: error rate (default 0.5, meaning open if more than half of recent requests fail), volume threshold (minimum request count before evaluation), and recovery timeout. The breaker's state, transitions, and outcomes are all instrumented:</p>
+
+<ul>
+  <li><code>agent.circuit_breaker.success</code> / <code>.failure</code> — outcomes of attempted calls.</li>
+  <li><code>agent.circuit_breaker.open</code> — number of times each breaker has opened. A rising value means a downstream is in trouble.</li>
+  <li><code>agent.circuit_breaker.rejected</code> — calls fast-failed by an open breaker. Tells you how much load the breaker absorbed.</li>
+  <li><code>circuit_breaker.state</code> — gauge of the current state (closed / open / half-open), per breaker.</li>
+</ul>
+
+<p>An operator looking at a Grafana panel for circuit breakers can see immediately which downstream services are degraded — without reading any application logs.</p>
+
+<p><strong>Panic recovery, so a single bad request does not crash the process.</strong> Go's <code>panic</code> mechanism is occasionally triggered by unexpected conditions — a nil dereference inside a third-party library, a malformed response, a corrupt payload. The framework wraps execution paths with <code>recover()</code>, so a panic during one request is caught, logged with full stack trace, and converted into a structured error returned to the caller. The agent process keeps serving other requests. Without this, one buggy code path could take down an entire pod and trigger a cascade of restarts.</p>
+
+<p><strong>How the pieces fit together.</strong> A typical failure scenario, end to end:</p>
+
+<ol>
+  <li>An agent makes an outbound call through a circuit breaker. The breaker is closed; the call goes through.</li>
+  <li>The downstream tool returns <code>RATE_LIMIT</code> with a retry-after hint.</li>
+  <li>The orchestrator's step-retry layer sees the retryable category, waits with exponential backoff plus jitter, and retries.</li>
+  <li>The second attempt succeeds. The breaker records the success, the request completes.</li>
+</ol>
+
+<p>If the rate-limit persisted across all retries, the request would fail with a clean structured error rather than a hang. If many agents were hitting the same rate-limited tool, the breaker would eventually open and shed load. If a code path inside the tool panicked instead, the panic would be caught and converted into a <code>SERVICE_ERROR</code> response. At no point does an unexpected failure crash the calling agent.</p>
+
+<p><strong>Working example in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-resilience">agent-with-resilience</a> example wires all of this end to end: per-tool circuit breakers, <code>resilience.RetryWithCircuitBreaker</code> for combined retry + breaker protection, <code>cb.ExecuteWithTimeout</code> for explicit timeout control, and a status endpoint that exposes circuit-breaker state per downstream tool. It is the right starting point for any agent that needs hardened fault isolation.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md">resilience/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/ERROR_HANDLING_GUIDE.md">Error Handling Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/INTELLIGENT_ERROR_HANDLING.md">Intelligent Error Handling</a>.</p>
+
+<h3 id="async-and-scheduling">8. Async tasks and scheduling</h3>
+
+<p>Not every agent workflow fits inside a single synchronous HTTP request. A research-style agent that calls a dozen tools across three planning phases can take a minute or more — long enough that holding a TCP connection open is fragile and the user has no useful progress signal. A nightly batch that runs at 2 AM is not even waiting for a user request. TruvaG3 ships two complementary mechanisms for these cases: <strong>async tasks</strong> for long-running synchronous-shaped work and <strong>scheduled execution</strong> for time-based work.</p>
+
+<p><strong>Async tasks — the standard HTTP-202-and-polling pattern.</strong> The client sends a request, the API returns immediately with a task ID and <code>202 Accepted</code>, and the work continues in the background. The client then polls a status endpoint until the task is complete:</p>
+
+<ol>
+  <li><code>POST /async-process</code> with the request body → returns <code>{"task_id": "task-abc123", "status": "pending"}</code>.</li>
+  <li><code>GET /tasks/task-abc123</code> → returns <code>{"status": "running", "progress": "Phase 2 of 3..."}</code> while work is in flight.</li>
+  <li><code>GET /tasks/task-abc123</code> after completion → returns the full response payload.</li>
+</ol>
+
+<p>Step-completion callbacks during execution write progress updates into the task store, so the polling client gets meaningful state — *"completed step 4 of 7"*, not just "still running." The duration of each task and the wait time before it is picked up by a worker are both instrumented in Prometheus: <code>truvag3_executor_task_duration_ms</code>, <code>truvag3_executor_task_wait_ms</code>, <code>truvag3_executor_tasks_submitted</code>, <code>truvag3_executor_tasks_completed</code>. A wait-time histogram that starts climbing is the canonical signal that you need more workers.</p>
+
+<p><strong>Scheduled execution — three primitives that cover everything.</strong> A scheduler-tool capability lets any agent or external system create a schedule against any target agent. The three primitives are mutually exclusive (exactly one per schedule):</p>
+
+<ul>
+  <li><strong><code>delay</code></strong> — relative one-shot. Go-duration string like <code>"30s"</code>, <code>"10m"</code>, <code>"2h"</code>. Useful for follow-ups: <em>"check this order status in 15 minutes"</em>.</li>
+  <li><strong><code>run_at</code></strong> — absolute time. RFC3339 timestamp like <code>"2026-06-01T18:00:00Z"</code>. Useful for one-off events: <em>"send a reminder at 6 PM on launch day"</em>.</li>
+  <li><strong><code>cron_expr</code></strong> — recurring. Standard five-field cron syntax (<code>*/5 * * * *</code>, <code>0 9 * * 1-5</code>, etc.) parsed by the well-established <code>robfig/cron/v3</code> library. Useful for periodic work: <em>"run the daily compliance check every morning at 9 AM."</em></li>
+</ul>
+
+<p>The architecture has three roles, each independently deployable:</p>
+
+<ol>
+  <li><strong>Scheduler-tool</strong> — the create/update/delete API for schedules. It is just another TruvaG3 tool, discoverable like everything else.</li>
+  <li><strong>Scheduled-executor</strong> — a worker that polls the schedule store for due work, atomically claims it (so two workers cannot fire the same schedule twice), and dispatches the task to the target agent. Scales horizontally — add replicas to handle more schedules.</li>
+  <li><strong>Target agent</strong> — any agent that registers a <code>scheduled</code> handler. One-line wiring opts in; the agent then receives scheduled requests through the same orchestration pipeline that handles synchronous chat requests.</li>
+</ol>
+
+<p><strong>Two delivery models for different reliability needs.</strong> Both async tasks and scheduled execution sit on a pluggable backend interface, with two bundled implementations:</p>
+
+<ul>
+  <li><strong>At-most-once (default, Redis lists)</strong> — once a worker pops a task off the queue, it is gone from the queue. If the worker crashes mid-execution, the task is lost. Cheap, simple, fine for idempotent work and best-effort schedules.</li>
+  <li><strong>At-least-once (Redis Streams)</strong> — uses consumer groups with explicit acknowledgement. A claimed task that is not acknowledged within a timeout is redelivered to another consumer. The worker may see the same task twice if it crashes — design your handler to be idempotent. Right choice for financial actions, compliance jobs, or anything where missing a scheduled run is worse than running it twice.</li>
+  <li><strong>In-memory</strong> — for tests and local development. Same interface, no Redis dependency.</li>
+</ul>
+
+<p>Switching between modes is a wiring change in the agent's <code>main.go</code> — no application logic moves. The right choice depends on what failure mode is more expensive in the workload, not on what the framework forces.</p>
+
+<p><strong>Live metrics across both flows.</strong></p>
+
+<ul>
+  <li><strong>Async tasks:</strong> <code>truvag3_async_orchestration_tasks</code> (labeled by status: completed, failed, setup_failed, catalog_failed), <code>truvag3_async_orchestration_duration_ms</code>, <code>truvag3_async_orchestration_tool_calls</code>, <code>truvag3_async_orchestration_tools_per_query</code>. The last one is particularly useful: it tells you the typical "fan-out" of an async request, which feeds capacity planning.</li>
+  <li><strong>Scheduled execution:</strong> <code>truvag3_executor_tasks_submitted</code> vs <code>truvag3_executor_tasks_completed</code> shows backlog at a glance. <code>truvag3_executor_task_wait_ms</code> shows queue latency; <code>truvag3_executor_task_duration_ms</code> shows execution latency. A widening gap between submitted and completed is the canonical "add workers" signal.</li>
+</ul>
+
+<p><strong>Working examples in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async">agent-with-async</a> example demonstrates the full async pattern — API mode, worker mode, and embedded mode (API + worker in one process for simple deployments). The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/scheduler-tool">scheduler-tool</a> and <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/scheduled-executor">scheduled-executor</a> examples make up the complete scheduled-execution stack — the tool runs as a regular framework tool, the executor runs as an independently scalable worker pool, and any target agent can subscribe in one line.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md">Async Orchestration Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/SCHEDULED_TASKS_GUIDE.md">Scheduled Tasks Guide</a>.</p>
+
+<h3 id="hitl">9. Human-in-the-loop</h3>
+
+<p>Some decisions are too consequential for an agent to make alone — placing a financial trade, deleting production data, sending mass communications, approving a refund above a threshold, executing infrastructure changes against a live cluster. Regulated industries also require human approval points as a compliance control. TruvaG3 ships a complete <strong>Human-in-the-loop (HITL)</strong> system that pauses an in-flight request at well-defined moments, persists the execution state, notifies a reviewer, and resumes — or aborts — based on the reviewer's decision. The agent's request path stays continuous from the user's perspective even when a human takes minutes or hours to respond.</p>
+
+<p><strong>Five interrupt points cover every decision moment.</strong> The orchestrator can pause at any of these — chosen by policy, not hard-coded:</p>
+
+<ul>
+  <li><strong><code>plan_generated</code></strong> — pause right after the LLM produces a plan, before any step runs. The reviewer sees the entire DAG and can approve, edit, or reject. Useful for high-stakes workflows where the <em>whole shape</em> of the action matters.</li>
+  <li><strong><code>before_step</code></strong> — pause before a specific step executes. Useful for fine-grained control: approve every individual write to a sensitive system while letting reads pass freely.</li>
+  <li><strong><code>after_step</code></strong> — pause after a step completes but before the orchestrator continues to the next phase. The reviewer sees the actual result, not just the intent, and can decide whether to proceed. Useful when the next decision depends on what the previous step actually returned.</li>
+  <li><strong><code>on_error</code></strong> — escalate to a human when a step fails in a way the framework's automatic recovery cannot handle. Default action is to abort the workflow, since errors that reach this point are usually genuinely unrecoverable.</li>
+  <li><strong><code>context_gathering</code></strong> — pause to ask the reviewer for information the agent cannot obtain on its own (a missing identifier, a free-text justification, a policy override).</li>
+</ul>
+
+<p><strong>Seven decision types — not just "yes" or "no".</strong> When a checkpoint fires, the reviewer responds with one of:</p>
+
+<ul>
+  <li><strong><code>approve</code></strong> — proceed as planned.</li>
+  <li><strong><code>edit</code></strong> — proceed with modifications. The reviewer can rewrite the plan, change step parameters, or tweak the response before it goes out. The orchestrator picks up the modified version and continues.</li>
+  <li><strong><code>reject</code></strong> — reject the proposed action. The workflow stops cleanly with a structured rejection response.</li>
+  <li><strong><code>skip</code></strong> — skip the current step and continue with the rest of the plan. Useful when one step is irrelevant but the rest of the workflow should still run.</li>
+  <li><strong><code>abort</code></strong> — stop the entire workflow immediately, no continuation.</li>
+  <li><strong><code>retry</code></strong> — retry the step with new parameters supplied by the reviewer. Useful for fixing a known issue the LLM did not anticipate.</li>
+  <li><strong><code>respond</code></strong> — supply the information the agent requested (for <code>context_gathering</code> interrupts).</li>
+</ul>
+
+<p>This richness matters in practice. An approval workflow that only offers "approve" and "reject" forces a back-and-forth (reviewer rejects, agent regenerates, reviewer reviews again). With <code>edit</code> and <code>retry</code>, a reviewer can make a single-touch correction and let the workflow continue — turning a five-minute round-trip into a one-second adjustment.</p>
+
+<p><strong>Persistent checkpoints with atomic claim.</strong> When an interrupt fires, the orchestrator saves a full <code>ExecutionCheckpoint</code> to a Redis-backed store: the current plan, all completed step results, the LLM context, the conversation history, and the interrupt reason. A reviewer's decision arrives — possibly minutes or hours later — through any channel: REST API, webhook callback, or SSE stream from a chat UI. The framework <strong>atomically claims</strong> the checkpoint before processing the command, so even if the same approval is submitted from two browser tabs by accident, only one command runs (<code>truvag3_orchestration_hitl_claim_success</code> tracks claim outcomes).</p>
+
+<p><strong>Auto-resume on timeout, fail-safe by default.</strong> Every checkpoint has an expiration TTL. When the TTL elapses without a decision, the framework runs a configurable <code>DefaultAction</code>:</p>
+
+<ul>
+  <li>The default <code>DefaultAction</code> is <code>reject</code> — fail-safe, the high-stakes action does not happen automatically.</li>
+  <li>For <code>on_error</code> escalation, the default is <code>abort</code> — workflow stops cleanly.</li>
+  <li>Both are overridable per deployment via <code>TRUVAG3_HITL_DEFAULT_ACTION</code> or per checkpoint via policy.</li>
+</ul>
+
+<p>The expiry processor scans expired checkpoints in batches; <code>truvag3_orchestration_hitl_expiry_batch_size</code> and <code>_expiry_scan_duration_seconds</code> tell you whether the processor is keeping up.</p>
+
+<p><strong>Webhook notification, pre-built.</strong> Reviewer notification is not the framework's problem — it ships a <code>WebhookInterruptHandler</code> that fires an HTTP POST to a configured URL the moment a checkpoint is created. From there, the integration layer (Slack, Teams, PagerDuty, an internal approval system, a custom dashboard) takes over. <code>truvag3_orchestration_hitl_webhook_sent</code> tracks webhook delivery counts; <code>_webhook_duration_seconds</code> tracks the round-trip latency to the notification endpoint.</p>
+
+<p><strong>Approval-latency metric — measure your human SLA.</strong> <code>truvag3_orchestration_hitl_approval_latency_seconds</code> is the time from checkpoint creation to decision. This is the canonical "how fast does my human approver respond" metric, and it directly drives user-facing latency for HITL-gated workflows. A team running a 95th-percentile dashboard on this metric can prove (or disprove) compliance SLAs at any moment.</p>
+
+<p><strong>Working example in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-human-approval">agent-with-human-approval</a> example demonstrates the complete pattern: SSE for real-time browser notification, a structured approval dialog, plan-level and step-level approval chained together, auto-resume on timeout, and edit support so the reviewer can rewrite a plan in one round-trip. It is the right starting point for any agent that needs human gating.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md">Human-in-the-Loop User Guide</a>.</p>
+
+<h3 id="memory-and-context">10. Memory and context</h3>
+
+<p>A stateless agent starts every request from zero — it does not remember the user's last question, the answer it gave five minutes ago, the long-running investigation that other agents in the same domain have been working on, or the user's stated preferences. For some workflows that is fine. For chat agents, multi-step research, ongoing investigations, and assistant-style products it is not — context across requests is the difference between a helpful agent and an amnesiac one. TruvaG3 ships a three-tier memory system that covers everything from small per-component state to vector-backed semantic recall, with separate stores for shared agent memory and per-user memory so a single agent process can serve many users without leaking one user's facts to another.</p>
+
+<p><strong>Layer 1: Component key-value memory.</strong> A simple per-component <code>core.Memory</code> interface with <code>Get</code>, <code>Set</code>, <code>Delete</code>, and <code>Exists</code>. Useful for small local state — a session counter, a cached API response, a transient flag — that does not need to be shared across replicas. Two implementations ship: in-memory for tests and Redis-backed for production. Every operation goes through <code>truvag3_memory_operations</code>, with read latency in <code>truvag3_memory_request_duration_ms</code>.</p>
+
+<p><strong>Layer 2: Shared agent memory.</strong> A richer store designed for agents that work in a shared domain — a fleet of DevOps agents investigating the same incident, a team of research agents covering related topics, a set of compliance agents tracking related policy changes. Three substores:</p>
+
+<ul>
+  <li><strong>Episodic events</strong> — append-only log of meaningful events: tool calls made, findings discovered, decisions taken. Counted by <code>truvag3_memory_record_events</code>. Backed by Redis in production, in-memory for tests.</li>
+  <li><strong>Knowledge store (vector-backed)</strong> — semantic search over learned facts and prior conclusions, with Qdrant as the default vector backend. Fragments are stored (<code>truvag3_memory_knowledge_fragments_stored</code>), searched (<code>truvag3_memory_knowledge_search_success</code> / <code>_errors</code>), and surface as relevant context in the prompt when a request comes in. The cache layer is instrumented separately: <code>truvag3_memory_cache_hits</code> / <code>truvag3_memory_cache_misses</code> tell you whether vector queries are hitting cache.</li>
+  <li><strong>Activity coordination</strong> — lightweight signals between concurrent agents so they do not duplicate work. Agent A announces "I am investigating order #1234," and Agent B sees the announcement and skips that work. Backed by Redis distributed locks with a TTL.</li>
+</ul>
+
+<p><strong>Reflection — periodic LLM-driven memory consolidation.</strong> Raw episodic events accumulate quickly. Left alone, they would make the knowledge store either too noisy (every event surfaces) or too sparse (only recent events surface). The framework ships an opt-in <code>ReflectionJob</code> that periodically reads episodic events older than a configurable threshold (default 7 days), summarizes them through the LLM into stable knowledge fragments, and stores the result in the vector-backed knowledge store. Tracked by <code>truvag3_memory_reflection_fragments_stored</code> and <code>truvag3_memory_reflection_pass</code>. The effect is similar to what a human team does in a retrospective — extract the durable lessons from the ephemeral activity, and move on.</p>
+
+<p><strong>Layer 3: Per-user memory.</strong> For assistant-style agents that serve many users, the framework keeps a separate per-user memory store with three distinct stages, each instrumented:</p>
+
+<ul>
+  <li><strong>Extraction</strong> — at the end of a conversation, an LLM call extracts candidate facts from what the user said (<code>user_memory.extraction</code> and <code>user_memory.extraction.llm</code> spans in the trace, <code>truvag3_user_memory_remember_duration_ms</code> metric).</li>
+  <li><strong>Reconciliation</strong> — each candidate fact is checked against existing facts about that user. The LLM classifies the relationship as one of four operations: <strong><code>ADD</code></strong> (new fact), <strong><code>UPDATE</code></strong> (refines an existing fact), <strong><code>CONTRADICT</code></strong> (replaces a now-wrong fact), or <strong><code>DUPLICATE</code></strong> (already known, discard). Tracked by <code>truvag3_user_memory_reconciliation_operation</code> labeled by operation type. The contradict path is the most important one in practice — it lets the agent gracefully update its model of the user when they say "actually, never mind, I prefer X now."</li>
+  <li><strong>Recall</strong> — when a new request arrives, the framework runs five distinct recall paths in parallel and merges the results: <strong>identity</strong> (facts about who the user is), <strong>stable_namespace</strong> (facts tagged with stable identifiers), <strong>query</strong> (semantic match against the current request), <strong>summary</strong> (rolling user summary), and <strong>universal</strong> (facts that always apply). Each path is its own span — <code>user_memory.recall.{path}</code> in Jaeger — so you can see which paths contributed to a given response. Total recall latency is <code>truvag3_user_memory_recall_duration_ms</code>.</li>
+</ul>
+
+<p>Per-user memory supports GDPR-style "forget" — a single API call removes every fact, embedding, and summary tied to a user ID. Important for any deployment that has users in regions with right-to-erasure laws.</p>
+
+<p><strong>Conversation history protection — three tiers, automatic by default.</strong> Chat agents accumulate messages across turns; left unmanaged, the conversation buffer eventually overflows the LLM's context window. TruvaG3 handles this transparently:</p>
+
+<ul>
+  <li><strong>Tier 1 (default)</strong> — token-budgeted enrichment. Raw turns flow through, with the framework tracking token estimates (<code>truvag3_conversation_history_estimated_tokens</code>) and emitting <code>conversation_history.prepare</code> spans on every request.</li>
+  <li><strong>Tier 2 (opt-in)</strong> — recursive compaction. When a session grows past a configurable threshold, older turns are summarized into a rolling "earlier in this conversation..." block by the LLM, freeing budget for the live exchange. Compaction events are counted (<code>truvag3_conversation_history_compactions</code>) and their duration tracked (<code>_compaction_duration_ms</code>). A summary cache (<code>_summary_cache_size</code>) prevents re-summarizing the same older turns on every request.</li>
+  <li><strong>Tier 3 (custom)</strong> — for teams with specific compaction rules (preserve every tool result, drop greetings, structure by topic), the <code>ConversationCompactor</code> interface lets you supply your own logic while reusing the rest of the pipeline.</li>
+</ul>
+
+<p>Most teams never touch Tier 2 or 3 — Tier 1 with the default budget handles typical chat workloads. The system is layered so the work shows up only when the workload requires it.</p>
+
+<p><strong>Pipeline hooks are how memory connects to the request path.</strong> All three memory layers are wired into the orchestrator through pipeline hooks (see <a href="#extension-points">§13</a> for the four hook stages). Memory recall typically runs in a <code>BeforePlanningHook</code> (so recalled facts and conversation history enter the planning prompt); memory extraction typically runs in an <code>AfterSynthesisHook</code> (so facts learned during the request are persisted). This means memory is configurable per agent — a tool-only deployment can opt out entirely, a chat agent enables all three layers, and a regulated workflow can swap in a custom hook that audits every memory write.</p>
+
+<p><strong>Working examples in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a>, <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">devops-chat-agent</a>, and <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/qa-agent">qa-agent</a> all wire shared memory and per-user memory through pipeline hooks. Their Jaeger traces show the full memory flow — recall paths firing on the request path, extraction firing after synthesis — exactly as described above.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/memory/README.md">memory/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md">Agent Memory User Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md">Adding Context to Your Agent</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md">Conversation History Guide</a>.</p>
+
+<h3 id="chat-agents">11. Chat agent reference pattern</h3>
+
+<p>Building a practical chat agent involves more than calling an LLM. The agent needs to stream responses (long answers must not block on a final newline), maintain session state (the user expects you to remember the previous turn), support multi-turn context without overflowing the context window, integrate with human-in-the-loop approval flows for sensitive actions, and survive page refreshes, network blips, and concurrent tabs. TruvaG3 ships a complete reference pattern that handles all of this. The pattern is exercised by the bundled chat agents (<a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a>, <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">devops-chat-agent</a>, <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/qa-agent">qa-agent</a>) and consumed by the bundled <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/chat-ui">chat-ui</a> frontend.</p>
+
+<p><strong>Server-Sent Events stream eight distinct event types.</strong> Rather than streaming opaque token chunks, the chat pattern emits a typed event stream so the frontend always knows what kind of update it just received:</p>
+
+<ul>
+  <li><strong><code>session</code></strong> — new session created. Carries the session ID the client should attach to subsequent requests.</li>
+  <li><strong><code>status</code></strong> — progress update (e.g., <em>"Phase 2 of 3..."</em>, <em>"Analyzing weather data..."</em>). The frontend renders this as a spinner-with-context, not a blank loading state.</li>
+  <li><strong><code>step</code></strong> — a tool call completed. Carries the tool name, success flag, and duration. Power-user dashboards render the per-step execution; consumer UIs filter these out.</li>
+  <li><strong><code>chunk</code></strong> — a part of the AI's response text. Streamed token-by-token so the user sees the answer appearing as it generates.</li>
+  <li><strong><code>usage</code></strong> — token stats for the request (prompt, completion, total). Useful for showing cost transparency in admin UIs.</li>
+  <li><strong><code>finish</code></strong> — the stream is ending and here is why (<code>stop</code>, <code>length</code>, <code>tool_calls</code>, etc.).</li>
+  <li><strong><code>done</code></strong> — the request is complete. Carries the request ID and total duration so the frontend can show the final timing.</li>
+  <li><strong><code>error</code></strong> — something went wrong. Carries a structured error code, a human-readable message, and a retryable flag so the frontend can decide whether to surface a retry button.</li>
+</ul>
+
+<p>This typed event surface is the difference between a chat UI that feels rough at the edges and one that feels polished. A frontend developer can wire each event type to a specific UI affordance without parsing message text or guessing at intent.</p>
+
+<p><strong>Session storage with sliding-window history.</strong> Sessions are stored in Redis with a configurable TTL and a maximum-messages limit (when the message count exceeds the cap, the oldest messages are evicted automatically — a sliding window over the conversation). The session record carries the user ID, metadata, message history, and timing fields. Three Redis structures back this: the session record itself, a per-user index of that user's active sessions, and an active-session counter for capacity dashboards. A background cleanup process removes expired sessions on a schedule so the Redis footprint stays bounded.</p>
+
+<p><strong>Multi-turn context flows automatically into orchestration.</strong> A chat request body carries the session ID; the framework looks up that session's recent messages, packages them into orchestration metadata, and the conversation-history layer (see <a href="#memory-and-context">§10</a>) handles the rest — Tier 1 enrichment by default, Tier 2 compaction for long sessions. The agent's request handler does not have to do anything special; multi-turn just works.</p>
+
+<p><strong>HITL resume that preserves the conversation.</strong> When a chat request hits a human-in-the-loop checkpoint (see <a href="#hitl">§9</a>), the framework persists the session context alongside the checkpoint. Hours later, when the reviewer approves, the resume endpoint (<code>POST /hitl/resume/{checkpoint_id}</code>) restarts execution <em>inside the same chat session</em> — the orchestrator picks up where it left off, the conversation history is intact, and the SSE stream continues delivering events to whichever client is currently watching. The user sees a seamless conversation; the operator sees a clean audit trail of who approved what.</p>
+
+<p><strong>Frontend reference, ready to clone.</strong> The bundled <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/chat-ui">chat-ui</a> example ships several HTML frontends that consume the SSE event stream: a generic chat interface, a DevOps-styled chat (for the devops-chat-agent), a HITL approval dashboard, and a dashboard overview. They are deliberately plain HTML + vanilla JavaScript so they are easy to read and adapt — no framework lock-in, no build step. Any production chat product would replace them with a real frontend, but they are a complete starting point that exercises every event type and shows what good handling looks like.</p>
+
+<p><strong>Working examples in the cluster.</strong> The three bundled chat agents wire the full pattern end-to-end. travel-chat-agent and devops-chat-agent both expose <code>/chat/stream</code> (SSE) and <code>/chat</code> (request-response), use Redis-backed session stores, and integrate with HITL where applicable. devops-chat-agent specifically demonstrates the HITL-resume-in-chat flow, since most DevOps actions need human approval before touching production. qa-agent demonstrates an SSE chat flow for AI-driven QA test orchestration.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/CHAT_AGENT_GUIDE.md">Chat Agent Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/CHAT_SESSION_MANAGEMENT_GUIDE.md">Chat Session Management Guide</a>.</p>
+
+<h3 id="security">12. Security and request propagation</h3>
+
+<p>The framework takes a deliberately small position on security: it does not replace your identity provider, your service mesh, your ingress controller, your network policies, or your secrets manager. Those tools exist, your platform team operates them, and they work on TruvaG3 components the same way they work on every other REST service in the cluster — because TruvaG3 components <em>are</em> REST services. What the framework adds on top of that is the small set of hooks and propagation points that an agent workload specifically needs: passing user tokens through a chain of agent and tool calls, attaching tenant and audit metadata that flows the same way, and protecting a handful of framework-internal headers from being accidentally overwritten.</p>
+
+<p><strong>Three ways to attach an OAuth Bearer token to outbound calls.</strong> The orchestrator can attach an <code>Authorization: Bearer ...</code> header to every tool and agent call it dispatches, with three resolution paths to suit different deployment shapes:</p>
+
+<ul>
+  <li><strong>Environment variable</strong> — the simplest path. Set <code>TRUVAG3_OAUTH_TOKEN</code> at deploy time; every outbound call gets the token attached. Right for static service-to-service tokens.</li>
+  <li><strong>Config object</strong> — pass the token (or a token source) into the orchestrator at construction. Right when the token is loaded from a vault or a secret manager at startup.</li>
+  <li><strong>Per-request context injection</strong> — the most flexible path. The agent's HTTP handler extracts the user's token from the incoming request and passes it through Go's <code>context.Context</code>; the orchestrator uses that token for every downstream call this request makes. Right for user-token pass-through, where each request runs as the calling user.</li>
+</ul>
+
+<p>The three paths layer cleanly: per-request context overrides config, config overrides environment. Most deployments use a combination — for example, a default service token from env, with per-request user tokens overriding when present.</p>
+
+<p><strong>Runtime token refresh, no restart needed.</strong> Service tokens expire. When yours does, you call <code>SetOAuthToken(newToken)</code> on the orchestrator and every subsequent outbound call uses the new token. The implementation uses <code>atomic.Value</code> internally, so the refresh is thread-safe — in-flight requests already using the old token complete normally, and new requests get the new token, with no synchronization gap. Token refresh is a runtime operation, not a deploy.</p>
+
+<p><strong>Custom header propagation for tenant, audit, and correlation metadata.</strong> Agent workloads almost always need to carry context beyond the auth token — a tenant ID for multi-tenant routing, an audit correlation ID for compliance trails, a feature-flag bucket for A/B testing. The framework supports two layers:</p>
+
+<ul>
+  <li><strong>Config-level defaults</strong> — set <code>PropagatedHeaders</code> on the orchestrator config (e.g., <code>{"X-Tenant-ID": "acme", "X-Environment": "prod"}</code>) and every outbound call carries them. Useful for deployment-wide context.</li>
+  <li><strong>Per-request overrides</strong> — set headers on the request context via <code>WithPropagatedHeaders(ctx, ...)</code> and they override config-level defaults for that one request. Useful when each request has its own tenant or correlation context.</li>
+  <li><strong>Header field name protection</strong> — the JSON serialization of the config struct explicitly excludes <code>PropagatedHeaders</code> (the field is tagged <code>json:"-"</code>) so headers never leak into request logs or telemetry by accident.</li>
+</ul>
+
+<p><strong>Nine framework-internal headers are protected from overwriting.</strong> The orchestrator sets two standard HTTP headers and seven <code>X-TruvaG3-*</code> headers on every outbound call. These are reserved — even if a developer sets the same key in <code>PropagatedHeaders</code>, the framework's value wins. This prevents subtle breakage of authentication, trace correlation, or HITL resume:</p>
+
+<ul>
+  <li><code>Authorization</code> and <code>Content-Type</code> — reserved so a stray propagation cannot override the bearer token or the body format.</li>
+  <li><code>X-TruvaG3-Request-ID</code> — the orchestrator-assigned ID for this top-level request. Used for log and trace correlation end-to-end.</li>
+  <li><code>X-TruvaG3-Step-ID</code> — the specific step within the plan this call corresponds to. Tied to the per-step span in the trace.</li>
+  <li><code>X-TruvaG3-Agent-Name</code> — which agent originated the call. Useful for downstream RBAC checks.</li>
+  <li><code>X-TruvaG3-Phase-Number</code> — for multi-phase iterative plans, which phase this call belongs to.</li>
+  <li><code>X-TruvaG3-Plan-ID</code> — the plan this call is part of.</li>
+  <li><code>X-TruvaG3-Original-Request-ID</code> — for chained agent-to-agent calls, the request ID at the very top of the chain. Lets one trace cover the full fan-out.</li>
+  <li><code>X-TruvaG3-Investigation-Owner</code> — for shared-memory activity coordination, identifies which agent currently owns an ongoing investigation.</li>
+</ul>
+
+<p>Any of these headers arriving at a tool can be used for fine-grained authorization, audit logging, or correlation — none of them are framework-internal in the sense of being hidden.</p>
+
+<p><strong>Secrets and configuration follow Kubernetes conventions.</strong> API keys, OAuth tokens, and provider credentials are read from environment variables, sourced from Kubernetes Secrets. Non-sensitive configuration (registry URL, log level, feature toggles) is sourced from ConfigMaps. The framework imposes no special key-management system — whatever secrets workflow your platform team uses (ExternalSecrets, Sealed Secrets, Vault sidecars, plain Secrets) works without adaptation.</p>
+
+<p><strong>Developer-tool exposure is off by default.</strong> OpenAPI generation is disabled until you explicitly enable it, because the <code>/openapi.json</code> document describes the component's full API surface and most internal services do not need to expose that publicly. The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-overview">Registry Viewer</a> and <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/DEV_TOOLS_GUIDE.md#part-1--swagger-ui-api-exploration">Swagger UI</a> are developer tooling, not production endpoints — they should be protected at the network, gateway, or mesh layer just like a database admin console or a Prometheus query UI.</p>
+
+<p><strong>What this looks like end-to-end.</strong> A user request hits the agent's ingress with an Authorization header. The agent extracts the user's token, passes it through context, and calls a downstream tool. The orchestrator's outbound call carries: the user's Authorization token (per-request, from context), the tenant ID (config-level), the framework's request ID and step ID (protected). The tool authenticates the user via your existing identity provider, logs the request ID for audit, applies tenant-scoped authorization, and returns. Trace, logs, and audit data all correlate by the request ID. Nothing about this flow is framework-specific — it is the same pattern a well-built REST microservice deployment already uses.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/OAUTH_SECURITY_GUIDE.md">OAuth Security Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/KUBERNETES.md">Kubernetes Deployment Guide</a>.</p>
+
+<h3 id="extension-points">13. Extension points</h3>
+
+<p>The framework exposes interfaces at the boundaries where teams are most likely to need replacement. Each is behind a Go interface with a default implementation. The main extension points, with examples from the bundled agents:</p>
+
+<p><strong>Pipeline hooks.</strong> Per-stage middleware around the orchestration pipeline. Hooks let application code inject context, short-circuit processing, mutate plans, or post-process responses — without forking the framework. There are four stages:</p>
+
+<ul>
+  <li><strong><code>BeforePlanningHook</code></strong> — runs before the planner. Inject RAG context, conversation history, or a semantic-cache lookup. The only stage that can short-circuit the entire pipeline (return a cached response without calling the LLM at all).</li>
+  <li><strong><code>AfterPlanningHook</code></strong> — runs after the LLM produces a plan. Mutate or validate the plan before execution.</li>
+  <li><strong><code>AfterExecutionHook</code></strong> — runs after all tool calls finish. Observe-only — used for analytics, audit logging, and metrics.</li>
+  <li><strong><code>AfterSynthesisHook</code></strong> — runs after the final response is generated. Apply PII redaction, content policy checks, or write the response into memory.</li>
+</ul>
+
+<p>Hooks are resilient by design — a failing hook logs a warning and the pipeline continues. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a>, <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">devops-chat-agent</a>, and <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/qa-agent">qa-agent</a> examples all wire memory hooks across these stages to give chat agents conversation history, semantic recall, and audit trails.</p>
+
+<p><strong>Custom prompt builders.</strong> Replace the prompt-construction logic while preserving orchestration interfaces. Useful for compliance instructions, custom output formats, or tenant-aware system messages. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-orchestration">agent-with-orchestration</a> example configures a custom prompt builder with travel-specific type rules so the planner understands domain types out of the box.</p>
+
+<p><strong>Pluggable backend interfaces.</strong> Every backend the framework relies on sits behind a Go interface. Defaults work out of the box; alternatives can be wired in without changing application code:</p>
+
+<ul>
+  <li><code>core.Discovery</code> — service registry (default: Redis or Valkey; alternatives include etcd, Consul, an in-memory mock for tests).</li>
+  <li><code>core.AIClient</code> — LLM provider client (default: auto-detected provider registry; chain-client failover and custom providers also supported).</li>
+  <li><code>core.Memory</code> — per-component key-value memory (Redis in production, in-memory for tests).</li>
+  <li><code>core.TaskQueue</code> and <code>core.TaskStore</code> — async task backends (Redis lists by default; Redis Streams also bundled). The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async">agent-with-async</a> example wires the full request → task-ID → poll pattern on the default Redis backend.</li>
+  <li><code>core.ScheduleStore</code>, <code>core.TaskDispatcher</code>, <code>core.TaskConsumer</code> — scheduled-execution backends, used by the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/scheduled-executor">scheduled-executor</a> example.</li>
+  <li>Embedding client, LLM debug store, execution debug store — all behind interfaces with default implementations.</li>
+</ul>
+
+<p>The framework also ships in-memory implementations of every interface plus a <code>core/conformance</code> package that validates custom backends against the same contract the defaults meet.</p>
+
+<p><strong>Custom result processors.</strong> The <code>ResultProcessor</code> interface controls how large tool and agent results are trimmed before they enter LLM prompts. The default <code>StructuralTrimmer</code> preserves JSON structure, key names, and representative samples within byte budgets. Teams with domain-specific outputs (large clinical datasets, deeply nested telemetry payloads) can replace it behind the same interface.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md">Adding Context to Your Agent</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md">LLM Planning Prompt Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/reference/API_REFERENCE.md">API Reference</a>.</p>
+</section>
+
+<section>
+<h2 id="code-examples">What it looks like in code</h2>
+
+<p>Three short examples to make the framework concrete. They are simplified versions of the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">bundled examples</a>.</p>
+
+<h3 id="code-tool">A tool</h3>
+
+<p>A tool exposes one or more capabilities over HTTP. Here is a weather tool that registers a single capability:</p>
+
+<pre><code>tool := core.NewTool("weather-service")
+tool.RegisterCapability(core.Capability{
+    Name:        "current_weather",
+    Description: "Gets current weather conditions for a location.",
+    Handler:     handleCurrentWeather,
+})
+
+framework, _ := core.NewFramework(tool,
+    core.WithName("weather-service"),
+    core.WithPort(8080),
+    core.WithRedisURL(os.Getenv("REDIS_URL")),
+    core.WithDiscovery(true, "redis"),
+)
+framework.Run(ctx)</code></pre>
+
+<p>That is the whole tool. The framework registers <code>current_weather</code> into the registry, exposes it at <code>/api/capabilities/current_weather</code>, refreshes the heartbeat every 15 seconds, and shuts down gracefully on a signal.</p>
+
+<h3 id="code-agent">An agent that uses tools it has never heard of</h3>
+
+<p>An agent does not need to know which tools exist. It hands the user request to the orchestrator, which reads the live registry and produces a plan:</p>
+
+<pre><code>orchestrator := orchestration.CreateOrchestrator(config, deps)
+
+response, _ := orchestrator.ProcessRequest(ctx,
+    "What is the weather in Tokyo and the stock price of Apple?", nil)</code></pre>
+
+<p>The orchestrator discovers whatever capabilities are currently registered, asks the LLM for a plan, executes the plan as a DAG, and synthesizes the response. The agent's source code names no tool. Deploy a new tool five minutes later, and the same agent can use it on the next request — no code change, no redeploy.</p>
+
+<p>The bundled examples include <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">three live demos</a>: the same agent picks different tools depending on the question. "Weather in Paris" selects <code>weather-service</code>. "Stock price of Apple" selects <code>stock-service</code>. "Capital of Japan" selects <code>country-info-tool</code>. No hardcoded routing.</p>
+
+<h3 id="code-agent-to-agent">One agent calling another</h3>
+
+<p>From the calling agent's point of view, an agent and a tool look the same. Both register capabilities into the same registry. Both are dispatched through the same HTTP call. The <a href="micro-agents-architecture.html">architecture article</a> walks through a captured multi-domain trace where <code>travel-chat-agent</code> handles a user request that crosses three domains. Its four-step plan includes <code>devops_operations</code>, <code>geocode_location</code>, <code>stock_quote</code>, and <code>get_current_weather</code>. One of those — <code>devops_operations</code> — happens to be served by another agent (<code>devops-chat-agent</code>), which runs its own internal plan-execute-synthesize loop. From the dispatch site, there is no visible difference between the agent step and the tool steps.</p>
+</section>
+
+<section>
+<h2 id="run-it-yourself">Run it on a laptop</h2>
+
+<p>The full TruvaG3 stack — registry, the bundled tools and agents, the Registry Viewer, and an OpenTelemetry pipeline — runs on a laptop in a local Kubernetes cluster (Kind). The <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">setup guide</a> walks through the cluster, the Redis or Valkey backend, the AI provider configuration, and the bundled examples.</p>
+
+<p>The two captured executions in the <a href="micro-agents-architecture.html">architecture article</a> — the three-phase Switzerland trip plan and the multi-domain agent-to-agent run — both come from this setup. Once the bundled examples are deployed, the same user queries can be run against the same agents, and the Registry Viewer's Execution DAG tab will produce equivalent screenshots and trace JSON files. Nothing in either article is theoretical.</p>
+</section>
+
+<section>
+<h2 id="further-reading">Where to go next</h2>
+
+<p>Recommended reading order, by goal:</p>
+
+<ul>
+  <li><strong>Understand the architecture in depth.</strong> Read the <a href="micro-agents-architecture.html">micro-agents architecture article</a>. It is the foundation this framework implements.</li>
+  <li><strong>Find a specific feature.</strong> The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/overview/FRAMEWORK_FEATURES_GUIDE.md">Framework Features Guide</a> is organized by capability area and links to module-level documentation.</li>
+  <li><strong>Build something.</strong> Start with the <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">Getting Started guide</a> for the local Kubernetes setup, then the Tool Development Guide and Agent Development Guide for the build patterns.</li>
+  <li><strong>Read source code.</strong> The <code>core/</code>, <code>orchestration/</code>, <code>ai/</code>, and <code>memory/</code> modules have their own READMEs and architecture documents. The <code>examples/</code> directory has working code for tools, agents, chat UIs, and the registry viewer.</li>
+</ul>
+</section>
+
+<p class="footer-note">TruvaG3 is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
+
+<p class="copyright">© 2026 Neelabh Tripathi. All rights reserved.</p>
+
+</article>
+
+</body>
+</html>
