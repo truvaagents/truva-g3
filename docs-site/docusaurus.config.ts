@@ -4,7 +4,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'TruvaG3',
-  tagline: 'True. Dynamic discovery. Decentralized. Observable.',
+  tagline: 'True. Dynamic Discovery. Decentralized. Observable.',
   favicon: 'img/favicon.ico',
 
   future: {

@@ -336,7 +336,7 @@ Should answer "why should I care about TruvaG3?" within the first viewport. Requ
 
 1. **Hero**
    - Two-tone TruvaG3 brand mark.
-   - Tagline: "True. Dynamic discovery. Decentralized. Observable."
+   - Tagline: "True. Dynamic Discovery. Decentralized. Observable."
    - Primary CTA: "Get started" → `docs.truvag3.dev/docs/intro`
    - Secondary CTA: "View on GitHub" → repo URL
    - Optional: short tagline-extension sentence below.
