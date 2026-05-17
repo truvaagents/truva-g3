@@ -585,6 +585,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 
 **Architecture deep-dives:**
 - [A Micro-Agents Reference Architecture](www/blogs/micro-agents-architecture.html) — the reference-architecture article this framework implements
+- [Introduction to TruvaG3](www/blogs/truvag3-introduction.html) — framework overview
 
 **Building:**
 - [Tool Development Guide](docs/building/TOOL_DEVELOPMENT_GUIDE.md) — building a Tool from scratch

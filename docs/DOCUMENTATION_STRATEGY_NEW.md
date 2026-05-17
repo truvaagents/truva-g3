@@ -430,10 +430,10 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
    Confirmed reference sites (as of 2026-05-16):
    - [README.md:8](../README.md#L8) — micro-agents link in the "About this framework" blockquote
    - [README.md:587](../README.md#L587) — micro-agents link in the Guides section
-   - [README.md:588](../README.md#L588) — link to `docs/blogs/truvag3-introduction.html`, **a file that does not currently exist** (pre-existing dead link; either restore the file before launch or delete the line)
+   - [README.md:588](../README.md#L588) — link to the *Introduction to TruvaG3* blog. (The file was added to `main` after this strategy doc was written; Phase 1 moved it to `www/blogs/truvag3-introduction.html` alongside the other blog content.)
    - [README.md:681](../README.md#L681) — micro-agents link in Next Steps
    
-   Update each to point at the new website URL (`https://truvag3.dev/blogs/micro-agents-architecture` once live — no trailing slash, since Cloudflare Pages serves the `.html` file at its extensionless path; GitHub blob URL for the interim). Don't ship the dead `truvag3-introduction.html` link to launch.
+   Update each to point at the new website URL (`https://truvag3.dev/blogs/micro-agents-architecture` once live — no trailing slash, since Cloudflare Pages serves the `.html` file at its extensionless path; GitHub blob URL for the interim).
 
 4. **Inventory the whitepapers and stage them in the repo.** The source folder `~/Documents/Documents/TruvaG3/whitepapers/` is a personal-machine dependency — Cloudflare's build runner cannot read it, and no other contributor can find it. Required steps:
    - List exact filenames (and any sub-asset dependencies) once.
