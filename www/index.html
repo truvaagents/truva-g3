@@ -3,58 +3,247 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TruvaG3</title>
-<meta name="description" content="TruvaG3 — a Go framework for micro-agents: true dynamic discovery, decentralized coordination, observable by default.">
+<title>TruvaG3 — micro-agents framework for Go</title>
+<meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. True dynamic discovery. Decentralized coordination. Observable by default.">
 <link rel="stylesheet" href="/assets/css/brand.css">
-<style>
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    margin: 0;
-    background: #fff;
-    color: #222;
-    text-align: center;
-    padding: 2rem;
-    line-height: 1.6;
-  }
-  h1 {
-    font-size: 4rem;
-    font-weight: 800;
-    margin: 0 0 0.5rem;
-    line-height: 1;
-  }
-  .tagline {
-    color: #555;
-    font-size: 1.1rem;
-    margin: 0 0 2rem;
-    max-width: 36rem;
-  }
-  .note {
-    color: #888;
-    font-size: 0.95rem;
-    margin: 0 0 1rem;
-  }
-  a {
-    color: var(--brand-truva-dark);
-    text-decoration: none;
-    font-weight: 600;
-  }
-  a:hover {
-    text-decoration: underline;
-  }
-  @media (max-width: 600px) {
-    h1 { font-size: 2.75rem; }
-  }
-</style>
+<link rel="stylesheet" href="/assets/css/landing.css">
 </head>
 <body>
-  <h1><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></h1>
-  <p class="tagline">True. Dynamic discovery. Decentralized. Observable.</p>
-  <p class="note">The full site is under construction.</p>
-  <p>In the meantime: <a href="https://docs.truvag3.dev">read the docs →</a></p>
+
+<!-- ================= HERO ================= -->
+<header class="hero">
+  <div class="container">
+    <h1><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></h1>
+    <p class="tagline">True. Dynamic Discovery. Decentralized. Observable.</p>
+    <p class="sublede">
+      A Go framework that takes the microservices pattern and applies it to
+      multi-agent systems. Specialized agents and tools register their
+      capabilities with a shared registry, find each other by logical name at
+      runtime, and coordinate without a central conductor. Blends into the Kubernetes
+      platform.
+    </p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="https://docs.truvag3.dev/docs/intro">Get started →</a>
+      <a class="btn btn-secondary" href="https://github.com/truvaagents/truva-g3">View on GitHub</a>
+    </div>
+    <div class="pillrow">
+      <a class="pill" href="#what"><span class="dot" style="background:var(--accent)"></span>What is TruvaG3?</a>
+      <a class="pill" href="#code"><span class="dot" style="background:var(--brand-g3)"></span>See it in code</a>
+      <a class="pill" href="#coordination"><span class="dot" style="background:#7a3df0"></span>Two coordination layers</a>
+      <a class="pill" href="#reading"><span class="dot" style="background:var(--good)"></span>Recent reading</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= WHAT IS TRUVAG3 ================= -->
+<section id="what">
+  <div class="container">
+    <span class="eyebrow">What is TruvaG3?</span>
+    <h2>The microservices pattern, applied to multi-agent systems.</h2>
+    <p class="lede">
+      Most agent frameworks bind tools and agents at construction time. TruvaG3
+      inverts that — components advertise capabilities to a shared registry
+      and find each other at runtime. Four things follow from that choice.
+    </p>
+    <div class="cards">
+      <article class="card">
+        <h3>Capability-based discovery</h3>
+        <p>
+          Tools advertise what they do; agents resolve to whichever endpoint
+          serves that capability at runtime. Add, scale, or replace without
+          rewiring callers.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Decentralized coordination</h3>
+        <p>
+          No central conductor. Each agent reads the shared registry,
+          resolves capabilities, and calls peers directly over HTTP/REST.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Plain Kubernetes, plain HTTP</h3>
+        <p>
+          Ordinary Deployments and Services. No proprietary CRDs, no required
+          sidecars, no control plane. HTTP/REST based. OpenTelemetry based
+          distributed tracing built in.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Vendor-agnostic AI</h3>
+        <p>
+          Implements LLM-as-a-Service pattern. Switch between OpenAI,
+          Anthropic, Gemini, Groq, or self-hosted models (Ollama, vLLM,
+          llama.cpp) without changing agent code.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Observable end-to-end</h3>
+        <p>
+          Auto-instrumented end-to-end. Every plan, step, and LLM call is
+          captured — inspect them in the bundled Registry Viewer.
+          Distributed traces span agents and tools, with logs
+          auto-correlated by trace ID — all flowing via OpenTelemetry
+          to any compatible backend.
+        </p>
+      </article>
+      <article class="card">
+        <h3>True Opensource</h3>
+        <p>
+          Open by design. Every backend — discovery, memory, telemetry,
+          LLM provider — sits behind a swappable interface. Default local
+          stack is based on fully open source software.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CODE SNIPPET ================= -->
+<section id="code">
+  <div class="container">
+    <span class="eyebrow">See it in code</span>
+    <h2>A natural-language request becomes a DAG of tool calls.</h2>
+    <p class="lede">
+      The orchestrator discovers available tools from the shared registry, asks
+      the LLM to plan a sequence of calls, executes the plan — a directed acyclic
+      graph (DAG) — with parallelism where dependencies allow, and synthesizes the results. No tools are
+      named in the agent's source.
+    </p>
+    <div class="code-frame">
+<pre><span style="color:#9aa6bd">// Create orchestrator — no explicit tool/agent wiring needed</span>
+orchestrator := orchestration.CreateOrchestrator(config, deps)
+
+<span style="color:#9aa6bd">// Process a natural-language request</span>
+response, _ := orchestrator.ProcessRequest(ctx,
+    <span style="color:#fbbf24">"Perform a full Kubernetes cluster health check"</span>, nil)</pre>
+    </div>
+    <h3 class="code-output-heading">What that call becomes at runtime</h3>
+    <figure class="example-execution">
+      <button class="dag-thumb-button" type="button" aria-label="Expand the execution DAG image">
+        <img src="/assets/img/example-execution.png"
+             alt="Execution DAG from the Registry Viewer: the orchestrator turned a single ProcessRequest call into a multi-phase plan — Tier Select, Planning, then a parallel fan-out across six tools (system-utilities, devops, devops-kube-action, devops-kube-log-search, prometheus-query, devops-observability), a second round of Tier Select and re-planning for Phase 2, three more devops-tool calls, resolution steps, an Event Summary, and final Synthesis."
+             loading="lazy" />
+      </button>
+      <figcaption>
+        Captured from the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app" target="_blank" rel="noopener noreferrer">Registry Viewer's</a> <em>Execution DAG</em> view.
+        The orchestrator turned the single <code>ProcessRequest</code> call
+        above into a multi-phase plan — parallel where dependencies
+        allowed, re-planned between phases, then synthesized.
+        <span class="dag-hint">(click to expand)</span>
+      </figcaption>
+    </figure>
+  </div>
+
+  <!-- Lightbox via native <dialog>: top-layer rendering, native Esc
+       handling, native focus trap, no z-index management. Tiny inline
+       JS below wires it up. -->
+  <dialog id="dag-zoom-dialog" class="dag-zoom-dialog" aria-label="Execution DAG, full size">
+    <img src="/assets/img/example-execution.png" alt="" />
+  </dialog>
+</section>
+
+<!-- ================= TWO COORDINATION LAYERS ================= -->
+<section id="coordination">
+  <div class="container">
+    <span class="eyebrow">Architecture</span>
+    <h2>Two coordination layers, treated differently.</h2>
+    <p class="lede">
+      Once you separate "how an agent decides what to do next" from "how agents
+      find each other," each problem gets its own answer instead of one
+      conflated framework abstraction.
+    </p>
+    <div class="twocol">
+      <div class="layer">
+        <h4>Inside each agent</h4>
+        <h3>Orchestration</h3>
+        <p>
+          One AIOrchestrator drives <em>plan → execute → synthesize</em>,
+          returning to plan when fresh data unlocks the next phase. Plans are
+          DAGs of capability invocations executed with parallelism where
+          dependencies allow.
+        </p>
+      </div>
+      <div class="layer amber">
+        <h4>Between participants</h4>
+        <h3>Decentralized coordination</h3>
+        <p>
+          Each agent reads the shared registry, resolves capabilities to
+          endpoints, and calls peers directly over HTTP/REST. No process in
+          the middle routes, sequences, or coordinates.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RECENT READING ================= -->
+<section id="reading">
+  <div class="container">
+    <span class="eyebrow">Recent reading</span>
+    <h2>Architecture deep-dives and research notes.</h2>
+    <p class="lede">
+      Long-form pieces about the architecture and the broader research that
+      informs it.
+    </p>
+    <div class="read-list">
+      <a class="read-item" href="/blogs/micro-agents-architecture.html">
+        <span class="kind">Reference architecture</span>
+        <span class="title">A Micro-Agents Reference Architecture</span>
+        <span class="desc">Dynamic capability discovery and decentralized coordination — the architecture this framework implements, written up as a standalone reference.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-to-agent-communication.html">
+        <span class="kind">Whitepaper</span>
+        <span class="title">Agent-to-Agent Communication in AI Agent Frameworks</span>
+        <span class="desc">How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel handle discovery, embedding, and distributed calls between agents.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/operational-excellence-index.html">
+        <span class="kind">Whitepaper series</span>
+        <span class="title">Operational Excellence in AI Agent Frameworks</span>
+        <span class="desc">Configuration, deployment, observability, performance, testing — operational practices for running agent systems in production.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-errors-index.html">
+        <span class="kind">Whitepaper series</span>
+        <span class="title">Error Handling in AI Agent Frameworks</span>
+        <span class="desc">Provider errors, multi-agent failure modes, data compliance, and operational error handling across major agent frameworks.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer class="site-footer">
+  <div class="container">
+    <div class="brand">
+      <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
+    </div>
+    <div>True. Dynamic Discovery. Decentralized. Observable.</div>
+    <div class="links">
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="/blogs/micro-agents-architecture.html">Blog</a>
+      <a href="/whitepapers/agent-to-agent-communication.html">Whitepapers</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+      <a href="https://github.com/truvaagents/truva-g3/blob/main/LICENSE">License (Apache 2.0)</a>
+    </div>
+    <div>© 2026 TruvaG3.</div>
+  </div>
+</footer>
+
+
+<!-- DAG-image lightbox: native <dialog>.showModal() to open, click on the
+     backdrop (i.e. the dialog element itself, not its image child) to
+     close. Native browser handles Esc and focus trap. -->
+<script>
+  (() => {
+    const dialog = document.getElementById('dag-zoom-dialog');
+    const button = document.querySelector('.dag-thumb-button');
+    if (!dialog || !button) return;
+    button.addEventListener('click', () => dialog.showModal());
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) dialog.close();
+    });
+  })();
+</script>
+
 </body>
 </html>
