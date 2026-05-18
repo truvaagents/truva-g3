@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TruvaG3 — micro-agents framework for Go</title>
-<meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. True dynamic discovery. Decentralized coordination. Observable by default.">
+<meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. A micro-agents architecture — dynamic discovery, decentralized coordination.">
 <link rel="stylesheet" href="/assets/css/brand.css">
 <link rel="stylesheet" href="/assets/css/landing.css">
 </head>
@@ -14,7 +14,7 @@
 <header class="hero">
   <div class="container">
     <h1><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></h1>
-    <p class="tagline">True. Dynamic Discovery. Decentralized. Observable.</p>
+    <p class="tagline">True. Micro-Agents. Dynamic Discovery. Decentralized.</p>
     <p class="sublede">
       A Go framework that takes the microservices pattern and applies it to
       multi-agent systems. Specialized agents and tools register their
@@ -29,8 +29,9 @@
     <div class="pillrow">
       <a class="pill" href="#what"><span class="dot" style="background:var(--accent)"></span>What is TruvaG3?</a>
       <a class="pill" href="#code"><span class="dot" style="background:var(--brand-g3)"></span>See it in code</a>
-      <a class="pill" href="#coordination"><span class="dot" style="background:#7a3df0"></span>Two coordination layers</a>
-      <a class="pill" href="#reading"><span class="dot" style="background:var(--good)"></span>Recent reading</a>
+      <a class="pill" href="#coordination"><span class="dot" style="background:#7a3df0"></span>Capability registry</a>
+      <a class="pill" href="#developer-to-developer"><span class="dot" style="background:var(--brand-g3-light)"></span>For developers</a>
+      <a class="pill" href="#ops-to-ops"><span class="dot" style="background:var(--warn)"></span>For ops engineers</a>
     </div>
   </div>
 </header>
@@ -43,7 +44,7 @@
     <p class="lede">
       Most agent frameworks bind tools and agents at construction time. TruvaG3
       inverts that — components advertise capabilities to a shared registry
-      and find each other at runtime. Four things follow from that choice.
+      and find each other at runtime. Six things follow from that choice.
     </p>
     <div class="cards">
       <article class="card">
@@ -73,8 +74,8 @@
         <h3>Vendor-agnostic AI</h3>
         <p>
           Implements LLM-as-a-Service pattern. Switch between OpenAI,
-          Anthropic, Gemini, Groq, or self-hosted models (Ollama, vLLM,
-          llama.cpp) without changing agent code.
+          Anthropic, Gemini, or any OpenAI-compatible endpoint (Groq,
+          Mistral, Ollama) without changing agent code.
         </p>
       </article>
       <article class="card">
@@ -88,7 +89,7 @@
         </p>
       </article>
       <article class="card">
-        <h3>True Opensource</h3>
+        <h3>True Open Source</h3>
         <p>
           Open by design. Every backend — discovery, memory, telemetry,
           LLM provider — sits behind a swappable interface. Default local
@@ -122,7 +123,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
     <figure class="example-execution">
       <button class="dag-thumb-button" type="button" aria-label="Expand the execution DAG image">
         <img src="/assets/img/example-execution.png"
-             alt="Execution DAG from the Registry Viewer: the orchestrator turned a single ProcessRequest call into a multi-phase plan — Tier Select, Planning, then a parallel fan-out across six tools (system-utilities, devops, devops-kube-action, devops-kube-log-search, prometheus-query, devops-observability), a second round of Tier Select and re-planning for Phase 2, three more devops-tool calls, resolution steps, an Event Summary, and final Synthesis."
+             alt="Execution DAG from the Registry Viewer: the orchestrator turned a single ProcessRequest call into a multi-phase plan — Tier Select, Planning, then a parallel fan-out across six capability invocations (system-utilities, devops, devops-kube-action, devops-kube-log-search, prometheus-query, devops-observability), a second round of Tier Select and re-planning for Phase 2, three more devops-tool calls, resolution steps, an Event Summary, and final Synthesis."
              loading="lazy" />
       </button>
       <figcaption>
@@ -143,71 +144,304 @@ response, _ := orchestrator.ProcessRequest(ctx,
   </dialog>
 </section>
 
-<!-- ================= TWO COORDINATION LAYERS ================= -->
+<!-- ================= ARCHITECTURE ================= -->
 <section id="coordination">
   <div class="container">
     <span class="eyebrow">Architecture</span>
-    <h2>Two coordination layers, treated differently.</h2>
+    <h2>Built on one primitive: a capability registry.</h2>
     <p class="lede">
-      Once you separate "how an agent decides what to do next" from "how agents
-      find each other," each problem gets its own answer instead of one
-      conflated framework abstraction.
+      Every participant — tool or agent — publishes the capabilities it
+      offers into a shared registry. When a request arrives, the agent
+      reads the registry's current contents and hands that to the LLM as
+      its planning catalog. The LLM picks capabilities by name; the
+      framework resolves each name to a live endpoint and dispatches
+      directly over HTTP. No participant is named in any caller's source
+      code — the tool list is runtime data, not configuration. And at
+      the dispatch site, a tool and an agent are indistinguishable: the
+      registry is what tells the framework where to send the call.
     </p>
+
+    <figure class="arch-diagram">
+      <svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg"
+           role="img"
+           aria-label="A capability registry sits at the top, containing four capability entries mapping capability names to the participants that serve them: web_search to web-search-tool, geocode_location to geocoding-tool, devops_operations to devops-chat-agent, and financial_analysis to research-agent. Below the registry are four participants in a row: Agent A and Agent C, each labeled 'register + discover', and Tool B and Tool D, each labeled 'register only'. Gray arrows go up from every participant to the registry, indicating they all publish their capabilities. Icy-blue arrows go down from the registry to the two agent boxes only, indicating that only agents read the catalog and discover capabilities. The asymmetry is the point: tools are passive providers; agents both publish and consume from the registry.">
+        <defs>
+          <marker id="arch-arr-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#9aa6bd"/>
+          </marker>
+          <marker id="arch-arr-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7cc4ff"/>
+          </marker>
+        </defs>
+        <style>
+          .a-reg     { fill: #1a2236; stroke: #2a3550; stroke-width: 1.5; }
+          .a-box     { fill: #121826; stroke: #2a3550; stroke-width: 1; }
+          .a-title   { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #e6edf7; }
+          .a-sub     { font: 11px -apple-system, sans-serif; fill: #9aa6bd; }
+          .a-cap     { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #cfd9ee; }
+          .a-cap-mut { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #9aa6bd; }
+          .a-role    { font: italic 10.5px -apple-system, sans-serif; fill: #9aa6bd; }
+          .a-rolelbl { font: italic 11px -apple-system, sans-serif; fill: #9aa6bd; }
+          .a-arr-reg { stroke: #9aa6bd; stroke-width: 1.3; fill: none; }
+          .a-arr-disc{ stroke: #7cc4ff; stroke-width: 1.3; fill: none; }
+          .a-legend  { font: 11.5px -apple-system, sans-serif; fill: #9aa6bd; }
+        </style>
+
+        <rect x="40" y="14" width="680" height="120" rx="8" class="a-reg"/>
+        <text x="380" y="36" text-anchor="middle" class="a-title">Capability Registry</text>
+        <text x="380" y="54" text-anchor="middle" class="a-sub">passive index · TTL liveness · no routing logic</text>
+        <line x1="60" y1="66" x2="700" y2="66" stroke="#2a3550" stroke-width="1"/>
+        <text x="68"  y="84"  class="a-cap">web_search</text>
+        <text x="440" y="84"  class="a-cap-mut">→ web-search-tool</text>
+        <text x="68"  y="100" class="a-cap">geocode_location</text>
+        <text x="440" y="100" class="a-cap-mut">→ geocoding-tool</text>
+        <text x="68"  y="116" class="a-cap">devops_operations</text>
+        <text x="440" y="116" class="a-cap-mut">→ devops-chat-agent</text>
+        <text x="68"  y="132" class="a-cap">financial_analysis</text>
+        <text x="440" y="132" class="a-cap-mut">→ research-agent</text>
+
+        <rect x="60"  y="210" width="130" height="60" rx="8" class="a-box"/>
+        <text x="125" y="235" text-anchor="middle" class="a-title">Agent A</text>
+        <text x="125" y="253" text-anchor="middle" class="a-role">orchestrates · discovers</text>
+
+        <rect x="230" y="210" width="130" height="60" rx="8" class="a-box"/>
+        <text x="295" y="235" text-anchor="middle" class="a-title">Tool B</text>
+        <text x="295" y="253" text-anchor="middle" class="a-role">passive endpoint</text>
+
+        <rect x="400" y="210" width="130" height="60" rx="8" class="a-box"/>
+        <text x="465" y="235" text-anchor="middle" class="a-title">Agent C</text>
+        <text x="465" y="253" text-anchor="middle" class="a-role">orchestrates · discovers</text>
+
+        <rect x="570" y="210" width="130" height="60" rx="8" class="a-box"/>
+        <text x="635" y="235" text-anchor="middle" class="a-title">Tool D</text>
+        <text x="635" y="253" text-anchor="middle" class="a-role">passive endpoint</text>
+
+        <line x1="110" y1="210" x2="110" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="295" y1="210" x2="295" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="450" y1="210" x2="450" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="635" y1="210" x2="635" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+
+        <line x1="140" y1="138" x2="140" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
+        <line x1="480" y1="138" x2="480" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
+
+        <text x="125" y="182" text-anchor="middle" class="a-rolelbl">register + discover</text>
+        <text x="295" y="182" text-anchor="middle" class="a-rolelbl">register only</text>
+        <text x="465" y="182" text-anchor="middle" class="a-rolelbl">register + discover</text>
+        <text x="635" y="182" text-anchor="middle" class="a-rolelbl">register only</text>
+
+        <g transform="translate(0, 305)">
+          <line x1="240" y1="0" x2="278" y2="0" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+          <text x="286" y="4" class="a-legend">register</text>
+          <line x1="392" y1="0" x2="430" y2="0" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
+          <text x="438" y="4" class="a-legend">discover</text>
+        </g>
+      </svg>
+      <figcaption>
+        Tools register; agents register <em>and</em> discover. Drop a new
+        participant into the deployment and it joins every running agent's
+        planning catalog automatically — no central change, no redeploy.
+      </figcaption>
+    </figure>
+
+    <p class="arch-proof-intro">
+      One consequence of this design becomes visible in real execution:
+      an agent calling another agent is the same dispatch as an agent
+      calling a tool — same registry lookup, same HTTP call, same
+      structured response. The query below crosses three unrelated
+      domains:
+      <em>"Can you analyze the status of the local Kubernetes cluster?
+      Also, let me know the current weather at NYC, and the stock price
+      of Tesla."</em>
+    </p>
+
+    <figure class="arch-proof">
+      <div class="arch-proof-row">
+        <button class="dag-thumb-button arch-proof-thumb" type="button" aria-label="Expand the outer execution DAG">
+          <span class="arch-proof-label">Outer trace — <code>travel-chat-agent</code></span>
+          <img src="/blogs/agent-to-agent-execution-dag-p1.png"
+               alt="Outer execution DAG from the Registry Viewer: travel-chat-agent's four-step plan invokes one agent capability (devops-chat-agent, served by an agent) alongside three tool capabilities (geocoding-tool, stock-market-tool, weather-tool-v2) drawn from the same catalog — no special handling for the agent step."
+               loading="lazy" />
+        </button>
+        <button class="dag-thumb-button arch-proof-thumb" type="button" aria-label="Expand the inner execution DAG">
+          <span class="arch-proof-label">Inner trace — <code>devops-chat-agent</code></span>
+          <img src="/blogs/agent-to-agent-execution-dag-p2.png"
+               alt="Inner execution DAG from the Registry Viewer: devops-chat-agent receives the call and runs its own plan-act-observe loop, fanning out to three devops-tool calls before synthesizing a response."
+               loading="lazy" />
+        </button>
+      </div>
+      <figcaption>
+        On the left, <code>travel-chat-agent</code>'s plan put
+        <code>devops-chat-agent</code> on the same row as the three tool
+        capabilities — the planner picked by capability, not by participant
+        type. On the right, that single step expanded into a full
+        plan-act-observe run inside <code>devops-chat-agent</code>. The
+        caller never saw it: it got back JSON matching the published
+        capability schema, the same as for any tool.
+        <span class="dag-hint">(click either to expand)</span>
+      </figcaption>
+    </figure>
+
     <div class="twocol">
       <div class="layer">
         <h4>Inside each agent</h4>
         <h3>Orchestration</h3>
         <p>
           One AIOrchestrator drives <em>plan → execute → synthesize</em>,
-          returning to plan when fresh data unlocks the next phase. Plans are
-          DAGs of capability invocations executed with parallelism where
-          dependencies allow.
+          returning to plan when fresh data unlocks the next phase. Plans
+          are DAGs of capability invocations executed with parallelism
+          where dependencies allow.
         </p>
       </div>
       <div class="layer amber">
         <h4>Between participants</h4>
         <h3>Decentralized coordination</h3>
         <p>
-          Each agent reads the shared registry, resolves capabilities to
-          endpoints, and calls peers directly over HTTP/REST. No process in
-          the middle routes, sequences, or coordinates.
+          No process in the middle. Each agent reads the shared registry,
+          resolves capabilities to endpoints, and calls peers directly
+          over HTTP/REST — whether those peers are tools or other agents.
         </p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ================= RECENT READING ================= -->
-<section id="reading">
+<!-- ================= FROM DEVELOPER TO DEVELOPERS ================= -->
+<section id="developer-to-developer">
   <div class="container">
-    <span class="eyebrow">Recent reading</span>
-    <h2>Architecture deep-dives and research notes.</h2>
+    <span class="eyebrow">For Developers</span>
+    <h2>To Developers — with Love <span class="d2d-heart">♥</span></h2>
     <p class="lede">
-      Long-form pieces about the architecture and the broader research that
-      informs it.
+      Built the way you'd want it built. The things you'd look for in a
+      fellow developer's framework, baked&nbsp;in.
     </p>
-    <div class="read-list">
-      <a class="read-item" href="/blogs/micro-agents-architecture.html">
-        <span class="kind">Reference architecture</span>
-        <span class="title">A Micro-Agents Reference Architecture</span>
-        <span class="desc">Dynamic capability discovery and decentralized coordination — the architecture this framework implements, written up as a standalone reference.</span>
-      </a>
-      <a class="read-item" href="/whitepapers/agent-to-agent-communication.html">
-        <span class="kind">Whitepaper</span>
-        <span class="title">Agent-to-Agent Communication in AI Agent Frameworks</span>
-        <span class="desc">How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel handle discovery, embedding, and distributed calls between agents.</span>
-      </a>
-      <a class="read-item" href="/whitepapers/operational-excellence-index.html">
-        <span class="kind">Whitepaper series</span>
-        <span class="title">Operational Excellence in AI Agent Frameworks</span>
-        <span class="desc">Configuration, deployment, observability, performance, testing — operational practices for running agent systems in production.</span>
-      </a>
-      <a class="read-item" href="/whitepapers/agent-errors-index.html">
-        <span class="kind">Whitepaper series</span>
-        <span class="title">Error Handling in AI Agent Frameworks</span>
-        <span class="desc">Provider errors, multi-agent failure modes, data compliance, and operational error handling across major agent frameworks.</span>
-      </a>
+    <div class="cards">
+      <article class="card">
+        <h3>Modular architecture</h3>
+        <p>
+          Only <code>core</code> is required. AI, orchestration, memory,
+          telemetry, and resilience are independent, optional modules —
+          import only what your component needs.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Interface-first design</h3>
+        <p>
+          Every external dependency (LLM provider, registry, memory
+          backend, telemetry) sits behind an interface. Swap
+          implementations without touching call sites.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Sensible defaults, easy overrides</h3>
+        <p>
+          Zero-config to start; every default is overridable. Standard
+          env vars (<code>REDIS_URL</code>, <code>OPENAI_API_KEY</code>,
+          <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>) picked up
+          automatically.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Env-var overrides</h3>
+        <p>
+          Operational knobs (TTLs, token budgets, limits, endpoints)
+          live in environment variables, not code. Change behaviour from
+          outside the binary.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Distributed tracing built-in</h3>
+        <p>
+          OpenTelemetry traces, metrics, and logs across agents and
+          tools — auto-correlated by trace ID. Pipe to any
+          OTel-compatible backend.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Complete local setup</h3>
+        <p>
+          A full agent-dev stack runs on your laptop via Kind —
+          registry, distributed tracing, metrics, logs, dashboards,
+          vector store. Explore the whole system end-to-end.
+        </p>
+      </article>
     </div>
+    <p class="d2d-closing">
+      The full design principles live in
+      <a href="https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md"><code>FRAMEWORK_DESIGN_PRINCIPLES.md</code></a>
+      — a contract, not a brochure.
+    </p>
+  </div>
+</section>
+
+<!-- ================= TO OPS ENGINEERS ================= -->
+<section id="ops-to-ops">
+  <div class="container">
+    <span class="eyebrow">For Ops Engineers</span>
+    <h2>To Ops Engineers — with Love <span class="d2d-heart">♥</span></h2>
+    <p class="lede">
+      Built to blend into the Kubernetes platform you already operate —
+      no new control plane, no proprietary primitives, no playbook to
+      rewrite.
+    </p>
+    <div class="cards">
+      <article class="card">
+        <h3>Plain Kubernetes, plain HTTP</h3>
+        <p>
+          Agents and tools are ordinary Deployments behind Services,
+          communicating over plain HTTP/REST. Service mesh, ingress,
+          mTLS, and tcpdump/curl all apply unchanged. No CRDs, no
+          required operators, no proprietary control plane.
+        </p>
+      </article>
+      <article class="card">
+        <h3>OpenTelemetry-native</h3>
+        <p>
+          Traces, metrics, and logs flow through the standard OTel
+          Collector. Route them to whatever backend your team already
+          runs — Datadog, Honeycomb, Tempo, Jaeger, or anything else
+          that speaks OTLP.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Scaling is the standard kind</h3>
+        <p>
+          A heavily-used tool is a Deployment behind a Service. Same
+          HPA, same rolling updates, same PDBs as every other workload.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Failure modes are familiar</h3>
+        <p>
+          Readiness probes, restart policies, TTL eviction. A
+          misbehaving participant is recovered the same way any pod is.
+          No global state to repair, no cross-component lock to release.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Standard DevOps pipeline</h3>
+        <p>
+          Components ship as plain Docker images and standard Kubernetes
+          manifests — the operational surface is language-agnostic. Your
+          existing build, scan, sign, and deploy chain (GitHub Actions,
+          Argo CD, Flux, Helm — whatever you run) handles them like any
+          other containerized workload.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Air-gapped, by namespace</h3>
+        <p>
+          The whole stack — agents, tools, Redis registry, OpenTelemetry
+          pipeline, pre-built Grafana dashboards, vector store — fits in
+          a single Kubernetes namespace. Pair with a local LLM in the
+          same namespace for a fully self-contained, air-gapped setup.
+        </p>
+      </article>
+    </div>
+    <p class="d2d-closing">
+      Reference manifests, dashboards, and setup scripts live at
+      <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/k8-deployment"><code>examples/k8-deployment/</code></a>
+      — kubectl apply, audit, keep what fits.
+    </p>
   </div>
 </section>
 
@@ -217,7 +451,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
     <div class="brand">
       <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
     </div>
-    <div>True. Dynamic Discovery. Decentralized. Observable.</div>
+    <div>True. Micro-Agents. Dynamic Discovery. Decentralized.</div>
     <div class="links">
       <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
       <a href="/blogs/micro-agents-architecture.html">Blog</a>
@@ -232,13 +466,23 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <!-- DAG-image lightbox: native <dialog>.showModal() to open, click on the
      backdrop (i.e. the dialog element itself, not its image child) to
-     close. Native browser handles Esc and focus trap. -->
+     close. Native browser handles Esc and focus trap. One shared dialog
+     swaps src/alt to match whichever thumbnail was clicked. -->
 <script>
   (() => {
     const dialog = document.getElementById('dag-zoom-dialog');
-    const button = document.querySelector('.dag-thumb-button');
-    if (!dialog || !button) return;
-    button.addEventListener('click', () => dialog.showModal());
+    const dialogImg = dialog && dialog.querySelector('img');
+    if (!dialog || !dialogImg) return;
+    document.querySelectorAll('.dag-thumb-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        const thumbImg = button.querySelector('img');
+        if (thumbImg) {
+          dialogImg.src = thumbImg.src;
+          dialogImg.alt = thumbImg.alt;
+        }
+        dialog.showModal();
+      });
+    });
     dialog.addEventListener('click', (e) => {
       if (e.target === dialog) dialog.close();
     });
