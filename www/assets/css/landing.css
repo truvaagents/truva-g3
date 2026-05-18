@@ -458,6 +458,162 @@ section .lede {
 }
 
 /* -------------------------------------------------------------------------
+ * Architecture section: conceptual diagram + paired execution proof
+ * ------------------------------------------------------------------------- */
+
+.arch-diagram {
+  margin: 0 0 40px;
+}
+.arch-diagram svg {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  margin: 0 auto;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+.arch-diagram figcaption {
+  margin: 14px auto 0;
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+.arch-diagram figcaption code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.arch-proof-intro {
+  color: #cfd9ee;
+  font-size: 15px;
+  line-height: 1.65;
+  margin: 0 0 18px;
+  max-width: 760px;
+}
+.arch-proof-intro em {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.arch-proof {
+  margin: 0 0 44px;
+}
+.arch-proof-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+  /* Constrain the pair to 70% of the container so each thumbnail renders
+   * smaller than the half-width default; the figure stays centered. */
+  max-width: 70%;
+  margin: 0 auto;
+}
+@media (max-width: 880px) {
+  .arch-proof-row {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+  }
+}
+
+/* The paired thumbs reuse the .dag-thumb-button JS hook but get their own
+ * sizing — the existing .example-execution .dag-thumb-button rule is
+ * scoped to that section, so it does not apply here. */
+.arch-proof-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: zoom-in;
+}
+.arch-proof-thumb .arch-proof-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+.arch-proof-thumb .arch-proof-label code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+}
+.arch-proof-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.arch-proof-thumb:hover img,
+.arch-proof-thumb:focus-visible img {
+  transform: scale(1.02);
+  border-color: var(--accent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.arch-proof-thumb:focus { outline: none; }
+.arch-proof-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+.arch-proof figcaption {
+  margin: 18px auto 0;
+  max-width: 760px;
+  color: rgba(154, 166, 189, 0.85);
+  font-size: 13.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+.arch-proof figcaption code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* -------------------------------------------------------------------------
+ * "From Developer to Developers" section
+ *   Reuses the .cards / .card grid from "What is TruvaG3?" — only the
+ *   heart in the heading and the closing pointer need their own styles.
+ * ------------------------------------------------------------------------- */
+
+.d2d-heart {
+  /* Override the section h2's gradient text-fill so the heart reads as a
+   * solid amber accent, slightly smaller than the rest of the heading. */
+  -webkit-text-fill-color: var(--brand-g3);
+  color: var(--brand-g3);
+  font-size: 0.78em;
+  margin-left: 0.18em;
+  vertical-align: 0.06em;
+}
+
+.d2d-closing {
+  margin: 32px auto 0;
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+}
+.d2d-closing code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+.d2d-closing a {
+  color: var(--accent);
+}
+
+/* -------------------------------------------------------------------------
  * Recent-reading list
  * ------------------------------------------------------------------------- */
 
