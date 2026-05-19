@@ -1061,7 +1061,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <p>The orchestrator discovers whatever capabilities are currently registered, asks the LLM for a plan, executes the plan as a DAG, and synthesizes the response. The agent's source code names no tool. Deploy a new tool five minutes later, and the same agent can use it on the next request — no code change, no redeploy.</p>
 
-<p>The bundled examples include <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">three live demos</a>: the same agent picks different tools depending on the question. "Weather in Paris" selects <code>weather-service</code>. "Stock price of Apple" selects <code>stock-service</code>. "Capital of Japan" selects <code>country-info-tool</code>. No hardcoded routing.</p>
+<p>The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">bundled examples</a> show the same agent picking different capabilities depending on the question. "Weather in Paris" routes to <code>get_current_weather</code> (served by <code>weather-tool-v2</code>); "stock price of Apple" routes to <code>stock_quote</code> (<code>stock-market-tool</code>); "Capital of Japan" routes to <code>get_country_info</code> (<code>country-info-tool</code>). No hardcoded routing — the LLM picks the capability from the live registry and the framework resolves it to the address.</p>
 
 <h3 id="code-agent-to-agent">One agent calling another</h3>
 
