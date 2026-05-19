@@ -139,6 +139,27 @@
     color: var(--muted);
     font-size: 0.9rem;
   }
+  .cite-as {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    padding: 0.9rem 1.1rem;
+    margin: 2rem 0 1rem 0;
+    font-size: 0.9rem;
+    border-radius: 4px;
+    line-height: 1.5;
+  }
+  .cite-as code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
 </style>
 </head>
 <body>
@@ -148,7 +169,7 @@
 <header class="article-header">
   <h1>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h1>
   <p class="dek">An introduction to a micro-agents architecture in which specialized tools and agents dynamically register their capabilities with a shared registry, are addressed by logical names rather than hardcoded URLs, and coordinate without a central conductor — with orchestration inside each agent and decentralized coordination across the system. The concepts are grounded in TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation that can be cloned and run on a laptop.</p>
-  <p class="meta">A reference-architecture article. Reading time: about 30 minutes.</p>
+  <p class="meta">Neelabh Tripathi · May 7, 2026</p>
 </header>
 
 <section>
@@ -1381,7 +1402,11 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
 </ol>
 </section>
 
+<p class="cite-as"><strong>Cite as:</strong> Tripathi, N. (2026). <em>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</em>. <a href="https://truvag3.dev/blogs/micro-agents-architecture">https://truvag3.dev/blogs/micro-agents-architecture</a></p>
+
 <p class="footer-note">The TruvaG3 reference implementation<a class="ref" href="#ref-1">[1]</a> is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
+
+<p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
 
 </article>
 
