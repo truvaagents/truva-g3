@@ -63,6 +63,26 @@
   footer a { color: var(--accent); }
 
   @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -81,6 +101,7 @@
 <header class="hero">
   <div class="container">
     <div class="chap-tag">Chapter 2 of 5</div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Provider-side failures</h1>
     <p class="subtitle">
       These are the failures that originate <i>before</i> your code runs at all — the LLM
@@ -533,6 +554,7 @@
     <a href="agent-errors-index.html">← Back to index</a> ·
     Previous: <a href="agent-errors.html">Chapter 1 · In-loop</a> ·
     Next: <a href="agent-errors-multi-agent.html">Chapter 3 · Multi-agent →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

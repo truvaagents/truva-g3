@@ -223,6 +223,26 @@
     section { page-break-inside: avoid; }
     .fw-card { break-inside: avoid; }
   }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -230,6 +250,7 @@
 <header class="hero">
   <div class="container">
     <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>How AI Agent Frameworks Orchestrate Tool Calls</h1>
     <p class="subtitle">
       A side-by-side conceptual tour of the agent harness inside <b>LangChain</b>, <b>LangGraph</b>,
@@ -465,8 +486,8 @@
               guardrail trips: <code>max_iterations</code> (default 15) or <code>max_execution_time</code>.
             </p>
             <div class="twocol">
-              <div class="miniblock"><h5>Strengths</h5><p>Tiny mental model. Easy to debug — every step is in <code>intermediate_steps</code>.</p></div>
-              <div class="miniblock"><h5>Watch-outs</h5><p>Single linear loop. No native branching, parallelism, or human-in-the-loop without bolt-ons. Most net-new work has moved to LangGraph.</p></div>
+              <div class="miniblock"><h5>Mechanism</h5><p>Single linear loop. Each step is recorded in <code>intermediate_steps</code>.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>No native branching, parallelism, or human-in-the-loop primitives. Most net-new work has moved to LangGraph.</p></div>
             </div>
           </div>
         </div>
@@ -566,8 +587,8 @@
               and streaming events at node-level.
             </p>
             <div class="twocol">
-              <div class="miniblock"><h5>Strengths</h5><p>Production-grade. Composable into multi-agent supervisors. State is explicit.</p></div>
-              <div class="miniblock"><h5>Watch-outs</h5><p>Steeper learning curve — you need to think in nodes, edges, reducers, and channels rather than scripts.</p></div>
+              <div class="miniblock"><h5>Mechanism</h5><p>Composable into multi-agent supervisors. State is explicit.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Requires modeling logic as nodes, edges, reducers, and channels rather than imperative scripts.</p></div>
             </div>
           </div>
         </div>
@@ -693,8 +714,8 @@
               chooses who runs what next.
             </p>
             <div class="twocol">
-              <div class="miniblock"><h5>Strengths</h5><p>Intuitive metaphor for non-engineers. Fast to prototype "team of specialists" workflows.</p></div>
-              <div class="miniblock"><h5>Watch-outs</h5><p>Two loops to reason about. Hierarchical Process can be expensive — the manager LLM is invoked between every task.</p></div>
+              <div class="miniblock"><h5>Mechanism</h5><p>Role-based "team of specialists" metaphor. Hierarchical Process uses two loops.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>In Hierarchical Process mode, the manager LLM is invoked between every task, adding an LLM call per delegation.</p></div>
             </div>
           </div>
         </div>
@@ -811,8 +832,8 @@
               hooks power tracing, eval, and policy.
             </p>
             <div class="twocol">
-              <div class="miniblock"><h5>Strengths</h5><p>First-class composition + production-grade observability/eval. Streaming and live (audio) are native.</p></div>
-              <div class="miniblock"><h5>Watch-outs</h5><p>Heavier surface area than LangChain. The processor pipeline is powerful but takes effort to learn.</p></div>
+              <div class="miniblock"><h5>Mechanism</h5><p>Built-in composition. Observability/eval, streaming, and live (audio) are all native.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Larger API surface than LangChain. The processor pipeline has its own lifecycle and ordering rules.</p></div>
             </div>
           </div>
         </div>
@@ -928,8 +949,8 @@
               kernel function — i.e. another LLM judging the conversation.
             </p>
             <div class="twocol">
-              <div class="miniblock"><h5>Strengths</h5><p>Clean .NET- and Python-friendly shape. Strong enterprise story (filters, telemetry, identity). Tools = first-class plugins.</p></div>
-              <div class="miniblock"><h5>Watch-outs</h5><p>Loop control mostly hidden inside the Kernel — convenient, but harder to surgically intervene than LangGraph.</p></div>
+              <div class="miniblock"><h5>Mechanism</h5><p>.NET- and Python-friendly API. Filters, telemetry, and identity abstractions are built in. Tools are plugins registered with the Kernel.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Loop control is encapsulated inside the Kernel. Fine-grained intervention requires Kernel-level service registration rather than explicit graph nodes.</p></div>
             </div>
           </div>
         </div>
@@ -1116,6 +1137,7 @@
     Conceptual overview compiled from the upstream source of
     LangChain, LangGraph, CrewAI, Google ADK (adk-python), and Microsoft Semantic Kernel.
     Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

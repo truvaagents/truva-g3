@@ -62,6 +62,26 @@
   footer a { color: var(--accent); }
 
   @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -80,6 +100,7 @@
 <header class="hero">
   <div class="container">
     <div class="chap-tag">Chapter 4 of 5</div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Operational failures</h1>
     <p class="subtitle">
       These are the failures that sit between the agent loop and the platform running it: a tool
@@ -474,7 +495,7 @@
       </div>
       <div class="ta">
         <span class="tag">RPM</span>
-        <h4>6 · CrewAI is the only framework with first-class RPM</h4>
+        <h4>6 · CrewAI is the only framework with built-in RPM control</h4>
         <p>
           <code>RPMController</code> in <code>utilities/rpm_controller.py:8</code> uses
           <code>threading.Timer</code> + <code>threading.Lock</code> for a per-minute counter
@@ -491,6 +512,7 @@
     <a href="agent-errors-index.html">← Back to index</a> ·
     Previous: <a href="agent-errors-multi-agent.html">Chapter 3 · Multi-agent</a> ·
     Next: <a href="agent-errors-data-compliance.html">Chapter 5 · Data &amp; compliance →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

@@ -111,6 +111,26 @@
   footer a { color: var(--accent); }
 
   @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -118,6 +138,7 @@
 <header class="hero">
   <div class="container">
     <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Operational Excellence in AI Agent Frameworks</h1>
     <p class="subtitle">
       A multipart guide. What does it take to run an agent in production — observe it, scale it,
@@ -158,87 +179,6 @@
       <div class="finding">
         <h4>Implementation swap-ability is cheap nearly everywhere</h4>
         <p>Seven frameworks land at "Low effort to swap a default" — nearly every component is an abstract base class, interface, or trait. CrewAI, SK, and Genkit Go land at moderate friction.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ========== FRAMEWORKS ========== -->
-<section>
-  <div class="container">
-    <h2>The ten frameworks under comparison</h2>
-    <p class="lede">Five Python frameworks plus five non-Python representatives — one each for TypeScript, .NET, Java, Go, and Rust.</p>
-
-    <div class="frameworks-grid">
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">LangChain</div>
-          <div class="fw-sub">Composable LLM toolkit; broadest abstraction surface.</div>
-        </div>
-        <span class="fw-tag">Python</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">LangGraph</div>
-          <div class="fw-sub">Graph-orchestrated agents with checkpointable state.</div>
-        </div>
-        <span class="fw-tag">Python</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">CrewAI</div>
-          <div class="fw-sub">Role-based multi-agent crews; scoped memory.</div>
-        </div>
-        <span class="fw-tag">Python</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Google ADK</div>
-          <div class="fw-sub">Cloud Run / Vertex AI–targeted agent runtime.</div>
-        </div>
-        <span class="fw-tag">Python</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Microsoft Semantic Kernel</div>
-          <div class="fw-sub">Kernel + connectors; deep OTel diagnostics.</div>
-        </div>
-        <span class="fw-tag">Python</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Mastra</div>
-          <div class="fw-sub">TypeScript-first; built on Vercel AI SDK; edge-ready.</div>
-        </div>
-        <span class="fw-tag">TypeScript</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Microsoft Agent Framework</div>
-          <div class="fw-sub">Successor to AutoGen / .NET SK; ASP.NET Core hosted.</div>
-        </div>
-        <span class="fw-tag">.NET</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">LangChain4j</div>
-          <div class="fw-sub">~80 vendor modules; Spring Boot / Quarkus ready.</div>
-        </div>
-        <span class="fw-tag">Java</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Genkit</div>
-          <div class="fw-sub">Google's TS-first framework; Go SDK 1.0; .prompt files.</div>
-        </div>
-        <span class="fw-tag">Go</span>
-      </div>
-      <div class="fw-item">
-        <div>
-          <div class="fw-name">Rig</div>
-          <div class="fw-sub">Trait-based Rust framework; Tokio async; native binary.</div>
-        </div>
-        <span class="fw-tag">Rust</span>
       </div>
     </div>
   </div>
@@ -323,6 +263,87 @@
         </ul>
         <span class="arrow">Read Chapter 5 →</span>
       </a>
+    </div>
+  </div>
+</section>
+
+<!-- ========== FRAMEWORKS ========== -->
+<section>
+  <div class="container">
+    <h2>The ten frameworks under comparison</h2>
+    <p class="lede">Five Python frameworks plus five non-Python representatives — one each for TypeScript, .NET, Java, Go, and Rust.</p>
+
+    <div class="frameworks-grid">
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangChain</div>
+          <div class="fw-sub">Composable LLM toolkit; broadest abstraction surface.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangGraph</div>
+          <div class="fw-sub">Graph-orchestrated agents with checkpointable state.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">CrewAI</div>
+          <div class="fw-sub">Role-based multi-agent crews; scoped memory.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Google ADK</div>
+          <div class="fw-sub">Cloud Run / Vertex AI–targeted agent runtime.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Microsoft Semantic Kernel</div>
+          <div class="fw-sub">Kernel + connectors; deep OTel diagnostics.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Mastra</div>
+          <div class="fw-sub">TypeScript-first; built on Vercel AI SDK; edge-ready.</div>
+        </div>
+        <span class="fw-tag">TypeScript</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Microsoft Agent Framework</div>
+          <div class="fw-sub">Successor to AutoGen / .NET SK; ASP.NET Core hosted.</div>
+        </div>
+        <span class="fw-tag">.NET</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangChain4j</div>
+          <div class="fw-sub">~80 vendor modules; Spring Boot / Quarkus ready.</div>
+        </div>
+        <span class="fw-tag">Java</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Genkit</div>
+          <div class="fw-sub">Google's TS-first framework; Go SDK 1.0; .prompt files.</div>
+        </div>
+        <span class="fw-tag">Go</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Rig</div>
+          <div class="fw-sub">Trait-based Rust framework; Tokio async; native binary.</div>
+        </div>
+        <span class="fw-tag">Rust</span>
+      </div>
     </div>
   </div>
 </section>
@@ -444,6 +465,7 @@
     <a href="operational-excellence-deployment.html">Chapter 3</a> ·
     <a href="operational-excellence-testing.html">Chapter 4</a> ·
     <a href="operational-excellence-configuration.html">Chapter 5</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

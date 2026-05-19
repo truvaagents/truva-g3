@@ -208,6 +208,26 @@
     section { page-break-inside: avoid; }
     .fw-card { break-inside: avoid; }
   }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -215,6 +235,7 @@
 <header class="hero">
   <div class="container">
     <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Human-in-the-Loop in AI Agent Frameworks</h1>
     <p class="subtitle">
       How <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
@@ -1122,6 +1143,7 @@
   <div class="container">
     HITL behaviour compiled from upstream source of LangChain, LangGraph, CrewAI, Google ADK
     (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

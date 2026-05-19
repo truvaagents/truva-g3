@@ -206,6 +206,26 @@
     section { page-break-inside: avoid; }
     .fw-card { break-inside: avoid; }
   }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -213,6 +233,7 @@
 <header class="hero">
   <div class="container">
     <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Agent-to-Agent Communication in AI Agent Frameworks</h1>
     <p class="subtitle">
       How agents in <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
@@ -220,7 +241,7 @@
       talk — both <i>embedded</i> in the same process and <i>distributed</i> across services.
     </p>
     <div class="pillrow">
-      <a class="pill" href="#universal"><span class="dot" style="background:var(--net)"></span>The four A2A questions</a>
+      <a class="pill" href="#universal"><span class="dot" style="background:var(--net)"></span>The four Agent-to-Agent questions</a>
       <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
       <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
       <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
@@ -235,7 +256,7 @@
 <!-- ================= UNIVERSAL FRAMING ================= -->
 <section id="universal">
   <div class="container">
-    <h2>Four questions every A2A story has to answer</h2>
+    <h2>Four questions every Agent-to-Agent story has to answer</h2>
     <p class="lede">
       Whether two agents are running in the same process or across continents, the framework has
       to answer the same four questions before they can collaborate. The differences between
@@ -245,7 +266,7 @@
 
     <div class="universal-stack">
       <div class="uni-svg-wrap">
-        <svg viewBox="0 -20 1040 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal A2A diagram">
+        <svg viewBox="0 -20 1040 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal Agent-to-Agent diagram">
           <defs>
             <marker id="u-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
@@ -353,7 +374,7 @@
   <div class="container">
     <h2>How each framework answers those four questions</h2>
     <p class="lede">
-      For each card: a diagram showing the framework's A2A machinery (in-process on top, network
+      For each card: a diagram showing the framework's Agent-to-Agent machinery (in-process on top, network
       below), the four-axis coverage, and a code-grounded explanation.
     </p>
 
@@ -370,7 +391,7 @@
         </div>
         <div class="fw-body">
           <div class="fw-svg-wrap">
-            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain A2A">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain Agent-to-Agent">
               <defs>
                 <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
@@ -482,7 +503,7 @@
         </div>
         <div class="fw-body">
           <div class="fw-svg-wrap">
-            <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph A2A">
+            <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph Agent-to-Agent">
               <defs>
                 <marker id="lg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
@@ -598,13 +619,13 @@
         <div class="fw-head">
           <div class="fw-badge" style="background:var(--crew)">Cr</div>
           <div>
-            <h3>CrewAI · DelegateWorkTool + first-class A2A protocol</h3>
+            <h3>CrewAI · DelegateWorkTool + built-in A2A protocol</h3>
             <div class="sub">In-process: a manager LLM gets a delegate tool per coworker. Across the wire: a full A2A client/server module ships in core.</div>
           </div>
         </div>
         <div class="fw-body">
           <div class="fw-svg-wrap">
-            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI A2A">
+            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI Agent-to-Agent">
               <defs>
                 <marker id="cr-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd"/></marker>
@@ -707,7 +728,7 @@
                 <div class="ax"><h5>1 · Discovery</h5><p>Local: list of agents in the Crew. Remote: AgentCard fetch by URL.</p></div>
                 <div class="ax"><h5>2 · LLM exposure</h5><p>Local: <code>DelegateWorkTool</code> with role-based dispatch. Remote: prompt templates inject available remote agents into the prompt.</p></div>
                 <div class="ax"><h5>3 · Embedded</h5><p>Synchronous task chaining; outputs propagate via <code>_get_context()</code>.</p></div>
-                <div class="ax"><h5>4 · Distributed</h5><p><b>First-class.</b> Full A2A protocol, multiple transports, multiple auth schemes.</p></div>
+                <div class="ax"><h5>4 · Distributed</h5><p>Full A2A protocol, with multiple transports and auth schemes.</p></div>
               </div>
               <h4>Protocol on the wire</h4>
               <p><b>A2A protocol</b>, built on the official <code>a2a-python</code> SDK. Three transports negotiated at runtime: <b>JSONRPC</b> (default), <b>gRPC</b>, and <b>HTTP+JSON</b> — all enumerated in <code>TransportType</code>. Updates: streaming, push notifications, and polling for long-running calls. Auth schemes in <code>a2a/auth/client_schemes.py</code>: <b>APIKey</b>, <b>HTTP Basic</b>, <b>HTTP Digest</b>, <b>Bearer Token</b>, <b>OAuth2</b> (client-credentials and authorization-code).</p>
@@ -729,7 +750,7 @@
         </div>
         <div class="fw-body">
           <div class="fw-svg-wrap">
-            <svg viewBox="0 0 1040 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK A2A">
+            <svg viewBox="0 0 1040 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK Agent-to-Agent">
               <defs>
                 <marker id="ad-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M0,0 L10,5 L0,10 Z" fill="#fca5a5"/></marker>
@@ -866,7 +887,7 @@
         </div>
         <div class="fw-body">
           <div class="fw-svg-wrap">
-            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel A2A">
+            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel Agent-to-Agent">
               <defs>
                 <marker id="sk-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M0,0 L10,5 L0,10 Z" fill="#bae6fd"/></marker>
@@ -987,8 +1008,8 @@
 <!-- ================= COMPARISON TABLE ================= -->
 <section id="compare">
   <div class="container">
-    <h2>Side-by-side · the four A2A axes</h2>
-    <p class="lede">Read down a column for one framework's whole A2A story; read across to see how each framework answers the same question.</p>
+    <h2>Side-by-side · the four Agent-to-Agent axes</h2>
+    <p class="lede">Read down a column for one framework's whole Agent-to-Agent story; read across to see how each framework answers the same question.</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -1150,8 +1171,9 @@
 
 <footer>
   <div class="container">
-    A2A behaviour compiled from upstream source of LangChain, LangGraph, CrewAI, Google ADK
+    Agent-to-Agent behaviour compiled from upstream source of LangChain, LangGraph, CrewAI, Google ADK
     (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

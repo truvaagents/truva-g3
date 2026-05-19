@@ -224,6 +224,26 @@
   .chap-nav a.active { background: #2d1414; border-color: var(--err); color: #fee2e2; }
   .chap-nav .home { color: var(--muted); }
   .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -242,6 +262,7 @@
 <header class="hero">
   <div class="container">
     <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Error Handling in AI Agent Frameworks</h1>
     <p class="subtitle">
       How <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
@@ -803,7 +824,7 @@
               <div class="ax-grid">
                 <div class="ax"><h5>1 · Tool fails</h5><p><b>Native.</b> Counted against <code>max_retry_limit</code>; error string fed back to LLM.</p></div>
                 <div class="ax"><h5>2 · LLM incorrect</h5><p><b>Native.</b> <code>parse()</code> in <code>agents/parser.py</code> + corrective re-prompt; capped by <code>max_iter</code>.</p></div>
-                <div class="ax"><h5>3 · Hallucination</h5><p><b>Best of the bunch</b> — <code>Task.guardrail(s)</code> are first-class callable validators.</p></div>
+                <div class="ax"><h5>3 · Hallucination</h5><p><code>Task.guardrail(s)</code> are first-class callable validators.</p></div>
                 <div class="ax"><h5>4 · Large context</h5><p><b>Native.</b> <code>respect_context_window</code> → auto-summarize via <code>handle_context_length</code>.</p></div>
               </div>
               <h4>Auto-retry defaults</h4>
@@ -1206,6 +1227,7 @@
     Error-handling behaviour compiled from upstream source of LangChain, LangGraph, CrewAI,
     Google ADK (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect
     audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

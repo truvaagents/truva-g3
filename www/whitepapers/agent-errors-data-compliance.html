@@ -62,6 +62,26 @@
   footer a { color: var(--accent); }
 
   @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -80,6 +100,7 @@
 <header class="hero">
   <div class="container">
     <div class="chap-tag">Chapter 5 of 5</div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Data &amp; compliance failures</h1>
     <p class="subtitle">
       These are the failures that happen at the data boundary — malformed payloads coming in,
@@ -202,7 +223,7 @@
         Catching this means scanning text at three points: incoming user input (before the model
         sees it), outgoing tool results (before they're added to the prompt), and outgoing model
         responses (before they reach the user or the trace store). LangChain v1's
-        <code>PIIMiddleware</code> is the only first-class implementation in the catalog — it
+        <code>PIIMiddleware</code> is the only built-in PII implementation in the catalog — it
         ships built-in detectors for email, credit-card, IP, MAC, and URL with four redaction
         strategies (<code>"block"</code>, <code>"redact"</code>, <code>"mask"</code>,
         <code>"hash"</code>). Every other framework provides generic interception hooks
@@ -430,7 +451,7 @@
       </div>
       <div class="ta">
         <span class="tag">PII</span>
-        <h4>2 · LangChain v1 is the only first-class PII surface</h4>
+        <h4>2 · LangChain v1 is the only framework shipping built-in PII surfaces</h4>
         <p>
           <code>PIIMiddleware</code> at <code>middleware/pii.py:32</code> ships built-in detectors
           for email, credit-card, IP, MAC, URL, and four redaction strategies
@@ -488,6 +509,7 @@
     <a href="agent-errors-index.html">← Back to index</a> ·
     Previous: <a href="agent-errors-operational.html">Chapter 4 · Operational</a> ·
     First: <a href="agent-errors.html">Chapter 1 · In-loop</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 

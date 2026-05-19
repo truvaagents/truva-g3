@@ -63,6 +63,26 @@
   footer a { color: var(--accent); }
 
   @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -81,6 +101,7 @@
 <header class="hero">
   <div class="container">
     <div class="chap-tag">Chapter 3 of 5 · Operational Excellence</div>
+    <div class="ai-capsule">Generated with AI</div>
     <h1>Deployment &amp; runtime</h1>
     <p class="subtitle">
       A framework's runtime profile — how fast it boots, how much memory it holds, what
@@ -556,7 +577,7 @@
             <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
             <td>Yes — embed in Axum / actix-web; native binary.</td>
             <td>Yes — Lambda via custom runtime; cold start sub-100 ms.</td>
-            <td>Possible via WASM compilation; not turnkey.</td>
+            <td>Possible via WASM compilation; requires custom build configuration.</td>
           </tr>
         </tbody>
       </table>
@@ -570,9 +591,8 @@
         .NET AOT, Quarkus native) feel snappy on cold containers; Python feels noticeably
         slower; Mastra on Vercel sits in between. For edge runtimes, the picture collapses
         to one realistic option: Mastra. Cloudflare Workers and Vercel Edge run JavaScript /
-        WASM, which rules out Python, JVM jars, and traditional Go / .NET deployments. If you
-        need genuine edge deployment for an agent today, Mastra is the only framework on this
-        list with a turnkey path.
+        WASM, which rules out Python, JVM jars, and traditional Go / .NET deployments. For edge runtimes (Cloudflare Workers, Vercel Edge), Mastra is the only
+        framework on this list that ships ready-to-deploy edge-compatible bundles.
       </p>
     </div>
   </div>
@@ -727,8 +747,8 @@
         <h4>4 · Edge runtime is a single-framework story</h4>
         <p>
           Cloudflare Workers, Vercel Edge, and Deno Deploy run JavaScript / WASM. Of the ten
-          frameworks, only <b>Mastra</b> ships turnkey edge deployment. Rig and Genkit Go are
-          theoretically reachable via WASM compilation but not turnkey. Python and JVM
+          frameworks, only <b>Mastra</b> ships ready-to-deploy edge-compatible bundles. Rig and Genkit Go are
+          theoretically reachable via WASM compilation but require custom WASM packaging. Python and JVM
           frameworks aren't realistic for edge.
         </p>
       </div>
@@ -762,6 +782,7 @@
     <a href="operational-excellence-index.html">← Back to index</a> ·
     Previous: <a href="operational-excellence-performance.html">Chapter 2 · Performance</a> ·
     Next: <a href="operational-excellence-testing.html">Chapter 4 · Testing →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
 
