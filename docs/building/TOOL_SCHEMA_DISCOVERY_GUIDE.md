@@ -10,9 +10,9 @@ Welcome to the complete guide on how TruvaG3 helps your AI agents generate perfe
 - [Phase 1: Description-Based Generation](#-phase-1-description-based-generation-always-present)
 - [Phase 2: Field-Hint-Based Generation](#-phase-2-field-hint-based-generation-recommended)
 - [Phase 3: Schema-Based Validation](#-phase-3-schema-based-validation-optional)
-- [Implementation Guide for Tool Developers](#-implementation-guide-for-tool-developers)
+- [Implementation Guide for Tool Developers](#️-implementation-guide-for-tool-developers)
 - [Implementation Guide for Agent Developers](#-implementation-guide-for-agent-developers)
-- [How It Works Under the Hood](#-how-it-works-under-the-hood)
+- [How It Works Under the Hood](#️-how-it-works-under-the-hood)
 - [Performance Characteristics](#-performance-characteristics)
 - [Best Practices](#-best-practices)
 - [Common Patterns and Solutions](#-common-patterns-and-solutions)
@@ -2079,14 +2079,14 @@ Mission-critical: Phase 1 + 2 + 3
    - See `examples/agent-example/` for complete implementation
 
 3. **Learn More:**
-   - [Core Module README](../../core/README.md) - Framework fundamentals
-   - [AI Module README](../../ai/README.md) - AI client integration
-   - [Examples](../../examples) - Working code samples
+   - [Core Module README](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) - Framework fundamentals
+   - [AI Module README](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md) - AI client integration
+   - [Examples](https://github.com/truvaagents/truva-g3/tree/main/examples) - Working code samples
 
 ### Questions?
 
 - Check the [troubleshooting section](#-troubleshooting) above
-- Review the [examples](../../examples) for working code
+- Review the [examples](https://github.com/truvaagents/truva-g3/tree/main/examples) for working code
 - Open an issue on GitHub for additional help
 
 Happy building! 🚀

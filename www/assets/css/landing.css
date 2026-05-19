@@ -1,0 +1,709 @@
+/**
+ * TruvaG3 — landing page styles.
+ *
+ * Design tokens + primitives extracted from
+ * www/whitepapers/agent-to-agent-communication.html so the homepage
+ * shares its visual language with the whitepapers (intentional — readers
+ * who arrive at a whitepaper from the homepage stay inside the same
+ * design system).
+ *
+ * Brand tokens (--brand-truva*, --brand-g3*) live in brand.css and are
+ * loaded first; this file references them but does not redefine them.
+ */
+
+/* -------------------------------------------------------------------------
+ * Design tokens
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* Backgrounds — three depths, deepest first */
+  --bg:    #0b0f17;
+  --bg-2:  #121826;
+  --bg-3:  #1a2236;
+
+  /* Foreground */
+  --ink:   #e6edf7;
+  --muted: #9aa6bd;
+  --line:  #2a3550;
+
+  /* Accents */
+  --accent: #7cc4ff;     /* icy blue — very close to --brand-truva */
+  --good:   #34d399;
+  --warn:   #fbbf24;
+
+  /* Layout */
+  --maxw: 1180px;
+  --section-pad: 88px;   /* slightly more breathing room than whitepaper's 64px */
+}
+
+/* -------------------------------------------------------------------------
+ * Base
+ * ------------------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  /* Subtle radial glow at the top, fading into deep navy */
+  background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+  color: var(--ink);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+pre {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 22px;
+  overflow: auto;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #cfe1ff;
+  margin: 0;
+}
+
+.container {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* -------------------------------------------------------------------------
+ * Hero
+ * ------------------------------------------------------------------------- */
+
+header.hero {
+  padding: 96px 0 64px;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.hero h1 {
+  font-size: clamp(56px, 9vw, 96px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 0 0 18px;
+}
+
+.hero .tagline {
+  font-size: clamp(18px, 2.2vw, 26px);
+  font-weight: 400;
+  margin: 0 auto 12px;
+  max-width: 760px;
+  /* Gradient text — softer than the whitepaper's, sits between brand tones */
+  background: linear-gradient(90deg, #ffffff 0%, var(--accent) 55%, var(--brand-g3-light) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  letter-spacing: -0.01em;
+}
+
+.hero .sublede {
+  color: var(--muted);
+  font-size: 17px;
+  max-width: 640px;
+  margin: 0 auto 36px;
+}
+
+/* -------------------------------------------------------------------------
+ * Buttons (CTAs)
+ * ------------------------------------------------------------------------- */
+
+.btn-row {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 36px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 24px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform .15s ease, background .15s ease,
+              border-color .15s ease, box-shadow .15s ease;
+}
+
+.btn-primary {
+  /* Solid cyan — the exact right-stop of the "Act" box gradient in
+   * agent-orchestration.html (#06b6d4). Paired with deep-teal text
+   * (#062a23, same as the whitepaper uses on its toolG-filled box) —
+   * the combo is a tested high-contrast read in this design system.
+   *
+   * Note: cyan is intentionally OUTSIDE the brand palette (we're
+   * blue + amber). It's borrowed from the whitepaper aesthetic and
+   * scoped to the primary CTA as a "vibrant action" accent. */
+  background: #06b6d4;
+  color: #062a23;
+  font-weight: 700;
+  box-shadow:
+    0 8px 24px rgba(6, 182, 212, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.40);
+}
+.btn-primary:hover {
+  background: #22d3ee;         /* Tailwind cyan-400 — one shade brighter */
+  transform: translateY(-2px);
+  box-shadow:
+    0 12px 32px rgba(34, 211, 238, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.50);
+  text-decoration: none;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #3a4a72;
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+
+/* -------------------------------------------------------------------------
+ * Pill nav
+ * ------------------------------------------------------------------------- */
+
+.pillrow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  transition: transform .15s ease, background .15s ease, border-color .15s ease;
+}
+.pill:hover {
+  transform: translateY(-1px);
+  border-color: #3a4a72;
+  text-decoration: none;
+}
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* -------------------------------------------------------------------------
+ * Sections
+ * ------------------------------------------------------------------------- */
+
+section {
+  padding: var(--section-pad) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.eyebrow {
+  display: block;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+section h2 {
+  font-size: clamp(26px, 3.2vw, 36px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+  width: fit-content;
+  max-width: 100%;
+  /* Editorial gradient — lifted verbatim from the whitepaper's hero h1
+   * so section headings on the homepage visually match the headings
+   * inside any linked whitepaper. white → sky-blue → lavender. */
+  background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+section .lede {
+  color: var(--muted);
+  font-size: 17px;
+  max-width: 760px;
+  margin: 0 0 40px;
+}
+
+/* -------------------------------------------------------------------------
+ * Feature card grid (4-up → 2-up → 1-up)
+ * ------------------------------------------------------------------------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+@media (max-width: 980px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .cards { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 22px 24px;
+  transition: transform .2s ease, border-color .2s ease, background .2s ease;
+}
+.card:hover {
+  transform: translateY(-2px);
+  border-color: #3a4a72;
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-3) 100%);
+}
+.card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--accent);
+  letter-spacing: -0.005em;
+}
+.card p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: #cfd9ee;
+}
+
+/* -------------------------------------------------------------------------
+ * Code-snippet section
+ * ------------------------------------------------------------------------- */
+
+.code-frame {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 28px 32px;
+  /* Subtle inner glow matching the whitepaper's framework cards */
+  background:
+    radial-gradient(900px 500px at 20% 10%, rgba(56, 189, 248, 0.05), transparent 60%),
+    var(--bg-2);
+}
+.code-frame .caption {
+  color: var(--muted);
+  font-size: 14.5px;
+  margin: 0 0 16px;
+}
+
+/* Sub-heading and execution-DAG figure that follow the code block —
+ * "what the call becomes at runtime." The figure is a real captured
+ * execution from the Registry Viewer, so frame matches the existing
+ * dark surface treatment (border + radius). */
+.code-output-heading {
+  margin: 40px 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  /* Gradient in the same hue family as section h2 (white → sky-blue →
+   * lavender) but with stops shifted earlier — at 18px the h2's
+   * 0/60/100 spacing compresses the color into the last ~40% of the
+   * text, so most of it reads white. 0/25/100 gives the gradient room
+   * to show across the whole heading. */
+  background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 25%, #c4b5fd 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.example-execution {
+  margin: 0;
+}
+/* Thumbnail button — sized to ~1/3 of the container on desktop,
+ * constrained by viewport on mobile. <button> is the right semantic
+ * element for "click to open dialog"; we strip native button chrome and
+ * style the image inside. */
+.example-execution .dag-thumb-button {
+  display: block;
+  max-width: min(380px, 100%);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: zoom-in;
+}
+.example-execution .dag-thumb-button img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.example-execution .dag-thumb-button:hover img,
+.example-execution .dag-thumb-button:focus-visible img {
+  transform: scale(1.02);
+  border-color: var(--accent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.example-execution .dag-thumb-button:focus { outline: none; }
+.example-execution .dag-thumb-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+.example-execution figcaption {
+  margin: 14px auto 0;
+  max-width: min(380px, 100%);          /* match thumbnail width — no overflow */
+  color: rgba(154, 166, 189, 0.72);     /* var(--muted) at lower opacity */
+  font-size: 12.5px;                    /* was 14.5px */
+  line-height: 1.5;                     /* slightly tighter */
+  text-align: center;
+}
+.dag-hint {
+  color: var(--accent);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Native <dialog> lightbox.
+ *
+ * <dialog> sits on the browser's top-layer when opened with .showModal(),
+ * so no z-index management needed. ::backdrop is the dim/blur scrim that
+ * the browser renders behind the dialog. Esc-to-close and focus trapping
+ * are handled by the browser natively. */
+.dag-zoom-dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-width: 95vw;
+  max-height: 95vh;
+  overflow: visible;
+  cursor: zoom-out;
+}
+.dag-zoom-dialog::backdrop {
+  background: rgba(11, 15, 23, 0.92);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.dag-zoom-dialog img {
+  display: block;
+  max-width: 95vw;
+  max-height: 95vh;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+/* -------------------------------------------------------------------------
+ * Two-column metaphor section (coordination layers)
+ * ------------------------------------------------------------------------- */
+
+.twocol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 880px) { .twocol { grid-template-columns: 1fr; } }
+
+.layer {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 22px 24px;
+}
+.layer.amber {
+  border-left-color: var(--brand-g3);
+}
+.layer h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.layer h3 {
+  margin: 0 0 14px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.layer p {
+  margin: 0;
+  color: #cfd9ee;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* -------------------------------------------------------------------------
+ * Architecture section: conceptual diagram + paired execution proof
+ * ------------------------------------------------------------------------- */
+
+.arch-diagram {
+  margin: 0 0 40px;
+}
+.arch-diagram svg {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  margin: 0 auto;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+.arch-diagram figcaption {
+  margin: 14px auto 0;
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+.arch-diagram figcaption code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.arch-proof-intro {
+  color: #cfd9ee;
+  font-size: 15px;
+  line-height: 1.65;
+  margin: 0 0 18px;
+  max-width: 760px;
+}
+.arch-proof-intro em {
+  display: block;
+  margin-top: 0.6em;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.arch-proof {
+  margin: 0 0 44px;
+}
+.arch-proof-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+  /* Constrain the pair to 70% of the container so each thumbnail renders
+   * smaller than the half-width default; the figure stays centered. */
+  max-width: 70%;
+  margin: 0 auto;
+}
+@media (max-width: 880px) {
+  .arch-proof-row {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+  }
+}
+
+/* The paired thumbs reuse the .dag-thumb-button JS hook but get their own
+ * sizing — the existing .example-execution .dag-thumb-button rule is
+ * scoped to that section, so it does not apply here. */
+.arch-proof-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: zoom-in;
+}
+.arch-proof-thumb .arch-proof-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+.arch-proof-thumb .arch-proof-label code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+}
+.arch-proof-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.arch-proof-thumb:hover img,
+.arch-proof-thumb:focus-visible img {
+  transform: scale(1.02);
+  border-color: var(--accent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.arch-proof-thumb:focus { outline: none; }
+.arch-proof-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+.arch-proof figcaption {
+  margin: 18px auto 0;
+  max-width: 760px;
+  color: rgba(154, 166, 189, 0.85);
+  font-size: 13.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+.arch-proof figcaption code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* -------------------------------------------------------------------------
+ * "From Developer to Developers" section
+ *   Reuses the .cards / .card grid from "What is TruvaG3?" — only the
+ *   heart in the heading and the closing pointer need their own styles.
+ * ------------------------------------------------------------------------- */
+
+.d2d-heart {
+  /* Override the section h2's gradient text-fill so the heart reads as a
+   * solid amber accent, slightly smaller than the rest of the heading. */
+  -webkit-text-fill-color: var(--brand-g3);
+  color: var(--brand-g3);
+  font-size: 0.78em;
+  margin-left: 0.18em;
+  vertical-align: 0.06em;
+}
+
+.d2d-closing {
+  margin: 32px auto 0;
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+}
+.d2d-closing code {
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+}
+.d2d-closing a {
+  color: var(--accent);
+}
+
+/* -------------------------------------------------------------------------
+ * Recent-reading list
+ * ------------------------------------------------------------------------- */
+
+.read-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 800px) { .read-list { grid-template-columns: 1fr; } }
+
+.read-item {
+  display: block;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.read-item:hover {
+  border-color: #3a4a72;
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+.read-item .kind {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.read-item .title {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  letter-spacing: -0.005em;
+}
+.read-item .desc {
+  display: block;
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* -------------------------------------------------------------------------
+ * Footer
+ * ------------------------------------------------------------------------- */
+
+footer.site-footer {
+  padding: 48px 0 56px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+footer.site-footer .brand {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 8px;
+  display: inline-block;
+}
+footer.site-footer .links {
+  margin: 14px 0 18px;
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+footer.site-footer .links a {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+footer.site-footer .links a:hover {
+  color: var(--ink);
+}
+
+/* -------------------------------------------------------------------------
+ * Honor reduced-motion preference
+ * ------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

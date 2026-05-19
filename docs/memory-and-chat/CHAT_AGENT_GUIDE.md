@@ -2,7 +2,7 @@
 
 Hey there! Welcome to the TruvaG3 chat agent guide. If you're reading this, you probably want to build something like ChatGPT - a conversational AI that can stream responses in real-time, remember what users said earlier, and maybe even call external tools to get information.
 
-This guide will walk you through everything step-by-step. We'll use the [`travel-chat-agent`](../../examples/travel-chat-agent) example as our reference - it's a working implementation you can run and poke at.
+This guide will walk you through everything step-by-step. We'll use the [`travel-chat-agent`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent) example as our reference - it's a working implementation you can run and poke at.
 
 ## Table of Contents
 
@@ -1662,9 +1662,9 @@ Before deploying, verify:
 - **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Deep dive into logging with trace correlation
 - **[DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md)** - Setting up distributed tracing
 - **[HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md)** - Adding approval workflows for sensitive operations
-- **[orchestration/README.md](../../orchestration/README.md)** - Orchestration module documentation
-- **[ai/README.md](../../ai/README.md)** - AI module with streaming support
-- **[examples/travel-chat-agent/](../../examples/travel-chat-agent)** - The complete working example
-- **[examples/devops-chat-agent/](../../examples/devops-chat-agent)** - Chat agent with shared memory and cross-agent coordination
+- **[orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md)** - Orchestration module documentation
+- **[ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)** - AI module with streaming support
+- **[examples/travel-chat-agent/](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)** - The complete working example
+- **[examples/devops-chat-agent/](https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent)** - Chat agent with shared memory and cross-agent coordination
 
 Happy building! If something doesn't make sense, check the travel-chat-agent example - it's a working implementation of everything in this guide.

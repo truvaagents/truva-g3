@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</title>
-<meta name="description" content="An educational walkthrough of a micro-agents reference architecture — specialized agents and tools that register their capabilities with a shared dynamic registry, are addressed by logical names, and coordinate without a central conductor. Grounded in the open-source TruvaG3 reference implementation.">
+<title>A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</title>
+<meta name="description" content="An educational walkthrough of a microagents reference architecture — specialized agents and tools that register their capabilities with a shared dynamic registry, are addressed by logical names, and coordinate without a central conductor. Grounded in the open-source TruvaG3 reference implementation.">
 <style>
   :root {
     --fg: #1a1a1a;
@@ -167,8 +167,8 @@
 <article>
 
 <header class="article-header">
-  <h1>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h1>
-  <p class="dek">An introduction to a micro-agents architecture in which specialized tools and agents dynamically register their capabilities with a shared registry, are addressed by logical names rather than hardcoded URLs, and coordinate without a central conductor — with orchestration inside each agent and decentralized coordination across the system. The concepts are grounded in TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation that can be cloned and run on a laptop.</p>
+  <h1>A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h1>
+  <p class="dek">An introduction to a microagents architecture in which specialized tools and agents dynamically register their capabilities with a shared registry, are addressed by logical names rather than hardcoded URLs, and coordinate without a central conductor — with orchestration inside each agent and decentralized coordination across the system. The concepts are grounded in TruvaG3<a class="ref" href="#ref-1">[1]</a>, an open-source reference implementation that can be cloned and run on a laptop.</p>
   <p class="meta">Neelabh Tripathi · May 7, 2026</p>
 </header>
 
@@ -308,13 +308,13 @@
 </section>
 
 <section>
-<h2>The micro-agents architecture</h2>
+<h2>The microagents architecture</h2>
 
-<p>The architectural class this article describes has begun to acquire a name in industry literature: a <strong>micro-agents architecture</strong>. The term is used in two related senses, and it is worth distinguishing them up front.</p>
+<p>The architectural class this article describes has begun to acquire a name in industry literature: a <strong>microagents architecture</strong>. The term is used in two related senses, and it is worth distinguishing them up front.</p>
 
-<p><strong>At a workflow level</strong>, articulated in a recent CIO article on the agentic enterprise<a class="ref" href="#ref-8">[8]</a>, <em>micro-agents</em> are "specialized AI systems designed to perform narrow, well-defined tasks within a workflow," and <em>macro-agents</em> are components that "coordinate multiple micro agents to complete an end-to-end business process." This framing is about division of labor and governance.</p>
+<p><strong>At a workflow level</strong>, articulated in a recent CIO article on the agentic enterprise<a class="ref" href="#ref-8">[8]</a>, <em>microagents</em> are "specialized AI systems designed to perform narrow, well-defined tasks within a workflow," and <em>macro-agents</em> are components that "coordinate multiple micro agents to complete an end-to-end business process." This framing is about division of labor and governance.</p>
 
-<p><strong>At an architectural level</strong>, which is the focus of this article, a micro-agents architecture is a system with the following properties:</p>
+<p><strong>At an architectural level</strong>, which is the focus of this article, a microagents architecture is a system with the following properties:</p>
 
 <ul>
   <li>Agents and tools are <strong>specialized and independently deployable</strong>.</li>
@@ -330,7 +330,7 @@
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
-     aria-label="Side-by-side comparison of two architectural approaches. On the left, popular agent frameworks place a single Orchestrator at the top — labeled with examples such as graph, crew, runner, team, kernel, workflow — that directs three statically wired participants (a Tool, an Agent, and a Tool) below it. Solid arrows go down from the Orchestrator to each participant, indicating central control. On the right, a micro-agents architecture has a passive Capability Registry at the top, labeled 'no central control logic'. Three participants below — Tool, Agent, Tool — each push solid arrows up to the registry to register themselves. There is no central conductor; coordination is decentralized, with peers finding each other through the registry and calling each other directly. Captions reinforce: 'Participants are wired in source at construction. The orchestrator routes work between them.' on the left; 'Participants register at runtime. Peers find each other through the registry. No central conductor.' on the right.">
+     aria-label="Side-by-side comparison of two architectural approaches. On the left, popular agent frameworks place a single Orchestrator at the top — labeled with examples such as graph, crew, runner, team, kernel, workflow — that directs three statically wired participants (a Tool, an Agent, and a Tool) below it. Solid arrows go down from the Orchestrator to each participant, indicating central control. On the right, a microagents architecture has a passive Capability Registry at the top, labeled 'no central control logic'. Three participants below — Tool, Agent, Tool — each push solid arrows up to the registry to register themselves. There is no central conductor; coordination is decentralized, with peers finding each other through the registry and calling each other directly. Captions reinforce: 'Participants are wired in source at construction. The orchestrator routes work between them.' on the left; 'Participants register at runtime. Peers find each other through the registry. No central conductor.' on the right.">
   <defs>
     <marker id="m-arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
@@ -379,8 +379,8 @@
 
   <line x1="380" y1="50" x2="380" y2="340" class="panel-divider"/>
 
-  <!-- RIGHT: micro-agents architecture -->
-  <text x="570" y="22" text-anchor="middle" class="t-section-label">MICRO-AGENTS ARCHITECTURE</text>
+  <!-- RIGHT: microagents architecture -->
+  <text x="570" y="22" text-anchor="middle" class="t-section-label">MICROAGENTS ARCHITECTURE</text>
   <text x="570" y="42" text-anchor="middle" class="t-section-title">Decentralized coordination</text>
 
   <rect x="490" y="78" width="160" height="65" rx="6" class="registry"/>
@@ -404,16 +404,16 @@
   <text x="570" y="310" text-anchor="middle" class="t-caption">Participants register at runtime.</text>
   <text x="570" y="326" text-anchor="middle" class="t-caption">Peers find each other through the registry. No central conductor.</text>
 </svg>
-<figcaption><strong>Figure 2.</strong> Two architectural approaches in contrast. <strong>Left</strong>: popular agent frameworks place a central orchestrator at the top, with all participants wired in at construction; the orchestrator routes work between them. <strong>Right</strong>: a micro-agents architecture inverts this — participants register themselves into a passive registry at runtime; coordination is decentralized, with peers finding each other through the registry and calling each other directly, with no central component directing the flow.</figcaption>
+<figcaption><strong>Figure 2.</strong> Two architectural approaches in contrast. <strong>Left</strong>: popular agent frameworks place a central orchestrator at the top, with all participants wired in at construction; the orchestrator routes work between them. <strong>Right</strong>: a microagents architecture inverts this — participants register themselves into a passive registry at runtime; coordination is decentralized, with peers finding each other through the registry and calling each other directly, with no central component directing the flow.</figcaption>
 </figure>
 
-<p>The contrast with the seven frameworks in the previous section is direct. Each of those binds every participant at construction; a micro-agents architecture lets participants come and go independently. The registry is the only thing they need to know about each other, and — in this article's variant — the only thing the LLM needs to know about them either.</p>
+<p>The contrast with the seven frameworks in the previous section is direct. Each of those binds every participant at construction; a microagents architecture lets participants come and go independently. The registry is the only thing they need to know about each other, and — in this article's variant — the only thing the LLM needs to know about them either.</p>
 
 <figure id="fig-microagents-build-vs-runtime">
 <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
      role="img"
-     aria-label="Build time versus runtime in a micro-agents architecture, drawn as the counterpart to the earlier figure under 'How today's frameworks coordinate'. On the left under the heading BUILD TIME with subtitle 'Agent code holds no peer references', a large rounded rectangle labeled 'Agent program (compiled binary)' contains an Agent loop component near the top with a single Registry client box below it, connected by a downward blue arrow. A code-style line below reads 'agent.tools = registry.discover()'. Captions explain that no peer is named in source — the program only knows how to read the registry — and that anything available there can be used immediately. On the right under the heading RUNTIME with subtitle 'A new tool deployed elsewhere is immediately visible', a Capability Registry box at the top lists 'Tool A · Tool B · Sub-agent C · Tool D'. Below it on the left, an Agent program (running) with an Agent loop inside; on the right, a separate Tool D box drawn in a green dashed border labeled 'deployed later, separate process'. A green arrow goes up from Tool D to the registry labeled 'registers'; another green arrow goes down from the registry to the agent program labeled 'reads'. Below Tool D, a green '✓ DISCOVERED' label. Captions explain that Tool D registers on startup and the agent sees it on its next registry read, with no code change and no redeploy.">
+     aria-label="Build time versus runtime in a microagents architecture, drawn as the counterpart to the earlier figure under 'How today's frameworks coordinate'. On the left under the heading BUILD TIME with subtitle 'Agent code holds no peer references', a large rounded rectangle labeled 'Agent program (compiled binary)' contains an Agent loop component near the top with a single Registry client box below it, connected by a downward blue arrow. A code-style line below reads 'agent.tools = registry.discover()'. Captions explain that no peer is named in source — the program only knows how to read the registry — and that anything available there can be used immediately. On the right under the heading RUNTIME with subtitle 'A new tool deployed elsewhere is immediately visible', a Capability Registry box at the top lists 'Tool A · Tool B · Sub-agent C · Tool D'. Below it on the left, an Agent program (running) with an Agent loop inside; on the right, a separate Tool D box drawn in a green dashed border labeled 'deployed later, separate process'. A green arrow goes up from Tool D to the registry labeled 'registers'; another green arrow goes down from the registry to the agent program labeled 'reads'. Below Tool D, a green '✓ DISCOVERED' label. Captions explain that Tool D registers on startup and the agent sees it on its next registry read, with no code change and no redeploy.">
   <defs>
     <marker id="m-mc-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#0b6cff"/>
@@ -496,7 +496,7 @@
   <text x="570" y="290" text-anchor="middle" class="mc-caption">Tool D registers on startup; the agent sees it on its next registry read.</text>
   <text x="570" y="306" text-anchor="middle" class="mc-caption">No code change. No redeploy.</text>
 </svg>
-<figcaption><strong>Figure 3.</strong> Build time vs runtime in a micro-agents architecture. <strong>Left:</strong> the agent program ships with no peer references in source — only a registry client. Tools and peers are not bound at compile time. <strong>Right:</strong> a tool deployed separately registers itself into the shared registry on startup; the agent picks it up on its next read, with no code change and no redeploy.</figcaption>
+<figcaption><strong>Figure 3.</strong> Build time vs runtime in a microagents architecture. <strong>Left:</strong> the agent program ships with no peer references in source — only a registry client. Tools and peers are not bound at compile time. <strong>Right:</strong> a tool deployed separately registers itself into the shared registry on startup; the agent picks it up on its next read, with no code change and no redeploy.</figcaption>
 </figure>
 
 <p>This article describes one specific reference design for that class — and that design has a working open-source reference implementation in <strong>TruvaG3</strong><a class="ref" href="#ref-1">[1]</a>, the framework this article is grounded in. Everything that follows can be cloned, deployed locally, and observed in the live registry-viewer UI. The dynamic registry pattern itself has decades of precedent in service-discovery infrastructure, and the LLM-as-registry-consumer extension is also available in other open-source systems<a class="ref" href="#ref-16">[16]</a>. The architectural point here is the role the registry plays at request time: its current contents are what the LLM sees in its planning prompt, so the LLM picks among capabilities that are dynamically present rather than capabilities that were configured ahead of time.</p>
@@ -718,7 +718,7 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
 
 <p>The discovery is dynamic in three senses, each of which matters in production. To be precise about the term: <em>discovery</em> here does not mean the agent's code calling a lookup function. The agent's code does not know any capability names. It is the chain by which the registry's current state reaches the LLM at planning time, and from there reaches the address that handles each step.</p>
 
-<p>The mechanics behind the three properties below — a key-value registry, TTL-based liveness, additive registration — are borrowed from service-discovery patterns that have been used in microservice systems for over a decade. What is distinctive in the micro-agents version of those mechanics is the role they play: the consumer of the registry's contents is not application code with a known target name; it is an LLM choosing from a runtime menu. The plumbing is standard. The mediation is not. This combination is uncommon in agent frameworks, where tools are usually bound to agents at construction time.</p>
+<p>The mechanics behind the three properties below — a key-value registry, TTL-based liveness, additive registration — are borrowed from service-discovery patterns that have been used in microservice systems for over a decade. What is distinctive in the microagents version of those mechanics is the role they play: the consumer of the registry's contents is not application code with a known target name; it is an LLM choosing from a runtime menu. The plumbing is standard. The mediation is not. This combination is uncommon in agent frameworks, where tools are usually bound to agents at construction time.</p>
 
 <figure id="fig-tool-registration-timelapse">
 <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg"
@@ -1261,7 +1261,7 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
 <figcaption><strong>Figure 10.</strong> Three-phase execution captured from the registry-viewer UI<a class="ref" href="#ref-13">[13]</a>. <strong>Phase 1</strong> plans a single web search; the LLM cannot plan further until it knows the destinations. <strong>Phase 2</strong> — generated after Phase 1's results return — plans three parallel geocoding calls (one per destination: Zurich, Zermatt, Interlaken). <strong>Phase 3</strong> — generated after Phase 2's coordinates return — plans six parallel calls (weather and hotel for each destination). Total wall time: 29 seconds. Maximum parallelism: six.</figcaption>
 </figure>
 
-<p>What this run demonstrates about the micro-agents architecture in action:</p>
+<p>What this run demonstrates about the microagents architecture in action:</p>
 
 <ul>
   <li><strong>The plan referred to capabilities, not addresses.</strong> Each step named a capability — <code>web_search</code>, <code>geocode_location</code>, <code>get_current_weather</code>, <code>search_hotels</code> — never a URL or hostname. The framework resolved each name to a concrete endpoint at execution time by reading the live registry.</li>
@@ -1322,7 +1322,7 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
 
 <p><strong>Tools and Agents compose interchangeably.</strong> Because the call site does not distinguish between them, a deployment can swap a tool for an agent that exposes the same capability without callers changing. A capability that begins as a deterministic tool (a small service with an HTTP handler) can later be replaced by a reasoning-driven agent that performs its own internal work before responding — under the same capability name. Callers continue to look it up by name and continue to receive structured responses against the same schema. The promotion is a deployment change, not an architectural one.</p>
 
-<p><strong>Adding a participant requires no central change.</strong> Drop a new participant into the deployment. It registers itself, advertises its capabilities, and is immediately discoverable. No orchestrator graph needs editing, no routing table needs updating, no central deployment needs redeploying. Within the registry's normal propagation window, the new participant is visible to every existing caller — and can be invoked by them without any change to their own code or configuration. This is the operational property that service-discovery infrastructure gives to ordinary microservices, carried over to the micro-agents domain.</p>
+<p><strong>Adding a participant requires no central change.</strong> Drop a new participant into the deployment. It registers itself, advertises its capabilities, and is immediately discoverable. No orchestrator graph needs editing, no routing table needs updating, no central deployment needs redeploying. Within the registry's normal propagation window, the new participant is visible to every existing caller — and can be invoked by them without any change to their own code or configuration. This is the operational property that service-discovery infrastructure gives to ordinary microservices, carried over to the microagents domain.</p>
 
 <p>Some practical consequences (illustrated against a Kubernetes deployment, since that's the most common production setup):</p>
 
@@ -1390,9 +1390,9 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
   <li id="ref-21"><strong>CrewAI — Quickstart.</strong> Official CrewAI quickstart showing the crew construction pattern: <code>Crew(agents=self.agents, tasks=self.tasks, process=Process.sequential, ...)</code> — agents and tasks are passed to the constructor as fixed lists. URL: <a href="https://docs.crewai.com/en/quickstart">https://docs.crewai.com/en/quickstart</a></li>
   <li id="ref-22"><strong>LlamaIndex — Understanding agents.</strong> Official LlamaIndex documentation showing <code>FunctionAgent(tools=[multiply, add], llm=llm, ...)</code> — agents are built with an explicit tool list at construction time. URL: <a href="https://developers.llamaindex.ai/python/framework/understanding/agent/">https://developers.llamaindex.ai/python/framework/understanding/agent/</a></li>
   <li id="ref-23"><strong>Pydantic AI — Tools.</strong> Official Pydantic AI tools documentation showing both <code>tools=[roll_dice, get_player_name]</code> as a constructor argument and the <code>@agent.tool</code> / <code>@agent.tool_plain</code> decorators — both bind tools to the agent at construction time. URL: <a href="https://pydantic.dev/docs/ai/tools-toolsets/tools/">https://pydantic.dev/docs/ai/tools-toolsets/tools/</a></li>
-  <li id="ref-24"><strong>TruvaG3 — execution trace JSON for the Switzerland run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for the three-phase Switzerland execution shown in Figure 10. Captured from the registry-viewer UI's <em>Execution DAG</em> tab. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-switzerland-full-execution.json</a></li>
-  <li id="ref-25"><strong>TruvaG3 — execution trace JSON for the multi-domain outer run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for travel-chat-agent's four-step plan shown in Figure 11. The user-profile RAG context (memorized via the agentic-memory tool) is shown with its identifying values redacted to neutral placeholders. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent1.json</a></li>
-  <li id="ref-26"><strong>TruvaG3 — execution trace JSON for the multi-domain inner run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for devops-chat-agent's three-step plan shown in Figure 12 (the inner trace returned through Figure 11's <code>devops_operations</code> step). URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json">https://github.com/truvaagents/truva-g3/blob/main/docs/blogs/dag-agent-to-agent-execution-agent2.json</a></li>
+  <li id="ref-24"><strong>TruvaG3 — execution trace JSON for the Switzerland run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for the three-phase Switzerland execution shown in Figure 10. Captured from the registry-viewer UI's <em>Execution DAG</em> tab. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-switzerland-full-execution.json">https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-switzerland-full-execution.json</a></li>
+  <li id="ref-25"><strong>TruvaG3 — execution trace JSON for the multi-domain outer run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for travel-chat-agent's four-step plan shown in Figure 11. The user-profile RAG context (memorized via the agentic-memory tool) is shown with its identifying values redacted to neutral placeholders. URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-agent-to-agent-execution-agent1.json">https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-agent-to-agent-execution-agent1.json</a></li>
+  <li id="ref-26"><strong>TruvaG3 — execution trace JSON for the multi-domain inner run.</strong> The full plan, step-by-step results, LLM interactions, and DAG metadata for devops-chat-agent's three-step plan shown in Figure 12 (the inner trace returned through Figure 11's <code>devops_operations</code> step). URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-agent-to-agent-execution-agent2.json">https://github.com/truvaagents/truva-g3/blob/main/www/blogs/dag-agent-to-agent-execution-agent2.json</a></li>
   <li id="ref-27"><strong>TruvaG3 — <code>AUTO_DISCOVERY_GUIDE.md</code>.</strong> The framework's operations guide for the auto-discovery subsystem. Its "Extending: Pluggable Backends" section documents how to swap Redis for alternatives: <em>"The framework ships with a Redis/Valkey-backed registry as the default, but the registry is pluggable behind the <code>core.Discovery</code> interface. You can swap in etcd, Consul, an in-memory mock for tests, or anything else that satisfies the contract."</em> URL: <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/AUTO_DISCOVERY_GUIDE.md">https://github.com/truvaagents/truva-g3/blob/main/docs/operations/AUTO_DISCOVERY_GUIDE.md</a></li>
   <li id="ref-28"><strong>Wikipedia, "Directed acyclic graph."</strong> Comprehensive open-access reference with multiple diagrams (DAG examples, topological ordering, PERT charts, citation networks), plain-language definition, and an applications section covering job scheduling, version control, compilation order, causal models, and dependency tracking — the same patterns used in the article's execution plans. URL: <a href="https://en.wikipedia.org/wiki/Directed_acyclic_graph">https://en.wikipedia.org/wiki/Directed_acyclic_graph</a></li>
   <li id="ref-29"><strong>Sedgewick, R., &amp; Wayne, K. <em>Algorithms, 4th Edition</em> booksite, Section 4.2 — Directed Graphs.</strong> Princeton University. Freely accessible companion to the textbook. Defines directed acyclic graphs (DAGs), states the topological-order equivalence, and lists real-world applications including job scheduling, build/compilation order, and dependency resolution — the same shape the article uses for the orchestrator's plan steps. URL: <a href="https://algs4.cs.princeton.edu/42digraph/">https://algs4.cs.princeton.edu/42digraph/</a></li>
@@ -1402,7 +1402,7 @@ When the LLM can't plan all the steps up front, it makes a partial plan; the loo
 </ol>
 </section>
 
-<p class="cite-as"><strong>Cite as:</strong> Tripathi, N. (2026). <em>A Micro-Agents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</em>. <a href="https://truvag3.dev/blogs/micro-agents-architecture">https://truvag3.dev/blogs/micro-agents-architecture</a></p>
+<p class="cite-as"><strong>Cite as:</strong> Tripathi, N. (2026). <em>A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</em>. <a href="https://truvag3.dev/blogs/microagents-architecture">https://truvag3.dev/blogs/microagents-architecture</a></p>
 
 <p class="footer-note">The TruvaG3 reference implementation<a class="ref" href="#ref-1">[1]</a> is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
 

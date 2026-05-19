@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Operational Excellence in AI Agent Frameworks — Index</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch1: #22d3ee; --ch2: #f59e0b; --ch3: #818cf8; --ch4: #f472b6; --ch5: #a3e635;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.hero { padding: 64px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px); line-height: 1.1; margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #a5f3fc 25%, #fde68a 50%, #fbcfe8 75%, #d9f99d 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header.hero .subtitle { color: var(--muted); font-size: 17px; max-width: 820px; margin: 0 auto 22px; }
+  .research-date {
+    display: inline-block; margin-bottom: 18px;
+    padding: 5px 14px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 28px; }
+
+  /* Frameworks list */
+  .frameworks-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 880px) { .frameworks-grid { grid-template-columns: 1fr; } }
+  .fw-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .fw-item .fw-name { font-weight: 600; color: #fff; font-size: 15px; }
+  .fw-item .fw-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .fw-item .fw-tag {
+    display: inline-block; font-size: 11px; padding: 3px 10px; border-radius: 999px;
+    background: var(--bg-3); color: var(--muted); letter-spacing: .04em;
+  }
+
+  /* Chapter cards */
+  .chapters { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  @media (max-width: 880px) { .chapters { grid-template-columns: 1fr; } }
+  .chapter {
+    display: block;
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px 24px; color: inherit; text-decoration: none;
+    border-left: 4px solid var(--ch1);
+    transition: transform .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .chapter:hover { transform: translateY(-2px); background: var(--bg-3); text-decoration: none; }
+  .chapter.ch1 { border-left-color: var(--ch1); }
+  .chapter.ch2 { border-left-color: var(--ch2); }
+  .chapter.ch3 { border-left-color: var(--ch3); }
+  .chapter.ch4 { border-left-color: var(--ch4); }
+  .chapter.ch5 { border-left-color: var(--ch5); }
+  .chapter .num {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    background: rgba(255,255,255,.06); color: var(--muted);
+    font-size: 11px; letter-spacing: .08em; margin-bottom: 10px;
+  }
+  .chapter h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -0.01em; color: #fff; }
+  .chapter p { margin: 0 0 10px; color: var(--ink); font-size: 14.5px; }
+  .chapter ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+  .chapter li { margin: 4px 0; }
+  .chapter .arrow { color: var(--accent); font-size: 13px; font-weight: 600; margin-top: 12px; display: inline-block; }
+
+  /* Matrix */
+  .matrix-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  .matrix { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; }
+  .matrix th, .matrix td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  .matrix thead th { background: var(--bg-2); position: sticky; top: 0; }
+  .matrix td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .matrix .lang-tag {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em;
+    vertical-align: middle;
+  }
+
+  /* Headline findings */
+  .findings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .findings { grid-template-columns: 1fr; } }
+  .finding {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px;
+  }
+  .finding h4 { margin: 0 0 6px; font-size: 14px; color: #fff; }
+  .finding p { margin: 0; color: #cfd9ee; font-size: 13.5px; }
+
+  footer { padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Operational Excellence in AI Agent Frameworks</h1>
+    <p class="subtitle">
+      A multipart guide. What does it take to run an agent in production — observe it, scale it,
+      deploy it, test it, evolve it — across <b>ten frameworks</b> spanning Python, TypeScript,
+      .NET, Java, Go, and Rust? This index orients you across <b>five chapters</b>, each focused
+      on a different operational axis, with source-grounded comparisons and practical takeaways.
+    </p>
+  </div>
+</header>
+
+<!-- ========== HEADLINE FINDINGS ========== -->
+<section>
+  <div class="container">
+    <h2>Headline findings</h2>
+    <p class="lede">Six observations that frame the rest of the guide.</p>
+
+    <div class="findings">
+      <div class="finding">
+        <h4>OTel is now table stakes</h4>
+        <p>Six frameworks ship direct OpenTelemetry SDK dependencies; the other four reach OTel through a bridge (Micrometer, tracing-opentelemetry, LangSmith). Every framework gets there.</p>
+      </div>
+      <div class="finding">
+        <h4>Native binaries deploy 50× faster</h4>
+        <p>Genkit Go and Rig cold-start in 20–80 ms; .NET AOT and Quarkus native in tens to low hundreds; Mastra on edge runtimes ~50–100 ms; Python frameworks all 2–4 seconds.</p>
+      </div>
+      <div class="finding">
+        <h4>Mastra is the only edge framework</h4>
+        <p>Cloudflare Workers, Vercel Edge, and Deno Deploy require JavaScript or WASM. Of the ten, only Mastra ships turnkey edge deployment.</p>
+      </div>
+      <div class="finding">
+        <h4>Six ship comprehensive eval frameworks</h4>
+        <p>LangChain, ADK, Mastra, MS Agent Framework, Genkit Go ship mature eval frameworks; CrewAI ships an experimental one. LLM-as-judge is in every one of them.</p>
+      </div>
+      <div class="finding">
+        <h4>Memory primitives ship in six</h4>
+        <p>LangChain (50+ vector stores), LangGraph (state-as-memory), CrewAI (scoped + LanceDB), ADK (Session + Memory services), Mastra (thread-scoped Memory with semantic recall), LangChain4j (window-based + ~30 stores).</p>
+      </div>
+      <div class="finding">
+        <h4>Implementation swap-ability is cheap nearly everywhere</h4>
+        <p>Seven frameworks land at "Low effort to swap a default" — nearly every component is an abstract base class, interface, or trait. CrewAI, SK, and Genkit Go land at moderate friction.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== CHAPTERS ========== -->
+<section>
+  <div class="container">
+    <h2>The five chapters</h2>
+    <p class="lede">
+      Pick a chapter by the operational lens you care about. Each ships a comparison across all
+      ten frameworks plus a six-card cheat sheet at the end.
+    </p>
+
+    <div class="chapters">
+      <a class="chapter ch1" href="operational-excellence-observability.html">
+        <span class="num">CHAPTER 1 · OBSERVABILITY</span>
+        <h3>Tracing, metrics, logs, vendor integrations</h3>
+        <p>What each framework emits and how it integrates with OpenTelemetry, vendor dashboards, and structured logging.</p>
+        <ul>
+          <li>Tracing surfaces &amp; span hierarchy</li>
+          <li>OpenTelemetry adoption &amp; Gen AI semconv</li>
+          <li>Metrics emission (token usage, latency)</li>
+          <li>Structured logging &amp; trace correlation</li>
+          <li>Vendor integrations (LangSmith, Langfuse, Datadog, &amp;c.)</li>
+        </ul>
+        <span class="arrow">Read Chapter 1 →</span>
+      </a>
+
+      <a class="chapter ch2" href="operational-excellence-performance.html">
+        <span class="num">CHAPTER 2 · PERFORMANCE</span>
+        <h3>Streaming, caching, parallelism</h3>
+        <p>What knobs each framework gives you to make agents feel fast at the request level.</p>
+        <ul>
+          <li>Streaming surfaces &amp; HTTP transport</li>
+          <li>Built-in caching &amp; backends</li>
+          <li>Parallel tool execution</li>
+          <li>Concurrency model (sync / async / actor)</li>
+          <li>Batch APIs</li>
+        </ul>
+        <span class="arrow">Read Chapter 2 →</span>
+      </a>
+
+      <a class="chapter ch3" href="operational-excellence-deployment.html">
+        <span class="num">CHAPTER 3 · DEPLOYMENT &amp; RUNTIME</span>
+        <h3>Cold start, memory, packaging, target environments</h3>
+        <p>Where each framework can run, how fast it boots, how big the artifact ships.</p>
+        <ul>
+          <li>Cold start &amp; startup time</li>
+          <li>Per-worker memory footprint</li>
+          <li>Build artifact &amp; container size</li>
+          <li>Long-running server / serverless / edge</li>
+          <li>Built-in dev runners &amp; production hosts</li>
+        </ul>
+        <span class="arrow">Read Chapter 3 →</span>
+      </a>
+
+      <a class="chapter ch4" href="operational-excellence-testing.html">
+        <span class="num">CHAPTER 4 · TESTING &amp; EVALUATION</span>
+        <h3>Mocks, eval frameworks, replay</h3>
+        <p>How each framework supports unit tests, golden-set quality regression, and replay of past runs.</p>
+        <ul>
+          <li>Mock LLMs (and tools)</li>
+          <li>Built-in eval frameworks &amp; scorers</li>
+          <li>LLM-as-judge support</li>
+          <li>Replay &amp; regression testing</li>
+          <li>Snapshot-testing patterns</li>
+        </ul>
+        <span class="arrow">Read Chapter 4 →</span>
+      </a>
+
+      <a class="chapter ch5" href="operational-excellence-configuration.html">
+        <span class="num">CHAPTER 5 · CONFIGURATION, MEMORY &amp; SWAP-ABILITY</span>
+        <h3>Production runtime: config, swap-ability, memory, multi-tenancy</h3>
+        <p>The day-2 surfaces — where config comes from, how easy it is to swap defaults, what memory ships, and how sessions get isolated.</p>
+        <ul>
+          <li>Agent definition &amp; prompt versioning</li>
+          <li>Configuration &amp; secrets at startup</li>
+          <li>Implementation swap-ability</li>
+          <li>Memory architectures (short-term + vector)</li>
+          <li>Multi-tenancy &amp; session isolation</li>
+        </ul>
+        <span class="arrow">Read Chapter 5 →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ========== FRAMEWORKS ========== -->
+<section>
+  <div class="container">
+    <h2>The ten frameworks under comparison</h2>
+    <p class="lede">Five Python frameworks plus five non-Python representatives — one each for TypeScript, .NET, Java, Go, and Rust.</p>
+
+    <div class="frameworks-grid">
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangChain</div>
+          <div class="fw-sub">Composable LLM toolkit; broadest abstraction surface.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangGraph</div>
+          <div class="fw-sub">Graph-orchestrated agents with checkpointable state.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">CrewAI</div>
+          <div class="fw-sub">Role-based multi-agent crews; scoped memory.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Google ADK</div>
+          <div class="fw-sub">Cloud Run / Vertex AI–targeted agent runtime.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Microsoft Semantic Kernel</div>
+          <div class="fw-sub">Kernel + connectors; deep OTel diagnostics.</div>
+        </div>
+        <span class="fw-tag">Python</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Mastra</div>
+          <div class="fw-sub">TypeScript-first; built on Vercel AI SDK; edge-ready.</div>
+        </div>
+        <span class="fw-tag">TypeScript</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Microsoft Agent Framework</div>
+          <div class="fw-sub">Successor to AutoGen / .NET SK; ASP.NET Core hosted.</div>
+        </div>
+        <span class="fw-tag">.NET</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">LangChain4j</div>
+          <div class="fw-sub">~80 vendor modules; Spring Boot / Quarkus ready.</div>
+        </div>
+        <span class="fw-tag">Java</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Genkit</div>
+          <div class="fw-sub">Google's TS-first framework; Go SDK 1.0; .prompt files.</div>
+        </div>
+        <span class="fw-tag">Go</span>
+      </div>
+      <div class="fw-item">
+        <div>
+          <div class="fw-name">Rig</div>
+          <div class="fw-sub">Trait-based Rust framework; Tokio async; native binary.</div>
+        </div>
+        <span class="fw-tag">Rust</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== AT-A-GLANCE MATRIX ========== -->
+<section>
+  <div class="container">
+    <h2>At a glance — how each framework lands on each axis</h2>
+    <p class="lede">
+      One headline observation per chapter, per framework. For nuance, every chapter has a
+      "What this means in practice" card that synthesises the comparison.
+    </p>
+    <div class="matrix-wrap">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>Framework</th>
+            <th>Observability</th>
+            <th>Performance</th>
+            <th>Deployment</th>
+            <th>Testing</th>
+            <th>Configuration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Callbacks → LangSmith bridge to OTel</td>
+            <td>Batch + cache + parallel async</td>
+            <td>Long-running server; ~2–4 s cold start</td>
+            <td>5 fake-LLM variants + comprehensive evals</td>
+            <td>LangChain Hub for prompt versioning</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Inherits LangChain callbacks</td>
+            <td>Auto-parallel ToolNode</td>
+            <td>langgraph dev / up CLI</td>
+            <td>Replay via checkpointer state</td>
+            <td>thread_id native multi-tenancy</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Native OTel; flat-but-named spans</td>
+            <td>RPMController throttle</td>
+            <td>Long-running server; stateful</td>
+            <td>Experimental eval module</td>
+            <td>Scoped Memory + LanceDB</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Native OTel + Gen AI semconv</td>
+            <td>Streaming-first async generator</td>
+            <td>Cloud Run / Vertex AI native</td>
+            <td>Eval cases + replay</td>
+            <td>YAML LlmAgentConfig</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>OTel decorators + Meter</td>
+            <td>Async-first; serial tools</td>
+            <td>FastAPI / ASP.NET host</td>
+            <td>No eval framework</td>
+            <td>Per-kernel ChatHistory</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Native OTel + 9 vendor packages</td>
+            <td>Vercel AI SDK SSE-ready</td>
+            <td>Edge runtime turnkey; ~50–100 ms cold</td>
+            <td>12 eval scorers + LLM-as-judge</td>
+            <td>threadId + Memory class</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>ActivitySource + Gen AI semconv v1.37</td>
+            <td>IAsyncEnumerable streaming</td>
+            <td>AOT ~200 ms; ASP.NET Core host</td>
+            <td>MEAI Evaluation integration</td>
+            <td>DI + appsettings + workflows</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Listener + Micrometer bridge</td>
+            <td>Virtual-thread parallel tools (Java 21+)</td>
+            <td>Quarkus native ~50 ms; Spring Boot</td>
+            <td>ChatModelMock (experimental)</td>
+            <td>chatMemoryProvider callback</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Native OTel; slog structured logs</td>
+            <td>Goroutines; SSE handler bundled</td>
+            <td>Single Go binary; ~30–80 ms cold</td>
+            <td>Plugin evaluators (DeepEqual / Regex / Jsonata)</td>
+            <td>.prompt files; hot reload</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>tracing-opentelemetry bridge</td>
+            <td>Tokio Stream traits</td>
+            <td>Single Rust binary; ~20–60 ms cold</td>
+            <td>Trait-based test impls</td>
+            <td>Builder + rig-memory crate</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Multipart operational-excellence guide · compiled from upstream source of LangChain,
+    LangGraph, CrewAI, Google ADK, Microsoft Semantic Kernel, Mastra, Microsoft Agent
+    Framework, LangChain4j, Genkit, and Rig ·
+    <a href="operational-excellence-observability.html">Chapter 1</a> ·
+    <a href="operational-excellence-performance.html">Chapter 2</a> ·
+    <a href="operational-excellence-deployment.html">Chapter 3</a> ·
+    <a href="operational-excellence-testing.html">Chapter 4</a> ·
+    <a href="operational-excellence-configuration.html">Chapter 5</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

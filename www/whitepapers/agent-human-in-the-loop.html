@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Human-in-the-Loop in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #121826;
+    --bg-3: #1a2236;
+    --ink: #e6edf7;
+    --muted: #9aa6bd;
+    --line: #2a3550;
+    --accent: #7cc4ff;
+    --warn: #fbbf24;
+    --good: #34d399;
+    --human: #f472b6;
+    --lc: #1F6FEB;
+    --lg: #14b8a6;
+    --crew: #7c3aed;
+    --adk: #EA4335;
+    --sk: #2EA5FF;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; font-size: 13px; line-height:1.5; color:#cfe1ff; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.hero {
+    padding: 64px 0 36px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .research-date {
+    display: inline-block;
+    margin-bottom: 18px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #f9a8d4 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero .subtitle {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 800px;
+    margin: 0 auto 22px;
+  }
+  .pillrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); font-size: 13px; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; }
+  .dot { width:9px; height:9px; border-radius: 50%; display:inline-block; }
+
+  section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 800px; margin: 0 0 28px; }
+
+  /* Universal HITL — diagram full-width on top, four patterns in a row below */
+  .universal-stack { display: grid; gap: 24px; }
+  .uni-svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 24px 32px;
+  }
+  .uni-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .uni-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 980px) { .uni-list { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .uni-list { grid-template-columns: 1fr; } }
+  .uni-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .uni-item b { color: #fff; }
+  .uni-item .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #2a1a35; color: #f9a8d4; margin-right:8px; border:1px solid #4a2a55;
+  }
+
+  /* Framework cards — STACKED layout: diagram on top, prose below in 2 columns */
+  .frameworks { display: grid; gap: 28px; }
+  .fw-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .fw-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255,255,255,0.015);
+  }
+  .fw-badge {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 18px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .fw-head h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .fw-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .fw-body { display: flex; flex-direction: column; }
+  .fw-svg-wrap {
+    padding: 28px 32px;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(900px 500px at 20% 10%, rgba(244,114,182,.05), transparent 60%),
+      var(--bg-2);
+  }
+  .fw-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .fw-text-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    padding: 24px 32px;
+  }
+  /* Grid items get min-width: 0 so they're allowed to shrink below the intrinsic
+     width of their content (long monospace paths, etc.) instead of overflowing. */
+  .fw-text-grid > div { min-width: 0; }
+  @media (max-width: 880px) { .fw-text-grid { grid-template-columns: 1fr; padding: 22px; } }
+  .fw-text-grid h4 { margin: 14px 0 6px; font-size: 14px; color: var(--accent); letter-spacing:.04em; text-transform: uppercase; }
+  .fw-text-grid h4:first-child { margin-top: 0; }
+  .fw-text-grid p { margin: 0 0 10px; overflow-wrap: anywhere; }
+  .fw-text-grid ul { padding-left: 18px; margin: 0 0 4px; }
+  .fw-text-grid li { margin: 4px 0; }
+  .metaphor {
+    margin: 0 0 12px; padding: 10px 14px;
+    background: #2a1230; border-left: 3px solid var(--human); border-radius: 8px;
+    color: #fce7f3; font-style: italic; font-size: 14px;
+  }
+  .twocol { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width: 600px) { .twocol { grid-template-columns: 1fr; } }
+  .miniblock { background: var(--bg-3); border:1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .miniblock h5 { margin:0 0 4px; font-size:12px; color:#a8b6d6; letter-spacing:.05em; text-transform: uppercase; }
+  .miniblock p { margin:0; font-size:13.5px; color:#dbe6ff; }
+
+  /* HITL pattern badges (used in mini-grid) */
+  .pat-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (max-width: 600px) { .pat-grid { grid-template-columns: 1fr; } }
+  .pat-grid > .pat { min-width: 0; }
+  .pat {
+    background: var(--bg-3); border:1px solid var(--line); border-left: 3px solid var(--human); border-radius: 8px;
+    padding: 10px 12px;
+    overflow-wrap: anywhere;
+  }
+  .pat h5 { margin:0 0 4px; font-size:12px; color:#f9a8d4; letter-spacing:.04em; text-transform: uppercase; }
+  .pat p { margin:0; font-size:13.5px; color:#dbe6ff; overflow-wrap: anywhere; }
+  .pat.no { border-left-color: #555; opacity: .7; }
+  .pat.no h5 { color:#888; }
+
+  /* Comparison table */
+  .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align:left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; }
+  th.fw, td.fw { white-space: nowrap; }
+  td.row-hd { background: var(--bg-2); font-weight:600; }
+
+  /* Takeaways */
+  .takeaways { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--bg-2); border:1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin:0; color:#cfd9ee; font-size: 14px; }
+  .ta .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #2a1a35; color: #f9a8d4; margin-bottom:8px;
+  }
+
+  footer { padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px; }
+
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .fw-card { break-inside: avoid; }
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Human-in-the-Loop in AI Agent Frameworks</h1>
+    <p class="subtitle">
+      How <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
+      <b>Microsoft Semantic Kernel</b> let a person step into the agent loop —
+      to approve a tool call, edit a plan, sign off on the final answer, or own a long-running
+      decision the agent simply cannot make alone.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#universal"><span class="dot" style="background:var(--human)"></span>The four HITL patterns</a>
+      <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
+      <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
+      <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
+      <a class="pill" href="#adk"><span class="dot" style="background:var(--adk)"></span>Google ADK</a>
+      <a class="pill" href="#sk"><span class="dot" style="background:var(--sk)"></span>Semantic Kernel</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Cheat sheet</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= UNIVERSAL HITL PATTERNS ================= -->
+<section id="universal">
+  <div class="container">
+    <h2>The four places a human can step in</h2>
+    <p class="lede">
+      Strip away the framework labels and there are really only four moments in an agent's life
+      where a human can — or must — be in the loop. Every framework in this deck supports some
+      subset of these, with very different durability and developer-experience trade-offs.
+    </p>
+
+    <div class="universal-stack">
+      <div class="uni-svg-wrap">
+        <svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal HITL points">
+          <defs>
+            <marker id="u-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+            </marker>
+            <marker id="u-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/>
+            </marker>
+            <linearGradient id="llmGrad" x1="0" x2="1">
+              <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/>
+            </linearGradient>
+            <linearGradient id="toolGrad" x1="0" x2="1">
+              <stop offset="0" stop-color="#10b981"/><stop offset="1" stop-color="#06b6d4"/>
+            </linearGradient>
+            <linearGradient id="humanGrad" x1="0" x2="1">
+              <stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/>
+            </linearGradient>
+          </defs>
+
+          <!-- Agent loop body -->
+          <rect x="40" y="100" width="180" height="100" rx="14" fill="url(#llmGrad)" opacity="0.92"/>
+          <text x="130" y="135" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">LLM (reason)</text>
+          <text x="130" y="158" text-anchor="middle" fill="#dbeafe" font-size="11">decide next action</text>
+          <text x="130" y="176" text-anchor="middle" fill="#dbeafe" font-size="11">or final answer</text>
+
+          <rect x="280" y="100" width="180" height="100" rx="14" fill="url(#toolGrad)" opacity="0.92"/>
+          <text x="370" y="135" text-anchor="middle" fill="#062a23" font-size="14" font-weight="700">Tool (act)</text>
+          <text x="370" y="158" text-anchor="middle" fill="#062a23" font-size="11">run the tool the LLM</text>
+          <text x="370" y="176" text-anchor="middle" fill="#062a23" font-size="11">picked</text>
+
+          <rect x="520" y="100" width="160" height="100" rx="14" fill="#0e1a2e" stroke="#3a8aff"/>
+          <text x="600" y="135" text-anchor="middle" fill="#9ec5ff" font-size="14" font-weight="700">Final Answer</text>
+          <text x="600" y="158" text-anchor="middle" fill="#9aa6bd" font-size="11">return to user</text>
+
+          <!-- Loop arrows -->
+          <path d="M220,150 L280,150" stroke="#9ec5ff" stroke-width="2" marker-end="url(#u-arr)" fill="none"/>
+          <path d="M460,150 L520,150" stroke="#9ec5ff" stroke-width="2" marker-end="url(#u-arr)" fill="none"/>
+          <path d="M370,200 Q 250,260 130,200" stroke="#9ec5ff" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#u-arr)" class="flow-line"/>
+          <text x="250" y="248" text-anchor="middle" fill="#9aa6bd" font-size="11">tool result · loop</text>
+
+          <!-- Four HITL injection points (numbered pink badges) -->
+          <!-- 1. Tool-call approval: between LLM picking and Tool running -->
+          <circle cx="250" cy="150" r="14" fill="url(#humanGrad)" stroke="#fff" stroke-width="2"/>
+          <text x="250" y="155" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">1</text>
+
+          <!-- 2. Mid-run pause+resume: anchored at the BOTTOM-LEFT of the LLM box, well clear
+               of the loop-back arrow's endpoint at the bottom-center -->
+          <circle cx="70" cy="200" r="14" fill="url(#humanGrad)" stroke="#fff" stroke-width="2"/>
+          <text x="70" y="205" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">2</text>
+
+          <!-- 3. Final-output review: between LLM final and user -->
+          <circle cx="490" cy="150" r="14" fill="url(#humanGrad)" stroke="#fff" stroke-width="2"/>
+          <text x="490" y="155" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">3</text>
+
+          <!-- 4. Long-running async wait: bottom of Tool box, offset LEFT from the corner so it
+               sits in clear space (loop-back arrow exits at bottom-center, x=370) -->
+          <circle cx="430" cy="200" r="14" fill="url(#humanGrad)" stroke="#fff" stroke-width="2"/>
+          <text x="430" y="205" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">4</text>
+
+          <!-- Human sits below all of this -->
+          <rect x="220" y="320" width="280" height="100" rx="14" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+          <text x="360" y="358" text-anchor="middle" fill="#fce7f3" font-size="14" font-weight="700">Human</text>
+          <text x="360" y="380" text-anchor="middle" fill="#f9a8d4" font-size="12">approves · edits · responds · ignores</text>
+          <text x="360" y="398" text-anchor="middle" fill="#f9a8d4" font-size="11">(may take seconds, hours, or days)</text>
+
+          <!-- Dashed pink lines from the 4 numbered badges down to the human box.
+               2 and 4 swing wide (left / right) so they don't cross any node boxes. -->
+          <path d="M250,164 L 280,320" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+          <path d="M70,214 L 240,322" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+          <!-- 3 lands on the RIGHT of the Human panel; 4 lands LEFT of 3.
+               That preserves the left-to-right order (4 then 3) of the badges and prevents crossing. -->
+          <path d="M490,164 L 490,322" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+          <path d="M430,214 L 440,322" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+
+          <!-- Caption -->
+          <text x="40" y="80" fill="#9aa6bd" font-size="11">↓ Inside the agent loop ↓</text>
+          <text x="220" y="305" fill="#9aa6bd" font-size="11">↓ The human, on the other side ↓</text>
+        </svg>
+      </div>
+
+      <div class="uni-list">
+        <div class="uni-item">
+          <span class="tag">1</span><b>Tool-call approval</b><br>
+          The LLM has picked a tool and arguments. <i>Before</i> the tool runs, a human is shown
+          the call and may approve, edit, or reject. Used for irreversible or expensive actions
+          (send email, place order, run shell).
+        </div>
+        <div class="uni-item">
+          <span class="tag">2</span><b>Mid-run pause + resume</b><br>
+          The agent is mid-flight. It hits a checkpoint — explicitly via an <code>interrupt()</code>
+          call, or because the framework was told "always pause before this step." State is
+          persisted; a human responds at their leisure; the run resumes.
+        </div>
+        <div class="uni-item">
+          <span class="tag">3</span><b>Final-output review</b><br>
+          The agent has produced a final answer (or draft email, or report). A human reviews and
+          approves it before it leaves the building. Often plain pause-before-end.
+        </div>
+        <div class="uni-item">
+          <span class="tag">4</span><b>Long-running async wait</b><br>
+          The agent calls a "tool" that is really a human inbox: an approval queue, a Slack
+          message, a manual data-entry task. The framework needs to <i>release</i> the run and
+          accept a callback hours or days later — without losing context.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FRAMEWORK CARDS ================= -->
+<section id="frameworks" style="border-bottom:none;">
+  <div class="container">
+    <h2>How each framework actually does it</h2>
+    <p class="lede">
+      Each card: one big diagram of the framework's HITL machinery, then the four-pattern
+      coverage and a code-grounded explanation underneath.
+    </p>
+
+    <div class="frameworks">
+
+      <!-- ============ LANGCHAIN ============ -->
+      <article class="fw-card" id="langchain">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lc)">Lc</div>
+          <div>
+            <h3>LangChain · the classic <code>AgentExecutor</code></h3>
+            <div class="sub">HITL is bolted on via callback handlers and "ask the human" tools — synchronous, in-process.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1000 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain HITL">
+              <defs>
+                <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <marker id="lc-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/></marker>
+                <linearGradient id="lcG" x1="0" x2="1"><stop offset="0" stop-color="#1F6FEB"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+                <linearGradient id="hG" x1="0" x2="1"><stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+              </defs>
+
+              <!-- Agent loop -->
+              <rect x="40" y="100" width="180" height="80" rx="12" fill="url(#lcG)"/>
+              <text x="130" y="132" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">LLM Chain</text>
+              <text x="130" y="152" text-anchor="middle" fill="#dbeafe" font-size="11">picks tool + args</text>
+
+              <rect x="280" y="100" width="200" height="80" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="380" y="132" text-anchor="middle" fill="#bbf7d0" font-size="14" font-weight="700">Tool.invoke()</text>
+              <text x="380" y="152" text-anchor="middle" fill="#a7f3d0" font-size="11">runs the picked tool</text>
+
+              <!-- Pattern 1: HumanApprovalCallbackHandler intercepts -->
+              <rect x="540" y="40" width="220" height="100" rx="12" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="650" y="68" text-anchor="middle" fill="#fce7f3" font-size="13" font-weight="700">HumanApprovalCallbackHandler</text>
+              <text x="650" y="86" text-anchor="middle" fill="#f9a8d4" font-size="11">on_tool_start callback</text>
+              <text x="650" y="103" text-anchor="middle" fill="#f9a8d4" font-size="11">prints call, asks y/n</text>
+              <text x="650" y="121" text-anchor="middle" fill="#f9a8d4" font-size="11">raises if rejected</text>
+
+              <!-- Pattern 2: HumanInputRun tool inside the tool dictionary -->
+              <rect x="280" y="240" width="200" height="100" rx="12" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="380" y="268" text-anchor="middle" fill="#fce7f3" font-size="13" font-weight="700">HumanInputRun (tool)</text>
+              <text x="380" y="286" text-anchor="middle" fill="#f9a8d4" font-size="11">a regular Tool the LLM</text>
+              <text x="380" y="302" text-anchor="middle" fill="#f9a8d4" font-size="11">can pick to ask the user</text>
+              <text x="380" y="320" text-anchor="middle" fill="#f9a8d4" font-size="11">a question (input() prompt)</text>
+
+              <!-- The Human -->
+              <rect x="800" y="180" width="160" height="80" rx="12" fill="url(#hG)"/>
+              <text x="880" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Human</text>
+              <text x="880" y="232" text-anchor="middle" fill="#fff" font-size="11">terminal y/n / prompt</text>
+
+              <!-- Arrows -->
+              <path d="M220,140 L280,140" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <path d="M380,180 L380,240" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lc-arrH)" fill="none"/>
+              <text x="395" y="215" fill="#f472b6" font-size="11">LLM picks "Human"</text>
+              <path d="M480,140 Q 510,90 540,90" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lc-arrH)" fill="none"/>
+              <text x="510" y="75" text-anchor="middle" fill="#f472b6" font-size="11">intercepts</text>
+              <!-- Cubic Bezier whose tangent at the endpoint is purely vertical (control point P2
+                   shares the endpoint's x), so the arrowhead points DOWN onto the MIDDLE of the
+                   Human box's top edge and its body sits cleanly above it -->
+              <path d="M760,90 C 820,90 880,100 880,180" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lc-arrH)" fill="none"/>
+              <path d="M480,290 L800,250" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lc-arrH)" fill="none"/>
+              <path d="M800,220 L480,150" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <!-- Line slopes down-right in screen coords (positive slope), so rotate clockwise (+12) -->
+              <text x="640" y="170" fill="#9aa6bd" font-size="11" transform="rotate(12 640 170)">approval / answer back</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Wrap tools in a callback that prompts y/n. Or hand the agent a 'Human' tool and let it ask."</div>
+              <h4>How HITL works</h4>
+              <p>
+                LangChain has no first-class pause/resume primitive in <code>AgentExecutor</code>.
+                Two patterns are common:
+              </p>
+              <ul>
+                <li><b>Callback approval</b> — register
+                  <code>HumanApprovalCallbackHandler</code> (from
+                  <code>langchain_community.callbacks.human</code>). Its
+                  <code>on_tool_start</code> hook prints the proposed tool call and waits for
+                  a y/n; rejection raises an exception that the executor surfaces as a tool
+                  error.</li>
+                <li><b>"Human" as a tool</b> — add a
+                  <code>HumanInputRun</code> tool to the agent's tool list. The LLM can choose
+                  to call it; the tool runs <code>input()</code> (or any custom prompt callable)
+                  to fetch a string from the user.</li>
+              </ul>
+              <p>
+                Both run synchronously, in-process. The agent thread is blocked while the
+                terminal (or your custom callable) waits.
+              </p>
+            </div>
+            <div>
+              <h4>Pattern coverage</h4>
+              <div class="pat-grid">
+                <div class="pat"><h5>1 · Tool approval</h5><p>Yes, via <code>HumanApprovalCallbackHandler</code>'s <code>on_tool_start</code> hook.</p></div>
+                <div class="pat no"><h5>2 · Pause + resume</h5><p>No native primitive. The <code>while</code> loop blocks; restarting the process loses state.</p></div>
+                <div class="pat no"><h5>3 · Final-output review</h5><p>No built-in. You'd wrap the executor or post-process its output yourself.</p></div>
+                <div class="pat"><h5>4 · Long-running async</h5><p>Possible only if your "Human" tool returns a future and you orchestrate the wait — not framework-managed.</p></div>
+              </div>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">Both classes ship in the <b>langchain-community</b> package (a separate repo from the core <code>langchain</code> repo, which only retains deprecation stubs):<br>· <code>langchain_community.callbacks.human</code> · <code>HumanApprovalCallbackHandler</code><br>· <code>langchain_community.tools</code> · <code>HumanInputRun</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ LANGGRAPH ============ -->
+      <article class="fw-card" id="langgraph">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lg)">Lg</div>
+          <div>
+            <h3>LangGraph · <code>interrupt()</code> + checkpointer = durable HITL</h3>
+            <div class="sub">The only framework here with a true pause/resume primitive whose state survives a process restart.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph HITL">
+              <defs>
+                <marker id="lg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <marker id="lg-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/></marker>
+                <marker id="lg-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+                <linearGradient id="lgG" x1="0" x2="1"><stop offset="0" stop-color="#0d9488"/><stop offset="1" stop-color="#14b8a6"/></linearGradient>
+                <linearGradient id="hG2" x1="0" x2="1"><stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+              </defs>
+
+              <!-- Graph body -->
+              <text x="40" y="40" fill="#9aa6bd" font-size="12">StateGraph</text>
+              <rect x="40" y="60" width="640" height="180" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <circle cx="80" cy="150" r="20" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="80" y="155" text-anchor="middle" fill="#fff" font-size="11">START</text>
+
+              <rect x="140" y="110" width="170" height="80" rx="12" fill="url(#lgG)"/>
+              <text x="225" y="142" text-anchor="middle" fill="#03241f" font-size="14" font-weight="700">agent (LLM)</text>
+              <text x="225" y="162" text-anchor="middle" fill="#03241f" font-size="11">may call interrupt()</text>
+              <text x="225" y="178" text-anchor="middle" fill="#03241f" font-size="11">inside the node body</text>
+
+              <polygon points="370,150 410,120 450,150 410,180" fill="#1a2236" stroke="#fbbf24"/>
+              <text x="410" y="155" text-anchor="middle" fill="#fbbf24" font-size="11">tool_calls?</text>
+
+              <rect x="490" y="110" width="170" height="80" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="575" y="142" text-anchor="middle" fill="#bbf7d0" font-size="14" font-weight="700">tools (ToolNode)</text>
+              <text x="575" y="162" text-anchor="middle" fill="#a7f3d0" font-size="11">interrupt_before=["tools"]</text>
+              <text x="575" y="178" text-anchor="middle" fill="#a7f3d0" font-size="11">→ pause every tool call</text>
+
+              <path d="M100,150 L140,150" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <path d="M310,150 L370,150" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <path d="M450,150 L490,150" stroke="#fbbf24" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <text x="468" y="142" text-anchor="middle" fill="#fbbf24" font-size="10">yes</text>
+              <path d="M575,110 Q 380,55 225,110" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lg-arr)" fill="none" class="flow-line"/>
+              <text x="400" y="80" text-anchor="middle" fill="#9aa6bd" font-size="11">loop back with tool result</text>
+
+              <!-- "no" branch from the diamond down to END -->
+              <circle cx="410" cy="220" r="18" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="410" y="224" text-anchor="middle" fill="#9ec5ff" font-size="11">END</text>
+              <path d="M410,180 L 410,202" stroke="#34d399" stroke-width="2" marker-end="url(#lg-arrG)" fill="none"/>
+              <text x="425" y="198" fill="#34d399" font-size="11">no</text>
+
+              <!-- Checkpointer (durable store) -->
+              <rect x="40" y="270" width="640" height="120" rx="14" fill="#171f33" stroke="#3a4a72" stroke-dasharray="3 5"/>
+              <text x="60" y="262" fill="#9aa6bd" font-size="12">Checkpointer (memory · SQLite · Postgres)</text>
+              <text x="360" y="305" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">{ messages: [...], pending_writes: [...], interrupts: [{ value: ... }] }</text>
+              <text x="360" y="328" text-anchor="middle" fill="#9aa6bd" font-size="11">graph state is persisted at every super-step</text>
+              <text x="360" y="350" text-anchor="middle" fill="#9aa6bd" font-size="11">a process restart, hours later, can pick up exactly here</text>
+              <text x="360" y="372" text-anchor="middle" fill="#9aa6bd" font-size="11">→ this is what makes interrupt() durable</text>
+
+              <!-- Human side -->
+              <rect x="730" y="120" width="280" height="200" rx="14" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="870" y="150" text-anchor="middle" fill="#fce7f3" font-size="14" font-weight="700">Client (any UI / queue / app)</text>
+
+              <rect x="755" y="170" width="230" height="50" rx="8" fill="#3d1b3f" stroke="#f9a8d4"/>
+              <text x="870" y="190" text-anchor="middle" fill="#fce7f3" font-size="12" font-weight="700">interrupt(value)</text>
+              <text x="870" y="208" text-anchor="middle" fill="#f9a8d4" font-size="10">raises GraphInterrupt → state checkpointed</text>
+
+              <rect x="755" y="235" width="230" height="50" rx="8" fill="#3d1b3f" stroke="#f9a8d4"/>
+              <text x="870" y="255" text-anchor="middle" fill="#fce7f3" font-size="12" font-weight="700">Command(resume=...)</text>
+              <text x="870" y="273" text-anchor="middle" fill="#f9a8d4" font-size="10">graph re-runs the node with resume value</text>
+
+              <text x="870" y="305" text-anchor="middle" fill="#f9a8d4" font-size="11">HumanInterrupt schema: accept · ignore</text>
+              <text x="870" y="318" text-anchor="middle" fill="#f9a8d4" font-size="11">· respond · edit</text>
+
+              <!-- arrows graph ↔ client -->
+              <path d="M680,150 L 730,160" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lg-arrH)" fill="none"/>
+              <text x="685" y="135" fill="#f472b6" font-size="11">interrupt</text>
+              <!-- Resume arrow now terminates ON the StateGraph rect's right edge inside the
+                   graph (y=200, well inside the y=60..240 rect) — not in mid-air. -->
+              <path d="M730,260 L 680,200" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <text x="700" y="252" fill="#9ec5ff" font-size="11">resume</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Call interrupt() anywhere in any node. Persist state via the checkpointer. Resume hours later with Command(resume=value)."</div>
+              <h4>How HITL works</h4>
+              <p>
+                LangGraph treats HITL as a first-class control-flow primitive. Anywhere in any node
+                you can call <code>interrupt(value)</code> — it raises a <code>GraphInterrupt</code>,
+                LangGraph snapshots the entire graph state via the configured <code>checkpointer</code>,
+                and the value is surfaced to the calling client. A separate process — minutes,
+                hours, or days later — can call the graph back with
+                <code>Command(resume=human_response)</code>; the runtime loads the snapshot and
+                re-executes the node from the top, this time with the human's value returned by
+                <code>interrupt</code>.
+              </p>
+              <p>
+                For "always pause before this node" semantics, compile the graph with
+                <code>interrupt_before=["tools"]</code> or
+                <code>interrupt_after=["agent"]</code>; this is how you do tool approval and
+                final-output review without changing node code.
+              </p>
+              <p>
+                The <code>HumanInterrupt</code> typed dict — currently in
+                <code>langgraph.prebuilt.interrupt</code> with a deprecation note that it will move
+                to <code>langchain.agents.interrupt</code> — gives you a structured envelope
+                (<code>accept</code> · <code>ignore</code> · <code>respond</code> · <code>edit</code>)
+                that UIs can render consistently.
+              </p>
+            </div>
+            <div>
+              <h4>Pattern coverage</h4>
+              <div class="pat-grid">
+                <div class="pat"><h5>1 · Tool approval</h5><p><code>interrupt_before=["tools"]</code> on compile, or call <code>interrupt()</code> inside a custom tool node.</p></div>
+                <div class="pat"><h5>2 · Pause + resume</h5><p>The native pattern. Pause is durable thanks to the checkpointer; resume via <code>Command(resume=...)</code>.</p></div>
+                <div class="pat"><h5>3 · Final-output review</h5><p><code>interrupt_after=["agent"]</code> or call <code>interrupt(draft)</code> in a final node before return.</p></div>
+                <div class="pat"><h5>4 · Long-running async</h5><p>Yes — checkpointer makes the wait survive process restarts. Approval can come from a totally different service.</p></div>
+              </div>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">libs/langgraph/langgraph/types.py · <code>interrupt()</code>, <code>Command</code><br>libs/checkpoint{,-sqlite,-postgres} · checkpointers</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ CREWAI ============ -->
+      <article class="fw-card" id="crewai">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--crew)">Cr</div>
+          <div>
+            <h3>CrewAI · <code>task.human_input=True</code></h3>
+            <div class="sub">A flag on the Task. After the agent finishes, a HumanInputProvider takes over and iterates feedback rounds.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1100 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI HITL">
+              <defs>
+                <marker id="cr-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd"/></marker>
+                <marker id="cr-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/></marker>
+                <marker id="cr-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+                <linearGradient id="crewG" x1="0" x2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+                <linearGradient id="hG3" x1="0" x2="1"><stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+              </defs>
+
+              <!-- Task box (x=30, w=220) -->
+              <rect x="30" y="80" width="220" height="170" rx="14" fill="url(#crewG)"/>
+              <text x="140" y="115" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Task</text>
+              <text x="140" y="138" text-anchor="middle" fill="#ede9fe" font-size="12">description, expected_output</text>
+              <text x="140" y="158" text-anchor="middle" fill="#ede9fe" font-size="12">agent = Researcher</text>
+              <rect x="50" y="180" width="180" height="50" rx="8" fill="#fff" opacity=".15"/>
+              <text x="140" y="200" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">human_input = True</text>
+              <text x="140" y="218" text-anchor="middle" fill="#ede9fe" font-size="11">opt-in HITL flag</text>
+
+              <!-- CrewAgentExecutor (x=320, w=200) — 70px gap from Task -->
+              <rect x="320" y="80" width="200" height="170" rx="14" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="420" y="110" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">CrewAgentExecutor</text>
+              <text x="420" y="130" text-anchor="middle" fill="#9aa6bd" font-size="11">_invoke_loop()</text>
+              <text x="420" y="150" text-anchor="middle" fill="#9aa6bd" font-size="11">runs until AgentFinish</text>
+              <rect x="340" y="170" width="160" height="60" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="420" y="192" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">AgentFinish</text>
+              <text x="420" y="210" text-anchor="middle" fill="#9aa6bd" font-size="11">draft answer</text>
+
+              <!-- HumanInputProvider (x=590, w=220) — 70px gap from Executor -->
+              <rect x="590" y="80" width="220" height="170" rx="14" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="700" y="110" text-anchor="middle" fill="#fce7f3" font-size="13" font-weight="700">HumanInputProvider</text>
+              <text x="700" y="128" text-anchor="middle" fill="#f9a8d4" font-size="11">.handle_feedback()</text>
+              <text x="700" y="146" text-anchor="middle" fill="#f9a8d4" font-size="11">.handle_feedback_async()</text>
+              <text x="700" y="172" text-anchor="middle" fill="#fce7f3" font-size="12">while ask_for_human_input:</text>
+              <text x="700" y="190" text-anchor="middle" fill="#f9a8d4" font-size="11">  prompt user for feedback</text>
+              <text x="700" y="206" text-anchor="middle" fill="#f9a8d4" font-size="11">  inject as new message</text>
+              <text x="700" y="222" text-anchor="middle" fill="#f9a8d4" font-size="11">  re-invoke the agent loop</text>
+
+              <!-- Human (x=900, w=170) — 90px gap from Provider for prompt/feedback labels -->
+              <rect x="900" y="120" width="170" height="100" rx="14" fill="url(#hG3)"/>
+              <text x="985" y="155" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Human</text>
+              <text x="985" y="178" text-anchor="middle" fill="#fff" font-size="11">"looks good" / "fix X" /</text>
+              <text x="985" y="194" text-anchor="middle" fill="#fff" font-size="11">empty = accept</text>
+
+              <!-- Final answer (y=320 — 70px below Provider's bottom at y=250) -->
+              <rect x="590" y="320" width="220" height="60" rx="12" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="700" y="345" text-anchor="middle" fill="#9ec5ff" font-size="13" font-weight="700">Final answer → next task / user</text>
+              <text x="700" y="365" text-anchor="middle" fill="#9aa6bd" font-size="11">when human accepts (empty input)</text>
+
+              <!-- Arrows -->
+              <!-- Task → Executor (70 px) -->
+              <path d="M250,165 L320,165" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <!-- Executor → Provider (70 px) -->
+              <path d="M520,200 L590,200" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <text x="555" y="190" text-anchor="middle" fill="#c4b5fd" font-size="10">draft</text>
+              <!-- Provider → Human (90 px) -->
+              <path d="M810,165 L900,165" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#cr-arrH)" fill="none"/>
+              <text x="855" y="155" text-anchor="middle" fill="#f472b6" font-size="11">prompt</text>
+              <!-- Human → Provider (90 px) -->
+              <path d="M900,180 L810,180" stroke="#f472b6" stroke-width="2" marker-end="url(#cr-arrH)" fill="none"/>
+              <text x="855" y="200" text-anchor="middle" fill="#f472b6" font-size="11">feedback</text>
+              <!-- Loop back from Provider into Executor for re-run -->
+              <path d="M590,135 Q 510,40 420,80" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#cr-arrH)" fill="none" class="flow-line"/>
+              <text x="510" y="45" text-anchor="middle" fill="#f472b6" font-size="11">re-invoke loop with feedback</text>
+              <!-- Provider → Final answer (70 px vertical) -->
+              <path d="M700,250 L 700,320" stroke="#34d399" stroke-width="2" marker-end="url(#cr-arrG)" fill="none"/>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Set a flag on the Task. The agent runs. Its answer is shown to the human. Empty input = accept. Anything else = re-run with that as feedback."</div>
+              <h4>How HITL works</h4>
+              <p>
+                CrewAI's HITL is a per-task flag: <code>Task(..., human_input=True)</code>. After
+                <code>CrewAgentExecutor._invoke_loop()</code> returns an <code>AgentFinish</code>,
+                the executor checks <code>self.ask_for_human_input</code>; if true, it calls
+                <code>_handle_human_feedback()</code>, which delegates to a
+                <code>HumanInputProvider</code> (the default <code>SyncHumanInputProvider</code>
+                uses an <code>input()</code> prompt).
+              </p>
+              <p>
+                The provider runs a <code>while ask_for_human_input</code> loop: prompt for
+                feedback, inject the feedback as a message, re-invoke the agent's loop, repeat.
+                Empty feedback ends the cycle and the latest answer is the task's output. An
+                async path (<code>handle_feedback_async</code>) exists for non-blocking I/O but
+                still keeps the agent's loop in-process.
+              </p>
+            </div>
+            <div>
+              <h4>Pattern coverage</h4>
+              <div class="pat-grid">
+                <div class="pat no"><h5>1 · Tool approval</h5><p>No per-tool approval primitive. You'd wrap the tool yourself.</p></div>
+                <div class="pat no"><h5>2 · Pause + resume</h5><p>No durable pause; the provider blocks the in-process agent loop until input arrives.</p></div>
+                <div class="pat"><h5>3 · Final-output review</h5><p><b>Native</b> — this is exactly what <code>human_input=True</code> does, with iterate-on-feedback built in.</p></div>
+                <div class="pat no"><h5>4 · Long-running async</h5><p>The async provider helps, but state is in memory; a process restart loses it unless you persist out of band.</p></div>
+              </div>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">lib/crewai/src/crewai/task.py · <code>human_input</code> field<br>lib/crewai/src/crewai/agents/crew_agent_executor.py · <code>_handle_human_feedback</code><br>lib/crewai/src/crewai/core/providers/human_input.py · provider impls</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ GOOGLE ADK ============ -->
+      <article class="fw-card" id="adk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--adk)">Ad</div>
+          <div>
+            <h3>Google ADK · <code>request_confirmation</code> + long-running tools</h3>
+            <div class="sub">Two complementary mechanisms: tool-call confirmation, and tools that release the run and resume on callback.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 510" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK HITL">
+              <defs>
+                <marker id="ad-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fca5a5"/></marker>
+                <marker id="ad-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/></marker>
+                <marker id="ad-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+                <linearGradient id="adkG" x1="0" x2="1"><stop offset="0" stop-color="#EA4335"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
+                <linearGradient id="hG4" x1="0" x2="1"><stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+              </defs>
+
+              <!-- Top: tool-call confirmation path -->
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Path A · Tool-call confirmation</text>
+              <rect x="40" y="50" width="180" height="80" rx="12" fill="url(#adkG)"/>
+              <text x="130" y="82" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">LLM</text>
+              <text x="130" y="100" text-anchor="middle" fill="#1a0d00" font-size="11">picks tool with</text>
+              <text x="130" y="116" text-anchor="middle" fill="#1a0d00" font-size="11">require_confirmation</text>
+
+              <rect x="260" y="50" width="240" height="80" rx="12" fill="#1a2236" stroke="#fb7185"/>
+              <text x="380" y="78" text-anchor="middle" fill="#fecaca" font-size="13" font-weight="700">request_confirmation processor</text>
+              <text x="380" y="96" text-anchor="middle" fill="#fda4af" font-size="11">flows/llm_flows/request_confirmation.py</text>
+              <text x="380" y="114" text-anchor="middle" fill="#fda4af" font-size="11">emits adk_request_confirmation call</text>
+
+              <rect x="540" y="50" width="220" height="80" rx="12" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="650" y="78" text-anchor="middle" fill="#fce7f3" font-size="13" font-weight="700">ToolConfirmation</text>
+              <text x="650" y="96" text-anchor="middle" fill="#f9a8d4" font-size="11">{ confirmed: bool, payload: ... }</text>
+              <text x="650" y="114" text-anchor="middle" fill="#f9a8d4" font-size="11">@experimental Pydantic model</text>
+
+              <rect x="800" y="50" width="200" height="80" rx="12" fill="url(#hG4)"/>
+              <text x="900" y="82" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Human</text>
+              <text x="900" y="100" text-anchor="middle" fill="#fff" font-size="11">approves / rejects</text>
+              <text x="900" y="116" text-anchor="middle" fill="#fff" font-size="11">in any client UI</text>
+
+              <path d="M220,90 L260,90" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M500,90 L540,90" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M760,90 L800,90" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ad-arrH)" fill="none"/>
+
+              <!-- Divider -->
+              <line x1="20" y1="170" x2="1020" y2="170" stroke="#2a3550" stroke-dasharray="4 6"/>
+
+              <!-- Bottom: long-running tool path -->
+              <text x="40" y="200" fill="#9aa6bd" font-size="12">Path B · Long-running tool (durable async wait)</text>
+
+              <rect x="40" y="220" width="180" height="100" rx="12" fill="url(#adkG)"/>
+              <text x="130" y="252" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">LLM</text>
+              <text x="130" y="272" text-anchor="middle" fill="#1a0d00" font-size="11">picks long-running tool</text>
+              <text x="130" y="290" text-anchor="middle" fill="#1a0d00" font-size="11">e.g. get_user_choice</text>
+
+              <rect x="260" y="220" width="240" height="100" rx="12" fill="#1a2236" stroke="#fb7185"/>
+              <text x="380" y="252" text-anchor="middle" fill="#fecaca" font-size="13" font-weight="700">LongRunningFunctionTool</text>
+              <text x="380" y="272" text-anchor="middle" fill="#fda4af" font-size="11">is_long_running = True</text>
+              <text x="380" y="290" text-anchor="middle" fill="#fda4af" font-size="11">framework records function_call_id</text>
+              <text x="380" y="307" text-anchor="middle" fill="#fda4af" font-size="11">and releases the run</text>
+
+              <rect x="540" y="220" width="220" height="100" rx="12" fill="#171f33" stroke="#3a4a72"/>
+              <text x="650" y="252" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Session (Event log)</text>
+              <text x="650" y="272" text-anchor="middle" fill="#9aa6bd" font-size="11">pending function_call_id</text>
+              <text x="650" y="289" text-anchor="middle" fill="#9aa6bd" font-size="11">stored in events; durable across</text>
+              <text x="650" y="305" text-anchor="middle" fill="#9aa6bd" font-size="11">processes via SessionService</text>
+
+              <rect x="800" y="220" width="200" height="100" rx="12" fill="url(#hG4)"/>
+              <text x="900" y="252" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Human / external</text>
+              <text x="900" y="272" text-anchor="middle" fill="#fff" font-size="11">answers later via</text>
+              <text x="900" y="290" text-anchor="middle" fill="#fff" font-size="11">function_response with</text>
+              <text x="900" y="306" text-anchor="middle" fill="#fff" font-size="11">matching id → run resumes</text>
+
+              <path d="M220,270 L260,270" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M500,270 L540,270" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M760,270 L800,270" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ad-arrH)" fill="none"/>
+              <!-- Callback returns: curves DOWN out of Human bottom-mid (900,320), arcs under
+                   the row of Path-B boxes, and lands UP on the bottom-mid of LongRunningFunctionTool
+                   (380,320) with a vertical tangent — so the arrow tip is centered on the box edge -->
+              <path d="M900,320 C 900,440 380,440 380,320" stroke="#34d399" stroke-width="2" marker-end="url(#ad-arrG)" fill="none"/>
+              <text x="640" y="360" text-anchor="middle" fill="#34d399" font-size="11">callback with same function_call_id → resume</text>
+
+              <!-- Built-in helper (pushed DOWN so the callback curve has clean room above it) -->
+              <rect x="40" y="440" width="960" height="60" rx="12" fill="#171f33" stroke="#3a4a72"/>
+              <text x="60" y="465" fill="#cfe1ff" font-size="12">Built-in:</text>
+              <text x="120" y="465" fill="#fce7f3" font-size="12" font-weight="700">get_user_choice_tool</text>
+              <text x="280" y="465" fill="#9aa6bd" font-size="12">— a LongRunningFunctionTool that asks the user to pick from a list of options.</text>
+              <text x="60" y="486" fill="#cfe1ff" font-size="12">Compose with:</text>
+              <text x="160" y="486" fill="#fce7f3" font-size="12" font-weight="700">request_confirmation</text>
+              <text x="320" y="486" fill="#9aa6bd" font-size="12">processor on any tool by setting <tspan font-family="monospace">tool.require_confirmation</tspan>.</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Two HITL channels: a confirmation request side-call for tool approvals, and 'long-running' tools that release the run and resume on callback."</div>
+              <h4>How HITL works</h4>
+              <p>
+                <b>Tool-call confirmation.</b> Mark a tool to require confirmation; the
+                <code>request_confirmation</code> request processor (in
+                <code>flows/llm_flows/request_confirmation.py</code>) intercepts the call,
+                emits a special <code>adk_request_confirmation</code> function call to the
+                client carrying a <code>ToolConfirmation</code> envelope (<code>confirmed</code>,
+                <code>payload</code>, <code>hint</code>). The client surfaces it to the human;
+                their decision comes back as a function response and the original call either
+                proceeds or is dropped.
+              </p>
+              <p>
+                <b>Long-running tools.</b> A <code>LongRunningFunctionTool</code> (or any tool
+                with <code>is_long_running=True</code>) returns to the framework <i>without</i>
+                a final result. ADK records the <code>function_call_id</code> in the
+                <code>Session</code> as a pending event and releases the run. Whenever the
+                external system (queue worker, ticketing tool, human via UI) is ready it sends a
+                function response carrying the same id, and the agent resumes from that point.
+                The built-in <code>get_user_choice</code> tool is implemented exactly this way.
+              </p>
+            </div>
+            <div>
+              <h4>Pattern coverage</h4>
+              <div class="pat-grid">
+                <div class="pat"><h5>1 · Tool approval</h5><p>Native via <code>request_confirmation</code> + <code>ToolConfirmation</code> (currently @experimental).</p></div>
+                <div class="pat"><h5>2 · Pause + resume</h5><p>Achievable via long-running tools — the run pauses and resumes on a function-response callback.</p></div>
+                <div class="pat"><h5>3 · Final-output review</h5><p>No first-class hook, but easy to model as a long-running "review" tool the agent must call before finishing.</p></div>
+                <div class="pat"><h5>4 · Long-running async</h5><p><b>Native</b>. Persistence depends on which <code>SessionService</code> you use (in-memory vs. database).</p></div>
+              </div>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">src/google/adk/flows/llm_flows/request_confirmation.py<br>src/google/adk/tools/long_running_tool.py · <code>LongRunningFunctionTool</code><br>src/google/adk/tools/get_user_choice_tool.py</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ SEMANTIC KERNEL ============ -->
+      <article class="fw-card" id="sk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--sk)">Sk</div>
+          <div>
+            <h3>Microsoft Semantic Kernel · auto-function-invocation filters</h3>
+            <div class="sub">A filter sits in front of every plugin call the kernel auto-invokes — that's the HITL hook.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel HITL">
+              <defs>
+                <marker id="sk-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#bae6fd"/></marker>
+                <marker id="sk-arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f472b6"/></marker>
+                <marker id="sk-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+                <linearGradient id="skG" x1="0" x2="1"><stop offset="0" stop-color="#2EA5FF"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
+                <linearGradient id="hG5" x1="0" x2="1"><stop offset="0" stop-color="#ec4899"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+              </defs>
+
+              <text x="40" y="34" fill="#9aa6bd" font-size="12">ChatCompletionAgent.invoke()</text>
+              <rect x="20" y="50" width="1000" height="240" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- ChatHistory (x=40, w=180) -->
+              <rect x="40" y="100" width="180" height="120" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="130" y="130" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">ChatHistory</text>
+              <text x="130" y="148" text-anchor="middle" fill="#9aa6bd" font-size="11">user message</text>
+              <text x="130" y="164" text-anchor="middle" fill="#9aa6bd" font-size="11">assistant message</text>
+              <text x="130" y="180" text-anchor="middle" fill="#9aa6bd" font-size="11">+ function_call</text>
+              <text x="130" y="196" text-anchor="middle" fill="#9aa6bd" font-size="11">+ function_result</text>
+
+              <!-- Kernel (x=280, w=200) — 60 px gap from ChatHistory -->
+              <rect x="280" y="100" width="200" height="120" rx="12" fill="url(#skG)"/>
+              <text x="380" y="130" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Kernel</text>
+              <text x="380" y="150" text-anchor="middle" fill="#06243f" font-size="11">FunctionChoiceBehavior.Auto</text>
+              <text x="380" y="170" text-anchor="middle" fill="#06243f" font-size="11">model emits function_call</text>
+              <text x="380" y="190" text-anchor="middle" fill="#06243f" font-size="11">→ kernel must invoke</text>
+
+              <!-- AutoFunctionInvocation Filter (x=540, w=220) — 60 px gap from Kernel -->
+              <rect x="540" y="100" width="220" height="120" rx="12" fill="#2a1230" stroke="#f472b6" stroke-width="2"/>
+              <text x="650" y="124" text-anchor="middle" fill="#fce7f3" font-size="13" font-weight="700">AutoFunctionInvocation Filter</text>
+              <text x="650" y="142" text-anchor="middle" fill="#f9a8d4" font-size="11">async middleware: sees</text>
+              <text x="650" y="158" text-anchor="middle" fill="#f9a8d4" font-size="11">function_call_content</text>
+              <text x="650" y="178" text-anchor="middle" fill="#fce7f3" font-size="12" font-weight="700">await next(context)</text>
+              <text x="650" y="195" text-anchor="middle" fill="#f9a8d4" font-size="11">or set context.terminate=True</text>
+              <text x="650" y="211" text-anchor="middle" fill="#f9a8d4" font-size="11">or set context.function_result</text>
+
+              <!-- Plugin (x=820, w=180) — 60 px gap from Filter -->
+              <rect x="820" y="100" width="180" height="120" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="910" y="130" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">Plugin function</text>
+              <text x="910" y="148" text-anchor="middle" fill="#a7f3d0" font-size="11">@kernel_function</text>
+              <text x="910" y="166" text-anchor="middle" fill="#a7f3d0" font-size="11">runs only if filter</text>
+              <text x="910" y="182" text-anchor="middle" fill="#a7f3d0" font-size="11">calls await next(context)</text>
+
+              <!-- Human (pushed DOWN below the outer perimeter so its top no longer touches it) -->
+              <rect x="510" y="320" width="280" height="60" rx="12" fill="url(#hG5)"/>
+              <text x="650" y="345" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Human (prompted by your filter)</text>
+              <text x="650" y="363" text-anchor="middle" fill="#fff" font-size="11">CLI input · webhook reply · approval queue · …</text>
+
+              <!-- Top-row arrows: each gap is 60 px so the labels above them are clearly visible -->
+              <path d="M220,160 L280,160" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M480,160 L540,160" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <text x="510" y="150" text-anchor="middle" fill="#9aa6bd" font-size="10">function_call</text>
+              <path d="M760,160 L820,160" stroke="#34d399" stroke-width="2" marker-end="url(#sk-arrG)" fill="none"/>
+              <text x="790" y="150" text-anchor="middle" fill="#34d399" font-size="10">await next</text>
+
+              <!-- Filter ↔ Human: two parallel vertical arrows so neither hides the other.
+                   Filter is at x=540..760 (centre 650); Human is at x=510..790 (centre 650). -->
+              <path d="M620,220 L 620,320" stroke="#f472b6" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#sk-arrH)" fill="none"/>
+              <path d="M680,320 L 680,220" stroke="#f472b6" stroke-width="2" marker-end="url(#sk-arrH)" fill="none"/>
+              <text x="610" y="278" text-anchor="end" fill="#f472b6" font-size="11">filter awaits</text>
+              <text x="690" y="278" text-anchor="start" fill="#f472b6" font-size="11">human decides</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Register a filter on the kernel. Every auto-invoked function passes through it. Approve, mutate, or terminate."</div>
+              <h4>How HITL works</h4>
+              <p>
+                When <code>FunctionChoiceBehavior.Auto</code> is in effect, the kernel — not your
+                code — invokes plugin functions on the model's behalf. The hook is a
+                <i>filter</i>: register one with
+                <code>kernel.add_filter(FilterTypes.AUTO_FUNCTION_INVOCATION, my_filter)</code>.
+                The filter is async middleware that receives an
+                <code>AutoFunctionInvocationContext</code> (with the
+                <code>function_call_content</code>, the <code>chat_history</code>, the
+                request/function index in the loop, etc.) and decides what happens next.
+              </p>
+              <p>
+                Inside the filter you can: prompt a human (anything <code>await</code>-able will
+                do — <code>aioconsole.ainput</code>, an HTTP wait, a queue subscriber); mutate
+                the arguments before forwarding; <i>set</i>
+                <code>context.function_result</code> to short-circuit the call entirely; or set
+                <code>context.terminate = True</code> to stop the whole function-call loop.
+                Calling <code>await next(context)</code> lets the call proceed.
+              </p>
+            </div>
+            <div>
+              <h4>Pattern coverage</h4>
+              <div class="pat-grid">
+                <div class="pat"><h5>1 · Tool approval</h5><p>Native — auto-function-invocation filter is exactly this. Approve, mutate, or replace the result.</p></div>
+                <div class="pat"><h5>2 · Pause + resume</h5><p>Process-level only — the filter <code>await</code>s, but state is in memory. Restarting kills it.</p></div>
+                <div class="pat"><h5>3 · Final-output review</h5><p>Done outside the kernel: review the agent's <code>AgentResponseItem</code> before forwarding. No built-in hook.</p></div>
+                <div class="pat no"><h5>4 · Long-running async</h5><p>Possible only if your filter integrates with a durable queue you own. Nothing built in.</p></div>
+              </div>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">python/semantic_kernel/filters/auto_function_invocation/auto_function_invocation_context.py · <code>terminate</code>, <code>function_result</code><br>python/semantic_kernel/filters/filter_types.py · <code>AUTO_FUNCTION_INVOCATION</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON TABLE ================= -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side · the four HITL patterns</h2>
+    <p class="lede">Read down a column to see one framework's whole HITL story; read across a row to see how each framework answers the same need.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="fw"><span class="dot" style="background:var(--lc)"></span> LangChain</th>
+            <th class="fw"><span class="dot" style="background:var(--lg)"></span> LangGraph</th>
+            <th class="fw"><span class="dot" style="background:var(--crew)"></span> CrewAI</th>
+            <th class="fw"><span class="dot" style="background:var(--adk)"></span> Google ADK</th>
+            <th class="fw"><span class="dot" style="background:var(--sk)"></span> Semantic Kernel</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">1 · Tool-call approval</td>
+            <td><code>HumanApprovalCallbackHandler</code> on <code>on_tool_start</code></td>
+            <td><code>interrupt_before=["tools"]</code> at compile-time, or <code>interrupt()</code> in a tool node</td>
+            <td>Not built in — wrap the tool yourself</td>
+            <td><code>request_confirmation</code> processor + <code>ToolConfirmation</code></td>
+            <td>Auto-function-invocation filter</td>
+          </tr>
+          <tr>
+            <td class="row-hd">2 · Mid-run pause + resume</td>
+            <td>Not native — synchronous loop</td>
+            <td><b>Native:</b> <code>interrupt(value)</code> + <code>Command(resume=…)</code></td>
+            <td>Not native — the provider blocks the loop in-process</td>
+            <td>Via long-running tool that awaits a function-response callback</td>
+            <td>Filter can <code>await</code> in-process; not durable</td>
+          </tr>
+          <tr>
+            <td class="row-hd">3 · Final-output review</td>
+            <td>No first-class hook</td>
+            <td><code>interrupt_after=["agent"]</code> or <code>interrupt(draft)</code> in a final node</td>
+            <td><b>Native</b> — exactly what <code>task.human_input=True</code> does</td>
+            <td>Model as a long-running "review" tool the agent must call</td>
+            <td>Done outside the agent (inspect <code>AgentResponseItem</code>)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">4 · Long-running async wait</td>
+            <td>Not framework-managed</td>
+            <td><b>Native + durable</b> — checkpointer survives process restarts</td>
+            <td>Async provider exists, but state is in memory</td>
+            <td><b>Native</b> via <code>LongRunningFunctionTool</code>; durability = your <code>SessionService</code></td>
+            <td>Only if your filter is wired to a durable queue you own</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Durability</td>
+            <td>None (in-process)</td>
+            <td>Memory · SQLite · Postgres checkpointers</td>
+            <td>None (the executor must stay alive)</td>
+            <td>Tied to <code>SessionService</code> impl (in-memory, DB, …)</td>
+            <td>None (filter is in-process)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Human action vocabulary</td>
+            <td>y/n (callback) or free-text (Human tool)</td>
+            <td>Structured: accept · ignore · respond · edit (<code>HumanInterrupt</code>)</td>
+            <td>Free-text feedback (empty = accept)</td>
+            <td>Structured: <code>{ confirmed, payload, hint }</code></td>
+            <td>Whatever your filter implements</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Code anchor</td>
+            <td><code>langchain_community/callbacks/human.py</code></td>
+            <td><code>libs/langgraph/langgraph/types.py</code> · <code>interrupt</code></td>
+            <td><code>lib/crewai/.../core/providers/human_input.py</code></td>
+            <td><code>src/google/adk/flows/llm_flows/request_confirmation.py</code> + <code>tools/long_running_tool.py</code></td>
+            <td><code>filters/auto_function_invocation/auto_function_invocation_context.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAKEAWAYS ================= -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Architect's cheat sheet</h2>
+    <p class="lede">If HITL is non-negotiable in your domain (regulated industries, high-blast-radius actions, content moderation), the framework choice has consequences.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">DURABILITY</span>
+        <h4>1 · The hard question is "can the agent wait days?"</h4>
+        <p>
+          Most HITL "support" is really an <code>input()</code> blocking the agent thread. Only
+          <b>LangGraph</b> (checkpointer) and <b>ADK</b> (long-running tool + persistent
+          <code>SessionService</code>) survive a process restart with the run intact.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">VOCABULARY</span>
+        <h4>2 · Structured human responses are worth a lot</h4>
+        <p>
+          LangGraph's <code>HumanInterrupt</code> (accept · ignore · respond · edit) and ADK's
+          <code>ToolConfirmation</code> are typed envelopes you can render consistently across
+          UIs. CrewAI is free-text only; LangChain is y/n. UI-side reusability follows.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">GRANULARITY</span>
+        <h4>3 · Per-tool vs. per-step vs. per-task</h4>
+        <p>
+          ADK and SK gate at the <i>tool / function</i> level. LangGraph gates at the <i>node /
+          super-step</i> level. CrewAI gates at the <i>task</i> level. Match the gate granularity
+          to where your blast-radius lives.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">DX</span>
+        <h4>4 · Easiest path to "yes/no on every tool"</h4>
+        <p>
+          LangGraph: one line at compile (<code>interrupt_before=["tools"]</code>). ADK: mark
+          tools with <code>require_confirmation</code>. SK: a 10-line filter that
+          <code>input()</code>s. LangChain: register the callback. CrewAI: roll your own.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">DX</span>
+        <h4>5 · Easiest path to "review the final answer"</h4>
+        <p>
+          CrewAI wins here — <code>human_input=True</code> on the last task. LangGraph is close
+          (<code>interrupt_after=["agent"]</code>). The others need wrappers.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RISK</span>
+        <h4>6 · Don't conflate "filter that can prompt" with "real HITL"</h4>
+        <p>
+          A filter that <code>await</code>s <code>input()</code> works on a laptop. Production
+          HITL needs durability (graph state survives restarts), routability (any of N humans can
+          answer), and auditability (who clicked yes?). Most of that is your problem regardless
+          of the framework — but the framework should at least not make it impossible.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    HITL behaviour compiled from upstream source of LangChain, LangGraph, CrewAI, Google ADK
+    (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('a.pill').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

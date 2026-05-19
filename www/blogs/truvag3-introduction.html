@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TruvaG3: An Introduction to the Micro-Agents Framework</title>
+<title>TruvaG3: An Introduction to the Microagents Framework</title>
 <meta name="description" content="A guided tour of TruvaG3 — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.">
 <style>
   :root {
@@ -141,7 +141,7 @@
 <article>
 
 <header class="article-header">
-  <h1>TruvaG3: An Introduction to the Micro-Agents Framework</h1>
+  <h1>TruvaG3: An Introduction to the Microagents Framework</h1>
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
   <p class="meta">Neelabh Tripathi · May 16, 2026</p>
 </header>
@@ -155,7 +155,7 @@
 
 <p>The second is operational. Even when an agent framework gets the architecture right, it often brings its own runtime: its own orchestrator process, a hosted control plane, a vendor-specific workflow engine, or all three. For a platform team that already runs a working Kubernetes environment, that is not a feature — it is a new system to learn, scale, secure, and pay for. The team has to either accept a parallel operating model for agent workloads, or rebuild parts of the platform they already trust.</p>
 
-<p><strong>TruvaG3 is a Go framework that takes a different position on both counts.</strong> The architecture is the micro-agents reference described in <a href="micro-agents-architecture.html">a separate article</a> — capabilities registered into a shared registry at runtime, peers addressed by logical name, orchestration inside each agent, decentralized coordination between participants. The runtime is ordinary Kubernetes: Deployments, Services, ConfigMaps, Secrets, ingress, service mesh, autoscaling, OpenTelemetry. The framework adds the agent-specific pieces — discovery, an LLM client, an orchestrator, resilience and memory primitives — and does not require anything else.</p>
+<p><strong>TruvaG3 is a Go framework that takes a different position on both counts.</strong> The architecture is the microagents reference described in <a href="microagents-architecture.html">a separate article</a> — capabilities registered into a shared registry at runtime, peers addressed by logical name, orchestration inside each agent, decentralized coordination between participants. The runtime is ordinary Kubernetes: Deployments, Services, ConfigMaps, Secrets, ingress, service mesh, autoscaling, OpenTelemetry. The framework adds the agent-specific pieces — discovery, an LLM client, an orchestrator, resilience and memory primitives — and does not require anything else.</p>
 
 <p>This article walks through both halves. It is meant to be read in one sitting; sections can be skipped without losing the thread.</p>
 </section>
@@ -165,13 +165,13 @@
 
 <h3 id="architectural-reason">The architectural reason</h3>
 
-<p>The <a href="micro-agents-architecture.html">companion article on the micro-agents architecture</a> argues the case in detail, with primary-source evidence from production teams. The short version follows.</p>
+<p>The <a href="microagents-architecture.html">companion article on the microagents architecture</a> argues the case in detail, with primary-source evidence from production teams. The short version follows.</p>
 
 <p>Most agent frameworks today share one wiring pattern. The developer builds an agent, gives it a list of tools, and starts a loop. If a second agent is needed, the developer either wires it into the first agent as another callable, or places both agents inside a higher-level orchestrator that decides whose turn it is. In every case, the set of participants is fixed in source code before the program runs.</p>
 
-<p>Production teams report that this pattern hits real limits. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic's engineering account</a> of their multi-agent Research feature describes synchronous lead-subagent coordination as a bottleneck — the lead agent cannot steer subagents, subagents cannot coordinate, and the whole system can block on one slow subagent. <a href="https://arxiv.org/abs/2411.04468">Microsoft Research, writing about Magentic-One</a>, names the static composition itself as a limitation: <em>"Magentic-One's composition is fixed to a common set of five agents... When agents are not needed, they simply serve as a distraction to the Orchestrator... Conversely, when extra expertise might be needed, it is simply unavailable. We can easily imagine an alternative approach where agents are added or removed dynamically, based on the task need."</em> The fix the Magentic-One authors describe — agents added or removed dynamically — is exactly the micro-agents approach.</p>
+<p>Production teams report that this pattern hits real limits. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic's engineering account</a> of their multi-agent Research feature describes synchronous lead-subagent coordination as a bottleneck — the lead agent cannot steer subagents, subagents cannot coordinate, and the whole system can block on one slow subagent. <a href="https://arxiv.org/abs/2411.04468">Microsoft Research, writing about Magentic-One</a>, names the static composition itself as a limitation: <em>"Magentic-One's composition is fixed to a common set of five agents... When agents are not needed, they simply serve as a distraction to the Orchestrator... Conversely, when extra expertise might be needed, it is simply unavailable. We can easily imagine an alternative approach where agents are added or removed dynamically, based on the task need."</em> The fix the Magentic-One authors describe — agents added or removed dynamically — is exactly the microagents approach.</p>
 
-<p>The micro-agents architecture has five defining properties:</p>
+<p>The microagents architecture has five defining properties:</p>
 
 <ul>
   <li><strong>Specialized and independently deployable.</strong> Agents and tools run in their own processes, with their own release cadence and ownership.</li>
@@ -375,13 +375,13 @@
 
 <p>This is a structural property, not a compatibility claim. Because the protocol is the one your platform team already operates, every piece of infrastructure that already works on your REST services works on TruvaG3 components in the same way: API gateways (Kong, Ambassador, Nginx), service meshes (Istio, Linkerd), ingress controllers, network policies, identity providers, mTLS, OAuth and JWT validation, RBAC, audit logging, rate limiters, web application firewalls, monitoring, API governance tools, OpenAPI consumers (Swagger UI, Postman, code generators). Nothing has to be re-built or re-secured for agent workloads. Security and authentication and authorization patterns the team has already standardized on apply by default, because the thing being secured is just an HTTP service.</p>
 
-<p>The combined claim is straightforward. TruvaG3 is architecturally different from most agent frameworks, because it inherits the micro-agents pattern. It is also operationally familiar, because the platform layer is the same Kubernetes platform the team is already running — and because the wire protocol is the same HTTP/REST contract every other service in the cluster already follows. Most frameworks pick one or the other; TruvaG3 is shaped around the assumption that both matter.</p>
+<p>The combined claim is straightforward. TruvaG3 is architecturally different from most agent frameworks, because it inherits the microagents pattern. It is also operationally familiar, because the platform layer is the same Kubernetes platform the team is already running — and because the wire protocol is the same HTTP/REST contract every other service in the cluster already follows. Most frameworks pick one or the other; TruvaG3 is shaped around the assumption that both matter.</p>
 </section>
 
 <section>
 <h2 id="how-it-works">How the architecture works, briefly</h2>
 
-<p>This section is a compressed restatement of the architecture, enough to follow the rest of the article. For the full treatment — including production-team citations, the wiring problem in detail, and two captured execution traces from a running cluster — see the <a href="micro-agents-architecture.html">architecture article</a>.</p>
+<p>This section is a compressed restatement of the architecture, enough to follow the rest of the article. For the full treatment — including production-team citations, the wiring problem in detail, and two captured execution traces from a running cluster — see the <a href="microagents-architecture.html">architecture article</a>.</p>
 
 <p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant publishes the capabilities it offers into a shared index, each identified by a logical name. These names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning catalog. The LLM picks capabilities; the framework dispatches each chosen step to the address the registry currently lists for that name.</p>
 
@@ -503,7 +503,7 @@ type Discovery interface {
 
 <h3 id="runtime-discovery">2. Runtime discovery</h3>
 
-<p>Discovery is the primitive that makes the whole micro-agents architecture possible: agents find tools and other agents <em>by what they can do</em>, not by hardcoded addresses. A capability registered by one component becomes visible to every other component on the next read. Add a new tool, and every existing agent sees it within seconds — no agent code change, no redeploy. Remove a tool, and it disappears within seconds too.</p>
+<p>Discovery is the primitive that makes the whole microagents architecture possible: agents find tools and other agents <em>by what they can do</em>, not by hardcoded addresses. A capability registered by one component becomes visible to every other component on the next read. Add a new tool, and every existing agent sees it within seconds — no agent code change, no redeploy. Remove a tool, and it disappears within seconds too.</p>
 
 <p>A single registry holds tools and agents on equal footing — any number of either — each publishing one or more capabilities that any other component can look up by name. All of it sits behind one Go interface called <code>core.Discovery</code>. Capability lookups are key-value reads, so the registry scales with the number of distinct capability names in the deployment, not with the wiring complexity between components.</p>
 
@@ -680,7 +680,7 @@ type Discovery interface {
 
 <h3 id="orchestration">6. Orchestration</h3>
 
-<p>The orchestrator is what turns a list of capabilities and a natural-language request into an answer. It is the per-agent reasoning loop, and it is built around dynamic LLM-driven planning — the part of the framework that most directly uses the micro-agents architecture. No hand-written routing graphs, no pre-wired tool list in source code: the plan is generated against whatever is in the registry at the moment the request arrives.</p>
+<p>The orchestrator is what turns a list of capabilities and a natural-language request into an answer. It is the per-agent reasoning loop, and it is built around dynamic LLM-driven planning — the part of the framework that most directly uses the microagents architecture. No hand-written routing graphs, no pre-wired tool list in source code: the plan is generated against whatever is in the registry at the moment the request arrives.</p>
 
 <p><strong>The plan-execute-synthesize loop.</strong> A request enters the orchestrator. The orchestrator hands the live capability catalog to the LLM and asks for a plan. The LLM returns a directed acyclic graph (DAG) of steps — each step names a capability and lists the steps it depends on. The executor then runs the DAG: independent steps in parallel, dependent steps in topological order. When all steps finish, a synthesis call composes the response. Every operation along this path is instrumented, with one span per layer:</p>
 
@@ -1065,7 +1065,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <h3 id="code-agent-to-agent">One agent calling another</h3>
 
-<p>From the calling agent's point of view, an agent and a tool look the same. Both register capabilities into the same registry. Both are dispatched through the same HTTP call. The <a href="micro-agents-architecture.html">architecture article</a> walks through a captured multi-domain trace where <code>travel-chat-agent</code> handles a user request that crosses three domains. Its four-step plan includes <code>devops_operations</code>, <code>geocode_location</code>, <code>stock_quote</code>, and <code>get_current_weather</code>. One of those — <code>devops_operations</code> — happens to be served by another agent (<code>devops-chat-agent</code>), which runs its own internal plan-execute-synthesize loop. From the dispatch site, there is no visible difference between the agent step and the tool steps.</p>
+<p>From the calling agent's point of view, an agent and a tool look the same. Both register capabilities into the same registry. Both are dispatched through the same HTTP call. The <a href="microagents-architecture.html">architecture article</a> walks through a captured multi-domain trace where <code>travel-chat-agent</code> handles a user request that crosses three domains. Its four-step plan includes <code>devops_operations</code>, <code>geocode_location</code>, <code>stock_quote</code>, and <code>get_current_weather</code>. One of those — <code>devops_operations</code> — happens to be served by another agent (<code>devops-chat-agent</code>), which runs its own internal plan-execute-synthesize loop. From the dispatch site, there is no visible difference between the agent step and the tool steps.</p>
 </section>
 
 <section>
@@ -1073,7 +1073,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <p>The full TruvaG3 stack — registry, the bundled tools and agents, the Registry Viewer, and an OpenTelemetry pipeline — runs on a laptop in a local Kubernetes cluster (Kind). The <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">setup guide</a> walks through the cluster, the Redis or Valkey backend, the AI provider configuration, and the bundled examples.</p>
 
-<p>The two captured executions in the <a href="micro-agents-architecture.html">architecture article</a> — the three-phase Switzerland trip plan and the multi-domain agent-to-agent run — both come from this setup. Once the bundled examples are deployed, the same user queries can be run against the same agents, and the Registry Viewer's Execution DAG tab will produce equivalent screenshots and trace JSON files. Nothing in either article is theoretical.</p>
+<p>The two captured executions in the <a href="microagents-architecture.html">architecture article</a> — the three-phase Switzerland trip plan and the multi-domain agent-to-agent run — both come from this setup. Once the bundled examples are deployed, the same user queries can be run against the same agents, and the Registry Viewer's Execution DAG tab will produce equivalent screenshots and trace JSON files. Nothing in either article is theoretical.</p>
 </section>
 
 <section>
@@ -1082,7 +1082,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 <p>Recommended reading order, by goal:</p>
 
 <ul>
-  <li><strong>Understand the architecture in depth.</strong> Read the <a href="micro-agents-architecture.html">micro-agents architecture article</a>. It is the foundation this framework implements.</li>
+  <li><strong>Understand the architecture in depth.</strong> Read the <a href="microagents-architecture.html">microagents architecture article</a>. It is the foundation this framework implements.</li>
   <li><strong>Find a specific feature.</strong> The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/overview/FRAMEWORK_FEATURES_GUIDE.md">Framework Features Guide</a> is organized by capability area and links to module-level documentation.</li>
   <li><strong>Build something.</strong> Start with the <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">Getting Started guide</a> for the local Kubernetes setup, then the Tool Development Guide and Agent Development Guide for the build patterns.</li>
   <li><strong>Read source code.</strong> The <code>core/</code>, <code>orchestration/</code>, <code>ai/</code>, and <code>memory/</code> modules have their own READMEs and architecture documents. The <code>examples/</code> directory has working code for tools, agents, chat UIs, and the registry viewer.</li>
@@ -1091,7 +1091,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <p class="footer-note">TruvaG3 is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
 
-<p class="copyright">© 2026 Neelabh Tripathi. All rights reserved.</p>
+<p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
 
 </article>
 

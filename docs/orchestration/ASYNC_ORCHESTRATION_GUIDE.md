@@ -65,16 +65,17 @@ Welcome to the complete guide on async tasks in TruvaG3! Think of this as your f
     - 12.2 [Architecture: How They Fit Together](#122-architecture-how-they-fit-together)
     - 12.3 [Resume Context: Using BuildResumeContext](#123-resume-context-using-buildresumecontext)
     - 12.4 [Key Points](#124-key-points)
-13. [Best Practices](#13-best-practices)
-    - 13.1 [DO](#131-do)
-    - 13.2 [DON'T](#132-dont)
-14. [Troubleshooting](#14-troubleshooting)
-    - 14.1 [Problem: Tasks Stuck in "queued" Status](#141-problem-tasks-stuck-in-queued-status)
-    - 14.2 [Problem: Tasks Fail Immediately](#142-problem-tasks-fail-immediately)
-    - 14.3 [Problem: Progress Not Updating](#143-problem-progress-not-updating)
-    - 14.4 [Problem: Traces Not Linked](#144-problem-traces-not-linked)
-    - 14.5 [Problem: Workers Using Too Much Memory](#145-problem-workers-using-too-much-memory)
-15. [Related Documentation](#15-related-documentation)
+13. [Scheduled Task Execution](#13-scheduled-task-execution)
+14. [Best Practices](#14-best-practices)
+    - 14.1 [DO](#141-do)
+    - 14.2 [DON'T](#142-dont)
+15. [Troubleshooting](#15-troubleshooting)
+    - 15.1 [Problem: Tasks Stuck in "queued" Status](#151-problem-tasks-stuck-in-queued-status)
+    - 15.2 [Problem: Tasks Fail Immediately](#152-problem-tasks-fail-immediately)
+    - 15.3 [Problem: Progress Not Updating](#153-problem-progress-not-updating)
+    - 15.4 [Problem: Traces Not Linked](#154-problem-traces-not-linked)
+    - 15.5 [Problem: Workers Using Too Much Memory](#155-problem-workers-using-too-much-memory)
+16. [Related Documentation](#16-related-documentation)
 
 ---
 
@@ -226,7 +227,7 @@ Before diving into code, let's understand the components.
 >
 > TruvaG3's async task system uses an **interface-first design**. The `TaskQueue` and `TaskStore` interfaces are defined in the `core` module, while **Redis implementations are provided as defaults**. You can implement these interfaces for other backends (PostgreSQL, in-memory for testing, etc.) if needed.
 >
-> This guide uses the Redis implementations throughout. See [Configuration Reference](#configuration-reference) for Redis configuration details, or [Implementing Custom Backends](#implementing-custom-backends) for guidance on creating your own implementations.
+> This guide uses the Redis implementations throughout. See [Configuration Reference](#11-configuration-reference) for Redis configuration details, or [Implementing Custom Backends](#116-implementing-custom-backends) for guidance on creating your own implementations.
 
 ### 3.1 Component Overview
 
@@ -291,7 +292,7 @@ Before diving into code, let's understand the components.
 
 Let's build an async agent step by step.
 
-> **Working Example**: See [examples/agent-with-async/](../../examples/agent-with-async) for a complete implementation.
+> **Working Example**: See [examples/agent-with-async/](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async) for a complete implementation.
 
 ### 4.1 Step 1: Create Project Structure
 
@@ -347,7 +348,7 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 114-132 for complete Redis connection and task infrastructure setup.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/main.go) lines 114-132 for complete Redis connection and task infrastructure setup.
 
 ### 4.3 Step 3: Create Worker Pool and Register Handlers
 
@@ -379,7 +380,7 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 241-259 for worker pool configuration and handler registration.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/main.go) lines 241-259 for worker pool configuration and handler registration.
 
 ### 4.4 Step 4: Set Up HTTP API
 
@@ -421,11 +422,11 @@ func main() {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/main.go](../../examples/agent-with-async/main.go) lines 164-226 for API mode setup, or lines 344-486 for embedded mode with both API and workers.
+> 📁 **Full Example**: See [examples/agent-with-async/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/main.go) lines 164-226 for API mode setup, or lines 344-486 for embedded mode with both API and workers.
 
 ### 4.5 Step 5: Implement Task Handler
 
-> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) for the complete `AsyncTravelAgent` struct (lines 51-57), `QueryResult` type (lines 67-75), and `InitializeOrchestrator` method (lines 132-174).
+> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/travel_research_agent.go) for the complete `AsyncTravelAgent` struct (lines 51-57), `QueryResult` type (lines 67-75), and `InitializeOrchestrator` method (lines 132-174).
 
 ```go
 // handlers.go
@@ -708,7 +709,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 25-244 for the complete `HandleQuery` implementation.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 25-244 for the complete `HandleQuery` implementation.
 
 ##### 2. Progress Reporting
 
@@ -751,7 +752,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 44-51, 125-131, and 206-212 for real progress reporting with `OnStepComplete` callback integration.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 44-51, 125-131, and 206-212 for real progress reporting with `OnStepComplete` callback integration.
 
 ##### 3. Result Handling
 
@@ -793,7 +794,7 @@ type QueryResult struct {
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) lines 67-83 for the `QueryResult` struct, and [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 216-228 for how it's populated.
+> 📁 **Full Example**: See [examples/agent-with-async/travel_research_agent.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/travel_research_agent.go) lines 67-83 for the `QueryResult` struct, and [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 216-228 for how it's populated.
 
 ##### 4. Error Handling
 
@@ -831,7 +832,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 34-37 for input validation, and lines 54-70 for graceful fallback when orchestrator is unavailable.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 34-37 for input validation, and lines 54-70 for graceful fallback when orchestrator is unavailable.
 
 ##### 5. Observability (Traces & Metrics)
 
@@ -869,7 +870,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 119-121 and 230-233 for custom metric emission, and [examples/agent-with-async/travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) lines 117-125 for metric declarations.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 119-121 and 230-233 for custom metric emission, and [examples/agent-with-async/travel_research_agent.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/travel_research_agent.go) lines 117-125 for metric declarations.
 
 #### Quick Reference: "Where Does This Happen?"
 
@@ -898,10 +899,10 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 | Redis store | `orchestration/redis_task_store.go` | `Create()`, `Get()`, `Update()`, `Cancel()` |
 | Linked spans | `telemetry/async_span.go` | `StartLinkedSpan()` |
 
-> 📁 **Complete Working Example**: The [examples/agent-with-async/](../../examples/agent-with-async) directory contains a production-ready implementation demonstrating all these patterns:
-> - [main.go](../../examples/agent-with-async/main.go) - Entry point with 3 deployment modes (api/worker/embedded)
-> - [handlers.go](../../examples/agent-with-async/handlers.go) - Handler implementation with AI orchestration and progress reporting
-> - [travel_research_agent.go](../../examples/agent-with-async/travel_research_agent.go) - Agent struct, types, and orchestrator initialization
+> 📁 **Complete Working Example**: The [examples/agent-with-async/](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async) directory contains a production-ready implementation demonstrating all these patterns:
+> - [main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/main.go) - Entry point with 3 deployment modes (api/worker/embedded)
+> - [handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) - Handler implementation with AI orchestration and progress reporting
+> - [travel_research_agent.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/travel_research_agent.go) - Agent struct, types, and orchestrator initialization
 
 ---
 
@@ -1213,7 +1214,7 @@ config.ExecutionOptions.OnStepComplete = func(
 }
 ```
 
-> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](../../examples/agent-with-async/handlers.go) lines 88-140 for a complete `OnStepComplete` callback implementation that tracks planning, tool execution, and synthesis phases.
+> 📁 **Full Example**: See [examples/agent-with-async/handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-async/handlers.go) lines 88-140 for a complete `OnStepComplete` callback implementation that tracks planning, tool execution, and synthesis phases.
 
 ### 7.3 Client-Side Polling
 
@@ -1486,7 +1487,7 @@ The `WithContext` methods automatically extract from context:
 - `trace.span_id` - Current span ID
 - `request_id` - Correlation ID generated by `ProcessRequest` (via baggage)
 
-> **Important**: Always use `WithContext` methods in handlers to enable log correlation. See [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#handler-logging-with-trace-correlation) for details.
+> **Important**: Always use `WithContext` methods in handlers to enable log correlation. See [LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md#8-handler-logging-with-trace-correlation) for details.
 
 **JSON log output with trace context:**
 
@@ -1690,7 +1691,7 @@ sum(rate(truvag3_tasks_completed_total[5m])) by (task_type)
 
 ### 10.4 Grafana Dashboard
 
-See [examples/k8-deployment/grafana.yaml](../../examples/k8-deployment/grafana.yaml) for a pre-built dashboard.
+See [examples/k8-deployment/grafana.yaml](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/grafana.yaml) for a pre-built dashboard.
 
 ---
 
@@ -2513,7 +2514,7 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 }
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](../../orchestration/hitl_helpers.go#L141)) handles the full resume contract:
+`BuildResumeContext` ([hitl_helpers.go:141](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go#L141)) handles the full resume contract:
 - **Validates** the checkpoint status is resumable (`approved`, `edited`, `expired_approved`)
 - **Restores plan** — the stored plan with matching step IDs, so the orchestrator skips re-planning
 - **Restores completed steps** — already-executed step results, so the executor skips them
@@ -2532,7 +2533,7 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 
 > **Complete guide:** For checkpoint store setup, expiry policies, SSE streaming integration, status lifecycle, and configuration reference, see [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 >
-> **Reference implementation:** [examples/event-driven-agent](../../examples/event-driven-agent) — Full async + HITL agent with webhook ingestion, alert dedup, worker pool, and approval checkpoints.
+> **Reference implementation:** [examples/event-driven-agent](https://github.com/truvaagents/truva-g3/tree/main/examples/event-driven-agent) — Full async + HITL agent with webhook ingestion, alert dedup, worker pool, and approval checkpoints.
 
 ---
 
@@ -2789,8 +2790,8 @@ containers:
 - [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md) - Step-by-step agent development with HITL integration
 - [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) - Complete tracing setup
 - [AI-Powered Payload Generation Guide](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) - Tool schema discovery
-- [Example: agent-with-async](../../examples/agent-with-async) - Complete async working example
-- [Example: event-driven-agent](../../examples/event-driven-agent) - Async + HITL working example
+- [Example: agent-with-async](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async) - Complete async working example
+- [Example: event-driven-agent](https://github.com/truvaagents/truva-g3/tree/main/examples/event-driven-agent) - Async + HITL working example
 
 ---
 

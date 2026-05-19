@@ -116,12 +116,12 @@ Start with [Feature Map](#feature-map) for the current framework surface. Each f
 
 For implementation details, prefer the module READMEs and architecture docs:
 
-- [core/README.md](../../core/README.md)
-- [ai/README.md](../../ai/README.md)
-- [orchestration/README.md](../../orchestration/README.md)
-- [memory/README.md](../../memory/README.md)
-- [resilience/README.md](../../resilience/README.md)
-- [telemetry/README.md](../../telemetry/README.md)
+- [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md)
+- [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)
+- [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md)
+- [memory/README.md](https://github.com/truvaagents/truva-g3/blob/main/memory/README.md)
+- [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md)
+- [telemetry/README.md](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md)
 
 ## Feature Map
 
@@ -142,7 +142,7 @@ Typical tool features:
 - structured success/error responses
 - optional OpenAPI exposure
 
-See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) and [core/README.md](../../core/README.md).
+See [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) and [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md).
 
 #### Agents
 
@@ -156,7 +156,7 @@ Typical agent features:
 - optional session, memory, and telemetry wiring
 - ability to expose capabilities other agents can call
 
-See [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md), [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md), and [core/README.md](../../core/README.md).
+See [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md), [Chat Agent Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md), and [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md).
 
 #### Framework Lifecycle
 
@@ -203,7 +203,7 @@ Common generated or framework-managed endpoints include:
 - `/api/capabilities/{name}/schema` when schema metadata is available
 - `/openapi.json` when OpenAPI generation is enabled
 
-See [core/README.md](../../core/README.md#registering-capabilities-making-your-components-useful) and [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#9-testing-your-tool).
+See [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md#registering-capabilities-making-your-components-useful) and [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#9-testing-your-tool).
 
 #### CORS And Middleware
 
@@ -211,7 +211,7 @@ The framework can wire HTTP middleware around component handlers. Built-in and d
 
 This is useful when exposing agents or tools to browser clients, service meshes, gateways, or internal platform middleware.
 
-See [core/README.md](../../core/README.md), [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#complete-main-implementation), and [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
+See [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md), [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md#complete-main-implementation), and [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
 
 ### 2. Runtime Discovery
 
@@ -317,7 +317,7 @@ The AI module gives agents a provider-neutral interface for LLM calls.
 
 `ai.NewClient()` can scan the environment, detect configured providers, and create a working client without hardcoding a provider in application code. This is useful for local development, promotion between environments, and running the same container image with different provider settings.
 
-See [ai/README.md](../../ai/README.md#method-1-zero-configuration-auto-pilot) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#how-auto-configuration-works).
+See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#method-1-zero-configuration-auto-pilot) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#how-auto-configuration-works).
 
 #### Single Client
 
@@ -363,7 +363,7 @@ The AI module has a provider registry. Providers register themselves through pac
 
 This matters when evaluating the framework for private endpoints, internal gateways, new provider integrations, or self-hosted models.
 
-See [ai/README.md](../../ai/README.md#the-provider-registry---plugin-architecture), [ai/README.md](../../ai/README.md#creating-custom-providers), and [ai/README.md](../../ai/README.md#adding-new-openai-compatible-services).
+See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#the-provider-registry---plugin-architecture), [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#creating-custom-providers), and [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#adding-new-openai-compatible-services).
 
 #### Embeddings And Vector Integration
 
@@ -371,7 +371,7 @@ The AI layer includes embedding-capable interfaces for providers that support em
 
 This prevents agents from having to own vectorization code when adding semantic recall, shared knowledge search, or user memory.
 
-See [ai/README.md](../../ai/README.md#provider-capabilities), [memory/README.md](../../memory/README.md), and [API Reference](../reference/API_REFERENCE.md#shared-memory-interfaces).
+See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#provider-capabilities), [memory/README.md](https://github.com/truvaagents/truva-g3/blob/main/memory/README.md), and [API Reference](../reference/API_REFERENCE.md#shared-memory-interfaces).
 
 #### Reasoning Controls And Request Options
 
@@ -385,7 +385,7 @@ See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-
 
 AI clients support non-streaming and streaming responses. When telemetry is initialized before the AI client, AI operations can emit spans and metrics such as provider, model, request duration, and token counts.
 
-See [ai/README.md](../../ai/README.md#15-streaming-support) and [telemetry/README.md](../../telemetry/README.md#20-ai-module-distributed-tracing).
+See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#15-streaming-support) and [telemetry/README.md](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md#20-ai-module-distributed-tracing).
 
 ### 5. Orchestration
 
@@ -411,7 +411,7 @@ Features include:
 - step-level callbacks
 - retry-aware execution
 
-See [orchestration/README.md](../../orchestration/README.md#3-how-it-works).
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#3-how-it-works).
 
 #### Context Window And Token Budget Management
 
@@ -425,7 +425,7 @@ The orchestration layer includes several mechanisms to avoid context-window over
 
 This is the planning-side context optimization layer. Large output handling is covered separately by [Result Trimming And Distillation](#result-trimming-and-distillation), and long chat sessions are covered by [Conversation History Protection](#conversation-history-protection).
 
-See [orchestration/README.md](../../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture), [API Reference](../reference/API_REFERENCE.md#tieredcapabilityconfig), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#tiered-capability-resolution).
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture), [API Reference](../reference/API_REFERENCE.md#tieredcapabilityconfig), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#tiered-capability-resolution).
 
 #### Iterative Multi-Phase Planning
 
@@ -450,13 +450,13 @@ See [Orchestration Modes Guide](../orchestration/ORCHESTRATION_MODES_GUIDE.md).
 
 Streaming orchestration emits progress and response events while work is running. This supports chat-style UX and long-running workflows where users need visibility before the final answer is complete.
 
-See [orchestration/README.md](../../orchestration/README.md#18-streaming-support).
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#18-streaming-support).
 
 #### Clarification Requests
 
 When the planner needs user-provided information to proceed, the orchestrator can surface a structured clarification request. Simple chat UIs can forward the natural-language response, while richer UIs can render structured prompts from the `Clarification` field.
 
-See [orchestration/README.md](../../orchestration/README.md#clarification-requests) and [API Reference](../reference/API_REFERENCE.md#processrequeststreaming).
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#clarification-requests) and [API Reference](../reference/API_REFERENCE.md#processrequeststreaming).
 
 #### Execution Controls And Token Usage
 
@@ -490,7 +490,7 @@ See [LLM Planning Prompt Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) a
 
 For large systems, capability providers reduce prompt bloat and help the planner work with relevant subsets of a large tool/agent catalog.
 
-See [orchestration/README.md](../../orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture).
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture).
 
 ### 6. Reliability And Error Recovery
 
@@ -549,19 +549,19 @@ See [API Reference](../reference/API_REFERENCE.md#resulttrimconfig) and [Environ
 
 Circuit breakers prevent cascading failures by failing fast after repeated errors, then testing recovery through half-open probes.
 
-See [resilience/README.md](../../resilience/README.md#basic-circuit-breaker).
+See [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md#basic-circuit-breaker).
 
 #### Retry And Backoff
 
 Retry logic supports exponential backoff, jitter, context cancellation, and maximum delay caps.
 
-See [resilience/README.md](../../resilience/README.md#smart-retry-with-backoff) and [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md#7-step-retry-and-backoff).
+See [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md#smart-retry-with-backoff) and [Error Handling Guide](../orchestration/ERROR_HANDLING_GUIDE.md#7-step-retry-and-backoff).
 
 #### Panic Recovery
 
 The resilience module includes panic recovery helpers so unexpected panics can be converted into errors, logged, and handled without tearing down the process.
 
-See [resilience/README.md](../../resilience/README.md#panic-recovery-system).
+See [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md#panic-recovery-system).
 
 ### 7. Async Execution, HITL, And Scheduling
 
@@ -630,7 +630,7 @@ The core module defines a simple component memory interface with `Get`, `Set`, `
 
 This is separate from shared agent memory and user memory: it is the lightweight per-component storage primitive.
 
-See [core/README.md](../../core/README.md) and [API Reference](../reference/API_REFERENCE.md#memory-implementations).
+See [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) and [API Reference](../reference/API_REFERENCE.md#memory-implementations).
 
 #### Pipeline Hooks
 
@@ -658,7 +658,7 @@ Features include:
 - vector-backed shared knowledge
 - LLM-powered memory reflection
 
-See [memory/README.md](../../memory/README.md) and [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md).
+See [memory/README.md](https://github.com/truvaagents/truva-g3/blob/main/memory/README.md) and [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md).
 
 #### Per-User Memory
 
@@ -747,7 +747,7 @@ Features include:
 - cardinality protection
 - graceful degradation if telemetry backends fail
 
-See [telemetry/README.md](../../telemetry/README.md) and [API Reference](../reference/API_REFERENCE.md#telemetry-module).
+See [telemetry/README.md](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md) and [API Reference](../reference/API_REFERENCE.md#telemetry-module).
 
 #### Distributed Tracing
 
@@ -795,7 +795,7 @@ See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-o
 
 Swagger UI consumes generated OpenAPI specs from components that expose `/openapi.json`. It supports interactive API exploration and can integrate with developer portals and API gateways.
 
-See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#part-1--swagger-ui-api-exploration).
+See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#2-the-openapijson-contract).
 
 ### 11. Security And Request Propagation
 
@@ -814,7 +814,7 @@ This means the framework helps with:
 - exposing runtime metadata only when explicitly enabled
 - adding guardrails, redaction, and audit behavior through hooks and prompt builders
 
-See [README.md](../../README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices).
+See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices).
 
 #### OAuth Bearer Propagation
 
@@ -884,7 +884,7 @@ The Kubernetes docs describe the platform controls expected around TruvaG3 deplo
 - ServiceAccounts and RBAC with minimal permissions
 - ingress, gateway, service mesh, or mTLS controls at trust boundaries
 
-See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
+See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
 
 ### 12. Deployment And Operations
 
@@ -915,7 +915,7 @@ See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md).
 
 TruvaG3 is intended for teams that want agents, tools, discovery, traces, and runtime data inside their own environment. This supports restricted, regulated, and air-gapped-friendly deployments.
 
-See [README.md](../../README.md#25-enterprise-deployment-model-run-agent-ecosystems-inside-your-existing-kubernetes-platform).
+See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#25-enterprise-deployment-model-run-agent-ecosystems-inside-your-existing-kubernetes-platform).
 
 #### Runtime Backends
 
@@ -926,7 +926,7 @@ Common runtime backends include:
 - OpenTelemetry Collector for metrics and traces
 - Prometheus, Jaeger, Grafana, and Loki in the example stack
 
-See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) and [memory/README.md](../../memory/README.md).
+See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) and [memory/README.md](https://github.com/truvaagents/truva-g3/blob/main/memory/README.md).
 
 ### 13. Extension Points
 
@@ -969,7 +969,7 @@ The framework includes test-friendly implementations and contracts so developers
 - mock memory and discovery implementations
 - `core/conformance` tests for custom `TaskConsumer` backends
 
-See [core/README.md](../../core/README.md), [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md#testing-the-conformance-helper), and [API Reference](../reference/API_REFERENCE.md#scheduling-interfaces).
+See [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md), [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md#testing-the-conformance-helper), and [API Reference](../reference/API_REFERENCE.md#scheduling-interfaces).
 
 #### MCP Integration Paths
 
@@ -1000,16 +1000,16 @@ See [TruvaG3 Tools vs MCP Servers](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md)
 
 Use these docs for deeper feature-level details:
 
-- [README.md](../../README.md) - project overview and positioning
-- [GETTING_STARTED.md](../../GETTING_STARTED.md) - first-run path
-- [core/README.md](../../core/README.md) - tools, agents, framework runtime
-- [ai/README.md](../../ai/README.md) - AI provider layer
-- [orchestration/README.md](../../orchestration/README.md) - orchestration, workflows, streaming, HITL, production features
-- [memory/README.md](../../memory/README.md) - shared memory backend implementations
-- [resilience/README.md](../../resilience/README.md) - circuit breakers, retry, panic recovery
-- [telemetry/README.md](../../telemetry/README.md) - metrics, tracing, telemetry configuration
+- [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md) - project overview and positioning
+- [GETTING_STARTED.md](https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md) - first-run path
+- [core/README.md](https://github.com/truvaagents/truva-g3/blob/main/core/README.md) - tools, agents, framework runtime
+- [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md) - AI provider layer
+- [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md) - orchestration, workflows, streaming, HITL, production features
+- [memory/README.md](https://github.com/truvaagents/truva-g3/blob/main/memory/README.md) - shared memory backend implementations
+- [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md) - circuit breakers, retry, panic recovery
+- [telemetry/README.md](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md) - metrics, tracing, telemetry configuration
 - [API_REFERENCE.md](../reference/API_REFERENCE.md) - API surface
-- [ARCHITECTURE.md](ARCHITECTURE.md) - framework architecture
+- [ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/docs/overview/ARCHITECTURE.md) - framework architecture
 - [TOOL_DEVELOPMENT_GUIDE.md](../building/TOOL_DEVELOPMENT_GUIDE.md) - building tools
 - [TOOL_SCHEMA_DISCOVERY_GUIDE.md](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) - schema discovery and tool payload generation
 - [AGENT_DEVELOPMENT_GUIDE.md](../building/AGENT_DEVELOPMENT_GUIDE.md) - building agents
@@ -1040,6 +1040,6 @@ Use these docs for deeper feature-level details:
 
 Some docs still appear older than the current codebase and should be reviewed before relying on them as authoritative:
 
-- [examples/README.md](../../examples/README.md) references several example directories that are no longer present.
-- [API_REFERENCE.md](../reference/API_REFERENCE.md#ui-module) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
+- [examples/README.md](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md) references several example directories that are no longer present.
+- [API_REFERENCE.md](../reference/API_REFERENCE.md) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
 This guide is based on the current root/module READMEs and the current guides under `docs/`.

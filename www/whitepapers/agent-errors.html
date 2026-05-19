@@ -1,0 +1,1251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Error Handling in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #121826;
+    --bg-3: #1a2236;
+    --ink: #e6edf7;
+    --muted: #9aa6bd;
+    --line: #2a3550;
+    --accent: #7cc4ff;
+    --warn: #fbbf24;
+    --good: #34d399;
+    --err: #f87171;
+    --lc: #1F6FEB;
+    --lg: #14b8a6;
+    --crew: #7c3aed;
+    --adk: #EA4335;
+    --sk: #2EA5FF;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; font-size: 13px; line-height:1.5; color:#cfe1ff; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.hero {
+    padding: 64px 0 36px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #fca5a5 60%, #fbbf24 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero .subtitle {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 820px;
+    margin: 0 auto 22px;
+  }
+  .research-date {
+    display: inline-block;
+    margin-bottom: 18px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+  .pillrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); font-size: 13px; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; }
+  .dot { width:9px; height:9px; border-radius: 50%; display:inline-block; }
+
+  section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 28px; }
+
+  .universal-stack { display: grid; gap: 24px; }
+  .uni-svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 24px 32px;
+  }
+  .uni-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .uni-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 980px) { .uni-list { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .uni-list { grid-template-columns: 1fr; } }
+  .uni-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .uni-item b { color: #fff; }
+  .uni-item .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #3a1c1c; color: #fca5a5; margin-right:8px; border:1px solid #5d2929;
+  }
+
+  .scenarios { display: grid; gap: 16px; }
+  .scenario { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; }
+  .scenario h4 { margin: 0 0 10px; font-size: 17px; letter-spacing: -0.005em; color: #fff; }
+  .scenario h4 .tag {
+    display:inline-block; font-size:11px; padding:3px 9px; border-radius:999px; vertical-align: middle;
+    background: #3a1c1c; color: #fca5a5; margin-right:10px; border:1px solid #5d2929;
+    font-weight: 700; letter-spacing:.04em;
+  }
+  .scenario p { margin: 0 0 12px; color: #cfd9ee; } .scenario p:last-child { margin-bottom: 0; }
+
+  .frameworks { display: grid; gap: 28px; }
+  .fw-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .fw-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255,255,255,0.015);
+  }
+  .fw-badge {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 18px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .fw-head h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .fw-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .fw-body { display: flex; flex-direction: column; }
+  .fw-svg-wrap {
+    padding: 28px 32px;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(900px 500px at 20% 10%, rgba(248,113,113,.05), transparent 60%),
+      var(--bg-2);
+  }
+  .fw-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .fw-text-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    padding: 24px 32px;
+  }
+  .fw-text-grid > div { min-width: 0; }
+  @media (max-width: 880px) { .fw-text-grid { grid-template-columns: 1fr; padding: 22px; } }
+  .fw-text-grid h4 { margin: 14px 0 6px; font-size: 14px; color: var(--accent); letter-spacing:.04em; text-transform: uppercase; }
+  .fw-text-grid h4:first-child { margin-top: 0; }
+  .fw-text-grid p { margin: 0 0 10px; overflow-wrap: anywhere; }
+
+  .metaphor {
+    margin: 0 0 12px; padding: 10px 14px;
+    background: #2d1414; border-left: 3px solid var(--err); border-radius: 8px;
+    color: #fee2e2; font-style: italic; font-size: 14px;
+  }
+
+  .ax-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (max-width: 600px) { .ax-grid { grid-template-columns: 1fr; } }
+  .ax-grid > .ax { min-width: 0; }
+  .ax {
+    background: var(--bg-3); border:1px solid var(--line); border-left: 3px solid var(--err); border-radius: 8px;
+    padding: 10px 12px;
+    overflow-wrap: anywhere;
+  }
+  .ax h5 { margin:0 0 4px; font-size:12px; color:#fca5a5; letter-spacing:.04em; text-transform: uppercase; }
+  .ax p { margin:0; font-size:13.5px; color:#dbe6ff; overflow-wrap: anywhere; }
+  .ax.no { border-left-color: #555; opacity: .7; }
+  .ax.no h5 { color:#888; }
+
+  .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align:left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; }
+  th.fw, td.fw { white-space: nowrap; }
+  td.row-hd { background: var(--bg-2); font-weight:600; }
+
+  .takeaways { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--bg-2); border:1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin:0; color:#cfd9ee; font-size: 14px; }
+  .ta .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #3a1c1c; color: #fca5a5; margin-bottom:8px;
+  }
+
+  footer { padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px; }
+
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .fw-card { break-inside: avoid; }
+  }
+
+  /* Chapter nav (multipart guide) */
+  .chap-nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(11,15,23,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 0;
+  }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a {
+    padding: 5px 11px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); text-decoration: none;
+  }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #2d1414; border-color: var(--err); color: #fee2e2; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="agent-errors-index.html">← Index</a>
+    <a class="active" href="agent-errors.html"><span class="num">1</span>In-loop</a>
+    <a href="agent-errors-provider.html"><span class="num">2</span>Provider</a>
+    <a href="agent-errors-multi-agent.html"><span class="num">3</span>Multi-agent</a>
+    <a href="agent-errors-operational.html"><span class="num">4</span>Operational</a>
+    <a href="agent-errors-data-compliance.html"><span class="num">5</span>Data &amp; compliance</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Error Handling in AI Agent Frameworks</h1>
+    <p class="subtitle">
+      How <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
+      <b>Microsoft Semantic Kernel</b> deal with the four ways an agent run breaks in production:
+      tools throwing, LLMs returning rubbish, models hallucinating, and contexts blowing past the
+      window. Plus what each framework does on its own to retry.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#universal"><span class="dot" style="background:var(--err)"></span>Four failure modes</a>
+      <a class="pill" href="#failure-deep-dives"><span class="dot" style="background:var(--warn)"></span>What each looks like</a>
+      <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
+      <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
+      <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
+      <a class="pill" href="#adk"><span class="dot" style="background:var(--adk)"></span>Google ADK</a>
+      <a class="pill" href="#sk"><span class="dot" style="background:var(--sk)"></span>Semantic Kernel</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Cheat sheet</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= UNIVERSAL FRAMING ================= -->
+<section id="universal">
+  <div class="container">
+    <h2>Four failure modes the frameworks design around</h2>
+    <p class="lede">
+      In a production deployment, agent runs fail for many reasons — provider rate-limits,
+      content-moderation refusals, expired auth, infra outages, cyclic handoffs, cost ceilings,
+      and more. <b>This page focuses on the four failure modes the frameworks themselves ship
+      dedicated machinery for</b>, and where each framework draws the line between "we handle
+      this for you" and "you handle this yourself." For everything else (provider outages, infra,
+      auth, budgets, compliance), every framework defers to your operational tooling.
+    </p>
+
+    <div class="universal-stack">
+      <div class="uni-svg-wrap">
+        <svg viewBox="0 -20 1040 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal error modes">
+          <defs>
+            <marker id="u-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+            <marker id="u-arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#f87171"/></marker>
+            <linearGradient id="agentG" x1="0" x2="1">
+              <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/></linearGradient>
+            <linearGradient id="toolG" x1="0" x2="1">
+              <stop offset="0" stop-color="#10b981"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+          </defs>
+
+          <!-- LLM box -->
+          <rect x="220" y="100" width="220" height="120" rx="14" fill="url(#agentG)" opacity=".92"/>
+          <text x="330" y="130" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">LLM</text>
+          <text x="330" y="152" text-anchor="middle" fill="#dbeafe" font-size="11">picks tool + args, OR</text>
+          <text x="330" y="170" text-anchor="middle" fill="#dbeafe" font-size="11">returns a final answer</text>
+          <text x="330" y="195" text-anchor="middle" fill="#dbeafe" font-size="11" font-style="italic">may hallucinate, malform, run long</text>
+
+          <!-- Tool box -->
+          <rect x="600" y="100" width="220" height="120" rx="14" fill="url(#toolG)" opacity=".92"/>
+          <text x="710" y="130" text-anchor="middle" fill="#062a23" font-size="14" font-weight="700">Tool</text>
+          <text x="710" y="152" text-anchor="middle" fill="#062a23" font-size="11">runs the picked function</text>
+          <text x="710" y="170" text-anchor="middle" fill="#062a23" font-size="11">(API, code, retrieval)</text>
+          <text x="710" y="195" text-anchor="middle" fill="#062a23" font-size="11" font-style="italic">may throw, time out, 500</text>
+
+          <!-- Forward + back arrows -->
+          <path d="M440,140 L600,140" stroke="#9ec5ff" stroke-width="2" marker-end="url(#u-arr)" fill="none"/>
+          <text x="520" y="132" text-anchor="middle" fill="#cfe1ff" font-size="11">tool_call</text>
+          <path d="M600,180 L440,180" stroke="#9ec5ff" stroke-width="2" marker-end="url(#u-arr)" fill="none"/>
+          <text x="520" y="200" text-anchor="middle" fill="#cfe1ff" font-size="11">result</text>
+
+          <!-- Numbered failure-mode badges -->
+          <!-- 2 · LLM incorrect response — top of LLM box -->
+          <circle cx="330" cy="100" r="14" fill="#7f1d1d" stroke="#fff" stroke-width="2"/>
+          <text x="330" y="105" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">2</text>
+          <!-- 3 · Hallucination — bottom of LLM box -->
+          <circle cx="330" cy="220" r="14" fill="#7f1d1d" stroke="#fff" stroke-width="2"/>
+          <text x="330" y="225" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">3</text>
+          <!-- 4 · Large context — left of LLM -->
+          <circle cx="220" cy="160" r="14" fill="#7f1d1d" stroke="#fff" stroke-width="2"/>
+          <text x="220" y="165" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">4</text>
+          <!-- 1 · Tool fails — top of Tool box -->
+          <circle cx="710" cy="100" r="14" fill="#7f1d1d" stroke="#fff" stroke-width="2"/>
+          <text x="710" y="105" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">1</text>
+
+          <!-- Retry harness wrapping the whole thing -->
+          <rect x="80" y="50" width="900" height="240" rx="20" fill="none" stroke="#f87171" stroke-width="2" stroke-dasharray="6 6"/>
+          <text x="100" y="40" fill="#fca5a5" font-size="12" font-weight="700">Retry harness — max_attempts · backoff · timeouts</text>
+
+          <!-- Human / output -->
+          <rect x="380" y="340" width="280" height="60" rx="14" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="520" y="365" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">User / next agent / persisted output</text>
+          <text x="520" y="385" text-anchor="middle" fill="#9aa6bd" font-size="11">downstream consumer of the agent's answer</text>
+
+          <!-- Arrow from LLM to output (final answer) -->
+          <path d="M330,220 C 330,290 460,310 460,340" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#u-arr)" class="flow-line"/>
+          <text x="370" y="290" fill="#34d399" font-size="11">final answer</text>
+        </svg>
+      </div>
+
+      <div class="uni-list">
+        <div class="uni-item">
+          <span class="tag">1</span><b>Tool calls fail</b><br>
+          The LLM's chosen tool throws — network 500, schema mismatch, missing API key,
+          rate-limited downstream. The framework's job: catch it, surface it back to the LLM as
+          an error message it can react to, and decide whether to retry.
+        </div>
+        <div class="uni-item">
+          <span class="tag">2</span><b>LLM sends incorrect response</b><br>
+          Malformed JSON, wrong tool name, missing required arg, prose where a function call was
+          expected. The framework's job: parse-with-recovery, validate against the schema, and
+          either re-prompt with the validation error or hand it to a fixer.
+        </div>
+        <div class="uni-item">
+          <span class="tag">3</span><b>Hallucination</b><br>
+          The LLM confidently invents a tool that doesn't exist, an argument that doesn't fit, a
+          fact that isn't true. Most frameworks have <i>no built-in</i> detection — this is on
+          you (validators, guardrails, factual tools).
+        </div>
+        <div class="uni-item">
+          <span class="tag">4</span><b>Context overflow</b><br>
+          The accumulated messages grow past the model's context window. The framework's job: trim,
+          summarize, or compact. Some have first-class hooks; some leave it entirely to the user.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FAILURE-MODE DEEP DIVES ================= -->
+<section id="failure-deep-dives">
+  <div class="container">
+    <h2>What each failure looks like in practice</h2>
+    <p class="lede">
+      A plain-English walkthrough of how each of the four failure modes shows up in a real
+      production run, before the framework-by-framework comparisons that follow.
+    </p>
+
+    <div class="scenarios">
+      <div class="scenario">
+        <h4><span class="tag">1</span>Tool calls fail</h4>
+        <p>
+          The model picks a tool, hands it some arguments, and the tool throws — a network 500
+          from an external API, a 401 because the downstream service rotated its credentials,
+          a Pydantic schema mismatch because the model hallucinated an extra argument, a
+          rate-limit error from a third-party data provider. To the agent loop this looks like a
+          Python exception bubbling up from inside <code>tool.invoke()</code>.
+        </p>
+        <p>
+          The framework has three choices. Crash the run and propagate the exception to the
+          caller. Catch it, format the error as a synthetic tool-result message, feed it back
+          to the model, and let the model decide what to do (often: try a different tool, or
+          apologise to the user). Or retry the tool call automatically with backoff in the
+          hope it was transient. Most frameworks default to "catch and feed back" — so the
+          model gets a chance to react — and offer a configurable retry policy on top of that.
+        </p>
+      </div>
+
+      <div class="scenario">
+        <h4><span class="tag">2</span>LLM sends incorrect response</h4>
+        <p>
+          The model is supposed to produce a structured output: a function call, a JSON object
+          matching a schema, or text in a specific format. It produces something that doesn't
+          parse. Examples: malformed JSON missing a closing brace, a tool name that isn't in
+          the registered tool list, missing a required argument, returning prose ("I think we
+          should call the search tool with…") where a function-call structure was expected.
+        </p>
+        <p>
+          The framework's recovery options are limited but well-defined. A parser-with-recovery
+          looks at the malformed output and tries to extract intent (e.g. "the model wrote
+          <code>action: search</code> in YAML instead of a JSON tool call — assume the user
+          meant to call <code>search</code>"). A schema validator catches argument-shape
+          violations and re-prompts the model with the validation error attached. A "fixer"
+          agent can be invoked as a sub-step to clean up the output. Whichever path is taken,
+          the goal is to avoid burning the cycle and to get the model back on schema with
+          minimal extra tokens.
+        </p>
+      </div>
+
+      <div class="scenario">
+        <h4><span class="tag">3</span>Hallucination</h4>
+        <p>
+          The model confidently produces something that looks plausible but isn't. It calls a
+          tool that doesn't exist (<code>weatherLookup</code> when only <code>search</code> and
+          <code>get_weather</code> are registered). It passes an argument value that's invalid
+          (a customer ID format that has never existed). It states a fact that's wrong but
+          surface-coherent. Hallucination is fundamentally different from the previous two
+          modes because nothing throws — the call is well-formed, the output is grammatical,
+          the schema validates. The error is semantic, not syntactic.
+        </p>
+        <p>
+          That makes it the hardest of the four to detect inside the framework. Most
+          frameworks have <i>no built-in</i> hallucination detection — they trust the model's
+          tool selection and argument shape. Defence falls outside the loop: factual tools
+          (RAG over an authoritative source), output guardrails (a classifier or LLM-judge
+          that flags suspicious answers), strict tool-name enums in the schema so the
+          model can't invent tools, and post-hoc human review for high-stakes decisions.
+        </p>
+      </div>
+
+      <div class="scenario">
+        <h4><span class="tag">4</span>Context overflow</h4>
+        <p>
+          Every model has a context-window limit — the total number of tokens it can read
+          plus generate in a single call. A long-running agent run accumulates messages: every
+          user turn, every model response, every tool call, every tool result. After enough
+          iterations, the prompt grows past the limit and the next call fails with an
+          overflow error from the provider.
+        </p>
+        <p>
+          Recovery means shrinking the message list before the next call. Three strategies
+          show up across the catalog: <b>trim</b> (drop the oldest messages, keep the system
+          prompt and recent turns), <b>summarise</b> (replace older messages with an
+          LLM-generated summary), and <b>compact</b> (a more sophisticated summary that
+          preserves named entities and tool-call structure). Some frameworks ship a
+          first-class hook for this; others leave it entirely to the developer to wire up
+          before each call. Whichever is used, the trade-off is the same: shrinking saves
+          tokens but loses information, and the model may forget context that was important
+          three turns back.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FRAMEWORKS ================= -->
+<section id="frameworks" style="border-bottom:none;">
+  <div class="container">
+    <h2>How each framework handles the four modes</h2>
+    <p class="lede">
+      For each card: a diagram of the framework's recovery surfaces, the four-mode coverage, and
+      a code-grounded explanation. Auto-retry behaviour is called out in each.
+    </p>
+
+    <div class="frameworks">
+
+      <!-- ============ LANGCHAIN ============ -->
+      <article class="fw-card" id="langchain">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lc)">Lc</div>
+          <div>
+            <h3>LangChain · classic <code>handle_*</code> flags + v1 middleware</h3>
+            <div class="sub">Classic AgentExecutor exposes per-error flags; the new v1 package has dedicated <code>ToolRetryMiddleware</code>, <code>ModelRetryMiddleware</code>, <code>SummarizationMiddleware</code>, etc.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain error handling">
+              <defs>
+                <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <marker id="lc-arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#f87171"/></marker>
+                <linearGradient id="lcG" x1="0" x2="1"><stop offset="0" stop-color="#1F6FEB"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">AgentExecutor — outer guard: max_iterations=15 · max_execution_time</text>
+              <rect x="20" y="50" width="1000" height="160" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- Top row spread evenly across the container: 40 px margins + 120 px gaps -->
+
+              <!-- LLM Chain (60..260) -->
+              <rect x="60" y="80" width="200" height="100" rx="12" fill="url(#lcG)"/>
+              <text x="160" y="110" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">LLM Chain</text>
+              <text x="160" y="132" text-anchor="middle" fill="#dbeafe" font-size="11">model.invoke(prompt)</text>
+              <text x="160" y="150" text-anchor="middle" fill="#dbeafe" font-size="11">may return rubbish</text>
+
+              <!-- Output Parser (380..620) — gap 120 -->
+              <rect x="380" y="80" width="240" height="100" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="500" y="108" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">Output Parser</text>
+              <text x="500" y="126" text-anchor="middle" fill="#fca5a5" font-size="11">handle_parsing_errors:</text>
+              <text x="500" y="142" text-anchor="middle" fill="#fca5a5" font-size="11">bool · str · Callable</text>
+              <text x="500" y="160" text-anchor="middle" fill="#fca5a5" font-size="11">+ OutputFixingParser / RetryOutputParser</text>
+
+              <!-- Tool.invoke() (740..980) — gap 120 -->
+              <rect x="740" y="80" width="240" height="100" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="860" y="108" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">Tool.invoke()</text>
+              <text x="860" y="126" text-anchor="middle" fill="#fca5a5" font-size="11">Tool.handle_tool_error:</text>
+              <text x="860" y="142" text-anchor="middle" fill="#fca5a5" font-size="11">bool · str · Callable</text>
+              <text x="860" y="160" text-anchor="middle" fill="#fca5a5" font-size="11">→ feeds error back to LLM</text>
+
+              <path d="M260,130 L380,130" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <path d="M620,130 L740,130" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+
+              <!-- v1 middleware row -->
+              <text x="40" y="240" fill="#9aa6bd" font-size="12">langchain v1 (langchain.agents.middleware) — modular middleware stack</text>
+              <rect x="20" y="260" width="1000" height="100" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="40" y="280" width="180" height="60" rx="10" fill="#2d1414" stroke="#f87171"/>
+              <text x="130" y="304" text-anchor="middle" fill="#fee2e2" font-size="12" font-weight="700">ToolRetryMiddleware</text>
+              <text x="130" y="324" text-anchor="middle" fill="#fca5a5" font-size="10">retries failed tool calls · backoff</text>
+
+              <rect x="240" y="280" width="180" height="60" rx="10" fill="#2d1414" stroke="#f87171"/>
+              <text x="330" y="304" text-anchor="middle" fill="#fee2e2" font-size="12" font-weight="700">ModelRetryMiddleware</text>
+              <text x="330" y="324" text-anchor="middle" fill="#fca5a5" font-size="10">retries failed model calls</text>
+
+              <rect x="440" y="280" width="180" height="60" rx="10" fill="#2d1414" stroke="#f87171"/>
+              <text x="530" y="304" text-anchor="middle" fill="#fee2e2" font-size="12" font-weight="700">ModelFallbackMiddleware</text>
+              <text x="530" y="324" text-anchor="middle" fill="#fca5a5" font-size="10">switch to backup model on fail</text>
+
+              <rect x="640" y="280" width="180" height="60" rx="10" fill="#2d1414" stroke="#f87171"/>
+              <text x="730" y="304" text-anchor="middle" fill="#fee2e2" font-size="12" font-weight="700">SummarizationMiddleware</text>
+              <text x="730" y="324" text-anchor="middle" fill="#fca5a5" font-size="10">trims chat history</text>
+
+              <rect x="840" y="280" width="160" height="60" rx="10" fill="#2d1414" stroke="#f87171"/>
+              <text x="920" y="304" text-anchor="middle" fill="#fee2e2" font-size="12" font-weight="700">ContextEditing</text>
+              <text x="920" y="324" text-anchor="middle" fill="#fca5a5" font-size="10">ClearToolUsesEdit · …</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Classic exposes a flag for every kind of failure. v1 promotes them to first-class middleware classes."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>Classic <code>AgentExecutor</code>.</b> Three flags do most of the work.
+                <code>handle_parsing_errors: bool | str | Callable</code> (line 1042 of
+                <code>agent.py</code>) controls what happens when the output parser blows up —
+                set to <code>True</code> and the framework re-prompts the LLM with the parse
+                error attached. Each tool has <code>Tool.handle_tool_error</code> with the same
+                three-shape signature; on a tool exception the value (or the result of the
+                callable) is fed back to the LLM as the tool's "result" string. Outer guards
+                <code>max_iterations</code> (<b>default 15</b>) and <code>max_execution_time</code>
+                stop runaway loops.
+              </p>
+              <p>
+                <b>Retry-on-bad-output parsers.</b>
+                <code>OutputFixingParser</code> wraps a base parser and, on failure, calls a
+                "fixer" LLM with the original output and the parser error.
+                <code>RetryOutputParser</code> goes further, also passing the original prompt so
+                the LLM can correct itself in context.
+              </p>
+              <p>
+                <b>v1 middleware stack.</b> The new
+                <code>langchain.agents.middleware</code> package promotes each concern to its own
+                <code>AgentMiddleware</code> subclass — <code>ToolRetryMiddleware</code> (retries
+                with exponential backoff, default 2 retries, configurable
+                <code>should_retry</code>), <code>ModelRetryMiddleware</code>,
+                <code>ModelFallbackMiddleware</code>, <code>SummarizationMiddleware</code>,
+                <code>ContextEditingMiddleware</code> (with edit policies like
+                <code>ClearToolUsesEdit</code>).
+              </p>
+            </div>
+            <div>
+              <h4>Mode coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Tool fails</h5><p><b>Native.</b> <code>handle_tool_error</code> on each Tool, plus <code>ToolRetryMiddleware</code> with backoff in v1.</p></div>
+                <div class="ax"><h5>2 · LLM incorrect</h5><p><b>Native.</b> <code>handle_parsing_errors</code>, <code>OutputFixingParser</code>, <code>RetryOutputParser</code>, <code>ModelRetryMiddleware</code>.</p></div>
+                <div class="ax no"><h5>3 · Hallucination</h5><p>No built-in detector. Schema validation in tool args is your best lever.</p></div>
+                <div class="ax"><h5>4 · Large context</h5><p><code>trim_messages</code> (in <code>langchain_core.messages.utils</code>), <code>ConversationSummaryBufferMemory</code>, v1 <code>SummarizationMiddleware</code>.</p></div>
+              </div>
+              <h4>Auto-retry defaults</h4>
+              <p>None at the executor level — you opt in by setting flags or adding middlewares. v1 <code>ToolRetryMiddleware</code> defaults: <b>2 retries · exponential backoff</b>. <code>OutputFixingParser</code> retries <b>once</b> with the fixer LLM.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">libs/langchain/langchain_classic/agents/agent.py · <code>handle_parsing_errors</code> (line 1042), <code>max_iterations</code> (line 1023)<br>libs/langchain/langchain_classic/output_parsers/{fix,retry}.py<br>libs/langchain_v1/langchain/agents/middleware/{tool_retry,model_retry,model_fallback,summarization,context_editing}.py</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ LANGGRAPH ============ -->
+      <article class="fw-card" id="langgraph">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lg)">Lg</div>
+          <div>
+            <h3>LangGraph · per-node <code>RetryPolicy</code> + <code>ToolNode</code> error handling</h3>
+            <div class="sub">Every node can carry its own retry policy. ToolNode has a typed <code>handle_tool_errors</code>. Trim and validate via dedicated nodes.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph error handling">
+              <defs>
+                <marker id="lg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <linearGradient id="lgG" x1="0" x2="1"><stop offset="0" stop-color="#0d9488"/><stop offset="1" stop-color="#14b8a6"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">StateGraph — outer guard: recursion_limit</text>
+              <rect x="20" y="50" width="1000" height="240" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- pre_model_hook -->
+              <rect x="60" y="100" width="180" height="80" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="150" y="128" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">pre_model_hook</text>
+              <text x="150" y="146" text-anchor="middle" fill="#fca5a5" font-size="11">trim_messages</text>
+              <text x="150" y="162" text-anchor="middle" fill="#fca5a5" font-size="11">summarize · drop · …</text>
+
+              <!-- agent node -->
+              <rect x="300" y="100" width="180" height="80" rx="12" fill="url(#lgG)"/>
+              <text x="390" y="128" text-anchor="middle" fill="#03241f" font-size="14" font-weight="700">agent (LLM)</text>
+              <text x="390" y="148" text-anchor="middle" fill="#03241f" font-size="11">RetryPolicy(max=3,</text>
+              <text x="390" y="164" text-anchor="middle" fill="#03241f" font-size="11">backoff=2.0, retry_on=…)</text>
+
+              <!-- ValidationNode -->
+              <rect x="540" y="100" width="180" height="80" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="630" y="128" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">ValidationNode</text>
+              <text x="630" y="146" text-anchor="middle" fill="#fca5a5" font-size="11">re-validates tool_calls</text>
+              <text x="630" y="164" text-anchor="middle" fill="#fca5a5" font-size="11">against schemas</text>
+
+              <!-- ToolNode -->
+              <rect x="780" y="100" width="220" height="80" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="890" y="128" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">ToolNode</text>
+              <text x="890" y="146" text-anchor="middle" fill="#a7f3d0" font-size="11">handle_tool_errors:</text>
+              <text x="890" y="164" text-anchor="middle" fill="#a7f3d0" font-size="11">bool · str · tuple[Exc] · Callable</text>
+
+              <path d="M240,140 L300,140" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <path d="M480,140 L540,140" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <path d="M720,140 L780,140" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+
+              <!-- RetryPolicy detail -->
+              <text x="40" y="220" fill="#9aa6bd" font-size="12">RetryPolicy is a NamedTuple — applied to ANY node</text>
+              <rect x="20" y="240" width="600" height="40" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="40" y="265" fill="#cfe1ff" font-size="12" font-family="ui-monospace">RetryPolicy(initial_interval, backoff_factor=2.0, max_attempts=3, retry_on=…)</text>
+
+              <!-- error edge to LLM -->
+              <path d="M890,180 C 890,230 500,250 390,180" stroke="#f87171" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#lg-arr)" class="flow-line"/>
+              <text x="640" y="245" text-anchor="middle" fill="#fca5a5" font-size="11">error → ToolMessage(status="error") → re-enter agent</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Recovery is just another node — or a NamedTuple you bolt onto the node you already have."</div>
+              <h4>How it works</h4>
+              <p>
+                <b><code>RetryPolicy</code>.</b> A <code>NamedTuple</code> at
+                <code>langgraph/types.py:406</code> with
+                <code>max_attempts: int = 3</code>, <code>backoff_factor: float = 2.0</code>,
+                <code>initial_interval</code>, and <code>retry_on</code> (an exception type, a
+                tuple of types, or a predicate). Pregel's runner accepts a
+                <code>Sequence[RetryPolicy]</code> so you can stack them per-node — first
+                policy that matches the exception wins.
+              </p>
+              <p>
+                <b><code>ToolNode</code> error handling.</b> The prebuilt
+                <code>ToolNode</code> takes
+                <code>handle_tool_errors: bool | str | tuple[type[Exception], ...] | Callable</code>
+                (default: a built-in <code>_default_handle_tool_errors</code> that turns the
+                exception into a friendly string). On error, the tool produces a
+                <code>ToolMessage(status="error")</code> that the next agent step sees — the
+                LLM gets a chance to correct itself.
+              </p>
+              <p>
+                <b>Validation as a node.</b> <code>ValidationNode</code>
+                (<code>tool_validator.py:47</code>) re-validates the LLM's tool calls against the
+                schemas; you can route validation failures back to the agent node for a re-prompt.
+              </p>
+              <p>
+                <b>Context editing.</b> <code>create_react_agent</code> exposes
+                <code>pre_model_hook</code>; the canonical move is to call
+                <code>trim_messages</code> from <code>langchain_core.messages</code> there.
+              </p>
+            </div>
+            <div>
+              <h4>Mode coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Tool fails</h5><p><b>Native.</b> Typed <code>handle_tool_errors</code> on <code>ToolNode</code>; <code>RetryPolicy</code> on the node.</p></div>
+                <div class="ax"><h5>2 · LLM incorrect</h5><p><b>Native.</b> <code>ValidationNode</code> for schema checks; <code>response_format</code> for structured output.</p></div>
+                <div class="ax no"><h5>3 · Hallucination</h5><p>No detector. Schema validation catches the worst (made-up tools / wrong args).</p></div>
+                <div class="ax"><h5>4 · Large context</h5><p><code>pre_model_hook</code> + <code>trim_messages</code>. Patterns documented; no built-in summarizer.</p></div>
+              </div>
+              <h4>Auto-retry defaults</h4>
+              <p>No retries by default — you opt in by attaching a <code>RetryPolicy</code>. When attached: <b>3 attempts · 2.0× exponential backoff</b>.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">libs/langgraph/langgraph/types.py · <code>RetryPolicy</code> (line 406)<br>libs/prebuilt/langgraph/prebuilt/tool_node.py · <code>ToolNode</code>, <code>handle_tool_errors</code><br>libs/prebuilt/langgraph/prebuilt/tool_validator.py · <code>ValidationNode</code><br>libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py · <code>pre_model_hook</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ CREWAI ============ -->
+      <article class="fw-card" id="crewai">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--crew)">Cr</div>
+          <div>
+            <h3>CrewAI · <code>max_retry_limit</code>, guardrails, <code>respect_context_window</code></h3>
+            <div class="sub">Built-in retry counter on the agent loop, callable guardrails per task, and a token-aware context-window handler that auto-summarizes.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI error handling">
+              <defs>
+                <marker id="cr-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd"/></marker>
+                <linearGradient id="crewG" x1="0" x2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">CrewAgentExecutor — outer guards: max_iter · max_rpm · max_retry_limit</text>
+              <rect x="20" y="50" width="1000" height="240" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- handle_context_length -->
+              <rect x="40" y="90" width="180" height="80" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="130" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">handle_context_length</text>
+              <text x="130" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">respect_context_window?</text>
+              <text x="130" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">→ summarize_messages</text>
+
+              <!-- LLM -->
+              <rect x="270" y="90" width="180" height="80" rx="12" fill="url(#crewG)"/>
+              <text x="360" y="118" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">LLM</text>
+              <text x="360" y="138" text-anchor="middle" fill="#ede9fe" font-size="11">parsed by</text>
+              <text x="360" y="156" text-anchor="middle" fill="#ede9fe" font-size="11">agents/parser.py · parse()</text>
+
+              <!-- Tool with retry -->
+              <rect x="500" y="90" width="180" height="80" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="590" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">Tool</text>
+              <text x="590" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">tool error → AgentFinish</text>
+              <text x="590" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">retry counted vs max_retry_limit</text>
+
+              <!-- Task guardrail -->
+              <rect x="730" y="90" width="270" height="80" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="865" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">Task.guardrail / .guardrails</text>
+              <text x="865" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">callable validators on output</text>
+              <text x="865" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">fail → re-execute task</text>
+
+              <path d="M220,130 L270,130" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <path d="M450,130 L500,130" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <path d="M680,130 L730,130" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+
+              <!-- defaults block -->
+              <text x="40" y="220" fill="#9aa6bd" font-size="12">Agent / Task defaults that act as silent retry budgets:</text>
+              <rect x="20" y="240" width="1000" height="40" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="40" y="265" fill="#cfe1ff" font-size="12" font-family="ui-monospace">Agent.max_iter (default 25 in core) · Agent.max_retry_limit (default 2) · Agent.max_rpm · Task.guardrail_max_retries</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Set a retry budget on the agent. Set a guardrail on the task. Let the executor count strikes."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>Tool failures.</b> When a tool throws inside
+                <code>CrewAgentExecutor</code>'s loop, the executor formats the exception,
+                appends it as the tool's "result" so the LLM can react, and increments an
+                internal counter against <code>max_retry_limit</code>. After
+                <code>self._times_executed > self.max_retry_limit</code> the executor
+                raises (<code>crew_agent_executor.py:674</code>).
+              </p>
+              <p>
+                <b>LLM bad output.</b> The ReAct-style <code>parse()</code> function in
+                <code>agents/parser.py</code> handles malformed responses — it raises
+                <code>OutputParserError</code> on bad shape, the executor catches it and surfaces
+                a corrective message back to the LLM. <code>max_iter</code> caps the total
+                iterations; if the agent keeps failing to parse it eventually
+                <code>raise RuntimeError(...)</code> at line 435 / 1247 of
+                <code>crew_agent_executor.py</code>.
+              </p>
+              <p>
+                <b>Guardrails.</b> A <code>Task</code> takes a single
+                <code>guardrail</code> or a list of <code>guardrails</code> — each is a callable
+                that runs on the task's output before propagation. Failure causes the executor
+                to re-run the task. This is CrewAI's closest thing to a hallucination-mitigation
+                hook: you write the validator, the framework calls it.
+              </p>
+              <p>
+                <b>Context window.</b>
+                <code>respect_context_window: bool</code> on <code>Agent</code> /
+                <code>CrewAgentExecutor</code>. When the LLM raises a context-length error,
+                <code>handle_context_length</code> (<code>utilities/agent_utils.py:709</code>)
+                dispatches to <code>summarize_messages</code>; with the flag off, the run aborts.
+              </p>
+            </div>
+            <div>
+              <h4>Mode coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Tool fails</h5><p><b>Native.</b> Counted against <code>max_retry_limit</code>; error string fed back to LLM.</p></div>
+                <div class="ax"><h5>2 · LLM incorrect</h5><p><b>Native.</b> <code>parse()</code> in <code>agents/parser.py</code> + corrective re-prompt; capped by <code>max_iter</code>.</p></div>
+                <div class="ax"><h5>3 · Hallucination</h5><p><code>Task.guardrail(s)</code> are first-class callable validators.</p></div>
+                <div class="ax"><h5>4 · Large context</h5><p><b>Native.</b> <code>respect_context_window</code> → auto-summarize via <code>handle_context_length</code>.</p></div>
+              </div>
+              <h4>Auto-retry defaults</h4>
+              <p><code>max_iter</code> default <b>25</b> (per task). <code>max_retry_limit</code> default <b>2</b> (tool / parse retries on a single agent invocation). <code>max_rpm</code> off by default — when set it throttles. Guardrail re-runs are bounded by <code>guardrail_max_retries</code>.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">lib/crewai/.../agents/crew_agent_executor.py · <code>max_retry_limit</code>, <code>handle_context_length</code><br>lib/crewai/.../utilities/agent_utils.py · <code>handle_context_length</code> (709), <code>summarize_messages</code> (921)<br>lib/crewai/.../task.py · <code>guardrail</code>, <code>guardrails</code><br>lib/crewai/.../agents/parser.py · <code>parse()</code> in <code>agents/parser.py</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ GOOGLE ADK ============ -->
+      <article class="fw-card" id="adk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--adk)">Ad</div>
+          <div>
+            <h3>Google ADK · <code>on_*_error_callback</code> hooks + token-threshold compaction</h3>
+            <div class="sub">Both the model call and every tool call have dedicated error-callback chains; large-context handling is its own request processor.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK error handling">
+              <defs>
+                <marker id="ad-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fca5a5"/></marker>
+                <linearGradient id="adkG" x1="0" x2="1"><stop offset="0" stop-color="#EA4335"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">BaseLlmFlow — every transition observable by callbacks &amp; plugins</text>
+              <rect x="20" y="50" width="1000" height="260" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- All four boxes share the same height (100) and vertical centerline (y=130).
+                   Row shifted left by 10 px so margins are symmetric (20 px both sides). -->
+
+              <!-- CompactionRequestProcessor (30..250) — height now matches others -->
+              <rect x="30" y="80" width="220" height="100" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="140" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">CompactionRequestProcessor</text>
+              <text x="140" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">flows/llm_flows/compaction.py</text>
+              <text x="140" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">token-threshold based</text>
+
+              <!-- LLM call (290..510) -->
+              <rect x="290" y="80" width="220" height="100" rx="12" fill="url(#adkG)"/>
+              <text x="400" y="108" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">LLM call</text>
+              <text x="400" y="128" text-anchor="middle" fill="#1a0d00" font-size="11">before_model_callback</text>
+              <text x="400" y="146" text-anchor="middle" fill="#1a0d00" font-size="11">after_model_callback</text>
+              <text x="400" y="164" text-anchor="middle" fill="#1a0d00" font-size="11" font-weight="700">on_model_error_callback</text>
+
+              <!-- Tool call (550..770) -->
+              <rect x="550" y="80" width="220" height="100" rx="12" fill="url(#adkG)"/>
+              <text x="660" y="108" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">Tool call</text>
+              <text x="660" y="128" text-anchor="middle" fill="#1a0d00" font-size="11">before_tool_callback</text>
+              <text x="660" y="146" text-anchor="middle" fill="#1a0d00" font-size="11">after_tool_callback</text>
+              <text x="660" y="164" text-anchor="middle" fill="#1a0d00" font-size="11" font-weight="700">on_tool_error_callback</text>
+
+              <!-- PluginManager (810..1010) — 10 px right margin to container edge (1020) -->
+              <rect x="810" y="80" width="200" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="910" y="108" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">PluginManager</text>
+              <text x="910" y="128" text-anchor="middle" fill="#9aa6bd" font-size="11">runs error callback FIRST</text>
+              <text x="910" y="146" text-anchor="middle" fill="#9aa6bd" font-size="11">if it returns a response,</text>
+              <text x="910" y="164" text-anchor="middle" fill="#9aa6bd" font-size="11">that's used; else agent's</text>
+
+              <!-- Live API resumption -->
+              <rect x="40" y="200" width="600" height="90" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="340" y="226" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">Live API · session_resumption_handle</text>
+              <text x="340" y="246" text-anchor="middle" fill="#fca5a5" font-size="11">on disconnect: increment attempt counter,</text>
+              <text x="340" y="262" text-anchor="middle" fill="#fca5a5" font-size="11">reconnect with saved handle, replay deltas</text>
+              <text x="340" y="278" text-anchor="middle" fill="#fca5a5" font-size="11" font-style="italic">base_llm_flow.py · run_live() loop</text>
+
+              <!-- Right side: response processors -->
+              <rect x="660" y="200" width="360" height="90" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="840" y="226" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Response processors</text>
+              <text x="840" y="244" text-anchor="middle" fill="#9aa6bd" font-size="11">_nl_planning · _code_execution</text>
+              <text x="840" y="260" text-anchor="middle" fill="#9aa6bd" font-size="11">_output_schema_processor (validates)</text>
+              <text x="840" y="278" text-anchor="middle" fill="#9aa6bd" font-size="11">parse function_calls before dispatch</text>
+
+              <!-- Both top-row arrows at y=130 (shared centerline of the 100-tall boxes) -->
+              <path d="M250,130 L290,130" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M510,130 L550,130" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Every error path has a callback chain — agent-level + plugin-level. Pick where you want to recover."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>Tool failures.</b> <code>LlmAgent</code> exposes
+                <code>on_tool_error_callback: OnToolErrorCallback | list[…]</code> (line 450 of
+                <code>llm_agent.py</code>). When a tool call raises,
+                <code>flows/llm_flows/functions.py</code> calls
+                <code>_run_on_tool_error_callbacks</code>: it first runs the plugin manager's
+                error callback; if that returns a <code>function_response</code>, that becomes
+                the tool result; otherwise it cycles through the agent's callbacks. If none
+                handles it, the original exception propagates.
+              </p>
+              <p>
+                <b>LLM call failures.</b> Symmetrical:
+                <code>on_model_error_callback</code> (line 405) is invoked from
+                <code>base_llm_flow.py:347</code> in <code>_run_on_model_error_callbacks</code>.
+                Plugin first, then agent. Same "return a response to suppress, else re-raise"
+                semantics. Used in the live (streaming) loop to recover transient failures
+                without bringing down the run.
+              </p>
+              <p>
+                <b>Live-API session resumption.</b> The <code>run_live</code> loop in
+                <code>base_llm_flow.py:475</code> tracks <code>attempt</code> and
+                <code>live_session_resumption_handle</code>; on disconnect it reconnects with
+                the saved handle so the model can resume from the same conversation point.
+              </p>
+              <p>
+                <b>Large context.</b> <code>CompactionRequestProcessor</code>
+                (<code>flows/llm_flows/compaction.py:32</code>) sits in the request-processor
+                chain; if the configured token-threshold is exceeded it calls
+                <code>_run_compaction_for_token_threshold_config</code> to compact the events
+                before the LLM call. Hallucination-wise: the
+                <code>_output_schema_processor</code> validates structured outputs so a
+                made-up shape gets caught at the response stage.
+              </p>
+            </div>
+            <div>
+              <h4>Mode coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Tool fails</h5><p><b>Native.</b> <code>on_tool_error_callback</code> chain (plugin then agent).</p></div>
+                <div class="ax"><h5>2 · LLM incorrect</h5><p><b>Native.</b> <code>on_model_error_callback</code> chain + <code>_output_schema_processor</code>.</p></div>
+                <div class="ax no"><h5>3 · Hallucination</h5><p>No detector. Output-schema validation traps malformed structured responses; the rest is on you.</p></div>
+                <div class="ax"><h5>4 · Large context</h5><p><b>Native.</b> Token-threshold <code>CompactionRequestProcessor</code> in the per-turn pipeline.</p></div>
+              </div>
+              <h4>Auto-retry defaults</h4>
+              <p>No general retry counter. <b>Live-API</b>: automatic reconnect with session-resumption handle; <code>attempt</code> counter increments per disconnect (no hard cap in the loop — relies on the underlying client's connect timeout).</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">src/google/adk/agents/llm_agent.py · <code>on_model_error_callback</code> (405), <code>on_tool_error_callback</code> (450)<br>src/google/adk/flows/llm_flows/base_llm_flow.py · <code>_run_on_model_error_callbacks</code>, <code>run_live</code><br>src/google/adk/flows/llm_flows/functions.py · <code>_run_on_tool_error_callbacks</code><br>src/google/adk/flows/llm_flows/compaction.py · <code>CompactionRequestProcessor</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ SEMANTIC KERNEL ============ -->
+      <article class="fw-card" id="sk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--sk)">Sk</div>
+          <div>
+            <h3>Microsoft Semantic Kernel · filters + reducers + pluggable retry</h3>
+            <div class="sub">Filters wrap every function call. Chat history reducers (truncate / summarize) handle context. Retry is a pluggable mechanism; the default is "no retry."</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel error handling">
+              <defs>
+                <marker id="sk-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#bae6fd"/></marker>
+                <linearGradient id="skG" x1="0" x2="1"><stop offset="0" stop-color="#2EA5FF"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Kernel — filters + reducers + reliability extension</text>
+              <rect x="20" y="50" width="1000" height="240" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- ChatHistoryReducer -->
+              <rect x="40" y="90" width="220" height="120" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="150" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">ChatHistoryReducer (abstract)</text>
+              <text x="150" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">ChatHistoryTruncationReducer</text>
+              <text x="150" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">ChatHistorySummarizationReducer</text>
+              <text x="150" y="180" text-anchor="middle" fill="#fca5a5" font-size="11">applied before the model call</text>
+
+              <!-- Kernel -->
+              <rect x="300" y="90" width="180" height="120" rx="12" fill="url(#skG)"/>
+              <text x="390" y="118" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Kernel</text>
+              <text x="390" y="138" text-anchor="middle" fill="#06243f" font-size="11">FunctionChoiceBehavior</text>
+              <text x="390" y="156" text-anchor="middle" fill="#06243f" font-size="11">.Auto(...) loop</text>
+              <text x="390" y="180" text-anchor="middle" fill="#06243f" font-size="11">RetryMechanismBase (pluggable)</text>
+
+              <!-- AutoFunctionInvocation Filter -->
+              <rect x="520" y="90" width="220" height="120" rx="12" fill="#2d1414" stroke="#f87171" stroke-width="2"/>
+              <text x="630" y="118" text-anchor="middle" fill="#fee2e2" font-size="13" font-weight="700">AutoFunctionInvocation Filter</text>
+              <text x="630" y="138" text-anchor="middle" fill="#fca5a5" font-size="11">try { await next(context) }</text>
+              <text x="630" y="156" text-anchor="middle" fill="#fca5a5" font-size="11">except: set context.function_result</text>
+              <text x="630" y="174" text-anchor="middle" fill="#fca5a5" font-size="11">or context.terminate = True</text>
+              <text x="630" y="194" text-anchor="middle" fill="#fca5a5" font-size="11" font-style="italic">async middleware</text>
+
+              <!-- Plugin -->
+              <rect x="780" y="90" width="220" height="120" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="890" y="118" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">@kernel_function</text>
+              <text x="890" y="138" text-anchor="middle" fill="#a7f3d0" font-size="11">runs only if filter</text>
+              <text x="890" y="156" text-anchor="middle" fill="#a7f3d0" font-size="11">calls await next(context)</text>
+              <text x="890" y="180" text-anchor="middle" fill="#a7f3d0" font-size="11">exceptions propagate up</text>
+
+              <path d="M260,150 L300,150" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M480,150 L520,150" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M740,150 L780,150" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+
+              <!-- Reliability default -->
+              <text x="40" y="240" fill="#9aa6bd" font-size="12">Default reliability behaviour:</text>
+              <rect x="20" y="250" width="1000" height="40" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="40" y="275" fill="#cfe1ff" font-size="12" font-family="ui-monospace">PassThroughWithoutRetry — connector-level retries are off by default; bring your own RetryMechanismBase impl to enable.</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Filters catch tool errors; reducers shrink the chat; retries you wire yourself."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>Tool failures.</b> Auto-function-invocation filters wrap every plugin call.
+                The filter can <code>try { await next(context) } except</code> and either set
+                <code>context.function_result</code> to recover (so the model sees a clean
+                result), set <code>context.terminate = True</code> to stop the function-call
+                loop, or re-raise. Plain function-invocation filters give you the same hook for
+                non-auto invocations.
+              </p>
+              <p>
+                <b>LLM bad output.</b> Same filter pattern at the auto-invocation boundary —
+                the filter can swap or null out a malformed function call before it ever runs.
+                Beyond that, output validation is on the caller.
+              </p>
+              <p>
+                <b>Large context.</b> <code>ChatHistoryReducer</code> is the abstract base;
+                concrete implementations <code>ChatHistoryTruncationReducer</code> and
+                <code>ChatHistorySummarizationReducer</code> shrink the history before each
+                model call.
+              </p>
+              <p>
+                <b>Retries.</b> The reliability extension is pluggable —
+                <code>RetryMechanismBase</code> in <code>reliability/</code> is the contract.
+                The default ships as <code>PassThroughWithoutRetry</code> (i.e. <i>none</i>).
+                For real retries you supply your own implementation (typically wrapping
+                <code>tenacity</code> or polly-style policies).
+              </p>
+            </div>
+            <div>
+              <h4>Mode coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Tool fails</h5><p>Filter <code>try / except</code> around <code>await next()</code>; set <code>function_result</code> or <code>terminate</code>.</p></div>
+                <div class="ax"><h5>2 · LLM incorrect</h5><p>Auto-function-invocation filter sees the proposed call; can null it out or short-circuit.</p></div>
+                <div class="ax no"><h5>3 · Hallucination</h5><p>No detector. Filters can spot blatant cases (unknown function name) but that's it.</p></div>
+                <div class="ax"><h5>4 · Large context</h5><p><b>Native.</b> <code>ChatHistoryTruncationReducer</code> / <code>ChatHistorySummarizationReducer</code>.</p></div>
+              </div>
+              <h4>Auto-retry defaults</h4>
+              <p><b><code>PassThroughWithoutRetry</code> — none.</b> The reliability layer is pluggable but ships with a no-op default. You opt in by providing a <code>RetryMechanismBase</code> implementation.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">python/semantic_kernel/filters/auto_function_invocation/auto_function_invocation_context.py · <code>terminate</code>, <code>function_result</code><br>python/semantic_kernel/contents/history_reducer/{chat_history_truncation_reducer,chat_history_summarization_reducer}.py<br>python/semantic_kernel/reliability/{retry_mechanism_base,pass_through_without_retry}.py</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON TABLE ================= -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side · the four failure modes</h2>
+    <p class="lede">A plain-English at-a-glance summary. Read down a column for one framework's whole story; read across to compare. For the exact APIs and source paths, see the per-framework cards above.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="fw"><span class="dot" style="background:var(--lc)"></span> LangChain</th>
+            <th class="fw"><span class="dot" style="background:var(--lg)"></span> LangGraph</th>
+            <th class="fw"><span class="dot" style="background:var(--crew)"></span> CrewAI</th>
+            <th class="fw"><span class="dot" style="background:var(--adk)"></span> Google ADK</th>
+            <th class="fw"><span class="dot" style="background:var(--sk)"></span> Semantic Kernel</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">1 · When a tool throws an error</td>
+            <td>Catches the exception and feeds it back to the model as a message it can read, so the model can try a different approach. Optional automatic retry.</td>
+            <td>Catches the exception at the tool step. The step can retry itself automatically with exponential backoff.</td>
+            <td>Catches the exception and counts it against the agent's retry budget, then either retries or feeds the error back to the model.</td>
+            <td>Calls a developer-supplied error callback that decides how to recover — substitute a fake-success response, retry, or give up.</td>
+            <td>A wrapping filter catches the exception and chooses what happens next.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">2 · When the LLM returns bad output</td>
+            <td>Built-in parsers try to repair the broken output; a "fixer" agent can rewrite a response that doesn't parse.</td>
+            <td>A validation step re-prompts the model with the schema error attached. Structured output can be requested up front to avoid the problem.</td>
+            <td>A parser recognises common mistakes and re-prompts the model with the error explained. Capped by the iteration limit.</td>
+            <td>An error callback fires; the response can be validated against a schema before it's accepted.</td>
+            <td>A filter intercepts the model's tool choice and can reject or replace it before the call runs.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">3 · When the LLM hallucinates</td>
+            <td>No detection of its own. Schema validation on tool arguments catches the obvious cases.</td>
+            <td>No detection of its own. The same schema validation helps with malformed tool calls.</td>
+            <td><b>The only framework with first-class output validators</b> — you write a function, it runs after the task and rejects bad answers.</td>
+            <td>No detection of its own beyond output-schema validation.</td>
+            <td>No detection of its own. A filter can notice an unknown tool name and stop the call.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">4 · When the conversation gets too long</td>
+            <td>Built-in helpers either drop the oldest messages or summarise them with a separate model call.</td>
+            <td>You wire a pre-model hook that trims or summarises messages before every call. DIY, but well documented.</td>
+            <td>An opt-in setting auto-summarises when the context fills up.</td>
+            <td>A built-in compaction step kicks in once the prompt crosses a token threshold.</td>
+            <td>Pluggable "reducers" either truncate or summarise the chat history.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">What happens automatically (retries)</td>
+            <td>Off by default. The v1 tool-retry middleware ships a 2-attempt exponential-backoff policy you can enable.</td>
+            <td>Off by default. When enabled, 3 attempts with 2× backoff between each.</td>
+            <td>Built in — up to 25 reasoning iterations and 2 tool retries happen silently before anything bubbles up.</td>
+            <td>Live-streaming sessions reconnect automatically. Everything else is opt-in.</td>
+            <td><b>Nothing.</b> The default is no retry at all.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">What stops a runaway loop</td>
+            <td>Caps total reasoning steps and total wall-clock time.</td>
+            <td>Caps how deep the graph recursion can go.</td>
+            <td>Caps reasoning steps, requests per minute, and tool retries.</td>
+            <td>No flow-level cap. Relies on the per-call and per-tool timeouts you set yourself.</td>
+            <td>Caps how many auto-function-call rounds happen inside one model turn.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">How the error gets back to the LLM</td>
+            <td>Formats the error as a fake tool result and feeds it back on the next turn.</td>
+            <td>Wraps the error as a tool message marked as "error" and re-enters the agent step.</td>
+            <td>Adds the error as a corrective message in the conversation history.</td>
+            <td>The error callback can synthesise what looks like a successful response so the loop keeps going.</td>
+            <td>The filter writes a substitute result directly, replacing the failed call.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAKEAWAYS ================= -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Architect's cheat sheet</h2>
+    <p class="lede">Six things to remember when production starts hurting.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">DEFAULT</span>
+        <h4>1 · Most defaults are "no auto-retry"</h4>
+        <p>
+          Only <b>CrewAI</b> retries silently out of the box (<code>max_retry_limit=2</code>,
+          <code>max_iter=25</code>). LangGraph has retry as a NamedTuple but you have to attach
+          it. SK ships <code>PassThroughWithoutRetry</code>. ADK retries only the live-API
+          connection. LangChain v1 only retries if you add the middleware.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SHAPE</span>
+        <h4>2 · Errors come back to the LLM as messages</h4>
+        <p>
+          The dominant pattern across all five: serialize the exception to a string and put it
+          where the LLM expects the tool result. The model gets a chance to react — apologise,
+          try a different tool, or escalate. This is also why hallucinations on error formats
+          are common: the LLM sees plausible "human-friendly" error text.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">VALIDATION</span>
+        <h4>3 · Hallucination = your problem</h4>
+        <p>
+          None of the five ships a hallucination detector. The closest things are
+          <b>CrewAI's</b> <code>Task.guardrail(s)</code> (callable validators on output) and
+          tool-schema validation everywhere else. For factual hallucination you need
+          retrieval-grounding or a separate verifier.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CONTEXT</span>
+        <h4>4 · Context handling is mostly DIY</h4>
+        <p>
+          Only <b>ADK</b>'s <code>CompactionRequestProcessor</code> and <b>CrewAI</b>'s
+          <code>handle_context_length</code> auto-trigger. SK gives you reducers but you
+          attach them; LangChain offers <code>trim_messages</code> as a building block;
+          LangGraph documents the <code>pre_model_hook</code> pattern but ships nothing pre-baked.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">OBSERVABILITY</span>
+        <h4>5 · The error path is your trace path</h4>
+        <p>
+          Every framework's error hooks are also where you'd plug telemetry. ADK's
+          plugin-then-agent callback chain, LangGraph's RetryPolicy event stream, SK's filters,
+          CrewAI's step callbacks — pick the framework whose error surface aligns with how you
+          plan to trace.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RISK</span>
+        <h4>6 · Silent retries can hide real bugs</h4>
+        <p>
+          The same auto-retry that smooths transient flakiness will also paper over genuine
+          regressions in your tools or model. Whatever framework you pick, log every retry —
+          and alert on retry rate, not just failure rate.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Error-handling behaviour compiled from upstream source of LangChain, LangGraph, CrewAI,
+    Google ADK (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect
+    audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('a.pill').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

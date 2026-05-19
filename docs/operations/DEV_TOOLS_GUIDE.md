@@ -9,14 +9,14 @@ If you've ever had to keep a hand-written spec file in sync with your handlers, 
 > Everything in this guide is backed by working code in the repo:
 >
 > **Swagger UI (API exploration)**
-> - **Spec generator**: [`core/openapi.go`](../../core/openapi.go)
-> - **Swagger UI deployment**: [`examples/k8-deployment/swagger-ui.yaml`](../../examples/k8-deployment/swagger-ui.yaml)
-> - **Auto-discovery feed**: [`examples/registry-viewer-app/main.go`](../../examples/registry-viewer-app/main.go) (`handleSwaggerURLs`)
+> - **Spec generator**: [`core/openapi.go`](https://github.com/truvaagents/truva-g3/blob/main/core/openapi.go)
+> - **Swagger UI deployment**: [`examples/k8-deployment/swagger-ui.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/swagger-ui.yaml)
+> - **Auto-discovery feed**: [`examples/registry-viewer-app/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/main.go) (`handleSwaggerURLs`)
 > - **Live at**: [http://swagger.localhost](http://swagger.localhost)
 >
 > **Registry Viewer (runtime observability)**
-> - **App**: [`examples/registry-viewer-app/`](../../examples/registry-viewer-app)
-> - **Views**: [`examples/registry-viewer-app/static/js/views/`](../../examples/registry-viewer-app/static/js/views) — `registry.js`, `llm-debug.js`, `hitl.js`, `dag.js`, `memory.js`
+> - **App**: [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app)
+> - **Views**: [`examples/registry-viewer-app/static/js/views/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/static/js/views) — `registry.js`, `llm-debug.js`, `hitl.js`, `dag.js`, `memory.js`
 > - **Live at**: [http://registry.localhost](http://registry.localhost)
 >
 > Both URLs are available after running `examples/k8-deployment/setup-infrastructure.sh` against the local kind cluster. We recommend having the cluster running alongside this guide so you can click through while you read.
@@ -252,7 +252,7 @@ Important: this is **scaffolding for the repo's demo environment**, not part of 
 
 ### What Gets Deployed
 
-Three pieces live under [examples/k8-deployment/](../../examples/k8-deployment):
+Three pieces live under [examples/k8-deployment/](https://github.com/truvaagents/truva-g3/tree/main/examples/k8-deployment):
 
 | File | Purpose |
 |------|---------|
@@ -260,7 +260,7 @@ Three pieces live under [examples/k8-deployment/](../../examples/k8-deployment):
 | `ingress-infra.yaml` | Adds an Ingress rule exposing `swagger.localhost` → `swagger-ui` service (alongside the other infra ingress rules) |
 | `setup-infrastructure.sh` | Deploys Swagger UI alongside Redis, Prometheus, Grafana, etc. |
 
-Separately, the [registry-viewer](../../examples/registry-viewer-app) app exposes `GET /swagger-urls.json` — a list of every TruvaG3 service currently registered in Redis, formatted as Swagger UI's `urls` config array. The kind-cluster Swagger UI fetches this URL at page load to auto-populate its service dropdown.
+Separately, the [registry-viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) app exposes `GET /swagger-urls.json` — a list of every TruvaG3 service currently registered in Redis, formatted as Swagger UI's `urls` config array. The kind-cluster Swagger UI fetches this URL at page load to auto-populate its service dropdown.
 
 ### How Auto-Discovery Works
 
@@ -302,7 +302,7 @@ This means individual agents never need to know their public ingress hostname (e
 
 ### Dev Default: `TRUVAG3_ENABLE_OPENAPI=true`
 
-For the local kind cluster workflow to work out of the box, every tool and agent's ConfigMap needs `TRUVAG3_ENABLE_OPENAPI=true`. Rather than require developers to add this to ~40 `.env` files, the shared [setup-env-lib.sh](../../examples/k8-deployment/setup-env-lib.sh) library injects it automatically into every ConfigMap it creates. The injection is two-step:
+For the local kind cluster workflow to work out of the box, every tool and agent's ConfigMap needs `TRUVAG3_ENABLE_OPENAPI=true`. Rather than require developers to add this to ~40 `.env` files, the shared [setup-env-lib.sh](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/setup-env-lib.sh) library injects it automatically into every ConfigMap it creates. The injection is two-step:
 
 ```bash
 # Step 1 — while scanning the .env file, track whether the developer set
@@ -437,7 +437,7 @@ cd ../api-specs && git add . && git commit -m "Update weather-tool-v2 spec" && g
 
 If your team wants the kind-cluster experience — one Swagger UI dropdown showing every live service with auto-refresh on deploy — the registry-viewer's `/swagger-urls.json` feed is a reference implementation you can port to your environment.
 
-The endpoint reads service registrations from Redis (TruvaG3's default discovery backend) and emits the `{name, url}` array that Swagger UI expects. ~50 lines of Go in [examples/registry-viewer-app/main.go](../../examples/registry-viewer-app/main.go) (`handleSwaggerURLs`).
+The endpoint reads service registrations from Redis (TruvaG3's default discovery backend) and emits the `{name, url}` array that Swagger UI expects. ~50 lines of Go in [examples/registry-viewer-app/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/main.go) (`handleSwaggerURLs`).
 
 To adapt it:
 
@@ -515,7 +515,7 @@ Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger 
 
 Open [http://registry.localhost](http://registry.localhost) against the local kind cluster and you land in a single-page web app with five tabs across the top: **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, and **Memory**. Each tab is its own view of the live system, backed by different data in Redis (and Qdrant for memory), refreshing on demand or on a timer. Everything is read-only except for one narrow exception: the HITL view can submit Approve/Reject commands back to the agent that owns a pending checkpoint.
 
-The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](../../examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. What it demonstrates is that every piece of runtime state TruvaG3 produces is persisted in Redis (and optionally Qdrant) under well-known keys, and a read-only dashboard can be built on top of it in a few thousand lines of Go + vanilla JS.
+The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. What it demonstrates is that every piece of runtime state TruvaG3 produces is persisted in Redis (and optionally Qdrant) under well-known keys, and a read-only dashboard can be built on top of it in a few thousand lines of Go + vanilla JS.
 
 ### What It Shows You
 
@@ -555,7 +555,7 @@ For the views to show data, the underlying features have to be enabled in your c
 | View | What must be true for data to appear |
 |------|--------------------------------------|
 | Registry | Services must register with a shared Redis via `core.WithDiscovery(true, "redis")`. This is the default for every example tool/agent in the repo. |
-| LLM Debug | Two enablement paths, often both at once: (a) **Orchestrator-internal calls** (`plan_generation`, `tiered_selection`, `synthesis_streaming`, memory hooks, error analysis, etc.) populate the store automatically when the orchestrator is constructed with `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's `RedisLLMDebugStore` is wired up by the factory. (b) **Direct agent AI calls** (an agent that calls `ai.GenerateResponse(...)` outside of an orchestration step) populate the store only when the agent wraps its AI client with `ai.NewInstrumentedClient(..., debugRecorder, ...)` using `telemetry.NewRedisLLMCallRecorder`. See [`examples/agent-with-telemetry/research_agent.go`](../../examples/agent-with-telemetry/research_agent.go) for the wiring. Most chat agents in the kind cluster don't need (b) because their LLM calls go through the orchestrator and are captured by (a). |
+| LLM Debug | Two enablement paths, often both at once: (a) **Orchestrator-internal calls** (`plan_generation`, `tiered_selection`, `synthesis_streaming`, memory hooks, error analysis, etc.) populate the store automatically when the orchestrator is constructed with `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's `RedisLLMDebugStore` is wired up by the factory. (b) **Direct agent AI calls** (an agent that calls `ai.GenerateResponse(...)` outside of an orchestration step) populate the store only when the agent wraps its AI client with `ai.NewInstrumentedClient(..., debugRecorder, ...)` using `telemetry.NewRedisLLMCallRecorder`. See [`examples/agent-with-telemetry/research_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-telemetry/research_agent.go) for the wiring. Most chat agents in the kind cluster don't need (b) because their LLM calls go through the orchestrator and are captured by (a). |
 | HITL Interrupted | At least one agent must run the orchestration module with HITL enabled (`HITLConfig.Enabled: true` and a configured checkpoint store). See [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md). |
 | Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED` — the execution debug store and the LLM debug store live in separate Redis databases (DB 8 and DB 7) and are wired by separate factory branches. In practice you almost always want both enabled, because the DAG view's LLM Calls tab pulls data from the LLM debug store. See the per-agent enablement table below — not every example chat agent in the kind cluster has both set, and the asymmetric setups are the most common gotchas. |
 | Memory | Agents must be wired with shared memory via `memory.NewSharedBackends(...)` and `orchestration.BuildMemoryHooks(...)`. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). `TRUVAG3_AGENT_DOMAIN` must be set so the view has a domain to pick from in its dropdown. |
@@ -632,7 +632,7 @@ This is the flat, searchable log of every LLM interaction recorded into the LLM 
 
 **Typical workflow.** Something weird happened — an orchestrator picked the wrong tool, or the synthesis is nonsense, or the LLM refused a task. You open LLM Debug, find the request by ID (or by searching the conversation text), and walk through the interactions. Within seconds you can tell whether the problem was bad tool-selection prompting, a broken plan-generation output, a stale memory digest, or a retry loop that burned tokens without progressing.
 
-**Gotcha.** If a request is missing from this view entirely, check that the agent that handled it has `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's LLM debug store is gated on this env var. If the request appears but the **Source** column shows only an `orchestrator` badge (no agent name), the agent's direct AI client isn't wrapped with `InstrumentedAIClient`. That's fine for chat agents whose LLM calls all flow through the orchestrator (the orchestrator handles them), but it means a custom agent that calls `ai.GenerateResponse(...)` directly outside of an orchestration step won't have its direct calls attributed to it. See [`examples/agent-with-telemetry/research_agent.go`](../../examples/agent-with-telemetry/research_agent.go) for the wiring pattern.
+**Gotcha.** If a request is missing from this view entirely, check that the agent that handled it has `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's LLM debug store is gated on this env var. If the request appears but the **Source** column shows only an `orchestrator` badge (no agent name), the agent's direct AI client isn't wrapped with `InstrumentedAIClient`. That's fine for chat agents whose LLM calls all flow through the orchestrator (the orchestrator handles them), but it means a custom agent that calls `ai.GenerateResponse(...)` directly outside of an orchestration step won't have its direct calls attributed to it. See [`examples/agent-with-telemetry/research_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-telemetry/research_agent.go) for the wiring pattern.
 
 ### 8.3 HITL Interrupted View — Pending Approvals
 
@@ -813,26 +813,26 @@ When you're stuck and not sure which tab to open, scan this table.
 ## 10. See Also
 
 **Framework contract (what ships in core):**
-- **[`core/openapi.go`](../../core/openapi.go)** — Spec generator and `/openapi.json` HTTP handler. Only registered when `EnableOpenAPI` is true.
-- **[`core/config.go`](../../core/config.go)** — `HTTPConfig.EnableOpenAPI` field, `WithOpenAPI(bool)` option, and `TRUVAG3_ENABLE_OPENAPI` env var loader. Default is `false`.
-- **[`core/tool.go`](../../core/tool.go)** / **[`core/agent.go`](../../core/agent.go)** — `/openapi.json` endpoint gate in `setupStandardEndpoints()` / `Start()`. Also the `/api/capabilities/{name}/schema` endpoint registration in `RegisterCapability()` — note that this one is **NOT** gated by `EnableOpenAPI` (see [Section 6](#6-security-considerations)).
-- **[`core/openapi_test.go`](../../core/openapi_test.go)** — Unit tests for the on/off gate (`TestOpenAPIEndpoint_*`) and the spec generator (`TestGenerateOpenAPISpec_*`).
+- **[`core/openapi.go`](https://github.com/truvaagents/truva-g3/blob/main/core/openapi.go)** — Spec generator and `/openapi.json` HTTP handler. Only registered when `EnableOpenAPI` is true.
+- **[`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go)** — `HTTPConfig.EnableOpenAPI` field, `WithOpenAPI(bool)` option, and `TRUVAG3_ENABLE_OPENAPI` env var loader. Default is `false`.
+- **[`core/tool.go`](https://github.com/truvaagents/truva-g3/blob/main/core/tool.go)** / **[`core/agent.go`](https://github.com/truvaagents/truva-g3/blob/main/core/agent.go)** — `/openapi.json` endpoint gate in `setupStandardEndpoints()` / `Start()`. Also the `/api/capabilities/{name}/schema` endpoint registration in `RegisterCapability()` — note that this one is **NOT** gated by `EnableOpenAPI` (see [Section 6](#6-security-considerations)).
+- **[`core/openapi_test.go`](https://github.com/truvaagents/truva-g3/blob/main/core/openapi_test.go)** — Unit tests for the on/off gate (`TestOpenAPIEndpoint_*`) and the spec generator (`TestGenerateOpenAPISpec_*`).
 
 **Swagger UI scaffolding (local kind cluster only):**
-- **[`examples/k8-deployment/swagger-ui.yaml`](../../examples/k8-deployment/swagger-ui.yaml)** — Swagger UI Deployment + Service + ConfigMap + nginx proxy for the local kind cluster.
-- **[`examples/registry-viewer-app/main.go`](../../examples/registry-viewer-app/main.go)** — `handleSwaggerURLs` is the reference implementation for [Pattern 5](#pattern-5-dynamic-multi-service-aggregation-the-pattern-we-ship). Reads from Redis and emits a Swagger UI compatible `urls` feed.
-- **[`examples/k8-deployment/setup-env-lib.sh`](../../examples/k8-deployment/setup-env-lib.sh)** — `truvag3_create_configmap` injects `TRUVAG3_ENABLE_OPENAPI=true` for every tool deployed via the example setup scripts. Dev-workflow only.
+- **[`examples/k8-deployment/swagger-ui.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/swagger-ui.yaml)** — Swagger UI Deployment + Service + ConfigMap + nginx proxy for the local kind cluster.
+- **[`examples/registry-viewer-app/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/main.go)** — `handleSwaggerURLs` is the reference implementation for [Pattern 5](#pattern-5-dynamic-multi-service-aggregation-the-pattern-we-ship). Reads from Redis and emits a Swagger UI compatible `urls` feed.
+- **[`examples/k8-deployment/setup-env-lib.sh`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/setup-env-lib.sh)** — `truvag3_create_configmap` injects `TRUVAG3_ENABLE_OPENAPI=true` for every tool deployed via the example setup scripts. Dev-workflow only.
 
 **Registry Viewer implementation:**
-- **[`examples/registry-viewer-app/`](../../examples/registry-viewer-app)** — Full app source (Go backend + vanilla-JS frontend).
-- **[`examples/registry-viewer-app/main.go`](../../examples/registry-viewer-app/main.go)** — Backend: Redis scan loops, HTTP handlers for every view's data, HITL command proxy.
-- **[`examples/registry-viewer-app/static/js/views/registry.js`](../../examples/registry-viewer-app/static/js/views/registry.js)** — Registry view (§8.1).
-- **[`examples/registry-viewer-app/static/js/views/llm-debug.js`](../../examples/registry-viewer-app/static/js/views/llm-debug.js)** — LLM Debug view (§8.2).
-- **[`examples/registry-viewer-app/static/js/views/hitl.js`](../../examples/registry-viewer-app/static/js/views/hitl.js)** — HITL Interrupted view (§8.3).
-- **[`examples/registry-viewer-app/static/js/views/dag.js`](../../examples/registry-viewer-app/static/js/views/dag.js)** — Execution DAG view (§8.4) — the largest view, ~3,300 lines.
-- **[`examples/registry-viewer-app/static/js/views/memory.js`](../../examples/registry-viewer-app/static/js/views/memory.js)** — Memory view (§8.5).
-- **[`examples/registry-viewer-app/k8-deployment.yaml`](../../examples/registry-viewer-app/k8-deployment.yaml)** — Kubernetes deployment and service.
-- **[`examples/k8-deployment/ingress-infra.yaml`](../../examples/k8-deployment/ingress-infra.yaml)** — Ingress rule exposing `registry.localhost`.
+- **[`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app)** — Full app source (Go backend + vanilla-JS frontend).
+- **[`examples/registry-viewer-app/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/main.go)** — Backend: Redis scan loops, HTTP handlers for every view's data, HITL command proxy.
+- **[`examples/registry-viewer-app/static/js/views/registry.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/registry.js)** — Registry view (§8.1).
+- **[`examples/registry-viewer-app/static/js/views/llm-debug.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/llm-debug.js)** — LLM Debug view (§8.2).
+- **[`examples/registry-viewer-app/static/js/views/hitl.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/hitl.js)** — HITL Interrupted view (§8.3).
+- **[`examples/registry-viewer-app/static/js/views/dag.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/dag.js)** — Execution DAG view (§8.4) — the largest view, ~3,300 lines.
+- **[`examples/registry-viewer-app/static/js/views/memory.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/memory.js)** — Memory view (§8.5).
+- **[`examples/registry-viewer-app/k8-deployment.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/k8-deployment.yaml)** — Kubernetes deployment and service.
+- **[`examples/k8-deployment/ingress-infra.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/ingress-infra.yaml)** — Ingress rule exposing `registry.localhost`.
 
 **Related guides:**
 - **[Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md)** — How to write good `InputSummary` and `OutputSummary` when registering capabilities. Spec quality depends on this.
@@ -841,4 +841,4 @@ When you're stuck and not sure which tab to open, scan this table.
 - **[Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md)** — How HITL checkpoints work. The HITL Interrupted view in the Registry Viewer is an operational dashboard for the checkpoints this guide tells you how to create.
 - **[Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)** — How W3C trace IDs flow through TruvaG3. The DAG view surfaces trace IDs so you can pivot into Jaeger for even lower-level detail.
 - **[Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md)** — Full list of `TRUVAG3_*` environment variables, including `TRUVAG3_ENABLE_OPENAPI`, `TRUVAG3_LLM_DEBUG_ENABLED`, and `TRUVAG3_AGENT_DOMAIN`.
-- **[Architecture Overview](../overview/ARCHITECTURE.md)** — Framework-wide architectural overview.
+- **[Architecture Overview](https://github.com/truvaagents/truva-g3/blob/main/docs/overview/ARCHITECTURE.md)** — Framework-wide architectural overview.

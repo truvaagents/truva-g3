@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 4 · Testing &amp; evaluation — Operational Excellence in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #f472b6;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #3a1e2e; border-color: var(--ch); color: #fbcfe8; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #fbcfe8 60%, #f472b6 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #3a1e2e; border: 1px solid var(--ch); color: #fbcfe8; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #3a1e2e; color: #fbcfe8; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a class="active" href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 4 of 5 · Operational Excellence</div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Testing &amp; evaluation</h1>
+    <p class="subtitle">
+      Testing an LLM-driven agent is fundamentally harder than testing an ordinary service.
+      The model is non-deterministic, tools call live external systems, and "quality" is
+      partly subjective. Every framework has to give you some answer for three things: how to
+      write a unit test that doesn't hit a real model, how to score quality across a
+      golden-set of test cases, and how to reproduce a bad production run locally. This
+      chapter walks through each in plain language and compares the surfaces across the ten
+      frameworks.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#mocks">Mock LLMs (and tools)</a></li>
+        <li><a href="#evals">Built-in eval frameworks</a></li>
+        <li><a href="#replay">Replay &amp; regression testing</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- MOCKS -->
+<section id="mocks">
+  <div class="container">
+    <h2><span class="num">1</span>Mock LLMs (and tools)</h2>
+    <p class="lede">
+      You can't run your unit-test suite against OpenAI in CI — it's expensive, flaky, and
+      non-deterministic. So you need a fake model: something with the same interface as the
+      real chat client but returning canned responses you control. Three of the ten frameworks
+      ship a mock LLM in their test toolkit; the rest expect you to reach for the host
+      language's general-purpose mocking library.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        You're testing an agent that classifies customer questions. The unit test wants to
+        check that when the model returns "billing", the agent routes to the billing tool.
+        With a built-in fake, the test reads:
+        <code>agent = make_agent(model=FakeListChatModel(responses=["billing"]))</code> and
+        runs offline in milliseconds. With no built-in fake, you reach for
+        <code>unittest.mock</code> / <code>Moq</code> / <code>Mockito</code> and patch the
+        chat-client interface yourself — which works but every team rebuilds the same
+        mock-builder.
+      </p>
+      <p>
+        Tool mocking is a separate matter. <b>None</b> of the ten frameworks ships a mock-tool
+        primitive — every team uses its host language's mock library when a tool depends on a
+        slow or external service. The pattern is uniform enough that the absence isn't a
+        problem in practice; it's just one more piece of test scaffolding you write yourself.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Built-in mock LLM?</th><th>What it does</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Yes — five variants.</td>
+            <td><code>FakeListChatModel</code> cycles a list of string responses; <code>FakeMessagesListChatModel</code> cycles full <code>BaseMessage</code> objects; <code>GenericFakeChatModel</code> supports streaming tokens; <code>ParrotFakeChatModel</code> echoes input.</td>
+            <td><code>core/langchain_core/language_models/fake_chat_models.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Yes — extends LangChain's primitives.</td>
+            <td><code>FakeChatModel</code> in the test suite extends <code>GenericFakeChatModel</code>; supports <code>bind_tools()</code> for tool-use scenarios.</td>
+            <td><code>libs/langgraph/tests/fake_chat.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>Tests use <code>unittest.mock</code> to patch the LLM client directly.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>Tests use fixtures and <code>unittest.mock</code>; the eval framework is the canonical answer for behavioural tests.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>Tests use <code>unittest.mock</code>; <code>tests/integration/fakes/</code> contains plugin stubs but no LLM doubles.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>No.</td>
+            <td>Tests use <code>sinon</code>/<code>vitest.mock</code> to stub the chat client.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>No.</td>
+            <td>Tests use <b>Moq</b> to stub <code>IChatClient</code>. <code>FakeAuthenticationTokenProvider</code> exists for auth, but no fake chat client.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Yes — marked <code>@Experimental</code>.</td>
+            <td><code>ChatModelMock</code> implements the <code>ChatModel</code> interface and returns static responses; <code>StreamingChatModelMock</code> for the streaming variant; both record all invocations for assertion.</td>
+            <td><code>langchain4j-core/src/test/java/dev/langchain4j/model/chat/mock/ChatModelMock.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>No dedicated mock.</td>
+            <td>Tests define a model with a programmable callback (<code>func(ctx, *ModelRequest, ModelStreamCallback) (*ModelResponse, error)</code>), giving you a one-off fake per test.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No.</td>
+            <td>Tests implement the <code>CompletionModel</code> trait yourself for each test case — Rust's standard pattern for trait-based fakes.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Three frameworks (LangChain, LangGraph, LangChain4j) save you the small but repeat
+        work of building a fake chat client. LangChain ships the most variants — list-cycling,
+        message-cycling, streaming, parrot-style echo — covering most of the test scenarios
+        you'll write. The other seven expect you to reach for the host language's mocking
+        library (<code>unittest.mock</code>, <code>Moq</code>, <code>sinon</code>,
+        <code>vitest</code>, <code>Mockito</code>, custom Go callbacks, custom Rust trait
+        impls). Either approach works; only the convenience differs.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- EVALS -->
+<section id="evals">
+  <div class="container">
+    <h2><span class="num">2</span>Built-in eval frameworks</h2>
+    <p class="lede">
+      You changed a prompt. Did the agent get better or worse on the dozen scenarios that
+      matter? An eval framework gives you a way to express "run the agent on these test cases
+      and score each one" without rebuilding the runner, the metric, and the comparison view
+      yourself. Six of the ten frameworks ship a meaningful eval framework — five mature,
+      plus CrewAI's experimental module. The others leave you to wire something like Promptfoo,
+      DeepEval, or your own scaffolding.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        You're about to ship a prompt change. Before merging the PR, you want to know: did
+        this change improve quality on the 50 test scenarios you've curated, or regress? With
+        a built-in eval framework, you have a list of <code>EvalCase</code> objects (input,
+        expected output, expected tool calls), pick scorers (correctness, faithfulness,
+        tool-call accuracy), run the suite, and get a pass/fail report comparing this run to
+        the baseline. Without one, you build the runner, the scoring logic (often calling
+        another LLM as a judge), and the comparison report from scratch — which most teams do
+        in a Jupyter notebook that becomes load-bearing infrastructure.
+      </p>
+      <p>
+        Two important sub-features: <b>LLM-as-judge</b> (using a model to score whether an
+        answer is good) and <b>golden-set replay</b> (re-running a curated set of test cases
+        against the agent). Most production-grade eval frameworks bundle both.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Built-in eval framework?</th><th>What ships</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Yes — comprehensive.</td>
+            <td>Sub-packages for comparison, criteria-based scoring, embedding distance, exact-match, regex-match, QA, parsing, agent-trajectory; LLM-as-judge built in. LangSmith adds hosted experiment tracking.</td>
+            <td><code>libs/langchain/langchain_classic/evaluation/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>No native — uses LangChain's evaluation module.</td>
+            <td>Imports LangChain's scorers; LangGraph-specific evals for trajectory replay typically run via LangSmith.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Yes — marked experimental.</td>
+            <td><code>AgentEvaluator</code> with six concrete evaluators (<code>GoalAlignmentEvaluator</code>, <code>ParameterExtractionEvaluator</code>, <code>ReasoningEfficiencyEvaluator</code>, <code>SemanticQualityEvaluator</code>, <code>ToolInvocationEvaluator</code>, <code>ToolSelectionEvaluator</code>); <code>ExperimentRunner</code>; LLM-as-judge via the agent's own LLM.</td>
+            <td><code>src/crewai/experimental/evaluation/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Yes — large dedicated module.</td>
+            <td><code>EvalCase</code> / <code>EvalSet</code> definitions, <code>AgentEvaluator</code>, trajectory evaluator, rubric-based evaluator, hallucination detector, conversation-scenarios generator, simulation submodule, LLM-as-judge implementation.</td>
+            <td><code>src/google/adk/evaluation/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>Tests use <code>pytest</code>; the .NET SK has separate evaluation tooling.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Yes — dedicated package.</td>
+            <td>Twelve built-in scorers: answer-relevancy, answer-similarity, bias, context-precision, context-relevance, faithfulness, hallucination, noise-sensitivity, prompt-alignment, tool-call-accuracy, toxicity, trajectory. Split into <code>llm/</code> (judge-driven) and <code>code/</code> (deterministic) trees.</td>
+            <td><code>packages/evals/src/scorers/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Yes — integrated with Microsoft.Extensions.AI.Evaluation.</td>
+            <td><code>IAgentEvaluator</code>, <code>EvalCheck</code>, <code>EvalItem</code>, <code>FunctionEvaluator</code>, <code>ExpectedToolCall</code>, <code>IConversationSplitter</code>; <code>numRepetitions</code> parameter for consistency runs.</td>
+            <td><code>dotnet/src/Microsoft.Agents.AI/Evaluation/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>No.</td>
+            <td>Tests use JUnit + Mockito; quality regression is not framework-managed.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Yes — plugin-based.</td>
+            <td>Built-in evaluators: <code>EvaluatorDeepEqual</code>, <code>EvaluatorRegex</code>, <code>EvaluatorJsonata</code>; custom metrics via <code>MetricConfig</code>; LLM-as-judge configurable.</td>
+            <td><code>go/plugins/evaluators/evaluators.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No.</td>
+            <td>Tests use Rust's built-in test harness; quality regression is not framework-managed.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Five frameworks ship mature eval frameworks: LangChain, ADK, Mastra, MS Agent
+        Framework, and Genkit Go. The breadth varies — LangChain has the largest scorer
+        catalogue and the longest-running ecosystem; ADK has the most production-grade
+        artifacts (named <code>EvalCase</code> / <code>EvalSet</code> types, scenario generator,
+        simulation submodule); Mastra has the broadest scorer count (twelve including
+        toxicity, bias, hallucination, trajectory); MS Agent Framework integrates with
+        Microsoft.Extensions.AI.Evaluation; Genkit Go is the smallest but covers the basics.
+        CrewAI ships a sixth eval framework under <code>experimental/evaluation/</code> —
+        comparable in shape (multiple metric evaluators, an experiment runner) but flagged
+        experimental.
+      </p>
+      <p>
+        The other four (LangGraph leans on LangChain's; SK Python / LangChain4j / Rig ship
+        nothing) expect you to wire an external eval tool — Promptfoo, DeepEval, Ragas, or a
+        Jupyter notebook with custom scoring. That works, but you lose the framework's
+        awareness of how to run agents reproducibly under test conditions.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- REPLAY -->
+<section id="replay">
+  <div class="container">
+    <h2><span class="num">3</span>Replay &amp; regression testing</h2>
+    <p class="lede">
+      A user reports a bad answer in production. You want to reproduce it locally — same
+      prompts, same tool responses, same model state — so you can put a debugger inside the
+      agent and figure out what went wrong. That's <i>replay</i>: re-executing a recorded run
+      offline. Two of the ten frameworks ship something close to it; the others ask you to
+      reconstruct from logs.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        At 9 AM, a customer escalates: the bot recommended an expired promo code. With
+        replay, you pull the trace for that conversation, load the stored state into your
+        local agent, and step through what happened — same model responses, same tool
+        outputs, same intermediate state. You can see that the model misread a context field
+        on step 3 and confidently propagated the wrong value to step 4. Without replay, you
+        eyeball the trace, hand-craft a Python script that matches the prompt, and hope you
+        reproduce the failure.
+      </p>
+      <p>
+        Replay also matters for regression. Before merging a prompt change, you want to
+        re-run it against the same scenarios that have failed before — not just synthetic
+        evals, but real captured production runs. The frameworks that ship replay are the
+        ones that make this realistic.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Replay support?</th><th>How it works</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Indirect — through LangSmith / LangGraph checkpointers.</td>
+            <td>LangSmith captures runs and supports re-execution from the dashboard; pure LangChain has no native replay primitive.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Yes — first-class via checkpointers.</td>
+            <td>Every super-step writes to a checkpointer (memory / SQLite / Postgres). <code>graph.get_state(config)</code> retrieves any snapshot; you can resume execution from that point or replay the whole thread.</td>
+            <td><code>libs/checkpoint/langgraph/checkpoint/base/__init__.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>State lives in-memory in the crew object; nothing is persisted in a way that supports replay.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Yes — via eval cases.</td>
+            <td><code>EvalCase</code> in <code>eval_case.py</code> defines a replayable case (input + expected trajectory). The eval suite re-runs cases against an agent.</td>
+            <td><code>src/google/adk/evaluation/eval_case.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>No.</td>
+            <td>No native replay; <code>ChatHistory</code> can be passed in but reconstruction is manual.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Indirect — through stored thread history.</td>
+            <td>Memory thread state is persisted (working + observational memory); you can hydrate an agent with a thread and resume, but replay-as-debug isn't a first-class workflow.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>No native replay.</td>
+            <td>Eval framework supports <code>numRepetitions</code> for consistency runs but there's no record/replay surface.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>No.</td>
+            <td>State is held by host application; replay is on you.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Indirect — via tracing.</td>
+            <td>The trace store captures execution history; reconstruction from traces is manual.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>No.</td>
+            <td>Stateless library; state and replay belong to the host application.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        First-class replay belongs to two frameworks: LangGraph (via the checkpointer model
+        — every super-step is recorded and any snapshot is replayable) and ADK (via the eval
+        framework's <code>EvalCase</code> abstraction, which defines a replayable scenario
+        as the unit of testing). LangChain inherits LangGraph's path through LangSmith. The
+        other six frameworks have no first-class replay — production debugging falls back to
+        reading traces and reconstructing what happened by hand.
+      </p>
+      <p>
+        On <b>snapshot testing</b>: only LangChain and LangGraph use snapshot testing in
+        their own test suites (via the <code>syrupy</code> library; LangGraph stores
+        <code>.ambr</code> files at <code>tests/__snapshots__/</code>). It's used for
+        framework-internal schema validation, not for agent-output regression — but it's the
+        only place where snapshot testing as a pattern is visible across the catalog.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on testing surfaces across the ten frameworks.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">MOCK LLMS</span>
+        <h4>1 · Three frameworks ship a mock LLM</h4>
+        <p>
+          LangChain (five fake-model variants in <code>fake_chat_models.py</code>), LangGraph
+          (extends LangChain's via <code>tests/fake_chat.py</code>), and LangChain4j
+          (<code>ChatModelMock</code> + <code>StreamingChatModelMock</code>, marked
+          <code>@Experimental</code>). The other seven expect you to reach for the host
+          language's mocking library.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">MOCK TOOLS</span>
+        <h4>2 · Tool mocking is universally absent</h4>
+        <p>
+          None of the ten frameworks ships a mock-tool primitive. Every team uses
+          <code>unittest.mock</code> / <code>Moq</code> / <code>Mockito</code> /
+          <code>sinon</code> and stubs the tool function directly. Uniformly absent across
+          the catalog — and uniformly easy to work around.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">EVALS</span>
+        <h4>3 · Six frameworks ship eval frameworks (five mature)</h4>
+        <p>
+          LangChain (longest-running scorer catalog), ADK (largest production-grade module
+          with <code>EvalCase</code>/<code>EvalSet</code>, scenario generator, simulation),
+          Mastra (twelve scorers including toxicity, bias, hallucination, trajectory),
+          MS Agent Framework (integrated with Microsoft.Extensions.AI.Evaluation), Genkit Go
+          (plugin-based). CrewAI's experimental module adds a sixth at
+          <code>experimental/evaluation/</code>.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">JUDGE</span>
+        <h4>4 · LLM-as-judge ships in every eval framework that ships</h4>
+        <p>
+          All six frameworks with eval support include an LLM-as-judge implementation — using
+          a separate model call to score whether an answer is correct, faithful, or satisfies
+          a rubric. The pattern has converged: it's now what production-grade eval frameworks
+          look like.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">REPLAY</span>
+        <h4>5 · First-class replay only in LangGraph and ADK</h4>
+        <p>
+          LangGraph's checkpointer model writes every super-step and lets
+          <code>get_state()</code> rehydrate any snapshot. ADK's <code>EvalCase</code>
+          abstraction defines replayable scenarios as the unit of testing. Everywhere else,
+          reproducing a production run means reading traces and hand-crafting the inputs.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SNAPSHOT</span>
+        <h4>6 · Snapshot testing is a LangChain-family habit</h4>
+        <p>
+          LangChain and LangGraph use the <code>syrupy</code> library for snapshot tests in
+          their own test suites; LangGraph stores <code>.ambr</code> files at
+          <code>tests/__snapshots__/</code>. The pattern is for framework-internal schema
+          validation rather than agent-output regression — but it's the only place where
+          snapshot testing shows up as a discipline across the catalog.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-index.html">← Back to index</a> ·
+    Previous: <a href="operational-excellence-deployment.html">Chapter 3 · Deployment</a> ·
+    Next: <a href="operational-excellence-configuration.html">Chapter 5 · Configuration →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -38,7 +38,7 @@ This guide ensures every TruvaG3 component logs in a consistent, useful way.
 
 ## 2. The Logger Interface
 
-TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go`](../../core/interfaces.go) (search for `type Logger interface`). This design:
+TruvaG3 uses a custom `Logger` interface defined in [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go) (search for `type Logger interface`). This design:
 
 - **Avoids vendor lock-in** (not tied to zap, logrus, zerolog, etc.)
 - **Is minimal and composable** (easy to test and mock)
@@ -74,7 +74,7 @@ type Logger interface {
 
 ### Default Logger Behavior
 
-When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go`](../../core/interfaces.go) — search for `type NoOpLogger`). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
+When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go) — search for `type NoOpLogger`). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
 
 ---
 
@@ -95,7 +95,7 @@ TruvaG3 uses four standard log levels, from most to least verbose:
 DEBUG (0) → INFO (1) → WARN (2) → ERROR (3)
 ```
 
-> **Source**: [`core/config.go`](../../core/config.go) (`LogLevel` constants)
+> **Source**: [`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) (`LogLevel` constants)
 
 When you set `TRUVAG3_LOG_LEVEL=INFO`, you see INFO, WARN, and ERROR logs. DEBUG logs are hidden.
 
@@ -121,7 +121,7 @@ TruvaG3 logging is configured through environment variables:
 | `TRUVAG3_LOG_FORMAT` | json, text | json | Output format |
 | `TRUVAG3_DEBUG` | true, false | false | Enable debug mode |
 
-> **Source**: [`core/config.go`](../../core/config.go) (`LoggingConfig struct`)
+> **Source**: [`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) (`LoggingConfig struct`)
 
 ### Format Behavior
 
@@ -658,7 +658,7 @@ The `WithContext` methods enable trace-log correlation. Here's how it works:
 2. **Context** carries the trace ID and span ID through your code
 3. **WithContext methods** extract and include these IDs in log output
 
-> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](../../telemetry/trace_context.go) and [`telemetry/framework_integration.go`](../../telemetry/framework_integration.go)
+> **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](https://github.com/truvaagents/truva-g3/blob/main/telemetry/trace_context.go) and [`telemetry/framework_integration.go`](https://github.com/truvaagents/truva-g3/blob/main/telemetry/framework_integration.go)
 
 ### What Your Logs Look Like
 
@@ -1065,13 +1065,13 @@ When implementing HITL-related logging:
 
 ### Reference Implementation: agent-with-human-approval
 
-The [`examples/agent-with-human-approval`](../../examples/agent-with-human-approval) directory contains the reference implementation for HITL logging patterns. Key files to study:
+The [`examples/agent-with-human-approval`](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-human-approval) directory contains the reference implementation for HITL logging patterns. Key files to study:
 
 | File | Purpose |
 |------|---------|
-| [`handlers.go`](../../examples/agent-with-human-approval/handlers.go) | `handleResumeSSE` - Shows complete trace correlation setup with priority-based `original_request_id` resolution |
-| [`handlers_auto_resume.go`](../../examples/agent-with-human-approval/handlers_auto_resume.go) | `handleAutoResumeSSE` - Expiry-triggered auto-resume with same trace correlation patterns |
-| [`hitl_setup.go`](../../examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
+| [`handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) | `handleResumeSSE` - Shows complete trace correlation setup with priority-based `original_request_id` resolution |
+| [`handlers_auto_resume.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go) | `handleAutoResumeSSE` - Expiry-triggered auto-resume with same trace correlation patterns |
+| [`hitl_setup.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
 
 **Key patterns demonstrated:**
 
@@ -1112,7 +1112,7 @@ When your app emits a log line, two fields carry identity:
 - **`service`** — the string your application writes in the JSON body. Set at framework
   construction time from `cfg.Name`, which is configured via `core.WithName("…")` in
   your `main.go` (or the `TRUVAG3_AGENT_NAME` env var if you prefer env-based config).
-  See [core/config.go](../../core/config.go). Shown in every log line for
+  See [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go). Shown in every log line for
   human readability.
 - **`service_name`** — an indexed Loki stream label derived from the pod's
   `metadata.labels.app` value by the cluster-wide OTel log collector (via the
@@ -1199,7 +1199,7 @@ logger.Info("Request completed", map[string]interface{}{
 
 ## 11. Required Patterns for Framework-Level Logging
 
-This section documents **required patterns** that MUST be followed when implementing logging in TruvaG3 framework modules. These patterns are used throughout [orchestrator.go](../../orchestration/orchestrator.go) and [executor.go](../../orchestration/executor.go).
+This section documents **required patterns** that MUST be followed when implementing logging in TruvaG3 framework modules. These patterns are used throughout [orchestrator.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/orchestrator.go) and [executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go).
 
 ### Pattern 1: Logger Nil Check (REQUIRED)
 
@@ -1463,7 +1463,7 @@ Logging integrates with TruvaG3's telemetry system for metrics and tracing.
 
 ### Three-Layer Observability
 
-TruvaG3's `ProductionLogger` (defined in [`core/config.go`](../../core/config.go) — search for `type ProductionLogger`) implements three layers:
+TruvaG3's `ProductionLogger` (defined in [`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) — search for `type ProductionLogger`) implements three layers:
 
 1. **Layer 1 - Console Output**: Always works, immediate visibility
 2. **Layer 2 - Metrics Emission**: When telemetry is initialized
@@ -1518,7 +1518,7 @@ func initTelemetry(serviceName string) {
 
 When telemetry is enabled, logs automatically emit metrics. Only specific low-cardinality fields are used as metric labels to prevent metric explosion:
 
-**Allowed label fields** (defined in [`core/config.go`](../../core/config.go)):
+**Allowed label fields** (defined in [`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go)):
 - `operation`
 - `status`
 - `error_type`
@@ -1955,7 +1955,7 @@ kubectl logs -n truvag3-examples -l app=research-agent-telemetry --since=60s | \
 
 ### The ComponentAwareLogger Interface
 
-The component segregation is powered by the `ComponentAwareLogger` interface defined in [`core/interfaces.go`](../../core/interfaces.go):
+The component segregation is powered by the `ComponentAwareLogger` interface defined in [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go):
 
 ```go
 // ComponentAwareLogger extends Logger with component context support
@@ -2202,7 +2202,7 @@ Following these guidelines ensures your logs are useful in production, easy to s
 ## See Also
 
 - **[DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md)** - Complete guide for distributed tracing setup, including TracingMiddleware, TracedHTTPClient, Jaeger/OTEL infrastructure, and trace visualization
-- **[orchestration/hitl_interfaces.go](../../orchestration/hitl_interfaces.go)** - HITL interfaces including `ExecutionCheckpoint` with `OriginalRequestID` field
-- **[telemetry/trace_context.go](../../telemetry/trace_context.go)** - Source for `GetTraceContext()`, `AddSpanEvent()`, `RecordSpanError()`
-- **[core/config.go](../../core/config.go)** - ProductionLogger implementation and `WithComponent()` method
-- **[core/interfaces.go](../../core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions
+- **[orchestration/hitl_interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_interfaces.go)** - HITL interfaces including `ExecutionCheckpoint` with `OriginalRequestID` field
+- **[telemetry/trace_context.go](https://github.com/truvaagents/truva-g3/blob/main/telemetry/trace_context.go)** - Source for `GetTraceContext()`, `AddSpanEvent()`, `RecordSpanError()`
+- **[core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go)** - ProductionLogger implementation and `WithComponent()` method
+- **[core/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions

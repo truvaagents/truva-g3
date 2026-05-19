@@ -7,13 +7,13 @@ Auto-discovery is what lets you deploy a new tool to your cluster and have exist
 > **Working Example**
 >
 > Everything in this guide comes from fully working, in-tree implementations:
-> - **Tool that registers** (passive, can't discover): [`examples/weather-tool-v2/`](../../examples/weather-tool-v2/)
-> - **Agent that discovers** (active, registers + finds): [`examples/travel-chat-agent/`](../../examples/travel-chat-agent/)
-> - **Single-process tool+agent demo**: [`examples/agent-example/`](../../examples/agent-example/)
-> - **Live registry inspection UI**: [`examples/registry-viewer-app/`](../../examples/registry-viewer-app/)
-> - **Default infrastructure** (Redis/Valkey): [`examples/k8-deployment/`](../../examples/k8-deployment/)
-> - **Core interfaces**: [`core/interfaces.go`](../../core/interfaces.go) (search for `Registry`, `Discovery`)
-> - **Default backend**: [`core/redis_registry.go`](../../core/redis_registry.go), [`core/redis_discovery.go`](../../core/redis_discovery.go)
+> - **Tool that registers** (passive, can't discover): [`examples/weather-tool-v2/`](https://github.com/truvaagents/truva-g3/tree/main/examples/weather-tool-v2/)
+> - **Agent that discovers** (active, registers + finds): [`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent/)
+> - **Single-process tool+agent demo**: [`examples/agent-example/`](https://github.com/truvaagents/truva-g3/tree/main/examples/agent-example/)
+> - **Live registry inspection UI**: [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/)
+> - **Default infrastructure** (Redis/Valkey): [`examples/k8-deployment/`](https://github.com/truvaagents/truva-g3/tree/main/examples/k8-deployment/)
+> - **Core interfaces**: [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go) (search for `Registry`, `Discovery`)
+> - **Default backend**: [`core/redis_registry.go`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go), [`core/redis_discovery.go`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_discovery.go)
 
 ## Table of Contents
 
@@ -37,7 +37,8 @@ Auto-discovery is what lets you deploy a new tool to your cluster and have exist
   - [Heartbeat Interval](#heartbeat-interval)
   - [What the Heartbeat Actually Does](#what-the-heartbeat-actually-does)
 - [Multi-Replica Behaviour](#multi-replica-behaviour)
-  - [Each Replica Gets a Unique ID](#each-replica-gets-a-unique-id)
+  - [Mode 1 — Service-Scoped Registration (the K8s default)](#mode-1--service-scoped-registration-the-k8s-default)
+  - [Mode 2 — Instance-Scoped Registration (non-K8s, or K8s without `TRUVAG3_K8S_SERVICE_NAME`)](#mode-2--instance-scoped-registration-non-k8s-or-k8s-without-truvag3_k8s_service_name)
   - [Last-Writer-Wins on Shared Indexes](#last-writer-wins-on-shared-indexes)
   - [What Happens When One Replica Crashes](#what-happens-when-one-replica-crashes)
 - [Resilience](#resilience)
@@ -75,7 +76,7 @@ The framework ships with a Redis/Valkey-backed registry as the default, but the 
 - **Tools** are *passive*. They implement `core.Registry` (Register, UpdateHealth, Unregister). They can't discover other components — the type system literally won't let them. This keeps tools simple and prevents them from quietly growing into orchestrators.
 - **Agents** are *active*. They implement `core.Discovery`, which embeds Registry plus three lookup methods. Agents both publish themselves *and* find others.
 
-That separation is enforced at compile time, not by convention. See [`FRAMEWORK_DESIGN_PRINCIPLES.md`](../../FRAMEWORK_DESIGN_PRINCIPLES.md) §"Compile-Time Architectural Enforcement" for why.
+That separation is enforced at compile time, not by convention. See [`FRAMEWORK_DESIGN_PRINCIPLES.md`](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md) §"Compile-Time Architectural Enforcement" for why.
 
 ## Quick Start
 
@@ -149,7 +150,7 @@ func main() {
 
 That's it. No service mesh, no DNS plumbing, no hardcoded URLs. Add a second weather tool with a different implementation, and the agent will start finding both — with no agent-side code change.
 
-For a complete agent that uses discovery to orchestrate multiple tools, see [`examples/travel-chat-agent/`](../../examples/travel-chat-agent/).
+For a complete agent that uses discovery to orchestrate multiple tools, see [`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent/).
 
 ## Architecture
 
@@ -229,7 +230,7 @@ The agent never has the tool's address baked into its config. Discovery happens 
 
 ### The Registration Record (`ServiceInfo`)
 
-When a component registers, it sends a `ServiceInfo` record. Defined at [`core/component.go:49`](../../core/component.go#L49):
+When a component registers, it sends a `ServiceInfo` record. Defined at [`core/component.go:49`](https://github.com/truvaagents/truva-g3/blob/main/core/component.go#L49):
 
 ```go
 type ServiceInfo struct {
@@ -251,7 +252,7 @@ The `ID` value depends on deployment mode (the framework picks for you):
 - **In Kubernetes with `TRUVAG3_K8S_SERVICE_NAME` set**: `ID = Name`. All replicas of a Deployment share the same ID and write to the same registry key — *one logical entry per Deployment*. K8s Service handles load balancing across the pods. This is the default for production K8s deployments.
 - **Outside Kubernetes** (or in K8s without `TRUVAG3_K8S_SERVICE_NAME`): `ID = "<name>-<uuid8>"`, generated at process start. Each instance gets its own registry entry. The non-K8s case.
 
-The choice is made in [`core/agent.go:1019-1022`](../../core/agent.go#L1019-L1022) (agents) and [`core/agent.go:1086-1089`](../../core/agent.go#L1086-L1089) (tools). See [Multi-Replica Behaviour](#multi-replica-behaviour) for what each mode looks like in practice.
+The choice is made in [`core/agent.go:1019-1022`](https://github.com/truvaagents/truva-g3/blob/main/core/agent.go#L1019-L1022) (agents) and [`core/agent.go:1086-1089`](https://github.com/truvaagents/truva-g3/blob/main/core/agent.go#L1086-L1089) (tools). See [Multi-Replica Behaviour](#multi-replica-behaviour) for what each mode looks like in practice.
 
 `Metadata` is a free-form map, but in Kubernetes the framework auto-populates several fields for you. From a real registry record:
 
@@ -268,11 +269,11 @@ The choice is made in [`core/agent.go:1019-1022`](../../core/agent.go#L1019-L102
 
 In service-scoped mode (multiple pods writing the same key), `pod_name` reflects whichever replica heartbeated most recently. In steady state this can be the same pod for extended periods — heartbeat scheduling tends to cluster, and once one pod's write lands last in a round, it can keep winning subsequent rounds. The value flips reliably when the pod set itself changes (rolling update, crash, replacement, scale event). Treat it as a "currently-observed pod" hint, not an authoritative routing target.
 
-The `Capability` struct ([`core/agent.go:70`](../../core/agent.go#L70)) carries more than just a name and description — it also includes optional payload-generation hints (`InputSummary`, `OutputSummary`) and an auto-generated schema endpoint. Those are explained in the [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md); for discovery purposes, you mainly care about `Name`, `Description`, `Endpoint`, and `Internal` (a flag that hides admin-style capabilities from the AI-facing catalog).
+The `Capability` struct ([`core/agent.go:70`](https://github.com/truvaagents/truva-g3/blob/main/core/agent.go#L70)) carries more than just a name and description — it also includes optional payload-generation hints (`InputSummary`, `OutputSummary`) and an auto-generated schema endpoint. Those are explained in the [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md); for discovery purposes, you mainly care about `Name`, `Description`, `Endpoint`, and `Internal` (a flag that hides admin-style capabilities from the AI-facing catalog).
 
 ### What the Registry Stores: Four Key Types
 
-A single registration writes four key families to Redis (verified at [`core/redis_registry.go:198-234`](../../core/redis_registry.go#L198-L234)). All keys are namespace-prefixed; the default namespace is `truvag3`.
+A single registration writes four key families to Redis (verified at [`core/redis_registry.go:198-234`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L198-L234)). All keys are namespace-prefixed; the default namespace is `truvag3`.
 
 | Key | Type | Contents | TTL |
 |---|---|---|---|
@@ -287,7 +288,7 @@ The two TTL values are deliberate. The service record's short TTL (30 s) means a
 
 ### Atomic Registration
 
-All four writes — service record + each capability set + name set + type set — happen in a single `TxPipeline` ([`core/redis_registry.go:194-264`](../../core/redis_registry.go#L194-L264)). Either all writes commit together, or none of them do.
+All four writes — service record + each capability set + name set + type set — happen in a single `TxPipeline` ([`core/redis_registry.go:194-264`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L194-L264)). Either all writes commit together, or none of them do.
 
 The practical implication: an agent will never see a half-registered component. There's no window where `truvag3:capabilities:current_weather` lists an ID whose `truvag3:services:<id>` record hasn't been written yet. This matters during fast scale-up bursts and during recovery from a transient registry outage.
 
@@ -295,14 +296,14 @@ The practical implication: an agent will never see a half-registered component. 
 
 What the framework writes into `ServiceInfo.Address` depends on where it's running:
 
-- **In Kubernetes with `TRUVAG3_K8S_SERVICE_NAME` set**: the address becomes `<svc>.<ns>.svc.cluster.local`, and the port becomes `TRUVAG3_K8S_SERVICE_PORT` (default 80). This is what you want — agents dial through the K8s Service, not pod IPs, so traffic load-balances across replicas. Logic at [`core/address_resolver.go:32`](../../core/address_resolver.go#L32).
+- **In Kubernetes with `TRUVAG3_K8S_SERVICE_NAME` set**: the address becomes `<svc>.<ns>.svc.cluster.local`, and the port becomes `TRUVAG3_K8S_SERVICE_PORT` (default 80). This is what you want — agents dial through the K8s Service, not pod IPs, so traffic load-balances across replicas. Logic at [`core/address_resolver.go:32`](https://github.com/truvaagents/truva-g3/blob/main/core/address_resolver.go#L32).
 - **Outside K8s** (or in K8s without those env vars set): falls back to `config.Address` (default `localhost`) and `config.Port` (default 8080).
 
-If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. The fix is wiring the env vars correctly — see [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#service-discovery-on-kubernetes).
+If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. The fix is wiring the env vars correctly — see [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns).
 
 ## How Agents Discover Tools and Other Agents
 
-The `Discovery` interface ([`core/interfaces.go:200`](../../core/interfaces.go#L200)) gives agents three ways to look up components. Each method maps to a concrete index lookup followed by record fetches.
+The `Discovery` interface ([`core/interfaces.go:200`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go#L200)) gives agents three ways to look up components. Each method maps to a concrete index lookup followed by record fetches.
 
 ### `FindByCapability` — the workhorse
 
@@ -378,7 +379,7 @@ Both TTLs are set on every successful registration *and* on every heartbeat. The
 
 The heartbeat goroutine ticks at `ttl / 2` by default — 15 seconds for the default 30 s service TTL. The reasoning is the standard one for lease renewal: with two refresh attempts inside one TTL window, a single missed heartbeat (network hiccup, stop-the-world GC pause) doesn't cause the lease to expire.
 
-The actual heartbeat math from [`core/redis_registry.go:967-985`](../../core/redis_registry.go#L967-L985):
+The actual heartbeat math from [`core/redis_registry.go:967-985`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L967-L985):
 
 | Rule | Value |
 |---|---|
@@ -389,7 +390,7 @@ The actual heartbeat math from [`core/redis_registry.go:967-985`](../../core/red
 
 You can override with `TRUVAG3_DISCOVERY_HEARTBEAT` or `core.WithHeartbeatInterval(d)`. In practice, the defaults work for almost everything — the main reason to override is if you've also overridden the TTL.
 
-**Note**: some in-tree example deployments set a custom heartbeat interval via their config maps. For example, the chat agents under [`examples/`](../../examples/) ship with `TRUVAG3_DISCOVERY_HEARTBEAT: 10s` — this is **a deployment-config override**, not a framework default change. If you're comparing pod behaviour across the example cluster and notice different cadences, check the deployment's env vars and configmaps:
+**Note**: some in-tree example deployments set a custom heartbeat interval via their config maps. For example, the chat agents under [`examples/`](https://github.com/truvaagents/truva-g3/tree/main/examples/) ship with `TRUVAG3_DISCOVERY_HEARTBEAT: 10s` — this is **a deployment-config override**, not a framework default change. If you're comparing pod behaviour across the example cluster and notice different cadences, check the deployment's env vars and configmaps:
 
 ```bash
 kubectl get deploy -n <ns> <name> \
@@ -404,7 +405,7 @@ The framework default remains `ttl/2`; deployments choose to opt in to a differe
 
 ### What the Heartbeat Actually Does
 
-Each heartbeat tick calls `UpdateHealth(ctx, id, status)` ([`core/redis_registry.go:294`](../../core/redis_registry.go#L294)), which re-runs the same `TxPipeline` as registration:
+Each heartbeat tick calls `UpdateHealth(ctx, id, status)` ([`core/redis_registry.go:294`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L294)), which re-runs the same `TxPipeline` as registration:
 
 1. Re-write the service record with fresh TTL (`SET <key> <data> EX <ttl>`)
 2. Re-add the ID to all four index sets (`SADD`)
@@ -412,7 +413,7 @@ Each heartbeat tick calls `UpdateHealth(ctx, id, status)` ([`core/redis_registry
 
 So heartbeats don't just refresh a single key — they refresh *the whole picture*. This matters when an index set has expired entirely and needs to be reconstructed (for instance, after a Redis restart): the heartbeat from any healthy replica will rebuild the affected sets.
 
-There's also a self-healing path: if the heartbeat detects that the service record has gone missing (e.g., Redis was unavailable for longer than TTL and the entry expired), it re-registers from the in-memory state it kept around for exactly this case ([`core/redis_registry.go:737-790`](../../core/redis_registry.go#L737-L790)). See [Self-Healing Recovery](#self-healing-recovery-runtime-outages) below.
+There's also a self-healing path: if the heartbeat detects that the service record has gone missing (e.g., Redis was unavailable for longer than TTL and the entry expired), it re-registers from the in-memory state it kept around for exactly this case ([`core/redis_registry.go:737-790`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L737-L790)). See [Self-Healing Recovery](#self-healing-recovery-runtime-outages) below.
 
 ## Multi-Replica Behaviour
 
@@ -522,7 +523,7 @@ What happens depends on outage duration:
 | Outage duration | Effect |
 |---|---|
 | < TTL (under 30 s by default) | Heartbeat fails for one or two ticks; service record's TTL hasn't elapsed yet; on the next successful heartbeat, the world is back to normal. |
-| > TTL | The service record expires from Redis. When Redis is reachable again, the next heartbeat detects "service not found" and triggers re-registration from in-memory state ([`core/redis_registry.go:737`](../../core/redis_registry.go#L737)). |
+| > TTL | The service record expires from Redis. When Redis is reachable again, the next heartbeat detects "service not found" and triggers re-registration from in-memory state ([`core/redis_registry.go:737`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L737)). |
 
 You don't enable this — it's always on. Heartbeat goroutines naturally retry on every tick.
 
@@ -530,7 +531,7 @@ You don't enable this — it's always on. Heartbeat goroutines naturally retry o
 
 A different problem: at *startup*, the registry isn't reachable yet (e.g., Redis is also a Kubernetes Pod that hasn't become Ready). By default, `NewRedisRegistry` retries the initial connection 3× with backoff (~10 s total) and then returns an error. The framework runs the component in **standalone mode** — HTTP endpoints work, but the component never makes it into the registry.
 
-Setting `TRUVAG3_DISCOVERY_RETRY=true` switches to a non-blocking retry policy: the framework reports the failed initial registration but keeps a background goroutine that retries on an exponentially-backing-off interval. From [`core/redis_registry.go:1128-1180`](../../core/redis_registry.go#L1128-L1180):
+Setting `TRUVAG3_DISCOVERY_RETRY=true` switches to a non-blocking retry policy: the framework reports the failed initial registration but keeps a background goroutine that retries on an exponentially-backing-off interval. From [`core/redis_registry.go:1128-1180`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L1128-L1180):
 
 | Behaviour | Value |
 |---|---|
@@ -568,7 +569,7 @@ The discovery-related variables — full reference with precedence rules in [`do
 | `TRUVAG3_DISCOVERY_RETRY` | `false` | Enable background retry on initial connection failure. **Recommended for production K8s.** |
 | `TRUVAG3_DISCOVERY_RETRY_INTERVAL` | `30s` | Initial retry interval; doubles on failure, caps at 5 minutes. |
 
-For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record. See [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#service-discovery-on-kubernetes) for the deployment wiring.
+For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record. See [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns) for the deployment wiring.
 
 ### Programmatic Options
 
@@ -589,7 +590,7 @@ For tests:
 |---|---|
 | `core.WithMockDiscovery(true)` | Use the in-memory `MockDiscovery` (no Redis required) |
 
-Full signatures are in [`docs/reference/API_REFERENCE.md`](../reference/API_REFERENCE.md). Precedence rule (project-wide): when both env vars and option functions set the same value, **option functions win**. See [`core/ARCHITECTURE.md`](../../core/ARCHITECTURE.md) §"Environment Variable Loading".
+Full signatures are in [`docs/reference/API_REFERENCE.md`](../reference/API_REFERENCE.md). Precedence rule (project-wide): when both env vars and option functions set the same value, **option functions win**. See [`core/ARCHITECTURE.md`](https://github.com/truvaagents/truva-g3/blob/main/core/ARCHITECTURE.md) §"Environment Variable Loading".
 
 ## Observability
 
@@ -622,9 +623,9 @@ redis-cli TTL "truvag3:services:weather-tool-abc123"
 # 0 or -2 means the record has expired or doesn't exist.
 ```
 
-For a friendlier view of the whole registry, the [`examples/registry-viewer-app/`](../../examples/registry-viewer-app/) example is a standalone web dashboard that shows all registered services, their capabilities, and their health in real time. It's read-only, runs anywhere with access to your Redis, and is useful for both developers and ops.
+For a friendlier view of the whole registry, the [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/) example is a standalone web dashboard that shows all registered services, their capabilities, and their health in real time. It's read-only, runs anywhere with access to your Redis, and is useful for both developers and ops.
 
-The framework also emits Prometheus metrics for discovery operations (`discovery.registrations`, `discovery.lookups`, `discovery.lookup.duration_ms`). See [`examples/k8-deployment/OBSERVABILITY.md`](../../examples/k8-deployment/OBSERVABILITY.md) for the full metric catalog.
+The framework also emits Prometheus metrics for discovery operations (`discovery.registrations`, `discovery.lookups`, `discovery.lookup.duration_ms`). See [`examples/k8-deployment/OBSERVABILITY.md`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/OBSERVABILITY.md) for the full metric catalog.
 
 For log-based observability of the registration health, the framework emits a periodic `Heartbeat health summary` INFO line every ~5 minutes per service:
 
@@ -689,7 +690,7 @@ Redis/Valkey is the default. The interface is the contract — any backend that 
 
 ### The Interface Contract
 
-A custom backend implements `core.Discovery` ([`core/interfaces.go:200`](../../core/interfaces.go#L200)):
+A custom backend implements `core.Discovery` ([`core/interfaces.go:200`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go#L200)):
 
 ```go
 type Registry interface {
@@ -741,11 +742,11 @@ framework, _ := core.NewFramework(agent)
 framework.Run(context.Background())
 ```
 
-The auto-injection logic ([`core/tool_dependency_injection_test.go`](../../core/tool_dependency_injection_test.go)) checks whether `Registry`/`Discovery` is already set before injecting the default. So pre-setting your custom backend wins.
+The auto-injection logic ([`core/tool_dependency_injection_test.go`](https://github.com/truvaagents/truva-g3/blob/main/core/tool_dependency_injection_test.go)) checks whether `Registry`/`Discovery` is already set before injecting the default. So pre-setting your custom backend wins.
 
 ### Test Path: `MockDiscovery`
 
-For unit tests that don't want to spin up Redis, [`core/mock_discovery.go`](../../core/mock_discovery.go) provides an in-memory implementation of the full `Discovery` interface. Enable it via:
+For unit tests that don't want to spin up Redis, [`core/mock_discovery.go`](https://github.com/truvaagents/truva-g3/blob/main/core/mock_discovery.go) provides an in-memory implementation of the full `Discovery` interface. Enable it via:
 
 ```go
 framework, _ := core.NewFramework(agent,
@@ -798,8 +799,8 @@ The framework calls `Unregister` for you when its parent context is cancelled (g
 - [Kubernetes Deployment Patterns](KUBERNETES.md) — env-var wiring for service-fronted discovery, NetworkPolicy, ServiceMonitor, troubleshooting in K8s
 - [API Reference](../reference/API_REFERENCE.md) — exact signatures for `Registry`, `Discovery`, `Discover`, `FindService`, `FindByCapability`
 - [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) — precedence rules and full env-var reference
-- [Framework Design Principles](../../FRAMEWORK_DESIGN_PRINCIPLES.md) — why Tool/Agent split is compile-time enforced
-- [Core Module Architecture](../../core/ARCHITECTURE.md) — `Registry`/`Discovery` interface contracts and design rationale
+- [Framework Design Principles](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md) — why Tool/Agent split is compile-time enforced
+- [Core Module Architecture](https://github.com/truvaagents/truva-g3/blob/main/core/ARCHITECTURE.md) — `Registry`/`Discovery` interface contracts and design rationale
 - [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md) — building tools that register capabilities
 - [Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md) — building agents that discover and orchestrate tools
-- [Examples: registry-viewer-app](../../examples/registry-viewer-app/) — live registry inspection dashboard
+- [Examples: registry-viewer-app](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/) — live registry inspection dashboard

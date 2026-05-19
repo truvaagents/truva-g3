@@ -14,8 +14,8 @@ you are in the right place.
 
 This guide is based on the real implementations in:
 
-- [`examples/travel-chat-agent/`](../../examples/travel-chat-agent)
-- [`examples/devops-chat-agent/`](../../examples/devops-chat-agent)
+- [`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)
+- [`examples/devops-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent)
 
 It is meant to be friendly to someone seeing this system for the first time, while still being precise enough for deeper debugging and design work.
 
@@ -125,26 +125,26 @@ same session ID reused and the conversation resumed if that session still exists
 Both example agents follow the same design, so we mainly need to understand a handful of files:
 
 - Session store:
-  - [`examples/travel-chat-agent/session.go`](../../examples/travel-chat-agent/session.go)
-  - [`examples/devops-chat-agent/session.go`](../../examples/devops-chat-agent/session.go)
+  - [`examples/travel-chat-agent/session.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/session.go)
+  - [`examples/devops-chat-agent/session.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/session.go)
 - Session-related HTTP handlers:
-  - [`examples/travel-chat-agent/handlers.go`](../../examples/travel-chat-agent/handlers.go)
-  - [`examples/devops-chat-agent/handlers.go`](../../examples/devops-chat-agent/handlers.go)
+  - [`examples/travel-chat-agent/handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/handlers.go)
+  - [`examples/devops-chat-agent/handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/handlers.go)
 - Streaming entrypoint:
-  - [`examples/travel-chat-agent/sse_handler.go`](../../examples/travel-chat-agent/sse_handler.go)
-  - [`examples/devops-chat-agent/sse_handler.go`](../../examples/devops-chat-agent/sse_handler.go)
+  - [`examples/travel-chat-agent/sse_handler.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/sse_handler.go)
+  - [`examples/devops-chat-agent/sse_handler.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/sse_handler.go)
 - Orchestrator integration:
-  - [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
-  - [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
+  - [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
+  - [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go)
 - DevOps-only HITL resume flow:
-  - [`examples/devops-chat-agent/handlers_hitl.go`](../../examples/devops-chat-agent/handlers_hitl.go)
+  - [`examples/devops-chat-agent/handlers_hitl.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/handlers_hitl.go)
 
 The framework-side history preparation path lives in:
 
-- [`orchestration/pipeline_hooks.go`](../../orchestration/pipeline_hooks.go)
-- [`orchestration/conversation_history_processor.go`](../../orchestration/conversation_history_processor.go)
-- [`orchestration/metadata_keys.go`](../../orchestration/metadata_keys.go)
-- [`core/interfaces.go`](../../core/interfaces.go)
+- [`orchestration/pipeline_hooks.go`](https://github.com/truvaagents/truva-g3/blob/main/orchestration/pipeline_hooks.go)
+- [`orchestration/conversation_history_processor.go`](https://github.com/truvaagents/truva-g3/blob/main/orchestration/conversation_history_processor.go)
+- [`orchestration/metadata_keys.go`](https://github.com/truvaagents/truva-g3/blob/main/orchestration/metadata_keys.go)
+- [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go)
 
 ## Start With The Short Answer
 
@@ -169,8 +169,8 @@ When either chat agent starts, it creates a Redis-backed `SessionStore`.
 
 That happens in:
 
-- [`examples/travel-chat-agent/chat_agent.go`](../../examples/travel-chat-agent/chat_agent.go)
-- [`examples/devops-chat-agent/chat_agent.go`](../../examples/devops-chat-agent/chat_agent.go)
+- [`examples/travel-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/chat_agent.go)
+- [`examples/devops-chat-agent/chat_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/chat_agent.go)
 
 Both examples use the same constructor settings:
 
@@ -677,4 +677,4 @@ That separation is the design.
 - [`CHAT_AGENT_GUIDE.md`](CHAT_AGENT_GUIDE.md)
 - [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md)
 - [`AGENT_DEVELOPMENT_GUIDE.md`](../building/AGENT_DEVELOPMENT_GUIDE.md)
-- [`examples/travel-chat-agent/README.md`](../../examples/travel-chat-agent/README.md)
+- [`examples/travel-chat-agent/README.md`](https://github.com/truvaagents/truva-g3/blob/main/examples/travel-chat-agent/README.md)

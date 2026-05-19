@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How AI Agent Frameworks Orchestrate Tool Calls</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #121826;
+    --bg-3: #1a2236;
+    --ink: #e6edf7;
+    --muted: #9aa6bd;
+    --line: #2a3550;
+    --accent: #7cc4ff;
+    --warn: #fbbf24;
+    --good: #34d399;
+    --lc: #1F6FEB;     /* LangChain */
+    --lg: #14b8a6;     /* LangGraph */
+    --crew: #7c3aed;   /* CrewAI */
+    --adk: #EA4335;    /* Google ADK */
+    --sk: #2EA5FF;     /* Semantic Kernel */
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; font-size: 13px; line-height:1.5; color:#cfe1ff; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  header.hero {
+    padding: 64px 0 36px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .research-date {
+    display: inline-block;
+    margin-bottom: 18px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #9ec5ff 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero .subtitle {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 760px;
+    margin: 0 auto 22px;
+  }
+  .pillrow {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); font-size: 13px; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; }
+  .dot { width:9px; height:9px; border-radius: 50%; display:inline-block; }
+
+  /* Sections */
+  section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 780px; margin: 0 0 28px; }
+
+  /* Universal loop diagram */
+  .universal-grid {
+    display: grid; grid-template-columns: 1.1fr .9fr; gap: 28px; align-items: center;
+  }
+  @media (max-width: 880px) { .universal-grid { grid-template-columns: 1fr; } }
+  .uni-svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
+  }
+  .uni-list { display: grid; gap: 12px; }
+  .uni-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .uni-item b { color: #fff; }
+  .uni-item .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #19243d; color: #9fc2ff; margin-right:8px;
+  }
+
+  /* Framework cards */
+  .frameworks { display: grid; gap: 28px; }
+  .fw-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .fw-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255,255,255,0.015);
+  }
+  .fw-badge {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 18px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .fw-head h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .fw-head .sub { color: var(--muted); font-size: 13px; }
+  .fw-body { display: grid; grid-template-columns: 1.15fr .85fr; gap: 0; }
+  @media (max-width: 980px) { .fw-body { grid-template-columns: 1fr; } }
+  .fw-svg {
+    padding: 22px;
+    border-right: 1px solid var(--line);
+    background:
+      radial-gradient(900px 500px at 20% 10%, rgba(124,196,255,.05), transparent 60%),
+      var(--bg-2);
+  }
+  @media (max-width: 980px) { .fw-svg { border-right: none; border-bottom: 1px solid var(--line); } }
+  .fw-text { padding: 22px; }
+  .fw-text h4 { margin: 14px 0 6px; font-size: 14px; color: var(--accent); letter-spacing:.04em; text-transform: uppercase; }
+  .fw-text p { margin: 0 0 10px; }
+  .fw-text ul { padding-left: 18px; margin: 0 0 4px; }
+  .fw-text li { margin: 4px 0; }
+  .metaphor {
+    margin: 4px 0 12px; padding: 10px 14px;
+    background: #0e1a2e; border-left: 3px solid var(--accent); border-radius: 8px;
+    color: #cfe1ff; font-style: italic; font-size: 14px;
+  }
+  .twocol { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width: 600px) { .twocol { grid-template-columns: 1fr; } }
+  .miniblock { background: var(--bg-3); border:1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .miniblock h5 { margin:0 0 4px; font-size:12px; color:#a8b6d6; letter-spacing:.05em; text-transform: uppercase; }
+  .miniblock p { margin:0; font-size:13.5px; color:#dbe6ff; }
+
+  /* Comparison table */
+  .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align:left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; }
+  th.fw, td.fw { white-space: nowrap; }
+  td.row-hd { background: var(--bg-2); font-weight:600; }
+  .tag-tiny {
+    display:inline-block; font-size:11px; padding:2px 7px; border-radius:999px;
+    background:#192541; color:#9fc2ff; border:1px solid #2c3d65; margin-right:4px; margin-bottom:4px;
+  }
+
+  /* Takeaways */
+  .takeaways { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--bg-2); border:1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin:0; color:#cfd9ee; font-size: 14px; }
+  .ta .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #19243d; color: #9fc2ff; margin-bottom:8px;
+  }
+
+  /* Glossary */
+  .gloss { display:grid; grid-template-columns: repeat(2, 1fr); gap: 10px 22px; }
+  @media (max-width: 720px) { .gloss { grid-template-columns: 1fr; } }
+  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .gloss b { color: #fff; }
+
+  /* Footer */
+  footer {
+    padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px;
+  }
+
+  /* Animation */
+  @keyframes dash {
+    to { stroke-dashoffset: -40; }
+  }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: .35; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.04); }
+  }
+  .pulse { transform-origin: center; transform-box: fill-box; animation: pulse 2.6s ease-in-out infinite; }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  .orbit { transform-origin: center; transform-box: fill-box; animation: orbit 16s linear infinite; }
+
+  /* Toggle expand */
+  details > summary {
+    cursor: pointer; list-style: none; outline: none;
+    color: var(--accent); font-size: 13px; user-select: none;
+  }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] > summary { color: var(--ink); }
+  details > summary::after { content: "  ▸"; color: var(--muted); }
+  details[open] > summary::after { content: "  ▾"; }
+
+  /* Print */
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .fw-card { break-inside: avoid; }
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>How AI Agent Frameworks Orchestrate Tool Calls</h1>
+    <p class="subtitle">
+      A side-by-side conceptual tour of the agent harness inside <b>LangChain</b>, <b>LangGraph</b>,
+      <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and <b>Microsoft Semantic Kernel</b> —
+      what the loop looks like, who holds state, and how each framework decides when to stop.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#universal"><span class="dot" style="background:#9ec5ff"></span>The universal loop</a>
+      <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
+      <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
+      <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
+      <a class="pill" href="#adk"><span class="dot" style="background:var(--adk)"></span>Google ADK</a>
+      <a class="pill" href="#sk"><span class="dot" style="background:var(--sk)"></span>Semantic Kernel</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Cheat sheet</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= UNIVERSAL LOOP ================= -->
+<section id="universal">
+  <div class="container">
+    <h2>The Universal Agent Loop</h2>
+    <p class="lede">
+      Strip away branding and every modern AI agent framework looks the same on the inside:
+      a control loop that <b>asks an LLM what to do</b>, <b>runs the tool the LLM picked</b>,
+      <b>feeds the result back</b>, and <b>decides whether to stop</b>. The frameworks differ in the
+      <i>shape</i> of that loop and <i>who owns the state</i>.
+    </p>
+    <div class="universal-grid">
+      <div class="uni-svg-wrap">
+        <svg viewBox="0 0 780 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal agent loop">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+            </marker>
+            <marker id="arrowY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+            </marker>
+            <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/>
+            </marker>
+            <linearGradient id="llmG" x1="0" x2="1">
+              <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/>
+            </linearGradient>
+            <linearGradient id="toolG" x1="0" x2="1">
+              <stop offset="0" stop-color="#10b981"/><stop offset="1" stop-color="#06b6d4"/>
+            </linearGradient>
+          </defs>
+
+          <!-- ====== top row: User → Reason → Decide → Final ====== -->
+
+          <!-- User Task -->
+          <rect x="20" y="70" width="130" height="80" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="85" y="105" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">User Task</text>
+          <text x="85" y="125" text-anchor="middle" fill="#9aa6bd" font-size="11">"Book me a flight"</text>
+
+          <!-- Reason (LLM) -->
+          <rect x="200" y="50" width="210" height="120" rx="14" fill="url(#llmG)" opacity="0.92"/>
+          <text x="305" y="88" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">1. Reason</text>
+          <text x="305" y="112" text-anchor="middle" fill="#dbeafe" font-size="12">LLM call with tool schemas</text>
+          <text x="305" y="132" text-anchor="middle" fill="#dbeafe" font-size="12">→ tool_call OR final answer</text>
+
+          <!-- Decide diamond -->
+          <polygon points="525,55 590,110 525,165 460,110" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="525" y="106" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">4. Continue?</text>
+          <text x="525" y="124" text-anchor="middle" fill="#9aa6bd" font-size="10">tool_calls present?</text>
+
+          <!-- Final Answer -->
+          <rect x="630" y="70" width="130" height="80" rx="12" fill="#0e1a2e" stroke="#3a8aff"/>
+          <text x="695" y="103" text-anchor="middle" fill="#9ec5ff" font-size="14" font-weight="600">Final Answer</text>
+          <text x="695" y="123" text-anchor="middle" fill="#9aa6bd" font-size="11">return to user</text>
+
+          <!-- ====== bottom row: Observe ← Act ====== -->
+
+          <!-- Observe -->
+          <rect x="200" y="300" width="210" height="90" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="305" y="335" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">3. Observe + Update State</text>
+          <text x="305" y="357" text-anchor="middle" fill="#9aa6bd" font-size="11">scratchpad · messages · events</text>
+
+          <!-- Act -->
+          <rect x="480" y="290" width="210" height="110" rx="14" fill="url(#toolG)" opacity="0.92"/>
+          <text x="585" y="325" text-anchor="middle" fill="#062a23" font-size="15" font-weight="700">2. Act</text>
+          <text x="585" y="349" text-anchor="middle" fill="#062a23" font-size="12">Run the picked tool</text>
+          <text x="585" y="367" text-anchor="middle" fill="#062a23" font-size="12">(API · code · retrieval · sub-agent)</text>
+
+          <!-- ====== arrows (no overlap) ====== -->
+
+          <!-- User → Reason -->
+          <path d="M150,110 L200,110" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <!-- Reason → Decide -->
+          <path d="M410,110 L460,110" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <!-- Decide → Final (no) -->
+          <path d="M590,110 L630,110" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrowG)"/>
+          <text x="610" y="100" text-anchor="middle" fill="#34d399" font-size="11">no</text>
+
+          <!-- Decide → Act (yes, curved down-right) -->
+          <path d="M555,150 Q 620,210 605,290" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
+          <text x="618" y="205" fill="#fbbf24" font-size="11">yes</text>
+
+          <!-- Act → Observe -->
+          <path d="M480,345 L410,345" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <!-- Observe → Reason (loop back, curves through the empty area between User and the loop body) -->
+          <path d="M250,300 Q 170,235 215,170" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
+          <text x="40" y="225" fill="#fbbf24" font-size="11">append + re-prompt</text>
+        </svg>
+      </div>
+
+      <div class="uni-list">
+        <div class="uni-item">
+          <span class="tag">1 · Reason</span><b>LLM call</b><br>
+          The model is shown the conversation so far <i>plus</i> the available tools, and asked
+          to either emit a tool call or a final answer. Modern frameworks rely on the provider's
+          native function-calling JSON; older ones parsed free-text (ReAct).
+        </div>
+        <div class="uni-item">
+          <span class="tag">2 · Act</span><b>Tool dispatch</b><br>
+          The framework looks up the tool by name, validates arguments against a schema, and runs
+          it. The tool can be a Python function, an HTTP call, code execution, retrieval — or
+          another agent.
+        </div>
+        <div class="uni-item">
+          <span class="tag">3 · Observe</span><b>State update</b><br>
+          The tool result is appended to whatever store the framework uses for memory:
+          a scratchpad, a list of messages, a graph channel, a Session/Event log, or a chat history.
+        </div>
+        <div class="uni-item">
+          <span class="tag">4 · Decide</span><b>Continue or stop</b><br>
+          Stop when the LLM emits no more tool calls, when it returns an explicit "final answer"
+          structure, or when a guardrail trips: max iterations, time budget, or a custom termination
+          strategy.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FRAMEWORK CARDS ================= -->
+<section id="frameworks" style="border-bottom:none;">
+  <div class="container">
+    <h2>Five frameworks, five takes on the loop</h2>
+    <p class="lede">
+      Same building blocks; very different opinions about who runs the show. Below: each framework's
+      orchestration model in one diagram and a few words.
+    </p>
+
+    <div class="frameworks">
+
+      <!-- ============ LANGCHAIN ============ -->
+      <article class="fw-card" id="langchain">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lc)">Lc</div>
+          <div>
+            <h3>LangChain · the classic <code>AgentExecutor</code></h3>
+            <div class="sub">A while-loop wrapped around an LLM and a parser.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg">
+            <svg viewBox="0 0 580 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain AgentExecutor loop">
+              <defs>
+                <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+                </marker>
+                <marker id="lc-arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+                </marker>
+                <linearGradient id="lcG" x1="0" x2="1">
+                  <stop offset="0" stop-color="#1F6FEB"/><stop offset="1" stop-color="#3b82f6"/>
+                </linearGradient>
+              </defs>
+
+              <!-- Outer "while" loop ring -->
+              <rect x="20" y="40" width="540" height="320" rx="20" fill="none" stroke="#2a3550" stroke-dasharray="4 6"/>
+              <text x="40" y="30" fill="#9aa6bd" font-size="11">while _should_continue(iter, time): ...</text>
+
+              <!-- LLM Chain -->
+              <rect x="60" y="80" width="190" height="90" rx="12" fill="url(#lcG)"/>
+              <text x="155" y="112" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">LLM Chain</text>
+              <text x="155" y="133" text-anchor="middle" fill="#dbeafe" font-size="11">Prompt + tool descriptions</text>
+              <text x="155" y="151" text-anchor="middle" fill="#dbeafe" font-size="11">→ raw text or tool_calls</text>
+
+              <!-- Output Parser -->
+              <rect x="330" y="80" width="200" height="90" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="430" y="112" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Output Parser</text>
+              <text x="430" y="133" text-anchor="middle" fill="#9aa6bd" font-size="11">→ AgentAction</text>
+              <text x="430" y="151" text-anchor="middle" fill="#9aa6bd" font-size="11">or AgentFinish</text>
+
+              <!-- Tool -->
+              <rect x="330" y="250" width="200" height="90" rx="12" fill="#0c2a23" stroke="#10b981"/>
+              <text x="430" y="282" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">Tool.invoke()</text>
+              <text x="430" y="303" text-anchor="middle" fill="#a7f3d0" font-size="11">name → callable lookup</text>
+              <text x="430" y="321" text-anchor="middle" fill="#a7f3d0" font-size="11">returns Observation</text>
+
+              <!-- Scratchpad -->
+              <rect x="60" y="250" width="190" height="90" rx="12" fill="#171f33" stroke="#3a4a72"/>
+              <text x="155" y="282" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">intermediate_steps</text>
+              <text x="155" y="303" text-anchor="middle" fill="#9aa6bd" font-size="11">List[(action, observation)]</text>
+              <text x="155" y="321" text-anchor="middle" fill="#9aa6bd" font-size="11">aka the "scratchpad"</text>
+
+              <!-- Arrows along a clean rectangular loop -->
+              <!-- LLM → Parser -->
+              <path d="M250,125 L330,125" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="290" y="115" text-anchor="middle" fill="#9aa6bd" font-size="11">parse</text>
+              <!-- Parser → Tool -->
+              <path d="M430,170 L430,250" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="442" y="215" fill="#9aa6bd" font-size="11">dispatch</text>
+              <!-- Tool → Scratchpad -->
+              <path d="M330,295 L250,295" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="290" y="285" text-anchor="middle" fill="#9aa6bd" font-size="11">append</text>
+              <!-- Scratchpad → LLM (loop back) -->
+              <path d="M155,250 L155,170" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lc-arrY)" fill="none" class="flow-line"/>
+              <text x="170" y="215" fill="#fbbf24" font-size="11">re-prompt</text>
+            </svg>
+          </div>
+          <div class="fw-text">
+            <div class="metaphor">"A while loop, an LLM call, a parser, and a dictionary of tools."</div>
+            <h4>How orchestration works</h4>
+            <p>
+              <code>AgentExecutor</code> drives a single loop. On each turn it formats the prompt
+              (system + tools + scratchpad), calls the LLM, and hands the response to an
+              <i>output parser</i>. The parser produces either an <code>AgentAction</code>
+              (tool name + args) or an <code>AgentFinish</code> (final answer). Actions are executed,
+              the result becomes an Observation, and both get appended to the scratchpad before
+              the next iteration.
+            </p>
+            <h4>How it stops</h4>
+            <p>
+              On <code>AgentFinish</code>, on a tool marked <code>return_direct</code>, or when the
+              guardrail trips: <code>max_iterations</code> (default 15) or <code>max_execution_time</code>.
+            </p>
+            <div class="twocol">
+              <div class="miniblock"><h5>Mechanism</h5><p>Single linear loop. Each step is recorded in <code>intermediate_steps</code>.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>No native branching, parallelism, or human-in-the-loop primitives. Most net-new work has moved to LangGraph.</p></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ LANGGRAPH ============ -->
+      <article class="fw-card" id="langgraph">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lg)">Lg</div>
+          <div>
+            <h3>LangGraph · the loop as a stateful graph</h3>
+            <div class="sub">Two nodes, one router, a shared message channel — and a checkpointer.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg">
+            <svg viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph ReAct graph">
+              <defs>
+                <marker id="lg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+                </marker>
+                <marker id="lg-arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+                </marker>
+                <marker id="lg-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/>
+                </marker>
+                <linearGradient id="lgG" x1="0" x2="1">
+                  <stop offset="0" stop-color="#0d9488"/><stop offset="1" stop-color="#14b8a6"/>
+                </linearGradient>
+              </defs>
+
+              <!-- loop-back caption above the arc -->
+              <text x="320" y="20" text-anchor="middle" fill="#9aa6bd" font-size="11">append ToolMessages → re-enter "agent"</text>
+
+              <!-- START -->
+              <circle cx="40" cy="170" r="22" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="40" y="174" text-anchor="middle" fill="#fff" font-size="11">START</text>
+
+              <!-- agent node -->
+              <rect x="100" y="130" width="180" height="80" rx="14" fill="url(#lgG)"/>
+              <text x="190" y="160" text-anchor="middle" fill="#03241f" font-size="14" font-weight="700">agent</text>
+              <text x="190" y="180" text-anchor="middle" fill="#03241f" font-size="11">model.bind_tools(tools)</text>
+              <text x="190" y="196" text-anchor="middle" fill="#03241f" font-size="11">.invoke(state.messages)</text>
+
+              <!-- Router diamond -->
+              <polygon points="370,130 415,170 370,210 325,170" fill="#1a2236" stroke="#fbbf24"/>
+              <text x="370" y="166" text-anchor="middle" fill="#fbbf24" font-size="11">tool_calls?</text>
+
+              <!-- tools node -->
+              <rect x="450" y="130" width="170" height="80" rx="14" fill="#0c2a23" stroke="#10b981"/>
+              <text x="535" y="160" text-anchor="middle" fill="#bbf7d0" font-size="14" font-weight="700">tools (ToolNode)</text>
+              <text x="535" y="180" text-anchor="middle" fill="#a7f3d0" font-size="11">runs every tool_call</text>
+              <text x="535" y="196" text-anchor="middle" fill="#a7f3d0" font-size="11">→ ToolMessage[]</text>
+
+              <!-- END -->
+              <circle cx="370" cy="290" r="22" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="370" y="294" text-anchor="middle" fill="#9ec5ff" font-size="11">END</text>
+
+              <!-- State channel -->
+              <rect x="100" y="320" width="420" height="60" rx="10" fill="#171f33" stroke="#3a4a72"/>
+              <text x="310" y="342" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">State channel · messages</text>
+              <text x="310" y="362" text-anchor="middle" fill="#9aa6bd" font-size="11">add_messages reducer · checkpointed</text>
+
+              <!-- arrows -->
+              <!-- START → agent -->
+              <path d="M62,170 L100,170" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <!-- agent → diamond -->
+              <path d="M280,170 L325,170" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <!-- diamond → tools (yes) -->
+              <path d="M415,170 L450,170" stroke="#fbbf24" stroke-width="2" marker-end="url(#lg-arrY)" fill="none"/>
+              <text x="432" y="160" text-anchor="middle" fill="#fbbf24" font-size="11">yes</text>
+              <!-- tools → agent loop-back, arc above the boxes -->
+              <path d="M535,130 Q 360,40 190,130" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lg-arrY)" fill="none" class="flow-line"/>
+              <!-- diamond → END (no), straight down -->
+              <path d="M370,210 L370,268" stroke="#34d399" stroke-width="2" marker-end="url(#lg-arrG)" fill="none"/>
+              <text x="385" y="248" fill="#34d399" font-size="11">no → END</text>
+            </svg>
+          </div>
+          <div class="fw-text">
+            <div class="metaphor">"The agent loop, but expressed as a directed graph you can checkpoint and resume."</div>
+            <h4>How orchestration works</h4>
+            <p>
+              <code>create_react_agent(model, tools)</code> builds a tiny <code>StateGraph</code>
+              with two nodes — <b>agent</b> (LLM call) and <b>tools</b> (a <code>ToolNode</code>
+              that fans out every <code>tool_call</code>). A conditional edge
+              <code>should_continue</code> reads the last <code>AIMessage</code>: if it has
+              <code>tool_calls</code>, route to <b>tools</b>; otherwise route to <code>END</code>.
+              State is the <code>messages</code> channel, accumulated by an <code>add_messages</code>
+              reducer.
+            </p>
+            <h4>What you get for free</h4>
+            <p>
+              Persistence (any <code>checkpointer</code> — memory, SQLite, Postgres),
+              <i>time-travel</i> debugging, branching, parallel <code>Send</code> fan-out,
+              human-in-the-loop via <code>interrupt_before</code>/<code>interrupt_after</code>,
+              and streaming events at node-level.
+            </p>
+            <div class="twocol">
+              <div class="miniblock"><h5>Mechanism</h5><p>Composable into multi-agent supervisors. State is explicit.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Requires modeling logic as nodes, edges, reducers, and channels rather than imperative scripts.</p></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ CREWAI ============ -->
+      <article class="fw-card" id="crewai">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--crew)">Cr</div>
+          <div>
+            <h3>CrewAI · roles, tasks, and a Process that orchestrates them</h3>
+            <div class="sub">Multiple agents collaborating like a team; each agent runs its own inner ReAct loop.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg">
+            <svg viewBox="0 0 580 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI Crew + Agent loop">
+              <defs>
+                <marker id="cr-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd"/>
+                </marker>
+                <marker id="cr-arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+                </marker>
+                <marker id="cr-arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/>
+                </marker>
+                <linearGradient id="crewG" x1="0" x2="1">
+                  <stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#8b5cf6"/>
+                </linearGradient>
+              </defs>
+
+              <!-- Crew/Process container (slimmed by 10px so the inner panel can grow upward) -->
+              <rect x="20" y="30" width="540" height="190" rx="16" fill="none" stroke="#3a4a72" stroke-dasharray="3 5"/>
+              <text x="40" y="22" fill="#9aa6bd" font-size="11">Crew · Process.sequential | hierarchical</text>
+
+              <!-- Task pipeline -->
+              <rect x="40" y="70" width="150" height="120" rx="12" fill="url(#crewG)"/>
+              <text x="115" y="98" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Researcher</text>
+              <text x="115" y="116" text-anchor="middle" fill="#ede9fe" font-size="11">role · goal · backstory</text>
+              <text x="115" y="135" text-anchor="middle" fill="#ede9fe" font-size="11">tools: [search, scrape]</text>
+              <text x="115" y="160" text-anchor="middle" fill="#ede9fe" font-size="11">Task 1 → output</text>
+
+              <rect x="215" y="70" width="150" height="120" rx="12" fill="url(#crewG)"/>
+              <text x="290" y="98" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Analyst</text>
+              <text x="290" y="116" text-anchor="middle" fill="#ede9fe" font-size="11">tools: [calculator, sql]</text>
+              <text x="290" y="135" text-anchor="middle" fill="#ede9fe" font-size="11">context = prev outputs</text>
+              <text x="290" y="160" text-anchor="middle" fill="#ede9fe" font-size="11">Task 2 → output</text>
+
+              <rect x="390" y="70" width="150" height="120" rx="12" fill="url(#crewG)"/>
+              <text x="465" y="98" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Writer</text>
+              <text x="465" y="116" text-anchor="middle" fill="#ede9fe" font-size="11">tools: [doc_writer]</text>
+              <text x="465" y="135" text-anchor="middle" fill="#ede9fe" font-size="11">Task 3 → final</text>
+
+              <path d="M190,130 L215,130" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <path d="M365,130 L390,130" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+
+              <!-- Inside-an-agent zoom (panel grown 20% taller for clean arc + loop room) -->
+              <text x="40" y="234" fill="#9aa6bd" font-size="11">↓ Inside each agent: CrewAgentExecutor._invoke_loop()</text>
+              <rect x="20" y="240" width="540" height="240" rx="12" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- LLM -->
+              <rect x="40" y="315" width="130" height="70" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="105" y="340" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">LLM</text>
+              <text x="105" y="358" text-anchor="middle" fill="#9aa6bd" font-size="10">native tools? → JSON</text>
+              <text x="105" y="373" text-anchor="middle" fill="#9aa6bd" font-size="10">else → ReAct text</text>
+
+              <!-- Diamond -->
+              <polygon points="240,315 285,350 240,385 195,350" fill="#1a2236" stroke="#fbbf24"/>
+              <text x="240" y="354" text-anchor="middle" fill="#fbbf24" font-size="11">tool_call?</text>
+
+              <!-- Tool -->
+              <rect x="325" y="315" width="130" height="70" rx="10" fill="#0c2a23" stroke="#10b981"/>
+              <text x="390" y="340" text-anchor="middle" fill="#bbf7d0" font-size="12" font-weight="700">Tool</text>
+              <text x="390" y="358" text-anchor="middle" fill="#a7f3d0" font-size="10">+ tool cache</text>
+              <text x="390" y="373" text-anchor="middle" fill="#a7f3d0" font-size="10">+ guardrails</text>
+
+              <!-- Final -->
+              <rect x="475" y="315" width="80" height="70" rx="10" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="515" y="340" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">Final</text>
+              <text x="515" y="360" text-anchor="middle" fill="#9ec5ff" font-size="10">AgentFinish</text>
+
+              <!-- Inner arrows -->
+              <!-- LLM → diamond -->
+              <path d="M170,350 L195,350" stroke="#9ec5ff" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <!-- diamond → Tool (yes) -->
+              <path d="M285,350 L325,350" stroke="#fbbf24" stroke-width="2" marker-end="url(#cr-arrY)" fill="none"/>
+              <text x="305" y="340" text-anchor="middle" fill="#fbbf24" font-size="10">yes</text>
+              <!-- diamond → Final (no): cubic curve becomes vertical above Final, then a short straight line so the arrow lands centered -->
+              <path d="M240,315 C 280,260 515,260 515,300 L 515,315" stroke="#34d399" stroke-width="2" marker-end="url(#cr-arrG)" fill="none"/>
+              <text x="390" y="263" text-anchor="middle" fill="#34d399" font-size="10">no</text>
+
+              <!-- Loop back arc fully inside the panel -->
+              <path d="M390,385 Q 240,460 105,385" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#cr-arrY)" fill="none" class="flow-line"/>
+              <text x="248" y="455" text-anchor="middle" fill="#fbbf24" font-size="10">append observation → re-prompt</text>
+            </svg>
+          </div>
+          <div class="fw-text">
+            <div class="metaphor">"Hire a team of role-played agents. Give each a goal and tools. Run them like a workflow."</div>
+            <h4>Two layers of orchestration</h4>
+            <p>
+              <b>Outer layer — the Crew.</b> A <code>Crew</code> owns a list of <code>Agent</code>s
+              and a list of <code>Task</code>s, executed by a <code>Process</code> that is either
+              <i>sequential</i> (pass each task's output as context to the next) or
+              <i>hierarchical</i> (a manager LLM decides who runs what next).
+            </p>
+            <p>
+              <b>Inner layer — the Agent.</b> Inside each agent, <code>CrewAgentExecutor._invoke_loop()</code>
+              picks one of three modes based on the LLM's capabilities:
+              <code>_invoke_loop_native_tools</code> (modern function-calling),
+              <code>_invoke_loop_react</code> (text-based ReAct fallback), or
+              <code>_invoke_loop_native_no_tools</code>. Each is a <code>while True</code> that
+              calls the LLM, dispatches a tool if one was requested, appends the result, and
+              repeats until <code>AgentFinish</code> or <code>max_iter</code>.
+            </p>
+            <h4>State + comms</h4>
+            <p>
+              Per-agent: a message list plus a tool-result cache. Cross-agent: in
+              <i>sequential</i> Process the Crew automatically aggregates each finished task's
+              output as context for the next; you can also wire explicit dependencies via
+              <code>Task.context</code>. In <i>hierarchical</i> mode the manager agent gets
+              <code>AgentTools</code> (a <code>DelegateWorkTool</code> per colleague) and
+              chooses who runs what next.
+            </p>
+            <div class="twocol">
+              <div class="miniblock"><h5>Mechanism</h5><p>Role-based "team of specialists" metaphor. Hierarchical Process uses two loops.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>In Hierarchical Process mode, the manager LLM is invoked between every task, adding an LLM call per delegation.</p></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ GOOGLE ADK ============ -->
+      <article class="fw-card" id="adk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--adk)">Ad</div>
+          <div>
+            <h3>Google ADK · a pipeline of processors and a tree of agents</h3>
+            <div class="sub">An Event-streaming runtime where each LLM turn passes through an ordered list of request/response processors.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg">
+            <svg viewBox="0 0 660 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK orchestration">
+              <defs>
+                <marker id="ad-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fca5a5"/>
+                </marker>
+                <marker id="ad-arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+                </marker>
+                <linearGradient id="adkG" x1="0" x2="1">
+                  <stop offset="0" stop-color="#EA4335"/><stop offset="1" stop-color="#fb7185"/>
+                </linearGradient>
+              </defs>
+
+              <!-- Runner -->
+              <rect x="20" y="30" width="540" height="50" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="290" y="60" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Runner — drives an InvocationContext, streams Events</text>
+
+              <!-- Agent tree -->
+              <rect x="20" y="100" width="220" height="280" rx="14" fill="#171f33" stroke="#3a4a72"/>
+              <text x="130" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Agent composition</text>
+
+              <rect x="40" y="140" width="180" height="44" rx="8" fill="url(#adkG)"/>
+              <text x="130" y="167" text-anchor="middle" fill="#1a0d00" font-size="12" font-weight="700">root: LlmAgent</text>
+
+              <rect x="50" y="200" width="160" height="34" rx="8" fill="#2c1c1c" stroke="#fb7185"/>
+              <text x="130" y="222" text-anchor="middle" fill="#fecaca" font-size="11">SequentialAgent</text>
+
+              <rect x="50" y="244" width="160" height="34" rx="8" fill="#2c1c1c" stroke="#fb7185"/>
+              <text x="130" y="266" text-anchor="middle" fill="#fecaca" font-size="11">ParallelAgent</text>
+
+              <rect x="50" y="288" width="160" height="34" rx="8" fill="#2c1c1c" stroke="#fb7185"/>
+              <text x="130" y="310" text-anchor="middle" fill="#fecaca" font-size="11">LoopAgent · max_iters</text>
+
+              <rect x="50" y="332" width="160" height="34" rx="8" fill="#2c1c1c" stroke="#fb7185"/>
+              <text x="130" y="354" text-anchor="middle" fill="#fecaca" font-size="10">sub LlmAgent · transfer_to_agent</text>
+
+              <!-- Per-LLM-turn pipeline -->
+              <rect x="260" y="100" width="300" height="280" rx="14" fill="#171f33" stroke="#3a4a72"/>
+              <text x="410" y="124" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">BaseLlmFlow · per turn</text>
+
+              <!-- request processors (subset of the actual SingleFlow chain) -->
+              <rect x="280" y="140" width="260" height="22" rx="6" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="410" y="156" text-anchor="middle" fill="#cfe1ff" font-size="11">request: basic · instructions · identity</text>
+              <rect x="280" y="166" width="260" height="22" rx="6" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="410" y="182" text-anchor="middle" fill="#cfe1ff" font-size="11">+ contents · NL planning · code_execution</text>
+              <rect x="280" y="192" width="260" height="22" rx="6" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="410" y="208" text-anchor="middle" fill="#cfe1ff" font-size="10">+ agent_transfer (AutoFlow extends SingleFlow)</text>
+
+              <!-- LLM -->
+              <rect x="280" y="224" width="260" height="40" rx="8" fill="url(#adkG)"/>
+              <text x="410" y="250" text-anchor="middle" fill="#1a0d00" font-size="13" font-weight="700">LLM call</text>
+
+              <!-- response processors / tool dispatch -->
+              <rect x="280" y="276" width="260" height="22" rx="6" fill="#0c2a23" stroke="#10b981"/>
+              <text x="410" y="292" text-anchor="middle" fill="#bbf7d0" font-size="11">response: NL planning · code_execution</text>
+              <rect x="280" y="300" width="260" height="22" rx="6" fill="#0c2a23" stroke="#10b981"/>
+              <text x="410" y="316" text-anchor="middle" fill="#bbf7d0" font-size="11">then handle_function_calls_async → Tool/Agent</text>
+
+              <rect x="280" y="328" width="260" height="38" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="410" y="346" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">emit Event(s) → Session</text>
+              <text x="410" y="361" text-anchor="middle" fill="#9aa6bd" font-size="10">callbacks/plugins observe each step</text>
+
+              <!-- agent composition → flow link -->
+              <path d="M220,162 L280,162" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <!-- loop arrow OUTSIDE the per-turn panel -->
+              <path d="M558,366 C625,290 625,200 558,140" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ad-arrY)" class="flow-line"/>
+              <!-- rotated label far right of the arc -->
+              <text x="640" y="195" fill="#fbbf24" font-size="10" transform="rotate(90 640 195)">↺ repeat until no function_calls</text>
+            </svg>
+          </div>
+          <div class="fw-text">
+            <div class="metaphor">"Compose agents like Lego; inside each one, the LLM turn flows through a fixed processor pipeline."</div>
+            <h4>Two orchestration axes</h4>
+            <p>
+              <b>Composition.</b> ADK ships a small algebra of agent shapes:
+              <code>LlmAgent</code> (the reasoning unit), <code>SequentialAgent</code>,
+              <code>ParallelAgent</code>, and <code>LoopAgent</code>. Compose them into a tree.
+              An <code>LlmAgent</code> can also <i>transfer control</i> to a sibling/sub-agent by
+              emitting a <code>transfer_to_agent</code> action.
+            </p>
+            <p>
+              <b>Per-turn flow.</b> A <code>BaseLlmFlow</code> — concretely
+              <code>SingleFlow</code> for solo agents and <code>AutoFlow</code> (which adds
+              <code>agent_transfer</code>) for multi-agent — runs each LLM turn through an ordered
+              list of <i>request processors</i> (<code>basic</code>, <code>instructions</code>,
+              <code>identity</code>, <code>contents</code>, NL planning, code execution, and
+              several others), calls the model, runs <i>response processors</i>
+              (<code>_nl_planning</code>, <code>_code_execution</code>), and finally invokes
+              <code>handle_function_calls_async</code> to dispatch any
+              <code>function_calls</code> on the response to the matching tool or sub-agent.
+              Every step emits <code>Event</code>s into the <code>Session</code>.
+            </p>
+            <h4>State + observability</h4>
+            <p>
+              State lives in a typed <code>Session</code> as an append-only stream of
+              <code>Event</code>s. Plugins and callbacks (<code>before_model_callback</code>,
+              <code>after_tool_callback</code>, …) hook into every transition — the same
+              hooks power tracing, eval, and policy.
+            </p>
+            <div class="twocol">
+              <div class="miniblock"><h5>Mechanism</h5><p>Built-in composition. Observability/eval, streaming, and live (audio) are all native.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Larger API surface than LangChain. The processor pipeline has its own lifecycle and ordering rules.</p></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ SEMANTIC KERNEL ============ -->
+      <article class="fw-card" id="sk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--sk)">Sk</div>
+          <div>
+            <h3>Microsoft Semantic Kernel · the Kernel auto-invokes plugin functions</h3>
+            <div class="sub">The agent delegates the loop to the model's function-choice behaviour; group chats add a Selection + Termination strategy.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg">
+            <svg viewBox="0 0 580 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel agent flow">
+              <defs>
+                <marker id="sk-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#bae6fd"/>
+                </marker>
+                <marker id="sk-arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+                </marker>
+                <linearGradient id="skG" x1="0" x2="1">
+                  <stop offset="0" stop-color="#2EA5FF"/><stop offset="1" stop-color="#60a5fa"/>
+                </linearGradient>
+              </defs>
+
+              <!-- Single agent panel (taller so the loop note has room) -->
+              <rect x="20" y="20" width="540" height="220" rx="14" fill="#171f33" stroke="#3a4a72"/>
+              <text x="40" y="42" fill="#9aa6bd" font-size="11">ChatCompletionAgent.invoke()</text>
+
+              <!-- ChatHistory -->
+              <rect x="40" y="60" width="140" height="130" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="110" y="86" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">ChatHistory</text>
+              <text x="110" y="106" text-anchor="middle" fill="#9aa6bd" font-size="11">system + user +</text>
+              <text x="110" y="122" text-anchor="middle" fill="#9aa6bd" font-size="11">assistant + tool msgs</text>
+              <text x="110" y="148" text-anchor="middle" fill="#9aa6bd" font-size="11">(persisted in</text>
+              <text x="110" y="164" text-anchor="middle" fill="#9aa6bd" font-size="11">AgentThread)</text>
+
+              <!-- Kernel -->
+              <rect x="210" y="60" width="170" height="130" rx="10" fill="url(#skG)"/>
+              <text x="295" y="86" text-anchor="middle" fill="#06243f" font-size="13" font-weight="700">Kernel</text>
+              <text x="295" y="106" text-anchor="middle" fill="#06243f" font-size="11">FunctionChoiceBehavior</text>
+              <text x="295" y="122" text-anchor="middle" fill="#06243f" font-size="11">.Auto(max_invoke=N)</text>
+              <text x="295" y="148" text-anchor="middle" fill="#06243f" font-size="11">if function_call →</text>
+              <text x="295" y="164" text-anchor="middle" fill="#06243f" font-size="11">invoke kernel function</text>
+
+              <!-- Plugins -->
+              <rect x="410" y="60" width="140" height="130" rx="10" fill="#0c2a23" stroke="#10b981"/>
+              <text x="480" y="86" text-anchor="middle" fill="#bbf7d0" font-size="12" font-weight="700">Plugins</text>
+              <text x="480" y="106" text-anchor="middle" fill="#a7f3d0" font-size="11">@kernel_function</text>
+              <text x="480" y="122" text-anchor="middle" fill="#a7f3d0" font-size="11">native or prompt</text>
+              <text x="480" y="148" text-anchor="middle" fill="#a7f3d0" font-size="11">→ exposed as</text>
+              <text x="480" y="164" text-anchor="middle" fill="#a7f3d0" font-size="11">"functions"</text>
+
+              <!-- horizontal arrows -->
+              <path d="M180,125 L210,125" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M380,125 L410,125" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+
+              <!-- internal loop note inside top panel -->
+              <text x="295" y="218" text-anchor="middle" fill="#fbbf24" font-size="11">↺ Kernel loops internally until no function_call</text>
+
+              <!-- Group chat panel (taller for the loop arc) -->
+              <rect x="20" y="260" width="540" height="160" rx="14" fill="#171f33" stroke="#3a4a72"/>
+              <text x="40" y="282" fill="#9aa6bd" font-size="11">AgentGroupChat (multi-agent)</text>
+
+              <rect x="40" y="300" width="120" height="60" rx="10" fill="url(#skG)"/>
+              <text x="100" y="327" text-anchor="middle" fill="#06243f" font-size="12" font-weight="700">Selection</text>
+              <text x="100" y="344" text-anchor="middle" fill="#06243f" font-size="10">strategy → next agent</text>
+
+              <rect x="180" y="300" width="120" height="60" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="240" y="327" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Agent N</text>
+              <text x="240" y="344" text-anchor="middle" fill="#9aa6bd" font-size="10">.invoke() → message</text>
+
+              <rect x="320" y="300" width="120" height="60" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="380" y="327" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Broadcast</text>
+              <text x="380" y="344" text-anchor="middle" fill="#9aa6bd" font-size="10">→ each agent's history</text>
+
+              <rect x="460" y="300" width="80" height="60" rx="10" fill="#0e1a2e" stroke="#3a8aff"/>
+              <text x="500" y="327" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">Termination</text>
+              <text x="500" y="344" text-anchor="middle" fill="#9ec5ff" font-size="10">strategy?</text>
+
+              <path d="M160,330 L180,330" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M300,330 L320,330" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+              <path d="M440,330 L460,330" stroke="#bae6fd" stroke-width="2" marker-end="url(#sk-arr)" fill="none"/>
+
+              <!-- loop-back arc inside the panel -->
+              <path d="M500,360 Q 300,415 100,360" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#sk-arrY)" fill="none" class="flow-line"/>
+              <text x="300" y="412" text-anchor="middle" fill="#fbbf24" font-size="10">if not done → next round</text>
+            </svg>
+          </div>
+          <div class="fw-text">
+            <div class="metaphor">"Plugins are functions, the Kernel calls them, and the model decides when to ask."</div>
+            <h4>Single-agent: the Kernel does the looping</h4>
+            <p>
+              A <code>ChatCompletionAgent</code> is mostly a thin wrapper: it loads the
+              <code>ChatHistory</code> from an <code>AgentThread</code>, sets a
+              <code>FunctionChoiceBehavior</code> (typically <code>Auto</code>), and asks the
+              <code>Kernel</code> to chat-complete. With <code>Auto</code> behaviour, the Kernel
+              itself runs the function-call loop: model emits a function call → Kernel resolves it
+              to a registered <code>@kernel_function</code> in some plugin → invokes it → appends
+              the result to the chat → calls the model again — until no function calls are emitted
+              or <code>maximum_auto_invoke_attempts</code> is hit.
+            </p>
+            <h4>Multi-agent: AgentGroupChat</h4>
+            <p>
+              For collaborations, <code>AgentGroupChat</code> uses a
+              <code>SelectionStrategy</code> to pick which agent speaks next, runs that agent's
+              <code>invoke()</code>, broadcasts the resulting message into every agent's history,
+              then asks a <code>TerminationStrategy</code> whether to stop. The strategy can be a
+              kernel function — i.e. another LLM judging the conversation.
+            </p>
+            <div class="twocol">
+              <div class="miniblock"><h5>Mechanism</h5><p>.NET- and Python-friendly API. Filters, telemetry, and identity abstractions are built in. Tools are plugins registered with the Kernel.</p></div>
+              <div class="miniblock"><h5>Tradeoffs</h5><p>Loop control is encapsulated inside the Kernel. Fine-grained intervention requires Kernel-level service registration rather than explicit graph nodes.</p></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON TABLE ================= -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side</h2>
+    <p class="lede">Five views of the same loop. Read across rows to see how each framework answers the same question.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="fw"><span class="dot" style="background:var(--lc)"></span> LangChain</th>
+            <th class="fw"><span class="dot" style="background:var(--lg)"></span> LangGraph</th>
+            <th class="fw"><span class="dot" style="background:var(--crew)"></span> CrewAI</th>
+            <th class="fw"><span class="dot" style="background:var(--adk)"></span> Google ADK</th>
+            <th class="fw"><span class="dot" style="background:var(--sk)"></span> Semantic Kernel</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Loop shape</td>
+            <td>Single <code>while</code> in <code>AgentExecutor</code></td>
+            <td>Two-node <code>StateGraph</code> with conditional edge</td>
+            <td>Crew→Tasks (outer) + per-Agent <code>while</code> (inner)</td>
+            <td>Agent tree + per-turn processor pipeline</td>
+            <td>Kernel-driven function-choice loop</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Tool dispatch</td>
+            <td>Output parser → name lookup in <code>name_to_tool_map</code></td>
+            <td><code>ToolNode</code> fans out every <code>tool_call</code> on the last <code>AIMessage</code></td>
+            <td><code>_handle_native_tool_calls</code> (or ReAct text parse) → tool with caching/guardrails</td>
+            <td><code>handle_function_calls_async</code> after response processors</td>
+            <td>Kernel auto-invokes the matching <code>@kernel_function</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">State / memory</td>
+            <td><code>intermediate_steps</code> scratchpad (per run)</td>
+            <td><code>messages</code> channel + checkpointer (durable)</td>
+            <td>Per-agent message list + cross-task <code>context</code></td>
+            <td><code>Session</code> as an append-only <code>Event</code> stream</td>
+            <td><code>ChatHistory</code> persisted via <code>AgentThread</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Termination</td>
+            <td><code>AgentFinish</code>, <code>return_direct</code>, <code>max_iterations</code>, <code>max_execution_time</code></td>
+            <td>No <code>tool_calls</code> on last message → <code>END</code> (or <code>recursion_limit</code>)</td>
+            <td><code>AgentFinish</code> or <code>max_iter</code>; Crew ends when all tasks complete</td>
+            <td>No more <code>function_calls</code>; <code>LoopAgent</code> uses <code>max_iters</code></td>
+            <td>No more function calls; <code>maximum_auto_invoke_attempts</code>; or <code>TerminationStrategy</code> in group chat</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Multi-agent</td>
+            <td>Manual — wrap an agent as a Tool</td>
+            <td>Compose <code>StateGraph</code>s; supervisor patterns</td>
+            <td>First-class — Crew + Process (sequential / hierarchical)</td>
+            <td>Sequential / Parallel / Loop agents + <code>transfer_to_agent</code></td>
+            <td><code>AgentGroupChat</code> with Selection + Termination strategies</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Streaming &amp; HITL</td>
+            <td>Callback handlers; HITL via custom tools</td>
+            <td>Native streaming; <code>interrupt_before/after</code> for HITL</td>
+            <td>Step callbacks; built-in HITL via <code>task.human_input=True</code></td>
+            <td>Native event stream; <code>request_confirmation</code> processor for HITL</td>
+            <td>Streaming via <code>invoke_stream</code>; filters/middleware for HITL</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Code anchor</td>
+            <td><code>libs/langchain/langchain_classic/agents/agent.py</code></td>
+            <td><code>libs/prebuilt/.../chat_agent_executor.py</code> · <code>create_react_agent</code></td>
+            <td><code>lib/crewai/.../agents/crew_agent_executor.py</code></td>
+            <td><code>src/google/adk/flows/llm_flows/base_llm_flow.py</code></td>
+            <td><code>python/semantic_kernel/agents/chat_completion/chat_completion_agent.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Best fit</td>
+            <td>Simple "LLM + tools" prototypes; teaching the loop</td>
+            <td>Production agents with checkpointing, branching, HITL</td>
+            <td>"Team of specialists" workflows; quick org-style prototypes</td>
+            <td>Polyglot agent systems on Google infra; eval/observability heavy</td>
+            <td>Enterprise .NET/Python apps with plugin-centric integration</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAKEAWAYS ================= -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Architect's cheat sheet</h2>
+    <p class="lede">Five things to remember when you compare these frameworks at a whiteboard.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">PATTERN</span>
+        <h4>1 · It's the same loop, just different topologies</h4>
+        <p>
+          Reason → Act → Observe → Decide. Whether it's a <code>while</code>, a graph, a pipeline,
+          or a kernel-driven auto-invoke — the four-step semantics are identical. Pick the topology
+          that matches the property you need most: simplicity, durability, composition, or enterprise plumbing.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">STATE</span>
+        <h4>2 · "Where does the state live?" is the real differentiator</h4>
+        <p>
+          Scratchpad (LangChain), Channel + Checkpoint (LangGraph), Session/Event log (ADK),
+          ChatHistory/Thread (SK), per-Agent message list (CrewAI). This drives durability,
+          replay, time-travel, and how easy multi-agent gets.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CONTROL</span>
+        <h4>3 · Implicit vs. explicit termination matters in production</h4>
+        <p>
+          LangGraph and ADK make the stop condition a first-class artifact (a router edge, a
+          processor). LangChain and SK rely on the model+limit. For long-running, expensive, or
+          regulated agents, prefer the explicit version.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SCALE</span>
+        <h4>4 · Multi-agent isn't "one feature" — it's an architectural shift</h4>
+        <p>
+          CrewAI, ADK, and SK build multi-agent in. LangGraph composes graphs to do it. LangChain
+          treats other agents as tools. Pick based on whether collaboration is core to your domain
+          or an occasional pattern.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">OBSERVABILITY</span>
+        <h4>5 · Hooks decide whether you can run this in production</h4>
+        <p>
+          Look for: per-step callbacks (LangChain), node-level streaming (LangGraph), pre/post
+          model + tool callbacks and plugins (ADK), filters + telemetry (SK), step callbacks
+          (CrewAI). If you can't intercept every transition, you can't trace, eval, or guard.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">MIGRATION</span>
+        <h4>6 · The harness is the easy part to swap</h4>
+        <p>
+          Tools, prompts, evals, and guardrails are where the value compounds. Treat the
+          orchestration framework as <i>replaceable infrastructure</i> — keep your tool definitions,
+          prompts, and eval harness portable.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GLOSSARY ================= -->
+<section id="glossary">
+  <div class="container">
+    <h2>Mini-glossary</h2>
+    <p class="lede">A few terms used above that mean different things in different frameworks.</p>
+    <div class="gloss">
+      <div><b>Tool / Function / Plugin function</b> — a callable the model can ask the framework to run, exposed by a JSON schema.</div>
+      <div><b>Tool call</b> — the LLM's structured request to run a tool with named arguments (provider-native function calling).</div>
+      <div><b>ReAct</b> — older pattern where the model emits "Thought / Action / Action Input / Observation" as plain text; the framework parses it.</div>
+      <div><b>Scratchpad</b> — the running list of (action, observation) pairs the framework re-injects into the prompt each turn.</div>
+      <div><b>StateGraph / channel / reducer</b> — LangGraph primitives; channels accumulate values via a reducer (e.g. <code>add_messages</code>).</div>
+      <div><b>Checkpointer</b> — pluggable store (memory, SQLite, Postgres) that persists graph state at each step → resume / time-travel.</div>
+      <div><b>Process</b> (CrewAI) — strategy that turns a list of Tasks into an executable plan: sequential or hierarchical (with a manager LLM).</div>
+      <div><b>InvocationContext / Session / Event</b> (ADK) — the runtime container, the persisted conversation, and the typed entries that make it up.</div>
+      <div><b>FunctionChoiceBehavior</b> (SK) — Auto / Required / None — tells the Kernel whether to let the model pick functions and to auto-invoke them.</div>
+      <div><b>SelectionStrategy / TerminationStrategy</b> (SK) — pluggable policies for who speaks next and when the group chat ends.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Conceptual overview compiled from the upstream source of
+    LangChain, LangGraph, CrewAI, Google ADK (adk-python), and Microsoft Semantic Kernel.
+    Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  // smooth-scroll for the pill nav
+  document.querySelectorAll('a.pill').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

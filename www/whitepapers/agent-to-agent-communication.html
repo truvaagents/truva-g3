@@ -1,0 +1,1197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent-to-Agent Communication in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #121826;
+    --bg-3: #1a2236;
+    --ink: #e6edf7;
+    --muted: #9aa6bd;
+    --line: #2a3550;
+    --accent: #7cc4ff;
+    --warn: #fbbf24;
+    --good: #34d399;
+    --human: #f472b6;
+    --net: #38bdf8;
+    --lc: #1F6FEB;
+    --lg: #14b8a6;
+    --crew: #7c3aed;
+    --adk: #EA4335;
+    --sk: #2EA5FF;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; font-size: 13px; line-height:1.5; color:#cfe1ff; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.hero {
+    padding: 64px 0 36px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero .subtitle {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 820px;
+    margin: 0 auto 22px;
+  }
+  .research-date {
+    display: inline-block;
+    margin-bottom: 18px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+  .pillrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); font-size: 13px; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; }
+  .dot { width:9px; height:9px; border-radius: 50%; display:inline-block; }
+
+  section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 28px; }
+
+  /* Universal */
+  .universal-stack { display: grid; gap: 24px; }
+  .uni-svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 24px 32px;
+  }
+  .uni-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .uni-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 980px) { .uni-list { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .uni-list { grid-template-columns: 1fr; } }
+  .uni-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .uni-item b { color: #fff; }
+  .uni-item .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #0e2a3d; color: #7dd3fc; margin-right:8px; border:1px solid #1e4d6e;
+  }
+
+  /* Framework cards — STACKED layout: diagram on top, prose below in 2 columns */
+  .frameworks { display: grid; gap: 28px; }
+  .fw-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .fw-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255,255,255,0.015);
+  }
+  .fw-badge {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 18px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .fw-head h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .fw-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .fw-body { display: flex; flex-direction: column; }
+  .fw-svg-wrap {
+    padding: 28px 32px;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(900px 500px at 20% 10%, rgba(56,189,248,.05), transparent 60%),
+      var(--bg-2);
+  }
+  .fw-svg-wrap svg { width: 100%; height: auto; display: block; max-width: 1080px; margin: 0 auto; }
+  .fw-text-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    padding: 24px 32px;
+  }
+  .fw-text-grid > div { min-width: 0; }
+  @media (max-width: 880px) { .fw-text-grid { grid-template-columns: 1fr; padding: 22px; } }
+  .fw-text-grid h4 { margin: 14px 0 6px; font-size: 14px; color: var(--accent); letter-spacing:.04em; text-transform: uppercase; }
+  .fw-text-grid h4:first-child { margin-top: 0; }
+  .fw-text-grid p { margin: 0 0 10px; overflow-wrap: anywhere; }
+
+  .metaphor {
+    margin: 0 0 12px; padding: 10px 14px;
+    background: #0e2a3d; border-left: 3px solid var(--net); border-radius: 8px;
+    color: #cfe7fa; font-style: italic; font-size: 14px;
+  }
+  .twocol { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width: 600px) { .twocol { grid-template-columns: 1fr; } }
+  .miniblock { background: var(--bg-3); border:1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .miniblock h5 { margin:0 0 4px; font-size:12px; color:#a8b6d6; letter-spacing:.05em; text-transform: uppercase; }
+  .miniblock p { margin:0; font-size:13.5px; color:#dbe6ff; }
+
+  .ax-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (max-width: 600px) { .ax-grid { grid-template-columns: 1fr; } }
+  .ax-grid > .ax { min-width: 0; }
+  .ax {
+    background: var(--bg-3); border:1px solid var(--line); border-left: 3px solid var(--net); border-radius: 8px;
+    padding: 10px 12px;
+    overflow-wrap: anywhere;
+  }
+  .ax h5 { margin:0 0 4px; font-size:12px; color:#7dd3fc; letter-spacing:.04em; text-transform: uppercase; }
+  .ax p { margin:0; font-size:13.5px; color:#dbe6ff; overflow-wrap: anywhere; }
+  .ax.no { border-left-color: #555; opacity: .7; }
+  .ax.no h5 { color:#888; }
+
+  /* Comparison table */
+  .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align:left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; }
+  th.fw, td.fw { white-space: nowrap; }
+  td.row-hd { background: var(--bg-2); font-weight:600; }
+
+  /* Takeaways */
+  .takeaways { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--bg-2); border:1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin:0; color:#cfd9ee; font-size: 14px; }
+  .ta .tag {
+    display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background: #0e2a3d; color: #7dd3fc; margin-bottom:8px;
+  }
+
+  footer { padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px; }
+
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .fw-card { break-inside: avoid; }
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Agent-to-Agent Communication in AI Agent Frameworks</h1>
+    <p class="subtitle">
+      How agents in <b>LangChain</b>, <b>LangGraph</b>, <b>CrewAI</b>, <b>Google&nbsp;ADK</b>, and
+      <b>Microsoft Semantic Kernel</b> find each other, expose their capabilities to the LLM, and
+      talk — both <i>embedded</i> in the same process and <i>distributed</i> across services.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#universal"><span class="dot" style="background:var(--net)"></span>The four Agent-to-Agent questions</a>
+      <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
+      <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
+      <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
+      <a class="pill" href="#adk"><span class="dot" style="background:var(--adk)"></span>Google ADK</a>
+      <a class="pill" href="#sk"><span class="dot" style="background:var(--sk)"></span>Semantic Kernel</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Cheat sheet</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= UNIVERSAL FRAMING ================= -->
+<section id="universal">
+  <div class="container">
+    <h2>Four questions every Agent-to-Agent story has to answer</h2>
+    <p class="lede">
+      Whether two agents are running in the same process or across continents, the framework has
+      to answer the same four questions before they can collaborate. The differences between
+      LangChain, LangGraph, CrewAI, ADK, and Semantic Kernel are best understood as four different
+      sets of answers.
+    </p>
+
+    <div class="universal-stack">
+      <div class="uni-svg-wrap">
+        <svg viewBox="0 -20 1040 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal Agent-to-Agent diagram">
+          <defs>
+            <marker id="u-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+            <marker id="u-arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="#38bdf8"/></marker>
+            <linearGradient id="agentG" x1="0" x2="1">
+              <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/></linearGradient>
+            <linearGradient id="netG" x1="0" x2="1">
+              <stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#38bdf8"/></linearGradient>
+          </defs>
+
+          <!-- Agent A on the left -->
+          <rect x="60" y="100" width="200" height="180" rx="14" fill="url(#agentG)" opacity=".92"/>
+          <text x="160" y="130" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Agent A (caller)</text>
+          <text x="160" y="152" text-anchor="middle" fill="#dbeafe" font-size="11">LLM · tools · memory</text>
+          <text x="160" y="172" text-anchor="middle" fill="#dbeafe" font-size="11">decides "I need help"</text>
+
+          <!-- Discovery box — pulled UP so its bottom edge (y=85) sits above Agent A/B tops (y=100) -->
+          <rect x="380" y="15" width="280" height="70" rx="12" fill="#0e2a3d" stroke="#38bdf8" stroke-width="2"/>
+          <text x="520" y="38" text-anchor="middle" fill="#bae6fd" font-size="13" font-weight="700">Discovery</text>
+          <text x="520" y="56" text-anchor="middle" fill="#7dd3fc" font-size="11">explicit list · registry · AgentCard</text>
+          <text x="520" y="74" text-anchor="middle" fill="#7dd3fc" font-size="11">"what other agents exist?"</text>
+
+          <!-- Label 1 — bottom edge flush against Discovery's top edge (label fully above) -->
+          <circle cx="520" cy="1" r="14" fill="url(#netG)" stroke="#fff" stroke-width="2"/>
+          <text x="520" y="6" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">1</text>
+
+          <!-- Label 2 — bottom edge flush against Agent A's top edge, offset right of the
+               discovery arrow that lands on the top centre -->
+          <circle cx="260" cy="86" r="14" fill="url(#netG)" stroke="#fff" stroke-width="2"/>
+          <text x="260" y="91" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">2</text>
+
+          <!-- Agent B on the right (embedded, same process) -->
+          <rect x="780" y="100" width="200" height="180" rx="14" fill="url(#agentG)" opacity=".92"/>
+          <text x="880" y="130" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Agent B (callee)</text>
+          <text x="880" y="152" text-anchor="middle" fill="#dbeafe" font-size="11">embedded — same process</text>
+          <text x="880" y="172" text-anchor="middle" fill="#dbeafe" font-size="11">shared memory, fast calls</text>
+
+          <!-- Label 3 — bottom edge flush against Agent B (callee)'s top edge, top-centre -->
+          <circle cx="880" cy="86" r="14" fill="url(#netG)" stroke="#fff" stroke-width="2"/>
+          <text x="880" y="91" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">3</text>
+
+          <!-- Embedded comm arrow -->
+          <path d="M260,180 L780,180" stroke="#9ec5ff" stroke-width="2" marker-end="url(#u-arr)" fill="none"/>
+          <text x="520" y="172" text-anchor="middle" fill="#cfe1ff" font-size="11">tool-call · graph edge · transfer</text>
+
+          <!-- Network boundary line -->
+          <line x1="40" y1="310" x2="1000" y2="310" stroke="#2a3550" stroke-dasharray="4 6"/>
+          <text x="40" y="305" fill="#9aa6bd" font-size="11">process / network boundary</text>
+
+          <!-- Distributed agent below -->
+          <rect x="780" y="330" width="200" height="70" rx="14" fill="#1a2236" stroke="#38bdf8" stroke-width="2"/>
+          <text x="880" y="358" text-anchor="middle" fill="#bae6fd" font-size="14" font-weight="700">Agent B' (remote)</text>
+          <text x="880" y="378" text-anchor="middle" fill="#7dd3fc" font-size="11">different process · different host</text>
+          <text x="880" y="394" text-anchor="middle" fill="#7dd3fc" font-size="11">different runtime · different team</text>
+
+          <!-- Label 4 — bottom edge flush against Agent B (remote)'s top edge -->
+          <circle cx="880" cy="316" r="14" fill="url(#netG)" stroke="#fff" stroke-width="2"/>
+          <text x="880" y="321" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">4</text>
+
+          <!-- Distributed comm arrow -->
+          <path d="M260,260 C 400,260 500,340 780,360" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#u-arrN)" fill="none" class="flow-line"/>
+          <text x="520" y="280" text-anchor="middle" fill="#bae6fd" font-size="11">A2A protocol · HTTP · JSON-RPC · gRPC · streaming</text>
+
+          <!-- Discovery → Agent A connection.
+               Cubic ends with vertical tangent at (160, 90); a short straight L 160,100 segment
+               then runs straight down into the arrowhead, so the line connects at the EXACT centre
+               of the arrowhead base (no slight angle from the curve still bending at t=1). -->
+          <path d="M380,50 C 280,50 160,65 160,90 L 160,100" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#u-arrN)" fill="none"/>
+          <text x="250" y="50" text-anchor="middle" fill="#7dd3fc" font-size="10">tells A about B</text>
+        </svg>
+      </div>
+
+      <div class="uni-list">
+        <div class="uni-item">
+          <span class="tag">1</span><b>Discovery</b><br>
+          How does Agent A know Agent B exists? Possibilities: an explicit list at construction
+          time, a parent–child agent tree, a runtime registry, or a remote
+          <code>AgentCard</code> fetched over HTTP.
+        </div>
+        <div class="uni-item">
+          <span class="tag">2</span><b>LLM exposure</b><br>
+          Discovery is one thing — telling the LLM is another. Most frameworks surface
+          peer agents as <i>tools</i> the LLM can call (handoff tools, delegate-work tools), or
+          inject their descriptions into the system prompt. The LLM picks who to talk to.
+        </div>
+        <div class="uni-item">
+          <span class="tag">3</span><b>Embedded comms</b><br>
+          When agents share a process: a function call, a shared graph state channel, an event
+          bus, or a "transfer control" action. Microseconds, full type safety, full memory access.
+        </div>
+        <div class="uni-item">
+          <span class="tag">4</span><b>Distributed comms</b><br>
+          When agents are separate services: HTTP requests, JSON-RPC / gRPC, optional streaming
+          / push notifications, auth, retries. Most of the deck now ships with native support
+          for the <a href="https://a2a-protocol.org" target="_blank">A2A protocol</a>.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FRAMEWORKS ================= -->
+<section id="frameworks" style="border-bottom:none;">
+  <div class="container">
+    <h2>How each framework answers those four questions</h2>
+    <p class="lede">
+      For each card: a diagram showing the framework's Agent-to-Agent machinery (in-process on top, network
+      below), the four-axis coverage, and a code-grounded explanation.
+    </p>
+
+    <div class="frameworks">
+
+      <!-- ============ LANGCHAIN ============ -->
+      <article class="fw-card" id="langchain">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lc)">Lc</div>
+          <div>
+            <h3>LangChain · agent-as-tool</h3>
+            <div class="sub">Wrap any agent (or any Runnable) as a Tool. The other agent's LLM picks it up like any function call.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangChain Agent-to-Agent">
+              <defs>
+                <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <linearGradient id="lcG" x1="0" x2="1"><stop offset="0" stop-color="#1F6FEB"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">In-process · Python</text>
+
+              <!-- Three boxes spread evenly across the width with 100 px gaps,
+                   all vertically centred on y=135 -->
+
+              <!-- Agent A (Researcher) — y=60..210, centre y=135 -->
+              <rect x="60" y="60" width="220" height="150" rx="14" fill="url(#lcG)"/>
+              <text x="170" y="90" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Agent A · Researcher</text>
+              <text x="170" y="112" text-anchor="middle" fill="#dbeafe" font-size="11">AgentExecutor</text>
+              <text x="170" y="130" text-anchor="middle" fill="#dbeafe" font-size="11">tools list:</text>
+              <rect x="80" y="140" width="180" height="22" rx="6" fill="#fff" opacity=".18"/>
+              <text x="170" y="155" text-anchor="middle" fill="#fff" font-size="11">search_tool</text>
+              <rect x="80" y="170" width="180" height="22" rx="6" fill="#fff" opacity=".18"/>
+              <text x="170" y="185" text-anchor="middle" fill="#fff" font-size="11">writer_agent (as a Tool)</text>
+
+              <!-- Tool wrapper — y=85..185, centre y=135 (now lined up with the agents) -->
+              <rect x="380" y="85" width="280" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="520" y="113" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Tool wrapper</text>
+              <text x="520" y="131" text-anchor="middle" fill="#9aa6bd" font-size="11">name: "writer_agent"</text>
+              <text x="520" y="147" text-anchor="middle" fill="#9aa6bd" font-size="11">description: "writes blog posts from notes"</text>
+              <text x="520" y="165" text-anchor="middle" fill="#cfe1ff" font-size="11" font-style="italic">runnable.as_tool() · or hand-rolled</text>
+
+              <!-- Agent B (Writer) — y=60..210, centre y=135 -->
+              <rect x="760" y="60" width="220" height="150" rx="14" fill="url(#lcG)"/>
+              <text x="870" y="90" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Agent B · Writer</text>
+              <text x="870" y="112" text-anchor="middle" fill="#dbeafe" font-size="11">AgentExecutor</text>
+              <text x="870" y="130" text-anchor="middle" fill="#dbeafe" font-size="11">a totally separate executor</text>
+              <text x="870" y="148" text-anchor="middle" fill="#dbeafe" font-size="11">with its own tools + prompt</text>
+              <text x="870" y="172" text-anchor="middle" fill="#dbeafe" font-size="11">.invoke({"input": ...})</text>
+              <text x="870" y="190" text-anchor="middle" fill="#dbeafe" font-size="11">→ AgentFinish</text>
+
+              <!-- Symmetric arrow pairs: forward at y=115, backward at y=155.
+                   Each pair spans the 100 px gap between the boxes -->
+
+              <!-- A ↔ Tool (gap x=280..380) -->
+              <path d="M280,115 L380,115" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="330" y="108" text-anchor="middle" fill="#9aa6bd" font-size="10">LLM picks tool</text>
+              <path d="M380,155 L280,155" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="330" y="148" text-anchor="middle" fill="#9aa6bd" font-size="10">tool result</text>
+
+              <!-- Tool ↔ B (gap x=660..760) -->
+              <path d="M660,115 L760,115" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="710" y="108" text-anchor="middle" fill="#9aa6bd" font-size="10">.invoke()</text>
+              <path d="M760,155 L660,155" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lc-arr)" fill="none"/>
+              <text x="710" y="148" text-anchor="middle" fill="#9aa6bd" font-size="10">AgentFinish</text>
+
+              <!-- Bottom note -->
+              <line x1="40" y1="240" x2="1000" y2="240" stroke="#2a3550" stroke-dasharray="4 6"/>
+              <text x="40" y="260" fill="#9aa6bd" font-size="12">Distributed · classic AgentExecutor doesn't have native A2A</text>
+              <rect x="40" y="280" width="960" height="80" rx="12" fill="#171f33" stroke="#3a4a72"/>
+              <text x="520" y="310" text-anchor="middle" fill="#cfe1ff" font-size="13">Roll your own: an HTTP tool that POSTs to the remote agent.</text>
+              <text x="520" y="332" text-anchor="middle" fill="#9aa6bd" font-size="12">Or migrate the workflow to <tspan font-weight="700" fill="#bae6fd">LangGraph</tspan> (deployable) and use <tspan font-family="ui-monospace" fill="#bae6fd">RemoteGraph</tspan>.</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Make Agent B look like a function. Hand it to Agent A. Done."</div>
+              <h4>How it works</h4>
+              <p>
+                LangChain's classic <code>AgentExecutor</code> has no first-class concept of
+                "another agent" — multi-agent collaboration is built by treating the second
+                agent as a <i>Tool</i>. Two patterns are common:
+              </p>
+              <ul>
+                <li><b>Hand-rolled wrapper</b> — a <code>Tool</code> whose <code>_run</code>
+                  method calls <code>other_agent.invoke({"input": ...})</code> and returns the
+                  string output.</li>
+                <li><b><code>Runnable.as_tool()</code></b> — any LangChain Runnable (including a
+                  compiled agent) can be converted to a Tool with <code>.as_tool(name=..., description=...)</code>
+                  (defined in <code>langchain_core/runnables/base.py</code>).</li>
+              </ul>
+              <p>
+                Agent A's LLM "discovers" Agent B exactly the same way it discovers any other
+                tool: name + description in the tool list. It picks the call by emitting a
+                tool_call. The framework dispatches synchronously, in-process.
+              </p>
+            </div>
+            <div>
+              <h4>Axis coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Discovery</h5><p>Manual: you build the tool list when constructing each agent.</p></div>
+                <div class="ax"><h5>2 · LLM exposure</h5><p>Native — wrapped agent appears as a tool with name + description, indistinguishable from a normal function tool.</p></div>
+                <div class="ax"><h5>3 · Embedded</h5><p>Synchronous in-process call. Fast, simple, no scheduling.</p></div>
+                <div class="ax no"><h5>4 · Distributed</h5><p>Not in the framework. You'd write an HTTP-tool yourself or migrate to LangGraph.</p></div>
+              </div>
+              <h4>Protocol on the wire</h4>
+              <p>None native. In-process Python calls only. For network access: roll your own HTTP tool that <code>POST</code>s to the remote agent — auth, retries, streaming all on you.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">libs/core/langchain_core/runnables/base.py · <code>Runnable.as_tool()</code><br>libs/langchain/langchain_classic/agents/agent.py · <code>AgentExecutor</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ LANGGRAPH ============ -->
+      <article class="fw-card" id="langgraph">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--lg)">Lg</div>
+          <div>
+            <h3>LangGraph · subgraphs &amp; <code>RemoteGraph</code></h3>
+            <div class="sub">Each agent compiles into a Runnable. Use it as a node in a supervisor graph — locally or via HTTP to a deployed graph.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph Agent-to-Agent">
+              <defs>
+                <marker id="lg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+                <marker id="lg-arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#38bdf8"/></marker>
+                <linearGradient id="lgG" x1="0" x2="1"><stop offset="0" stop-color="#0d9488"/><stop offset="1" stop-color="#14b8a6"/></linearGradient>
+                <linearGradient id="netG2" x1="0" x2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#38bdf8"/></linearGradient>
+              </defs>
+
+              <!-- Embedded -->
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Embedded · Supervisor StateGraph</text>
+              <rect x="20" y="50" width="1000" height="180" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- Supervisor node -->
+              <rect x="60" y="90" width="200" height="100" rx="12" fill="url(#lgG)"/>
+              <text x="160" y="120" text-anchor="middle" fill="#03241f" font-size="14" font-weight="700">supervisor</text>
+              <text x="160" y="140" text-anchor="middle" fill="#03241f" font-size="11">LLM with handoff tools:</text>
+              <text x="160" y="158" text-anchor="middle" fill="#03241f" font-size="11">handoff_to_researcher</text>
+              <text x="160" y="174" text-anchor="middle" fill="#03241f" font-size="11">handoff_to_writer</text>
+
+              <!-- Worker subgraphs (shifted right by 60 px so the supervisor → worker arrows
+                   are 120 px instead of 60 px and the right margin is no longer 160 px wasted) -->
+              <rect x="380" y="70" width="200" height="60" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="480" y="98" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">researcher (subgraph)</text>
+              <text x="480" y="116" text-anchor="middle" fill="#a7f3d0" font-size="11">create_react_agent → Runnable</text>
+
+              <rect x="380" y="150" width="200" height="60" rx="12" fill="#0c2a23" stroke="#10b981" stroke-width="2"/>
+              <text x="480" y="178" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">writer (subgraph)</text>
+              <text x="480" y="196" text-anchor="middle" fill="#a7f3d0" font-size="11">create_react_agent → Runnable</text>
+
+              <!-- Shared state channel (shifted right by 120 px to balance the layout) -->
+              <rect x="700" y="90" width="280" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="840" y="120" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">state.messages (channel)</text>
+              <text x="840" y="140" text-anchor="middle" fill="#9aa6bd" font-size="11">add_messages reducer</text>
+              <text x="840" y="158" text-anchor="middle" fill="#9aa6bd" font-size="11">checkpointer makes it durable</text>
+              <text x="840" y="176" text-anchor="middle" fill="#9aa6bd" font-size="11">all subgraphs read &amp; append</text>
+
+              <!-- Supervisor → workers (120 px gap) -->
+              <path d="M260,110 L380,100" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <path d="M260,170 L380,180" stroke="#9ec5ff" stroke-width="2" marker-end="url(#lg-arr)" fill="none"/>
+              <!-- Workers ↔ shared state (120 px gap) -->
+              <path d="M580,100 L700,120" stroke="#9ec5ff" stroke-width="2" stroke-dasharray="6 4" fill="none"/>
+              <path d="M580,180 L700,160" stroke="#9ec5ff" stroke-width="2" stroke-dasharray="6 4" fill="none"/>
+              <text x="640" y="150" text-anchor="middle" fill="#9aa6bd" font-size="10">read/write</text>
+
+              <!-- Distributed -->
+              <text x="40" y="262" fill="#9aa6bd" font-size="12">Distributed · RemoteGraph speaks the LangGraph Server API</text>
+              <rect x="20" y="280" width="1000" height="160" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="60" y="320" width="200" height="80" rx="12" fill="url(#lgG)"/>
+              <text x="160" y="350" text-anchor="middle" fill="#03241f" font-size="14" font-weight="700">parent graph</text>
+              <text x="160" y="370" text-anchor="middle" fill="#03241f" font-size="11">add_node(remote)</text>
+              <text x="160" y="386" text-anchor="middle" fill="#03241f" font-size="11">looks like a local node</text>
+
+              <rect x="320" y="320" width="280" height="80" rx="12" fill="#0e2a3d" stroke="#38bdf8" stroke-width="2"/>
+              <text x="460" y="348" text-anchor="middle" fill="#bae6fd" font-size="13" font-weight="700">RemoteGraph(assistant_id, url=...)</text>
+              <text x="460" y="368" text-anchor="middle" fill="#7dd3fc" font-size="11">PregelProtocol over HTTP client</text>
+              <text x="460" y="384" text-anchor="middle" fill="#7dd3fc" font-size="11">streaming, checkpoints, interrupts: all preserved</text>
+
+              <rect x="660" y="320" width="320" height="80" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="820" y="346" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Remote graph (deployed)</text>
+              <text x="820" y="364" text-anchor="middle" fill="#9aa6bd" font-size="11">LangGraph Platform / self-hosted server</text>
+              <text x="820" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">/threads · /runs · /assistants endpoints</text>
+
+              <path d="M260,360 L320,360" stroke="#38bdf8" stroke-width="2" marker-end="url(#lg-arrN)" fill="none"/>
+              <path d="M600,360 L660,360" stroke="#38bdf8" stroke-width="2" marker-end="url(#lg-arrN)" fill="none"/>
+              <text x="630" y="350" text-anchor="middle" fill="#7dd3fc" font-size="10">HTTP</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Every agent compiles to a Runnable. Plug Runnables into a bigger graph — locally with subgraphs, remotely with RemoteGraph."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>In-process.</b> Each agent is built with <code>create_react_agent</code> (in
+                <code>langgraph.prebuilt</code> — now deprecated in favour of
+                <code>create_agent</code> in the <code>langchain</code> package), or any custom
+                <code>StateGraph</code>, and compiled to a Runnable. A "supervisor"
+                StateGraph adds those Runnables as <i>nodes</i>; conditional edges or
+                <i>handoff</i> tools (in the <code>langgraph-supervisor</code> /
+                <code>langgraph-handoff</code> add-ons) decide who runs next. All nodes share the
+                graph's state channels — the <code>messages</code> channel with
+                <code>add_messages</code> reducer is the universal "shared scratchpad."
+              </p>
+              <p>
+                <b>Distributed.</b> <code>RemoteGraph(assistant_id, url=...)</code> from
+                <code>langgraph/pregel/remote.py</code> implements the same
+                <code>PregelProtocol</code> as a local graph — but every method (<code>invoke</code>,
+                <code>stream</code>, <code>get_state</code>) talks to a LangGraph Server over
+                HTTP. You can drop a <code>RemoteGraph</code> directly into a parent graph as
+                a sub-node; the call site doesn't know it's remote.
+              </p>
+            </div>
+            <div>
+              <h4>Axis coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Discovery</h5><p>Explicit at compile-time. The supervisor's edges or handoff-tool list defines which agents exist.</p></div>
+                <div class="ax"><h5>2 · LLM exposure</h5><p>Handoff tools — one tool per worker, with auto-generated descriptions. Or <code>create_react_agent(name=...)</code> for use as a sub-node.</p></div>
+                <div class="ax"><h5>3 · Embedded</h5><p>Shared state channels with reducers. Native streaming, parallel <code>Send</code>, durable checkpointer.</p></div>
+                <div class="ax"><h5>4 · Distributed</h5><p><code>RemoteGraph</code> over the LangGraph Server API. Same Pregel surface; HTTP under the hood.</p></div>
+              </div>
+              <h4>Protocol on the wire</h4>
+              <p><b>LangGraph Server API</b> over HTTP — REST endpoints (<code>/threads</code>, <code>/runs</code>, <code>/assistants</code>) plus streaming. Auth via API key or custom headers. <code>RemoteGraph</code> exposes the same <code>PregelProtocol</code> as a local graph, so the call site is identical.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">libs/langgraph/langgraph/pregel/remote.py · <code>RemoteGraph</code><br>libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py · <code>create_react_agent(name=...)</code><br>(separate libs) <code>langgraph-supervisor</code>, <code>langgraph-handoff</code></p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ CREWAI ============ -->
+      <article class="fw-card" id="crewai">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--crew)">Cr</div>
+          <div>
+            <h3>CrewAI · DelegateWorkTool + built-in A2A protocol</h3>
+            <div class="sub">In-process: a manager LLM gets a delegate tool per coworker. Across the wire: a full A2A client/server module ships in core.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CrewAI Agent-to-Agent">
+              <defs>
+                <marker id="cr-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd"/></marker>
+                <marker id="cr-arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#38bdf8"/></marker>
+                <linearGradient id="crewG" x1="0" x2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+              </defs>
+
+              <!-- Embedded: hierarchical Crew -->
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Embedded · Crew with Process.hierarchical</text>
+              <rect x="20" y="50" width="1000" height="170" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="60" y="80" width="200" height="120" rx="12" fill="url(#crewG)"/>
+              <text x="160" y="108" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Manager Agent</text>
+              <text x="160" y="128" text-anchor="middle" fill="#ede9fe" font-size="11">LLM with auto-generated</text>
+              <text x="160" y="146" text-anchor="middle" fill="#ede9fe" font-size="11">AgentTools = [DelegateWorkTool,</text>
+              <text x="160" y="162" text-anchor="middle" fill="#ede9fe" font-size="11">AskQuestionTool] per coworker</text>
+              <text x="160" y="184" text-anchor="middle" fill="#ede9fe" font-size="11">picks coworker by role</text>
+
+              <!-- DelegateWorkTool args (shifted right by 60 px so the gaps to Manager and to
+                   the coworkers are both 120 px instead of 60 px) -->
+              <rect x="380" y="80" width="280" height="120" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="520" y="106" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">DelegateWorkTool args</text>
+              <text x="520" y="124" text-anchor="middle" fill="#9aa6bd" font-size="11">task: str — what to do</text>
+              <text x="520" y="140" text-anchor="middle" fill="#9aa6bd" font-size="11">context: str — what we know</text>
+              <text x="520" y="156" text-anchor="middle" fill="#9aa6bd" font-size="11">coworker: str — by role/name</text>
+              <text x="520" y="178" text-anchor="middle" fill="#cfe1ff" font-size="11" font-style="italic">→ runs that agent's task</text>
+
+              <!-- Coworker agents — vertically centred on y=140 (matching Manager and
+                   DelegateWorkTool args). Researcher: y=85..135, Writer: y=145..195.
+                   The pair's combined span (85..195) is symmetric around y=140. -->
+              <rect x="780" y="85" width="200" height="50" rx="10" fill="url(#crewG)"/>
+              <text x="880" y="107" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Researcher</text>
+              <text x="880" y="123" text-anchor="middle" fill="#ede9fe" font-size="10">role · goal · backstory</text>
+
+              <rect x="780" y="145" width="200" height="50" rx="10" fill="url(#crewG)"/>
+              <text x="880" y="167" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Writer</text>
+              <text x="880" y="183" text-anchor="middle" fill="#ede9fe" font-size="10">role · goal · backstory</text>
+
+              <!-- Manager → DelegateWorkTool args (120 px) -->
+              <path d="M260,140 L380,140" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <!-- DelegateWorkTool args → Researcher / Writer — symmetric diagonals around y=140 -->
+              <path d="M660,125 L780,110" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+              <path d="M660,155 L780,170" stroke="#c4b5fd" stroke-width="2" marker-end="url(#cr-arr)" fill="none"/>
+
+              <!-- Distributed: A2A protocol -->
+              <text x="40" y="252" fill="#9aa6bd" font-size="12">Distributed · crewai/a2a/* — built on the official a2a-python SDK</text>
+              <rect x="20" y="270" width="1000" height="190" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="60" y="300" width="200" height="100" rx="12" fill="url(#crewG)"/>
+              <text x="160" y="328" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Local Agent</text>
+              <text x="160" y="348" text-anchor="middle" fill="#ede9fe" font-size="11">A2AConfig + wrapper</text>
+              <text x="160" y="364" text-anchor="middle" fill="#ede9fe" font-size="11">a2a/wrapper.py injects</text>
+              <text x="160" y="380" text-anchor="middle" fill="#ede9fe" font-size="11">delegate calls into the agent</text>
+
+              <rect x="320" y="290" width="280" height="120" rx="12" fill="#0e2a3d" stroke="#38bdf8" stroke-width="2"/>
+              <text x="460" y="316" text-anchor="middle" fill="#bae6fd" font-size="13" font-weight="700">A2A Protocol Layer</text>
+              <text x="460" y="334" text-anchor="middle" fill="#7dd3fc" font-size="11">AgentCard fetch (URL → JSON)</text>
+              <text x="460" y="350" text-anchor="middle" fill="#7dd3fc" font-size="11">JSON-RPC · gRPC transports</text>
+              <text x="460" y="366" text-anchor="middle" fill="#7dd3fc" font-size="11">Auth: APIKey · HTTPDigest · OAuth</text>
+              <text x="460" y="382" text-anchor="middle" fill="#7dd3fc" font-size="11">Streaming · push notifications · polling</text>
+              <text x="460" y="398" text-anchor="middle" fill="#7dd3fc" font-size="11">Extensions (a2ui, custom)</text>
+
+              <rect x="660" y="300" width="320" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="820" y="328" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Remote Agent (any A2A server)</text>
+              <text x="820" y="348" text-anchor="middle" fill="#9aa6bd" font-size="11">Could be another CrewAI agent.</text>
+              <text x="820" y="364" text-anchor="middle" fill="#9aa6bd" font-size="11">Could be ADK. Could be your own.</text>
+              <text x="820" y="384" text-anchor="middle" fill="#9aa6bd" font-size="11">Discovery: AVAILABLE_AGENTS_TEMPLATE</text>
+
+              <path d="M260,350 L320,350" stroke="#38bdf8" stroke-width="2" marker-end="url(#cr-arrN)" fill="none"/>
+              <path d="M600,350 L660,350" stroke="#38bdf8" stroke-width="2" marker-end="url(#cr-arrN)" fill="none"/>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Hand each agent a role and a goal. The manager LLM gets one delegate-tool per coworker. Cross the wire? Same code, A2A under the hood."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>In-process.</b> A <code>Crew</code> with <code>Process.hierarchical</code>
+                automatically wires the manager agent with <code>AgentTools(agents=...)</code> —
+                that constructs a <code>DelegateWorkTool</code> and an
+                <code>AskQuestionTool</code> for each coworker. The manager's LLM sees a single
+                tool whose schema accepts <code>(task, context, coworker)</code> — coworkers are
+                identified by their <i>role</i> string. Agents themselves are described to the
+                manager via their role / goal / backstory triples.
+              </p>
+              <p>
+                <b>Distributed.</b> CrewAI ships a sizeable <code>crewai/a2a/</code> module
+                (auth, transport, wrapper, agent_card, extensions, updates) built on the
+                official <code>a2a-python</code> SDK (you'll see <code>from a2a.types import
+                AgentCard</code> throughout). Discovery: <code>fetch_agent_card(url)</code>
+                pulls the remote agent's AgentCard. Transport: JSON-RPC over HTTPS or gRPC.
+                Auth: APIKey, HTTP Digest, OAuth schemes. Updates: streaming, push
+                notifications, polling — all built in.
+              </p>
+            </div>
+            <div>
+              <h4>Axis coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Discovery</h5><p>Local: list of agents in the Crew. Remote: AgentCard fetch by URL.</p></div>
+                <div class="ax"><h5>2 · LLM exposure</h5><p>Local: <code>DelegateWorkTool</code> with role-based dispatch. Remote: prompt templates inject available remote agents into the prompt.</p></div>
+                <div class="ax"><h5>3 · Embedded</h5><p>Synchronous task chaining; outputs propagate via <code>_get_context()</code>.</p></div>
+                <div class="ax"><h5>4 · Distributed</h5><p>Full A2A protocol, with multiple transports and auth schemes.</p></div>
+              </div>
+              <h4>Protocol on the wire</h4>
+              <p><b>A2A protocol</b>, built on the official <code>a2a-python</code> SDK. Three transports negotiated at runtime: <b>JSONRPC</b> (default), <b>gRPC</b>, and <b>HTTP+JSON</b> — all enumerated in <code>TransportType</code>. Updates: streaming, push notifications, and polling for long-running calls. Auth schemes in <code>a2a/auth/client_schemes.py</code>: <b>APIKey</b>, <b>HTTP Basic</b>, <b>HTTP Digest</b>, <b>Bearer Token</b>, <b>OAuth2</b> (client-credentials and authorization-code).</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">lib/crewai/.../tools/agent_tools/delegate_work_tool.py · <code>DelegateWorkTool</code><br>lib/crewai/.../a2a/wrapper.py · A2A delegation injection<br>lib/crewai/.../a2a/utils/agent_card.py · <code>fetch_agent_card</code><br>lib/crewai/.../a2a/utils/transport.py · JSON-RPC / gRPC</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ GOOGLE ADK ============ -->
+      <article class="fw-card" id="adk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--adk)">Ad</div>
+          <div>
+            <h3>Google ADK · agent tree + <code>RemoteA2aAgent</code></h3>
+            <div class="sub">In-process: parent–child tree with <code>transfer_to_agent</code>. Across the wire: A2A protocol, AgentCard, Starlette server.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Google ADK Agent-to-Agent">
+              <defs>
+                <marker id="ad-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#fca5a5"/></marker>
+                <marker id="ad-arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#38bdf8"/></marker>
+                <linearGradient id="adkG" x1="0" x2="1"><stop offset="0" stop-color="#EA4335"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
+              </defs>
+
+              <!-- Embedded: agent tree -->
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Embedded · agent tree (parent_agent ↔ sub_agents)</text>
+              <rect x="20" y="50" width="1000" height="190" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <!-- All four columns shifted left by 20 px so the row has 20 px margin on EACH
+                   side of the container (was 40 left / 20 right) and three identical 60 px gaps
+                   between groups (was 60 / 60 / 40). -->
+
+              <!-- root: LlmAgent (x=40..240) -->
+              <rect x="40" y="100" width="200" height="100" rx="12" fill="url(#adkG)"/>
+              <text x="140" y="128" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">root: LlmAgent</text>
+              <text x="140" y="148" text-anchor="middle" fill="#1a0d00" font-size="11">sub_agents: [resA, resB]</text>
+              <text x="140" y="164" text-anchor="middle" fill="#1a0d00" font-size="11">AutoFlow injects:</text>
+              <text x="140" y="180" text-anchor="middle" fill="#1a0d00" font-size="11">transfer_to_agent tool</text>
+
+              <!-- agent_transfer pair (x=300..540) — 60 px gap from root -->
+              <rect x="300" y="80" width="240" height="60" rx="12" fill="#2c1c1c" stroke="#fb7185" stroke-width="2"/>
+              <text x="420" y="106" text-anchor="middle" fill="#fecaca" font-size="13" font-weight="700">agent_transfer.request_processor</text>
+              <text x="420" y="124" text-anchor="middle" fill="#fda4af" font-size="11">injects sub-agent metadata into the prompt</text>
+
+              <rect x="300" y="160" width="240" height="60" rx="12" fill="#2c1c1c" stroke="#fb7185" stroke-width="2"/>
+              <text x="420" y="186" text-anchor="middle" fill="#fecaca" font-size="13" font-weight="700">transfer_to_agent(agent_name)</text>
+              <text x="420" y="204" text-anchor="middle" fill="#fda4af" font-size="10">action on Event → Runner switches active agent</text>
+
+              <!-- researcher / writer pair (x=600..760) — 60 px gap from agent_transfer -->
+              <rect x="600" y="80" width="160" height="60" rx="10" fill="url(#adkG)"/>
+              <text x="680" y="105" text-anchor="middle" fill="#1a0d00" font-size="12" font-weight="700">researcher</text>
+              <text x="680" y="122" text-anchor="middle" fill="#1a0d00" font-size="10">name + description</text>
+
+              <rect x="600" y="160" width="160" height="60" rx="10" fill="url(#adkG)"/>
+              <text x="680" y="185" text-anchor="middle" fill="#1a0d00" font-size="12" font-weight="700">writer</text>
+              <text x="680" y="202" text-anchor="middle" fill="#1a0d00" font-size="10">name + description</text>
+
+              <!-- Session (x=820..1000) — 60 px gap from researcher/writer -->
+              <rect x="820" y="100" width="180" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="910" y="128" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Session</text>
+              <text x="910" y="148" text-anchor="middle" fill="#9aa6bd" font-size="11">shared event log</text>
+              <text x="910" y="164" text-anchor="middle" fill="#9aa6bd" font-size="11">agents append to it</text>
+              <text x="910" y="180" text-anchor="middle" fill="#9aa6bd" font-size="11">durable via SessionService</text>
+
+              <path d="M240,140 L300,110" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M240,160 L300,180" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M540,180 L600,110" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+              <path d="M540,200 L600,180" stroke="#fca5a5" stroke-width="2" marker-end="url(#ad-arr)" fill="none"/>
+
+              <!-- Distributed: A2A -->
+              <text x="40" y="272" fill="#9aa6bd" font-size="12">Distributed · A2A protocol (a2a-python SDK)</text>
+              <rect x="20" y="290" width="1000" height="190" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="60" y="320" width="200" height="100" rx="12" fill="url(#adkG)"/>
+              <text x="160" y="348" text-anchor="middle" fill="#1a0d00" font-size="14" font-weight="700">RemoteA2aAgent</text>
+              <text x="160" y="368" text-anchor="middle" fill="#1a0d00" font-size="11">looks like a regular Agent</text>
+              <text x="160" y="384" text-anchor="middle" fill="#1a0d00" font-size="11">from the parent's POV</text>
+              <text x="160" y="400" text-anchor="middle" fill="#1a0d00" font-size="11">drop into sub_agents[…]</text>
+
+              <rect x="320" y="310" width="280" height="120" rx="12" fill="#0e2a3d" stroke="#38bdf8" stroke-width="2"/>
+              <text x="460" y="336" text-anchor="middle" fill="#bae6fd" font-size="13" font-weight="700">A2A protocol</text>
+              <text x="460" y="354" text-anchor="middle" fill="#7dd3fc" font-size="11">agent_card: AgentCard | URL | path</text>
+              <text x="460" y="370" text-anchor="middle" fill="#7dd3fc" font-size="11">A2AClient over httpx</text>
+              <text x="460" y="386" text-anchor="middle" fill="#7dd3fc" font-size="11">part converters: GenAI ↔ A2A parts</text>
+              <text x="460" y="402" text-anchor="middle" fill="#7dd3fc" font-size="11">request interceptors · sessions</text>
+              <text x="460" y="418" text-anchor="middle" fill="#7dd3fc" font-size="11" font-style="italic">@a2a_experimental</text>
+
+              <rect x="660" y="320" width="320" height="100" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="820" y="346" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Remote ADK agent (server)</text>
+              <text x="820" y="364" text-anchor="middle" fill="#9aa6bd" font-size="11">to_a2a(agent) wraps it as</text>
+              <text x="820" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">A2AStarletteApplication (FastAPI/Starlette)</text>
+              <text x="820" y="398" text-anchor="middle" fill="#9aa6bd" font-size="11">AgentCardBuilder auto-generates the card</text>
+              <text x="820" y="414" text-anchor="middle" fill="#9aa6bd" font-size="11">from name · description · skills</text>
+
+              <path d="M260,370 L320,370" stroke="#38bdf8" stroke-width="2" marker-end="url(#ad-arrN)" fill="none"/>
+              <path d="M600,370 L660,370" stroke="#38bdf8" stroke-width="2" marker-end="url(#ad-arrN)" fill="none"/>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Locally: a tree of agents and a built-in transfer_to_agent action. Remotely: an AgentCard, a Starlette server, and the same A2A protocol."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>In-process.</b> Every <code>BaseAgent</code> has a <code>parent_agent</code>
+                and <code>sub_agents: list[BaseAgent]</code> field
+                (<code>agents/base_agent.py:124,135</code>). When an <code>LlmAgent</code> uses
+                <code>AutoFlow</code>, the <code>agent_transfer.request_processor</code> injects
+                the sub-agents' names and descriptions into the prompt context, and the LLM gets
+                a <code>transfer_to_agent(agent_name)</code> tool. Calling it emits a
+                <code>transfer_to_agent</code> action; the <code>Runner</code> sees it and
+                switches the active agent for the next turn. State is shared via the
+                <code>Session</code> event log.
+              </p>
+              <p>
+                <b>Distributed.</b> <code>RemoteA2aAgent</code>
+                (<code>agents/remote_a2a_agent.py:109</code>) takes an <code>AgentCard</code>,
+                URL, or file path; resolves it; and exposes itself as a regular
+                <code>BaseAgent</code> to the parent. Under the hood it uses
+                <code>A2AClient</code> from the official <code>a2a-python</code> SDK. To
+                <i>publish</i> an ADK agent: <code>a2a/utils/agent_to_a2a.py</code> wraps it
+                in an <code>A2AStarletteApplication</code>; <code>AgentCardBuilder</code>
+                auto-generates an <code>AgentCard</code> from the agent's metadata.
+              </p>
+            </div>
+            <div>
+              <h4>Axis coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Discovery</h5><p>Local: <code>parent_agent</code>/<code>sub_agents</code> tree. Remote: <code>AgentCard</code> from URL or file.</p></div>
+                <div class="ax"><h5>2 · LLM exposure</h5><p>Auto-injected <code>transfer_to_agent(agent_name)</code> tool with names/descriptions of sub-agents.</p></div>
+                <div class="ax"><h5>3 · Embedded</h5><p>Shared <code>Session</code> event log. Runner switches active agent on transfer action.</p></div>
+                <div class="ax"><h5>4 · Distributed</h5><p><code>RemoteA2aAgent</code> client + <code>to_a2a()</code> server, both on the official A2A SDK.</p></div>
+              </div>
+              <h4>Protocol on the wire</h4>
+              <p><b>A2A protocol</b> over HTTP, built on the official <code>a2a-python</code> SDK. Server-side: <code>A2AStarletteApplication</code> (Starlette / FastAPI). Client-side: <code>A2AClient</code> on top of <code>httpx</code>. Pluggable <i>request interceptors</i>; sessions and part converters (GenAI ↔ A2A parts) are framework-managed. Currently <code>@a2a_experimental</code>.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">src/google/adk/agents/base_agent.py · <code>parent_agent</code>, <code>sub_agents</code><br>src/google/adk/agents/remote_a2a_agent.py · <code>RemoteA2aAgent</code><br>src/google/adk/a2a/utils/agent_to_a2a.py · server wrapper<br>src/google/adk/a2a/utils/agent_card_builder.py · auto card generation<br>src/google/adk/tools/transfer_to_agent_tool.py · in-process transfer</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ============ SEMANTIC KERNEL ============ -->
+      <article class="fw-card" id="sk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background:var(--sk)">Sk</div>
+          <div>
+            <h3>Microsoft Semantic Kernel · five orchestration patterns</h3>
+            <div class="sub">Sequential · Concurrent · GroupChat · Handoffs · Magentic. Agents talk through an actor-style runtime.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="fw-svg-wrap">
+            <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Semantic Kernel Agent-to-Agent">
+              <defs>
+                <marker id="sk-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#bae6fd"/></marker>
+                <linearGradient id="skG" x1="0" x2="1"><stop offset="0" stop-color="#2EA5FF"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
+              </defs>
+
+              <text x="40" y="32" fill="#9aa6bd" font-size="12">Embedded · pick an orchestration pattern, hand it a list of agents</text>
+              <rect x="20" y="50" width="1000" height="170" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="40" y="80" width="180" height="120" rx="12" fill="url(#skG)"/>
+              <text x="130" y="108" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Sequential</text>
+              <text x="130" y="128" text-anchor="middle" fill="#06243f" font-size="11">a → b → c</text>
+              <text x="130" y="148" text-anchor="middle" fill="#06243f" font-size="11">pipeline of agents</text>
+              <text x="130" y="168" text-anchor="middle" fill="#06243f" font-size="11">simple, deterministic</text>
+
+              <rect x="240" y="80" width="180" height="120" rx="12" fill="url(#skG)"/>
+              <text x="330" y="108" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Concurrent</text>
+              <text x="330" y="128" text-anchor="middle" fill="#06243f" font-size="11">a, b, c in parallel</text>
+              <text x="330" y="148" text-anchor="middle" fill="#06243f" font-size="11">all see the same input</text>
+              <text x="330" y="168" text-anchor="middle" fill="#06243f" font-size="11">aggregate the answers</text>
+
+              <rect x="440" y="80" width="180" height="120" rx="12" fill="url(#skG)"/>
+              <text x="530" y="108" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">GroupChat</text>
+              <text x="530" y="128" text-anchor="middle" fill="#06243f" font-size="11">SelectionStrategy</text>
+              <text x="530" y="148" text-anchor="middle" fill="#06243f" font-size="11">picks who speaks next</text>
+              <text x="530" y="168" text-anchor="middle" fill="#06243f" font-size="11">TerminationStrategy stops</text>
+
+              <rect x="640" y="80" width="180" height="120" rx="12" fill="url(#skG)"/>
+              <text x="730" y="108" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Handoffs</text>
+              <text x="730" y="128" text-anchor="middle" fill="#06243f" font-size="11">OrchestrationHandoffs:</text>
+              <text x="730" y="148" text-anchor="middle" fill="#06243f" font-size="11">Agent A → {B, C, ...}</text>
+              <text x="730" y="168" text-anchor="middle" fill="#06243f" font-size="11">handoff = function call</text>
+
+              <rect x="840" y="80" width="160" height="120" rx="12" fill="url(#skG)"/>
+              <text x="920" y="108" text-anchor="middle" fill="#06243f" font-size="14" font-weight="700">Magentic</text>
+              <text x="920" y="128" text-anchor="middle" fill="#06243f" font-size="11">Manager LLM plans</text>
+              <text x="920" y="148" text-anchor="middle" fill="#06243f" font-size="11">a task ledger of</text>
+              <text x="920" y="168" text-anchor="middle" fill="#06243f" font-size="11">agent capabilities</text>
+
+              <!-- Runtime / actor model -->
+              <text x="40" y="252" fill="#9aa6bd" font-size="12">All five run on the same actor-style runtime</text>
+              <rect x="20" y="270" width="1000" height="100" rx="14" fill="#171f33" stroke="#3a4a72"/>
+
+              <rect x="60" y="300" width="200" height="50" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="160" y="322" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">AgentActorBase (one per agent)</text>
+              <text x="160" y="340" text-anchor="middle" fill="#9aa6bd" font-size="10">subscribes to a TopicId</text>
+
+              <rect x="320" y="300" width="200" height="50" rx="10" fill="#0e2a3d" stroke="#38bdf8"/>
+              <text x="420" y="322" text-anchor="middle" fill="#bae6fd" font-size="12" font-weight="700">CoreRuntime · message bus</text>
+              <text x="420" y="340" text-anchor="middle" fill="#7dd3fc" font-size="10">in_process default · pluggable</text>
+
+              <rect x="580" y="300" width="200" height="50" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="680" y="322" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">ChatHistory broadcast</text>
+              <text x="680" y="340" text-anchor="middle" fill="#9aa6bd" font-size="10">every agent sees the conversation</text>
+
+              <rect x="840" y="300" width="160" height="50" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+              <text x="920" y="322" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">@kernel_function</text>
+              <text x="920" y="340" text-anchor="middle" fill="#9aa6bd" font-size="10">tools / handoff fns</text>
+
+              <!-- Distributed note -->
+              <text x="40" y="402" fill="#9aa6bd" font-size="12">Distributed · runtime is pluggable, but no built-in remote-agent client</text>
+              <rect x="20" y="420" width="1000" height="50" rx="12" fill="#171f33" stroke="#3a4a72"/>
+              <text x="520" y="442" text-anchor="middle" fill="#cfe1ff" font-size="13">For cross-process workflows, SK ships the separate <tspan font-weight="700" fill="#bae6fd">Process Framework</tspan>. Native A2A is on the roadmap.</text>
+              <text x="520" y="460" text-anchor="middle" fill="#9aa6bd" font-size="11">Today you'd wrap remote agents with a custom <tspan font-family="ui-monospace" fill="#bae6fd">Agent</tspan> subclass that does the HTTP call.</text>
+            </svg>
+          </div>
+          <div class="fw-text-grid">
+            <div>
+              <div class="metaphor">"Pick a recipe — Sequential, Concurrent, GroupChat, Handoffs, or Magentic. The runtime treats every agent as an actor on a shared message bus."</div>
+              <h4>How it works</h4>
+              <p>
+                <b>Five orchestration patterns.</b>
+                <code>semantic_kernel/agents/orchestration/</code> ships
+                <code>sequential.py</code>, <code>concurrent.py</code>, <code>group_chat.py</code>,
+                <code>handoffs.py</code>, and <code>magentic.py</code> — each subclasses
+                <code>OrchestrationBase[TIn, TOut]</code>. Discovery is explicit: every pattern
+                takes a list of agents at construction.
+              </p>
+              <p>
+                <b>Handoffs</b> use an <code>OrchestrationHandoffs</code> dict
+                (<code>{source: {target: description, …}, …}</code>) — for each source agent,
+                the framework auto-generates a kernel function per target so the LLM can call
+                "transfer to AgentB" by description.
+                <b>Magentic</b> has a <code>StandardMagenticManager</code> LLM that produces a
+                task ledger of agent capabilities and decides who runs each step.
+                <b>GroupChat</b> uses a <code>SelectionStrategy</code> + <code>TerminationStrategy</code>
+                — both can be kernel functions, so the "who's next" decision is itself an LLM call.
+              </p>
+              <p>
+                <b>Runtime.</b> Underneath, every agent is wrapped in a subclass of
+                <code>AgentActorBase</code> (concrete subclasses per pattern, e.g. for handoffs and
+                Magentic) that subscribes to a <code>TopicId</code> on the <code>CoreRuntime</code>
+                message bus. The default runtime is <code>InProcessRuntime</code>; the architecture
+                is pluggable but no out-of-the-box remote runtime ships in the agents module today.
+              </p>
+            </div>
+            <div>
+              <h4>Axis coverage</h4>
+              <div class="ax-grid">
+                <div class="ax"><h5>1 · Discovery</h5><p>Explicit list passed to the orchestration constructor. <code>OrchestrationHandoffs</code> dict declares allowed paths.</p></div>
+                <div class="ax"><h5>2 · LLM exposure</h5><p>Auto-generated kernel functions per handoff target. Magentic builds a task ledger from agent metadata.</p></div>
+                <div class="ax"><h5>3 · Embedded</h5><p>Actor model on <code>CoreRuntime</code>, broadcast <code>ChatHistory</code>, broadcast queue.</p></div>
+                <div class="ax no"><h5>4 · Distributed</h5><p>No built-in remote-agent client in the agents module. Use the separate Process Framework or roll a custom remote <code>Agent</code>.</p></div>
+              </div>
+              <h4>Protocol on the wire</h4>
+              <p>None in <code>agents/</code> today. The runtime is pluggable but only <code>in_process</code> ships out of the box. For cross-process orchestration, use the separate <b>Process Framework</b> (its own SK component) — or wrap a remote agent in a custom <code>Agent</code> subclass that does the HTTP itself.</p>
+              <h4>Code anchor</h4>
+              <p class="mono" style="font-size:13px;color:#cfe1ff;">python/semantic_kernel/agents/orchestration/{sequential,concurrent,group_chat,handoffs,magentic}.py<br>python/semantic_kernel/agents/runtime/{core,in_process}/<br>python/semantic_kernel/agents/group_chat/broadcast_queue.py</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON TABLE ================= -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side · the four Agent-to-Agent axes</h2>
+    <p class="lede">Read down a column for one framework's whole Agent-to-Agent story; read across to see how each framework answers the same question.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="fw"><span class="dot" style="background:var(--lc)"></span> LangChain</th>
+            <th class="fw"><span class="dot" style="background:var(--lg)"></span> LangGraph</th>
+            <th class="fw"><span class="dot" style="background:var(--crew)"></span> CrewAI</th>
+            <th class="fw"><span class="dot" style="background:var(--adk)"></span> Google ADK</th>
+            <th class="fw"><span class="dot" style="background:var(--sk)"></span> Semantic Kernel</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">1 · Discovery</td>
+            <td>Manual tool list per agent</td>
+            <td>Compile-time graph topology / handoff tools</td>
+            <td><code>Crew(agents=[...])</code> · remote: <code>AgentCard</code> URL</td>
+            <td><code>sub_agents</code> tree · remote: <code>AgentCard</code></td>
+            <td>Constructor arg list · <code>OrchestrationHandoffs</code> dict</td>
+          </tr>
+          <tr>
+            <td class="row-hd">2 · LLM exposure</td>
+            <td>Tool name + description (<code>Runnable.as_tool</code>)</td>
+            <td>Handoff tools per worker · <code>create_react_agent(name=...)</code></td>
+            <td><code>DelegateWorkTool(task, context, coworker)</code></td>
+            <td>Auto-injected <code>transfer_to_agent(agent_name)</code> tool</td>
+            <td>Auto-generated kernel function per handoff · Magentic ledger</td>
+          </tr>
+          <tr>
+            <td class="row-hd">3 · Embedded comms</td>
+            <td>Synchronous in-process call</td>
+            <td>Shared <code>messages</code> channel + reducer</td>
+            <td>Task chaining + tool result pass-through</td>
+            <td>Shared <code>Session</code>; Runner switches active agent on transfer</td>
+            <td>Actor model · <code>CoreRuntime</code> message bus · ChatHistory broadcast</td>
+          </tr>
+          <tr>
+            <td class="row-hd">4 · Distributed comms</td>
+            <td>Not native — DIY HTTP tool</td>
+            <td><code>RemoteGraph</code> over LangGraph Server API (HTTP)</td>
+            <td><b>Native A2A</b> · JSONRPC / gRPC / HTTP+JSON · streaming / push / polling · auth</td>
+            <td><b>Native A2A</b> · <code>RemoteA2aAgent</code> + <code>to_a2a()</code> server</td>
+            <td>No built-in remote-agent client; Process Framework for cross-process</td>
+          </tr>
+          <tr>
+            <td class="row-hd">A2A protocol support</td>
+            <td>—</td>
+            <td>LangGraph Server API (HTTP, framework-specific)</td>
+            <td>Yes — <code>a2a-python</code> SDK in <code>crewai/a2a/</code></td>
+            <td>Yes — <code>a2a-python</code> SDK in <code>adk/a2a/</code></td>
+            <td>Not yet (in-flight)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Auth on the wire</td>
+            <td>—</td>
+            <td>API key / headers via <code>get_client</code></td>
+            <td>APIKey · HTTP Basic / Digest · Bearer · OAuth2 (<code>a2a/auth/</code>)</td>
+            <td>Pluggable interceptors · auth schemes via SDK</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Streaming / async updates</td>
+            <td>Callback handlers</td>
+            <td>Native streaming over HTTP via <code>RemoteGraph</code></td>
+            <td>Streaming · push notifications · polling — all built in</td>
+            <td>Native event streaming via the runner</td>
+            <td>Streaming via <code>invoke_stream</code> at the agent level</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Code anchor</td>
+            <td><code>libs/core/.../runnables/base.py · as_tool</code></td>
+            <td><code>libs/langgraph/langgraph/pregel/remote.py</code></td>
+            <td><code>lib/crewai/.../a2a/</code> + <code>tools/agent_tools/</code></td>
+            <td><code>src/google/adk/a2a/</code> + <code>agents/remote_a2a_agent.py</code></td>
+            <td><code>python/semantic_kernel/agents/orchestration/</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAKEAWAYS ================= -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Architect's cheat sheet</h2>
+    <p class="lede">Six things to weigh when picking a framework for a multi-agent system.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">DISCOVERY</span>
+        <h4>1 · Static vs. dynamic discovery is an architectural choice</h4>
+        <p>
+          Most frameworks make you list agents at construction. Only true A2A clients
+          (CrewAI, ADK) give you <i>runtime</i> discovery via <code>AgentCard</code> URLs —
+          which is what you actually want for a service-mesh of agents.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">EXPOSURE</span>
+        <h4>2 · Tool-call exposure beats free-text chat</h4>
+        <p>
+          Frameworks that surface peer agents as <i>typed tools</i> (LangGraph handoff tools,
+          ADK <code>transfer_to_agent</code>, CrewAI <code>DelegateWorkTool</code>, SK auto-gen
+          handoff functions) are more reliable than ones that drop "Available agents: ..."
+          into the prompt. Schema-typed delegation is just easier for the LLM to get right.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">STATE</span>
+        <h4>3 · Shared state ≠ shared understanding</h4>
+        <p>
+          LangGraph's <code>messages</code> channel and ADK's <code>Session</code> give every
+          agent the full conversation. CrewAI passes only the previous task's output forward.
+          SK's GroupChat broadcasts. Pick the model that matches your privacy / context-window
+          / coordination tradeoff.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SAME-AS-LOCAL</span>
+        <h4>4 · "Looks like a local agent" is a great test</h4>
+        <p>
+          The cleanest distributed stories are the ones where the remote agent has the same
+          API as a local one. <b>LangGraph</b> (<code>RemoteGraph</code> = local
+          <code>StateGraph</code>) and <b>ADK</b> (<code>RemoteA2aAgent</code> = local
+          <code>BaseAgent</code>) nail this. CrewAI gets there via wrapper injection.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RISK</span>
+        <h4>5 · Multi-agent doesn't mean multi-vendor — yet</h4>
+        <p>
+          In practice, almost every "multi-agent" deployment in 2026 is still single-framework.
+          A2A protocol changes that, but slowly. For now, picking <i>one</i> framework and
+          using its native multi-agent primitives will outperform a heterogeneous mesh on
+          observability, debugging, and cost.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PROTOCOLS</span>
+        <h4>6 · What each framework speaks on the wire</h4>
+        <p>
+          <b>LangChain</b>: in-process only — no native wire protocol.<br>
+          <b>LangGraph</b>: <i>LangGraph Server API</i> over HTTP (REST + streaming) via
+          <code>RemoteGraph</code>; auth via API key / headers.<br>
+          <b>CrewAI</b>: <i>A2A protocol</i> — three transports negotiated at runtime
+          (<b>JSONRPC</b>, <b>gRPC</b>, <b>HTTP+JSON</b>); streaming, push notifications, polling
+          for long-running calls; rich auth (APIKey, HTTP Basic, HTTP Digest, Bearer Token, OAuth2).<br>
+          <b>Google ADK</b>: <i>A2A protocol</i> over HTTP — server is an
+          <code>A2AStarletteApplication</code>, client is <code>A2AClient</code> on
+          <code>httpx</code>; pluggable request interceptors.<br>
+          <b>Semantic Kernel</b>: nothing in <code>agents/</code> today — for cross-process
+          orchestration, use the separate Process Framework.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Agent-to-Agent behaviour compiled from upstream source of LangChain, LangGraph, CrewAI, Google ADK
+    (adk-python), and Microsoft Semantic Kernel. Built for a developer + architect audience.
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('a.pill').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

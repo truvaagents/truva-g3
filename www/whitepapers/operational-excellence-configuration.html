@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 5 · Configuration, versioning &amp; memory — Operational Excellence in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #a3e635;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #1a2e08; border-color: var(--ch); color: #d9f99d; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #d9f99d 60%, #a3e635 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #1a2e08; border: 1px solid var(--ch); color: #d9f99d; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #1a2e08; color: #d9f99d; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a class="active" href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 5 of 5 · Operational Excellence</div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Configuration, versioning &amp; memory</h1>
+    <p class="subtitle">
+      Once an agent runs in production, the operational questions narrow to a few sharp ones:
+      where configuration and secrets come from at startup, how easily you can swap the
+      underlying LLM / memory store / vector backend / session store without rewriting your
+      agent code, what memory primitives ship for short-term and long-term recall, and how
+      sessions get isolated across users and tenants. This chapter walks through each axis
+      through a production-runtime lens, with a particular focus on how pluggable each
+      framework's default abstractions actually are when you need to change the implementation
+      underneath them.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#definition">Agent definition &amp; prompt versioning</a></li>
+        <li><a href="#config">Configuration &amp; secrets at startup</a></li>
+        <li><a href="#swap">Implementation swap-ability</a></li>
+        <li><a href="#memory">Memory architectures</a></li>
+        <li><a href="#multi-tenancy">Multi-tenancy &amp; session isolation</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- DEFINITION -->
+<section id="definition">
+  <div class="container">
+    <h2><span class="num">1</span>Agent definition &amp; prompt versioning</h2>
+    <p class="lede">
+      How is an agent defined — Python code, a YAML file, an interface declaration, a prompt
+      file? And once defined, how do you version, A/B test, or roll back a prompt without
+      redeploying the whole service? Most frameworks treat agents as code (versioned through
+      your VCS); a few use declarative formats; and only two ship a version-aware artifact
+      registry for prompts.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        It's Friday afternoon. Your CRO wants you to A/B test two variants of the customer-
+        service agent's opening prompt. With a code-defined agent, you ship two builds and a
+        feature flag — every prompt change is a code change, a code review, a deploy. With
+        a prompt-registry like LangChain Hub, you push a new prompt version, route 10% of
+        traffic to it via the dashboard, and roll back from the same dashboard if metrics
+        regress. With Genkit's <code>.prompt</code> files, you swap a file in your repo,
+        the dev server hot-reloads, and a deploy ships the change — no separate registry but
+        clean file-level versioning. The other frameworks land between these poles.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Definition style</th><th>Prompt versioning surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Code — <code>Runnable</code> chain composition; no dedicated agent class.</td>
+            <td><b>LangChain Hub</b> — versioned prompt registry with named, taggable prompts.</td>
+            <td><code>langchain.hub</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Code — <code>StateGraph</code> + node functions; state schema as TypedDict / Pydantic.</td>
+            <td>Inherits LangChain Hub.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Code — Pydantic <code>Agent</code> class with <code>role</code>, <code>goal</code>, <code>backstory</code> fields.</td>
+            <td>None — code-versioned only.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>YAML or code — <code>LlmAgentConfig</code> Pydantic schema declares agents in YAML; <code>LlmAgent</code> instantiates from config or constructor.</td>
+            <td>YAML file in your repo; no separate registry.</td>
+            <td><code>src/google/adk/agents/llm_agent_config.py:35</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Code — <code>Kernel</code> + <code>@kernel_function</code> decorators on plugin classes.</td>
+            <td>None — code-versioned only.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Code — <code>new Agent({ id, name, instructions, model, ... })</code>.</td>
+            <td>None — code-versioned only.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>YAML or code — declarative workflow files (<code>kind: InvokeAzureAgent</code>); also code-based agents via DI.</td>
+            <td>YAML file in your repo; Azure Foundry hosts named agents externally.</td>
+            <td><code>declarative-agents/</code> (samples)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Interface — <code>@AiService</code> annotated Java interface; methods map to LLM calls. Built via <code>AiServices.builder(...)</code>.</td>
+            <td>None — code-versioned only.</td>
+            <td><code>langchain4j/.../service/AiServices.java</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Mixed — prompts in <code>.prompt</code> files (Dotprompt format) + flows as Go functions.</td>
+            <td><b><code>.prompt</code> files</b> — file-based, hot-reload aware, versioned alongside code.</td>
+            <td><code>go/ai/prompt.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Code — <code>Agent::builder().model(...).system_prompt(...).build()</code>.</td>
+            <td>None — code-versioned only.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Three patterns dominate. <b>Code-first</b> (LangChain, LangGraph, CrewAI, SK, Mastra,
+        Rig) is the most common — agents are Python / TypeScript / Rust objects, versioning
+        is whatever VCS you use. <b>Declarative YAML</b> (ADK, MS Agent Framework) treats
+        agent definitions as data files — same VCS-versioned story but with a clearer
+        separation between "what the agent is" and "what surrounds it." <b>Interface-based</b>
+        (LangChain4j) is unique to the JVM — agents are Java interfaces with annotations, and
+        the framework synthesises the implementation at runtime.
+      </p>
+      <p>
+        On <b>prompt versioning as a separate artifact</b>: LangChain Hub is the most
+        feature-rich — named prompts with version tags and dashboard-driven A/B routing.
+        Genkit Go's <code>.prompt</code> files are file-based but hot-reload aware, which is
+        a nicer dev experience than a registry but lacks the runtime A/B story. Everyone
+        else treats prompts as code: change the prompt, ship a new build.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CONFIG -->
+<section id="config">
+  <div class="container">
+    <h2><span class="num">2</span>Configuration &amp; secrets at startup</h2>
+    <p class="lede">
+      In production, configuration arrives from environment variables, config files, secret
+      managers, or your platform's parameter store — and you switch between dev, staging,
+      and production without changing code. The frameworks fall into three groups: ones
+      that inherit a complete config story from their host (LangChain4j on Spring/Quarkus,
+      MS Agent Framework on .NET), ones that use their own structured pattern (ADK's YAML),
+      and ones that mostly leave configuration loading to you.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your production deployment reads a database password from AWS Secrets Manager, the
+        OpenAI key from a Kubernetes Secret, the model name and timeout from a ConfigMap,
+        and the tenant routing rules from a feature-flag service. With Spring Boot and
+        LangChain4j or ASP.NET Core and MS Agent Framework, the host framework's config
+        binder picks all of these up through its standard providers — secrets, configmaps,
+        envs, and profiles compose into a single typed configuration. With most Python
+        frameworks, your bootstrap code has to wire each source explicitly, often through
+        Pydantic Settings or Hydra. The differences mostly reflect which host ecosystem
+        each framework targets.
+      </p>
+      <p>
+        The other production concern is <b>secrets</b>: API keys for providers, credentials
+        for vector stores, tokens for downstream tools. None of the ten frameworks ships a
+        secrets-manager integration — they all read from environment variables and expect
+        your platform layer (Vault, Kubernetes Secrets, AWS Secrets Manager, Azure Key
+        Vault) to populate those vars before the process starts.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Config sources</th><th>Multi-environment story</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Env vars + runtime config dicts passed to <code>invoke()</code>.</td>
+            <td>None framework-managed — bring Pydantic Settings, Hydra, or env-based bootstrap.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Same as LangChain plus a <code>config</code> dict at <code>invoke()</code>/<code>astream()</code> carrying <code>thread_id</code>, <code>checkpoint_id</code>, etc.</td>
+            <td>Same as LangChain.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Pydantic <code>Agent</code> / <code>Crew</code> constructors; env vars for provider keys.</td>
+            <td>None framework-managed.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>YAML config (<code>LlmAgentConfig</code>) drives agent definition; env vars for Google Cloud auth.</td>
+            <td>YAML files per environment; load the right one at startup.</td>
+            <td><code>llm_agent_config.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Services registered via <code>kernel.add_service()</code> at init; env discovery via <code>OpenAIChatCompletion.from_env()</code> factory pattern.</td>
+            <td>None framework-managed.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Constructor arguments + <code>process.env</code> in setup code; deployer-specific env handling for Vercel / Cloudflare / etc.</td>
+            <td>Each deployer adapter handles its target's env model.</td>
+            <td><code>packages/deployer/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Standard .NET config — <code>appsettings.json</code>, environment-specific overrides, DI container; agent registration in <code>Program.cs</code> via hosting extensions.</td>
+            <td>Built-in via .NET — <code>appsettings.{Environment}.json</code> override pattern.</td>
+            <td><code>Microsoft.Agents.AI.Hosting.*</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Spring Boot <code>application.yml</code> / Quarkus <code>application.properties</code> via the host framework's starter.</td>
+            <td>Built-in via Spring Boot profiles or Quarkus profiles.</td>
+            <td>Spring Boot starter / <code>quarkus-langchain4j</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Go config to <code>genkit.New()</code>; env vars per provider plugin; prompts loaded from disk.</td>
+            <td>Standard Go env-var pattern (<code>os.Getenv</code>); Go build tags or env switches.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Builder pattern + <code>std::env::var()</code>; whatever crates you bring (e.g. <code>config</code>, <code>figment</code>).</td>
+            <td>None framework-managed.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Two frameworks inherit a complete config story from their host: LangChain4j (Spring
+        Boot or Quarkus profiles) and MS Agent Framework (.NET appsettings + environments).
+        ADK comes close with its YAML <code>LlmAgentConfig</code>. The other seven leave
+        configuration to you — read env vars, pick the right values for the right
+        environment, and wire it through. Python frameworks especially benefit from adding
+        Pydantic Settings or Hydra; Mastra benefits from its deployer's per-target env
+        handling.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- SWAP-ABILITY -->
+<section id="swap">
+  <div class="container">
+    <h2><span class="num">3</span>Implementation swap-ability</h2>
+    <p class="lede">
+      Production realities make you swap implementations all the time: the model provider
+      changes, the vector store changes, the memory backend has to move on-prem, the
+      session store needs to shard, the tracing exporter has to switch vendors. The
+      question isn't whether the framework <i>has</i> a default for these — they all do —
+      but how easy it is to provide your own implementation when the default doesn't fit.
+      The answer comes down to how broadly the framework exposes its internals as
+      pluggable abstractions, and how cleanly you can register a custom one.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your security team mandates that all vectors live in your internal vector database,
+        not Pinecone. With a framework whose vector layer is an abstract base class with
+        five-or-so methods (<code>add</code>, <code>search</code>, <code>delete</code>,
+        etc.), you implement the interface against your internal DB, register your class,
+        and the rest of the agent code never knows the swap happened — maybe an afternoon
+        of work. With a framework where the vector layer is hard-coded inside agent
+        internals, you're forking the framework, patching multiple files, and maintaining
+        the diff forever.
+      </p>
+      <p>
+        Three things matter for swap-ability: (1) <b>which abstractions are pluggable</b> —
+        LLM provider, memory store, vector store, session/checkpoint store, tool registry,
+        tracing exporter, cache backend; (2) <b>how the interface is shaped</b> — a small
+        clean interface is easier than a sprawling abstract class with assumptions baked
+        in; (3) <b>how you register a custom implementation</b> — a global setter, DI
+        registration, builder argument, or trait impl.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Pluggable abstractions</th><th>Effort to swap a default</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Nearly every component — <code>BaseChatModel</code>, <code>BaseLLM</code>, <code>BaseTool</code>, <code>BaseCache</code>, <code>BaseChatMessageHistory</code>, <code>VectorStore</code>, <code>BaseRetriever</code>, <code>BaseLoader</code>, <code>BaseCallbackHandler</code>.</td>
+            <td>Low — clear abstract bases with dozens of reference implementations to crib from; a custom impl is typically 30–80 lines.</td>
+            <td><code>core/langchain_core/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td><code>BaseCheckpointSaver</code> for durable state (memory / SQLite / Postgres / your own); inherits LangChain's full surface for everything else.</td>
+            <td>Low — checkpoint contract is small (put / get / list); reuses LangChain abstractions for models, tools, etc.</td>
+            <td><code>libs/checkpoint/langgraph/checkpoint/base/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Memory <code>Storage</code> interface; tool subclassing; LLM provider goes through LiteLLM (which is itself a unification layer).</td>
+            <td>Moderate — fewer abstractions exposed; the LiteLLM dependency limits how cleanly you can replace the model layer with a non-LiteLLM client.</td>
+            <td><code>src/crewai/memory/storage/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td><code>BaseSessionService</code>, <code>BaseMemoryService</code>, <code>BaseArtifactService</code>, <code>BaseAgent</code>, <code>BaseTool</code>, <code>BaseLlm</code>, plus a plugin system for runtime hooks.</td>
+            <td>Low — abstractions are well-defined; in-memory + Database + SQLite + Vertex backends already ship as reference implementations.</td>
+            <td><code>src/google/adk/sessions/base_session_service.py</code> · <code>memory/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Service interfaces (<code>ChatCompletionClientBase</code>, <code>EmbeddingGeneratorBase</code>, etc.); connectors as separate packages per vendor.</td>
+            <td>Moderate — requires understanding the kernel's service registration model; the connector pattern is consistent once you've seen one.</td>
+            <td><code>python/semantic_kernel/services/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td><code>MastraServerCache</code>, <code>MastraMemory</code>, abstract provider bases; vector / cache / storage backends ship as separate <code>stores/</code> packages.</td>
+            <td>Low — abstract bases follow a consistent pattern; provider/store packages show how to extend them.</td>
+            <td><code>packages/core/src/</code> · <code>stores/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td><code>AIAgent</code> base class, <code>IChatClient</code> (from Microsoft.Extensions.AI), agent-thread interfaces — all registered via the .NET DI container.</td>
+            <td>Low — standard .NET DI patterns; everything is interface-based and DI registration is one line in <code>Program.cs</code>.</td>
+            <td><code>dotnet/src/Microsoft.Agents.AI.Abstractions/AIAgent.cs</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td><code>ChatModel</code>, <code>EmbeddingModel</code>, <code>EmbeddingStore</code>, <code>ChatMemoryStore</code>, <code>ContentRetriever</code> — all interfaces. ~80 modules show how each is implemented per vendor.</td>
+            <td>Low — interfaces are small and uniform across the catalogue; pick the closest existing module and adapt.</td>
+            <td><code>langchain4j-core/src/main/java/dev/langchain4j/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Plugin interface; <code>genkit.DefineModel</code>, <code>genkit.DefineEmbedder</code>, <code>genkit.DefineEvaluator</code> register custom implementations.</td>
+            <td>Moderate — plugin pattern requires understanding the registry lifecycle; once registered, custom implementations are first-class.</td>
+            <td><code>go/core/</code> · <code>go/plugins/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td><code>CompletionModel</code>, <code>EmbeddingModel</code>, <code>VectorStoreIndex</code> traits.</td>
+            <td>Low — idiomatic Rust trait pattern; implement the trait, the rest of the agent stack works unchanged.</td>
+            <td><code>crates/rig-core/src/</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Most frameworks land at "Low effort to swap a default." LangChain has the broadest
+        abstraction surface, with abstract base classes for nearly every component and a
+        large library of reference implementations to copy. LangChain4j is the JVM
+        equivalent — clean interfaces and ~80 vendor modules to learn from. ADK has the
+        most explicitly named service interfaces (Session, Memory, Artifact). Rig's
+        trait-based design is idiomatic Rust and stays out of the way. MS Agent Framework
+        leans on standard .NET DI, which makes registration trivial.
+      </p>
+      <p>
+        Two frameworks have moderate friction. <b>CrewAI</b> exposes fewer abstractions
+        and routes the model layer through LiteLLM, which means swapping providers is easy
+        (LiteLLM supports many) but swapping <i>away</i> from LiteLLM requires more
+        plumbing. <b>Semantic Kernel</b>'s service-registration model is consistent but
+        requires more setup than a simple subclass-and-register. <b>Genkit Go</b>'s plugin
+        registry is powerful but expects you to learn its lifecycle first. None of these
+        are show-stoppers; they're just more upfront learning.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- MEMORY -->
+<section id="memory">
+  <div class="container">
+    <h2><span class="num">4</span>Memory architectures</h2>
+    <p class="lede">
+      Conversations need memory: what the user said earlier in the session (short-term),
+      what the user told the agent last week (long-term episodic), and what's relevant from
+      the company knowledge base (semantic / vector). Six of the ten frameworks ship a
+      first-class memory abstraction; the others delegate to whatever you wire below them.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Two memory primitives matter most. <b>Short-term</b>: the running list of messages
+        in this conversation, often capped by token count. <b>Long-term</b>: facts the agent
+        should remember across sessions — user preferences, prior decisions, contextual
+        details — typically backed by a vector store so the agent can semantically recall
+        relevant items. A framework that ships both lets you write
+        <code>agent({ memory: Memory({...}) })</code>; a framework without memory primitives
+        leaves you to thread message history in/out per request and integrate a vector store
+        yourself.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Short-term memory</th><th>Long-term / vector-backed memory</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td><code>BaseChatMessageHistory</code> implementations (in-memory, SQL, Redis, MongoDB).</td>
+            <td>Vector-store integrations (Chroma, Pinecone, pgvector, Qdrant, Weaviate, ~50 stores).</td>
+            <td><code>langchain_core.chat_history</code> · <code>langchain.vectorstores</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td><code>MessagesState</code> with <code>add_messages</code> reducer; checkpointer persists full graph state per thread.</td>
+            <td>Inherits LangChain vector stores; checkpointer can store arbitrary state including embeddings.</td>
+            <td><code>libs/langgraph/langgraph/graph/message.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td><code>Memory</code> class with <code>MemoryScope</code> (agent / crew / task / user); short-term conversation buffer.</td>
+            <td>Vector-backed semantic recall via LanceDB; lazy <code>EncodingFlow</code> writes embeddings.</td>
+            <td><code>src/crewai/memory/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td><code>BaseSessionService</code> with concrete <code>InMemorySessionService</code>, <code>DatabaseSessionService</code>, <code>SqliteSessionService</code>, <code>VertexAiSessionService</code>.</td>
+            <td><code>BaseMemoryService</code> for vector-backed long-term memory.</td>
+            <td><code>src/google/adk/sessions/</code> · <code>memory/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td><code>ChatHistory</code> per-kernel — caller manages lifecycle.</td>
+            <td>None core — vector-store connectors are separate (Azure AI Search, Qdrant, etc.).</td>
+            <td><code>python/semantic_kernel/contents/chat_history.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td><code>Memory</code> class extending <code>MastraMemory</code>; thread-scoped working memory and message history.</td>
+            <td>Built-in semantic recall via embeddings; pluggable vector stores.</td>
+            <td><code>packages/memory/src/index.ts:212</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Agent threads track conversation; backend-delegated when running on Azure Agent Service.</td>
+            <td>Backend-delegated; Foundry / Azure Agent Service hosts long-term memory.</td>
+            <td><code>Microsoft.Agents.AI/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td><code>ChatMemory</code> interface — <code>MessageWindowChatMemory</code> (count-bounded), <code>TokenWindowChatMemory</code> (token-bounded). Storage via <code>ChatMemoryStore</code>.</td>
+            <td>Embedding stores (~30 vendors) integrated separately from chat memory.</td>
+            <td><code>langchain4j/.../memory/chat/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Not built into core — flows are stateless; conversation state passed as function parameter.</td>
+            <td>Plugins for vector stores (Pinecone, Chroma, etc.) but not bundled into a "memory" abstraction.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Caller manages message history; agent stateless by default.</td>
+            <td>Separate <code>rig-memory</code> crate with vector-store integration (LanceDB, in-memory).</td>
+            <td><code>crates/rig-memory/</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Six frameworks ship first-class memory primitives: LangChain (broadest vector-store
+        catalogue), LangGraph (state-as-memory via checkpointer), CrewAI (scoped memory with
+        LanceDB-backed semantic recall), ADK (session service + memory service abstractions
+        with multiple backends), Mastra (thread-scoped <code>Memory</code> with built-in
+        semantic recall), and LangChain4j (window-based chat memory + ~30 embedding stores).
+        Semantic Kernel and Rig provide chat-history primitives but no memory abstraction —
+        you wire vector stores yourself. MS Agent Framework's memory story is
+        backend-delegated when running on Azure Agent Service; Genkit Go is stateless by
+        design.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- MULTI-TENANCY -->
+<section id="multi-tenancy">
+  <div class="container">
+    <h2><span class="num">5</span>Multi-tenancy &amp; session isolation</h2>
+    <p class="lede">
+      Production agents serve many users — and many tenants. How do you keep one user's
+      conversation history out of another user's run? The frameworks have converged
+      remarkably on a single pattern: a "thread id" string passed at request time that
+      isolates session state. The naming differs (<code>thread_id</code>, <code>threadId</code>,
+      <code>conversationId</code>, <code>session_id</code>); the shape is the same.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A multi-tenant SaaS agent serves 50 customer organisations. Each end-user within a
+        customer has their own conversation history. With a thread-id pattern, your gateway
+        passes <code>thread_id="acme-org/jane-doe-session-42"</code> in the request config;
+        the agent runtime looks up state for that thread, runs the agent, persists state
+        back. Different threads never see each other's data, and you can shard storage by
+        thread prefix if scale demands. With no session primitive, you thread message
+        history in/out manually and risk getting it wrong on a future code change.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Isolation primitive</th><th>How it's used</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td><code>RunnableWithMessageHistory</code> + <code>get_session_history(session_id)</code> callback.</td>
+            <td>Caller passes <code>session_id</code> at <code>invoke()</code>; framework calls back for history.</td>
+            <td><code>langchain_core.runnables.history</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td><code>thread_id</code> in the runnable config dict.</td>
+            <td>Checkpointer keys all state by thread; <code>graph.invoke(input, {"configurable": {"thread_id": "..."}})</code>.</td>
+            <td><code>libs/langgraph/langgraph/_internal/_config.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Per-crew instance; memory scoped per agent / crew / task / user.</td>
+            <td>Run a fresh <code>Crew</code> per session, or use the <code>user</code> memory scope to isolate within a long-lived crew.</td>
+            <td><code>memory/memory_scope.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td><code>Session</code> with <code>user_id</code> + <code>session_id</code>.</td>
+            <td>Session service stores per-user state; thread-per-session pattern.</td>
+            <td><code>src/google/adk/sessions/base_session_service.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Per-kernel <code>ChatHistory</code>.</td>
+            <td>Caller maintains a kernel + chat history per user; no built-in routing.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td><code>threadId</code> + <code>resourceId</code> on memory operations.</td>
+            <td>Agent calls scope all reads/writes to the thread; thread-history is cloneable and resumable.</td>
+            <td><code>packages/memory/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td><code>conversationId</code> at workflow invocation.</td>
+            <td>Agents stateless; conversation ID tracks the thread; backend persists per-conversation state.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td><code>chatMemoryProvider(Function&lt;String, ChatMemory&gt;)</code> callback.</td>
+            <td>Memory ID (user / session) passed at request time; provider returns per-ID <code>ChatMemory</code>.</td>
+            <td><code>AiServices.builder(...).chatMemoryProvider(...)</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Not modelled — flows stateless; caller passes context as function parameter.</td>
+            <td>Roll your own session ID + state lookup at the flow boundary.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Not modelled — agents are single-user by default.</td>
+            <td>Multi-tenancy requires app-level threading and context isolation.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Eight frameworks expose a thread-id-shaped primitive — the names vary but the shape
+        is the same: a string passed at request time that namespaces state and isolates one
+        session from another. LangGraph (<code>thread_id</code>), Mastra (<code>threadId</code>),
+        MS Agent Framework (<code>conversationId</code>), ADK (<code>Session</code> with
+        <code>user_id</code>), CrewAI (memory scope or per-crew instance), LangChain
+        (<code>session_id</code> callback), LangChain4j (<code>chatMemoryProvider</code>
+        callback), and SK (per-kernel chat history). Genkit Go and Rig leave session
+        isolation to your application code — they're stateless by design.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on configuration, versioning, and memory surfaces across the ten frameworks.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">DEFINITION</span>
+        <h4>1 · Code-first dominates; YAML and interface are the variants</h4>
+        <p>
+          Six frameworks define agents in code (LangChain, LangGraph, CrewAI, SK, Mastra,
+          Rig). ADK and MS Agent Framework support YAML declarative formats. LangChain4j is
+          unique with its <code>@AiService</code> Java interface pattern. Genkit Go is mixed
+          — code flows + <code>.prompt</code> files.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PROMPT VERSIONING</span>
+        <h4>2 · Only two ship version-aware prompt artifacts</h4>
+        <p>
+          LangChain Hub is the most feature-rich — named prompts with version tags and
+          dashboard-driven A/B routing. Genkit Go's <code>.prompt</code> files are
+          file-based and hot-reload aware. Everyone else versions prompts as code through
+          your VCS.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CONFIG</span>
+        <h4>3 · Config story tracks the host ecosystem</h4>
+        <p>
+          LangChain4j and MS Agent Framework inherit complete config solutions from Spring
+          Boot / Quarkus / .NET. ADK's YAML <code>LlmAgentConfig</code> is the closest
+          first-class story among Python frameworks. The other seven leave config to you —
+          add Pydantic Settings, Hydra, or per-deployer adapters.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">SWAP-ABILITY</span>
+        <h4>4 · Most frameworks make swap-ability cheap</h4>
+        <p>
+          Seven frameworks land at "Low effort to swap a default" — LangChain (broadest
+          abstraction surface), LangGraph (<code>BaseCheckpointSaver</code> + LangChain's
+          surface), ADK (named Session/Memory/Artifact services), Mastra (consistent
+          abstract bases + store packages), MS Agent Framework (.NET DI), LangChain4j (~80
+          interface-based modules), and Rig (trait-based). CrewAI, SK, and Genkit Go land
+          at moderate friction because of their respective LiteLLM/connector/plugin patterns.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">MEMORY</span>
+        <h4>5 · First-class memory ships in six</h4>
+        <p>
+          LangChain (50+ vector stores), LangGraph (state-as-memory via checkpointer),
+          CrewAI (scoped memory + LanceDB), ADK (Session + Memory services with multiple
+          backends), Mastra (thread-scoped <code>Memory</code> with semantic recall),
+          LangChain4j (window-based chat memory + ~30 embedding stores). SK, MS Agent
+          Framework, Genkit Go, and Rig delegate.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">MULTI-TENANCY</span>
+        <h4>6 · Thread-id is the convergent pattern</h4>
+        <p>
+          Eight frameworks expose a thread-id-shaped primitive — different names
+          (<code>thread_id</code>, <code>threadId</code>, <code>conversationId</code>,
+          <code>session_id</code>, <code>user_id</code>) but identical shape: a string
+          passed at request time that namespaces state. Genkit Go and Rig leave session
+          isolation to your application code.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-index.html">← Back to index</a> ·
+    Previous: <a href="operational-excellence-testing.html">Chapter 4 · Testing</a> ·
+    First: <a href="operational-excellence-observability.html">Chapter 1 · Observability</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

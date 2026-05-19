@@ -1,0 +1,52 @@
+/**
+ * TruvaG3 brand color tokens.
+ *
+ * Mirrors website/src/css/custom.css so the docs site (Docusaurus at
+ * docs.truvag3.dev) and the website (this folder, at truvag3.dev) share
+ * one visual identity. Tokens sampled from TruvaG3-Logo.png.
+ *
+ * Keep these values in sync with website/src/css/custom.css. Edits to
+ * brand color need to be applied in both places.
+ */
+
+:root {
+  --brand-truva:       #8FCBED;  /* icy blue, mid-tone */
+  --brand-truva-light: #DBEEFB;  /* icy blue, highlight */
+  --brand-truva-dark:  #4A8AB8;  /* icy blue, shadow */
+  --brand-g3:          #FFA040;  /* warm amber, mid-tone */
+  --brand-g3-light:    #FFD080;  /* warm amber, highlight */
+  --brand-g3-dark:     #C56710;  /* warm amber, shadow */
+}
+
+/* Two-tone brand mark — used inline as:
+ *   <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
+ *
+ * Property order matters: declare `background` BEFORE `background-clip`
+ * and `-webkit-text-fill-color` — the shorthand resets clip to its
+ * default otherwise (visible symptom: solid color blocks instead of
+ * gradient text). See docs/blogs/microagents-architecture.html source
+ * and the examples/registry-viewer-app GLASSMORPHISM_DESIGN.md notes.
+ */
+.brand-truva {
+  background: linear-gradient(
+    135deg,
+    var(--brand-truva-light),
+    var(--brand-truva-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* Tighten the right edge so "a" sits flush against the following "G". */
+  letter-spacing: -0.04em;
+}
+
+.brand-g3 {
+  background: linear-gradient(
+    135deg,
+    var(--brand-g3-light),
+    var(--brand-g3-dark)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

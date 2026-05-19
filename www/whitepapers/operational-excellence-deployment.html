@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 3 · Deployment &amp; runtime — Operational Excellence in AI Agent Frameworks</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #818cf8;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #1e1b4b; border-color: var(--ch); color: #c7d2fe; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #c7d2fe 60%, #818cf8 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #1e1b4b; border: 1px solid var(--ch); color: #c7d2fe; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #1e1b4b; color: #c7d2fe; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a class="active" href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 3 of 5 · Operational Excellence</div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Deployment &amp; runtime</h1>
+    <p class="subtitle">
+      A framework's runtime profile — how fast it boots, how much memory it holds, what
+      artifact it deploys as, where it runs comfortably — shapes operational cost more than
+      any benchmark suggests. For typical agent workloads the LLM dominates wall time and
+      framework throughput rarely matters; what does matter is cold-start time on serverless
+      or edge, memory cost per worker at scale, and whether your team can ship a single
+      binary or has to ship an interpreter and a virtualenv. This chapter walks through each
+      deployment axis and compares how the ten frameworks land on it.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#cold-start">Cold start &amp; startup time</a></li>
+        <li><a href="#memory">Memory footprint</a></li>
+        <li><a href="#packaging">Build &amp; packaging</a></li>
+        <li><a href="#targets">Target environments</a></li>
+        <li><a href="#runners">Built-in runners</a></li>
+      </ol>
+    </div>
+    <p class="lede" style="margin-top: 18px;">
+      A note on numbers in this chapter: cold-start times and memory footprints are
+      <i>ballparks</i>, not benchmarks. Real numbers depend on which provider SDKs you import,
+      how big your prompts and tools are, what observability stack you load, and which JVM /
+      runtime version you're on. Use the ballparks for ordering, not absolute claims.
+    </p>
+  </div>
+</section>
+
+<!-- COLD START -->
+<section id="cold-start">
+  <div class="container">
+    <h2><span class="num">1</span>Cold start &amp; startup time</h2>
+    <p class="lede">
+      Cold start is how long your service takes from "process not running" to "first request
+      answered." For long-running servers, you pay this cost once at boot and it doesn't
+      matter much. For serverless functions and edge workers, you may pay it on every
+      invocation that arrives during an idle window — and the user feels it directly.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your agent runs on AWS Lambda. Most invocations land on a warm container and take 1.5
+        seconds (the LLM call). But once a minute, a request lands on a cold container and the
+        framework has to import: the agent library, three provider SDKs, your observability
+        stack, your tool implementations. With a typical Python agent stack, that import takes
+        2–4 seconds. With a Mastra agent on a Cloudflare Worker, ~50 ms (V8 isolates start in
+        single-digit milliseconds; the bundle adds the rest). With a Genkit Go or Rig binary,
+        sub-100 ms. The user who lands on a cold container experiences a request two to three
+        times slower than the warm path.
+      </p>
+      <p>
+        Cold start hurts most under three conditions: (1) low or bursty traffic with idle
+        intervals long enough to scale to zero, (2) edge deployment where workers are evicted
+        aggressively, and (3) deployments with strict end-to-end SLAs where the cold-path
+        outlier blows your p99. Long-running servers behind a load balancer don't really care.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Cold-start ballpark</th><th>What dominates startup</th><th>AOT / native option?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>~2–4 s</td>
+            <td>Python imports — LangChain core + provider SDKs + observability libs.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>~2–4 s</td>
+            <td>Same as LangChain plus checkpointer / Pregel runtime.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>~2–4 s</td>
+            <td>Python imports including LiteLLM and the memory stack.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>~2–4 s</td>
+            <td>Python imports plus Google Cloud SDK if used.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>~2–4 s</td>
+            <td>Python imports plus Azure SDK if Azure connectors used.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>~300–800 ms (Node) · ~50–100 ms (edge)</td>
+            <td>Node module loading on a server; on Cloudflare/Vercel edge the V8 isolate boots in single-digit ms and bundle eval dominates.</td>
+            <td>Yes — edge bundles run on V8 isolates with single-digit-ms boot.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>~200 ms (AOT) · ~1–2 s (JIT)</td>
+            <td>.NET host startup; AOT publish trims this dramatically.</td>
+            <td>Yes — .NET 8+ AOT; tiny footprint.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>~1–2 s (Spring Boot JVM) · ~50 ms (Quarkus native)</td>
+            <td>JVM startup + Spring application context wiring; Quarkus + GraalVM native eliminates most of it.</td>
+            <td>Yes — Quarkus + GraalVM native image; CRaC for Spring Boot.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>~30–80 ms</td>
+            <td>Go binary load + flow registration.</td>
+            <td>Native binary by default.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>~20–60 ms</td>
+            <td>Rust binary load + Tokio runtime init.</td>
+            <td>Native binary by default.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        For a long-running server behind a load balancer, none of this matters — you eat cold
+        start once. For serverless and edge, the ranking lines up: native binaries (Genkit
+        Go, Rig), Quarkus + GraalVM native, and Mastra on edge runtimes all land under 100 ms;
+        .NET AOT sits in the low hundreds; plain Spring Boot JVM is ~1–2 seconds; Python
+        frameworks all sit in the 2–4 second range regardless of which one you pick.
+      </p>
+      <p>
+        If your deployment target is Cloudflare Workers, Vercel Edge, or AWS Lambda with strict
+        cold-start SLAs, the language choice — not the framework choice within Python —
+        dominates. If you're deploying to Cloud Run or Fargate behind a fronting service that
+        keeps containers warm, framework cold start barely shows up.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- MEMORY -->
+<section id="memory">
+  <div class="container">
+    <h2><span class="num">2</span>Memory footprint</h2>
+    <p class="lede">
+      A typical agent worker holds the framework's loaded code, the active session state, any
+      caches, and any open connections to the model provider. How much memory each worker
+      occupies determines how many you can run on a host, which translates directly to your
+      compute bill at scale.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        You provision a 4 GB memory instance for your agent backend. With a Python framework
+        whose worker is 400 MB, you can fit roughly 8 workers on the box (leaving headroom for
+        OS, cache, etc.). With a Go binary at 30 MB per process, you could fit 100+ — but
+        you'd typically run one process and let goroutines handle concurrency. With a JVM
+        on Spring Boot, one ~500 MB JVM is your worker, but it parallelises CPU work across
+        cores within that one process.
+      </p>
+      <p>
+        Memory matters most under three conditions: (1) cloud bills where you pay per GB-hour
+        of compute, (2) memory-limited edge or serverless functions, and (3) long-tail
+        workloads where idle workers stack up. For a single team's prototype it's invisible;
+        for a platform team running this at scale it's a real number.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Per-worker ballpark</th><th>What's in memory</th><th>Multi-process model</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>~250–500 MB</td>
+            <td>Python interpreter + framework code + provider SDKs + active sessions.</td>
+            <td>Multiple worker processes (gunicorn / uvicorn workers); each carries its own copy.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>~250–500 MB</td>
+            <td>Same as LangChain; checkpoint state typically lives in external store.</td>
+            <td>Multiple worker processes.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>~300–600 MB</td>
+            <td>Python interpreter + LiteLLM + memory stack + active crew state in-memory.</td>
+            <td>Multiple worker processes; CrewAI's stateful in-memory model means session state grows the worker.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>~250–500 MB</td>
+            <td>Python interpreter + ADK + Google SDK if used.</td>
+            <td>Multiple worker processes.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>~200–450 MB</td>
+            <td>Python interpreter + SK + connectors used.</td>
+            <td>Multiple worker processes.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>~150–300 MB (Node) · much smaller on edge runtimes</td>
+            <td>V8 + Node modules + active sessions; edge runtimes share V8 across isolates.</td>
+            <td>Single Node process handles concurrency via event loop; multiple processes for CPU parallelism.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>~80–150 MB (AOT) · ~250–400 MB (JIT)</td>
+            <td>.NET runtime + assemblies + DI container + sessions.</td>
+            <td>Single process parallelises CPU work across cores natively.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>~300–600 MB (JVM) · ~80–150 MB (Quarkus native)</td>
+            <td>JVM + classloader + Spring/Quarkus context + active sessions.</td>
+            <td>Single JVM parallelises CPU work across cores; virtual threads on Java 21+ scale concurrency without extra memory per request.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>~20–60 MB</td>
+            <td>Go binary + active sessions; very compact.</td>
+            <td>Single binary handles concurrency via goroutines.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>~10–40 MB</td>
+            <td>Rust binary + Tokio runtime + active sessions.</td>
+            <td>Single binary handles concurrency via Tokio tasks.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Rust and Go binaries are an order of magnitude smaller than the alternatives. .NET AOT
+        and Quarkus native are competitive at 80–150 MB. Mastra on Node sits in the middle.
+        Python frameworks all cluster around 250–500 MB, with CrewAI a touch heavier because
+        of its in-memory stateful crew model. Plain JVM (Spring Boot without native
+        compilation) is the heaviest at 300–600 MB, but it parallelises CPU within one
+        process so you typically run fewer workers.
+      </p>
+      <p>
+        For most agent workloads the LLM call dwarfs the per-request memory cost, so the
+        per-worker number multiplied by how many workers you need is the figure that matters.
+        Python's fixed cost per worker is the operational tax it pays at scale; the others
+        each have their own trade-offs (JVM startup time, .NET ecosystem assumptions, Node's
+        single-threaded model, Rust's compile times) that show up elsewhere.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- PACKAGING -->
+<section id="packaging">
+  <div class="container">
+    <h2><span class="num">3</span>Build &amp; packaging</h2>
+    <p class="lede">
+      What artifact does each framework produce, and how do you ship it? A single statically
+      linked binary is the simplest deploy story you can have; an interpreter plus a
+      virtualenv plus a lock file is the most portable on developer machines but the most
+      complex to ship reproducibly.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your CI pipeline produces a deploy artifact. With a Go or Rust agent, that artifact
+        is one statically linked binary you copy into a scratch container — total image size
+        ~30–80 MB. With a .NET AOT agent, similar story, ~50–120 MB. With a Spring Boot jar,
+        you ship a 50–80 MB jar and you need a JRE on the host (or you ship the JRE too,
+        making it ~250 MB). With a Node project, you ship the source plus
+        <code>node_modules</code>, typically 100–200 MB. With a Python project, you ship the
+        source plus a virtualenv plus a Python interpreter — typically 300–500 MB once you've
+        installed all the dependencies.
+      </p>
+      <p>
+        Bigger artifacts cost more storage in registries, more bandwidth on every deploy, and
+        more time pulling images on each new node. They also tend to have more vulnerabilities
+        to scan and patch. None of this kills you, but it adds operational drag.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Deploy artifact</th><th>Container size ballpark</th><th>Single-file binary?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Source + Python interpreter + virtualenv (or pip-installed packages).</td>
+            <td>~300–500 MB</td>
+            <td>No — interpreter + dependencies are a tree of files.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Same as LangChain.</td>
+            <td>~300–500 MB</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Same shape; LiteLLM and provider SDKs add weight.</td>
+            <td>~350–600 MB</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Same shape; Cloud SDKs add weight if used.</td>
+            <td>~300–500 MB</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Same shape; Azure SDKs add weight if used.</td>
+            <td>~250–500 MB</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Source + <code>node_modules</code>, or bundled JS for edge runtimes (Cloudflare / Vercel deployers).</td>
+            <td>~100–250 MB (Node) · much smaller bundled for edge</td>
+            <td>No, but edge bundles are compact (single JS bundle).</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Self-contained executable (AOT) or framework-dependent dll set (JIT).</td>
+            <td>~50–120 MB (AOT) · ~150–250 MB (JIT)</td>
+            <td>Yes — .NET 8+ self-contained AOT publish produces a single executable.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Spring Boot fat jar, Quarkus native binary, or app-server war.</td>
+            <td>~100–250 MB (jar + JRE) · ~80–150 MB (Quarkus native)</td>
+            <td>Yes via Quarkus + GraalVM native image; jar requires a JRE.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Single statically linked Go binary.</td>
+            <td>~30–80 MB</td>
+            <td>Yes — native single binary.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Single statically linked Rust binary.</td>
+            <td>~30–80 MB</td>
+            <td>Yes — native single binary.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        The simplest deploy story belongs to Genkit Go and Rig — copy one binary into a scratch
+        container, you're done. .NET AOT and Quarkus native are nearly as clean. Mastra's
+        edge-bundled output is similarly compact for edge deployment, though Node-mode is
+        heavier. Python and JVM-jar deployments require a runtime to be installed on the
+        target machine. JVM jars are genuinely portable (same jar runs on any OS with a
+        matching JRE); Python projects with native dependencies often need to be built per
+        target OS. Both ship bigger artifacts than native binaries.
+      </p>
+      <p>
+        For containerised deployments to Kubernetes / ECS / Cloud Run, image size matters
+        practically: more bandwidth on every deploy, more disk on every node, more time
+        before a pod is ready. For developer-laptop workflows the artifact size barely
+        matters — Python is the most ergonomic to install and iterate on.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TARGETS -->
+<section id="targets">
+  <div class="container">
+    <h2><span class="num">4</span>Target environments</h2>
+    <p class="lede">
+      Where can each framework realistically run? Long-running servers are the lowest common
+      denominator — every framework runs there. The interesting comparison is at the edges:
+      serverless functions with scale-to-zero behaviour, and edge runtimes (Cloudflare
+      Workers, Vercel Edge, Deno Deploy) that impose strict bundle-size and API limits.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        For a globally distributed chatbot, you'd ideally run the agent at the edge so users
+        get sub-100 ms first-byte latency from the geographically nearest worker. Most
+        frameworks can't run there — the runtime simply isn't supported by the edge platform,
+        or the cold-start tax is too high to make it worthwhile. Serverless functions
+        (Lambda, Cloud Functions, Azure Functions) sit in between — most frameworks can run
+        there, but cold start affects the user experience. Long-running containers behind a
+        load balancer absorb cold start once at boot and run fine for everything.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Long-running server</th><th>Serverless (Lambda / Functions)</th><th>Edge runtime (Workers / Edge)</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Yes — FastAPI / Uvicorn / LangServe.</td>
+            <td>Yes, with cold-start tax. Stateless requests fit cleanly.</td>
+            <td>Not realistic — Python isn't supported by Workers/Edge.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td>Yes — usually behind LangSmith Deployment or your own FastAPI.</td>
+            <td>Yes, with cold-start tax. Use an external checkpointer.</td>
+            <td>Not realistic.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>Yes — long-running server; CrewAI Cloud is the canonical hosted option.</td>
+            <td>Awkward — stateful in-memory crew model fights serverless stateless requests.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td>Yes — Cloud Run primary target, also Vertex AI Agent Engine.</td>
+            <td>Yes — Cloud Run scales to zero; Lambda with cold-start tax.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>Yes — FastAPI or any Python web framework.</td>
+            <td>Yes, with cold-start tax.</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td>Yes — Node, Next.js, any TS server.</td>
+            <td>Yes — bundled deployers for Vercel / AWS / Netlify.</td>
+            <td><b>Yes</b> — bundled deployer for Cloudflare Workers; targets edge directly.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>Yes — ASP.NET Core, Azure Container Apps.</td>
+            <td>Yes — Azure Functions; Lambda via .NET runtime.</td>
+            <td>Limited — .NET on edge is not yet mainstream; Azure Static Web Apps with Functions is closest.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Yes — Spring Boot, Quarkus, Helidon, Micronaut.</td>
+            <td>Yes — best results with Quarkus native binaries (cold start ~50 ms).</td>
+            <td>No.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td>Yes — Cloud Run primary target; any Go server.</td>
+            <td>Yes — Cloud Functions native; Lambda with custom runtime; Cloud Run scales to zero.</td>
+            <td>Limited — Go isn't on Cloudflare Workers; some edge platforms support WASM compilation.</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>Yes — embed in Axum / actix-web; native binary.</td>
+            <td>Yes — Lambda via custom runtime; cold start sub-100 ms.</td>
+            <td>Possible via WASM compilation; requires custom build configuration.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        For long-running servers any of the ten frameworks works. For serverless, the
+        ranking lines up with cold-start time — native-binary frameworks (Genkit Go, Rig,
+        .NET AOT, Quarkus native) feel snappy on cold containers; Python feels noticeably
+        slower; Mastra on Vercel sits in between. For edge runtimes, the picture collapses
+        to one realistic option: Mastra. Cloudflare Workers and Vercel Edge run JavaScript /
+        WASM, which rules out Python, JVM jars, and traditional Go / .NET deployments. For edge runtimes (Cloudflare Workers, Vercel Edge), Mastra is the only
+        framework on this list that ships ready-to-deploy edge-compatible bundles.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- RUNNERS -->
+<section id="runners">
+  <div class="container">
+    <h2><span class="num">5</span>Built-in runners</h2>
+    <p class="lede">
+      Some frameworks ship a CLI runner you can use to start a dev server, a production
+      server, or both. Others expect you to bring your own host framework (Spring Boot,
+      ASP.NET Core, Express, etc.). For early development the bundled runners save real
+      time; for production deployments the boundary between "framework runner" and "host
+      framework" matters less.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        On day one of a project, a built-in <code>dev</code> command lets you iterate on
+        agent code with file-watching reload, a playground UI for poking at the agent, and
+        basic observability — useful scaffolding that you'd otherwise hand-roll. By
+        production, most teams replace that runner with their company-standard hosting setup
+        (Spring Boot, ASP.NET Core, FastAPI with their auth and observability middleware),
+        so the production-runner column matters mostly for greenfield projects without that
+        opinionation.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Dev runner</th><th>Production runner</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td>Notebook / script — no first-party dev server.</td>
+            <td>LangServe — separate package, FastAPI-based HTTP server for Runnables.</td>
+            <td><code>langserve</code> package</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td><code>langgraph dev</code> — local dev server with checkpointer + UI.</td>
+            <td><code>langgraph up</code> — containerise + deploy; LangSmith Deployment for hosted runtime.</td>
+            <td><code>libs/cli/</code> · <code>langgraph_api</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td>CLI tools for crew scaffolding; no built-in HTTP dev server.</td>
+            <td>None built in — scripts or CrewAI Cloud (hosted, proprietary).</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td><code>adk run</code> (local) / <code>adk web</code> (FastAPI server with UI).</td>
+            <td><code>adk deploy</code> — Cloud Run helper; also Vertex AI Agent Engine.</td>
+            <td><code>src/google/adk/cli/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td>None built in — script or notebook.</td>
+            <td>None — integrate with FastAPI / ASP.NET Core hosting.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td><code>mastra dev</code> — file-watching dev server with playground UI.</td>
+            <td><code>mastra start</code> + bundled deployers for Vercel / Cloudflare / Netlify / AWS.</td>
+            <td><code>packages/cli/</code> · <code>packages/server/</code> · <code>packages/deployer/</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td>None bundled — use <code>dotnet run</code> with ASP.NET Core minimal API.</td>
+            <td><code>Microsoft.Agents.AI.Hosting</code> packages — <code>AddA2AServer()</code>, <code>MapA2AHttpJson()</code> extensions for ASP.NET Core.</td>
+            <td><code>Microsoft.Agents.AI.Hosting.*</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td>Quarkus dev mode (live reload) when used via <code>quarkus-langchain4j</code>; Spring Boot dev tools otherwise.</td>
+            <td>None bundled — Spring Boot / Quarkus / Micronaut / Helidon are the host frameworks.</td>
+            <td>Quarkus + Spring Boot starters</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td><code>genkit start</code> — dev server with prompt watching and Inspector UI.</td>
+            <td>Built-in HTTP handler; deploy as a Go binary to Cloud Run / Cloud Functions.</td>
+            <td><code>go/genkit/servers.go</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td>None bundled — use <code>cargo run</code> with your chosen web framework.</td>
+            <td>None bundled — wire your own HTTP layer (Axum / actix-web / tower).</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>What this means in practice</h4>
+      <p>
+        Four frameworks ship genuinely useful dev runners with hot reload and a built-in UI:
+        LangGraph (<code>langgraph dev</code>), ADK (<code>adk web</code>), Mastra
+        (<code>mastra dev</code>), and Genkit Go (<code>genkit start</code>). These cut day-one
+        scaffolding work meaningfully. For production, MS Agent Framework's
+        <code>Microsoft.Agents.AI.Hosting</code> extensions and Mastra's bundled deployers are
+        the most opinionated paths to a deployed agent — they wire ASP.NET Core or your edge
+        platform without you writing a host. Other frameworks expect you to choose a host
+        framework and integrate it yourself.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on deployment surfaces across the ten frameworks.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">COLD START</span>
+        <h4>1 · Native binaries lead by an order of magnitude</h4>
+        <p>
+          Genkit Go (~30–80 ms) and Rig (~20–60 ms) are the fastest. Quarkus + GraalVM native
+          (~50 ms) and Mastra on edge runtimes (~50–100 ms) join them under 100 ms. .NET AOT
+          sits around ~200 ms; plain Spring Boot JVM ~1–2 s; Python frameworks all sit at ~2–4 s.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">MEMORY</span>
+        <h4>2 · Per-worker memory varies 30×</h4>
+        <p>
+          Rig and Genkit Go workers are 10–60 MB. .NET AOT and Quarkus native ~80–150 MB.
+          Mastra on Node ~150–300 MB. Python frameworks 250–500 MB. Plain JVM 300–600 MB
+          but parallelises CPU within one process — fewer workers needed.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">ARTIFACT</span>
+        <h4>3 · Single-binary deploys belong to four ecosystems</h4>
+        <p>
+          Genkit Go, Rig, .NET AOT, and Quarkus native produce one statically linked
+          executable you copy into a scratch container. JVM jars need a JRE; Python and Node
+          need their interpreters and dependencies. Single-binary deploys are simpler to
+          ship reproducibly and faster to pull in CI.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">EDGE</span>
+        <h4>4 · Edge runtime is a single-framework story</h4>
+        <p>
+          Cloudflare Workers, Vercel Edge, and Deno Deploy run JavaScript / WASM. Of the ten
+          frameworks, only <b>Mastra</b> ships ready-to-deploy edge-compatible bundles. Rig and Genkit Go are
+          theoretically reachable via WASM compilation but require custom WASM packaging. Python and JVM
+          frameworks aren't realistic for edge.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RUNNERS</span>
+        <h4>5 · Four frameworks ship dev runners worth using</h4>
+        <p>
+          LangGraph (<code>langgraph dev</code>), ADK (<code>adk web</code>), Mastra
+          (<code>mastra dev</code>), and Genkit Go (<code>genkit start</code>) ship dev servers
+          with file-watching, an inspector UI, and useful scaffolding. The others expect
+          you to bring a host framework (Spring Boot, ASP.NET Core, FastAPI).
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">STATEFUL</span>
+        <h4>6 · Stateful in-memory runtime fights serverless</h4>
+        <p>
+          CrewAI's stateful in-memory crew model is the awkward fit on scale-to-zero
+          serverless platforms — sessions evaporate when the worker recycles. LangGraph
+          dodges this by externalising state via the checkpointer; ADK via SessionService;
+          Mastra via pluggable storage. The others stay stateless by default and pass session
+          data in/out per request.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-index.html">← Back to index</a> ·
+    Previous: <a href="operational-excellence-performance.html">Chapter 2 · Performance</a> ·
+    Next: <a href="operational-excellence-testing.html">Chapter 4 · Testing →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Error Handling in AI Agent Frameworks — Index</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch1: #f87171; --ch2: #fb923c; --ch3: #facc15; --ch4: #38bdf8; --ch5: #a78bfa;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.hero {
+    padding: 64px 0 36px; text-align: center; border-bottom: 1px solid var(--line);
+  }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px); line-height: 1.1; margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #fca5a5 40%, #fbbf24 80%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header.hero .subtitle { color: var(--muted); font-size: 17px; max-width: 800px; margin: 0 auto 22px; }
+  .research-date {
+    display: inline-block; margin-bottom: 18px;
+    padding: 5px 14px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 28px; }
+
+  /* Chapter cards */
+  .chapters { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  @media (max-width: 880px) { .chapters { grid-template-columns: 1fr; } }
+  .chapter {
+    display: block;
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px 24px; color: inherit; text-decoration: none;
+    border-left: 4px solid var(--ch1);
+    transition: transform .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .chapter:hover { transform: translateY(-2px); background: var(--bg-3); text-decoration: none; }
+  .chapter.ch1 { border-left-color: var(--ch1); }
+  .chapter.ch2 { border-left-color: var(--ch2); }
+  .chapter.ch3 { border-left-color: var(--ch3); }
+  .chapter.ch4 { border-left-color: var(--ch4); }
+  .chapter.ch5 { border-left-color: var(--ch5); }
+  .chapter .num {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    background: rgba(255,255,255,.06); color: var(--muted);
+    font-size: 11px; letter-spacing: .08em; margin-bottom: 10px;
+  }
+  .chapter h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -0.01em; color: #fff; }
+  .chapter p { margin: 0 0 10px; color: var(--ink); font-size: 14.5px; }
+  .chapter ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+  .chapter li { margin: 4px 0; }
+  .chapter .arrow { color: var(--accent); font-size: 13px; font-weight: 600; margin-top: 12px; display: inline-block; }
+
+  .matrix-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  .matrix { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+  .matrix th, .matrix td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  .matrix thead th { background: var(--bg-2); position: sticky; top: 0; }
+  .matrix td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .matrix .yes { color: var(--good); }
+  .matrix .partial { color: var(--warn); }
+  .matrix .no { color: var(--muted); }
+
+  footer { padding: 36px 0 64px; text-align:center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 6, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Error Handling in AI Agent Frameworks</h1>
+    <p class="subtitle">
+      A multipart guide. Production agent runs fail in many more ways than the four buckets the
+      frameworks themselves design around. This index orients you across <b>five chapters</b>
+      that, between them, cover what actually breaks in production — and what each framework does
+      (or doesn't do) about it.
+    </p>
+  </div>
+</header>
+
+<!-- ========== CHAPTERS ========== -->
+<section>
+  <div class="container">
+    <h2>The five chapters</h2>
+    <p class="lede">
+      Pick a chapter by where the failure originates. Frameworks have native machinery for some;
+      others are mostly an operational concern.
+    </p>
+
+    <div class="chapters">
+      <a class="chapter ch1" href="agent-errors.html">
+        <span class="num">CHAPTER 1 · IN-LOOP</span>
+        <h3>Inside the agent loop</h3>
+        <p>The four failure modes the frameworks themselves are built around — what happens during a single agent run.</p>
+        <ul>
+          <li>Tool calls fail (exceptions, 5xx, schema mismatch)</li>
+          <li>LLM sends incorrect / malformed response</li>
+          <li>Hallucination (made-up tools, args, facts)</li>
+          <li>Context overflow (input too large)</li>
+        </ul>
+        <span class="arrow">Read Chapter 1 →</span>
+      </a>
+
+      <a class="chapter ch2" href="agent-errors-provider.html">
+        <span class="num">CHAPTER 2 · PROVIDER-SIDE</span>
+        <h3>When the model provider misbehaves</h3>
+        <p>Failures upstream of your code — the LLM API rate-limits, refuses, disconnects, or expires your auth.</p>
+        <ul>
+          <li>Rate limits (HTTP 429) and burst spikes</li>
+          <li>Provider outages / 5xx</li>
+          <li>API-key expiration &amp; auth rotation</li>
+          <li>Content-moderation refusals</li>
+          <li>Streaming disconnects mid-response</li>
+          <li>Output truncation (max-tokens hit)</li>
+        </ul>
+        <span class="arrow">Read Chapter 2 →</span>
+      </a>
+
+      <a class="chapter ch3" href="agent-errors-multi-agent.html">
+        <span class="num">CHAPTER 3 · MULTI-AGENT</span>
+        <h3>Multi-agent specific failures</h3>
+        <p>Cycles, deadlocks, and state inconsistency that only show up when agents call agents.</p>
+        <ul>
+          <li>Cyclic handoffs (A → B → A → …)</li>
+          <li>Deadlocks &amp; spinning supervisors</li>
+          <li>State inconsistency across branches</li>
+          <li>Recursion / iteration limits as the last guard</li>
+        </ul>
+        <span class="arrow">Read Chapter 3 →</span>
+      </a>
+
+      <a class="chapter ch4" href="agent-errors-operational.html">
+        <span class="num">CHAPTER 4 · OPERATIONAL</span>
+        <h3>Operational failures</h3>
+        <p>Failures in the boring layer beneath the agent — budgets, infra, and cancellation.</p>
+        <ul>
+          <li>Cost / token-budget exhaustion</li>
+          <li>Infrastructure (DB, cache, OOM, network)</li>
+          <li>User cancellation &amp; caller timeouts</li>
+          <li>Throughput throttling (RPM)</li>
+        </ul>
+        <span class="arrow">Read Chapter 4 →</span>
+      </a>
+
+      <a class="chapter ch5" href="agent-errors-data-compliance.html">
+        <span class="num">CHAPTER 5 · DATA &amp; COMPLIANCE</span>
+        <h3>Data &amp; compliance failures</h3>
+        <p>Bad inputs from upstream and outputs that violate policy. Mostly an ingress / egress concern.</p>
+        <ul>
+          <li>Bad upstream input (malformed, encoded badly)</li>
+          <li>PII leaking into prompts or outputs</li>
+          <li>Output policy violations</li>
+          <li>Where each framework's hooks help — and where they don't</li>
+        </ul>
+        <span class="arrow">Read Chapter 5 →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ========== AT A GLANCE MATRIX ========== -->
+<section>
+  <div class="container">
+    <h2>At-a-glance — what's framework-handled vs. operational</h2>
+    <p class="lede">
+      Every chapter dives deeper, but here's the shorthand. <span class="yes">●</span> = native
+      machinery, <span class="partial">◐</span> = partial / opt-in, <span class="no">○</span> =
+      defer to your operational tooling.
+    </p>
+    <div class="matrix-wrap">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>Failure</th>
+            <th>LangChain</th>
+            <th>LangGraph</th>
+            <th>CrewAI</th>
+            <th>Google ADK</th>
+            <th>Semantic Kernel</th>
+            <th>Best handled at</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Tool call fails</td>
+            <td><span class="yes">●</span> handle_tool_error · v1 ToolRetryMiddleware</td>
+            <td><span class="yes">●</span> ToolNode.handle_tool_errors</td>
+            <td><span class="yes">●</span> max_retry_limit</td>
+            <td><span class="yes">●</span> on_tool_error_callback</td>
+            <td><span class="partial">◐</span> filter try/except</td>
+            <td>Framework</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LLM bad output</td>
+            <td><span class="yes">●</span> OutputFixingParser / RetryOutputParser</td>
+            <td><span class="yes">●</span> ValidationNode</td>
+            <td><span class="yes">●</span> parse() + corrective re-prompt</td>
+            <td><span class="yes">●</span> on_model_error_callback</td>
+            <td><span class="partial">◐</span> auto-function-invocation filter</td>
+            <td>Framework</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Hallucination</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="partial">◐</span> Task.guardrail(s)</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td>Your validators / RAG</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Context overflow</td>
+            <td><span class="yes">●</span> trim_messages · SummarizationMiddleware</td>
+            <td><span class="partial">◐</span> pre_model_hook + trim_messages</td>
+            <td><span class="yes">●</span> respect_context_window auto-summarize</td>
+            <td><span class="yes">●</span> CompactionRequestProcessor</td>
+            <td><span class="yes">●</span> ChatHistoryReducer</td>
+            <td>Framework</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Provider 429 / outage</td>
+            <td><span class="partial">◐</span> v1 ModelRetryMiddleware / Fallback</td>
+            <td><span class="partial">◐</span> RetryPolicy on agent node</td>
+            <td><span class="partial">◐</span> RPMController only</td>
+            <td><span class="partial">◐</span> on_model_error_callback</td>
+            <td><span class="no">○</span> default no retry</td>
+            <td>Gateway / LLM router</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Auth expiration</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td>Secret manager</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Streaming disconnect</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="yes">●</span> live-API session resumption</td>
+            <td><span class="no">○</span></td>
+            <td>Framework / gateway</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Cyclic handoffs</td>
+            <td><span class="partial">◐</span> max_iterations=15</td>
+            <td><span class="yes">●</span> recursion_limit</td>
+            <td><span class="yes">●</span> max_iter=25</td>
+            <td><span class="partial">◐</span> per-agent iteration caps</td>
+            <td><span class="yes">●</span> TerminationStrategy.maximum_iterations</td>
+            <td>Framework</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Cost / token budget</td>
+            <td><span class="yes">●</span> v1 ModelCallLimitMiddleware</td>
+            <td><span class="no">○</span></td>
+            <td><span class="partial">◐</span> max_iter as a proxy</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td>Cost gateway / budget guard</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Infra failures</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td>Platform / k8s</td>
+          </tr>
+          <tr>
+            <td class="row-hd">User cancellation</td>
+            <td><span class="partial">◐</span> async cancellation</td>
+            <td><span class="partial">◐</span> task cancel via Pregel</td>
+            <td><span class="no">○</span></td>
+            <td><span class="partial">◐</span> CancellationToken-style</td>
+            <td><span class="yes">●</span> CancellationToken</td>
+            <td>Framework</td>
+          </tr>
+          <tr>
+            <td class="row-hd">PII / compliance</td>
+            <td><span class="yes">●</span> v1 PIIMiddleware</td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td><span class="no">○</span></td>
+            <td>Pre-processor / Presidio</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Multipart error-handling guide · compiled from upstream source of LangChain, LangGraph,
+    CrewAI, Google ADK, and Microsoft Semantic Kernel ·
+    <a href="agent-errors.html">Chapter 1</a> ·
+    <a href="agent-errors-provider.html">Chapter 2</a> ·
+    <a href="agent-errors-multi-agent.html">Chapter 3</a> ·
+    <a href="agent-errors-operational.html">Chapter 4</a> ·
+    <a href="agent-errors-data-compliance.html">Chapter 5</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>

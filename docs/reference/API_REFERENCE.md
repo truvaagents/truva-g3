@@ -1619,7 +1619,7 @@ Use portable model names across different providers. Model aliases allow you to 
 - `"vision"` - Multimodal/vision capabilities (if available)
 - `"default"` - Provider's recommended default
 
-**Model alias resolution examples** (snapshot — see [ai/providers/openai/models.go](../../ai/providers/openai/models.go) for the canonical mapping):
+**Model alias resolution examples** (snapshot — see [ai/providers/openai/models.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/models.go) for the canonical mapping):
 
 ```go
 // "smart" resolves differently per provider

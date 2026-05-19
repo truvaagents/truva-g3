@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chapter 4 · Operational failures</title>
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --ch: #38bdf8;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #0e2a3d; border-color: var(--ch); color: #bae6fd; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #38bdf8 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 820px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #0e2a3d; border: 1px solid var(--ch); color: #bae6fd; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0e2a3d; color: #bae6fd; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="agent-errors-index.html">← Index</a>
+    <a href="agent-errors.html"><span class="num">1</span>In-loop</a>
+    <a href="agent-errors-provider.html"><span class="num">2</span>Provider</a>
+    <a href="agent-errors-multi-agent.html"><span class="num">3</span>Multi-agent</a>
+    <a class="active" href="agent-errors-operational.html"><span class="num">4</span>Operational</a>
+    <a href="agent-errors-data-compliance.html"><span class="num">5</span>Data &amp; compliance</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Chapter 4 of 5</div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Operational failures</h1>
+    <p class="subtitle">
+      These are the failures that sit between the agent loop and the platform running it: a tool
+      bug burns through a month's budget in an hour, a database goes offline mid-run, the user
+      closes their browser tab while the agent is still working, or your code accidentally
+      hammers a provider faster than it can respond. None of these are "the LLM made a mistake"
+      — they're "the system around the LLM broke." This chapter walks through each failure in
+      plain language, then catalogs the call-counting, checkpointing, cancellation, and
+      rate-control surfaces the five frameworks expose for these conditions.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this chapter</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#cost">Cost / call-budget caps</a></li>
+        <li><a href="#infra">Infrastructure failures &amp; durable resume</a></li>
+        <li><a href="#cancel">Cancellation primitives</a></li>
+        <li><a href="#throttle">Throughput throttling (RPM)</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- COST -->
+<section id="cost">
+  <div class="container">
+    <h2><span class="num">1</span>Cost / call-budget caps</h2>
+    <p class="lede">
+      Agent runs cost real money. A single user request can produce dozens of model calls and
+      hundreds of tool invocations, and a bug in a tool description or a poorly-tuned supervisor
+      can multiply that by 10× without anyone noticing. None of the five frameworks ship a
+      token-<i>cost</i> meter — they don't track dollars. What they do expose are
+      <i>call-count</i> ceilings: middleware and field defaults that bound how many model or
+      tool invocations a thread, run, or agent can produce before the loop is forced to stop.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A developer ships a small change: a new tool that scrapes a URL and returns the page
+        text. The tool description is slightly ambiguous, so the LLM keeps calling it again and
+        again hoping for a different result. One user request triggers 200 tool calls before
+        anyone notices — $40 of tokens for a single conversation. Multiply that across a few
+        hundred users over a weekend and you've blown a month's budget. The agent loop itself
+        had no way to know any of this was unusual; it just kept doing what the LLM asked.
+      </p>
+      <p>
+        Call-count caps are a blunt safeguard against this. They don't know the cost in dollars,
+        but they know "this thread has issued 50 model calls — that's more than the limit." The
+        granularity matters: a per-<i>run</i> cap protects against single-request runaways, a
+        per-<i>thread</i> cap protects against a long-running conversation slowly piling up
+        calls, and a per-<i>tool</i> cap protects against one buggy tool dominating the run.
+        LangChain v1's middlewares are the only built-ins in this catalog that distinguish
+        thread from run and offer per-tool scoping; the others ship a single integer cap.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Built-in call-budget surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain v1</td>
+            <td><code>ModelCallLimitMiddleware</code> with <code>thread_limit</code> + <code>run_limit</code> kwargs and <code>exit_behavior: Literal["end", "error"]</code>; counts persist across runs when keyed to a thread.</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/model_call_limit.py:89</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain v1</td>
+            <td><code>ToolCallLimitMiddleware</code> with optional <code>tool_name</code> scoping plus <code>thread_limit</code> / <code>run_limit</code>; <code>exit_behavior</code> adds <code>"continue"</code> (block exceeded tools, let others proceed).</td>
+            <td><code>libs/langchain_v1/langchain/agents/middleware/tool_call_limit.py:189</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain (classic)</td>
+            <td><code>AgentExecutor.max_iterations</code> (default 15) bounds reasoning steps; <code>max_execution_time: float | None = None</code> applies a wall-clock cap via <code>asyncio_timeout()</code>.</td>
+            <td><code>libs/langchain/langchain_classic/agents/agent.py:1028</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>No call-count or cost middleware. <code>recursion_limit</code> bounds super-steps, not LLM calls or tokens.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>BaseAgent.max_iter: int = Field(default=25, …)</code> — the per-agent reasoning-step ceiling that doubles as a call-count proxy.</td>
+            <td><code>agents/agent_builder/base_agent.py:251</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>LoopAgent.max_iterations: Optional[int] = None</code> — only applies to the explicit <code>LoopAgent</code> wrapper; unbounded by default.</td>
+            <td><code>src/google/adk/agents/loop_agent.py:51</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>FunctionChoiceBehavior.Auto.maximum_auto_invoke_attempts</code> — module-level default <code>DEFAULT_MAX_AUTO_INVOKE_ATTEMPTS = 5</code>, assigned to the field.</td>
+            <td><code>connectors/ai/function_choice_behavior.py:18</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- INFRA -->
+<section id="infra">
+  <div class="container">
+    <h2><span class="num">2</span>Infrastructure failures &amp; durable resume</h2>
+    <p class="lede">
+      Agent runs are long-lived — a multi-step task with several tool calls can take minutes.
+      That's a much bigger window for the underlying infrastructure to fail than a typical web
+      request. The pod gets OOM-killed, the database connection drops, a network partition
+      isolates the worker. The question is whether a different process can pick up where the
+      crashed one left off, or whether the run dies with the process. The answer depends entirely
+      on whether the framework persists run state to durable storage as it goes.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your agent is six steps into a ten-step research task — three searches done, two
+        documents summarised, a draft underway. The pod hosting the run gets evicted by
+        Kubernetes during a node upgrade. Without durable state, that work is gone: when the
+        request retries (or the user retries), the agent starts from scratch, paying for all six
+        steps again and asking the user to wait through the same minutes of work. With durable
+        state, a different pod loads the last checkpoint, sees that steps 1–6 completed, and
+        starts the run from step 7. The user might not even notice.
+      </p>
+      <p>
+        The mechanism that makes this work is a <i>checkpointer</i>: a storage backend the
+        framework writes to after each step. LangGraph is the only framework in this catalog
+        that ships one as a first-class abstraction (<code>BaseCheckpointSaver</code>) with
+        SQLite and Postgres implementations. The others let you record events for
+        observability, but they don't snapshot mid-run state in a form another process can
+        resume from.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Durable-state surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>BaseCheckpointSaver[V]</code> — the abstract persistence interface every implementation extends.</td>
+            <td><code>libs/checkpoint/langgraph/checkpoint/base/__init__.py:150</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>SqliteSaver(BaseCheckpointSaver[str])</code> + <code>AsyncSqliteSaver</code> — local-file checkpoint store; same package ships a sync and async variant.</td>
+            <td><code>libs/checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py</code> · <code>aio.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td><code>BasePostgresSaver(BaseCheckpointSaver[str])</code> — Postgres-backed durable state for cross-process resume.</td>
+            <td><code>libs/checkpoint-postgres/langgraph/checkpoint/postgres/base.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain (classic + v1)</td>
+            <td>No checkpoint abstraction. <code>RunnableWithMessageHistory</code> persists chat history through a <code>BaseChatMessageHistory</code> implementation, but does not snapshot mid-run agent state.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>No mid-run checkpointing. <code>Crew</code> exposes <code>Crew.kickoff()</code> as a single call; persistence is per-task output via memory backends, not a resumable run.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td><code>BaseSessionService</code> stores session events; runs are not snapshotted to a checkpoint that another process can resume from.</td>
+            <td><code>src/google/adk/sessions/base_session_service.py</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>Process framework provides <code>ProcessStateMetadata</code> for serialising in-flight processes; the agent runtime does not persist actor state mid-run.</td>
+            <td><code>python/semantic_kernel/processes/process_state.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- CANCEL -->
+<section id="cancel">
+  <div class="container">
+    <h2><span class="num">3</span>Cancellation primitives</h2>
+    <p class="lede">
+      The user closes their browser tab. Your API gateway's 60-second timeout fires. The
+      upstream service that called your agent gives up. In every case, your agent should also
+      give up — quickly, releasing tokens and external resources. But "stopping" a running agent
+      is harder than it sounds: there might be a model call mid-flight, several tools running in
+      parallel, sub-agents waiting on each other. The framework needs a way to say "stop" that
+      reaches all of them.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        A user clicks "cancel" on a long-running query. Your gateway sends a cancel signal to
+        the agent service. Without a clean cancellation pathway, the agent keeps running until
+        it finishes — the user is gone, but the agent is still calling the model, racking up
+        tokens, hitting external tools that might cost money, and tying up worker capacity.
+        With proper cancellation, the cancel signal propagates: the in-flight model call is
+        aborted, every running tool call is told to stop, sub-agents shut down, the run exits
+        within milliseconds.
+      </p>
+      <p>
+        Two API shapes exist in the catalog. Most frameworks rely on Python's built-in
+        cancellation: when the surrounding async task is cancelled, an
+        <code>asyncio.CancelledError</code> propagates through every awaiting coroutine. This
+        works as long as no one in the chain swallows the exception. Semantic Kernel takes a
+        different approach: it ships an explicit <code>CancellationToken</code> object you pass
+        through orchestration constructors. Calling <code>cancel()</code> on the token fires
+        registered callbacks and cancels every linked future — useful when an agent
+        orchestration spans actors that aren't all in a single asyncio task.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Cancellation API</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td><code>CancellationToken</code> with <code>cancel()</code>, <code>is_cancelled()</code>, <code>add_callback()</code>, and <code>link_future()</code>; passing the same token through orchestration constructors propagates cancellation to every actor.</td>
+            <td><code>agents/runtime/core/cancellation_token.py:10</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>Pregel runner branches on <code>isinstance(exception, asyncio.CancelledError)</code> to distinguish cancel from other exceptions; cleanup uses <code>contextlib.suppress(asyncio.CancelledError)</code>.</td>
+            <td><code>libs/langgraph/langgraph/pregel/_runner.py:578</code> · <code>main.py:3395</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain (classic)</td>
+            <td><code>max_execution_time: float | None</code> on <code>AgentExecutor</code> drives an <code>asyncio_timeout()</code> wrapper around the loop; awaiting tools propagate <code>asyncio.CancelledError</code> normally.</td>
+            <td><code>libs/langchain/langchain_classic/agents/agent.py:1028</code> · <code>:1644</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td>No first-class cancellation type. <code>max_iter</code> and <code>max_rpm</code> bound execution; hard cancel relies on host-level <code>asyncio.wait_for</code> wrapping <code>Crew.kickoff_async()</code>.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td>Cancellation rides through async generators in <code>BaseAgent.run_async</code>; there is no dedicated token type.</td>
+            <td><code>src/google/adk/agents/base_agent.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- THROTTLE -->
+<section id="throttle">
+  <div class="container">
+    <h2><span class="num">4</span>Throughput throttling (RPM)</h2>
+    <p class="lede">
+      This is the inverse of Chapter 2's rate-limit problem: instead of recovering from a
+      provider's <code>429</code>, you're trying to <i>prevent</i> the 429 by capping the rate
+      at which <i>you</i> send requests. Self-throttling at the agent layer is a polite-neighbor
+      mechanism that keeps a single agent from hammering the provider faster than it should,
+      typically configured per-agent or per-process.
+    </p>
+
+    <div class="card">
+      <h4>What this looks like in practice</h4>
+      <p>
+        Your CrewAI agent is processing a batch of 200 documents in parallel. With no
+        self-throttle, it issues 200 model calls in the first second, hits the provider's
+        per-minute token limit, and the next 150 calls return 429s. The framework retries them
+        with backoff — most succeed eventually, but the run takes 10× as long because of the
+        cascade of retries. With <code>max_rpm=60</code> set on the agent, the
+        <code>RPMController</code> spaces calls so the per-minute counter never exceeds 60; no
+        429s, no retries, no thundering herd.
+      </p>
+      <p>
+        Self-throttling is in-process by definition — the counter lives in Python's
+        <code>threading</code> primitives. If you have ten agent processes all talking to the
+        same provider account, each will have its own counter, and the provider sees 600 RPM
+        despite each agent's <code>max_rpm=60</code>. Cross-process throttling lives at a
+        different layer — typically a gateway proxy with a distributed token bucket. Of the
+        five frameworks, only CrewAI ships an in-process limiter; the rest expect this to be
+        handled by the model client or platform layer.
+      </p>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Framework</th><th>Self-throttle surface</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>RPMController(BaseModel)</code> with <code>max_rpm: int | None = None</code>, private <code>_current_rpm</code> counter, <code>_timer</code>, and a <code>_lock</code>; <code>check_or_wait()</code> blocks when the cap is reached and a 60-second timer resets the counter.</td>
+            <td><code>src/crewai/utilities/rpm_controller.py:8</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI</td>
+            <td><code>BaseAgent.max_rpm: int | None = Field(default=None, …)</code> wires per-agent caps into the <code>RPMController</code>; <code>None</code> means unlimited.</td>
+            <td><code>agents/agent_builder/base_agent.py:240</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain v1</td>
+            <td>No per-second limiter. <code>ModelCallLimitMiddleware</code> caps thread/run totals, not rate.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph</td>
+            <td>No first-class RPM control. Throttling is delegated to the underlying chat-model client.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK</td>
+            <td>No first-class RPM control.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel</td>
+            <td>No first-class RPM control.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section>
+  <div class="container">
+    <h2>At a glance</h2>
+    <p class="lede">Source-grounded observations on operational failure surfaces.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">CALL CAPS</span>
+        <h4>1 · Only LangChain v1 separates thread from run</h4>
+        <p>
+          <code>ModelCallLimitMiddleware</code> and <code>ToolCallLimitMiddleware</code> both
+          accept <code>thread_limit</code> and <code>run_limit</code> as independent kwargs.
+          CrewAI <code>max_iter=25</code>, ADK <code>LoopAgent.max_iterations=None</code>, and SK
+          <code>maximum_auto_invoke_attempts=5</code> are single-integer caps with no
+          conversation-vs-invocation distinction.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">TOOL SCOPE</span>
+        <h4>2 · Per-tool budgets are LangChain-only</h4>
+        <p>
+          <code>ToolCallLimitMiddleware</code> takes an optional <code>tool_name</code> kwarg in
+          <code>tool_call_limit.py:189</code>, scoping the count to a single tool and adding
+          <code>"continue"</code> as an exit behavior so other tools are unaffected. No other
+          framework exposes per-tool counting.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CHECKPOINTS</span>
+        <h4>3 · Durable resume ships only in LangGraph</h4>
+        <p>
+          <code>BaseCheckpointSaver[V]</code> in <code>checkpoint/base/__init__.py:150</code>
+          plus <code>SqliteSaver</code> and <code>BasePostgresSaver</code> implementations let a
+          different process resume an interrupted run. The other four frameworks have no
+          equivalent mid-run snapshot abstraction.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">CANCEL TOKEN</span>
+        <h4>4 · SK is the only framework with a token type</h4>
+        <p>
+          <code>CancellationToken</code> in <code>agents/runtime/core/cancellation_token.py:10</code>
+          exposes <code>cancel()</code>, <code>add_callback()</code>, and
+          <code>link_future()</code>; it propagates explicitly through orchestration constructors.
+          LangGraph and LangChain rely on <code>asyncio.CancelledError</code> propagation.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">WALL CLOCK</span>
+        <h4>5 · LangChain has the only built-in time cap</h4>
+        <p>
+          <code>AgentExecutor.max_execution_time: float | None = None</code> at
+          <code>libs/langchain/langchain_classic/agents/agent.py:1028</code> drives an
+          <code>asyncio_timeout()</code> at line 1644. LangGraph, CrewAI, ADK, and SK have no
+          first-class wall-clock budget — timeouts are imposed by the host.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">RPM</span>
+        <h4>6 · CrewAI is the only framework with built-in RPM control</h4>
+        <p>
+          <code>RPMController</code> in <code>utilities/rpm_controller.py:8</code> uses
+          <code>threading.Timer</code> + <code>threading.Lock</code> for a per-minute counter
+          wired to <code>BaseAgent.max_rpm</code>. The counter is in-process; cross-process RPM
+          is left to external infrastructure.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="agent-errors-index.html">← Back to index</a> ·
+    Previous: <a href="agent-errors-multi-agent.html">Chapter 3 · Multi-agent</a> ·
+    Next: <a href="agent-errors-data-compliance.html">Chapter 5 · Data &amp; compliance →</a>
+    <p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>
