@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TruvaG3: An Introduction to the Micro-Agents Framework</title>
+<title>TruvaG3: An Introduction to the Microagents Framework</title>
 <meta name="description" content="A guided tour of TruvaG3 — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.">
 <style>
   :root {
@@ -141,7 +141,7 @@
 <article>
 
 <header class="article-header">
-  <h1>TruvaG3: An Introduction to the Micro-Agents Framework</h1>
+  <h1>TruvaG3: An Introduction to the Microagents Framework</h1>
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
   <p class="meta">Neelabh Tripathi · May 16, 2026</p>
 </header>
@@ -155,7 +155,7 @@
 
 <p>The second is operational. Even when an agent framework gets the architecture right, it often brings its own runtime: its own orchestrator process, a hosted control plane, a vendor-specific workflow engine, or all three. For a platform team that already runs a working Kubernetes environment, that is not a feature — it is a new system to learn, scale, secure, and pay for. The team has to either accept a parallel operating model for agent workloads, or rebuild parts of the platform they already trust.</p>
 
-<p><strong>TruvaG3 is a Go framework that takes a different position on both counts.</strong> The architecture is the micro-agents reference described in <a href="micro-agents-architecture.html">a separate article</a> — capabilities registered into a shared registry at runtime, peers addressed by logical name, orchestration inside each agent, decentralized coordination between participants. The runtime is ordinary Kubernetes: Deployments, Services, ConfigMaps, Secrets, ingress, service mesh, autoscaling, OpenTelemetry. The framework adds the agent-specific pieces — discovery, an LLM client, an orchestrator, resilience and memory primitives — and does not require anything else.</p>
+<p><strong>TruvaG3 is a Go framework that takes a different position on both counts.</strong> The architecture is the microagents reference described in <a href="microagents-architecture.html">a separate article</a> — capabilities registered into a shared registry at runtime, peers addressed by logical name, orchestration inside each agent, decentralized coordination between participants. The runtime is ordinary Kubernetes: Deployments, Services, ConfigMaps, Secrets, ingress, service mesh, autoscaling, OpenTelemetry. The framework adds the agent-specific pieces — discovery, an LLM client, an orchestrator, resilience and memory primitives — and does not require anything else.</p>
 
 <p>This article walks through both halves. It is meant to be read in one sitting; sections can be skipped without losing the thread.</p>
 </section>
@@ -165,13 +165,13 @@
 
 <h3 id="architectural-reason">The architectural reason</h3>
 
-<p>The <a href="micro-agents-architecture.html">companion article on the micro-agents architecture</a> argues the case in detail, with primary-source evidence from production teams. The short version follows.</p>
+<p>The <a href="microagents-architecture.html">companion article on the microagents architecture</a> argues the case in detail, with primary-source evidence from production teams. The short version follows.</p>
 
 <p>Most agent frameworks today share one wiring pattern. The developer builds an agent, gives it a list of tools, and starts a loop. If a second agent is needed, the developer either wires it into the first agent as another callable, or places both agents inside a higher-level orchestrator that decides whose turn it is. In every case, the set of participants is fixed in source code before the program runs.</p>
 
-<p>Production teams report that this pattern hits real limits. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic's engineering account</a> of their multi-agent Research feature describes synchronous lead-subagent coordination as a bottleneck — the lead agent cannot steer subagents, subagents cannot coordinate, and the whole system can block on one slow subagent. <a href="https://arxiv.org/abs/2411.04468">Microsoft Research, writing about Magentic-One</a>, names the static composition itself as a limitation: <em>"Magentic-One's composition is fixed to a common set of five agents... When agents are not needed, they simply serve as a distraction to the Orchestrator... Conversely, when extra expertise might be needed, it is simply unavailable. We can easily imagine an alternative approach where agents are added or removed dynamically, based on the task need."</em> The fix the Magentic-One authors describe — agents added or removed dynamically — is exactly the micro-agents approach.</p>
+<p>Production teams report that this pattern hits real limits. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic's engineering account</a> of their multi-agent Research feature describes synchronous lead-subagent coordination as a bottleneck — the lead agent cannot steer subagents, subagents cannot coordinate, and the whole system can block on one slow subagent. <a href="https://arxiv.org/abs/2411.04468">Microsoft Research, writing about Magentic-One</a>, names the static composition itself as a limitation: <em>"Magentic-One's composition is fixed to a common set of five agents... When agents are not needed, they simply serve as a distraction to the Orchestrator... Conversely, when extra expertise might be needed, it is simply unavailable. We can easily imagine an alternative approach where agents are added or removed dynamically, based on the task need."</em> The fix the Magentic-One authors describe — agents added or removed dynamically — is exactly the microagents approach.</p>
 
-<p>The micro-agents architecture has five defining properties:</p>
+<p>The microagents architecture has five defining properties:</p>
 
 <ul>
   <li><strong>Specialized and independently deployable.</strong> Agents and tools run in their own processes, with their own release cadence and ownership.</li>
@@ -375,13 +375,13 @@
 
 <p>This is a structural property, not a compatibility claim. Because the protocol is the one your platform team already operates, every piece of infrastructure that already works on your REST services works on TruvaG3 components in the same way: API gateways (Kong, Ambassador, Nginx), service meshes (Istio, Linkerd), ingress controllers, network policies, identity providers, mTLS, OAuth and JWT validation, RBAC, audit logging, rate limiters, web application firewalls, monitoring, API governance tools, OpenAPI consumers (Swagger UI, Postman, code generators). Nothing has to be re-built or re-secured for agent workloads. Security and authentication and authorization patterns the team has already standardized on apply by default, because the thing being secured is just an HTTP service.</p>
 
-<p>The combined claim is straightforward. TruvaG3 is architecturally different from most agent frameworks, because it inherits the micro-agents pattern. It is also operationally familiar, because the platform layer is the same Kubernetes platform the team is already running — and because the wire protocol is the same HTTP/REST contract every other service in the cluster already follows. Most frameworks pick one or the other; TruvaG3 is shaped around the assumption that both matter.</p>
+<p>The combined claim is straightforward. TruvaG3 is architecturally different from most agent frameworks, because it inherits the microagents pattern. It is also operationally familiar, because the platform layer is the same Kubernetes platform the team is already running — and because the wire protocol is the same HTTP/REST contract every other service in the cluster already follows. Most frameworks pick one or the other; TruvaG3 is shaped around the assumption that both matter.</p>
 </section>
 
 <section>
 <h2 id="how-it-works">How the architecture works, briefly</h2>
 
-<p>This section is a compressed restatement of the architecture, enough to follow the rest of the article. For the full treatment — including production-team citations, the wiring problem in detail, and two captured execution traces from a running cluster — see the <a href="micro-agents-architecture.html">architecture article</a>.</p>
+<p>This section is a compressed restatement of the architecture, enough to follow the rest of the article. For the full treatment — including production-team citations, the wiring problem in detail, and two captured execution traces from a running cluster — see the <a href="microagents-architecture.html">architecture article</a>.</p>
 
 <p>The architecture is built around a single primitive: a <strong>capability registry</strong>. Every participant publishes the capabilities it offers into a shared index, each identified by a logical name. These names are runtime facts about the deployment; they are not configuration carried in any caller's code, and no participant references a peer's capability by name in its own source. When a request needs to be planned, the framework hands the registry's current contents to the LLM as the planning catalog. The LLM picks capabilities; the framework dispatches each chosen step to the address the registry currently lists for that name.</p>
 
@@ -452,19 +452,19 @@ type Discovery interface {
 
 <h3 id="component-runtime">1. Component runtime</h3>
 
-<p>Behind every TruvaG3 component — tool or agent — is a small runtime that handles the work of being a service: starting an HTTP server, wiring middleware, registering capabilities with the discovery layer, propagating loggers and telemetry into handlers, refreshing heartbeats, and shutting down cleanly when the process gets a termination signal. The developer writes the business logic — the API client, the domain handlers — and the framework supplies everything else.</p>
+<p>Behind every TruvaG3 component — tool or agent — is a small runtime that handles the work of being a service: starting an HTTP server, wiring panic-recovery and logging middleware, registering capabilities with the discovery layer, propagating loggers and telemetry into handlers, refreshing heartbeats, and providing a bounded HTTP shutdown the application can invoke on a termination signal. The developer writes the business logic — the API client, the domain handlers — and the framework supplies everything else.</p>
 
 <p><strong>Functional-options API, predictable defaults.</strong> A component starts life with <code>core.NewFramework(component, opts...)</code>. Every operational property is set through a <code>With...</code> option — explicit when you need to override, invisible when defaults are fine. The options that come up in practice:</p>
 
 <ul>
   <li><strong><code>WithName</code></strong> — the logical name the framework registers in discovery and uses in logs, metrics, and traces.</li>
   <li><strong><code>WithPort</code></strong> — the HTTP port to listen on. Standard Kubernetes deployments leave this at the container port (e.g., 8080).</li>
-  <li><strong><code>WithNamespace</code></strong> — the logical namespace for multi-tenant isolation in the registry. Maps cleanly to Kubernetes namespaces.</li>
+  <li><strong><code>WithNamespace</code></strong> — a logical grouping label (e.g., <code>"production"</code>, <code>"staging"</code>) that is attached to the component's registry metadata and emitted in logs and traces. It is not a Kubernetes namespace, and it does not key-partition the registry — the Redis registry key namespace is currently hardcoded to <code>truvag3</code>.</li>
   <li><strong><code>WithRedisURL</code></strong> / <strong><code>WithDiscovery</code></strong> — turn on the registry connection. Pluggable backends sit behind these.</li>
   <li><strong><code>WithCORS</code></strong> / <strong><code>WithCORSDefaults</code></strong> — opt in to CORS for browser-facing components. Off by default, since most internal services do not need it.</li>
-  <li><strong><code>WithMiddleware</code></strong> — wire arbitrary HTTP middleware into the handler chain. The framework's own tracing, telemetry, and logger-propagation middleware are wired automatically; this is the hook for application-specific middleware (auth, rate-limiting, audit).</li>
+  <li><strong><code>WithMiddleware</code></strong> — wire arbitrary HTTP middleware into the handler chain. Panic recovery, request/response logging, and (when enabled) CORS are wired automatically by the framework. Distributed tracing is NOT auto-wired — application code adds it through this option, typically with <code>telemetry.TracingMiddleware</code> or <code>TracingMiddlewareWithConfig</code>. This is also the hook for application-specific middleware (auth, rate-limiting, audit).</li>
   <li><strong><code>WithOpenAPI</code></strong> — opt in to the auto-generated OpenAPI document at <code>/openapi.json</code>. Off by default for security; see <a href="#capability-contracts">§3</a> for what the document contains and <a href="#security">§12</a> for when to enable it.</li>
-  <li><strong><code>WithDevelopmentMode</code></strong> — pretty (human-readable) logs, <code>debug</code> log level, text log format, relaxed validation. Off in production deployments.</li>
+  <li><strong><code>WithDevelopmentMode</code></strong> — pretty (human-readable) logs, <code>debug</code> log level, text log format. Off in production deployments. (Validation relaxation for AI/discovery is separate, via <code>WithMockAI</code> / <code>WithMockDiscovery</code>.)</li>
 </ul>
 
 <p>Most operational options have a corresponding environment variable (<code>TRUVAG3_*</code>) so the same binary can run in many environments without recompilation. Options that take function values — middleware, custom loggers — are code-only. The precedence order is documented and predictable: explicit code overrides take priority, environment variables come next, framework defaults are the fallback.</p>
@@ -472,27 +472,28 @@ type Discovery interface {
 <p><strong>Standard endpoints, no boilerplate.</strong> The framework auto-mounts a small set of endpoints on every component. Hit any running tool or agent and these are always there:</p>
 
 <ul>
-  <li><strong><code>GET /health</code></strong> — liveness probe. Returns the component's identity and current health status. The live <code>weather-tool-v2</code> tool in the bundled examples returns exactly this: <code>{"id":"weather-tool-v2","name":"weather-tool-v2","status":"healthy","type":"tool"}</code>. Agents return the same status with their own identity fields. The path is configurable; the default <code>/health</code> works with Kubernetes liveness and readiness probes without any extra configuration.</li>
+  <li><strong><code>GET /health</code></strong> — liveness probe. The default tool handler returns <code>{"id":..., "name":..., "status":"healthy", "type":"tool"}</code> — e.g. <code>weather-tool-v2</code> returns <code>{"id":"weather-tool-v2","name":"weather-tool-v2","status":"healthy","type":"tool"}</code>. The default agent handler returns a smaller shape: <code>{"status":"healthy", "agent":..., "id":...}</code> (no <code>type</code>; the name field is keyed <code>agent</code>). Bundled chat agents typically override <code>/health</code> with a richer handler that includes orchestrator status. The path is configurable; the default <code>/health</code> works with Kubernetes liveness and readiness probes without any extra configuration.</li>
   <li><strong><code>GET /api/capabilities</code></strong> — the component's capability catalog. See <a href="#capability-contracts">§3</a>.</li>
   <li><strong><code>POST /api/capabilities/{name}</code></strong> — the auto-generated endpoint per capability. Components do not have to write HTTP handlers; the framework binds the capability handler function to this path automatically when the capability is registered without an explicit endpoint.</li>
-  <li><strong><code>GET /api/capabilities/{name}/schema</code></strong> — auto-generated JSON Schema per capability. See <a href="#capability-contracts">§3</a>.</li>
+  <li><strong><code>GET /api/capabilities/{name}/schema</code></strong> — auto-generated JSON Schema per capability. Mounted only when the capability declares an <code>InputSummary</code> (Phase 2 of the schema model — see <a href="#capability-contracts">§3</a>).</li>
   <li><strong><code>GET /openapi.json</code></strong> — full OpenAPI document (when enabled).</li>
 </ul>
 
 <p>Agents that need to expose the live registry snapshot register a <code>GET /discover</code> capability themselves — the bundled chat agents do this. It is a convention, not a framework-mounted endpoint. See <a href="#runtime-discovery">§2</a> for the discovery story.</p>
 
-<p><strong>Lifecycle, signal-aware.</strong> The framework manages the component's full lifespan in a predictable order:</p>
+<p><strong>Lifecycle.</strong> The framework manages the component's lifespan in this order:</p>
 
 <ol>
-  <li><strong>Setup</strong> — configuration loading, dependency injection (registry, telemetry, memory store), middleware chain wiring.</li>
-  <li><strong>Background runnables start</strong> — anything registered via <code>RegisterRunnable</code> (memory sweepers, heartbeat goroutines, custom periodic jobs) starts in parallel.</li>
-  <li><strong>HTTP server starts</strong> — the component begins serving requests. Registration in the discovery registry is atomic and happens here; heartbeats begin firing immediately.</li>
-  <li><strong>Graceful shutdown on context cancellation</strong> — <code>Framework.Run(ctx)</code> exits cleanly when its context is cancelled. In the bundled examples, <code>main</code> wires <code>SIGTERM</code> and <code>SIGINT</code> (the signals Kubernetes uses) to that cancellation via <code>signal.Notify</code>. Once triggered, the framework stops accepting new connections, waits for in-flight requests to complete (capped at <code>ShutdownTimeout</code>, default 10s, configurable via <code>TRUVAG3_HTTP_SHUTDOWN_TIMEOUT</code>), deregisters from discovery, stops background runnables, and exits cleanly. No connection cut mid-response, no orphan registry entries.</li>
+  <li><strong>Setup</strong> — configuration loading, dependency injection (registry, telemetry, memory store for agents), middleware chain wiring.</li>
+  <li><strong>Initialize</strong> — the component registers itself with the discovery registry and starts its heartbeat goroutine. Tools also re-register with the resolved address when the HTTP server actually binds; agents log the address but rely on the Initialize-time registration.</li>
+  <li><strong>Background runnables start</strong> — anything registered via <code>RegisterRunnable</code> (memory sweepers, scheduled-executor workers, custom periodic jobs) starts in parallel goroutines that receive the same context.</li>
+  <li><strong>HTTP server starts</strong> — the component begins serving requests on a blocking <code>ListenAndServe</code> call.</li>
+  <li><strong>Shutdown</strong> — <code>BaseAgent.Stop</code> and <code>BaseTool.Shutdown</code> call <code>http.Server.Shutdown</code> (bounded by <code>HTTP.ShutdownTimeout</code>, code default 10s), deregister from discovery, and stop background runnables cleanly. Two important caveats for the current code: (a) <code>Framework.Run(ctx)</code> does not itself watch <code>ctx</code> to invoke shutdown — applications wire <code>SIGTERM</code>/<code>SIGINT</code> in <code>main</code> and the bundled examples typically end the process with <code>os.Exit</code> after cancellation, so framework-managed graceful shutdown only happens when application code explicitly calls <code>Stop</code>/<code>Shutdown</code>; (b) <code>TRUVAG3_HTTP_SHUTDOWN_TIMEOUT</code> is declared on the struct as a tag but is not currently loaded by <code>LoadFromEnv()</code> — change the value via code (<code>Config.HTTP.ShutdownTimeout</code>) for now.</li>
 </ol>
 
-<p>The 10-second shutdown timeout aligns with Kubernetes' default <code>terminationGracePeriodSeconds</code> of 30 seconds, giving the framework headroom to drain requests before Kubernetes force-kills the pod.</p>
+<p>The 10-second code default for the shutdown timeout sits comfortably inside Kubernetes' default <code>terminationGracePeriodSeconds</code> of 30s, leaving headroom to drain in-flight requests before the kubelet sends <code>SIGKILL</code>.</p>
 
-<p><strong>Dependency injection by default.</strong> The framework gives every handler access to a logger, the discovery client, telemetry, memory, and the AI client (when configured) through dependency injection — no globals, no implicit state. Tests can substitute mocks for any of these through the standard interfaces (<code>core.Discovery</code>, <code>core.Memory</code>, <code>core.Telemetry</code>, <code>core.AIClient</code>); the in-memory implementations bundled with the framework are designed specifically for tests.</p>
+<p><strong>Dependency injection by default.</strong> The framework wires dependencies into the component struct so handlers reach them without globals. The injected set differs by component type: <strong>tools</strong> get a <code>Registry</code> (registration only, no discovery), <code>Logger</code>, <code>Telemetry</code>, and an optional <code>AIClient</code> — tools deliberately have no <code>Memory</code> field, since response caching is a tool-local concern with tool-specific TTL/eviction semantics. <strong>Agents</strong> get a full <code>Discovery</code> (registration + lookup), <code>Logger</code>, <code>Telemetry</code>, <code>Memory</code>, and an optional <code>AIClient</code>. Tests substitute mocks for any of these through the standard interfaces; the in-memory implementations (<code>core.NewMockDiscovery</code>, <code>core.NewMemoryStore</code>) ship with the framework specifically for tests.</p>
 
 <p><strong>Background runnables.</strong> Long-running work that needs its own goroutine — a memory eviction sweeper, a metric reporter, a periodic refresh job — registers through <code>RegisterRunnable</code>. The framework starts it before the HTTP server, supplies a cancellation context, and stops it during graceful shutdown. The bundled scheduled-executor is built on this pattern; so are custom jobs application teams write for their own deployments.</p>
 
@@ -502,7 +503,7 @@ type Discovery interface {
 
 <h3 id="runtime-discovery">2. Runtime discovery</h3>
 
-<p>Discovery is the primitive that makes the whole micro-agents architecture possible: agents find tools and other agents <em>by what they can do</em>, not by hardcoded addresses. A capability registered by one component becomes visible to every other component on the next read. Add a new tool, and every existing agent sees it within seconds — no agent code change, no redeploy. Remove a tool, and it disappears within seconds too.</p>
+<p>Discovery is the primitive that makes the whole microagents architecture possible: agents find tools and other agents <em>by what they can do</em>, not by hardcoded addresses. A capability registered by one component becomes visible to every other component on the next read. Add a new tool, and every existing agent sees it within seconds — no agent code change, no redeploy. Remove a tool, and it disappears within seconds too.</p>
 
 <p>A single registry holds tools and agents on equal footing — any number of either — each publishing one or more capabilities that any other component can look up by name. All of it sits behind one Go interface called <code>core.Discovery</code>. Capability lookups are key-value reads, so the registry scales with the number of distinct capability names in the deployment, not with the wiring complexity between components.</p>
 
@@ -513,7 +514,7 @@ type Discovery interface {
 <ul>
   <li><strong><code>FindByCapability(ctx, "geocode_location")</code></strong> — "give me every component that can do this." The workhorse. The orchestrator uses this when the LLM has chosen a capability and the framework needs the address that currently serves it. Most calls in a running system go through this path.</li>
   <li><strong><code>FindService(ctx, "weather-tool-v2")</code></strong> — "give me this specific component, regardless of what it does." Useful for health checks, admin operations, or any case where the caller already knows the participant by name.</li>
-  <li><strong><code>Discover(ctx, filter)</code></strong> — "give me everything that matches these criteria." The filter combines component type (tool vs agent), name, capability list, and metadata — useful for cross-cutting queries like "list all agents that expose a streaming capability." Namespace isolation is configured per Discovery client and applies to every query made through it.</li>
+  <li><strong><code>Discover(ctx, filter)</code></strong> — "give me everything that matches these criteria." The filter combines component type (tool vs agent), name, capability list, and metadata — useful for cross-cutting queries like "list all agents that expose a streaming capability." The Redis key namespace used by a Discovery client is set when the client is constructed (default <code>truvag3</code> through the auto-wired path; override by injecting a client built with <code>NewRedisDiscoveryWithNamespace</code>) and applies to every query made through it.</li>
 </ul>
 
 <p><strong>TTL-backed leases, not separate health checks.</strong> Every registration carries a 30-second TTL. Each component refreshes its entry every 15 seconds (half the TTL, with jitter to spread load). If a component crashes, loses network, or simply stops responding, its entry expires within one TTL window — no separate liveness probe required, no orphan entries to clean up. The gauge <code>discovery.last_health_check_timestamp</code> exposes the Unix timestamp of each component's last heartbeat per registry, so a stale value is the canonical signal that something is wrong.</p>
@@ -562,7 +563,7 @@ type Discovery interface {
 <ul>
   <li><code>GET /api/capabilities</code> — the component's full capability catalog, including descriptions, input and output field hints, endpoint paths, and input/output content types.</li>
   <li><code>POST /api/capabilities/{name}</code> — the capability endpoint itself (the handler that runs the work). The framework decodes the JSON request body and invokes the registered handler.</li>
-  <li><code>GET /api/capabilities/{name}/schema</code> — the auto-generated JSON Schema (draft-07) for that capability's input. Useful for code generators, validators, and contract tests.</li>
+  <li><code>GET /api/capabilities/{name}/schema</code> — the auto-generated JSON Schema (draft-07) for that capability's input. Mounted only when the capability declares an <code>InputSummary</code>. Useful for code generators, validators, and contract tests.</li>
   <li><code>GET /openapi.json</code> — a complete OpenAPI document covering every capability the component exposes, with both Input and Output schemas registered as named components. Drops straight into Swagger UI, Postman, code generators, and API gateways that consume OpenAPI.</li>
 </ul>
 
@@ -679,7 +680,7 @@ type Discovery interface {
 
 <h3 id="orchestration">6. Orchestration</h3>
 
-<p>The orchestrator is what turns a list of capabilities and a natural-language request into an answer. It is the per-agent reasoning loop, and it is built around dynamic LLM-driven planning — the part of the framework that most directly uses the micro-agents architecture. No hand-written routing graphs, no pre-wired tool list in source code: the plan is generated against whatever is in the registry at the moment the request arrives.</p>
+<p>The orchestrator is what turns a list of capabilities and a natural-language request into an answer. It is the per-agent reasoning loop, and it is built around dynamic LLM-driven planning — the part of the framework that most directly uses the microagents architecture. No hand-written routing graphs, no pre-wired tool list in source code: the plan is generated against whatever is in the registry at the moment the request arrives.</p>
 
 <p><strong>The plan-execute-synthesize loop.</strong> A request enters the orchestrator. The orchestrator hands the live capability catalog to the LLM and asks for a plan. The LLM returns a directed acyclic graph (DAG) of steps — each step names a capability and lists the steps it depends on. The executor then runs the DAG: independent steps in parallel, dependent steps in topological order. When all steps finish, a synthesis call composes the response. Every operation along this path is instrumented, with one span per layer:</p>
 
@@ -1064,7 +1065,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <h3 id="code-agent-to-agent">One agent calling another</h3>
 
-<p>From the calling agent's point of view, an agent and a tool look the same. Both register capabilities into the same registry. Both are dispatched through the same HTTP call. The <a href="micro-agents-architecture.html">architecture article</a> walks through a captured multi-domain trace where <code>travel-chat-agent</code> handles a user request that crosses three domains. Its four-step plan includes <code>devops_operations</code>, <code>geocode_location</code>, <code>stock_quote</code>, and <code>get_current_weather</code>. One of those — <code>devops_operations</code> — happens to be served by another agent (<code>devops-chat-agent</code>), which runs its own internal plan-execute-synthesize loop. From the dispatch site, there is no visible difference between the agent step and the tool steps.</p>
+<p>From the calling agent's point of view, an agent and a tool look the same. Both register capabilities into the same registry. Both are dispatched through the same HTTP call. The <a href="microagents-architecture.html">architecture article</a> walks through a captured multi-domain trace where <code>travel-chat-agent</code> handles a user request that crosses three domains. Its four-step plan includes <code>devops_operations</code>, <code>geocode_location</code>, <code>stock_quote</code>, and <code>get_current_weather</code>. One of those — <code>devops_operations</code> — happens to be served by another agent (<code>devops-chat-agent</code>), which runs its own internal plan-execute-synthesize loop. From the dispatch site, there is no visible difference between the agent step and the tool steps.</p>
 </section>
 
 <section>
@@ -1072,7 +1073,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <p>The full TruvaG3 stack — registry, the bundled tools and agents, the Registry Viewer, and an OpenTelemetry pipeline — runs on a laptop in a local Kubernetes cluster (Kind). The <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">setup guide</a> walks through the cluster, the Redis or Valkey backend, the AI provider configuration, and the bundled examples.</p>
 
-<p>The two captured executions in the <a href="micro-agents-architecture.html">architecture article</a> — the three-phase Switzerland trip plan and the multi-domain agent-to-agent run — both come from this setup. Once the bundled examples are deployed, the same user queries can be run against the same agents, and the Registry Viewer's Execution DAG tab will produce equivalent screenshots and trace JSON files. Nothing in either article is theoretical.</p>
+<p>The two captured executions in the <a href="microagents-architecture.html">architecture article</a> — the three-phase Switzerland trip plan and the multi-domain agent-to-agent run — both come from this setup. Once the bundled examples are deployed, the same user queries can be run against the same agents, and the Registry Viewer's Execution DAG tab will produce equivalent screenshots and trace JSON files. Nothing in either article is theoretical.</p>
 </section>
 
 <section>
@@ -1081,7 +1082,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 <p>Recommended reading order, by goal:</p>
 
 <ul>
-  <li><strong>Understand the architecture in depth.</strong> Read the <a href="micro-agents-architecture.html">micro-agents architecture article</a>. It is the foundation this framework implements.</li>
+  <li><strong>Understand the architecture in depth.</strong> Read the <a href="microagents-architecture.html">microagents architecture article</a>. It is the foundation this framework implements.</li>
   <li><strong>Find a specific feature.</strong> The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/overview/FRAMEWORK_FEATURES_GUIDE.md">Framework Features Guide</a> is organized by capability area and links to module-level documentation.</li>
   <li><strong>Build something.</strong> Start with the <a href="https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md">Getting Started guide</a> for the local Kubernetes setup, then the Tool Development Guide and Agent Development Guide for the build patterns.</li>
   <li><strong>Read source code.</strong> The <code>core/</code>, <code>orchestration/</code>, <code>ai/</code>, and <code>memory/</code> modules have their own READMEs and architecture documents. The <code>examples/</code> directory has working code for tools, agents, chat UIs, and the registry viewer.</li>
@@ -1090,7 +1091,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <p class="footer-note">TruvaG3 is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
 
-<p class="copyright">© 2026 Neelabh Tripathi. All rights reserved.</p>
+<p class="copyright">© 2026 Neelabh Tripathi. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
 
 </article>
 

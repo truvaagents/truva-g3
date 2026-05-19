@@ -38,7 +38,7 @@ This revises the single-surface plan in the original strategy doc, motivated by 
 
 The original strategy assumed a single Docusaurus site at `truvag3.dev` with subpaths for docs, blog, examples, and whitepapers. That works for projects whose content is mostly reference docs with light supporting material. TruvaG3's content shape is different:
 
-1. **Article-style long-form already exists and works.** `www/blogs/micro-agents-architecture.html` (migrated from `docs/blogs/` in Phase 1) is a 1389-line standalone HTML article with custom typography (760px max-width, 17px body, 1.65 line-height, custom aside/code styles). Re-implementing this in MDX would lose the magazine-style polish that the format actually benefits from.
+1. **Article-style long-form already exists and works.** `www/blogs/microagents-architecture.html` (migrated from `docs/blogs/` in Phase 1) is a 1389-line standalone HTML article with custom typography (760px max-width, 17px body, 1.65 line-height, custom aside/code styles). Re-implementing this in MDX would lose the magazine-style polish that the format actually benefits from.
 2. **Whitepapers are an entire content category.** A handful of HTML whitepapers live at `~/Documents/Documents/TruvaG3/whitepapers/` and need a home. Each is standalone, formatted, self-contained.
 3. **The Docusaurus homepage is structurally constrained.** A serious framework landing typically needs: code-snippet hero, architecture diagrams, customer/showcase signals, recent blog posts, GitHub stars badge, registry-viewer screenshots, multi-section narrative. None of those are comfortable to author in a Docusaurus `index.tsx` — every visual choice fights the underlying theme.
 4. **One author = no coordination tax.** Splitting surfaces only makes sense when the team can afford the operational overhead. A solo maintainer with a single Cloudflare Pages account can ship and maintain two surfaces with no more friction than one — provided the boundary is clean.
@@ -189,7 +189,7 @@ truva-g3/
 │   ├── index.html                         # homepage
 │   ├── blogs/
 │   │   ├── index.html                     # blog index page
-│   │   ├── micro-agents-architecture.html # migrated from docs/blogs/
+│   │   ├── microagents-architecture.html # migrated from docs/blogs/
 │   │   └── <new-blog-90pct>.html          # new blog draft
 │   ├── whitepapers/
 │   │   ├── index.html                     # whitepapers index
@@ -381,7 +381,7 @@ Should answer "why should I care about TruvaG3?" within the first viewport. Requ
 
 ### Blog post template
 
-Currently embodied by `www/blogs/micro-agents-architecture.html`. Worth standardizing into a shared template:
+Currently embodied by `www/blogs/microagents-architecture.html`. Worth standardizing into a shared template:
 
 - Header with article title, date, author, reading time.
 - 760px max-width body, 17px font, 1.65 line-height (matches existing).
@@ -419,21 +419,21 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 1. Create `www/` at repo root with the structure above.
 
-2. Move `docs/blogs/micro-agents-architecture.html` and its asset PNGs/JSONs into `www/blogs/`.
+2. Move `docs/blogs/microagents-architecture.html` and its asset PNGs/JSONs into `www/blogs/`.
 
-3. **Sweep every reference to `docs/blogs/` and to `micro-agents-architecture` in the repo** — not just the README. Run:
+3. **Sweep every reference to `docs/blogs/` and to `microagents-architecture` in the repo** — not just the README. Run:
 
    ```bash
-   rg "docs/blogs|micro-agents|truvag3-introduction" --type=md --type=html
+   rg "docs/blogs|microagents|truvag3-introduction" --type=md --type=html
    ```
 
    Confirmed reference sites (as of 2026-05-16):
-   - [README.md:8](../README.md#L8) — micro-agents link in the "About this framework" blockquote
-   - [README.md:587](../README.md#L587) — micro-agents link in the Guides section
+   - [README.md:8](../README.md#L8) — microagents link in the "About this framework" blockquote
+   - [README.md:587](../README.md#L587) — microagents link in the Guides section
    - [README.md:588](../README.md#L588) — link to the *Introduction to TruvaG3* blog. (The file was added to `main` after this strategy doc was written; Phase 1 moved it to `www/blogs/truvag3-introduction.html` alongside the other blog content.)
-   - [README.md:681](../README.md#L681) — micro-agents link in Next Steps
+   - [README.md:681](../README.md#L681) — microagents link in Next Steps
    
-   Update each to point at the new website URL (`https://truvag3.dev/blogs/micro-agents-architecture` once live — no trailing slash, since Cloudflare Pages serves the `.html` file at its extensionless path; GitHub blob URL for the interim).
+   Update each to point at the new website URL (`https://truvag3.dev/blogs/microagents-architecture` once live — no trailing slash, since Cloudflare Pages serves the `.html` file at its extensionless path; GitHub blob URL for the interim).
 
 4. **Inventory the whitepapers and stage them in the repo.** The source folder `~/Documents/Documents/TruvaG3/whitepapers/` is a personal-machine dependency — Cloudflare's build runner cannot read it, and no other contributor can find it. Required steps:
    - List exact filenames (and any sub-asset dependencies) once.
@@ -482,7 +482,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 ### Phase 6 — Polish surrounding pages (~1 day)
 
-24. Standardize the blog template using `www/blogs/micro-agents-architecture.html` as the reference (already at this path after Phase 1 migration). Extract shared CSS into `www/assets/css/article.css`.
+24. Standardize the blog template using `www/blogs/microagents-architecture.html` as the reference (already at this path after Phase 1 migration). Extract shared CSS into `www/assets/css/article.css`.
 25. Build `www/blogs/index.html` listing all blog posts.
 26. Build `www/whitepapers/index.html` listing all whitepapers.
 27. Ensure the second blog (90% done) is finished and added to `www/blogs/`.

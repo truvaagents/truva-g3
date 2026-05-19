@@ -24,7 +24,7 @@
  * Property order matters: declare `background` BEFORE `background-clip`
  * and `-webkit-text-fill-color` — the shorthand resets clip to its
  * default otherwise (visible symptom: solid color blocks instead of
- * gradient text). See docs/blogs/micro-agents-architecture.html source
+ * gradient text). See docs/blogs/microagents-architecture.html source
  * and the examples/registry-viewer-app GLASSMORPHISM_DESIGN.md notes.
  */
 .brand-truva {
