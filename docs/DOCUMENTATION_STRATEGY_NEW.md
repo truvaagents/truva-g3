@@ -1,6 +1,6 @@
 # TruvaG3 Documentation Strategy (Two-Surface, NEW)
 
-> **Status:** active. This document supersedes [DOCUMENTATION_STRATEGY.md](./DOCUMENTATION_STRATEGY.md) for the **publishing architecture**. The original strategy doc remains a valid reference for individual concerns (Docusaurus mechanics, the 601-link rewrite script, MDX gotchas, deployment configuration patterns).
+> **Status:** active. Publishing architecture for the TruvaG3 documentation surfaces.
 >
 > **Last updated:** 2026-05-16.
 
@@ -43,7 +43,7 @@ The original strategy assumed a single Docusaurus site at `truvag3.dev` with sub
 3. **The Docusaurus homepage is structurally constrained.** A serious framework landing typically needs: code-snippet hero, architecture diagrams, customer/showcase signals, recent blog posts, GitHub stars badge, registry-viewer screenshots, multi-section narrative. None of those are comfortable to author in a Docusaurus `index.tsx` — every visual choice fights the underlying theme.
 4. **One author = no coordination tax.** Splitting surfaces only makes sense when the team can afford the operational overhead. A solo maintainer with a single Cloudflare Pages account can ship and maintain two surfaces with no more friction than one — provided the boundary is clean.
 
-The principle the original doc named ([line 304](./DOCUMENTATION_STRATEGY.md#L304)) — *"different aesthetics across surfaces is correct, not a bug"* — is right. This revision takes it more literally: two surfaces, two physical sites, no shared theme.
+The principle *"different aesthetics across surfaces is correct, not a bug"* holds here. This plan takes it literally: two surfaces, two physical sites, no shared theme.
 
 ---
 
@@ -174,8 +174,7 @@ truva-g3/
 │   ├── operations/
 │   ├── memory-and-chat/
 │   ├── reference/
-│   ├── DOCUMENTATION_STRATEGY.md          # original strategy (reference)
-│   └── DOCUMENTATION_STRATEGY_NEW.md      # this file
+│   └── DOCUMENTATION_STRATEGY_NEW.md      # this file (publishing architecture)
 │
 ├── docs-site/                               # Docusaurus (unchanged)
 │   ├── docusaurus.config.ts
@@ -575,17 +574,3 @@ This is comparable to the original strategy's 10–14 day estimate, but with a m
 - The `prebuild` hook that syncs `GETTING_STARTED.md`.
 - The link-rewrite scripts.
 - The two-tone brand mark in the Docusaurus navbar.
-
----
-
-## Reference: the original strategy
-
-The original [DOCUMENTATION_STRATEGY.md](./DOCUMENTATION_STRATEGY.md) remains valid as a reference for:
-
-- Docusaurus setup mechanics (sections "Phase 1 — Pipeline smoke test", "Docusaurus Configuration", "Markdown compatibility cleanups")
-- The 601-link rewrite procedure and Python script
-- MDX gotchas (curly braces in headings)
-- Multi-release management (when versioning becomes relevant)
-- Site-map decisions and surface model
-
-Treat the original as a deep reference; treat this NEW doc as the canonical execution plan going forward.

@@ -43,7 +43,6 @@ const config: Config = {
           routeBasePath: 'docs',
           sidebarPath: './sidebars.ts',
           exclude: [
-            'DOCUMENTATION_STRATEGY.md',
             'DOCUMENTATION_STRATEGY_NEW.md',
             'PAPER_DRAFT_*.md',
             'PAPER_NOVELTY_ASSESSMENT.md',

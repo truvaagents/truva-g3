@@ -4,7 +4,8 @@
  * examples/registry-viewer-app/GLASSMORPHISM_DESIGN.md for context.
  * Tier 1 only: brand color tokens + two-tone navbar mark.
  * Heavy theming (glassmorphism cards, blurred backgrounds) is intentionally
- * NOT applied to docs surfaces — see DOCUMENTATION_STRATEGY.md line 1412.
+ * NOT applied to docs surfaces — kept reserved for the website surface
+ * at truvag3.dev.
  */
 
 :root {
