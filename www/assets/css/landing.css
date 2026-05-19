@@ -240,6 +240,8 @@ section h2 {
   font-weight: 700;
   letter-spacing: -0.02em;
   margin: 0 0 12px;
+  width: fit-content;
+  max-width: 100%;
   /* Editorial gradient — lifted verbatim from the whitepaper's hero h1
    * so section headings on the homepage visually match the headings
    * inside any linked whitepaper. white → sky-blue → lavender. */
@@ -497,6 +499,8 @@ section .lede {
   max-width: 760px;
 }
 .arch-proof-intro em {
+  display: block;
+  margin-top: 0.6em;
   color: var(--muted);
   font-style: italic;
 }

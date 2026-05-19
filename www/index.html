@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TruvaG3 — micro-agents framework for Go</title>
-<meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. A micro-agents architecture — dynamic discovery, decentralized coordination.">
+<title>TruvaG3 — microagents framework for Go</title>
+<meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. A microagents architecture — dynamic discovery, decentralized coordination.">
 <link rel="stylesheet" href="/assets/css/brand.css">
 <link rel="stylesheet" href="/assets/css/landing.css">
 </head>
@@ -14,13 +14,13 @@
 <header class="hero">
   <div class="container">
     <h1><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></h1>
-    <p class="tagline">True. Micro-Agents. Dynamic Discovery. Decentralized.</p>
+    <p class="tagline">True. Microagents. Dynamic Discovery. Decentralized.</p>
     <p class="sublede">
       A Go framework that takes the microservices pattern and applies it to
       multi-agent systems. Specialized agents and tools register their
       capabilities with a shared registry, find each other by logical name at
-      runtime, and coordinate without a central conductor. Blends into the Kubernetes
-      platform.
+      runtime, and coordinate without a central conductor. Built to blend into
+      the Kubernetes platform.
     </p>
     <div class="btn-row">
       <a class="btn btn-primary" href="https://docs.truvag3.dev/docs/intro">Get started →</a>
@@ -32,6 +32,7 @@
       <a class="pill" href="#coordination"><span class="dot" style="background:#7a3df0"></span>Capability registry</a>
       <a class="pill" href="#developer-to-developer"><span class="dot" style="background:var(--brand-g3-light)"></span>For developers</a>
       <a class="pill" href="#ops-to-ops"><span class="dot" style="background:var(--warn)"></span>For ops engineers</a>
+      <a class="pill" href="#reading"><span class="dot" style="background:var(--good)"></span>Interesting reads</a>
     </div>
   </div>
 </header>
@@ -44,7 +45,8 @@
     <p class="lede">
       Most agent frameworks bind tools and agents at construction time. TruvaG3
       inverts that — components advertise capabilities to a shared registry
-      and find each other at runtime. Six things follow from that choice.
+      and find each other at runtime. The framework built around that core
+      makes six commitments.
     </p>
     <div class="cards">
       <article class="card">
@@ -66,8 +68,8 @@
         <h3>Plain Kubernetes, plain HTTP</h3>
         <p>
           Ordinary Deployments and Services. No proprietary CRDs, no required
-          sidecars, no control plane. HTTP/REST based. OpenTelemetry based
-          distributed tracing built in.
+          sidecars, no control plane. Built on HTTP/REST. Distributed tracing
+          via OpenTelemetry.
         </p>
       </article>
       <article class="card">
@@ -97,6 +99,11 @@
         </p>
       </article>
     </div>
+    <p class="d2d-closing">
+      The full introduction lives at
+      <a href="/blogs/truvag3-introduction.html">TruvaG3 — A Guided Tour</a>
+      — why it exists, how it works, and when it fits.
+    </p>
   </div>
 </section>
 
@@ -134,6 +141,12 @@ response, _ := orchestrator.ProcessRequest(ctx,
         <span class="dag-hint">(click to expand)</span>
       </figcaption>
     </figure>
+    <p class="d2d-closing">
+      The runnable example lives at
+      <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent"><code>examples/travel-chat-agent/</code></a>;
+      the <a href="https://docs.truvag3.dev/docs/getting-started">Getting Started guide</a>
+      walks through it step by step — top to bottom on a laptop.
+    </p>
   </div>
 
   <!-- Lightbox via native <dialog>: top-layer rendering, native Esc
@@ -164,13 +177,13 @@ response, _ := orchestrator.ProcessRequest(ctx,
     <figure class="arch-diagram">
       <svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg"
            role="img"
-           aria-label="A capability registry sits at the top, containing four capability entries mapping capability names to the participants that serve them: web_search to web-search-tool, geocode_location to geocoding-tool, devops_operations to devops-chat-agent, and financial_analysis to research-agent. Below the registry are four participants in a row: Agent A and Agent C, each labeled 'register + discover', and Tool B and Tool D, each labeled 'register only'. Gray arrows go up from every participant to the registry, indicating they all publish their capabilities. Icy-blue arrows go down from the registry to the two agent boxes only, indicating that only agents read the catalog and discover capabilities. The asymmetry is the point: tools are passive providers; agents both publish and consume from the registry.">
+           aria-label="A capability registry sits at the top, containing four capability entries mapping capability names to the participants that serve them: web_search to web-search-tool, geocode_location to geocoding-tool, devops_operations to devops-chat-agent, and financial_analysis to research-agent. Below the registry are four participants in a row: Agent A and Agent C, each labeled 'register + discover', and Tool B and Tool D, each labeled 'register only'. Icy-blue arrows go up from every participant to the registry, indicating they all publish their capabilities. Amber arrows go down from the registry to the two agent boxes only, indicating that only agents read the catalog and discover capabilities. The asymmetry is the point: tools are passive providers; agents both publish and consume from the registry.">
         <defs>
           <marker id="arch-arr-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill="#9aa6bd"/>
+            <path d="M0,0 L10,5 L0,10 z" fill="#8FCBED"/>
           </marker>
           <marker id="arch-arr-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill="#7cc4ff"/>
+            <path d="M0,0 L10,5 L0,10 z" fill="#FFA040"/>
           </marker>
         </defs>
         <style>
@@ -181,13 +194,13 @@ response, _ := orchestrator.ProcessRequest(ctx,
           .a-cap     { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #cfd9ee; }
           .a-cap-mut { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #9aa6bd; }
           .a-role    { font: italic 10.5px -apple-system, sans-serif; fill: #9aa6bd; }
-          .a-rolelbl { font: italic 11px -apple-system, sans-serif; fill: #9aa6bd; }
-          .a-arr-reg { stroke: #9aa6bd; stroke-width: 1.3; fill: none; }
-          .a-arr-disc{ stroke: #7cc4ff; stroke-width: 1.3; fill: none; }
+          .a-rolelbl { font: italic 11px -apple-system, sans-serif; fill: #9aa6bd; paint-order: stroke; stroke: #121826; stroke-width: 4px; stroke-linejoin: round; }
+          .a-arr-reg { stroke: #8FCBED; stroke-width: 1.3; fill: none; }
+          .a-arr-disc{ stroke: #FFA040; stroke-width: 1.3; fill: none; }
           .a-legend  { font: 11.5px -apple-system, sans-serif; fill: #9aa6bd; }
         </style>
 
-        <rect x="40" y="14" width="680" height="120" rx="8" class="a-reg"/>
+        <rect x="40" y="14" width="680" height="130" rx="8" class="a-reg"/>
         <text x="380" y="36" text-anchor="middle" class="a-title">Capability Registry</text>
         <text x="380" y="54" text-anchor="middle" class="a-sub">passive index · TTL liveness · no routing logic</text>
         <line x1="60" y1="66" x2="700" y2="66" stroke="#2a3550" stroke-width="1"/>
@@ -216,13 +229,13 @@ response, _ := orchestrator.ProcessRequest(ctx,
         <text x="635" y="235" text-anchor="middle" class="a-title">Tool D</text>
         <text x="635" y="253" text-anchor="middle" class="a-role">passive endpoint</text>
 
-        <line x1="110" y1="210" x2="110" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
-        <line x1="295" y1="210" x2="295" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
-        <line x1="450" y1="210" x2="450" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
-        <line x1="635" y1="210" x2="635" y2="138" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="110" y1="210" x2="110" y2="148" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="295" y1="210" x2="295" y2="148" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="450" y1="210" x2="450" y2="148" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
+        <line x1="635" y1="210" x2="635" y2="148" class="a-arr-reg" marker-end="url(#arch-arr-gray)"/>
 
-        <line x1="140" y1="138" x2="140" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
-        <line x1="480" y1="138" x2="480" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
+        <line x1="140" y1="148" x2="140" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
+        <line x1="480" y1="148" x2="480" y2="208" class="a-arr-disc" marker-end="url(#arch-arr-accent)"/>
 
         <text x="125" y="182" text-anchor="middle" class="a-rolelbl">register + discover</text>
         <text x="295" y="182" text-anchor="middle" class="a-rolelbl">register only</text>
@@ -302,6 +315,11 @@ response, _ := orchestrator.ProcessRequest(ctx,
         </p>
       </div>
     </div>
+    <p class="d2d-closing">
+      The full architecture write-up lives at
+      <a href="/blogs/microagents-architecture.html">A Microagents Reference Architecture</a>
+      — concept-first, citation-grounded, with execution traces from a running cluster.
+    </p>
   </div>
 </section>
 
@@ -334,10 +352,10 @@ response, _ := orchestrator.ProcessRequest(ctx,
       <article class="card">
         <h3>Sensible defaults, easy overrides</h3>
         <p>
-          Zero-config to start; every default is overridable. Standard
-          env vars (<code>REDIS_URL</code>, <code>OPENAI_API_KEY</code>,
-          <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>) picked up
-          automatically.
+          Zero-config to start; every default is overridable. Swap LLM
+          providers, memory backends, or any framework interface via
+          <code>WithXXX()</code> options. Drop to direct constructors
+          for full control — no cliffs between layers.
         </p>
       </article>
       <article class="card">
@@ -385,7 +403,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
     </p>
     <div class="cards">
       <article class="card">
-        <h3>Plain Kubernetes, plain HTTP</h3>
+        <h3>Kubernetes-native runtime</h3>
         <p>
           Agents and tools are ordinary Deployments behind Services,
           communicating over plain HTTP/REST. Service mesh, ingress,
@@ -445,16 +463,65 @@ response, _ := orchestrator.ProcessRequest(ctx,
   </div>
 </section>
 
+<!-- ================= RECENT READING ================= -->
+<section id="reading">
+  <div class="container">
+    <span class="eyebrow">Interesting Reads</span>
+    <h2>Architecture deep-dives and research notes.</h2>
+    <p class="lede">
+      Long-form pieces about the architecture and the broader research that
+      informs it.
+    </p>
+    <div class="read-list">
+      <a class="read-item" href="/blogs/microagents-architecture.html">
+        <span class="kind">Reference architecture</span>
+        <span class="title">A Microagents Reference Architecture</span>
+        <span class="desc">Dynamic capability discovery and decentralized coordination — the architecture this framework implements, written up as a standalone reference.</span>
+      </a>
+      <a class="read-item" href="/blogs/truvag3-introduction.html">
+        <span class="kind">Framework introduction</span>
+        <span class="title">TruvaG3 — A Guided Tour</span>
+        <span class="desc">Why the framework exists, how the architecture works in practice, what ships in the box, and how to decide whether it fits your situation.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-to-agent-communication.html">
+        <span class="kind">Whitepaper</span>
+        <span class="title">Agent-to-Agent Communication in AI Agent Frameworks</span>
+        <span class="desc">How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel handle discovery, embedding, and distributed calls between agents.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-orchestration.html">
+        <span class="kind">Whitepaper</span>
+        <span class="title">How AI Agent Frameworks Orchestrate Tool Calls</span>
+        <span class="desc">A side-by-side look at how the major frameworks turn a user request into a sequence of tool calls — planning models, executor loops, and re-planning strategies.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-human-in-the-loop.html">
+        <span class="kind">Whitepaper</span>
+        <span class="title">Human-in-the-Loop in AI Agent Frameworks</span>
+        <span class="desc">Approval gates, interrupt-and-resume patterns, and approval-state persistence across the major frameworks — where the human fits, and what each framework expects.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/operational-excellence-index.html">
+        <span class="kind">Whitepaper series</span>
+        <span class="title">Operational Excellence in AI Agent Frameworks</span>
+        <span class="desc">Configuration, deployment, observability, performance, testing — operational practices for running agent systems in production.</span>
+      </a>
+      <a class="read-item" href="/whitepapers/agent-errors-index.html">
+        <span class="kind">Whitepaper series</span>
+        <span class="title">Error Handling in AI Agent Frameworks</span>
+        <span class="desc">Provider errors, multi-agent failure modes, data compliance, and operational error handling across major agent frameworks.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
 <!-- ================= FOOTER ================= -->
 <footer class="site-footer">
   <div class="container">
     <div class="brand">
       <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
     </div>
-    <div>True. Micro-Agents. Dynamic Discovery. Decentralized.</div>
+    <div>True. Microagents. Dynamic Discovery. Decentralized.</div>
     <div class="links">
       <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
-      <a href="/blogs/micro-agents-architecture.html">Blog</a>
+      <a href="/blogs/microagents-architecture.html">Blog</a>
       <a href="/whitepapers/agent-to-agent-communication.html">Whitepapers</a>
       <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
       <a href="https://github.com/truvaagents/truva-g3/blob/main/LICENSE">License (Apache 2.0)</a>
