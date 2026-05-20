@@ -115,7 +115,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} TruvaG3. Built with Docusaurus.`,
+      copyright: `© 2025–${new Date().getFullYear()} Neelabh Tripathi · TruvaG3. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.<br/>TruvaG3™ is a trademark of Neelabh Tripathi.`,
     },
     prism: {
       theme: prismThemes.github,

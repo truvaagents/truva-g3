@@ -688,3 +688,5 @@ The author currently accepts contributions for bug fixes and documentation updat
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+TruvaG3™ is a trademark of Neelabh Tripathi.

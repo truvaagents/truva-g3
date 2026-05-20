@@ -36,6 +36,7 @@ function Hero(): ReactNode {
         <Heading as="h1" className={styles.heroTitle}>
           <span className="brand-truva">Truva</span>
           <span className="brand-g3">G3</span>
+          <sup className="tm">™</sup>
         </Heading>
         <p className={styles.heroTagline}>{siteConfig.tagline}</p>
         <div className={styles.heroButtons}>
