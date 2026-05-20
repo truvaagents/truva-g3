@@ -123,3 +123,46 @@
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+
+/* Trademark superscript on the hero brand mark. Sized as small as
+ * readable against the large hero h1, slightly dimmed so it doesn't
+ * compete with the two-tone brand letters. `vertical-align: top`
+ * (not `super`) is required — `super` only raises by a fraction of
+ * x-height, leaving the ™ floating mid-letter against very large
+ * parent text. */
+.tm {
+  font-size: 0.22em;
+  font-weight: 500;
+  margin-left: 0.02em;
+  letter-spacing: 0;
+  display: inline-block;
+  vertical-align: baseline;
+  line-height: 1;
+  position: relative;
+  top: -2.6em;
+  opacity: 0.85;
+}
+
+/* Center the footer link columns as a group. Infima's .col defaults
+ * to flex:1 which fills the row and leaves text left-aligned against
+ * the page margin — so we shrink each .col to content width, then
+ * center the row. Text stays left-aligned within each column. */
+.footer .footer__links {
+  justify-content: center !important;
+  flex-wrap: nowrap !important;
+  gap: 4rem;
+}
+
+.footer .footer__col {
+  flex: none !important;
+  width: auto !important;
+  max-width: none !important;
+  text-align: left;
+}
+
+/* Slightly shrink the copyright + trademark line so it sits visually
+ * subordinate to the footer link columns. */
+.footer__copyright {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}

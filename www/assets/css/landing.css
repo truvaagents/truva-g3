@@ -97,6 +97,19 @@ header.hero {
   margin: 0 0 18px;
 }
 
+.hero h1 .tm {
+  font-size: 0.22em;
+  font-weight: 500;
+  margin-left: 0.02em;
+  letter-spacing: 0;
+  display: inline-block;
+  vertical-align: baseline;
+  line-height: 1;
+  position: relative;
+  top: -2.6em;
+  opacity: 0.85;
+}
+
 .hero .tagline {
   font-size: clamp(18px, 2.2vw, 26px);
   font-weight: 400;
