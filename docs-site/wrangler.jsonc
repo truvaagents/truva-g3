@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "truva-g3-docs",
+  "compatibility_date": "2026-05-19",
+  "assets": {
+    "directory": "./build"
+  }
+}
