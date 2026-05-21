@@ -69,14 +69,33 @@ const config: Config = {
     },
     navbar: {
       title: 'TruvaG3',
-      // No logo image yet — the two-tone "TruvaG3" brand mark is painted via
-      // CSS on `.navbar__title`. See docs-site/src/css/custom.css.
+      // The two-tone "TruvaG3" brand mark is painted via CSS pseudo-
+      // elements on `.navbar__title`. The logo entry below exists only
+      // so Docusaurus wraps the brand area in a link to the apex
+      // (truvag3.dev); the image itself is hidden via `.navbar__logo
+      // img { display: none; }` in custom.css.
+      logo: {
+        alt: 'TruvaG3 — home',
+        src: 'img/favicon.svg',
+        href: 'https://truvag3.dev',
+        target: '_self',
+      },
       items: [
         {
           type: 'docSidebar',
           sidebarId: 'tutorialSidebar',
           position: 'left',
           label: 'Docs',
+        },
+        {
+          href: 'https://truvag3.dev/blogs/',
+          label: 'Blog',
+          position: 'right',
+        },
+        {
+          href: 'https://truvag3.dev/whitepapers/',
+          label: 'Whitepapers',
+          position: 'right',
         },
         {
           href: 'https://github.com/truvaagents/truva-g3',

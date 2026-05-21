@@ -59,10 +59,17 @@
   line-height: 1;
 }
 
+/* Hide the favicon image that ships with `navbar.logo` — it exists only
+ * to give the brand area a click target pointing at truvag3.dev. The
+ * painted ::before / ::after marks below are the actual visible brand. */
+.navbar__logo img {
+  display: none;
+}
+
 .navbar__title::before,
 .navbar__title::after {
-  font-size: 1.25rem;
-  font-weight: 800;
+  font-size: 1.5rem;
+  font-weight: 900;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
