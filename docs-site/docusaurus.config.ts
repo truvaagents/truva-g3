@@ -18,6 +18,10 @@ const config: Config = {
   // https://truva-g3-docs.pages.dev/ — same baseUrl works there too.
   url: 'https://docs.truvag3.dev',
   baseUrl: '/',
+  // Cloudflare Pages serves Docusaurus's folder-per-route output at
+  // /docs/intro/ (with trailing slash). Emitting matching URLs in the
+  // sitemap and internal links avoids 307 redirects on every docs URL.
+  trailingSlash: true,
 
   organizationName: 'truvaagents',
   projectName: 'truva-g3',
