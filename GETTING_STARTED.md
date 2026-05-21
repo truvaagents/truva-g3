@@ -15,6 +15,14 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 
 ## 1. Prerequisites
 
+> **Reference: author's local setup.** Not required — just a known-good baseline
+> the maintainer develops against:
+> - **Hardware:** MacBook Pro (M5 Max)
+> - **Editor:** VS Code
+> - **Coding agents:** [Claude Code](https://claude.com/claude-code) + [OpenAI Codex](https://github.com/openai/codex)
+> - **Container runtime:** [OrbStack](https://orbstack.dev/)
+> - **Kubernetes UI:** [Lens Desktop](https://k8slens.dev/) (see [Optional: Kubernetes UI](#optional-kubernetes-ui) below for the free alternative)
+
 TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
 
 ### Required Software
@@ -111,6 +119,14 @@ kubectl version --client
 > hosts file (e.g. `chat.localhost`, `travel-chat-agent.localhost`,
 > `grafana.localhost`, `prometheus.localhost`, `jaeger.localhost` →
 > `127.0.0.1`).
+
+### Optional: Kubernetes UI
+
+A GUI helps with poking around the cluster — viewing pods, logs, events, port-forwarding — without typing `kubectl` every time. Pick one:
+
+- **[Lens Desktop](https://k8slens.dev/)** — full-featured Kubernetes IDE. Free personal tier requires a Mirantis account; paid for commercial use beyond evaluation.
+- **[Headlamp](https://headlamp.dev/)** — open-source (CNCF Sandbox), Microsoft-maintained. Like-for-like GUI alternative to Lens with no account required and no commercial-use restrictions. macOS: `brew install --cask headlamp`.
+- **[k9s](https://k9scli.io/)** — terminal UI (vim-style keys), not a GUI, but extremely fast once you learn it. macOS: `brew install k9s`. Worth knowing even if you also run Lens or Headlamp.
 
 ---
 
