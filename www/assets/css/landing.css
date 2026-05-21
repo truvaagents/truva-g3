@@ -65,12 +65,31 @@ pre {
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 18px 22px;
+  padding: 12px 16px;
   overflow: auto;
   font-size: 13.5px;
   line-height: 1.6;
   color: #cfe1ff;
   margin: 0;
+}
+
+/* Preserve our pre chrome (--bg-3 background, --line border, 10px radius)
+ * when Prism applies its language-* class. Prism's prism-tomorrow theme
+ * otherwise overrides background and removes our visual continuity with
+ * the rest of the dark surface. */
+pre[class*="language-"] {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  text-shadow: none;
+  margin: 0;
+}
+code[class*="language-"] {
+  text-shadow: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .container {
@@ -314,6 +333,8 @@ section .lede {
  * ------------------------------------------------------------------------- */
 
 .code-frame {
+  max-width: 840px;
+  margin: 0;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: 16px;

@@ -6,10 +6,28 @@
 <title>TruvaG3 — microagents framework for Go</title>
 <meta name="description" content="TruvaG3 is a Go framework that takes the microservices pattern and applies it to multi-agent systems. A microagents architecture — dynamic discovery, decentralized coordination.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="/assets/css/brand.css">
+<!-- Prism CSS loads BEFORE landing.css so landing.css's pre/code rules
+     (system-mono font, original sizing, our dark-panel chrome) win on
+     specificity-tied cascade — preserves the original font feel after
+     adding syntax highlighting. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
 <link rel="stylesheet" href="/assets/css/landing.css">
 </head>
 <body>
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
 
 <!-- ================= HERO ================= -->
 <header class="hero">
@@ -120,12 +138,12 @@
       named in the agent's source.
     </p>
     <div class="code-frame">
-<pre><span style="color:#9aa6bd">// Create orchestrator — no explicit tool/agent wiring needed</span>
+<pre><code class="language-go">// Create orchestrator — no explicit tool/agent wiring needed
 orchestrator := orchestration.CreateOrchestrator(config, deps)
 
-<span style="color:#9aa6bd">// Process a natural-language request</span>
+// Process a natural-language request
 response, _ := orchestrator.ProcessRequest(ctx,
-    <span style="color:#fbbf24">"Perform a full Kubernetes cluster health check"</span>, nil)</pre>
+    "Perform a full Kubernetes cluster health check", nil)</code></pre>
     </div>
     <h3 class="code-output-heading">What that call becomes at runtime</h3>
     <figure class="example-execution">
@@ -522,6 +540,8 @@ response, _ := orchestrator.ProcessRequest(ctx,
     <div>True. Microagents. Dynamic Discovery. Decentralized.</div>
     <div class="links">
       <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
       <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
       <a href="https://github.com/truvaagents/truva-g3/blob/main/LICENSE">License (Apache 2.0)</a>
     </div>
@@ -555,6 +575,9 @@ response, _ := orchestrator.ProcessRequest(ctx,
     });
   })();
 </script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
 
 </body>
 </html>

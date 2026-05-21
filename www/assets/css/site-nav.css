@@ -1,0 +1,103 @@
+/**
+ * Shared top navigation for every page under www/.
+ *
+ * Self-contained: defines its own colors with sensible fallbacks via
+ * CSS custom properties, so it works whether or not brand.css /
+ * landing.css are loaded. The homepage inherits the bg/ink/muted/line
+ * tokens from landing.css; the article pages (blogs + whitepapers)
+ * use the fallback values declared here.
+ */
+
+.site-nav {
+  /* Transparent so the page's underlying gradient (homepage) or
+   * html-level dark bg (article pages) shows through — painting a
+   * flat color here creates a visible darker band against the lighter
+   * top of the radial gradient. The border-bottom keeps visual
+   * separation from the page content below. */
+  background: transparent;
+  border-bottom: 1px solid var(--line, #2a3550);
+  padding: 14px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  position: relative;
+  z-index: 10;
+}
+
+.site-nav .container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-nav .nav-brand {
+  font-size: 24px;
+  font-weight: 900;
+  color: var(--ink, #e6edf7);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+  /* Property order matters — see brand.css for the rationale. */
+}
+
+.site-nav .nav-brand:hover {
+  text-decoration: none;
+  opacity: 0.9;
+}
+
+/* Two-tone brand mark inside the navbar. Scoped to .site-nav so these
+ * rules never collide with the per-article inline definitions of
+ * .brand-truva / .brand-g3 (different sizes, gradient stops). */
+.site-nav .nav-brand .brand-truva {
+  background: linear-gradient(
+    135deg,
+    var(--brand-truva-light, #DBEEFB),
+    var(--brand-truva-dark, #4A8AB8)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.04em;
+}
+
+.site-nav .nav-brand .brand-g3 {
+  background: linear-gradient(
+    135deg,
+    var(--brand-g3-light, #FFD080),
+    var(--brand-g3-dark, #C56710)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.site-nav .nav-links {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.site-nav .nav-links a {
+  color: var(--accent, #7cc4ff);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease, filter 0.15s ease;
+}
+
+.site-nav .nav-links a:hover {
+  filter: brightness(1.2);
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .site-nav .container {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .site-nav .nav-links {
+    gap: 18px;
+    font-size: 14px;
+  }
+}

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whitepapers — TruvaG3</title>
+<meta name="description" content="Source-grounded comparisons of agent frameworks — error handling, operational excellence, orchestration, human-in-the-loop, and agent-to-agent communication.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/css/brand.css">
+<link rel="stylesheet" href="/assets/css/landing.css">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<style>
+  .index-hero {
+    padding: 64px 0 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+  }
+  .index-hero h1 {
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    display: inline-block;
+  }
+  .index-hero .lede {
+    color: var(--muted);
+    max-width: 680px;
+    margin: 0 auto;
+    font-size: clamp(16px, 1.8vw, 19px);
+    line-height: 1.55;
+  }
+  .index-list {
+    padding: 56px 0 88px;
+  }
+  .group-heading {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 18px;
+  }
+  .group-heading:not(:first-of-type) {
+    margin-top: 56px;
+  }
+  .index-entry {
+    display: block;
+    padding: 32px 0;
+    border-bottom: 1px solid var(--line);
+    text-decoration: none;
+    color: inherit;
+  }
+  .index-entry:hover {
+    text-decoration: none;
+  }
+  .index-entry:hover h2 {
+    filter: brightness(1.15);
+  }
+  .index-entry:first-of-type,
+  .group-heading + .index-entry {
+    border-top: 1px solid var(--line);
+  }
+  .index-entry .meta {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 10px;
+    letter-spacing: 0.02em;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .index-entry .pill-tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .index-entry h2 {
+    font-size: clamp(22px, 2.8vw, 30px);
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 0 0 12px;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    transition: filter 0.15s ease;
+  }
+  .index-entry .dek {
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    max-width: 760px;
+  }
+  .index-entry .read-arrow {
+    display: inline-block;
+    margin-top: 14px;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="index-hero">
+  <div class="container">
+    <h1>Whitepapers</h1>
+    <p class="lede">
+      Source-level comparisons of today's agent frameworks — what each one
+      ships for error handling, observability, deployment, tool orchestration,
+      human-in-the-loop, and agent-to-agent communication. Drawn from
+      analyzing the frameworks' own source code.
+    </p>
+  </div>
+</header>
+
+<section class="index-list">
+  <div class="container">
+
+    <h3 class="group-heading">Standalone papers</h3>
+
+    <a class="index-entry" href="/whitepapers/agent-orchestration.html">
+      <p class="meta">
+        <span class="pill-tag">Standalone</span>
+        <span>Research date · May 6, 2026</span>
+      </p>
+      <h2>How AI Agent Frameworks Orchestrate Tool Calls</h2>
+      <p class="dek">
+        A side-by-side conceptual tour of the agent harness inside LangChain,
+        LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel — what
+        the loop looks like, who holds state, and how each framework decides
+        when to stop.
+      </p>
+      <span class="read-arrow">Read paper →</span>
+    </a>
+
+    <a class="index-entry" href="/whitepapers/agent-to-agent-communication.html">
+      <p class="meta">
+        <span class="pill-tag">Standalone</span>
+        <span>Research date · May 6, 2026</span>
+      </p>
+      <h2>Agent-to-Agent Communication in AI Agent Frameworks</h2>
+      <p class="dek">
+        How agents in LangChain, LangGraph, CrewAI, Google ADK, and
+        Microsoft Semantic Kernel find each other, expose their capabilities
+        to the LLM, and talk — both embedded in the same process and
+        distributed across services.
+      </p>
+      <span class="read-arrow">Read paper →</span>
+    </a>
+
+    <a class="index-entry" href="/whitepapers/agent-human-in-the-loop.html">
+      <p class="meta">
+        <span class="pill-tag">Standalone</span>
+        <span>Research date · May 6, 2026</span>
+      </p>
+      <h2>Human-in-the-Loop in AI Agent Frameworks</h2>
+      <p class="dek">
+        How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic
+        Kernel let a person step into the agent loop — to approve a tool
+        call, edit a plan, sign off on the final answer, or own a
+        long-running decision the agent simply cannot make alone.
+      </p>
+      <span class="read-arrow">Read paper →</span>
+    </a>
+
+    <h3 class="group-heading">Multipart guides</h3>
+
+    <a class="index-entry" href="/whitepapers/agent-errors-index.html">
+      <p class="meta">
+        <span class="pill-tag">5 chapters</span>
+        <span>Research date · May 6, 2026</span>
+      </p>
+      <h2>Error Handling in AI Agent Frameworks</h2>
+      <p class="dek">
+        Production agent runs fail in many more ways than the four buckets
+        the frameworks themselves design around. Five chapters cover what
+        actually breaks in production — in-loop failures, provider-side
+        failures, multi-agent failures, operational failures, and data &amp;
+        compliance failures — and what LangChain, LangGraph, CrewAI, Google
+        ADK, and Microsoft Semantic Kernel do (or don't do) about each one.
+      </p>
+      <span class="read-arrow">Start with the index →</span>
+    </a>
+
+    <a class="index-entry" href="/whitepapers/operational-excellence-index.html">
+      <p class="meta">
+        <span class="pill-tag">5 chapters</span>
+        <span>Research date · May 6, 2026</span>
+      </p>
+      <h2>Operational Excellence in AI Agent Frameworks</h2>
+      <p class="dek">
+        What does it take to run an agent in production — observe it, scale
+        it, deploy it, test it, evolve it — across ten frameworks spanning
+        Python, TypeScript, .NET, Java, Go, and Rust? Five chapters: each
+        focused on one operational axis (observability, performance,
+        deployment, testing, and configuration/memory) with source-grounded
+        comparisons and practical takeaways.
+      </p>
+      <span class="read-arrow">Start with the index →</span>
+    </a>
+
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="brand">
+      <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
+    </div>
+    <div>True. Microagents. Dynamic Discovery. Decentralized.</div>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/blogs/">Blog</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+      <a href="https://github.com/truvaagents/truva-g3/blob/main/LICENSE">License (Apache 2.0)</a>
+    </div>
+    <div>© 2025–2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a> · TruvaG3. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</div>
+    <div>TruvaG3™ is a trademark of <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>.</div>
+  </div>
+</footer>
+
+</body>
+</html>

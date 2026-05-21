@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blog — TruvaG3</title>
+<meta name="description" content="Long-form articles on the microagents architecture, decentralized coordination, and what it takes to run agents at scale.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/css/brand.css">
+<link rel="stylesheet" href="/assets/css/landing.css">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<style>
+  .index-hero {
+    padding: 64px 0 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+  }
+  .index-hero h1 {
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    display: inline-block;
+  }
+  .index-hero .lede {
+    color: var(--muted);
+    max-width: 640px;
+    margin: 0 auto;
+    font-size: clamp(16px, 1.8vw, 19px);
+    line-height: 1.55;
+  }
+  .index-list {
+    padding: 56px 0 88px;
+  }
+  .index-entry {
+    display: block;
+    padding: 32px 0;
+    border-bottom: 1px solid var(--line);
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.15s ease;
+  }
+  .index-entry:hover {
+    text-decoration: none;
+  }
+  .index-entry:hover h2 {
+    filter: brightness(1.15);
+  }
+  .index-entry:first-of-type {
+    border-top: 1px solid var(--line);
+  }
+  .index-entry .meta {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 10px;
+    letter-spacing: 0.02em;
+  }
+  .index-entry h2 {
+    font-size: clamp(22px, 2.8vw, 30px);
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 0 0 12px;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    transition: filter 0.15s ease;
+  }
+  .index-entry .dek {
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    max-width: 760px;
+  }
+  .index-entry .read-arrow {
+    display: inline-block;
+    margin-top: 14px;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="index-hero">
+  <div class="container">
+    <h1>Blog</h1>
+    <p class="lede">
+      Long-form on the microagents architecture, decentralized coordination,
+      and what it takes to run multi-agent systems in production.
+    </p>
+  </div>
+</header>
+
+<section class="index-list">
+  <div class="container">
+
+    <a class="index-entry" href="/blogs/truvag3-introduction.html">
+      <p class="meta">Neelabh Tripathi · May 16, 2026</p>
+      <h2>TruvaG3: An Introduction to the Microagents Framework</h2>
+      <p class="dek">
+        A guided tour of TruvaG3 — why it exists, how the architecture works
+        in practice, what the framework ships with, and how to decide whether
+        it fits your situation. Written for engineers and architects who
+        already operate Kubernetes platforms.
+      </p>
+      <span class="read-arrow">Read article →</span>
+    </a>
+
+    <a class="index-entry" href="/blogs/microagents-architecture.html">
+      <p class="meta">Neelabh Tripathi · May 7, 2026</p>
+      <h2>A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination</h2>
+      <p class="dek">
+        An introduction to a microagents architecture in which specialized
+        tools and agents dynamically register their capabilities with a shared
+        registry, are addressed by logical names rather than hardcoded URLs,
+        and coordinate without a central conductor — with orchestration
+        inside each agent and decentralized coordination across the system.
+      </p>
+      <span class="read-arrow">Read article →</span>
+    </a>
+
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="brand">
+      <span class="brand-truva">Truva</span><span class="brand-g3">G3</span>
+    </div>
+    <div>True. Microagents. Dynamic Discovery. Decentralized.</div>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+      <a href="https://github.com/truvaagents/truva-g3/blob/main/LICENSE">License (Apache 2.0)</a>
+    </div>
+    <div>© 2025–2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a> · TruvaG3. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</div>
+    <div>TruvaG3™ is a trademark of <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>.</div>
+  </div>
+</footer>
+
+</body>
+</html>
