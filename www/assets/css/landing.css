@@ -259,7 +259,7 @@ section {
 
 .eyebrow {
   display: block;
-  color: var(--accent);
+  color: var(--brand-g3);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.08em;
