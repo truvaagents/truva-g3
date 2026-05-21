@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.6
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.52.0
 	github.com/stretchr/testify v1.11.1
 	github.com/truvaagents/truva-g3/core v0.8.2
 	github.com/truvaagents/truva-g3/telemetry v0.8.2
