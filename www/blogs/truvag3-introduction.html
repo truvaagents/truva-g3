@@ -5,21 +5,49 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TruvaG3: An Introduction to the Microagents Framework</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
 <meta name="description" content="A guided tour of TruvaG3 — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.">
 <style>
   :root {
-    --fg: #1a1a1a;
-    --muted: #555;
-    --accent: #0b6cff;
-    --rule: #e5e5e5;
-    --code-bg: #f6f8fa;
-    --aside-bg: #fafaf7;
-    --aside-border: #d9d4c3;
+    /* Dark theme — tokens mirror www/assets/css/landing.css so this
+     * article visually continues from the truvag3.dev homepage. */
+    --fg: #9aa6bd;          /* was #1a1a1a — matches landing.css --muted so
+                                body text reads with the same softness as the
+                                homepage hero sublede. */
+    --muted: #9aa6bd;       /* was #555 */
+    --accent: #7cc4ff;      /* was #0b6cff */
+    --rule: #2a3550;        /* was #e5e5e5 */
+    --code-bg: #1a2236;     /* was #f6f8fa */
+    --aside-bg: #121826;    /* was #fafaf7 */
+    --aside-border: #C56710; /* warm amber (brand-g3-dark) — preserves
+                                the original "warm aside" character */
+  }
+  /* Paint the full viewport dark — body is a 760px centered column,
+   * so setting bg on html ensures the area outside the column also
+   * shows the dark theme. */
+  html {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, #0b0f17 60%);
+    background-attachment: fixed;
+    min-height: 100vh;
   }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     color: var(--fg);
-    line-height: 1.65;
+    line-height: 1.55;
+    font-weight: 400;
+    margin: 0;
+    background: transparent;
+    /* Match landing.css rendering — thinner, cleaner on macOS retina;
+     * without these, Chrome/Safari default to subpixel-antialiased which
+     * makes the same typeface look slightly heavier and warmer. */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Article column — moved off body so the site-nav can sit at the top
+   * of the viewport at full width, and only the reading column stays at
+   * 760px. */
+  article {
     max-width: 760px;
     margin: 2rem auto;
     padding: 0 1.25rem;
@@ -35,6 +63,17 @@
     line-height: 1.25;
     margin: 0 0 0.6rem 0;
     font-weight: 700;
+    letter-spacing: -0.02em;
+    width: fit-content;
+    max-width: 100%;
+    /* Editorial gradient — same color stops as section h2 on the www
+     * homepage. Stops shifted slightly earlier (0/45/90 vs 0/60/100)
+     * so the colorful portion is visible across the longer article
+     * title even when it wraps. */
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 45%, #c4b5fd 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
   header.article-header p.dek {
     color: var(--muted);
@@ -51,6 +90,12 @@
     margin-top: 2.4rem;
     margin-bottom: 0.6rem;
     line-height: 1.3;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
   h3 {
     font-size: 1.25rem;
@@ -62,6 +107,7 @@
   li > strong:first-child {
     font-weight: 600;
     font-size: 0.95em;
+    color: var(--accent);
   }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -73,6 +119,22 @@
     font-size: 0.85rem;
     line-height: 1.5;
     border: 1px solid var(--rule);
+  }
+  /* Keep Prism's syntax highlighting but reuse our panel chrome
+   * (background, border, padding) so the highlighted blocks visually
+   * match the article's other dark panels (asides, tables, etc.). */
+  pre[class*="language-"] {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    text-shadow: none;
+  }
+  code[class*="language-"] {
+    text-shadow: none;
+    font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
   }
   code {
     font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
@@ -121,6 +183,79 @@
     text-align: center;
     margin-top: 0.4rem;
   }
+  figcaption strong {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  /* Amber-toned text for inline emphasis — matches --brand-g3 mid-tone
+   * (#FFA040) used across the brand mark and homepage accents. */
+  .highlight-amber {
+    color: #FFA040;
+  }
+  /* Collapsible table of contents — native <details>/<summary>; no JS. */
+  details.toc {
+    margin: 1.5rem 0 2.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.75rem 1.25rem;
+    background: var(--code-bg);
+  }
+  details.toc summary {
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+    color: var(--accent);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+  }
+  details.toc summary::-webkit-details-marker {
+    display: none;
+  }
+  details.toc summary::before {
+    content: '▸';
+    display: inline-block;
+    transition: transform 0.15s ease;
+    color: var(--accent);
+    font-size: 0.85em;
+  }
+  details.toc[open] summary::before {
+    transform: rotate(90deg);
+  }
+  details.toc ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 0.85rem 0 0.25rem;
+  }
+  details.toc > ul > li {
+    margin: 0.5rem 0;
+  }
+  details.toc > ul > li > a {
+    font-weight: 600;
+    font-size: 0.93rem;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  details.toc ul ul {
+    margin: 0.35rem 0 0.6rem;
+    padding-left: 1.25rem;
+    border-left: 1px solid var(--rule);
+  }
+  details.toc ul ul li {
+    margin: 0.25rem 0 0.25rem 0.5rem;
+  }
+  details.toc ul ul a {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 400;
+    text-decoration: none;
+  }
+  details.toc a:hover {
+    text-decoration: underline;
+    color: var(--fg);
+  }
   .footer-note {
     margin-top: 3rem;
     padding-top: 1rem;
@@ -138,6 +273,18 @@
 </style>
 </head>
 <body>
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
 
 <article>
 
@@ -146,6 +293,46 @@
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
   <p class="meta">Neelabh Tripathi · May 16, 2026</p>
 </header>
+
+<details class="toc">
+  <summary>Contents</summary>
+  <ul>
+    <li><a href="#two-problems">Two problems, one framework</a></li>
+    <li><a href="#why-truvag3-exists">Why TruvaG3 exists</a>
+      <ul>
+        <li><a href="#architectural-reason">The architectural reason</a></li>
+        <li><a href="#operational-reason">The operational reason</a></li>
+      </ul>
+    </li>
+    <li><a href="#how-it-works">How the architecture works, briefly</a></li>
+    <li><a href="#what-it-ships-with">What TruvaG3 ships with</a>
+      <ul>
+        <li><a href="#component-runtime">1. Component runtime</a></li>
+        <li><a href="#runtime-discovery">2. Runtime discovery</a></li>
+        <li><a href="#capability-contracts">3. Self-describing capability contracts</a></li>
+        <li><a href="#observability">4. Observability</a></li>
+        <li><a href="#ai-provider-layer">5. Vendor-agnostic AI provider layer</a></li>
+        <li><a href="#orchestration">6. Orchestration</a></li>
+        <li><a href="#reliability">7. Reliability and error recovery</a></li>
+        <li><a href="#async-and-scheduling">8. Async tasks and scheduling</a></li>
+        <li><a href="#hitl">9. Human-in-the-loop</a></li>
+        <li><a href="#memory-and-context">10. Memory and context</a></li>
+        <li><a href="#chat-agents">11. Chat agent reference pattern</a></li>
+        <li><a href="#security">12. Security and request propagation</a></li>
+        <li><a href="#extension-points">13. Extension points</a></li>
+      </ul>
+    </li>
+    <li><a href="#code-examples">What it looks like in code</a>
+      <ul>
+        <li><a href="#code-tool">A tool</a></li>
+        <li><a href="#code-agent">An agent that uses tools it has never heard of</a></li>
+        <li><a href="#code-agent-to-agent">One agent calling another</a></li>
+      </ul>
+    </li>
+    <li><a href="#run-it-yourself">Run it on a laptop</a></li>
+    <li><a href="#further-reading">Where to go next</a></li>
+  </ul>
+</details>
 
 <section>
 <h2 id="two-problems">Two problems, one framework</h2>
@@ -182,11 +369,11 @@
   <li><strong>Decentralized coordination.</strong> Each peer drives its own work. The registry mediates discovery, not control.</li>
 </ul>
 
-<p>Two coordination layers fall out of this design. <em>Inside</em> each agent, a single orchestrator runs the request: it plans against the current capability catalog, executes the plan as a directed acyclic graph (DAG) with parallelism where dependencies allow, and synthesizes the response. It can return to planning when fresh data unlocks the next phase. <em>Between</em> participants, no such orchestrator exists. Each agent reads the registry, resolves capabilities to endpoints, and calls peers directly over HTTP. Nothing in the middle routes, sequences, or coordinates.</p>
+<p>Two coordination layers fall out of this design. <em>Inside</em> each agent, a single orchestrator runs the request: it plans against the current capability catalog, executes the plan as a directed acyclic graph (DAG) with parallelism where dependencies allow, and synthesizes the response. It can return to planning when fresh data unlocks the next phase. <span class="highlight-amber"><em>Between</em> participants, no such orchestrator exists. Each agent reads the registry, resolves capabilities to endpoints, and calls peers directly over HTTP. Nothing in the middle routes, sequences, or coordinates.</span></p>
 
 <figure id="fig-orchestration-inside-agent">
 <svg viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #2a3550;"
      role="img"
      aria-label="Inside one agent's process. A single Agent box with an amber-bordered frame contains three phase boxes connected by amber arrows. PHASE 1 Plan: a single LLM call against the live capability catalog, output is a DAG of steps. PHASE 2 Execute steps: for each step, resolve capability, make HTTP call, gather response; runs in DAG order with parallelism where possible. PHASE 3 Synthesize: assemble all step outputs into a final response for the user. A solid amber loop-back arrow curves from the bottom of Execute back to the bottom of Plan, labeled 'iterative re-plan, if needed', indicating that the orchestrator can loop from execute back to plan when the LLM decides during execution that additional planning is required. From the Execute phase, two outbound blue arrows pierce the agent's process boundary and reach two peer boxes below — one labeled Tool with a gray border (a passive peer endpoint) and one labeled Agent with an amber border (another orchestrating peer) — illustrating that the HTTP calls made during Execute leave this agent's process and reach participants running in their own processes. The blue color matches the convention used in the next figure for inter-participant HTTP calls. The amber framing throughout indicates that the AIOrchestrator is the single conductor driving the entire flow inside this one process; but the calls it dispatches leave that process to reach peers.">
   <defs>
@@ -268,7 +455,7 @@
 
 <figure id="fig-decentralized-coordination">
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #e5e5e5;"
+     style="width:100%;height:auto;display:block;margin:0 auto;background:#ffffff;border-radius:6px;border:1px solid #2a3550;"
      role="img"
      aria-label="Between participants. A Capability Registry box at the top is connected by thin dashed gray lines down to four participants below — Agent A and Agent C on the outside (each containing a small inner AIOrchestrator showing plan, act, observe, and a loop), and Tool B and Tool D between them (passive endpoints with no orchestrator). A thick blue arrow labelled 'user query' enters Agent A from outside the diagram on the left, indicating that Agent A is the entry point for the request. From there, thick blue arrows show direct peer-to-peer HTTP calls between participants: Agent A to Tool B, Agent C to Tool D, and Agent A curving downward to Agent C beneath the others. There is no central process between the participants; each one runs its own loop and reaches its peers directly.">
   <defs>
@@ -412,7 +599,7 @@
 
 <p>The difference between tools and agents matters, and TruvaG3 enforces it at compile time. A <code>Registry</code> interface lets a component register but not discover. A <code>Discovery</code> interface extends <code>Registry</code> with the lookup methods. Tools satisfy <code>Registry</code> only. Agents satisfy <code>Discovery</code>. A tool cannot call discovery methods, because those methods do not exist on its interface. The check happens before the code runs:</p>
 
-<pre><code>// Tools can only register themselves (passive components)
+<pre><code class="language-go">// Tools can only register themselves (passive components)
 type Registry interface {
     Register(ctx context.Context, info *ServiceInfo) error
     UpdateHealth(ctx context.Context, id string, status HealthStatus) error
@@ -1034,7 +1221,7 @@ type Discovery interface {
 
 <p>A tool exposes one or more capabilities over HTTP. Here is a weather tool that registers a single capability:</p>
 
-<pre><code>tool := core.NewTool("weather-service")
+<pre><code class="language-go">tool := core.NewTool("weather-service")
 tool.RegisterCapability(core.Capability{
     Name:        "current_weather",
     Description: "Gets current weather conditions for a location.",
@@ -1055,7 +1242,7 @@ framework.Run(ctx)</code></pre>
 
 <p>An agent does not need to know which tools exist. It hands the user request to the orchestrator, which reads the live registry and produces a plan:</p>
 
-<pre><code>orchestrator := orchestration.CreateOrchestrator(config, deps)
+<pre><code class="language-go">orchestrator := orchestration.CreateOrchestrator(config, deps)
 
 response, _ := orchestrator.ProcessRequest(ctx,
     "What is the weather in Tokyo and the stock price of Apple?", nil)</code></pre>
@@ -1096,5 +1283,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 </article>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
 </body>
 </html>
