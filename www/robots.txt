@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://truvag3.dev/sitemap.xml
