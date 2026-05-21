@@ -51,10 +51,91 @@
       <a class="pill" href="#coordination"><span class="dot" style="background:#7a3df0"></span>Capability registry</a>
       <a class="pill" href="#developer-to-developer"><span class="dot" style="background:var(--brand-g3-light)"></span>For developers</a>
       <a class="pill" href="#ops-to-ops"><span class="dot" style="background:var(--warn)"></span>For ops engineers</a>
-      <a class="pill" href="#reading"><span class="dot" style="background:var(--good)"></span>Interesting reads</a>
+      <a class="pill" href="#reading"><span class="dot" style="background:var(--good)"></span>Learn</a>
     </div>
   </div>
 </header>
+
+<!-- ================= IMPATIENT? ================= -->
+<section id="impatient">
+  <div class="container">
+    <span class="eyebrow">Impatient?</span>
+    <h2>Working setup in two commands.</h2>
+    <p class="lede">
+      Pick whichever fits your workflow. The agent path is fastest if you
+      already use a coding agent; the manual path takes about ten minutes.
+    </p>
+    <div class="cards cards-2">
+      <article class="card card-impatient">
+        <h3>With a coding agent</h3>
+        <p>
+          Works with Claude Code, Cursor, Aider, or any coding agent that can
+          read files in your workspace.
+        </p>
+        <div class="snippet-wrap">
+          <pre class="card-snippet"><code class="language-bash">git clone https://github.com/truvaagents/truva-g3.git
+cd truva-g3</code></pre>
+          <button class="copy-btn" type="button" aria-label="Copy clone commands">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+        <p class="card-cta-label">Then paste into the agent:</p>
+        <div class="snippet-wrap">
+          <pre class="card-snippet card-prompt"><code>I want to run the example travel agent in my local. Follow GETTING_STARTED.md and start the setup.</code></pre>
+          <button class="copy-btn" type="button" aria-label="Copy prompt">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+      </article>
+      <article class="card card-impatient">
+        <h3>Manual</h3>
+        <p>
+          From a fresh clone to a chat UI you can talk to. Prereqs:
+          Go 1.26+, Docker, Kind, kubectl.
+        </p>
+
+        <p class="card-step-label">1. Clone and enter the example</p>
+        <div class="snippet-wrap">
+          <pre class="card-snippet"><code class="language-bash">git clone https://github.com/truvaagents/truva-g3.git
+cd truva-g3/examples/travel-chat-agent</code></pre>
+          <button class="copy-btn" type="button" aria-label="Copy clone commands">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+
+        <p class="card-step-label">2. Set one AI provider key</p>
+        <div class="snippet-wrap">
+          <pre class="card-snippet"><code class="language-bash">cp .env.example .env       # then edit .env: set provider api key</code></pre>
+          <button class="copy-btn" type="button" aria-label="Copy env setup">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+
+        <p class="card-step-label">3. Deploy cluster + infra + agent + chat UI</p>
+        <div class="snippet-wrap">
+          <pre class="card-snippet"><code class="language-bash">./setup.sh full-deploy</code></pre>
+          <button class="copy-btn" type="button" aria-label="Copy deploy command">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+          </button>
+        </div>
+
+        <p class="card-step-label">4. Open <code>http://chat.localhost</code></p>
+
+        <p class="card-cta">
+          <a class="btn btn-primary" href="https://docs.truvag3.dev/docs/getting-started">Getting Started Guide →</a>
+        </p>
+      </article>
+    </div>
+    <p class="d2d-closing">
+      Either path lands you at a working <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent"><code>travel-chat-agent</code></a> you can run — or pick the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent"><code>devops-chat-agent</code></a> if you'd rather start with the absolute minimum (one AI key, no external APIs).
+    </p>
+  </div>
+</section>
 
 <!-- ================= WHAT IS TRUVAG3 ================= -->
 <section id="what">
@@ -485,7 +566,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
 <!-- ================= RECENT READING ================= -->
 <section id="reading">
   <div class="container">
-    <span class="eyebrow">Interesting Reads</span>
+    <span class="eyebrow">Learn</span>
     <h2>Architecture deep-dives and research notes.</h2>
     <p class="lede">
       Long-form pieces about the architecture and the broader research that
@@ -572,6 +653,25 @@ response, _ := orchestrator.ProcessRequest(ctx,
     });
     dialog.addEventListener('click', (e) => {
       if (e.target === dialog) dialog.close();
+    });
+  })();
+</script>
+
+<!-- Copy-to-clipboard for snippets in the "Impatient?" section. Uses the
+     Clipboard API; silently no-ops on unsupported browsers / non-HTTPS
+     previews so the button never appears stuck. -->
+<script>
+  (() => {
+    document.querySelectorAll('.copy-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const pre = btn.parentElement.querySelector('pre');
+        if (!pre) return;
+        try {
+          await navigator.clipboard.writeText(pre.innerText);
+          btn.classList.add('copied');
+          setTimeout(() => btn.classList.remove('copied'), 1500);
+        } catch (_) { /* clipboard unavailable; do nothing */ }
+      });
     });
   })();
 </script>
