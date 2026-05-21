@@ -13,6 +13,7 @@ A streaming chat agent that demonstrates AI-powered orchestration using the Truv
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
   - [OpenAI-Compatible Providers](#openai-compatible-providers)
+- [User Memory](#user-memory)
 - [Session Management](#session-management)
 - [Telemetry](#telemetry)
 - [Project Structure](#project-structure)
@@ -38,7 +39,7 @@ Before running this example in your local machine, ensure you have the following
 
 > **Note:** This agent serves as the backend for the [chat-ui](../chat-ui/) example. The chat-ui provides a web interface that connects to this agent's SSE streaming API. While the agent can be used standalone via its REST API, the chat-ui offers a convenient way to interact with it.
 
-> **Important:** The travel-chat-agent requires [tools to be deployed](#required-tools-and-agents) (weather-tool-v2, geocoding-tool, currency-tool, country-info-tool, news-tool) to function. You can deploy tools before or after the agent, but the agent won't be able to answer queries until tools are running.
+> **Important:** The travel-chat-agent requires [tools to be deployed](#required-tools-and-agents) to function. The Core Tools list has eight tools the system prompt names directly (weather, geocoding, currency, country-info, flight, hotel, travel-advisory, places); the bare minimum to demo a "what's the weather in Tokyo?" query is weather-tool-v2 + geocoding-tool. You can deploy tools before or after the agent — the agent simply can't answer queries that need a tool until that tool is running.
 
 ### Quick Start (Recommended)
 
@@ -58,22 +59,33 @@ cd examples/travel-chat-agent
 nano .env    # or: code .env / vim .env
 ```
 
-At minimum, uncomment and set ONE of these in your `.env` file:
+At minimum, set ONE provider key in your `.env` file. In `.env.example`, `OPENAI_API_KEY=` and `GROQ_API_KEY=` are already uncommented (blank value — paste your key after the `=`). `ANTHROPIC_API_KEY=` is present but commented out by default; remove the leading `#` if you want to use Anthropic.
 - `OPENAI_API_KEY=sk-your-key`
 - `ANTHROPIC_API_KEY=sk-ant-your-key`
 - `GROQ_API_KEY=gsk_your-key`
 
 > **Note:** Multiple providers enable automatic failover.
+>
+> **Important:** Leave unused providers blank — do **not** paste placeholder strings like `your-key`. The AI module treats any non-empty value as "this provider is configured" and will route calls to it, which fails the request when the key isn't real.
 
 ```bash
 # 2. Deploy cluster, infrastructure, and the chat agent
 ./setup.sh full-deploy
 
-# 3. Deploy the required tools (each tool has its own setup script)
-cd ../weather-tool-v2 && ./setup.sh deploy && cd ..
-cd ../geocoding-tool && ./setup.sh deploy && cd ..
-cd ../currency-tool && ./setup.sh deploy && cd ..
-cd ../country-info-tool && ./setup.sh deploy && cd ..
+# 3. Deploy the required tools (each tool has its own setup script).
+#    Each line returns to examples/travel-chat-agent so the next `cd ../...`
+#    resolves correctly. Run from the examples/travel-chat-agent directory.
+#    Start with these four to cover weather + country/currency lookups:
+cd ../weather-tool-v2 && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../geocoding-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../currency-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../country-info-tool && ./setup.sh deploy && cd ../travel-chat-agent
+
+#    Add these to unlock flight, hotel, advisory, and places queries:
+cd ../flight-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../hotel-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../travel-advisory-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../places-tool && ./setup.sh deploy && cd ../travel-chat-agent
 ```
 
 **What `./setup.sh full-deploy` does:**
@@ -86,7 +98,7 @@ cd ../country-info-tool && ./setup.sh deploy && cd ..
 > **Note:** All services are accessible via `*.localhost` hostnames through the NGINX Ingress Controller. No port-forwarding is needed. On macOS/Linux, `*.localhost` resolves to `127.0.0.1` automatically ([RFC 6761](https://tools.ietf.org/html/rfc6761)). This is the same pattern used in production with real DNS on EKS/GKE/AKS.
 
 **What you need to do separately:**
-- Deploy tools using each tool's setup script (Step 4 above)
+- Deploy tools using each tool's setup script (Step 3 above)
 
 Once complete, access the application at:
 
@@ -131,11 +143,16 @@ This deploys the shared infrastructure components:
 Each tool has its own setup script:
 
 ```bash
-# Deploy tools (from the examples directory)
-cd ../weather-tool-v2 && ./setup.sh deploy
-cd ../geocoding-tool && ./setup.sh deploy
-cd ../currency-tool && ./setup.sh deploy
-cd ../country-info-tool && ./setup.sh deploy
+# Run from examples/travel-chat-agent. Each line returns there so the next
+# `cd ../...` resolves correctly.
+cd ../weather-tool-v2 && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../geocoding-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../currency-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../country-info-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../flight-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../hotel-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../travel-advisory-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../places-tool && ./setup.sh deploy && cd ../travel-chat-agent
 ```
 
 > **Note:** The `k8-deployment` directory contains shared infrastructure (Redis, Prometheus, etc.), not tools.
@@ -147,10 +164,14 @@ cd examples/travel-chat-agent
 
 # Create .env from example and configure your API key
 cp .env.example .env
-# Edit .env and uncomment/set your AI provider key(s)
+# Edit .env: set ONE provider key, leave the other providers blank. Do not paste
+# placeholder strings — any non-empty value activates that provider, even if the
+# key isn't real, which will fail your request. OPENAI_API_KEY and GROQ_API_KEY
+# are already uncommented; uncomment ANTHROPIC_API_KEY only if you want to use it.
 
-# Build and deploy
-./setup.sh docker
+# Build the image and deploy in one step.
+# (`./setup.sh deploy` runs build_docker → load_to_kind → deploy_k8s;
+#  there is no separate "deploy only, skip build" subcommand.)
 ./setup.sh deploy
 ```
 
@@ -170,22 +191,32 @@ The travel-chat-agent orchestrates multiple tools to answer user queries. **Thes
 
 ### Core Tools
 
+These tools are referenced by name in the agent's system prompt — the agent expects them to be deployed for full functionality.
+
 | Tool | Purpose | Port | Documentation |
 |------|---------|------|---------------|
-| **weather-tool-v2** | Weather data (current, forecast) | 8096 | [README](../weather-tool-v2/README.md) |
-| **geocoding-tool** | Location coordinates lookup | 8095 | [README](../geocoding-tool/README.md) |
-| **currency-tool** | Currency exchange rates | 8097 | [README](../currency-tool/README.md) |
-| **country-info-tool** | Country information | 8098 | [README](../country-info-tool/README.md) |
-| **news-tool** | News articles | 8099 | [README](../news-tool/README.md) |
+| **weather-tool-v2** | Weather data (current, forecast) | 8339 | [README](../weather-tool-v2/README.md) |
+| **geocoding-tool** | Location coordinates lookup (used before any weather query) | 8335 | [README](../geocoding-tool/README.md) |
+| **currency-tool** | Currency exchange rates | 8334 | [README](../currency-tool/README.md) |
+| **country-info-tool** | Country metadata (capital, languages, calling code, currency code) | 8333 | [README](../country-info-tool/README.md) |
+| **flight-tool** | `search_airports` (IATA resolution) and flight search | 8342 | [README](../flight-tool/README.md) |
+| **hotel-tool** | Hotel search by city IATA code | 8343 | [README](../hotel-tool/README.md) |
+| **travel-advisory-tool** | `get_travel_advisory` — country safety information | 8345 | [README](../travel-advisory-tool/README.md) |
+| **places-tool** | `search_places` and `nearby_places` for dining and activities at a destination | 8344 | [README](../places-tool/README.md) |
 
 ### Optional Tools
 
-These provide additional capabilities:
+These extend the agent's reach beyond the prompt's explicit instructions.
 
 | Tool | Purpose | Documentation |
 |------|---------|---------------|
+| **news-tool** | News articles (e.g., "any news about Tokyo before I travel?") | [README](../news-tool/README.md) |
 | **stock-market-tool** | Stock prices | [README](../stock-market-tool/README.md) |
 | **grocery-tool** | Grocery store API | [README](../grocery-tool/README.md) |
+
+### Sibling Agent (DevOps Delegation)
+
+The travel-chat-agent's prompt instructs it to delegate any Kubernetes / cluster / DevOps query to the `devops_operations` capability exposed by [devops-chat-agent](../devops-chat-agent/README.md). This is purely an opportunistic delegation — if the devops-chat-agent isn't deployed, those queries simply fail; travel-related queries are unaffected.
 
 ### Related Agents
 
@@ -214,18 +245,23 @@ cd examples/weather-tool-v2
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              User Browser                                │
-│                          http://localhost:8096                           │
+│                          http://chat.localhost                           │
 └────────────────────────────────┬────────────────────────────────────────┘
                                  │ SSE Stream
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         travel-chat-agent                                │
-│                          (Port 8095)                                     │
+│                          (Port 8356)                                     │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────────┐  │
 │  │   Session    │  │     SSE      │  │        AI Orchestrator        │  │
 │  │    Store     │  │   Handler    │  │   (Plan → Execute → Synth)    │  │
 │  │  (Redis DB2) │  │              │  │                               │  │
 │  └──────────────┘  └──────────────┘  └───────────────┬───────────────┘  │
+│  ┌──────────────────────────────────┐                │                  │
+│  │        User Memory               │                │                  │
+│  │   (per-user facts injected as    │                │                  │
+│  │    <user_profile> — Qdrant)      │                │                  │
+│  └──────────────────────────────────┘                │                  │
 └──────────────────────────────────────────────────────┼──────────────────┘
                                                        │
                     ┌──────────────────────────────────┼──────────────────────────────────┐
@@ -233,7 +269,7 @@ cd examples/weather-tool-v2
                     ▼                                  ▼                                  ▼
           ┌─────────────────┐              ┌─────────────────┐              ┌─────────────────┐
           │ weather-tool-v2 │              │  geocoding-tool │              │  currency-tool  │
-          │   (Port 8091)   │              │   (Port 8094)   │              │   (Port 8090)   │
+          │   (Port 8339)   │              │   (Port 8335)   │              │   (Port 8334)   │
           └─────────────────┘              └─────────────────┘              └─────────────────┘
 ```
 
@@ -249,11 +285,12 @@ cd examples/weather-tool-v2
 
 ### Data Isolation
 
-| Data Type | Redis Database | Key Pattern |
-|-----------|----------------|-------------|
-| Service Registry | DB 0 | `truvag3:services:*` |
-| Chat Sessions | DB 2 | `truvag3:sessions:*` |
-| LLM Debug Records | DB 7 | `llm_debug:*` |
+| Data Type | Backend | Location |
+|-----------|---------|----------|
+| Service Registry | Redis | DB 0, keys `truvag3:services:*` |
+| Chat Sessions | Redis | DB 2, keys `truvag3:sessions:*` |
+| LLM Debug Records | Redis | DB 7, keys `llm_debug:*` |
+| User Memory (per-user facts) | Qdrant | Collection `truvag3_user_memory` (overridable via `TRUVAG3_USER_MEMORY_COLLECTION`); falls back to in-memory when Qdrant isn't configured |
 
 ---
 
@@ -275,11 +312,12 @@ Main streaming chat endpoint using Server-Sent Events.
 
 | Event | Description | Data |
 |-------|-------------|------|
-| `session` | New session created | `{"id": "uuid"}` |
+| `session` | New session created (emitted when the caller omitted `session_id` or sent an expired one) | `{"id": "uuid"}` |
 | `status` | Progress update | `{"step": "planning", "message": "..."}` |
-| `step` | Tool execution complete | `{"tool": "weather-tool", "success": true, "duration_ms": 234}` |
+| `step` | Tool execution complete | `{"step_id": "step_1", "tool": "weather-tool-v2", "success": true, "duration_ms": 234}` |
 | `chunk` | Response text chunk | `{"text": "The weather..."}` |
-| `usage` | Token usage stats | `{"prompt_tokens": 100, "completion_tokens": 50}` |
+| `usage` | Token usage stats (`by_phase` is included only when the orchestrator tracked per-phase usage) | `{"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "by_phase": {...}}` |
+| `finish` | LLM finish reason | `{"reason": "stop"}` |
 | `done` | Request complete | `{"request_id": "...", "tools_used": [...], "total_duration_ms": 1234}` |
 | `error` | Error occurred | `{"code": "...", "message": "...", "retryable": true}` |
 
@@ -299,13 +337,30 @@ Create a new chat session.
 {
   "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "created_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-01T00:30:00Z"
+  "expires_at": "2024-01-03T00:00:00Z"
 }
 ```
 
 ### `GET /chat/session/{id}/history`
 
 Get conversation history for a session.
+
+### `POST /query`
+
+Non-streaming orchestration endpoint registered as the `travel_query` capability ([chat_agent.go:607-617](chat_agent.go#L607)). Marked `Internal: true`, so it is **not** advertised to other agents' orchestrators for discovery-based delegation (the travel-chat-agent is intended as a leaf, not as a delegated sub-agent); however, any external client can still call this endpoint directly via HTTP.
+
+**Request:**
+```json
+{
+  "query": "Find flights from NYC to Tokyo next month, check the weather there, and convert 2000 USD to JPY"
+}
+```
+
+**Response:** Full `OrchestratorResponse` — `request_id`, `response`, `tools_used`, `confidence`, `execution_time`, `steps`, `usage`.
+
+### `POST /api/v1/scheduled`
+
+Stateless one-shot orchestration endpoint, mounted by `orchestration.RegisterScheduledEndpoint` in [main.go:107](main.go#L107). The [scheduler-tool](../scheduler-tool/README.md) calls this when a cron entry fires — useful for periodic itinerary refreshes, recurring price checks, or "tell me the weather in my saved destinations every Monday" workflows. Request and response shapes match `POST /query` above (no SSE).
 
 ### `GET /health`
 
@@ -315,16 +370,22 @@ Health check endpoint.
 ```json
 {
   "status": "healthy",
+  "timestamp": 1716220800,
+  "service": "travel-chat-agent",
   "redis": "healthy",
   "ai_provider": "connected",
   "orchestrator": {
     "status": "active",
     "total_requests": 10,
-    "successful_requests": 9
+    "successful_requests": 9,
+    "failed_requests": 1,
+    "average_latency_ms": 842
   },
   "active_sessions": 3
 }
 ```
+
+The handler downgrades `status` to `degraded` and returns `503` when Redis discovery is unavailable. `orchestrator` is the string `"initializing"` (not an object) until the background goroutine in `main.go` finishes wiring Discovery → orchestrator.
 
 ### `GET /discover`
 
@@ -341,7 +402,8 @@ List available tools discovered by the orchestrator.
 | `REDIS_URL` | Redis connection URL | - | Yes |
 | `OPENAI_API_KEY` | OpenAI API key | - | Yes* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | - | Yes* |
-| `PORT` | HTTP server port | `8095` | No |
+| `GROQ_API_KEY` | Groq API key | - | Yes* |
+| `PORT` | HTTP server port | `8356` | No |
 | `APP_ENV` | Environment (development/staging/production) | `development` | No |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for telemetry | - | No |
 | `NAMESPACE` | Kubernetes namespace | `truvag3-examples` | No |
@@ -366,7 +428,7 @@ The `.env.example` file contains comprehensive documentation for all options inc
 - **Orchestration Settings** - Mode, capability matching thresholds
 - **Telemetry Configuration** - Environment profiles and OTLP endpoints
 
-At minimum, uncomment and set one AI provider API key.
+At minimum, set one AI provider API key (the variables are already uncommented in `.env.example`).
 
 ### OpenAI-Compatible Providers
 
@@ -405,13 +467,34 @@ See `.env.example` for complete documentation of all supported providers.
 
 ---
 
+## User Memory
+
+The agent wires per-user private memory via `BuildUserMemoryHooks` ([chat_agent.go:239](chat_agent.go#L239)). Facts mentioned in a conversation (preferred airlines, dietary restrictions, home airport, past destinations, etc.) are extracted by a background LLM call and recalled in future sessions, so the user doesn't have to repeat themselves.
+
+| Aspect | Details |
+|--------|---------|
+| **Hook** | `UserMemoryEnrichmentHook` (`BeforePlanning`) — injects relevant facts into the planning prompt as `<user_profile>` |
+| **Namespace** | `travel` (set via `memory.WithUserMemoryNamespace("travel")`) |
+| **Backend** | Qdrant when `TRUVAG3_VECTOR_DB_URL` + `TRUVAG3_EMBEDDING_BASE_URL` are set; falls back to in-memory otherwise |
+| **Extraction** | Background LLM call after each turn — uses the model named by `TRUVAG3_USER_MEMORY_EXTRACTION_MODEL` (default: the agent's main model; set to `fast` to save cost) |
+| **Recall** | Up to `TRUVAG3_USER_MEMORY_MAX_FACTS_IN_PROMPT` facts (default 15) ranked by semantic similarity to the current query |
+| **Collection** | `TRUVAG3_USER_MEMORY_COLLECTION` (default `truvag3_user_memory`) — separate from the shared knowledge collection |
+
+### Setup
+
+The active `.env.example` already enables user memory's prerequisites: `TRUVAG3_DEPLOY_QDRANT=true` makes `./setup.sh infra` provision Qdrant alongside Redis/Prometheus, and `TRUVAG3_EMBEDDING_BASE_URL` points at a local Ollama. To opt out of personalized memory entirely, comment those out — the agent falls back to a stateless in-memory backend that doesn't persist anything across pod restarts.
+
+> **Note:** `TRUVAG3_AGENT_DOMAIN=travel` is left commented out in `.env.example` because travel-chat-agent only wires user memory (`BuildUserMemoryHooks`), not shared cross-agent episodic memory (`BuildMemoryHooks`). Uncomment the variable only after adding `SharedBackends` wiring in `main.go` — until then it would be read by the framework but have no observable effect.
+
+---
+
 ## Session Management
 
 Sessions are stored in Redis (DB 2) with the following characteristics:
 
 | Property | Value |
 |----------|-------|
-| **TTL** | 30 minutes of inactivity |
+| **TTL** | 48 hours of inactivity |
 | **Max Messages** | 50 per session (sliding window) |
 | **Storage** | Redis DB 2 (`truvag3:sessions:*`) |
 | **Multi-pod Support** | Yes (shared Redis) |
@@ -422,7 +505,7 @@ Sessions are stored in Redis (DB 2) with the following characteristics:
 2. Server creates session, stores in Redis, returns `session_id` via SSE
 3. Client includes `session_id` in subsequent requests
 4. Server retrieves history from Redis for conversation context
-5. Session expires after 30 minutes of inactivity
+5. Session expires after 48 hours of inactivity (long enough that a planning conversation can pick back up across multiple work sessions)
 
 ---
 
@@ -435,7 +518,7 @@ The agent includes comprehensive observability:
 - All requests traced with span events
 - Tool execution timing
 - Error tracking and debugging
-- Access at http://localhost:16686
+- Access at http://jaeger.localhost
 
 ### LLM Debug Payload Store
 
@@ -456,7 +539,7 @@ This captures all LLM interactions at 6 recording sites (`plan_generation`, `cor
 | `chat.sessions.active` | Gauge | Active sessions |
 | `chat.orchestration.tool_calls` | Counter | Tool calls by tool name |
 
-Access Grafana at http://localhost:3000 (admin/admin)
+Access Grafana at http://grafana.localhost (admin/admin)
 
 ### Logging
 
@@ -596,9 +679,15 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 2 KEYS 'truvag3:se
 - [chat-ui](../chat-ui/) - Web frontend for this agent
 - [agent-with-orchestration](../agent-with-orchestration/) - Basic orchestration example
 - [agent-with-telemetry](../agent-with-telemetry/) - Full observability example
+- [devops-chat-agent](../devops-chat-agent/) - Sibling agent this one delegates DevOps queries to
 - [weather-tool-v2](../weather-tool-v2/) - Weather data tool
 - [geocoding-tool](../geocoding-tool/) - Location geocoding tool
 - [currency-tool](../currency-tool/) - Currency exchange tool
 - [country-info-tool](../country-info-tool/) - Country information tool
+- [flight-tool](../flight-tool/) - Flight and airport search
+- [hotel-tool](../hotel-tool/) - Hotel search by city IATA code
+- [travel-advisory-tool](../travel-advisory-tool/) - Country safety advisories
+- [places-tool](../places-tool/) - Places of interest and nearby search
+- [scheduler-tool](../scheduler-tool/) - Schedules recurring queries via `/api/v1/scheduled`
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).
