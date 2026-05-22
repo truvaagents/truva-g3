@@ -2,7 +2,7 @@
   <defs>
     <linearGradient id="amber" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFD080"/>
-      <stop offset="1" stop-color="#C56710"/>
+      <stop offset="1" stop-color="#FFA040"/>
     </linearGradient>
   </defs>
   <text
@@ -13,6 +13,10 @@
     font-weight="900"
     font-size="48"
     letter-spacing="-2"
+    paint-order="stroke"
+    stroke="url(#amber)"
+    stroke-width="3"
+    stroke-linejoin="round"
     fill="url(#amber)"
   >G3</text>
 </svg>
