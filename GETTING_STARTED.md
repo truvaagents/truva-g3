@@ -71,15 +71,38 @@ curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stabl
 chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 ```
 
-**Windows:**
+**Windows (via WSL2 + Ubuntu 24.04 — supported path):**
 
-> **Not verified:** Windows installation steps have not been tested end-to-end by the maintainers. macOS and Linux are the supported platforms; the commands below are best-effort and may need adjustment. Please open an issue or PR if you hit problems.
+The setup scripts under `examples/<name>/setup.sh` are bash and rely on Linux toolchains (kind, kubectl, Unix paths). The recommended Windows path is to run them inside WSL2 with Ubuntu 24.04, using Docker Desktop on the Windows host for the container runtime.
+
+From PowerShell (run once):
 
 ```powershell
-# Install via Chocolatey or download installers
-choco install golang docker-desktop kind kubernetes-cli
-# Restart required for Docker Desktop
+wsl --install -d Ubuntu-24.04
+winget install Docker.DockerDesktop
 ```
+
+Start Docker Desktop and enable **Settings → Resources → WSL Integration** for `Ubuntu-24.04`. Then restart WSL so the integration takes effect:
+
+```powershell
+wsl --set-default Ubuntu-24.04
+wsl --shutdown
+```
+
+Open the Ubuntu shell and verify the container runtime is coming from Docker Desktop (not a stray WSL-native engine):
+
+```bash
+docker info --format '{{.OperatingSystem}} {{.ServerVersion}}'
+# expected: Docker Desktop <version>
+```
+
+If this prints `Docker Engine` or `Ubuntu` instead of `Docker Desktop`, a WSL-native Docker installation is shadowing the integration — an unsupported configuration. Do not install Docker Engine inside Ubuntu; rely on Docker Desktop's WSL integration for the runtime.
+
+Then follow the **Linux** prerequisites above (Go, kind, kubectl); `docker` itself already works in the Ubuntu shell via the WSL integration.
+
+Clone the repo into the WSL filesystem (`~/truva-g3`) rather than `/mnt/c/...` — the WSL ext4 is noticeably faster and avoids permission and CRLF line-ending issues.
+
+> **Native Windows (without WSL) is not supported.** The setup scripts are bash; running them under PowerShell or cmd is fragile. For Windows-specific issues (clock drift breaking service discovery, single-node ingress restart deadlock, CRLF line-ending errors), see [Windows + WSL2 Troubleshooting](docs/reference/WINDOWS_TROUBLESHOOTING.md).
 
 ### Alternative: Podman (Drop-in Docker Replacement)
 
@@ -131,6 +154,23 @@ A GUI helps with poking around the cluster — viewing pods, logs, events, port-
 - **[Headlamp](https://headlamp.dev/)** — open-source (CNCF Sandbox), Microsoft-maintained. Like-for-like GUI alternative to Lens with no account required and no commercial-use restrictions. macOS: `brew install --cask headlamp`.
 - **[k9s](https://k9scli.io/)** — terminal UI (vim-style keys), not a GUI, but extremely fast once you learn it. macOS: `brew install k9s`. Worth knowing even if you also run Lens or Headlamp.
 
+### Optional: Ollama (for persistent agentic memory)
+
+Both chat agents wire **per-user memory** — facts that come up in conversation (preferences, recurring questions, prior destinations, common clusters) are embedded and recalled in future sessions so the user doesn't have to repeat themselves. The embedding step uses an OpenAI-compatible endpoint, configured via `TRUVAG3_EMBEDDING_BASE_URL` in each agent's `.env.example` and defaulted to a local [Ollama](https://ollama.ai/) running the `nomic-embed-text` model.
+
+**Skip this if you don't want persistent memory.** Both agents boot and run fine without Ollama — the framework doesn't panic when the embedding endpoint is unreachable; chats, planning, and tool calls all continue to work. You just don't get cross-session personalization.
+
+To enable it:
+
+1. Install Ollama from https://ollama.ai/.
+2. Pull the embedding model:
+   ```bash
+   ollama pull nomic-embed-text
+   ```
+3. Make sure Ollama is running (default: `http://localhost:11434`).
+
+The shipped `.env.example` files point at `http://host.docker.internal:11434/v1`, which resolves to your host from inside the Kind cluster on Docker Desktop (macOS/Windows). On Linux without Docker Desktop you may need to point `TRUVAG3_EMBEDDING_BASE_URL` at your host's reachable IP, or run Ollama inside the cluster.
+
 ---
 
 ## 2. Run the Examples First (Recommended)
@@ -172,12 +212,16 @@ git clone https://github.com/truvaagents/truva-g3.git
 cd truva-g3/examples/travel-chat-agent
 ```
 
-#### Step 2: Configure an AI provider API key (required)
+#### Step 2: Configure an AI provider (required)
 
-> 🔑 **You must set at least one AI provider API key. Without one, the agent
+> 🔑 **You must configure at least one AI provider. Without one, the agent
 > will start, but every chat request will fail at the LLM call.** The agent
-> uses the LLM both to plan tool calls and to synthesize the final answer —
-> there is no offline fallback.
+> uses the LLM both to plan tool calls and to synthesize the final answer.
+> The fastest path is a cloud API key (table below — Groq has a free tier).
+> If you'd rather stay fully local, point the agent at a [local Ollama
+> instance](docs/building/AI_PROVIDERS_SETUP_GUIDE.md#scenario-1-local-development-with-ollama)
+> instead — no API key needed, but you'll need to install Ollama and pull a
+> model that fits your machine.
 
 ```bash
 cp .env.example .env
@@ -195,7 +239,9 @@ Open `.env` and set **one** of the following:
 For multi-provider failover, custom model aliases, or other providers
 (DeepSeek, Bedrock, Ollama, etc.), see the
 [**AI Providers Setup Guide**](docs/building/AI_PROVIDERS_SETUP_GUIDE.md). For this
-quick-start, one key is enough.
+quick-start, one provider is enough.
+
+> 💾 **Optional: persistent user memory.** The travel agent wires per-user memory (preferences, past destinations) via an embedding endpoint, pre-configured in `.env.example` for a local Ollama. Install Ollama and pull `nomic-embed-text` to enable it — see [Optional: Ollama (for persistent agentic memory)](#optional-ollama-for-persistent-agentic-memory). The agent still works without Ollama; cross-session memory just won't persist.
 
 #### Step 3: Deploy the agent
 
@@ -284,7 +330,7 @@ provider key** and nothing else. The agent uses in-cluster `kubectl`,
 Prometheus, Loki, and Jaeger to answer questions about the very cluster it
 runs in — no third-party APIs to provision, no external credentials.
 
-#### Step 1: Configure the AI provider key
+#### Step 1: Configure an AI provider
 
 Same provider table as the travel quickstart's Step 2. If you already set
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the travel agent, the same value
@@ -296,6 +342,8 @@ cd examples/devops-chat-agent
 cp .env.example .env
 # Edit .env and set OPENAI_API_KEY or ANTHROPIC_API_KEY
 ```
+
+> 💾 **Optional: persistent agentic memory.** The devops agent (like the travel agent) wires per-user memory and also uses the `agentic-memory-tool` deployed in Step 3 for semantic recall. Both rely on an embedding endpoint, pre-configured in `.env.example` for a local Ollama. Install Ollama and pull `nomic-embed-text` to enable it — see [Optional: Ollama (for persistent agentic memory)](#optional-ollama-for-persistent-agentic-memory). The agent works without Ollama; the tool still deploys but semantic recall isn't available.
 
 #### Step 2: Deploy the agent
 
@@ -398,7 +446,8 @@ curl -N -X POST http://travel-chat-agent.localhost/chat/stream \
   -H "Content-Type: application/json" \
   -d "{\"session_id\":\"$SESSION\",\"message\":\"What is the weather in London?\"}"
 
-# Health check
+# Health check — use /health, not the root.
+# The agent root returns 404 by design; that's not a failed deployment.
 curl http://travel-chat-agent.localhost/health
 ```
 
@@ -828,6 +877,26 @@ redis-cli HGETALL "truvag3:services:my-tool"
 kubectl get pods -n truvag3-examples
 ```
 
+**Service discovery flickers — tools register and disappear, registry TTLs seem broken:**
+
+The discovery layer uses Redis TTLs (default 30s) to track healthy services. If the system clock on your dev machine, your WSL distro, or the Redis pod drift apart by more than the TTL, healthy services look expired and re-register repeatedly. Diagnose:
+
+```bash
+date -u                                                     # host UTC
+kubectl exec -n truvag3-examples deploy/redis -- date -u    # pod UTC
+```
+
+If they differ by minutes, the WSL clock is most likely the culprit. Fix:
+
+```bash
+sudo systemctl stop systemd-timesyncd          # don't let it snap back
+sudo date -u -s '<current Windows UTC>'
+kubectl rollout restart deployment/travel-chat-agent -n truvag3-examples
+# (also restart the affected tools so they re-register against the corrected clock)
+```
+
+See [Windows + WSL2 Troubleshooting — Service discovery flickers](docs/reference/WINDOWS_TROUBLESHOOTING.md#service-discovery-flickers-clock-skew) for the full diagnosis and tool-restart list.
+
 **Kind cluster issues:**
 
 ```bash
@@ -840,6 +909,17 @@ kind delete cluster --name "truvag3-demo-$(whoami)"
 cd examples/travel-chat-agent
 ./setup.sh full-deploy
 ```
+
+**`kubectl rollout restart deployment/ingress-nginx-controller -n ingress-nginx` hangs forever:**
+
+ingress-nginx uses `hostPort: 80, 443` to expose the cluster on `*.localhost`. On a single-node kind cluster the new pod can't schedule because the old pod still owns those ports (`0/1 nodes are available: 1 node(s) didn't have free ports`). Bypass the rolling strategy:
+
+```bash
+kubectl delete pod -n ingress-nginx -l app.kubernetes.io/component=controller
+kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
+```
+
+You'll have ~10–30s of ingress downtime while the new pod schedules.
 
 ---
 
