@@ -72,6 +72,9 @@ chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 ```
 
 **Windows:**
+
+> **Not verified:** Windows installation steps have not been tested end-to-end by the maintainers. macOS and Linux are the supported platforms; the commands below are best-effort and may need adjustment. Please open an issue or PR if you hit problems.
+
 ```powershell
 # Install via Chocolatey or download installers
 choco install golang docker-desktop kind kubernetes-cli
@@ -140,6 +143,26 @@ credentials, no third-party APIs) or you're evaluating the framework against
 an SRE/observability use case. Both share the same cluster and infrastructure,
 so you can run them side-by-side.
 
+> **Setup convention — always use `setup.sh`.** Every example (agent or
+> tool) ships with a `setup.sh` that wires up Kind image-loading and
+> Kubernetes deployment in one step. Don't `kubectl apply` manifests by
+> hand — the script handles dependencies you'd otherwise miss.
+>
+> Two verbs cover the common cases:
+>
+> - **`./setup.sh full-deploy`** — cold start. Creates the Kind cluster,
+>   rolls out shared infrastructure (Redis, OTEL Collector, Loki,
+>   Prometheus, Jaeger, Grafana, ingress-nginx, registry-viewer), then
+>   builds and deploys this example. Use on the **first** example you run.
+> - **`./setup.sh deploy`** — cluster + infra already up. Skips the
+>   cluster and infra phases, only builds and deploys this example. Use
+>   for **every subsequent** agent or tool, including all the tools in
+>   step 4 below.
+>
+> The full verb list and edge cases (`rollout` after `.env` edits,
+> `rebuild` for forced rebuilds, `cleanup`/`clean` to remove) are in
+> [Section 3 — Available Examples](#3-available-examples).
+
 ### Quick Start: Travel Chat Agent
 
 #### Step 1: Clone the repository
@@ -196,6 +219,10 @@ and waits for the rollouts to complete.
 The agent has no built-in capabilities — it discovers tools via Redis at
 runtime and asks the LLM to plan a sequence of tool calls. Without tools
 deployed, the agent will respond but can't fetch live data.
+
+Each tool uses `./setup.sh deploy` (not `full-deploy`) since the cluster
+and shared infrastructure are already up from step 3 — see the setup
+convention callout at the top of this section.
 
 ```bash
 cd ../weather-tool-v2       && ./setup.sh deploy && cd -
