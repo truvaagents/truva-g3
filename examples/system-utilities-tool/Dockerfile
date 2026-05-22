@@ -23,95 +23,36 @@ RUN go build -a -installsuffix cgo \
     -ldflags '-w -s -extldflags "-static"' \
     -o system-utilities-tool .
 
-# Runtime stage — Debian for full glibc compatibility and standard Linux tooling
-FROM debian:bookworm-slim
+# Runtime stage — python:3.12-slim (python3 + pip3 already bundled, ~125 MB base)
+FROM python:3.12-slim
 
-# Install runtime dependencies including useful command-line tools
-# for the execute_command capability
+# Install shell/text/network utilities for the execute_command capability.
+# Browser dependencies (nodejs, chromium libs, fonts) were removed when the
+# stealth_browser and browser_test capabilities moved to playwright-tool.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
-    # --- Shell & scripting ---
     bash \
-    python3 \
-    python3-pip \
-    python3-venv \
-    # --- Text processing ---
+    coreutils \
     grep \
     sed \
     gawk \
     jq \
-    less \
-    file \
-    # --- Core utilities ---
-    coreutils \
-    tar \
-    gzip \
-    unzip \
     bc \
-    # --- Networking ---
     curl \
-    wget \
+    openssl \
+    git \
     dnsutils \
     iputils-ping \
     traceroute \
-    iproute2 \
     netcat-openbsd \
-    tcpdump \
-    nmap \
-    openssl \
-    openssh-client \
-    net-tools \
-    # --- Process & system inspection ---
-    procps \
-    htop \
-    strace \
-    lsof \
-    sysstat \
-    # --- Version control ---
-    git \
-    # --- Node.js / Playwright prerequisites ---
-    nodejs \
-    npm \
-    # Chromium shared-library dependencies (Playwright downloads its own binary)
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-    libxshmfence1 \
-    libgtk-3-0 \
-    libx11-xcb1 \
-    fonts-liberation \
-    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Playwright with bundled Chromium, plus stealth plugin.
-# Store browsers in a shared path so the non-root runtime user can access them.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npm install -g playwright playwright-extra puppeteer-extra-plugin-stealth \
-    puppeteer-extra-plugin-user-preferences puppeteer-extra-plugin-user-data-dir \
-    && npx playwright install chromium
-
-# Ensure Node.js can find globally-installed modules when invoked via `node -e`
-ENV NODE_PATH=/usr/local/lib/node_modules
 
 WORKDIR /app
 
 # Create non-root user for security
 RUN groupadd -g 1001 appgroup && \
     useradd -u 1001 -g appgroup -m -s /bin/bash appuser
-
-# Grant the non-root user read+execute access to Playwright browsers
-RUN chmod -R o+rX /opt/playwright-browsers
 
 COPY --from=builder /app/system-utilities-tool .
 RUN chown appuser:appgroup /app/system-utilities-tool && \
@@ -121,7 +62,7 @@ RUN chown appuser:appgroup /app/system-utilities-tool && \
 RUN mkdir -p /app/workspace && chown appuser:appgroup /app/workspace
 
 # Pre-install commonly requested Python packages and enable --user installs
-RUN pip3 install --break-system-packages numpy requests && \
+RUN pip3 install --no-cache-dir numpy requests && \
     mkdir -p /home/appuser/.local && chown -R appuser:appgroup /home/appuser/.local
 
 USER appuser

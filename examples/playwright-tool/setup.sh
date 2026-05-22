@@ -217,7 +217,8 @@ cmd_test() {
 
     # Test capabilities
     echo "Testing capabilities endpoint..."
-    if curl -s http://localhost:8349/api/capabilities | grep -q "capabilities"; then
+    # /api/capabilities returns a raw JSON array (see core/tool.go) — assert shape + non-empty
+    if curl -s http://localhost:8349/api/capabilities | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
         print_success "Capabilities endpoint working"
     else
         print_error "Capabilities endpoint not responding"

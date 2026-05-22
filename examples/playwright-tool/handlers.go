@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -929,6 +931,542 @@ func (t *PlaywrightTool) handleLookupScripts(rw http.ResponseWriter, r *http.Req
 	json.NewEncoder(rw).Encode(core.ToolResponse{Success: true, Data: response})
 }
 
+// --- Handler: stealth_browser ---
+
+func (t *PlaywrightTool) handleStealthBrowser(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
+	tc := telemetry.GetTraceContext(ctx)
+	if tc.TraceID != "" {
+		w.Header().Set("X-Trace-ID", tc.TraceID)
+		w.Header().Set("X-Span-ID", tc.SpanID)
+	}
+
+	requestID := extractRequestID(ctx, r)
+
+	telemetry.SetSpanAttributes(ctx,
+		attribute.String("request_id", requestID),
+		attribute.String("truvag3.tool.name", "playwright-tool"),
+		attribute.String("truvag3.capability", "stealth_browser"),
+	)
+
+	telemetry.AddSpanEvent(ctx, "request_received",
+		attribute.String("request_id", requestID),
+		attribute.String("method", r.Method),
+		attribute.String("path", r.URL.Path),
+		attribute.String("operation", "stealth_browser"),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "Processing stealth_browser request", map[string]interface{}{
+			"operation":  "stealth_browser",
+			"method":     r.Method,
+			"request_id": requestID,
+		})
+	}
+
+	var req StealthBrowserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "stealth_browser",
+			"error_type", "decode_error",
+		)
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Failed to decode request", map[string]interface{}{
+				"operation":   "stealth_browser",
+				"error":       err.Error(),
+				"error_type":  "decode_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "Invalid request format", http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		err := fmt.Errorf("url is required")
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "stealth_browser",
+			"error_type", "validation_error",
+		)
+		if t.Logger != nil {
+			t.Logger.WarnWithContext(ctx, "Empty url in request", map[string]interface{}{
+				"operation":   "stealth_browser",
+				"error_type":  "validation_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "url is required", http.StatusBadRequest, "MISSING_URL")
+		return
+	}
+
+	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+		t.sendError(w, "url must start with http:// or https://", http.StatusBadRequest, "INVALID_URL")
+		return
+	}
+
+	if req.ExtractContent == "" {
+		req.ExtractContent = "text"
+	}
+	extractContent := strings.ToLower(req.ExtractContent)
+	if extractContent != "text" && extractContent != "html" && extractContent != "both" {
+		extractContent = "text"
+	}
+
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 60
+	}
+	if timeout > 120 {
+		timeout = 120
+	}
+
+	telemetry.SetSpanAttributes(ctx,
+		attribute.String("browser.url", req.URL),
+		attribute.Int("browser.timeout", timeout),
+		attribute.Bool("browser.screenshot", req.Screenshot),
+		attribute.String("browser.extract", extractContent),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "Launching stealth browser", map[string]interface{}{
+			"operation":       "stealth_browser",
+			"url":             req.URL,
+			"timeout":         timeout,
+			"screenshot":      req.Screenshot,
+			"extract_content": extractContent,
+			"request_id":      requestID,
+		})
+	}
+
+	telemetry.AddSpanEvent(ctx, "browser_launching",
+		attribute.String("request_id", requestID),
+		attribute.String("url", req.URL),
+		attribute.Int("timeout_seconds", timeout),
+	)
+
+	script := buildPlaywrightScript(req.URL, req.WaitFor, extractContent, req.Screenshot, timeout, req.JavaScript, req.UserAgent)
+
+	execTimeout := time.Duration(timeout+15) * time.Second
+	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "node", "-e", script)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	cmdStartTime := time.Now()
+	err := cmd.Run()
+	cmdDuration := time.Since(cmdStartTime)
+
+	if err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "stealth_browser",
+			"error_type", "browser_error",
+		)
+
+		errMsg := stderr.String()
+		if execCtx.Err() == context.DeadlineExceeded {
+			errMsg = fmt.Sprintf("Browser timed out after %d seconds", timeout)
+		}
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Stealth browser execution failed", map[string]interface{}{
+				"operation":       "stealth_browser",
+				"url":             req.URL,
+				"error":           errMsg,
+				"error_type":      "browser_error",
+				"cmd_duration_ms": cmdDuration.Milliseconds(),
+				"request_id":      requestID,
+				"status":          "failure",
+				"duration_ms":     time.Since(startTime).Milliseconds(),
+			})
+		}
+
+		t.sendError(w, fmt.Sprintf("Browser execution failed: %s", errMsg), http.StatusInternalServerError, "BROWSER_ERROR")
+		return
+	}
+
+	var result StealthBrowserResponse
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "stealth_browser",
+			"error_type", "parse_error",
+		)
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Failed to parse browser output", map[string]interface{}{
+				"operation":   "stealth_browser",
+				"error":       err.Error(),
+				"error_type":  "parse_error",
+				"stdout_len":  stdout.Len(),
+				"stderr":      stderr.String(),
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "Failed to parse browser output", http.StatusInternalServerError, "PARSE_ERROR")
+		return
+	}
+
+	result.DurationMs = cmdDuration.Milliseconds()
+
+	duration := time.Since(startTime)
+	telemetry.Histogram("playwright_tool.browser.duration_ms",
+		float64(cmdDuration.Milliseconds()),
+		"capability", "stealth_browser",
+	)
+	telemetry.Counter("playwright_tool.requests.total",
+		"capability", "stealth_browser",
+		"status", "success",
+	)
+	telemetry.RecordToolCall("playwright-tool", "stealth_browser", float64(duration.Milliseconds()), "success")
+
+	telemetry.AddSpanEvent(ctx, "stealth_browser_completed",
+		attribute.String("request_id", requestID),
+		attribute.String("url", result.URL),
+		attribute.String("title", result.Title),
+		attribute.Int("status_code", result.StatusCode),
+		attribute.Int64("cmd_duration_ms", cmdDuration.Milliseconds()),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "stealth_browser completed", map[string]interface{}{
+			"operation":       "stealth_browser",
+			"url":             result.URL,
+			"title":           result.Title,
+			"status_code":     result.StatusCode,
+			"has_screenshot":  result.ScreenshotBase64 != "",
+			"has_js_result":   result.JSResult != "",
+			"cmd_duration_ms": cmdDuration.Milliseconds(),
+			"status":          "success",
+			"duration_ms":     duration.Milliseconds(),
+			"request_id":      requestID,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(core.ToolResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
+// --- Handler: browser_test ---
+
+func (t *PlaywrightTool) handleBrowserTest(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
+	tc := telemetry.GetTraceContext(ctx)
+	if tc.TraceID != "" {
+		w.Header().Set("X-Trace-ID", tc.TraceID)
+		w.Header().Set("X-Span-ID", tc.SpanID)
+	}
+
+	requestID := extractRequestID(ctx, r)
+
+	telemetry.SetSpanAttributes(ctx,
+		attribute.String("request_id", requestID),
+		attribute.String("truvag3.tool.name", "playwright-tool"),
+		attribute.String("truvag3.capability", "browser_test"),
+	)
+
+	telemetry.AddSpanEvent(ctx, "request_received",
+		attribute.String("request_id", requestID),
+		attribute.String("method", r.Method),
+		attribute.String("path", r.URL.Path),
+		attribute.String("operation", "browser_test"),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "Processing browser_test request", map[string]interface{}{
+			"operation":  "browser_test",
+			"method":     r.Method,
+			"request_id": requestID,
+		})
+	}
+
+	var req BrowserTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "decode_error",
+		)
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Failed to decode request", map[string]interface{}{
+				"operation":   "browser_test",
+				"error":       err.Error(),
+				"error_type":  "decode_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "Invalid request format", http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		err := fmt.Errorf("url is required")
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "validation_error",
+		)
+		if t.Logger != nil {
+			t.Logger.WarnWithContext(ctx, "Empty url in request", map[string]interface{}{
+				"operation":   "browser_test",
+				"error_type":  "validation_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "url is required", http.StatusBadRequest, "MISSING_URL")
+		return
+	}
+
+	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+		err := fmt.Errorf("url must start with http:// or https://")
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "validation_error",
+		)
+		t.sendError(w, "url must start with http:// or https://", http.StatusBadRequest, "INVALID_URL")
+		return
+	}
+
+	if len(req.Actions) == 0 {
+		err := fmt.Errorf("actions array is required and must not be empty")
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "validation_error",
+		)
+		if t.Logger != nil {
+			t.Logger.WarnWithContext(ctx, "Empty actions array", map[string]interface{}{
+				"operation":   "browser_test",
+				"error_type":  "validation_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "actions array is required and must not be empty", http.StatusBadRequest, "MISSING_ACTIONS")
+		return
+	}
+
+	const maxActions = 200
+	if len(req.Actions) > maxActions {
+		err := fmt.Errorf("actions array exceeds maximum of %d steps (got %d)", maxActions, len(req.Actions))
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "validation_error",
+		)
+		if t.Logger != nil {
+			t.Logger.WarnWithContext(ctx, "Actions array too large", map[string]interface{}{
+				"operation":    "browser_test",
+				"error_type":   "validation_error",
+				"action_count": len(req.Actions),
+				"max_actions":  maxActions,
+				"request_id":   requestID,
+				"status":       "failure",
+				"duration_ms":  time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, fmt.Sprintf("actions array exceeds maximum of %d steps", maxActions), http.StatusBadRequest, "TOO_MANY_ACTIONS")
+		return
+	}
+
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 120
+	}
+	if timeout > 300 {
+		timeout = 300
+	}
+
+	viewportWidth := 1280
+	viewportHeight := 720
+	if req.Viewport != nil {
+		if req.Viewport.Width > 0 {
+			viewportWidth = req.Viewport.Width
+		}
+		if req.Viewport.Height > 0 {
+			viewportHeight = req.Viewport.Height
+		}
+	}
+
+	telemetry.SetSpanAttributes(ctx,
+		attribute.String("browser.url", req.URL),
+		attribute.Int("browser.timeout", timeout),
+		attribute.Int("browser.action_count", len(req.Actions)),
+		attribute.String("browser.viewport", fmt.Sprintf("%dx%d", viewportWidth, viewportHeight)),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "Launching browser test", map[string]interface{}{
+			"operation":    "browser_test",
+			"url":          req.URL,
+			"timeout":      timeout,
+			"action_count": len(req.Actions),
+			"viewport":     fmt.Sprintf("%dx%d", viewportWidth, viewportHeight),
+			"request_id":   requestID,
+		})
+	}
+
+	telemetry.AddSpanEvent(ctx, "browser_test_launching",
+		attribute.String("request_id", requestID),
+		attribute.String("url", req.URL),
+		attribute.Int("action_count", len(req.Actions)),
+		attribute.Int("timeout_seconds", timeout),
+	)
+
+	script := buildPlaywrightTestScript(req.URL, req.Actions, timeout, viewportWidth, viewportHeight)
+
+	execTimeout := time.Duration(timeout+15) * time.Second
+	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "node", "-e", script)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	cmdStartTime := time.Now()
+	err := cmd.Run()
+	cmdDuration := time.Since(cmdStartTime)
+
+	if err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "browser_error",
+		)
+
+		errMsg := stderr.String()
+		if execCtx.Err() == context.DeadlineExceeded {
+			errMsg = fmt.Sprintf("Browser test timed out after %d seconds", timeout)
+		}
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Browser test execution failed", map[string]interface{}{
+				"operation":       "browser_test",
+				"url":             req.URL,
+				"error":           errMsg,
+				"error_type":      "browser_error",
+				"cmd_duration_ms": cmdDuration.Milliseconds(),
+				"request_id":      requestID,
+				"status":          "failure",
+				"duration_ms":     time.Since(startTime).Milliseconds(),
+			})
+		}
+
+		t.sendError(w, fmt.Sprintf("Browser test execution failed: %s", errMsg), http.StatusInternalServerError, "BROWSER_ERROR")
+		return
+	}
+
+	var result BrowserTestResponse
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		telemetry.Counter("playwright_tool.errors.total",
+			"module", "playwright-tool",
+			"capability", "browser_test",
+			"error_type", "parse_error",
+		)
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "Failed to parse browser test output", map[string]interface{}{
+				"operation":   "browser_test",
+				"error":       err.Error(),
+				"error_type":  "parse_error",
+				"stdout_len":  stdout.Len(),
+				"stderr":      stderr.String(),
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
+			})
+		}
+		t.sendError(w, "Failed to parse browser test output", http.StatusInternalServerError, "PARSE_ERROR")
+		return
+	}
+
+	result.DurationMs = cmdDuration.Milliseconds()
+
+	duration := time.Since(startTime)
+	telemetry.Histogram("playwright_tool.browser.duration_ms",
+		float64(cmdDuration.Milliseconds()),
+		"capability", "browser_test",
+	)
+	telemetry.Counter("playwright_tool.requests.total",
+		"capability", "browser_test",
+		"status", "success",
+	)
+	telemetry.RecordToolCall("playwright-tool", "browser_test", float64(duration.Milliseconds()), "success")
+
+	telemetry.AddSpanEvent(ctx, "browser_test_completed",
+		attribute.String("request_id", requestID),
+		attribute.String("url", result.URL),
+		attribute.Bool("passed", result.Passed),
+		attribute.Int("total_steps", result.TotalSteps),
+		attribute.Int("passed_steps", result.PassedSteps),
+		attribute.Int("failed_steps", result.FailedSteps),
+		attribute.Int64("cmd_duration_ms", cmdDuration.Milliseconds()),
+	)
+
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "browser_test completed", map[string]interface{}{
+			"operation":       "browser_test",
+			"url":             result.URL,
+			"passed":          result.Passed,
+			"total_steps":     result.TotalSteps,
+			"passed_steps":    result.PassedSteps,
+			"failed_steps":    result.FailedSteps,
+			"cmd_duration_ms": cmdDuration.Milliseconds(),
+			"status":          "success",
+			"duration_ms":     duration.Milliseconds(),
+			"request_id":      requestID,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(core.ToolResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
 // --- Helpers ---
 
 // resolveReusableScript fetches a stored script from S3 by name
@@ -988,4 +1526,272 @@ func extractSite(rawURL string) string {
 		return rawURL
 	}
 	return u.Hostname()
+}
+
+// buildPlaywrightScript generates a Node.js script that uses playwright-extra
+// with the stealth plugin to navigate a URL and extract content.
+func buildPlaywrightScript(url, waitFor, extractContent string, screenshot bool, timeout int, javascript, userAgent string) string {
+	timeoutMs := timeout * 1000
+
+	escapeJS := func(s string) string {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		s = strings.ReplaceAll(s, `'`, `\'`)
+		s = strings.ReplaceAll(s, "\n", `\n`)
+		s = strings.ReplaceAll(s, "\r", `\r`)
+		return s
+	}
+
+	var waitForBlock string
+	if waitFor != "" {
+		waitForBlock = fmt.Sprintf(`
+    await page.waitForSelector('%s', { timeout: %d });`, escapeJS(waitFor), timeoutMs)
+	}
+
+	var contextOptions string
+	if userAgent != "" {
+		contextOptions = fmt.Sprintf(`{ userAgent: '%s' }`, escapeJS(userAgent))
+	} else {
+		contextOptions = `{}`
+	}
+
+	var extractBlock string
+	switch extractContent {
+	case "html":
+		extractBlock = `
+    result.html_content = await page.content();`
+	case "both":
+		extractBlock = `
+    result.text_content = await page.evaluate(() => document.body.innerText);
+    result.html_content = await page.content();`
+	default: // "text"
+		extractBlock = `
+    result.text_content = await page.evaluate(() => document.body.innerText);`
+	}
+
+	var screenshotBlock string
+	if screenshot {
+		screenshotBlock = `
+    const screenshotBuf = await page.screenshot({ fullPage: true });
+    result.screenshot_base64 = screenshotBuf.toString('base64');`
+	}
+
+	var jsBlock string
+	if javascript != "" {
+		jsBlock = fmt.Sprintf(`
+    try {
+      const jsResult = await page.evaluate(async () => { %s });
+      result.js_result = String(jsResult);
+    } catch (jsErr) {
+      result.js_result = 'JS_ERROR: ' + jsErr.message;
+    }`, javascript)
+	}
+
+	script := fmt.Sprintf(`
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth');
+chromium.use(stealth());
+
+(async () => {
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    const context = await browser.newContext(%s);
+    const page = await context.newPage();
+    const response = await page.goto('%s', {
+      waitUntil: 'domcontentloaded',
+      timeout: %d
+    });
+    %s
+    const result = {
+      url: page.url(),
+      title: await page.title(),
+      status_code: response ? response.status() : 0
+    };
+    %s%s%s
+    console.log(JSON.stringify(result));
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  } finally {
+    if (browser) await browser.close();
+  }
+})();
+`, contextOptions, escapeJS(url), timeoutMs, waitForBlock, extractBlock, screenshotBlock, jsBlock)
+
+	return script
+}
+
+// buildPlaywrightTestScript generates a Node.js script that uses playwright-extra
+// with the stealth plugin to execute an ordered sequence of browser test actions.
+// Each action maps 1:1 to a Playwright API call and produces a per-step result.
+func buildPlaywrightTestScript(startURL string, actions []BrowserAction, timeoutSec, viewportWidth, viewportHeight int) string {
+	overallTimeoutMs := timeoutSec * 1000
+
+	escapeJS := func(s string) string {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		s = strings.ReplaceAll(s, `'`, `\'`)
+		s = strings.ReplaceAll(s, "\n", `\n`)
+		s = strings.ReplaceAll(s, "\r", `\r`)
+		return s
+	}
+
+	var actionBlocks strings.Builder
+	for i, action := range actions {
+		stepTimeout := action.Timeout
+		if stepTimeout <= 0 {
+			stepTimeout = 10000
+		}
+
+		selector := escapeJS(action.Selector)
+		value := escapeJS(action.Value)
+		expected := escapeJS(action.Expected)
+
+		var jsCode string
+
+		switch action.Action {
+		case "click":
+			jsCode = fmt.Sprintf(`await page.click('%s', { timeout: %d });`, selector, stepTimeout)
+		case "fill":
+			jsCode = fmt.Sprintf(`await page.fill('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
+		case "select":
+			jsCode = fmt.Sprintf(`await page.selectOption('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
+		case "check":
+			jsCode = fmt.Sprintf(`await page.check('%s', { timeout: %d });`, selector, stepTimeout)
+		case "uncheck":
+			jsCode = fmt.Sprintf(`await page.uncheck('%s', { timeout: %d });`, selector, stepTimeout)
+		case "hover":
+			jsCode = fmt.Sprintf(`await page.hover('%s', { timeout: %d });`, selector, stepTimeout)
+		case "press":
+			jsCode = fmt.Sprintf(`await page.press('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
+		case "navigate":
+			jsCode = fmt.Sprintf(`await page.goto('%s', { waitUntil: 'domcontentloaded', timeout: %d });`, value, stepTimeout)
+		case "wait_for_selector":
+			jsCode = fmt.Sprintf(`await page.waitForSelector('%s', { state: 'visible', timeout: %d });`, selector, stepTimeout)
+		case "wait_for_url":
+			jsCode = fmt.Sprintf(`await page.waitForURL('%s', { timeout: %d });`, value, stepTimeout)
+		case "wait_for_network_idle":
+			jsCode = `await page.waitForLoadState('networkidle');`
+		case "screenshot":
+			jsCode = fmt.Sprintf(`screenshots['%d'] = (await page.screenshot({ fullPage: true })).toString('base64');`, i)
+		case "assert":
+			jsCode = buildAssertionJS(action.Assertion, selector, expected, stepTimeout)
+		default:
+			actionBlocks.WriteString(fmt.Sprintf(`
+  // Step %d: unknown action '%s'
+  results.push({ step: %d, action: '%s', selector: '%s', passed: false, error: 'Unknown action type: %s', duration_ms: 0 });
+`, i, escapeJS(action.Action), i, escapeJS(action.Action), selector, escapeJS(action.Action)))
+			continue
+		}
+
+		if action.Action == "assert" {
+			actionBlocks.WriteString(fmt.Sprintf(`
+  // Step %d: assert %s
+  { const start_%d = Date.now();
+    try {
+      let passed = false;
+      %s
+      results.push({ step: %d, action: 'assert', selector: '%s', passed: passed, duration_ms: Date.now() - start_%d });
+    } catch(e) {
+      results.push({ step: %d, action: 'assert', selector: '%s', passed: false, error: e.message, duration_ms: Date.now() - start_%d });
+    }
+  }
+`, i, escapeJS(action.Assertion), i, jsCode, i, selector, i, i, selector, i))
+		} else {
+			actionBlocks.WriteString(fmt.Sprintf(`
+  // Step %d: %s
+  { const start_%d = Date.now();
+    try {
+      %s
+      results.push({ step: %d, action: '%s', selector: '%s', passed: true, duration_ms: Date.now() - start_%d });
+    } catch(e) {
+      results.push({ step: %d, action: '%s', selector: '%s', passed: false, error: e.message, duration_ms: Date.now() - start_%d });
+    }
+  }
+`, i, escapeJS(action.Action), i, jsCode, i, escapeJS(action.Action), selector, i, i, escapeJS(action.Action), selector, i))
+		}
+	}
+
+	script := fmt.Sprintf(`
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth');
+chromium.use(stealth());
+
+(async () => {
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    const context = await browser.newContext({ viewport: { width: %d, height: %d } });
+    const page = await context.newPage();
+    const results = [];
+    const screenshots = {};
+    const consoleLog = [];
+
+    page.on('console', msg => consoleLog.push('[' + msg.type() + '] ' + msg.text()));
+
+    await page.goto('%s', { waitUntil: 'domcontentloaded', timeout: %d });
+%s
+    const passed = results.every(r => r.passed);
+    console.log(JSON.stringify({
+      url: page.url(),
+      passed: passed,
+      total_steps: results.length,
+      passed_steps: results.filter(r => r.passed).length,
+      failed_steps: results.filter(r => !r.passed).length,
+      steps: results,
+      screenshots: screenshots,
+      console_log: consoleLog
+    }));
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  } finally {
+    if (browser) await browser.close();
+  }
+})();
+`, viewportWidth, viewportHeight, escapeJS(startURL), overallTimeoutMs, actionBlocks.String())
+
+	return script
+}
+
+// buildAssertionJS generates the JavaScript code for an assertion action.
+// It sets a 'passed' boolean variable that the caller wraps in try/catch.
+func buildAssertionJS(assertion, selector, expected string, timeoutMs int) string {
+	switch assertion {
+	case "visible":
+		return fmt.Sprintf(`await page.locator('%s').waitFor({ state: 'visible', timeout: %d }); passed = true;`, selector, timeoutMs)
+	case "hidden":
+		return fmt.Sprintf(`await page.locator('%s').waitFor({ state: 'hidden', timeout: %d }); passed = true;`, selector, timeoutMs)
+	case "text_contains":
+		return fmt.Sprintf(`const txt = await page.locator('%s').textContent({ timeout: %d }); passed = txt !== null && txt.includes('%s');`, selector, timeoutMs, expected)
+	case "text_equals":
+		return fmt.Sprintf(`const txt = await page.locator('%s').textContent({ timeout: %d }); passed = txt !== null && txt.trim() === '%s';`, selector, timeoutMs, expected)
+	case "url_contains":
+		return fmt.Sprintf(`passed = page.url().includes('%s');`, expected)
+	case "url_equals":
+		return fmt.Sprintf(`passed = page.url() === '%s';`, expected)
+	case "count_equals":
+		return fmt.Sprintf(`passed = (await page.locator('%s').count()) === parseInt('%s');`, selector, expected)
+	case "has_attribute":
+		// Expected format: "attr=value"
+		return fmt.Sprintf(`{
+      const parts = '%s'.split('=');
+      const attrName = parts[0];
+      const attrVal = parts.slice(1).join('=');
+      const actual = await page.locator('%s').getAttribute(attrName, { timeout: %d });
+      passed = actual === attrVal;
+    }`, expected, selector, timeoutMs)
+	case "has_class":
+		return fmt.Sprintf(`{
+      const cls = await page.locator('%s').getAttribute('class', { timeout: %d });
+      passed = cls !== null && cls.includes('%s');
+    }`, selector, timeoutMs, expected)
+	default:
+		return fmt.Sprintf(`passed = false; /* unknown assertion type: %s */`, assertion)
+	}
 }

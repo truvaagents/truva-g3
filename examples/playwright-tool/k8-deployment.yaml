@@ -70,7 +70,18 @@ spec:
           value: "true"
         - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
           value: "30s"
-        # S3 Configuration (AWS S3 — no S3_ENDPOINT means real AWS)
+        # S3 Configuration:
+        # - S3_BUCKET / S3_REGION are hardcoded here because the ConfigMap
+        #   built by truvag3_create_configmap filters out non-TRUVAG3_* vars
+        #   from .env (see examples/k8-deployment/setup-env-lib.sh:171). If
+        #   you change the bucket, edit this manifest, not the .env.
+        # - S3_ENDPOINT is intentionally NOT set — the AWS SDK falls back to
+        #   the standard AWS endpoint. For in-cluster MinIO, add an explicit
+        #   env entry: S3_ENDPOINT=http://minio.truvag3-examples:9000
+        # - S3_ACCESS_KEY / S3_SECRET_KEY come from the secret built by
+        #   setup.sh from .env. optional:true means an empty/missing secret
+        #   key won't fail pod startup — main.go falls through to the AWS
+        #   default credential chain (IAM role, etc.) if these are unset.
         - name: S3_BUCKET
           value: "truvag3-qa-playwright"
         - name: S3_REGION
@@ -80,16 +91,18 @@ spec:
             secretKeyRef:
               name: playwright-s3-credentials
               key: S3_ACCESS_KEY
+              optional: true
         - name: S3_SECRET_KEY
           valueFrom:
             secretKeyRef:
               name: playwright-s3-credentials
               key: S3_SECRET_KEY
+              optional: true
         # Playwright script directory
         - name: PLAYWRIGHT_SCRIPT_DIR
           value: "/app/scripts"
-        # Redis DB for QA data
-        - name: QA_REDIS_DB
+        # Redis DB for QA data (must match the env var read by main.go)
+        - name: REDIS_QA_DB
           value: "9"
         - name: DEV_MODE
           value: "false"

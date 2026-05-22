@@ -33,34 +33,23 @@ type ListTimezonesRequest struct {
 // DateArithmeticRequest represents the input for date_arithmetic
 type DateArithmeticRequest struct {
 	Date      string `json:"date"`               // Required: YYYY-MM-DD or ISO 8601
-	Operation string `json:"operation"`           // Required: "add" or "subtract"
-	Value     int    `json:"value"`               // Required: number of units
-	Unit      string `json:"unit"`                // Required: "days"|"hours"|"minutes"|"weeks"|"months"|"years"
-	Timezone  string `json:"timezone,omitempty"`  // Optional: timezone for the calculation
+	Operation string `json:"operation"`          // Required: "add" or "subtract"
+	Value     int    `json:"value"`              // Required: number of units
+	Unit      string `json:"unit"`               // Required: "days"|"hours"|"minutes"|"weeks"|"months"|"years"
+	Timezone  string `json:"timezone,omitempty"` // Optional: timezone for the calculation
 }
 
 // ExecuteCommandRequest represents the input for execute_command
 type ExecuteCommandRequest struct {
-	Command          string `json:"command"`                      // Required: shell command to execute
-	Timeout          int    `json:"timeout,omitempty"`            // Optional: timeout in seconds (default 30, max 300)
-	WorkingDirectory string `json:"working_directory,omitempty"`  // Optional: working directory
+	Command          string `json:"command"`                     // Required: shell command to execute
+	Timeout          int    `json:"timeout,omitempty"`           // Optional: timeout in seconds (default 30, max 300)
+	WorkingDirectory string `json:"working_directory,omitempty"` // Optional: working directory
 }
 
 // GenerateIDRequest represents the input for generate_id
 type GenerateIDRequest struct {
 	Type  string `json:"type,omitempty"`  // Optional: "uuid"|"ulid"|"nanoid" (default "uuid")
 	Count int    `json:"count,omitempty"` // Optional: number of IDs (default 1, max 100)
-}
-
-// StealthBrowserRequest represents the input for stealth_browser
-type StealthBrowserRequest struct {
-	URL            string `json:"url"`                        // Required: URL to navigate to
-	WaitFor        string `json:"wait_for,omitempty"`         // Optional: CSS selector to wait for before extracting
-	ExtractContent string `json:"extract_content,omitempty"`  // Optional: "text"|"html"|"both" (default "text")
-	Screenshot     bool   `json:"screenshot,omitempty"`       // Optional: capture screenshot (default false)
-	Timeout        int    `json:"timeout,omitempty"`          // Optional: navigation timeout in seconds (default 30, max 120)
-	JavaScript     string `json:"javascript,omitempty"`       // Optional: JS to execute after page load
-	UserAgent      string `json:"user_agent,omitempty"`       // Optional: custom user-agent override
 }
 
 // --- Response Types ---
@@ -122,79 +111,20 @@ type GenerateIDResponse struct {
 	IDs  []string `json:"ids"`
 }
 
-// StealthBrowserResponse represents the output for stealth_browser
-type StealthBrowserResponse struct {
-	URL              string `json:"url"`                          // Final URL (may differ from input due to redirects)
-	Title            string `json:"title"`                        // Page title
-	TextContent      string `json:"text_content,omitempty"`       // Extracted text (if extract_content is text or both)
-	HTMLContent      string `json:"html_content,omitempty"`       // Extracted HTML (if extract_content is html or both)
-	ScreenshotBase64 string `json:"screenshot_base64,omitempty"`  // Base64-encoded PNG screenshot
-	JSResult         string `json:"js_result,omitempty"`          // Result of JavaScript execution
-	StatusCode       int    `json:"status_code"`                  // HTTP response status code
-	DurationMs       int64  `json:"duration_ms"`                  // Browser operation duration
+// SleepRequest represents the input for sleep
+type SleepRequest struct {
+	DurationSeconds int    `json:"duration_seconds"` // Required: seconds to sleep (1-120)
+	Reason          string `json:"reason,omitempty"` // Optional: why the pause is needed
 }
 
-// BrowserTestRequest represents the input for browser_test (SPA UI testing)
-type BrowserTestRequest struct {
-	URL      string          `json:"url"`                // Required: starting URL
-	Actions  []BrowserAction `json:"actions"`            // Required: ordered test steps
-	Timeout  int             `json:"timeout,omitempty"`  // Optional: overall test timeout in seconds (default 120, max 300)
-	Viewport *Viewport       `json:"viewport,omitempty"` // Optional: viewport size (default 1280x720)
-}
-
-// Viewport represents browser viewport dimensions for responsive testing
-type Viewport struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
-}
-
-// BrowserAction represents a single test step in a browser_test sequence
-type BrowserAction struct {
-	Action    string `json:"action"`              // Action type: click, fill, select, check, uncheck, hover, press, navigate, wait_for_selector, wait_for_url, wait_for_network_idle, screenshot, assert
-	Selector  string `json:"selector,omitempty"`  // CSS or Playwright selector for the target element
-	Value     string `json:"value,omitempty"`     // Input value / target URL / key name
-	Timeout   int    `json:"timeout,omitempty"`   // Per-step timeout in ms (default 10000)
-	Assertion string `json:"assertion,omitempty"` // Assertion type (for assert action): visible, hidden, text_contains, text_equals, url_contains, url_equals, count_equals, has_attribute, has_class
-	Expected  string `json:"expected,omitempty"`  // Expected value for assertions
-}
-
-// BrowserTestResponse represents the output for browser_test
-type BrowserTestResponse struct {
-	URL         string              `json:"url"`                   // Final page URL
-	Passed      bool                `json:"passed"`                // Overall pass/fail
-	TotalSteps  int                 `json:"total_steps"`           // Total number of steps
-	PassedSteps int                 `json:"passed_steps"`          // Number of passed steps
-	FailedSteps int                 `json:"failed_steps"`          // Number of failed steps
-	Steps       []BrowserStepResult `json:"steps"`                 // Per-step results
-	Screenshots map[string]string   `json:"screenshots,omitempty"` // step_index -> base64 PNG
-	ConsoleLog  []string            `json:"console_log,omitempty"` // Browser console output
-	DurationMs  int64               `json:"duration_ms"`           // Total browser execution duration
-}
-
-// BrowserStepResult represents the result of a single test step
-type BrowserStepResult struct {
-	Step       int    `json:"step"`                // 0-indexed step number
-	Action     string `json:"action"`              // Action type that was executed
-	Selector   string `json:"selector,omitempty"`  // Selector used (if any)
-	Passed     bool   `json:"passed"`              // Whether the step passed
-	Error      string `json:"error,omitempty"`     // Error message if failed
-	DurationMs int64  `json:"duration_ms"`         // Step execution duration
-}
-
-// WaitRequest represents the input for wait
-type WaitRequest struct {
-	DurationSeconds int    `json:"duration_seconds"`    // Required: seconds to wait (1-120)
-	Reason          string `json:"reason,omitempty"`     // Optional: why the wait is needed
-}
-
-// WaitResponse represents the output for wait
-type WaitResponse struct {
+// SleepResponse represents the output for sleep
+type SleepResponse struct {
 	RequestedSeconds int    `json:"requested_seconds"` // What the caller asked for
-	DurationSeconds  int    `json:"duration_seconds"`  // How long was actually waited (post-clamp)
-	Reason           string `json:"reason,omitempty"`   // Echo of input
-	StartedAt        string `json:"started_at"`         // RFC 3339 UTC timestamp
-	EndedAt          string `json:"ended_at"`           // RFC 3339 UTC timestamp
-	Cancelled        bool   `json:"cancelled"`          // True if ctx cancelled early
+	DurationSeconds  int    `json:"duration_seconds"`  // How long was actually slept (post-clamp)
+	Reason           string `json:"reason,omitempty"`  // Echo of input
+	StartedAt        string `json:"started_at"`        // RFC 3339 UTC timestamp
+	EndedAt          string `json:"ended_at"`          // RFC 3339 UTC timestamp
+	Cancelled        bool   `json:"cancelled"`         // True if ctx cancelled early
 }
 
 // --- Timezone Data ---
@@ -433,7 +363,8 @@ func (s *SystemTool) registerCapabilities() {
 		Name: "execute_command",
 		Description: "Executes a shell command and returns stdout, stderr, and exit code. " +
 			"Runs inside an isolated container with non-root user. " +
-			"Available tools: bash, curl, jq, bc, git, python3, pip3, grep, awk, sed. " +
+			"Available tools: bash, python3, pip3, curl, jq, bc, git, grep, awk, sed, openssl. " +
+			"Network diagnostics: dig (dnsutils), nc (netcat-openbsd), traceroute, ping. " +
 			"Pre-installed Python packages: numpy, requests. " +
 			"To install additional packages at runtime: pip3 install --user <package>.",
 		InputTypes:  []string{"json"},
@@ -510,186 +441,18 @@ func (s *SystemTool) registerCapabilities() {
 		},
 	})
 
-	// Capability 7: Stealth Browser
-	// Auto-generated endpoint: /api/capabilities/stealth_browser
-	// Schema endpoint: /api/capabilities/stealth_browser/schema
+	// Capability 7: Sleep
+	// Auto-generated endpoint: /api/capabilities/sleep
 	s.RegisterCapability(core.Capability{
-		Name: "stealth_browser",
-		Description: "Opens a URL in a headless stealth Chromium browser (with anti-detection) and extracts page content. " +
-			"Uses Playwright with stealth plugin to bypass bot-detection, CAPTCHAs, and fingerprinting. " +
-			"Use for: scraping JavaScript-rendered pages, accessing bot-protected sites, taking screenshots, " +
-			"executing a single JS snippet on a page. " +
-			"Returns: page title, text/HTML content, optional screenshot (base64 PNG), optional JS execution result. " +
-			"NOTE: For multi-step interactions (clicking buttons, filling forms, navigating between pages, " +
-			"asserting element state), use the browser_test capability instead — it supports ordered action " +
-			"sequences with per-step pass/fail reporting. stealth_browser is for single-page content extraction only. " +
-			"IMPORTANT: Each call launches a full Chromium browser process. To avoid resource exhaustion, " +
-			"chain stealth_browser steps sequentially using depends_on rather than running them all in parallel. " +
-			"For multiple page loads, use at most 2 concurrent calls. Use timeout of 60 for JavaScript-heavy SPA sites.",
-		InputTypes:  []string{"json"},
-		OutputTypes: []string{"json"},
-		Handler:     s.handleStealthBrowser,
-
-		InputSummary: &core.SchemaSummary{
-			RequiredFields: []core.FieldHint{
-				{
-					Name:        "url",
-					Type:        "string",
-					Example:     "https://example.com",
-					Description: "Full URL to navigate to (must include protocol, e.g. https://)",
-				},
-			},
-			OptionalFields: []core.FieldHint{
-				{
-					Name:        "wait_for",
-					Type:        "string",
-					Example:     "#main-content",
-					Description: "CSS selector to wait for before extracting content (useful for JS-rendered pages)",
-				},
-				{
-					Name:        "extract_content",
-					Type:        "string",
-					Example:     "text",
-					Description: "What to extract: text (visible text), html (full HTML), or both (default: text)",
-				},
-				{
-					Name:        "screenshot",
-					Type:        "boolean",
-					Example:     "false",
-					Description: "Capture a full-page screenshot as base64 PNG (default: false)",
-				},
-				{
-					Name:        "timeout",
-					Type:        "integer",
-					Example:     "60",
-					Description: "Navigation timeout in seconds (default 60, max 120). Use 60+ for JavaScript-heavy SPA sites.",
-				},
-				{
-					Name:        "javascript",
-					Type:        "string",
-					Example:     "return document.querySelectorAll('h1').length",
-					Description: "JavaScript code to execute on the page after load. Must include an explicit 'return' statement to return a value. Supports multi-statement code and async/await.",
-				},
-				{
-					Name:        "user_agent",
-					Type:        "string",
-					Example:     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-					Description: "Custom User-Agent string to override the default browser UA",
-				},
-			},
-		},
-
-		OutputSummary: &core.SchemaSummary{
-			RequiredFields: []core.FieldHint{
-				{Name: "url", Type: "string", Description: "Final URL (may differ from input due to redirects)"},
-				{Name: "title", Type: "string", Description: "Page title"},
-				{Name: "status_code", Type: "number", Description: "HTTP response status code"},
-				{Name: "duration_ms", Type: "number", Description: "Browser operation duration in milliseconds"},
-			},
-			OptionalFields: []core.FieldHint{
-				{Name: "text_content", Type: "string", Description: "Extracted visible text content"},
-				{Name: "html_content", Type: "string", Description: "Extracted HTML content"},
-				{Name: "screenshot_base64", Type: "string", Description: "Base64-encoded PNG screenshot"},
-				{Name: "js_result", Type: "string", Description: "Result of JavaScript execution"},
-			},
-		},
-	})
-
-	// Capability 8: Browser Test (SPA UI Testing)
-	// Auto-generated endpoint: /api/capabilities/browser_test
-	// Schema endpoint: /api/capabilities/browser_test/schema (auto-generated from InputSummary)
-	s.RegisterCapability(core.Capability{
-		Name: "browser_test",
-		Description: "Executes a multi-step UI test in a headless Chromium browser using Playwright with stealth anti-detection. " +
-			"Designed for testing Single Page Applications (Vue.js, React, Angular). " +
-			"Use for: login flows, form submissions, navigation testing, CRUD operations, " +
-			"responsive layout verification, SPA route transitions. " +
-			"SPA TESTING GUIDELINES: After clicks that trigger route changes, add wait_for_url before assertions. " +
-			"After navigation, add wait_for_network_idle to let async data fetches complete. " +
-			"Prefer [data-testid='...'] selectors over CSS class selectors for stability. " +
-			"Use wait_for_selector before interacting with dynamically rendered components. " +
-			"RESOURCE USAGE: Each call launches a full Chromium browser process. " +
-			"Chain browser_test steps sequentially using depends_on rather than running them in parallel. " +
-			"Use at most 2 concurrent calls.",
-		InputTypes:  []string{"json"},
-		OutputTypes: []string{"json"},
-		Handler:     s.handleBrowserTest,
-
-		InputSummary: &core.SchemaSummary{
-			RequiredFields: []core.FieldHint{
-				{
-					Name:        "url",
-					Type:        "string",
-					Example:     "https://myapp.com/login",
-					Description: "Full starting URL to navigate to (must include protocol, e.g. https://)",
-				},
-				{
-					Name: "actions",
-					Type: "array",
-					Example: `[{"action":"wait_for_selector","selector":"[data-testid='email-input']"},` +
-						`{"action":"fill","selector":"[data-testid='email-input']","value":"user@test.com"},` +
-						`{"action":"click","selector":"[data-testid='login-button']"},` +
-						`{"action":"wait_for_url","value":"**/dashboard**"},` +
-						`{"action":"wait_for_network_idle"},` +
-						`{"action":"assert","assertion":"visible","selector":"[data-testid='welcome-message']"},` +
-						`{"action":"assert","assertion":"text_contains","selector":"[data-testid='welcome-message']","expected":"Welcome"},` +
-						`{"action":"screenshot"}]`,
-					Description: "Ordered array of test steps. Each step is an object with: " +
-						"'action' (required: click/fill/select/check/uncheck/hover/press/navigate/" +
-						"wait_for_selector/wait_for_url/wait_for_network_idle/screenshot/assert), " +
-						"'selector' (CSS or [data-testid='...'] selector for the target element), " +
-						"'value' (input text for fill, option for select, key for press, URL for navigate/wait_for_url), " +
-						"'timeout' (per-step timeout in ms, default 10000), " +
-						"'assertion' (for assert action: visible/hidden/text_contains/text_equals/" +
-						"url_contains/url_equals/count_equals/has_attribute/has_class), " +
-						"'expected' (expected value for text_contains/text_equals/url_contains/url_equals/count_equals/has_attribute/has_class assertions)",
-				},
-			},
-			OptionalFields: []core.FieldHint{
-				{
-					Name:        "timeout",
-					Type:        "number",
-					Example:     "120",
-					Description: "Overall test timeout in seconds (default 120, max 300). Use 120+ for multi-step SPA flows.",
-				},
-				{
-					Name:        "viewport",
-					Type:        "object",
-					Example:     `{"width": 1280, "height": 720}`,
-					Description: "Browser viewport dimensions for responsive testing. Default: 1280x720. Use {\"width\": 375, \"height\": 812} for mobile (iPhone).",
-				},
-			},
-		},
-
-		OutputSummary: &core.SchemaSummary{
-			RequiredFields: []core.FieldHint{
-				{Name: "url", Type: "string", Description: "Final page URL"},
-				{Name: "passed", Type: "boolean", Description: "Overall pass/fail result"},
-				{Name: "total_steps", Type: "number", Description: "Total number of test steps"},
-				{Name: "passed_steps", Type: "number", Description: "Number of passed steps"},
-				{Name: "failed_steps", Type: "number", Description: "Number of failed steps"},
-				{Name: "steps", Type: "array", Description: "Per-step results with step number, action, passed status, and error if any"},
-				{Name: "duration_ms", Type: "number", Description: "Total browser execution duration in milliseconds"},
-			},
-			OptionalFields: []core.FieldHint{
-				{Name: "screenshots", Type: "object", Description: "Map of step_index to base64 PNG screenshots"},
-				{Name: "console_log", Type: "array", Description: "Browser console output"},
-			},
-		},
-	})
-
-	// Capability 9: Wait
-	// Auto-generated endpoint: /api/capabilities/wait
-	s.RegisterCapability(core.Capability{
-		Name: "wait",
-		Description: "Waits (sleeps) for a short, bounded duration before returning. " +
+		Name: "sleep",
+		Description: "Sleeps (pauses) for a short, bounded duration before returning. " +
 			"Use this for brief in-line pauses — e.g., to let an external system settle after a write, " +
 			"or to space out polling checks. Max 120 seconds; requests above are clamped. " +
-			"For longer or recurring waits, use scheduler-tool/schedule_task instead. " +
+			"For longer or recurring pauses, use scheduler-tool/schedule_task instead. " +
 			"Required: duration_seconds (integer, 1-120). Optional: reason (string, echoed into traces).",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
-		Handler:     s.handleWait,
+		Handler:     s.handleSleep,
 
 		// Phase 2: Field hints for AI payload generation
 		InputSummary: &core.SchemaSummary{
@@ -698,7 +461,7 @@ func (s *SystemTool) registerCapabilities() {
 					Name:        "duration_seconds",
 					Type:        "integer",
 					Example:     "30",
-					Description: "How long to wait, in seconds. Must be between 1 and 120.",
+					Description: "How long to sleep, in seconds. Must be between 1 and 120.",
 				},
 			},
 			OptionalFields: []core.FieldHint{
@@ -706,7 +469,7 @@ func (s *SystemTool) registerCapabilities() {
 					Name:        "reason",
 					Type:        "string",
 					Example:     "waiting for kubectl rollout to propagate",
-					Description: "Optional explanation of why the wait is needed; echoed into traces and logs.",
+					Description: "Optional explanation of why the pause is needed; echoed into traces and logs.",
 				},
 			},
 		},
@@ -714,10 +477,10 @@ func (s *SystemTool) registerCapabilities() {
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
 				{Name: "requested_seconds", Type: "integer", Example: "30", Description: "Duration the caller requested"},
-				{Name: "duration_seconds", Type: "integer", Example: "30", Description: "Duration actually waited (post-clamp or post-cancel)"},
-				{Name: "started_at", Type: "string", Description: "RFC 3339 UTC timestamp when the wait began"},
-				{Name: "ended_at", Type: "string", Description: "RFC 3339 UTC timestamp when the wait ended"},
-				{Name: "cancelled", Type: "boolean", Example: "false", Description: "True if the wait was cancelled by context before completing"},
+				{Name: "duration_seconds", Type: "integer", Example: "30", Description: "Duration actually slept (post-clamp or post-cancel)"},
+				{Name: "started_at", Type: "string", Description: "RFC 3339 UTC timestamp when the sleep began"},
+				{Name: "ended_at", Type: "string", Description: "RFC 3339 UTC timestamp when the sleep ended"},
+				{Name: "cancelled", Type: "boolean", Example: "false", Description: "True if the sleep was cancelled by context before completing"},
 			},
 			OptionalFields: []core.FieldHint{
 				{Name: "reason", Type: "string", Description: "Echo of the reason supplied in the request"},

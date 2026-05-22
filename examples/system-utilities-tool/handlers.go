@@ -344,12 +344,12 @@ func (s *SystemTool) handleConvertTimezone(w http.ResponseWriter, r *http.Reques
 		)
 		if s.Logger != nil {
 			s.Logger.WarnWithContext(ctx, "Invalid from_timezone", map[string]interface{}{
-				"operation":      "convert_timezone",
-				"from_timezone":  req.FromTimezone,
-				"error_type":     "invalid_timezone",
-				"request_id":     requestID,
-				"status":         "failure",
-				"duration_ms":    time.Since(startTime).Milliseconds(),
+				"operation":     "convert_timezone",
+				"from_timezone": req.FromTimezone,
+				"error_type":    "invalid_timezone",
+				"request_id":    requestID,
+				"status":        "failure",
+				"duration_ms":   time.Since(startTime).Milliseconds(),
 			})
 		}
 		sendError(w, "INVALID_TIMEZONE", fmt.Sprintf("Unknown from_timezone: %s", req.FromTimezone), http.StatusBadRequest)
@@ -367,12 +367,12 @@ func (s *SystemTool) handleConvertTimezone(w http.ResponseWriter, r *http.Reques
 		)
 		if s.Logger != nil {
 			s.Logger.WarnWithContext(ctx, "Invalid to_timezone", map[string]interface{}{
-				"operation":    "convert_timezone",
-				"to_timezone":  req.ToTimezone,
-				"error_type":   "invalid_timezone",
-				"request_id":   requestID,
-				"status":       "failure",
-				"duration_ms":  time.Since(startTime).Milliseconds(),
+				"operation":   "convert_timezone",
+				"to_timezone": req.ToTimezone,
+				"error_type":  "invalid_timezone",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
 			})
 		}
 		sendError(w, "INVALID_TIMEZONE", fmt.Sprintf("Unknown to_timezone: %s", req.ToTimezone), http.StatusBadRequest)
@@ -1131,690 +1131,8 @@ func (s *SystemTool) handleGenerateID(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleStealthBrowser processes stealth_browser requests with full telemetry.
-// It launches a headless Chromium via Playwright + stealth plugin (Node.js) and
-// returns page content, optional screenshot, and optional JS execution result.
-func (s *SystemTool) handleStealthBrowser(w http.ResponseWriter, r *http.Request) {
-	startTime := time.Now()
-	ctx := r.Context()
-
-	// 1. Trace context
-	tc := telemetry.GetTraceContext(ctx)
-	if tc.TraceID != "" {
-		w.Header().Set("X-Trace-ID", tc.TraceID)
-		w.Header().Set("X-Span-ID", tc.SpanID)
-	}
-
-	// 2. Request ID from baggage
-	baggage := telemetry.GetBaggage(ctx)
-	requestID := baggage["request_id"]
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
-
-	// 3. Span attributes
-	telemetry.SetSpanAttributes(ctx,
-		attribute.String("request_id", requestID),
-		attribute.String("truvag3.tool.name", "system-utilities-tool"),
-		attribute.String("truvag3.capability", "stealth_browser"),
-	)
-
-	// 4. Span event: request received
-	telemetry.AddSpanEvent(ctx, "request_received",
-		attribute.String("request_id", requestID),
-		attribute.String("method", r.Method),
-		attribute.String("path", r.URL.Path),
-		attribute.String("operation", "stealth_browser"),
-	)
-
-	// 5. Log request start
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "Processing stealth_browser request", map[string]interface{}{
-			"operation":  "stealth_browser",
-			"method":     r.Method,
-			"request_id": requestID,
-		})
-	}
-
-	// 6. Decode request
-	var req StealthBrowserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "stealth_browser",
-			"error_type", "decode_error",
-		)
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Failed to decode request", map[string]interface{}{
-				"operation":   "stealth_browser",
-				"error":       err.Error(),
-				"error_type":  "decode_error",
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "INVALID_REQUEST", "Invalid request format", http.StatusBadRequest)
-		return
-	}
-
-	// 7. Validate required field
-	req.URL = strings.TrimSpace(req.URL)
-	if req.URL == "" {
-		err := fmt.Errorf("url is required")
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "stealth_browser",
-			"error_type", "validation_error",
-		)
-		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Empty url in request", map[string]interface{}{
-				"operation":   "stealth_browser",
-				"error_type":  "validation_error",
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "MISSING_URL", "url is required", http.StatusBadRequest)
-		return
-	}
-
-	// Validate URL has a protocol
-	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
-		sendError(w, "INVALID_URL", "url must start with http:// or https://", http.StatusBadRequest)
-		return
-	}
-
-	// 8. Apply defaults and limits
-	if req.ExtractContent == "" {
-		req.ExtractContent = "text"
-	}
-	extractContent := strings.ToLower(req.ExtractContent)
-	if extractContent != "text" && extractContent != "html" && extractContent != "both" {
-		extractContent = "text"
-	}
-
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = 60
-	}
-	if timeout > 120 {
-		timeout = 120
-	}
-
-	telemetry.SetSpanAttributes(ctx,
-		attribute.String("browser.url", req.URL),
-		attribute.Int("browser.timeout", timeout),
-		attribute.Bool("browser.screenshot", req.Screenshot),
-		attribute.String("browser.extract", extractContent),
-	)
-
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "Launching stealth browser", map[string]interface{}{
-			"operation":       "stealth_browser",
-			"url":             req.URL,
-			"timeout":         timeout,
-			"screenshot":      req.Screenshot,
-			"extract_content": extractContent,
-			"request_id":      requestID,
-		})
-	}
-
-	// 9. Span event: browser launching
-	telemetry.AddSpanEvent(ctx, "browser_launching",
-		attribute.String("request_id", requestID),
-		attribute.String("url", req.URL),
-		attribute.Int("timeout_seconds", timeout),
-	)
-
-	// 10. Build the Node.js script that uses playwright-extra + stealth
-	script := buildPlaywrightScript(req.URL, req.WaitFor, extractContent, req.Screenshot, timeout, req.JavaScript, req.UserAgent)
-
-	// 11. Execute the Node.js script with a timeout slightly beyond the page timeout
-	execTimeout := time.Duration(timeout+15) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "node", "-e", script)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	cmdStartTime := time.Now()
-	err := cmd.Run()
-	cmdDuration := time.Since(cmdStartTime)
-
-	if err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "stealth_browser",
-			"error_type", "browser_error",
-		)
-
-		errMsg := stderr.String()
-		if execCtx.Err() == context.DeadlineExceeded {
-			errMsg = fmt.Sprintf("Browser timed out after %d seconds", timeout)
-		}
-		if errMsg == "" {
-			errMsg = err.Error()
-		}
-
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Stealth browser execution failed", map[string]interface{}{
-				"operation":       "stealth_browser",
-				"url":             req.URL,
-				"error":           errMsg,
-				"error_type":      "browser_error",
-				"cmd_duration_ms": cmdDuration.Milliseconds(),
-				"request_id":      requestID,
-				"status":          "failure",
-				"duration_ms":     time.Since(startTime).Milliseconds(),
-			})
-		}
-
-		sendError(w, "BROWSER_ERROR", fmt.Sprintf("Browser execution failed: %s", errMsg), http.StatusInternalServerError)
-		return
-	}
-
-	// 12. Parse the JSON output from the Node.js script
-	var result StealthBrowserResponse
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "stealth_browser",
-			"error_type", "parse_error",
-		)
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Failed to parse browser output", map[string]interface{}{
-				"operation":   "stealth_browser",
-				"error":       err.Error(),
-				"error_type":  "parse_error",
-				"stdout_len":  stdout.Len(),
-				"stderr":      stderr.String(),
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "PARSE_ERROR", "Failed to parse browser output", http.StatusInternalServerError)
-		return
-	}
-
-	result.DurationMs = cmdDuration.Milliseconds()
-
-	// 13. Record success metrics
-	duration := time.Since(startTime)
-	telemetry.Histogram("system_utilities.browser.duration_ms",
-		float64(cmdDuration.Milliseconds()),
-		"capability", "stealth_browser",
-	)
-	telemetry.Counter("system_utilities.requests.total",
-		"capability", "stealth_browser",
-		"status", "success",
-	)
-	telemetry.RecordToolCall("system-utilities-tool", "stealth_browser", float64(duration.Milliseconds()), "success")
-
-	// 14. Span event: completed
-	telemetry.AddSpanEvent(ctx, "stealth_browser_completed",
-		attribute.String("request_id", requestID),
-		attribute.String("url", result.URL),
-		attribute.String("title", result.Title),
-		attribute.Int("status_code", result.StatusCode),
-		attribute.Int64("cmd_duration_ms", cmdDuration.Milliseconds()),
-	)
-
-	// 15. Log completion
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "stealth_browser completed", map[string]interface{}{
-			"operation":       "stealth_browser",
-			"url":             result.URL,
-			"title":           result.Title,
-			"status_code":     result.StatusCode,
-			"has_screenshot":  result.ScreenshotBase64 != "",
-			"has_js_result":   result.JSResult != "",
-			"cmd_duration_ms": cmdDuration.Milliseconds(),
-			"status":          "success",
-			"duration_ms":     duration.Milliseconds(),
-			"request_id":      requestID,
-		})
-	}
-
-	// 16. Send response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{
-		Success: true,
-		Data:    result,
-	})
-}
-
-// buildPlaywrightScript generates a Node.js script that uses playwright-extra
-// with the stealth plugin to navigate a URL and extract content.
-func buildPlaywrightScript(url, waitFor, extractContent string, screenshot bool, timeout int, javascript, userAgent string) string {
-	timeoutMs := timeout * 1000
-
-	// Escape strings for safe embedding in JS
-	escapeJS := func(s string) string {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `'`, `\'`)
-		s = strings.ReplaceAll(s, "\n", `\n`)
-		s = strings.ReplaceAll(s, "\r", `\r`)
-		return s
-	}
-
-	// Build optional sections
-	var waitForBlock string
-	if waitFor != "" {
-		waitForBlock = fmt.Sprintf(`
-    await page.waitForSelector('%s', { timeout: %d });`, escapeJS(waitFor), timeoutMs)
-	}
-
-	var contextOptions string
-	if userAgent != "" {
-		contextOptions = fmt.Sprintf(`{ userAgent: '%s' }`, escapeJS(userAgent))
-	} else {
-		contextOptions = `{}`
-	}
-
-	var extractBlock string
-	switch extractContent {
-	case "html":
-		extractBlock = `
-    result.html_content = await page.content();`
-	case "both":
-		extractBlock = `
-    result.text_content = await page.evaluate(() => document.body.innerText);
-    result.html_content = await page.content();`
-	default: // "text"
-		extractBlock = `
-    result.text_content = await page.evaluate(() => document.body.innerText);`
-	}
-
-	var screenshotBlock string
-	if screenshot {
-		screenshotBlock = `
-    const screenshotBuf = await page.screenshot({ fullPage: true });
-    result.screenshot_base64 = screenshotBuf.toString('base64');`
-	}
-
-	var jsBlock string
-	if javascript != "" {
-		jsBlock = fmt.Sprintf(`
-    try {
-      const jsResult = await page.evaluate(async () => { %s });
-      result.js_result = String(jsResult);
-    } catch (jsErr) {
-      result.js_result = 'JS_ERROR: ' + jsErr.message;
-    }`, javascript)
-	}
-
-	script := fmt.Sprintf(`
-const { chromium } = require('playwright-extra');
-const stealth = require('puppeteer-extra-plugin-stealth');
-chromium.use(stealth());
-
-(async () => {
-  let browser;
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-    const context = await browser.newContext(%s);
-    const page = await context.newPage();
-    const response = await page.goto('%s', {
-      waitUntil: 'domcontentloaded',
-      timeout: %d
-    });
-    %s
-    const result = {
-      url: page.url(),
-      title: await page.title(),
-      status_code: response ? response.status() : 0
-    };
-    %s%s%s
-    console.log(JSON.stringify(result));
-  } catch (err) {
-    console.error(err.message);
-    process.exit(1);
-  } finally {
-    if (browser) await browser.close();
-  }
-})();
-`, contextOptions, escapeJS(url), timeoutMs, waitForBlock, extractBlock, screenshotBlock, jsBlock)
-
-	return script
-}
-
-// handleBrowserTest processes browser_test requests with full telemetry.
-// It launches a headless Chromium via Playwright + stealth plugin and executes
-// an ordered sequence of test actions, returning per-step pass/fail results.
-func (s *SystemTool) handleBrowserTest(w http.ResponseWriter, r *http.Request) {
-	startTime := time.Now()
-	ctx := r.Context()
-
-	// Step 1: Trace context for response headers
-	tc := telemetry.GetTraceContext(ctx)
-	if tc.TraceID != "" {
-		w.Header().Set("X-Trace-ID", tc.TraceID)
-		w.Header().Set("X-Span-ID", tc.SpanID)
-	}
-
-	// Step 2: Request ID from baggage
-	baggage := telemetry.GetBaggage(ctx)
-	requestID := baggage["request_id"]
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
-
-	// Step 3: Span attributes
-	telemetry.SetSpanAttributes(ctx,
-		attribute.String("request_id", requestID),
-		attribute.String("truvag3.tool.name", "system-utilities-tool"),
-		attribute.String("truvag3.capability", "browser_test"),
-	)
-
-	// Step 4: Span event — request received
-	telemetry.AddSpanEvent(ctx, "request_received",
-		attribute.String("request_id", requestID),
-		attribute.String("method", r.Method),
-		attribute.String("path", r.URL.Path),
-		attribute.String("operation", "browser_test"),
-	)
-
-	// Step 5: Log request start
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "Processing browser_test request", map[string]interface{}{
-			"operation":  "browser_test",
-			"method":     r.Method,
-			"request_id": requestID,
-		})
-	}
-
-	// Step 6: Decode request
-	var req BrowserTestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "decode_error",
-		)
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Failed to decode request", map[string]interface{}{
-				"operation":   "browser_test",
-				"error":       err.Error(),
-				"error_type":  "decode_error",
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "INVALID_REQUEST", "Invalid request format", http.StatusBadRequest)
-		return
-	}
-
-	// Step 7: Validate required fields — URL
-	req.URL = strings.TrimSpace(req.URL)
-	if req.URL == "" {
-		err := fmt.Errorf("url is required")
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "validation_error",
-		)
-		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Empty url in request", map[string]interface{}{
-				"operation":   "browser_test",
-				"error_type":  "validation_error",
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "MISSING_URL", "url is required", http.StatusBadRequest)
-		return
-	}
-
-	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
-		err := fmt.Errorf("url must start with http:// or https://")
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "validation_error",
-		)
-		sendError(w, "INVALID_URL", "url must start with http:// or https://", http.StatusBadRequest)
-		return
-	}
-
-	// Validate required fields — actions
-	if len(req.Actions) == 0 {
-		err := fmt.Errorf("actions array is required and must not be empty")
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "validation_error",
-		)
-		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Empty actions array", map[string]interface{}{
-				"operation":   "browser_test",
-				"error_type":  "validation_error",
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "MISSING_ACTIONS", "actions array is required and must not be empty", http.StatusBadRequest)
-		return
-	}
-
-	const maxActions = 200
-	if len(req.Actions) > maxActions {
-		err := fmt.Errorf("actions array exceeds maximum of %d steps (got %d)", maxActions, len(req.Actions))
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "validation_error",
-		)
-		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Actions array too large", map[string]interface{}{
-				"operation":    "browser_test",
-				"error_type":   "validation_error",
-				"action_count": len(req.Actions),
-				"max_actions":  maxActions,
-				"request_id":   requestID,
-				"status":       "failure",
-				"duration_ms":  time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "TOO_MANY_ACTIONS", fmt.Sprintf("actions array exceeds maximum of %d steps", maxActions), http.StatusBadRequest)
-		return
-	}
-
-	// Step 8: Apply defaults and clamp limits
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = 120
-	}
-	if timeout > 300 {
-		timeout = 300
-	}
-
-	viewportWidth := 1280
-	viewportHeight := 720
-	if req.Viewport != nil {
-		if req.Viewport.Width > 0 {
-			viewportWidth = req.Viewport.Width
-		}
-		if req.Viewport.Height > 0 {
-			viewportHeight = req.Viewport.Height
-		}
-	}
-
-	// Step 9: Set span attributes with request details
-	telemetry.SetSpanAttributes(ctx,
-		attribute.String("browser.url", req.URL),
-		attribute.Int("browser.timeout", timeout),
-		attribute.Int("browser.action_count", len(req.Actions)),
-		attribute.String("browser.viewport", fmt.Sprintf("%dx%d", viewportWidth, viewportHeight)),
-	)
-
-	// Step 10: Log launch details
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "Launching browser test", map[string]interface{}{
-			"operation":    "browser_test",
-			"url":          req.URL,
-			"timeout":      timeout,
-			"action_count": len(req.Actions),
-			"viewport":     fmt.Sprintf("%dx%d", viewportWidth, viewportHeight),
-			"request_id":   requestID,
-		})
-	}
-
-	// Step 11: Span event — browser launching
-	telemetry.AddSpanEvent(ctx, "browser_test_launching",
-		attribute.String("request_id", requestID),
-		attribute.String("url", req.URL),
-		attribute.Int("action_count", len(req.Actions)),
-		attribute.Int("timeout_seconds", timeout),
-	)
-
-	// Step 12: Build the Node.js Playwright test script
-	script := buildPlaywrightTestScript(req.URL, req.Actions, timeout, viewportWidth, viewportHeight)
-
-	// Step 13: Execute the Node.js script with timeout buffer
-	execTimeout := time.Duration(timeout+15) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "node", "-e", script)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	cmdStartTime := time.Now()
-	err := cmd.Run()
-	cmdDuration := time.Since(cmdStartTime)
-
-	// Step 14: Handle execution errors
-	if err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "browser_error",
-		)
-
-		errMsg := stderr.String()
-		if execCtx.Err() == context.DeadlineExceeded {
-			errMsg = fmt.Sprintf("Browser test timed out after %d seconds", timeout)
-		}
-		if errMsg == "" {
-			errMsg = err.Error()
-		}
-
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Browser test execution failed", map[string]interface{}{
-				"operation":       "browser_test",
-				"url":             req.URL,
-				"error":           errMsg,
-				"error_type":      "browser_error",
-				"cmd_duration_ms": cmdDuration.Milliseconds(),
-				"request_id":      requestID,
-				"status":          "failure",
-				"duration_ms":     time.Since(startTime).Milliseconds(),
-			})
-		}
-
-		sendError(w, "BROWSER_ERROR", fmt.Sprintf("Browser test execution failed: %s", errMsg), http.StatusInternalServerError)
-		return
-	}
-
-	// Step 15: Parse the JSON output
-	var result BrowserTestResponse
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		telemetry.RecordSpanError(ctx, err)
-		telemetry.Counter("system_utilities.errors.total",
-			"module", "system-utilities-tool",
-			"capability", "browser_test",
-			"error_type", "parse_error",
-		)
-		if s.Logger != nil {
-			s.Logger.ErrorWithContext(ctx, "Failed to parse browser test output", map[string]interface{}{
-				"operation":   "browser_test",
-				"error":       err.Error(),
-				"error_type":  "parse_error",
-				"stdout_len":  stdout.Len(),
-				"stderr":      stderr.String(),
-				"request_id":  requestID,
-				"status":      "failure",
-				"duration_ms": time.Since(startTime).Milliseconds(),
-			})
-		}
-		sendError(w, "PARSE_ERROR", "Failed to parse browser test output", http.StatusInternalServerError)
-		return
-	}
-
-	// Step 16: Set duration from actual execution
-	result.DurationMs = cmdDuration.Milliseconds()
-
-	// Step 17: Record success metrics
-	duration := time.Since(startTime)
-	telemetry.Histogram("system_utilities.browser.duration_ms",
-		float64(cmdDuration.Milliseconds()),
-		"capability", "browser_test",
-	)
-	telemetry.Counter("system_utilities.requests.total",
-		"capability", "browser_test",
-		"status", "success",
-	)
-	telemetry.RecordToolCall("system-utilities-tool", "browser_test", float64(duration.Milliseconds()), "success")
-
-	// Step 18: Span event — completed
-	telemetry.AddSpanEvent(ctx, "browser_test_completed",
-		attribute.String("request_id", requestID),
-		attribute.String("url", result.URL),
-		attribute.Bool("passed", result.Passed),
-		attribute.Int("total_steps", result.TotalSteps),
-		attribute.Int("passed_steps", result.PassedSteps),
-		attribute.Int("failed_steps", result.FailedSteps),
-		attribute.Int64("cmd_duration_ms", cmdDuration.Milliseconds()),
-	)
-
-	// Step 19: Log completion
-	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "browser_test completed", map[string]interface{}{
-			"operation":       "browser_test",
-			"url":             result.URL,
-			"passed":          result.Passed,
-			"total_steps":     result.TotalSteps,
-			"passed_steps":    result.PassedSteps,
-			"failed_steps":    result.FailedSteps,
-			"cmd_duration_ms": cmdDuration.Milliseconds(),
-			"status":          "success",
-			"duration_ms":     duration.Milliseconds(),
-			"request_id":      requestID,
-		})
-	}
-
-	// Step 20: Send response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{
-		Success: true,
-		Data:    result,
-	})
-}
-
-// handleWait processes wait requests with full telemetry
-func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
+// handleSleep processes sleep requests with full telemetry
+func (s *SystemTool) handleSleep(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	ctx := r.Context()
 
@@ -1836,7 +1154,7 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	telemetry.SetSpanAttributes(ctx,
 		attribute.String("request_id", requestID),
 		attribute.String("truvag3.tool.name", "system-utilities-tool"),
-		attribute.String("truvag3.capability", "wait"),
+		attribute.String("truvag3.capability", "sleep"),
 	)
 
 	// 4. Add span event for request start (request_id FIRST per tracing guide Pattern 6)
@@ -1844,13 +1162,13 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 		attribute.String("request_id", requestID),
 		attribute.String("method", r.Method),
 		attribute.String("path", r.URL.Path),
-		attribute.String("operation", "wait"),
+		attribute.String("operation", "sleep"),
 	)
 
 	// 5. Log request start (logger nil check per tracing guide)
 	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "Processing wait request", map[string]interface{}{
-			"operation":  "wait",
+		s.Logger.InfoWithContext(ctx, "Processing sleep request", map[string]interface{}{
+			"operation":  "sleep",
 			"method":     r.Method,
 			"path":       r.URL.Path,
 			"request_id": requestID,
@@ -1858,17 +1176,17 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Decode request
-	var req WaitRequest
+	var req SleepRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		telemetry.RecordSpanError(ctx, err)
 		telemetry.Counter("system_utilities.errors.total",
 			"module", "system-utilities-tool",
-			"capability", "wait",
+			"capability", "sleep",
 			"error_type", "decode_error",
 		)
 		if s.Logger != nil {
 			s.Logger.ErrorWithContext(ctx, "Failed to decode request", map[string]interface{}{
-				"operation":   "wait",
+				"operation":   "sleep",
 				"error":       err.Error(),
 				"error_type":  "decode_error",
 				"request_id":  requestID,
@@ -1886,12 +1204,12 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 		telemetry.RecordSpanError(ctx, err)
 		telemetry.Counter("system_utilities.errors.total",
 			"module", "system-utilities-tool",
-			"capability", "wait",
+			"capability", "sleep",
 			"error_type", "validation_error",
 		)
 		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Invalid duration in wait request", map[string]interface{}{
-				"operation":        "wait",
+			s.Logger.WarnWithContext(ctx, "Invalid duration in sleep request", map[string]interface{}{
+				"operation":        "sleep",
 				"error_type":       "validation_error",
 				"duration_seconds": req.DurationSeconds,
 				"request_id":       requestID,
@@ -1904,35 +1222,35 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 8. Clamp to max
-	const maxWaitSeconds = 120
+	const maxSleepSeconds = 120
 	requested := req.DurationSeconds
 	duration := requested
-	if duration > maxWaitSeconds {
-		duration = maxWaitSeconds
+	if duration > maxSleepSeconds {
+		duration = maxSleepSeconds
 		if s.Logger != nil {
-			s.Logger.WarnWithContext(ctx, "Wait duration clamped to max", map[string]interface{}{
-				"operation":         "wait",
+			s.Logger.WarnWithContext(ctx, "Sleep duration clamped to max", map[string]interface{}{
+				"operation":         "sleep",
 				"requested_seconds": requested,
-				"max_seconds":       maxWaitSeconds,
+				"max_seconds":       maxSleepSeconds,
 				"request_id":        requestID,
 			})
 		}
 	}
 
-	// 9. Set wait-specific span attributes
+	// 9. Set sleep-specific span attributes
 	telemetry.SetSpanAttributes(ctx,
-		attribute.Int("wait.requested_seconds", requested),
-		attribute.Int("wait.duration_seconds", duration),
-		attribute.String("wait.reason", req.Reason),
+		attribute.Int("sleep.requested_seconds", requested),
+		attribute.Int("sleep.duration_seconds", duration),
+		attribute.String("sleep.reason", req.Reason),
 	)
 
-	// 10. Add span event for wait start (request_id FIRST per Pattern 6)
-	telemetry.AddSpanEvent(ctx, "wait_started",
+	// 10. Add span event for sleep start (request_id FIRST per Pattern 6)
+	telemetry.AddSpanEvent(ctx, "sleep_started",
 		attribute.String("request_id", requestID),
 		attribute.Int("duration_seconds", duration),
 	)
 
-	// 11. Wait with cancellation support
+	// 11. Sleep with cancellation support
 	startedAt := time.Now()
 	cancelled := false
 	timer := time.NewTimer(time.Duration(duration) * time.Second)
@@ -1945,14 +1263,14 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	endedAt := time.Now()
 	actualSeconds := int(endedAt.Sub(startedAt).Round(time.Second).Seconds())
 
-	telemetry.SetSpanAttributes(ctx, attribute.Bool("wait.cancelled", cancelled))
+	telemetry.SetSpanAttributes(ctx, attribute.Bool("sleep.cancelled", cancelled))
 
 	// 12. Capability-specific metrics
-	telemetry.Counter("system_utilities.wait.total",
+	telemetry.Counter("system_utilities.sleep.total",
 		"module", "system-utilities-tool",
 		"cancelled", fmt.Sprintf("%t", cancelled),
 	)
-	telemetry.Histogram("system_utilities.wait.duration_ms",
+	telemetry.Histogram("system_utilities.sleep.duration_ms",
 		float64(endedAt.Sub(startedAt).Milliseconds()),
 		"module", "system-utilities-tool",
 		"cancelled", fmt.Sprintf("%t", cancelled),
@@ -1962,17 +1280,17 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	handlerDuration := time.Since(startTime)
 	telemetry.Histogram("system_utilities.request.duration_ms",
 		float64(handlerDuration.Milliseconds()),
-		"capability", "wait",
+		"capability", "sleep",
 	)
 	telemetry.Counter("system_utilities.requests.total",
-		"capability", "wait",
+		"capability", "sleep",
 		"status", "success",
 	)
-	telemetry.RecordToolCall("system-utilities-tool", "wait",
+	telemetry.RecordToolCall("system-utilities-tool", "sleep",
 		float64(handlerDuration.Milliseconds()), "success")
 
 	// 14. Build response
-	result := WaitResponse{
+	result := SleepResponse{
 		RequestedSeconds: requested,
 		DurationSeconds:  actualSeconds,
 		Reason:           req.Reason,
@@ -1982,7 +1300,7 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 15. Add completion span event (request_id FIRST per Pattern 6)
-	telemetry.AddSpanEvent(ctx, "wait_completed",
+	telemetry.AddSpanEvent(ctx, "sleep_completed",
 		attribute.String("request_id", requestID),
 		attribute.Bool("cancelled", cancelled),
 		attribute.Int("actual_seconds", actualSeconds),
@@ -1991,8 +1309,8 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 
 	// 16. Log completion
 	if s.Logger != nil {
-		s.Logger.InfoWithContext(ctx, "wait request completed", map[string]interface{}{
-			"operation":         "wait",
+		s.Logger.InfoWithContext(ctx, "sleep request completed", map[string]interface{}{
+			"operation":         "sleep",
 			"requested_seconds": requested,
 			"actual_seconds":    actualSeconds,
 			"cancelled":         cancelled,
@@ -2008,182 +1326,6 @@ func (s *SystemTool) handleWait(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Data:    result,
 	})
-}
-
-// buildPlaywrightTestScript generates a Node.js script that uses playwright-extra
-// with the stealth plugin to execute an ordered sequence of browser test actions.
-// Each action maps 1:1 to a Playwright API call and produces a per-step result.
-func buildPlaywrightTestScript(startURL string, actions []BrowserAction, timeoutSec, viewportWidth, viewportHeight int) string {
-	overallTimeoutMs := timeoutSec * 1000
-
-	// Escape strings for safe embedding in JS
-	escapeJS := func(s string) string {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `'`, `\'`)
-		s = strings.ReplaceAll(s, "\n", `\n`)
-		s = strings.ReplaceAll(s, "\r", `\r`)
-		return s
-	}
-
-	// Build per-action try/catch blocks
-	var actionBlocks strings.Builder
-	for i, action := range actions {
-		stepTimeout := action.Timeout
-		if stepTimeout <= 0 {
-			stepTimeout = 10000
-		}
-
-		selector := escapeJS(action.Selector)
-		value := escapeJS(action.Value)
-		expected := escapeJS(action.Expected)
-
-		var jsCode string
-
-		switch action.Action {
-		case "click":
-			jsCode = fmt.Sprintf(`await page.click('%s', { timeout: %d });`, selector, stepTimeout)
-		case "fill":
-			jsCode = fmt.Sprintf(`await page.fill('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
-		case "select":
-			jsCode = fmt.Sprintf(`await page.selectOption('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
-		case "check":
-			jsCode = fmt.Sprintf(`await page.check('%s', { timeout: %d });`, selector, stepTimeout)
-		case "uncheck":
-			jsCode = fmt.Sprintf(`await page.uncheck('%s', { timeout: %d });`, selector, stepTimeout)
-		case "hover":
-			jsCode = fmt.Sprintf(`await page.hover('%s', { timeout: %d });`, selector, stepTimeout)
-		case "press":
-			jsCode = fmt.Sprintf(`await page.press('%s', '%s', { timeout: %d });`, selector, value, stepTimeout)
-		case "navigate":
-			jsCode = fmt.Sprintf(`await page.goto('%s', { waitUntil: 'domcontentloaded', timeout: %d });`, value, stepTimeout)
-		case "wait_for_selector":
-			jsCode = fmt.Sprintf(`await page.waitForSelector('%s', { state: 'visible', timeout: %d });`, selector, stepTimeout)
-		case "wait_for_url":
-			jsCode = fmt.Sprintf(`await page.waitForURL('%s', { timeout: %d });`, value, stepTimeout)
-		case "wait_for_network_idle":
-			jsCode = `await page.waitForLoadState('networkidle');`
-		case "screenshot":
-			jsCode = fmt.Sprintf(`screenshots['%d'] = (await page.screenshot({ fullPage: true })).toString('base64');`, i)
-		case "assert":
-			jsCode = buildAssertionJS(action.Assertion, selector, expected, stepTimeout)
-		default:
-			// Unknown action — record as error
-			actionBlocks.WriteString(fmt.Sprintf(`
-  // Step %d: unknown action '%s'
-  results.push({ step: %d, action: '%s', selector: '%s', passed: false, error: 'Unknown action type: %s', duration_ms: 0 });
-`, i, escapeJS(action.Action), i, escapeJS(action.Action), selector, escapeJS(action.Action)))
-			continue
-		}
-
-		// For assert actions, the JS sets a 'passed' variable; for all others, reaching the end = passed
-		if action.Action == "assert" {
-			actionBlocks.WriteString(fmt.Sprintf(`
-  // Step %d: assert %s
-  { const start_%d = Date.now();
-    try {
-      let passed = false;
-      %s
-      results.push({ step: %d, action: 'assert', selector: '%s', passed: passed, duration_ms: Date.now() - start_%d });
-    } catch(e) {
-      results.push({ step: %d, action: 'assert', selector: '%s', passed: false, error: e.message, duration_ms: Date.now() - start_%d });
-    }
-  }
-`, i, escapeJS(action.Assertion), i, jsCode, i, selector, i, i, selector, i))
-		} else {
-			actionBlocks.WriteString(fmt.Sprintf(`
-  // Step %d: %s
-  { const start_%d = Date.now();
-    try {
-      %s
-      results.push({ step: %d, action: '%s', selector: '%s', passed: true, duration_ms: Date.now() - start_%d });
-    } catch(e) {
-      results.push({ step: %d, action: '%s', selector: '%s', passed: false, error: e.message, duration_ms: Date.now() - start_%d });
-    }
-  }
-`, i, escapeJS(action.Action), i, jsCode, i, escapeJS(action.Action), selector, i, i, escapeJS(action.Action), selector, i))
-		}
-	}
-
-	script := fmt.Sprintf(`
-const { chromium } = require('playwright-extra');
-const stealth = require('puppeteer-extra-plugin-stealth');
-chromium.use(stealth());
-
-(async () => {
-  let browser;
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-    const context = await browser.newContext({ viewport: { width: %d, height: %d } });
-    const page = await context.newPage();
-    const results = [];
-    const screenshots = {};
-    const consoleLog = [];
-
-    page.on('console', msg => consoleLog.push('[' + msg.type() + '] ' + msg.text()));
-
-    await page.goto('%s', { waitUntil: 'domcontentloaded', timeout: %d });
-%s
-    const passed = results.every(r => r.passed);
-    console.log(JSON.stringify({
-      url: page.url(),
-      passed: passed,
-      total_steps: results.length,
-      passed_steps: results.filter(r => r.passed).length,
-      failed_steps: results.filter(r => !r.passed).length,
-      steps: results,
-      screenshots: screenshots,
-      console_log: consoleLog
-    }));
-  } catch (err) {
-    console.error(err.message);
-    process.exit(1);
-  } finally {
-    if (browser) await browser.close();
-  }
-})();
-`, viewportWidth, viewportHeight, escapeJS(startURL), overallTimeoutMs, actionBlocks.String())
-
-	return script
-}
-
-// buildAssertionJS generates the JavaScript code for an assertion action.
-// It sets a 'passed' boolean variable that the caller wraps in try/catch.
-func buildAssertionJS(assertion, selector, expected string, timeoutMs int) string {
-	switch assertion {
-	case "visible":
-		return fmt.Sprintf(`await page.locator('%s').waitFor({ state: 'visible', timeout: %d }); passed = true;`, selector, timeoutMs)
-	case "hidden":
-		return fmt.Sprintf(`await page.locator('%s').waitFor({ state: 'hidden', timeout: %d }); passed = true;`, selector, timeoutMs)
-	case "text_contains":
-		return fmt.Sprintf(`const txt = await page.locator('%s').textContent({ timeout: %d }); passed = txt !== null && txt.includes('%s');`, selector, timeoutMs, expected)
-	case "text_equals":
-		return fmt.Sprintf(`const txt = await page.locator('%s').textContent({ timeout: %d }); passed = txt !== null && txt.trim() === '%s';`, selector, timeoutMs, expected)
-	case "url_contains":
-		return fmt.Sprintf(`passed = page.url().includes('%s');`, expected)
-	case "url_equals":
-		return fmt.Sprintf(`passed = page.url() === '%s';`, expected)
-	case "count_equals":
-		return fmt.Sprintf(`passed = (await page.locator('%s').count()) === parseInt('%s');`, selector, expected)
-	case "has_attribute":
-		// Expected format: "attr=value"
-		return fmt.Sprintf(`{
-      const parts = '%s'.split('=');
-      const attrName = parts[0];
-      const attrVal = parts.slice(1).join('=');
-      const actual = await page.locator('%s').getAttribute(attrName, { timeout: %d });
-      passed = actual === attrVal;
-    }`, expected, selector, timeoutMs)
-	case "has_class":
-		return fmt.Sprintf(`{
-      const cls = await page.locator('%s').getAttribute('class', { timeout: %d });
-      passed = cls !== null && cls.includes('%s');
-    }`, selector, timeoutMs, expected)
-	default:
-		return fmt.Sprintf(`passed = false; /* unknown assertion type: %s */`, assertion)
-	}
 }
 
 // --- ID Generation Helpers (stdlib only, no new dependencies) ---

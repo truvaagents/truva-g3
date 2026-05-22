@@ -249,7 +249,7 @@ type playwrightSuite struct {
 	Specs  []struct {
 		Title string `json:"title"`
 		Tests []struct {
-			Status  string  `json:"status"` // expected, unexpected, flaky, skipped
+			Status  string `json:"status"` // expected, unexpected, flaky, skipped
 			Results []struct {
 				Status   string  `json:"status"`
 				Duration float64 `json:"duration"` // Playwright emits float ms

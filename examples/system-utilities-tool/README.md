@@ -1,6 +1,8 @@
 # System Utilities Tool
 
-A TruvaG3 tool that provides self-contained system utility capabilities: date/time operations, shell command execution, stealth browser automation, unique ID generation, and bounded wait/sleep. Unlike most tools in the framework, this tool requires **no external API keys** — all capabilities are powered by Go's standard library, Node.js (Playwright), and run entirely within the container.
+A TruvaG3 tool that provides self-contained system utility capabilities: date/time operations, shell + Python command execution, unique ID generation, and bounded sleep. Unlike most tools in the framework, this tool requires **no external API keys** — all capabilities are powered by Go's standard library plus a Python 3.12 slim runtime with common shell utilities, and run entirely within the container.
+
+> **Browser automation moved.** The `stealth_browser` and `browser_test` capabilities previously lived here. They now live in [`playwright-tool`](../playwright-tool/), which already ships the Chromium runtime needed for them. Discovery by capability name still routes correctly — no agent-side changes needed.
 
 ## Table of Contents
 
@@ -45,10 +47,10 @@ cd examples/system-utilities-tool
 ```
 
 **What `./setup.sh deploy` does:**
-1. Builds the Docker image (Debian Bookworm with 30+ Linux tools, Node.js, and Playwright with stealth plugin)
+1. Builds the Docker image (`python:3.12-slim` with bash, Python 3, and common shell + network utilities)
 2. Loads it into the Kind cluster
 3. Deploys the tool to Kubernetes (2 replicas)
-4. Registers 9 capabilities with Redis for agent discovery
+4. Registers 7 capabilities with Redis for agent discovery
 
 Once complete, set up port forwarding and test:
 
@@ -62,7 +64,7 @@ curl http://localhost:8348/health
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **System Utilities API** | http://localhost:8348 | Date/time, commands, stealth browser, IDs |
+| **System Utilities API** | http://localhost:8348 | Date/time, shell + Python commands, IDs, sleep |
 
 ### Step-by-Step Deployment
 
@@ -115,10 +117,10 @@ curl -X POST http://localhost:8348/api/capabilities/generate_id \
   -H "Content-Type: application/json" \
   -d '{"type": "uuid", "count": 3}'
 
-# Test stealth browser
-curl -X POST http://localhost:8348/api/capabilities/stealth_browser \
+# Test Python via execute_command
+curl -X POST http://localhost:8348/api/capabilities/execute_command \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "extract_content": "text"}'
+  -d '{"command": "python3 -c \"import numpy; print(numpy.__version__)\""}'
 ```
 
 ---
@@ -127,8 +129,7 @@ curl -X POST http://localhost:8348/api/capabilities/stealth_browser \
 
 - **Date/Time Operations** - Current time in any timezone, timezone conversion, date arithmetic
 - **Timezone Database** - ~80 curated IANA timezones with live offset and DST resolution
-- **Shell Command Execution** - Run commands inside an isolated Debian container with 30+ pre-installed Linux tools for networking, text processing, system inspection, and scripting
-- **Stealth Browser Automation** - Headless Chromium with Playwright + stealth plugin for anti-detection bypass, JavaScript-rendered page scraping, screenshots, and custom JS execution
+- **Shell + Python Execution** - Run commands inside an isolated `python:3.12-slim` container with bash, Python 3, common text-processing tools (`jq`, `grep`, `sed`, `awk`), and network diagnostics (`curl`, `dig`, `nc`, `ping`, `traceroute`)
 - **Unique ID Generation** - UUID v4, ULID, and nanoid formats
 - **Zero External Dependencies** - No API keys, no external services needed
 - **Full Telemetry** - OpenTelemetry traces, metrics, and structured logging
@@ -138,7 +139,7 @@ curl -X POST http://localhost:8348/api/capabilities/stealth_browser \
 
 ## Registered Capabilities
 
-The tool registers 9 capabilities with the service mesh:
+The tool registers 7 capabilities with the service mesh:
 
 ### 1. Get Current Time (`get_current_time`)
 
@@ -310,19 +311,18 @@ Executes a shell command inside the isolated container and returns stdout, stder
 
 **Available Tools in Container:**
 
-The container ships with a full Linux troubleshooting toolkit (Debian Bookworm-based, glibc):
+The container is `python:3.12-slim`-based (glibc) with a focused set of shell, scripting, and network utilities:
 
 | Category | Tools | Use Cases |
 |----------|-------|-----------|
-| **Shell & Scripting** | `bash`, `python3`, `bc` | Shell scripts, Python one-liners, math calculations |
-| **Text Processing** | `grep`, `sed`, `awk` (`gawk`), `jq`, `less`, `file` | Log parsing, JSON processing, file inspection |
-| **Core Utilities** | `coreutils` (`sort`, `uniq`, `cut`, `tr`, `wc`, `head`, `tail`, `base64`, `sha256sum`, `md5sum`, `date`, `ls`, `cat`, `tee`, `xargs`, etc.) | General-purpose data manipulation |
-| **Networking** | `curl`, `wget`, `dig` (`dnsutils`), `ping` (`iputils-ping`), `traceroute`, `ss` / `ip` (`iproute2`), `nc` (`netcat-openbsd`), `tcpdump`, `nmap`, `openssl`, `ifconfig` / `netstat` (`net-tools`) | HTTP requests, DNS lookup, connectivity testing, port scanning, packet capture, TLS/cert debugging, network mapping |
-| **Remote Access** | `ssh`, `scp`, `ssh-keygen` (`openssh-client`) | SSH connections, file transfer, key management |
-| **Process & System** | `ps`, `top` (`procps`), `htop`, `strace`, `lsof`, `iostat` / `mpstat` (`sysstat`) | Process monitoring, system inspection, syscall tracing, open file/socket inspection, I/O stats |
-| **Archive** | `tar`, `gzip`, `unzip` | Compress/extract archives |
+| **Shell & Scripting** | `bash`, `python3`, `pip3`, `bc` | Shell scripts, Python one-liners, package install via `pip3 install --user`, math calculations |
+| **Pre-installed Python packages** | `numpy`, `requests` | Numerical work, HTTP calls from Python |
+| **Text Processing** | `grep`, `sed`, `awk` (`gawk`), `jq` | Log parsing, JSON processing |
+| **Core Utilities** | `coreutils` (`sort`, `uniq`, `cut`, `tr`, `wc`, `head`, `tail`, `base64`, `sha256sum`, `md5sum`, `date`, `ls`, `cat`, `tee`, `xargs`, etc.); `tar`, `gzip` (Debian Essential, pre-installed) | General-purpose data manipulation |
+| **Networking** | `curl`, `openssl`, `dig` (`dnsutils`), `ping` (`iputils-ping`), `traceroute`, `nc` (`netcat-openbsd`) | HTTP requests, DNS lookup, connectivity testing, TLS/cert debugging |
 | **Version Control** | `git` | Repository operations |
-| **Node.js / Browser** | `node`, `npm`, `playwright`, `playwright-extra`, `puppeteer-extra-plugin-stealth` | JavaScript execution, headless browser automation (see [Stealth Browser](#7-stealth-browser-stealth_browser) capability) |
+
+> **Heavy tooling removed.** The previous image bundled `nodejs`, `npm`, Playwright + Chromium, `nmap`, `tcpdump`, `wget`, `openssh-client`, `htop`, `strace`, `lsof`, `sysstat`, `iproute2`, `net-tools` — together ~1.5 GB. Browser caps now live in [`playwright-tool`](../playwright-tool/). If you specifically need any of the dropped CLI tools, install via `apt-get` in a derived image or run `pip3 install --user` for Python equivalents.
 
 **Response:**
 ```json
@@ -378,80 +378,11 @@ Generates unique identifiers in various formats.
 
 ---
 
-### 7. Stealth Browser (`stealth_browser`)
+### 7. Sleep (`sleep`)
 
-**Endpoint:** `/api/capabilities/stealth_browser`
+**Endpoint:** `/api/capabilities/sleep`
 
-Opens a URL in a headless Chromium browser with anti-detection stealth plugin and extracts page content. Uses [Playwright](https://playwright.dev/) with [puppeteer-extra-plugin-stealth](https://github.com/nicedayfor/puppeteer-extra-plugin-stealth) to bypass bot-detection, CAPTCHAs, and fingerprinting.
-
-**Request:**
-```json
-{
-  "url": "https://example.com",
-  "extract_content": "text",
-  "screenshot": true,
-  "timeout": 30
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `url` | string | Yes | Full URL to navigate to (must include `http://` or `https://`) |
-| `wait_for` | string | No | CSS selector to wait for before extracting content (useful for JS-rendered pages) |
-| `extract_content` | string | No | `text` (default), `html`, or `both` |
-| `screenshot` | boolean | No | Capture a full-page screenshot as base64 PNG (default: `false`) |
-| `timeout` | integer | No | Navigation timeout in seconds (default: 30, max: 120) |
-| `javascript` | string | No | JavaScript code to execute on the page after load; result returned as string |
-| `user_agent` | string | No | Custom User-Agent string to override the default browser UA |
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "url": "https://example.com/",
-    "title": "Example Domain",
-    "text_content": "Example Domain\nThis domain is for use in illustrative examples...",
-    "screenshot_base64": "iVBORw0KGgoAAAANSUhEUg...",
-    "status_code": 200,
-    "duration_ms": 2340
-  }
-}
-```
-
-**Use Cases:**
-
-| Scenario | Example Request |
-|----------|----------------|
-| Scrape a JS-rendered SPA | `{"url": "https://spa-app.com", "wait_for": "#app-loaded", "extract_content": "text"}` |
-| Take a screenshot of a page | `{"url": "https://example.com", "screenshot": true}` |
-| Extract data with custom JS | `{"url": "https://news.site.com", "javascript": "JSON.stringify([...document.querySelectorAll('h2')].map(e => e.textContent))"}` |
-| Bypass bot detection | `{"url": "https://protected-site.com", "extract_content": "both"}` |
-| Use custom user agent | `{"url": "https://example.com", "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"}` |
-
-**How It Works:**
-
-The handler generates a Node.js script at runtime that:
-1. Imports `playwright-extra` + `puppeteer-extra-plugin-stealth`
-2. Launches headless Chromium with `--no-sandbox` (non-root container)
-3. Applies the stealth plugin (evades `navigator.webdriver` detection, `chrome.runtime` checks, WebGL fingerprinting, etc.)
-4. Optionally overrides User-Agent
-5. Navigates to the URL with configurable timeout
-6. Optionally waits for a CSS selector
-7. Extracts text, HTML, or both
-8. Optionally captures a full-page screenshot (base64 PNG)
-9. Optionally executes custom JavaScript
-10. Returns structured JSON via stdout, parsed by the Go handler
-
-**Safety:** The browser runs inside an isolated container as a non-root user. Navigation timeout is capped at 120 seconds. The Go handler wraps execution with an additional 15-second buffer timeout to ensure cleanup.
-
----
-
-### 8. Wait (`wait`)
-
-**Endpoint:** `/api/capabilities/wait`
-
-Waits (sleeps) for a short, bounded duration before returning. Use this for brief in-line pauses — e.g., to let an external system settle after a write, or to space out polling checks.
+Sleeps (pauses) for a short, bounded duration before returning. Use this for brief in-line pauses — e.g., to let an external system settle after a write, or to space out polling checks.
 
 **Request:**
 ```json
@@ -463,8 +394,8 @@ Waits (sleeps) for a short, bounded duration before returning. Use this for brie
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `duration_seconds` | integer | Yes | How long to wait, in seconds. Must be between 1 and 120. Requests above 120 are clamped. |
-| `reason` | string | No | Free-text explanation of why the wait is needed; echoed into traces and logs. |
+| `duration_seconds` | integer | Yes | How long to sleep, in seconds. Must be between 1 and 120. Requests above 120 are clamped. |
+| `reason` | string | No | Free-text explanation of why the pause is needed; echoed into traces and logs. |
 
 **Response:**
 ```json
@@ -485,7 +416,7 @@ Waits (sleeps) for a short, bounded duration before returning. Use this for brie
 
 **Cancellation:** If the request context is cancelled (client disconnect, executor timeout, execution cancellation) before the duration elapses, the handler returns immediately with `cancelled: true` and `duration_seconds` reflecting the actual elapsed time.
 
-**For longer waits:** Use `scheduler-tool/schedule_task` instead — it frees the worker and checkpoints the DAG.
+**For longer pauses:** Use `scheduler-tool/schedule_task` instead — it frees the worker and checkpoints the DAG.
 
 ---
 
@@ -504,11 +435,11 @@ Returns a JSON Schema draft-07 document generated from the Phase 2 `InputSummary
 ## Architecture
 
 ```
-System Utilities Tool (Passive) — Debian Bookworm container
+System Utilities Tool (Passive) — python:3.12-slim container
     |
-    +-- Registers 9 capabilities in Redis
+    +-- Registers 7 capabilities in Redis
     +-- Receives requests from agents
-    +-- Processes in-process or via local subprocess (Node.js for browser)
+    +-- Processes in-process or via local subprocess (sh -c for shell commands)
     +-- Returns standardized ToolResponse
     |
     +-- Capabilities:
@@ -518,7 +449,7 @@ System Utilities Tool (Passive) — Debian Bookworm container
         +-- date_arithmetic     (Go time.AddDate / time.Add)
         +-- execute_command     (os/exec.CommandContext with timeout)
         +-- generate_id         (google/uuid + custom ULID/nanoid)
-        +-- stealth_browser     (Node.js → Playwright + stealth plugin → Chromium)
+        +-- sleep               (time.NewTimer with context cancellation)
 ```
 
 ### Why This Tool Exists
@@ -528,7 +459,7 @@ The orchestrator needs deterministic operations that LLMs cannot reliably perfor
 - **"Calculate 100 * 468.285"** - The orchestrator can `execute_command` instead of burning an LLM retry
 - **"Add 30 days to today"** - Date arithmetic with timezone awareness
 - **"Generate a unique ID"** - Deterministic UUID/ULID generation
-- **"Scrape this JS-rendered page"** - `stealth_browser` renders the page with Chromium, no LLM guessing
+- **"Run this Python snippet"** - `execute_command` with `python3 -c '...'` for inline data work using `numpy`, `requests`
 
 ### Integration with Agents
 
@@ -561,7 +492,7 @@ curl -X POST http://localhost:8353/api/capabilities/research_topic \
 | `TRUVAG3_LOG_FORMAT` | Log format (`json`\|`text`) | `json` | No |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint | - | No |
 
-No API keys required. The tool is entirely self-contained. Node.js, Playwright, and the stealth plugin are pre-installed in the Docker image.
+No API keys required. The tool is entirely self-contained. Python 3, `pip3`, and common shell + network utilities are pre-installed in the Docker image.
 
 ---
 
@@ -571,10 +502,10 @@ No API keys required. The tool is entirely self-contained. Node.js, Playwright, 
 system-utilities-tool/
 ├── main.go                 # Entry point, config validation, telemetry, framework setup
 ├── system_tool.go          # Tool struct, request/response types, capability registration
-├── handlers.go             # HTTP handlers for all 9 capabilities with full telemetry
+├── handlers.go             # HTTP handlers for all 7 capabilities with full telemetry
 ├── go.mod                  # Go module definition
 ├── .env.example            # Environment variable documentation
-├── Dockerfile              # Standalone container (Debian Bookworm + Node.js + Playwright)
+├── Dockerfile              # Standalone container (python:3.12-slim + shell + network utilities)
 ├── Dockerfile.workspace    # Dev container build from truvag3 root
 ├── k8-deployment.yaml      # Kubernetes Service + Deployment manifests
 ├── setup.sh                # Full lifecycle script (build, run, deploy, test, clean)
@@ -599,7 +530,7 @@ kubectl logs -n truvag3-examples -l app=system-utilities-tool --tail=20
 
 **2. execute_command returns permission denied**
 
-Commands run as non-root user `appuser`. Operations requiring root (e.g., package install, port binding below 1024) will fail by design.
+Commands run as non-root user `appuser`. Operations requiring root (e.g., system-wide `apt-get install`, port binding below 1024) will fail by design. Python packages can still be installed at runtime via `pip3 install --user <package>` — those land in `appuser`'s home and don't need root.
 
 ```bash
 # Check what user the command runs as
@@ -627,24 +558,7 @@ Default timeout is 30 seconds (max 300). For long-running commands, increase the
 {"command": "sleep 60 && echo done", "timeout": 120}
 ```
 
-**5. Stealth browser returns BROWSER_ERROR**
-
-The stealth browser spawns a Node.js subprocess with Playwright. Common issues:
-
-```bash
-# Verify Node.js and Playwright are installed in the container
-kubectl exec -n truvag3-examples deploy/system-utilities-tool -- node -e "console.log('ok')"
-kubectl exec -n truvag3-examples deploy/system-utilities-tool -- node -e "require('playwright-extra'); console.log('playwright-extra ok')"
-
-# Check if Chromium binary is present
-kubectl exec -n truvag3-examples deploy/system-utilities-tool -- npx playwright install --dry-run
-```
-
-- **"Browser timed out"** - Increase the `timeout` field (max 120s). Some sites load slowly.
-- **"Cannot find module 'playwright-extra'"** - Rebuild the Docker image; npm packages may not have installed correctly.
-- **"Chromium sandbox error"** - The container runs as non-root; `--no-sandbox` is passed automatically. If you see sandbox errors, check that the Debian Chromium dependencies are installed (`libnss3`, `libgbm1`, etc.).
-
-**6. Pod not starting**
+**5. Pod not starting**
 
 ```bash
 # Check pod events
