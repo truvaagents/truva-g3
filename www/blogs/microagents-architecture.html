@@ -17,7 +17,7 @@
 <meta property="og:image" content="https://truvag3.dev/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="TruvaG3 — microagents framework for Go">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination">
 <meta name="twitter:description" content="An educational walkthrough of a microagents reference architecture — specialized agents and tools that register their capabilities with a shared dynamic registry, are addressed by logical names, and coordinate without a central conductor. Grounded in the open-source TruvaG3 reference implementation.">
@@ -177,9 +177,36 @@
     margin-top: 1.5rem;
     margin-bottom: 0;
   }
+  header.site-brand {
+    margin-bottom: 1.5rem;
+  }
+  header.site-brand a {
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    display: inline-block;
+  }
+  header.site-brand a:hover {
+    text-decoration: none;
+  }
+  /* Brand mark — solid dark tones (icy blue + warm amber).
+   * brand.css uses a light→dark gradient tuned for dark backgrounds;
+   * this article has a white background, so we use the dark tones
+   * directly for readable contrast. */
+  .brand-truva {
+    color: #4A8AB8;
+    letter-spacing: -0.04em;
+  }
+  .brand-g3 {
+    color: #C56710;
+  }
 </style>
 </head>
 <body>
+
+<header class="site-brand">
+  <a href="/" aria-label="TruvaG3 homepage"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+</header>
 
 
 <article>
