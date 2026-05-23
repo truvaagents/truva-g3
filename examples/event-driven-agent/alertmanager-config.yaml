@@ -37,6 +37,6 @@ data:
 
     - name: 'truvag3-event-agent'
       webhook_configs:
-      - url: 'http://event-driven-agent.truvag3-examples:80/webhook/alertmanager'
+      - url: 'http://event-driven-agent-service.truvag3-examples:80/webhook/alertmanager'
         send_resolved: true
         max_alerts: 10

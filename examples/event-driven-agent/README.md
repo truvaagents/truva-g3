@@ -8,19 +8,25 @@ A production-ready event-driven incident response agent that receives Prometheus
   - [Prerequisites](#prerequisites)
   - [Quick Start (Recommended)](#quick-start-recommended)
   - [Step-by-Step Deployment](#step-by-step-deployment)
+- [Required Tools and Agents](#required-tools-and-agents)
 - [Overview](#overview)
 - [What You'll Learn](#what-youll-learn)
 - [Architecture](#architecture)
+  - [How It Works](#how-it-works)
+  - [Data Isolation](#data-isolation)
 - [Event Processing Pipeline](#event-processing-pipeline)
 - [Deployment Modes](#deployment-modes)
-- [Metrics Collected](#metrics-collected)
 - [AlertManager Integration](#alertmanager-integration)
+- [API Reference](#api-reference)
 - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
 - [Configuration Reference](#configuration-reference)
+  - [OpenAI-Compatible Providers](#openai-compatible-providers)
 - [E2E Stress Test (HITL Demo)](#e2e-stress-test-hitl-demo)
   - [Test Scenario](#test-scenario)
   - [Running the Stress Test](#running-the-stress-test)
   - [Dedup and Flood Prevention](#dedup-and-flood-prevention)
+- [Telemetry](#telemetry)
+- [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Related Examples](#related-examples)
 
@@ -32,459 +38,26 @@ Running this example locally is the best way to understand how the TruvaG3 frame
 
 ### Prerequisites
 
-Before running this example, you need to install the following tools. Choose the instructions for your operating system.
+This agent needs the standard TruvaG3 local-dev toolchain (Docker, Kind, kubectl, Go ≥ 1.26) plus an AI provider API key. If you haven't set these up yet, follow **[Prerequisites in GETTING_STARTED.md](../../GETTING_STARTED.md#1-prerequisites)** — it has full macOS/Linux install instructions, a Podman alternative, a verification script, and an optional Kubernetes UI section.
 
-#### 1. Docker Desktop
-
-Docker is required to build and run containers.
-
-| Platform | Installation Method |
-|----------|---------------------|
-| **macOS** | Download from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) and drag to Applications |
-| **Windows** | Download from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) and run the installer |
-| **Linux** | See [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) for your distribution |
-
-<details>
-<summary><strong>macOS Installation Steps</strong></summary>
-
-1. Download Docker Desktop from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
-2. Double-click `Docker.dmg` to open the installer
-3. Drag the Docker icon to the Applications folder
-4. Double-click `Docker.app` in Applications to start Docker
-5. Follow the onboarding tutorial (optional)
-
-**Verify installation:**
-```bash
-docker --version
-# Expected: Docker version 24.x.x or later
-```
-
-**System Requirements:**
-- macOS 12 (Monterey) or later
-- At least 4 GB RAM
-- Apple Silicon (M1/M2/M3) or Intel processor
-
-</details>
-
-<details>
-<summary><strong>Windows Installation Steps</strong></summary>
-
-1. Download Docker Desktop from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
-2. Run the `Docker Desktop Installer.exe`
-3. Follow the installation wizard
-4. Restart your computer when prompted
-5. Start Docker Desktop from the Start menu
-
-**Verify installation:**
-```powershell
-docker --version
-# Expected: Docker version 24.x.x or later
-```
-
-**System Requirements:**
-- Windows 10 64-bit (Build 19041+) or Windows 11
-- WSL 2 backend (recommended) or Hyper-V
-- At least 4 GB RAM
-- BIOS virtualization enabled
-
-**Enable WSL 2 (if not already enabled):**
-```powershell
-wsl --install
-```
-
-</details>
-
-<details>
-<summary><strong>Linux Installation Steps (Ubuntu/Debian)</strong></summary>
+**Quick install (macOS):**
 
 ```bash
-# Remove old versions
-sudo apt-get remove docker docker-engine docker.io containerd runc
-
-# Install prerequisites
-sudo apt-get update
-sudo apt-get install ca-certificates curl gnupg
-
-# Add Docker's official GPG key
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-# Add the repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# Install Docker Engine
-sudo apt-get update
-sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Add your user to the docker group (to run without sudo)
-sudo usermod -aG docker $USER
-newgrp docker
+brew install go kind kubectl
+brew install --cask docker
 ```
 
-**Verify installation:**
-```bash
-docker --version
-docker run hello-world
-```
+**Quick install (Linux):** see [GETTING_STARTED.md §1](../../GETTING_STARTED.md#1-prerequisites) — install steps are distribution-specific (apt/dnf/snap/manual binary).
 
-</details>
-
-<details>
-<summary><strong>Linux Installation Steps (Fedora/RHEL)</strong></summary>
+**Verify:**
 
 ```bash
-# Remove old versions
-sudo dnf remove docker docker-client docker-client-latest docker-common docker-latest
-
-# Install Docker
-sudo dnf -y install dnf-plugins-core
-sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Start Docker
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# Add your user to the docker group
-sudo usermod -aG docker $USER
-newgrp docker
+docker --version && kind --version && kubectl version --client && go version
 ```
 
-**Verify installation:**
-```bash
-docker --version
-docker run hello-world
-```
+#### AI Provider API Key (Required)
 
-</details>
-
----
-
-#### 2. Kind (Kubernetes in Docker)
-
-Kind runs local Kubernetes clusters using Docker containers.
-
-| Platform | Recommended Method | Alternative |
-|----------|-------------------|-------------|
-| **macOS** | `brew install kind` | Binary download |
-| **Windows** | `choco install kind` | `winget install Kubernetes.kind` |
-| **Linux** | Binary download | Package manager |
-
-<details>
-<summary><strong>macOS Installation</strong></summary>
-
-**Using Homebrew (recommended):**
-```bash
-brew install kind
-```
-
-**Using MacPorts:**
-```bash
-sudo port selfupdate && sudo port install kind
-```
-
-**Manual binary installation (Apple Silicon):**
-```bash
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-darwin-arm64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-```
-
-**Manual binary installation (Intel):**
-```bash
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-darwin-amd64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-```
-
-**Verify installation:**
-```bash
-kind --version
-# Expected: kind version 0.31.0 or later
-```
-
-</details>
-
-<details>
-<summary><strong>Windows Installation</strong></summary>
-
-**Using Chocolatey (recommended):**
-```powershell
-choco install kind
-```
-
-**Using Winget:**
-```powershell
-winget install Kubernetes.kind
-```
-
-**Using Scoop:**
-```powershell
-scoop bucket add main
-scoop install main/kind
-```
-
-**Manual binary installation:**
-```powershell
-curl.exe -Lo kind-windows-amd64.exe https://kind.sigs.k8s.io/dl/v0.31.0/kind-windows-amd64
-Move-Item .\kind-windows-amd64.exe C:\Windows\System32\kind.exe
-```
-
-**Verify installation:**
-```powershell
-kind --version
-# Expected: kind version 0.31.0 or later
-```
-
-</details>
-
-<details>
-<summary><strong>Linux Installation</strong></summary>
-
-**Binary installation (AMD64/x86_64):**
-```bash
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-```
-
-**Binary installation (ARM64):**
-```bash
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-arm64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-```
-
-**Using Go (if Go is installed):**
-```bash
-go install sigs.k8s.io/kind@v0.31.0
-```
-
-**Verify installation:**
-```bash
-kind --version
-# Expected: kind version 0.31.0 or later
-```
-
-</details>
-
----
-
-#### 3. kubectl (Kubernetes CLI)
-
-kubectl is the command-line tool for interacting with Kubernetes clusters.
-
-| Platform | Recommended Method | Alternative |
-|----------|-------------------|-------------|
-| **macOS** | `brew install kubectl` | Binary download |
-| **Windows** | `choco install kubernetes-cli` | Binary download |
-| **Linux** | `apt install kubectl` | Binary download |
-
-<details>
-<summary><strong>macOS Installation</strong></summary>
-
-**Using Homebrew (recommended):**
-```bash
-brew install kubectl
-```
-
-**Manual binary installation (Apple Silicon):**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/arm64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
-```
-
-**Manual binary installation (Intel):**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/amd64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
-```
-
-**Verify installation:**
-```bash
-kubectl version --client
-# Expected: Client Version: v1.31.x or later
-```
-
-</details>
-
-<details>
-<summary><strong>Windows Installation</strong></summary>
-
-**Using Chocolatey (recommended):**
-```powershell
-choco install kubernetes-cli
-```
-
-**Using Winget:**
-```powershell
-winget install -e --id Kubernetes.kubectl
-```
-
-**Manual binary installation:**
-```powershell
-# Download kubectl
-curl.exe -LO "https://dl.k8s.io/release/v1.31.0/bin/windows/amd64/kubectl.exe"
-
-# Move to a directory in your PATH
-Move-Item .\kubectl.exe C:\Windows\System32\kubectl.exe
-```
-
-**Verify installation:**
-```powershell
-kubectl version --client
-# Expected: Client Version: v1.31.x or later
-```
-
-</details>
-
-<details>
-<summary><strong>Linux Installation</strong></summary>
-
-**Using apt (Ubuntu/Debian):**
-```bash
-# Add Kubernetes apt repository
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
-
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo chmod 644 /etc/apt/sources.list.d/kubernetes.list
-
-sudo apt-get update
-sudo apt-get install -y kubectl
-```
-
-**Using snap:**
-```bash
-sudo snap install kubectl --classic
-```
-
-**Manual binary installation:**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
-```
-
-**Verify installation:**
-```bash
-kubectl version --client
-# Expected: Client Version: v1.31.x or later
-```
-
-</details>
-
----
-
-#### 4. Go Programming Language
-
-Go is required for local development and running without Docker.
-
-| Platform | Recommended Method | Alternative |
-|----------|-------------------|-------------|
-| **macOS** | `brew install go` | Download from go.dev |
-| **Windows** | Download MSI from go.dev | `choco install golang` |
-| **Linux** | Download tarball from go.dev | Package manager |
-
-<details>
-<summary><strong>macOS Installation</strong></summary>
-
-**Using Homebrew (recommended):**
-```bash
-brew install go
-```
-
-**Manual installation:**
-1. Download the macOS installer from [go.dev/dl](https://go.dev/dl/)
-2. Open the downloaded `.pkg` file
-3. Follow the installation prompts
-
-**Verify installation:**
-```bash
-go version
-# Expected: go version go1.26.x darwin/arm64 (or darwin/amd64)
-```
-
-**Set up Go workspace (if not using modules):**
-```bash
-# Add to ~/.zshrc or ~/.bash_profile
-export GOPATH=$HOME/go
-export PATH=$PATH:$GOPATH/bin
-```
-
-</details>
-
-<details>
-<summary><strong>Windows Installation</strong></summary>
-
-**Using the MSI installer (recommended):**
-1. Download the Windows installer from [go.dev/dl](https://go.dev/dl/)
-2. Run the `.msi` installer
-3. Follow the installation wizard
-4. The installer sets PATH automatically
-
-**Using Chocolatey:**
-```powershell
-choco install golang
-```
-
-**Verify installation:**
-```powershell
-go version
-# Expected: go version go1.26.x windows/amd64
-```
-
-</details>
-
-<details>
-<summary><strong>Linux Installation</strong></summary>
-
-**Manual installation (recommended for latest version):**
-```bash
-# Download Go (replace version as needed)
-curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-
-# Remove any previous installation and extract
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
-
-# Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
-export PATH=$PATH:/usr/local/go/bin
-```
-
-**Using apt (may not have latest version):**
-```bash
-sudo apt update
-sudo apt install golang-go
-```
-
-**Using snap:**
-```bash
-sudo snap install go --classic
-```
-
-**Verify installation:**
-```bash
-go version
-# Expected: go version go1.26.x linux/amd64
-```
-
-</details>
-
----
-
-#### 5. AI Provider API Key (Required)
-
-This agent requires at least one AI provider API key for intelligent orchestration and analysis.
+At least one AI provider API key is required for the agent's intelligent orchestration and analysis.
 
 | Provider | Get API Key | Notes |
 |----------|-------------|-------|
@@ -492,38 +65,7 @@ This agent requires at least one AI provider API key for intelligent orchestrati
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | Claude models |
 | **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | Fast inference, free tier |
 
-**Auto-detection priority:** The agent automatically detects and uses the first available provider.
-
-**Multiple providers enable automatic failover** - if one provider fails, the agent tries the next.
-
----
-
-### Verify All Prerequisites
-
-Run this script to verify all tools are installed correctly:
-
-```bash
-echo "Checking prerequisites..."
-echo ""
-
-echo "Docker:"
-docker --version || echo "  ERROR: Docker not found"
-echo ""
-
-echo "Kind:"
-kind --version || echo "  ERROR: Kind not found"
-echo ""
-
-echo "kubectl:"
-kubectl version --client --short 2>/dev/null || kubectl version --client || echo "  ERROR: kubectl not found"
-echo ""
-
-echo "Go:"
-go version || echo "  ERROR: Go not found"
-echo ""
-
-echo "All checks complete!"
-```
+The agent auto-detects available providers and fails over between them — configure multiple keys for automatic failover.
 
 > **Important:** This example deploys the agent along with Prometheus AlertManager for real webhook-driven alert processing. The setup script handles all infrastructure deployment automatically, including AlertManager configuration.
 
@@ -562,7 +104,7 @@ At minimum, uncomment and set ONE of these in your `.env` file:
 2. Deploys shared monitoring infrastructure (Redis, OTEL Collector, Prometheus, Jaeger, Grafana)
 3. Deploys Prometheus AlertManager with routing rules for TruvaG3 alerts
 4. Builds and deploys the event-driven agent
-5. Deploys the stress-test-api mock service (for E2E HITL testing)
+5. Deploys the product-catalog-api mock service (for E2E HITL testing — see [E2E Stress Test](#e2e-stress-test-hitl-demo))
 6. Sets up port forwarding automatically
 
 Once complete, access the services at:
@@ -656,115 +198,55 @@ curl -X POST http://localhost:8372/trigger \
 
 ---
 
-## API Reference
+## Required Tools and Agents
 
-The agent exposes the following endpoints:
+The event-driven-agent's AI investigation calls capabilities exposed by other tool services discovered via Redis. **These tools must be running for the agent to investigate alerts end-to-end.**
 
-### Health & Discovery
+### Core Tools (used by the shipped HITL stress test)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check with Redis, orchestrator, AI provider, HITL, and queue status |
-| `/api/capabilities` | GET | List all registered capabilities |
+These tools are referenced directly by the E2E Stress Test scenario (latency alert → rollout_restart). Without them, the AI investigation will fall back to a degraded "manual investigation required" response.
 
-### Capabilities
+| Tool | Purpose | Port | Documentation |
+|------|---------|------|---------------|
+| **devops-tool** | `kubectl` operations: get/describe pods, deployments, services, nodes; `rollout_restart`, `scale_deployment`, `delete_pod` (HITL-gated) | 8347 | [README](../devops-tool/README.md) |
+| **prometheus-query-tool** | `query_metrics` — PromQL queries against the in-cluster Prometheus (used during AI investigation to confirm alert conditions) | 8371 | [README](../prometheus-query-tool/README.md) |
+| **devops-observability-tool** | `query_logs` (Loki) and `find_traces` / `get_trace` (Jaeger) — for log/trace inspection during investigation | 8378 | [README](../devops-observability-tool/README.md) |
+| **slack-tool** | `send_message` — used **both** directly by the webhook receiver for `warning`-severity alerts ([webhook_receiver.go:293](webhook_receiver.go#L293)) and by the AI investigation for incident notifications | 8373 | [README](../slack-tool/README.md) |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/webhook/alertmanager` | POST | Receives AlertManager webhook payloads for automated incident response |
-| `/trigger` | POST | Manually triggers an alert investigation for testing or CLI integration |
-| `/events` | GET | Returns recent alert event history with queue status |
+### Optional Tools
 
-### Async Task API
+These extend the agent's investigation toolkit but aren't required for the shipped stress test.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/tasks` | POST | Submit a new async task (e.g., `alert_investigation`) |
-| `/api/v1/tasks/{id}` | GET | Get task status and results |
-| `/api/v1/tasks/{id}/cancel` | POST | Cancel a running task |
+| Tool | Purpose | Documentation |
+|------|---------|---------------|
+| **jira-tool** | `create_ticket`, `add_comment`, `search_issues` — for incident documentation. Not HITL-gated by default | [README](../jira-tool/README.md) |
+| **system-utilities-tool** | `get_current_time`, `sleep`, `execute_command` — used by some AI plans for inspection delays | [README](../system-utilities-tool/README.md) |
 
-### Example Requests
+### Mock Service (for E2E demo)
 
-**Health Check:**
+| Service | Purpose | Documentation |
+|---------|---------|---------------|
+| **product-catalog-api** | Simulates a production microservice with `/api/v1/products` + `/api/v1/categories` endpoints. Includes `/admin/simulate/degrade` and `/admin/simulate/recover` for triggering the alert pipeline. Deployed automatically by `./setup.sh full-deploy` and driven by `./setup.sh mock-service ...` | [mock-services README](../mock-services/README.md) · [source](../mock-services/product-catalog-api/) |
+
+### Related Agents
+
+| Agent | Purpose | Documentation |
+|-------|---------|---------------|
+| **devops-chat-agent** | Conversational sibling — same HITL infrastructure and tool family, but driven by a chat UI instead of webhooks | [README](../devops-chat-agent/README.md) |
+| **agent-with-human-approval** | Minimal HITL demo agent (synchronous chat) — useful for understanding the checkpoint/resume flow in isolation | [README](../agent-with-human-approval/README.md) |
+| **agent-with-orchestration** | Basic orchestration example without HITL or event-driven patterns | [README](../agent-with-orchestration/README.md) |
+| **agent-with-telemetry** | Telemetry-focused agent | [README](../agent-with-telemetry/README.md) |
+
+### Deploying Tools
+
+Each tool has its own `setup.sh` script with similar commands:
+
 ```bash
-curl http://localhost:8372/health
-```
-
-**Sample Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": 1709568000,
-  "service": "event-driven-agent",
-  "redis": "healthy",
-  "queue_depth": 0,
-  "orchestrator": {
-    "status": "active",
-    "total_requests": 12,
-    "successful_requests": 10,
-    "failed_requests": 2
-  },
-  "ai_provider": "connected",
-  "hitl": "active"
-}
-```
-
-**Manual Alert Trigger (Critical):**
-```bash
-curl -X POST http://localhost:8372/trigger \
-  -H "Content-Type: application/json" \
-  -d '{
-    "alertname": "TruvaG3ComponentDown",
-    "severity": "critical",
-    "instance": "stock-market-tool-xyz:8348",
-    "summary": "TruvaG3 component truvag3-tools is down"
-  }'
-```
-
-**Sample Response:**
-```json
-{
-  "status": "ok",
-  "alertname": "TruvaG3ComponentDown",
-  "severity": "critical",
-  "enqueued": true,
-  "fingerprint": "manual-TruvaG3ComponentDown-1709568000000000000"
-}
-```
-
-**AlertManager Webhook (simulating AlertManager):**
-```bash
-curl -X POST http://localhost:8372/webhook/alertmanager \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": "4",
-    "status": "firing",
-    "alerts": [
-      {
-        "status": "firing",
-        "labels": {
-          "alertname": "HighCPU",
-          "severity": "critical",
-          "instance": "web-server-01"
-        },
-        "annotations": {
-          "summary": "CPU usage above 90% for 5 minutes"
-        },
-        "startsAt": "2026-03-04T10:00:00Z",
-        "fingerprint": "abc123"
-      }
-    ]
-  }'
-```
-
-**Event History:**
-```bash
-curl http://localhost:8372/events
-```
-
-**List Capabilities:**
-```bash
-curl http://localhost:8372/api/capabilities
+# Example: Deploy devops-tool
+cd examples/devops-tool
+./setup.sh deploy       # Deploy to Kubernetes
+./setup.sh run          # Run locally
+./setup.sh help         # See all options
 ```
 
 ---
@@ -845,6 +327,37 @@ This example demonstrates an event-driven agent pattern that is fundamentally di
   └──────────┘        │  Metrics)│         └──────────┘
                       └──────────┘
 ```
+
+### How It Works
+
+1. **AlertManager fires a webhook** (or a developer hits `/trigger` manually) to the agent's API endpoint
+2. **Webhook receiver parses** the AlertManager payload and runs the **deterministic pipeline** (fast, predictable, synchronous):
+   - Skip `resolved` alerts (informational only)
+   - Severity route: `critical` → enqueue, `warning` → Slack notify directly, `info` → log only
+   - Dedup check via Redis `SET NX` with fingerprint key + TTL (`TRUVAG3_EVENT_DEDUP_TTL`, default 5 min)
+3. **Critical alerts are `LPUSH`-ed** onto the Redis queue and the HTTP response returns immediately (the caller doesn't wait for investigation)
+4. **Worker pool** (`WORKER_COUNT` background goroutines, default 3) **`BRPOP`-s** alerts from the queue
+5. **Context enrichment** builds a natural-language query from alert labels and annotations
+6. **AI orchestrator** plans a DAG of tool calls (typically: `query_metrics` → `get_pods` → `get_pod_logs` → `rollout_restart`)
+7. **HITL gate** intercepts any step whose capability is in `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` (`rollout_restart`, `scale_deployment`, `delete_pod` by default) and pauses execution. A checkpoint is persisted to Redis (DB 6) and an `expired_approved` / `approved` / `rejected` decision drives resumption via `/hitl/resume/{id}`
+8. **AI synthesizes** a natural-language incident report and the worker releases the dedup key so the same alert can be re-investigated if it fires again
+9. **Side effects** (`create_ticket`, `send_message`, etc.) run as part of the DAG. By default these are **not** HITL-gated — only destructive K8s writes are
+
+See [Event Processing Pipeline](#event-processing-pipeline) for the per-stage breakdown.
+
+### Data Isolation
+
+| Data Type | Backend | Location |
+|-----------|---------|----------|
+| Service Registry | Redis | DB 0, keys `truvag3:services:*` |
+| Alert Event Queue | Redis | DB 0, list key `truvag3:event:alert_queue` ([queue_consumer.go:36](queue_consumer.go#L36)), LPUSH'd by the webhook receiver, BRPOP'd by workers |
+| Alert Dedup Fingerprints | Redis | DB 0, keys `truvag3:event:dedup:<fingerprint>` ([webhook_receiver.go:195](webhook_receiver.go#L195)) with TTL from `TRUVAG3_EVENT_DEDUP_TTL` (default 5 min) |
+| Shared Agent Memory — Episodic Events | Redis | DB 0, keys `truvag3:memory:infrastructure:event:<uuid>` (per-record string) and stream `truvag3:memory:infrastructure:events:stream`. Domain (`infrastructure`) is set via `TRUVAG3_AGENT_DOMAIN`. Shared with sister agents (e.g., devops-chat-agent) in the same domain |
+| Shared Agent Memory — Entity Records | Redis | DB 0, keys `truvag3:memory:infrastructure:entity:<type>:<id>` — per-entity rollups built from events |
+| Activity Coordination Signals | Redis | DB 0 (separate top-level prefix), keys `truvag3:activity:infrastructure:{requestID}` with 5-min TTL (`TRUVAG3_ACTIVITY_SIGNAL_TTL`). Each in-flight investigation announces itself here; other agents in the domain see active signals in their `<agent_coordination>` planning context — **advisory, not blocking** |
+| HITL Checkpoints & Commands | Redis | DB 6 (override via `TRUVAG3_HITL_REDIS_DB`), keys `truvag3:hitl:<agent-name>:*` |
+| LLM Debug Records | Redis | DB 7, keys `llm_debug:*` (active when `TRUVAG3_LLM_DEBUG_ENABLED=true`) |
+| Execution Debug DAGs | Redis | DB 8 (when `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`) |
 
 ---
 
@@ -938,19 +451,6 @@ AlertManager ──webhook──▶ API pod ──Redis queue──▶ Worker po
 
 ---
 
-## Metrics Collected
-
-| Metric | Type | Description | Labels |
-|--------|------|-------------|--------|
-| `event_agent.alerts_received` | Counter | Total alerts received from AlertManager | severity, alertname |
-| `event_agent.alerts_deduplicated` | Counter | Alerts skipped due to deduplication | alertname |
-| `event_agent.alerts_enqueued` | Counter | Alerts enqueued for AI investigation | severity |
-| `event_agent.alerts_processed` | Counter | Alerts processed by worker pool | status |
-| `event_agent.processing_duration_ms` | Histogram | End-to-end investigation duration | - |
-| `event_agent.slack_notifications` | Counter | Slack notifications sent for warnings | status |
-
----
-
 ## AlertManager Integration
 
 The agent includes Kubernetes manifests for deploying Prometheus AlertManager pre-configured to route TruvaG3 alerts to the agent's webhook endpoint.
@@ -994,9 +494,136 @@ curl -X POST http://localhost:8372/webhook/alertmanager \
 
 ---
 
+## API Reference
+
+The agent exposes the following endpoints:
+
+### Health & Discovery
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with Redis, orchestrator, AI provider, HITL, and queue status |
+| `/api/capabilities` | GET | List all registered capabilities |
+
+### Capabilities
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/webhook/alertmanager` | POST | Receives AlertManager webhook payloads for automated incident response |
+| `/trigger` | POST | Manually triggers an alert investigation for testing or CLI integration |
+| `/events` | GET | Returns recent alert event history with queue status |
+
+### Async Task API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/tasks` | POST | Submit a new async task (e.g., `alert_investigation`) |
+| `/api/v1/tasks/{id}` | GET | Get task status and results |
+| `/api/v1/tasks/{id}/cancel` | POST | Cancel a running task |
+
+### HITL Endpoints
+
+These endpoints manage Human-in-the-Loop checkpoints when the AI investigation reaches a step that's gated by `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` (default: `rollout_restart`, `scale_deployment`, `delete_pod`). See [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl) for the approval-flow walkthrough and [E2E Stress Test](#e2e-stress-test-hitl-demo) for an end-to-end demo.
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/hitl/checkpoints` | GET | List pending checkpoints (query params: `status`, `limit`, `offset`) |
+| `/hitl/checkpoints/{id}` | GET | Get full details for a single checkpoint (plan, current step, completed steps, decision) |
+| `/hitl/command` | POST | Submit `approve` / `reject` / `edit` / `abort` decision |
+| `/hitl/resume/{id}` | POST | Resume execution after approval — re-enqueues a `hitl_resume` task to the worker pool |
+| `/internal/hitl-webhook` | POST | **API mode only.** Worker pod POSTs here when a checkpoint fires; the API pod fans out the notification to the registry-viewer-app and any subscribed clients |
+
+> **Split-mode note:** In split mode (separate API + Worker pods, see [Deployment Modes](#deployment-modes)), the K8s Service routes all `/hitl/*` requests to the **API pod**, so external clients (Registry Viewer App, curl, the chat-ui) always reach the API. The worker pod registers only `/internal/hitl-webhook` (as a receiver) and the standard `/hitl/*` endpoints serve from the API pod. `TRUVAG3_HITL_WEBHOOK_URL` on the worker points back at the API Service so checkpoint notifications cross the pod boundary.
+
+### Example Requests
+
+**Health Check:**
+```bash
+curl http://localhost:8372/health
+```
+
+**Sample Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": 1709568000,
+  "service": "event-driven-agent",
+  "redis": "healthy",
+  "queue_depth": 0,
+  "orchestrator": {
+    "status": "active",
+    "total_requests": 12,
+    "successful_requests": 10,
+    "failed_requests": 2
+  },
+  "ai_provider": "connected",
+  "hitl": "active"
+}
+```
+
+**Manual Alert Trigger (Critical):**
+```bash
+curl -X POST http://localhost:8372/trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alertname": "TruvaG3ComponentDown",
+    "severity": "critical",
+    "instance": "stock-market-tool-xyz:8348",
+    "summary": "TruvaG3 component truvag3-tools is down"
+  }'
+```
+
+**Sample Response:**
+```json
+{
+  "status": "ok",
+  "alertname": "TruvaG3ComponentDown",
+  "severity": "critical",
+  "enqueued": true,
+  "fingerprint": "manual-TruvaG3ComponentDown-1709568000000000000"
+}
+```
+
+**AlertManager Webhook (simulating AlertManager):**
+```bash
+curl -X POST http://localhost:8372/webhook/alertmanager \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": "4",
+    "status": "firing",
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "HighCPU",
+          "severity": "critical",
+          "instance": "web-server-01"
+        },
+        "annotations": {
+          "summary": "CPU usage above 90% for 5 minutes"
+        },
+        "startsAt": "2026-03-04T10:00:00Z",
+        "fingerprint": "abc123"
+      }
+    ]
+  }'
+```
+
+**Event History:**
+```bash
+curl http://localhost:8372/events
+```
+
+**List Capabilities:**
+```bash
+curl http://localhost:8372/api/capabilities
+```
+
+---
+
 ## Human-in-the-Loop (HITL)
 
-Write operations (pod restarts, scaling, deletions, Slack messages, JIRA ticket creation) are gated by human-in-the-loop approval. When the orchestrator encounters a sensitive capability, execution pauses and returns a checkpoint ID for approval.
+By default, only **destructive Kubernetes write operations** (`rollout_restart`, `scale_deployment`, `delete_pod`) are gated by human-in-the-loop approval — these are the capabilities listed in the shipped `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES`. Notification capabilities (`create_ticket`, `send_message`, `send_rich_message`) and read-only investigation calls (`query_metrics`, `query_logs`, `get_pods`) run autonomously. When the orchestrator encounters a gated capability, execution pauses and a checkpoint is persisted to Redis for approval.
 
 ### Configuration
 
@@ -1009,8 +636,13 @@ TRUVAG3_HITL_ENABLED=true
 # Plan-level approval (approve the entire DAG before execution)
 TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL=false
 
-# Step-level approval for these capabilities
-TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES=rollout_restart,scale_deployment,delete_pod,send_message,create_ticket
+# Step-level approval for destructive K8s write operations.
+# The shipped .env.example gates only these three. Notification capabilities
+# (create_ticket, send_message, send_rich_message) are deliberately NOT gated
+# so the agent can autonomously file Jira tickets / post Slack messages
+# during investigation. Add them here only if you want human approval before
+# every notification too.
+TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES=rollout_restart,scale_deployment,delete_pod
 
 # Approval timeout
 TRUVAG3_HITL_DEFAULT_TIMEOUT=5m
@@ -1044,7 +676,7 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m
 | `APP_ENV` | development | Telemetry profile (development/staging/production) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | http://localhost:4318 | OTEL Collector endpoint |
 | `SLACK_WEBHOOK_URL` | - | Slack webhook URL for warning-level notifications |
-| `EVENT_AGENT_DEDUP_TTL` | 300 | Deduplication TTL in seconds |
+| `TRUVAG3_EVENT_DEDUP_TTL` | 300 | Deduplication TTL in seconds |
 | `TRUVAG3_HITL_ENABLED` | true | Enable human-in-the-loop approval |
 | `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | false | Require approval for entire execution plan |
 | `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | - | Comma-separated list of capabilities requiring step-level approval |
@@ -1063,11 +695,47 @@ Copy `.env.example` to `.env` and configure your settings:
 
 The `.env.example` file contains comprehensive documentation for all options including:
 
-- **AI Provider Keys** - Supports provider chain for failover
+- **AI Provider Keys** - Supports provider chain for failover (OpenAI → Anthropic → Groq)
+- **Model Aliases** - Override default/smart/fast model mappings per provider
 - **Service Configuration** - Port, Redis URL, deployment mode, worker count
 - **Event Agent Configuration** - Dedup TTL, Slack webhook
-- **HITL Configuration** - Approval settings for write operations
+- **HITL Configuration** - Sensitive capability list, approval timeouts, default action
 - **Telemetry Configuration** - Environment profiles and OTLP endpoints
+
+### OpenAI-Compatible Providers
+
+You can use any OpenAI-compatible API (DeepSeek, Together AI, xAI, Qwen, local Ollama, etc.) as a drop-in replacement for OpenAI.
+
+**Option 1: Override OpenAI endpoint** (simplest)
+
+```bash
+# Use DeepSeek as the "OpenAI" provider
+OPENAI_API_KEY=your-deepseek-api-key
+OPENAI_BASE_URL=https://api.deepseek.com/v1
+TRUVAG3_OPENAI_MODEL_DEFAULT=deepseek-chat
+```
+
+**Option 2: Use dedicated environment variables**
+
+```bash
+# DeepSeek
+DEEPSEEK_API_KEY=your-key
+DEEPSEEK_BASE_URL=https://api.deepseek.com  # optional, this is the default
+
+# xAI (Grok)
+XAI_API_KEY=your-key
+
+# Together AI
+TOGETHER_API_KEY=your-key
+
+# Qwen (Alibaba)
+QWEN_API_KEY=your-key
+
+# Ollama (local, no API key needed)
+OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+
+See `.env.example` for complete documentation of all supported providers.
 
 ### Setup Script Commands
 
@@ -1079,7 +747,7 @@ The `.env.example` file contains comprehensive documentation for all options inc
 # Kubernetes Cluster
 ./setup.sh cluster        # Create Kind cluster with port mappings
 ./setup.sh infra          # Setup monitoring infrastructure + AlertManager
-./setup.sh full-deploy    # Complete deployment: cluster + infra + agent + stress-test-api + port forwards
+./setup.sh full-deploy    # Complete deployment: cluster + infra + agent + product-catalog-api + port forwards
 
 # Kubernetes Deployment
 ./setup.sh docker-build     # Build Docker image using local workspace modules
@@ -1091,20 +759,22 @@ The `.env.example` file contains comprehensive documentation for all options inc
 ./setup.sh forward          # Port forward agent service only
 ./setup.sh forward-all      # Port forward agent + AlertManager + monitoring
 ./setup.sh logs             # View agent logs
-./setup.sh status           # Check deployment status (agent + AlertManager + stress-test-api + monitoring)
+./setup.sh status           # Check deployment status (agent + AlertManager + product-catalog-api + monitoring)
 ./setup.sh rollout          # Restart deployment to pick up new secrets/config
 
-# Stress Test (E2E HITL)
-./setup.sh stress-test deploy      # Deploy stress-test-api mock service
-./setup.sh stress-test rebuild     # Rebuild stress-test-api from scratch
-./setup.sh stress-test stress-on   # Enable stress mode (triggers alert → HITL flow)
-./setup.sh stress-test stress-off  # Disable stress mode
-./setup.sh stress-test status      # Show stress-test-api pod and stress state
-./setup.sh stress-test logs        # Tail stress-test-api logs
-./setup.sh stress-test clean       # Remove stress-test-api deployment
+# Mock Service (E2E HITL stress test driver)
+./setup.sh mock-service deploy       # Deploy product-catalog-api mock service
+./setup.sh mock-service rebuild      # Rebuild product-catalog-api from scratch
+./setup.sh mock-service normal-load  # Start ~3 req/s baseline load
+./setup.sh mock-service heavy-load   # Start ~30 req/s heavy load
+./setup.sh mock-service degrade      # Inject 1.2-2.0s latency + memory leak (triggers alert → HITL)
+./setup.sh mock-service recover      # Release ballast and recover to healthy
+./setup.sh mock-service status       # Show product-catalog-api pod and degradation state
+./setup.sh mock-service logs         # Tail product-catalog-api logs
+./setup.sh mock-service clean        # Remove product-catalog-api deployment
 
 # Cleanup
-./setup.sh clean          # Remove agent, AlertManager, and stress-test-api deployments
+./setup.sh clean          # Remove agent, AlertManager, and product-catalog-api deployments
 ./setup.sh clean-all      # Delete Kind cluster and all resources
 ```
 
@@ -1289,6 +959,107 @@ routes:
 
 ---
 
+## Telemetry
+
+The agent emits comprehensive observability data — every alert, every investigation step, every HITL pause is traced end-to-end.
+
+### Tracing (Jaeger)
+
+- Every webhook arrival starts a root span; the worker pool's investigation runs link back to the original webhook trace
+- Tool execution timing is captured per step in the DAG
+- HITL wait spans (`hitl.checkpoint.loaded`, `hitl.resume_started`, `hitl.resume_completed`) — linked to the original investigation span so a multi-checkpoint workflow stitches together cleanly
+- Worker-to-API webhook delivery is traced across the pod boundary in split mode (worker writes `original_trace_id` into the checkpoint, API attaches it on resume)
+- Access at http://jaeger.localhost (or http://localhost:16686 via port-forward)
+
+### LLM Debug Payload Store
+
+For debugging orchestration issues, the LLM Debug Store captures complete prompts and responses (Jaeger truncates large payloads). The shipped `.env.example` enables it by default:
+
+```bash
+TRUVAG3_LLM_DEBUG_ENABLED=true
+```
+
+This captures all LLM interactions at the standard recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`) with full payload visibility. Records are stored in Redis DB 7 with configurable TTL.
+
+### Metrics (Prometheus/Grafana)
+
+| Metric | Type | Description | Labels |
+|--------|------|-------------|--------|
+| `event_agent.alerts_received` | Counter | Total alerts received from AlertManager | severity, alertname |
+| `event_agent.alerts_deduplicated` | Counter | Alerts skipped due to deduplication | alertname |
+| `event_agent.alerts_enqueued` | Counter | Alerts enqueued for AI investigation | severity |
+| `event_agent.alerts_processed` | Counter | Alerts processed by worker pool | status |
+| `event_agent.processing_duration_ms` | Histogram | End-to-end investigation duration (queue dequeue → AI synthesis complete) | - |
+| `event_agent.slack_notifications` | Counter | Slack notifications sent for warnings | status |
+
+Access Grafana at http://grafana.localhost (admin/admin). The E2E stress test ships two pre-provisioned dashboards — see [Grafana Dashboards](#grafana-dashboards) under the stress test.
+
+### Logging
+
+Structured JSON logs with component attribution and trace context. Request-scoped logs include `trace.trace_id` and `trace.span_id` for distributed tracing:
+
+```json
+{
+  "component": "agent/event-driven-agent",
+  "level": "INFO",
+  "message": "Alert enqueued for AI investigation",
+  "operation": "webhook_alertmanager",
+  "service": "event-driven-agent",
+  "alertname": "TruvaG3HighLatency",
+  "severity": "critical",
+  "fingerprint": "abc123def456",
+  "queue_depth": 1,
+  "timestamp": "2026-05-22T16:31:51Z",
+  "trace.span_id": "0b319744acd226d5",
+  "trace.trace_id": "445c352173a351de293d4d27416b0eb2"
+}
+```
+
+```json
+{
+  "component": "agent/event-driven-agent",
+  "level": "INFO",
+  "message": "AI investigation completed",
+  "operation": "alert_investigation",
+  "service": "event-driven-agent",
+  "alertname": "TruvaG3HighLatency",
+  "tools_used": ["query_metrics", "get_pods", "get_pod_logs"],
+  "interrupted": true,
+  "checkpoint_id": "cp-d6c2b787-292c-4f",
+  "duration_ms": 24380,
+  "timestamp": "2026-05-22T16:32:15Z",
+  "trace.span_id": "e59c0a1c74b3f996",
+  "trace.trace_id": "445c352173a351de293d4d27416b0eb2"
+}
+```
+
+---
+
+## Project Structure
+
+```
+event-driven-agent/
+├── main.go                    # Entry point; mode dispatch (embedded / api / worker)
+├── event_agent.go             # Agent type + AI chain client wiring + capability registration
+├── event_processor.go         # AI investigation pipeline (context enrichment → orchestrator → synthesis)
+├── webhook_receiver.go        # AlertManager webhook parser + deterministic pipeline (sev route, dedup, enqueue)
+├── queue_consumer.go          # Worker pool that BRPOPs from Redis and invokes event_processor
+├── handlers.go                # HTTP handlers for /trigger, /events, /health, /webhook/alertmanager
+├── hitl_setup.go              # HITL infrastructure (checkpoint store, controller, policy)
+├── alertmanager-config.yaml   # AlertManager routing rules ConfigMap
+├── alertmanager.yaml          # AlertManager Deployment + Service
+├── k8-deployment.yaml         # Kubernetes manifest (embedded mode — single pod)
+├── k8-deployment-api.yaml     # API pod manifest (split mode)
+├── k8-deployment-worker.yaml  # Worker pod manifest (split mode)
+├── go.mod                     # Go module definition
+├── Dockerfile                 # Production container image
+├── Dockerfile.workspace       # Development container with local modules
+├── setup.sh                   # Build and deployment script (cluster, infra, deploy, mock-service driver)
+└── README.md                  # This file
+```
+
+---
+
 ## Troubleshooting
 
 ### Alerts not being processed
@@ -1330,12 +1101,12 @@ The agent deduplicates alerts by fingerprint with a default 5-minute TTL:
 1. **Check dedup TTL setting**:
    ```bash
    # Default is 300 seconds (5 minutes)
-   echo $EVENT_AGENT_DEDUP_TTL
+   echo $TRUVAG3_EVENT_DEDUP_TTL
    ```
 
 2. **Lower the TTL for testing**:
    ```bash
-   EVENT_AGENT_DEDUP_TTL=30  # 30 seconds
+   TRUVAG3_EVENT_DEDUP_TTL=30  # 30 seconds
    ```
 
 ### HITL checkpoint not appearing
@@ -1394,28 +1165,27 @@ curl http://localhost:8372/events
 
 ## Related Examples
 
-- [agent-example](../agent-example) - Basic agent without event-driven patterns
-- [agent-with-async](../agent-with-async/) - Async task processing patterns
-- [agent-with-human-approval](../agent-with-human-approval/) - Human-in-the-loop approval workflows
-- [agent-with-orchestration](../agent-with-orchestration/) - AI orchestration with DAG planning
-- [agent-with-telemetry](../agent-with-telemetry/) - Comprehensive telemetry and observability
+**Sibling agents:**
+- [devops-chat-agent](../devops-chat-agent/) - Conversational sibling using the same HITL infrastructure + tool family
+- [agent-with-human-approval](../agent-with-human-approval/) - Minimal HITL demo (synchronous chat) — best place to understand checkpoints in isolation
+- [agent-with-orchestration](../agent-with-orchestration/) - AI orchestration with DAG planning, no HITL or event-driven patterns
+- [agent-with-async](../agent-with-async/) - Async task processing patterns (background workers without webhooks)
+- [agent-with-telemetry](../agent-with-telemetry/) - Telemetry-focused observability example
 - [agent-with-resilience](../agent-with-resilience/) - Resilience patterns (circuit breakers, retries)
-- [devops-tool](../devops-tool/) - DevOps tool for pod management (used by this agent)
-- [jira-tool](../jira-tool/) - JIRA integration tool (used by this agent)
-- [slack-tool](../slack-tool/) - Slack integration tool (used by this agent)
+- [agent-example](../agent-example/) - Basic agent without event-driven patterns
 
----
+**Tools called by this agent:**
+- [devops-tool](../devops-tool/) - `kubectl` operations including HITL-gated `rollout_restart` / `scale_deployment` / `delete_pod`
+- [devops-observability-tool](../devops-observability-tool/) - Loki + Jaeger queries for investigation
+- [prometheus-query-tool](../prometheus-query-tool/) - PromQL queries
+- [jira-tool](../jira-tool/) - Ticket management
+- [slack-tool](../slack-tool/) - Incident notifications (direct call for `warning` severity, AI-orchestrated for `critical`)
 
-## Learn More
-
+**Further reading:**
 - [TruvaG3 Orchestration Module](../../orchestration/README.md) - AI orchestration and DAG planning
 - [Distributed Tracing Guide](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) - End-to-end request tracing and log correlation
 - [Agent Development Guide](../../docs/building/AGENT_DEVELOPMENT_GUIDE.md) - Building agents with TruvaG3
-- [Prometheus AlertManager Documentation](https://prometheus.io/docs/alerting/latest/alertmanager/)
-- [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/)
+- [Prometheus AlertManager Documentation](https://prometheus.io/docs/alerting/latest/alertmanager/) - Upstream AlertManager reference
+- [OpenTelemetry Go Documentation](https://opentelemetry.io/docs/languages/go/) - OTel SDK reference
 
----
-
-## License
-
-This example is part of the TruvaG3 framework and is licensed under the same terms.
+For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).
