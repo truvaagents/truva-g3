@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/memory
 
-go 1.26.2
+go 1.26.3
 
 replace github.com/truvaagents/truva-g3/core => ../core
 

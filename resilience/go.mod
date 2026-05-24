@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/resilience
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/truvaagents/truva-g3/core v0.8.2
