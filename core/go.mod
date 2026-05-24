@@ -3,7 +3,7 @@ module github.com/truvaagents/truva-g3/core
 go 1.26.3
 
 require (
-	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
