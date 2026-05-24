@@ -1191,7 +1191,7 @@ type Discovery interface {
 
 <p><strong>What this looks like end-to-end.</strong> A user request hits the agent's ingress with an Authorization header. The agent extracts the user's token, passes it through context, and calls a downstream tool. The orchestrator's outbound call carries: the user's Authorization token (per-request, from context), the tenant ID (config-level), the framework's request ID and step ID (protected). The tool authenticates the user via your existing identity provider, logs the request ID for audit, applies tenant-scoped authorization, and returns. Trace, logs, and audit data all correlate by the request ID. Nothing about this flow is framework-specific — it is the same pattern a well-built REST microservice deployment already uses.</p>
 
-<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/OAUTH_SECURITY_GUIDE.md">OAuth Security Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/KUBERNETES.md">Kubernetes Deployment Guide</a>.</p>
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/operations/OAUTH_SECURITY_GUIDE.md">OAuth Security Guide</a>.</p>
 
 <h3 id="extension-points">13. Extension points</h3>
 

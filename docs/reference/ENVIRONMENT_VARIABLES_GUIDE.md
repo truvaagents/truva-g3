@@ -1753,5 +1753,4 @@ To use these variables, you would need to either:
 - [Orchestration README](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md)
 - [AI Module README](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)
 - [Telemetry README](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md)
-- [Kubernetes Deployment Guide](../operations/KUBERNETES.md)
 - [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md)

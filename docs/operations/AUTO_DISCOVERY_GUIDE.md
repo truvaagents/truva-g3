@@ -299,7 +299,7 @@ What the framework writes into `ServiceInfo.Address` depends on where it's runni
 - **In Kubernetes with `TRUVAG3_K8S_SERVICE_NAME` set**: the address becomes `<svc>.<ns>.svc.cluster.local`, and the port becomes `TRUVAG3_K8S_SERVICE_PORT` (default 80). This is what you want — agents dial through the K8s Service, not pod IPs, so traffic load-balances across replicas. Logic at [`core/address_resolver.go:32`](https://github.com/truvaagents/truva-g3/blob/main/core/address_resolver.go#L32).
 - **Outside K8s** (or in K8s without those env vars set): falls back to `config.Address` (default `localhost`) and `config.Port` (default 8080).
 
-If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. The fix is wiring the env vars correctly — see [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns).
+If you're seeing `0.0.0.0:8080` in your registry records, that's a sign the K8s wiring isn't set. Fix it by setting `TRUVAG3_K8S_SERVICE_NAME` and `TRUVAG3_K8S_NAMESPACE` on the deployment (see the [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) for the full list of `TRUVAG3_K8S_*` vars).
 
 ## How Agents Discover Tools and Other Agents
 
@@ -569,7 +569,7 @@ The discovery-related variables — full reference with precedence rules in [`do
 | `TRUVAG3_DISCOVERY_RETRY` | `false` | Enable background retry on initial connection failure. **Recommended for production K8s.** |
 | `TRUVAG3_DISCOVERY_RETRY_INTERVAL` | `30s` | Initial retry interval; doubles on failure, caps at 5 minutes. |
 
-For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record. See [`KUBERNETES.md` §"Service Discovery on Kubernetes"](KUBERNETES.md#-service-discovery-patterns) for the deployment wiring.
+For Kubernetes deployments, the `TRUVAG3_K8S_*` env vars (`SERVICE_NAME`, `SERVICE_PORT`, `NAMESPACE`, `POD_IP`, `NODE_NAME`) control how `Address` is populated in the registry record.
 
 ### Programmatic Options
 
@@ -665,7 +665,6 @@ redis-cli GET "truvag3:services:<your-tool-id>"
 # 2. Check the Address field in the JSON. If it's "0.0.0.0:8080" or a pod IP,
 #    K8s service-fronted discovery isn't wired. Fix: set TRUVAG3_K8S_SERVICE_NAME
 #    and TRUVAG3_K8S_NAMESPACE on the deployment.
-#    See KUBERNETES.md §"Service Discovery on Kubernetes".
 
 # 3. Check capability spelling. A typo in the agent's FindByCapability call
 #    won't error; it'll silently return zero results.
@@ -796,7 +795,6 @@ The framework calls `Unregister` for you when its parent context is cancelled (g
 
 ## See Also
 
-- [Kubernetes Deployment Patterns](KUBERNETES.md) — env-var wiring for service-fronted discovery, NetworkPolicy, ServiceMonitor, troubleshooting in K8s
 - [API Reference](../reference/API_REFERENCE.md) — exact signatures for `Registry`, `Discovery`, `Discover`, `FindService`, `FindByCapability`
 - [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) — precedence rules and full env-var reference
 - [Framework Design Principles](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md) — why Tool/Agent split is compile-time enforced

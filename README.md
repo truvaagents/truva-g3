@@ -626,7 +626,6 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [API Reference](docs/reference/API_REFERENCE.md) — full API surface across modules
 - [Environment Variables Guide](docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md) — runtime configuration reference
 - [Limits Cheatsheet](docs/reference/LIMITS_CHEATSHEET.md) — runtime limits and tuning knobs
-- [Kubernetes Deployment](docs/operations/KUBERNETES.md) — deploying TruvaG3 components to Kubernetes
 - [Intelligent Error Handling](docs/orchestration/INTELLIGENT_ERROR_HANDLING.md) — LLM-assisted error analysis details
 - [TruvaG3 Tools vs MCP Servers](docs/reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md) — terminology and integration mapping
 

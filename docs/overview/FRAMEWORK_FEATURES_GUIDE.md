@@ -814,7 +814,7 @@ This means the framework helps with:
 - exposing runtime metadata only when explicitly enabled
 - adding guardrails, redaction, and audit behavior through hooks and prompt builders
 
-See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai), [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture), and [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices).
+See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#what-makes-truvag3-unique-dynamic-agent-discovery-vendor-agnostic-microservice-native-ai) and the [OAuth Security Guide](../operations/OAUTH_SECURITY_GUIDE.md#security-architecture).
 
 #### OAuth Bearer Propagation
 
@@ -875,7 +875,7 @@ See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) a
 
 #### Platform Security Controls
 
-The Kubernetes docs describe the platform controls expected around TruvaG3 deployments:
+Typical Kubernetes platform controls expected around TruvaG3 deployments:
 
 - Kubernetes Secrets for AI provider keys and service credentials
 - ConfigMaps for non-sensitive runtime configuration
@@ -884,7 +884,7 @@ The Kubernetes docs describe the platform controls expected around TruvaG3 deplo
 - ServiceAccounts and RBAC with minimal permissions
 - ingress, gateway, service mesh, or mTLS controls at trust boundaries
 
-See [Kubernetes Deployment Guide](../operations/KUBERNETES.md#️-security-best-practices) and [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
+See the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#managing-api-keys-with-secrets).
 
 ### 12. Deployment And Operations
 
@@ -902,8 +902,6 @@ The framework aligns with ordinary Kubernetes primitives:
 - health probes
 - namespace isolation
 - rolling updates
-
-See [Kubernetes Deployment Guide](../operations/KUBERNETES.md).
 
 #### Environment Configuration
 
@@ -1033,7 +1031,6 @@ Use these docs for deeper feature-level details:
 - [LIMITS_CHEATSHEET.md](../reference/LIMITS_CHEATSHEET.md) - runtime limits and tuning reference
 - [TRUVAG3_TOOLS_VS_MCP_SERVERS.md](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md) - TruvaG3 tool model compared with MCP
 - [AUTO_DISCOVERY_GUIDE.md](../operations/AUTO_DISCOVERY_GUIDE.md) - auto-discovery feature guide (registration, lookup, lease architecture, multi-replica, resilience)
-- [KUBERNETES.md](../operations/KUBERNETES.md) - Kubernetes deployment
 - [LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) - prompt customization
 
 ## Known Documentation Gaps
