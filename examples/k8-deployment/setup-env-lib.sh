@@ -132,7 +132,7 @@ truvag3_create_secret() {
         if [ -n "$value" ]; then
             echo "  $key=***"
             kubectl_args="$kubectl_args --from-literal=$key=$value"
-            ((key_count++))
+            ((++key_count))
         fi
     done
 
@@ -240,7 +240,7 @@ truvag3_create_configmap() {
 
         echo "  $key=$value"
         kubectl_args="$kubectl_args --from-literal=$key=$value"
-        ((var_count++))
+        ((++var_count))
     done < "$env_file"
 
     # Dev default: enable the /openapi.json endpoint for every tool/agent
@@ -255,7 +255,7 @@ truvag3_create_configmap() {
     if [[ "${_openapi_set_from_env:-false}" != "true" ]] && [[ "${TRUVAG3_DEV_DISABLE_OPENAPI:-false}" != "true" ]]; then
         echo "  TRUVAG3_ENABLE_OPENAPI=true  (dev default — see setup-env-lib.sh)"
         kubectl_args="$kubectl_args --from-literal=TRUVAG3_ENABLE_OPENAPI=true"
-        ((var_count++))
+        ((++var_count))
     fi
     unset _openapi_set_from_env
 
@@ -302,7 +302,7 @@ truvag3_create_tool_secret() {
         if [ -n "$value" ]; then
             echo "  $key=***"
             kubectl_args="$kubectl_args --from-literal=$key=$value"
-            ((key_count++))
+            ((++key_count))
         fi
     done
 

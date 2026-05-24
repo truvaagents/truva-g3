@@ -2,7 +2,27 @@
 
 Field-tested workarounds for issues that come up when running TruvaG3 on Windows + WSL2 + Docker Desktop. The quickstart in [GETTING_STARTED.md](https://github.com/truvaagents/truva-g3/blob/main/GETTING_STARTED.md) is the supported path — come here only when something breaks.
 
-## Line-ending errors from `setup.sh`
+## Linux commands fail when run from PowerShell
+
+Symptom: pasting a Linux install command (`kubectl`, `kind`, Go) into PowerShell — directly, or wrapped in `wsl bash -lc "..."` — produces errors like:
+
+```text
+Invoke-WebRequest : A parameter cannot be found that matches parameter name 'L'
+```
+
+Root cause: PowerShell pre-processes `$(...)` (command substitution) and aliases `curl` to `Invoke-WebRequest` before bash ever sees the command. The `kubectl` install line in the prerequisites uses `$(curl -L -s https://...)` — exactly the form that trips this.
+
+Fix: open the Ubuntu shell **first**, then paste Linux commands into it directly. Use PowerShell only for the Windows-side setup (`wsl --install`, `winget install Docker.DockerDesktop`). Everything after that — Go, kind, kubectl, clone, `setup.sh` — runs from inside Ubuntu.
+
+```bash
+# In the Ubuntu shell (not PowerShell):
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+```
+
+If you must drive Linux commands from PowerShell (e.g., for scripting), avoid inline `$(...)`: split the stable-version lookup into separate `wsl` invocations and pass the resolved value as a literal in the second call.
+
+## CRLF line-ending errors
 
 Symptom: `setup.sh` fails immediately with `'\r': command not found`, `bad interpreter`, or syntax errors that don't match the file content. CRLF line endings from a Windows clone are the cause.
 
@@ -16,6 +36,12 @@ Prevent it from recurring on future clones:
 
 ```bash
 git config --global core.autocrlf input
+```
+
+The same applies to `.env` files. If you create or edit `.env` in a Windows editor (Notepad, VS Code with default Windows line endings) and then copy it into the WSL checkout, bash will fail with the same `$'\r': command not found` when `setup.sh` sources the file. Preferred path: create and edit `.env` directly inside the Ubuntu shell (`nano`, `vim`, or `code .` launched from WSL — VS Code's Remote-WSL extension keeps line endings LF). If you must edit from Windows, convert before use:
+
+```bash
+dos2unix .env       # or: sed -i 's/\r$//' .env
 ```
 
 ## Service discovery flickers (clock skew)

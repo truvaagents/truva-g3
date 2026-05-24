@@ -100,7 +100,9 @@ If this prints `Docker Engine` or `Ubuntu` instead of `Docker Desktop`, a WSL-na
 
 Then follow the **Linux** prerequisites above (Go, kind, kubectl); `docker` itself already works in the Ubuntu shell via the WSL integration.
 
-Clone the repo into the WSL filesystem (`~/truva-g3`) rather than `/mnt/c/...` — the WSL ext4 is noticeably faster and avoids permission and CRLF line-ending issues.
+> **Paste Linux commands into the Ubuntu shell — not into PowerShell.** PowerShell aliases `curl` to `Invoke-WebRequest` and pre-evaluates `$(...)`, which breaks the `kubectl` install line (and similar). Use PowerShell only for `wsl --install` and `winget install Docker.DockerDesktop`; everything after that runs in Ubuntu. See [WINDOWS_TROUBLESHOOTING — Linux commands fail when run from PowerShell](docs/reference/WINDOWS_TROUBLESHOOTING.md#linux-commands-fail-when-run-from-powershell).
+
+Clone the repo into the WSL filesystem (`~/truva-g3`) rather than `/mnt/c/...` — the WSL ext4 is noticeably faster and avoids permission and CRLF line-ending issues. The same goes for `.env` files: create and edit them inside Ubuntu, not in a Windows editor copied across — Windows line endings will fail `setup.sh` with `$'\r': command not found`. See [WINDOWS_TROUBLESHOOTING — CRLF line-ending errors](docs/reference/WINDOWS_TROUBLESHOOTING.md#crlf-line-ending-errors).
 
 > **Native Windows (without WSL) is not supported.** The setup scripts are bash; running them under PowerShell or cmd is fragile. For Windows-specific issues (clock drift breaking service discovery, single-node ingress restart deadlock, CRLF line-ending errors), see [Windows + WSL2 Troubleshooting](docs/reference/WINDOWS_TROUBLESHOOTING.md).
 
