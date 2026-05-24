@@ -4228,9 +4228,9 @@
           "schema_endpoint": "/api/capabilities/browser_test/schema"
         },
         {
-          "name": "wait",
-          "description": "Waits (sleeps) for a short, bounded duration before returning. Use this for brief in-line pauses — e.g., to let an external system settle after a write, or to space out polling checks. Max 120 seconds; requests above are clamped. For longer or recurring waits, use scheduler-tool/schedule_task instead. Required: duration_seconds (integer, 1-120). Optional: reason (string, echoed into traces).",
-          "endpoint": "/api/capabilities/wait",
+          "name": "sleep",
+          "description": "Sleeps (pauses) for a short, bounded duration before returning. Use this for brief in-line pauses — e.g., to let an external system settle after a write, or to space out polling checks. Max 120 seconds; requests above are clamped. For longer or recurring pauses, use scheduler-tool/schedule_task instead. Required: duration_seconds (integer, 1-120). Optional: reason (string, echoed into traces).",
+          "endpoint": "/api/capabilities/sleep",
           "input_types": [
             "json"
           ],
@@ -4243,7 +4243,7 @@
                 "name": "duration_seconds",
                 "type": "integer",
                 "example": "30",
-                "description": "How long to wait, in seconds. Must be between 1 and 120."
+                "description": "How long to sleep, in seconds. Must be between 1 and 120."
               }
             ],
             "optional": [
@@ -4251,7 +4251,7 @@
                 "name": "reason",
                 "type": "string",
                 "example": "waiting for kubectl rollout to propagate",
-                "description": "Optional explanation of why the wait is needed; echoed into traces and logs."
+                "description": "Optional explanation of why the pause is needed; echoed into traces and logs."
               }
             ]
           },
@@ -4267,23 +4267,23 @@
                 "name": "duration_seconds",
                 "type": "integer",
                 "example": "30",
-                "description": "Duration actually waited (post-clamp or post-cancel)"
+                "description": "Duration actually slept (post-clamp or post-cancel)"
               },
               {
                 "name": "started_at",
                 "type": "string",
-                "description": "RFC 3339 UTC timestamp when the wait began"
+                "description": "RFC 3339 UTC timestamp when the sleep began"
               },
               {
                 "name": "ended_at",
                 "type": "string",
-                "description": "RFC 3339 UTC timestamp when the wait ended"
+                "description": "RFC 3339 UTC timestamp when the sleep ended"
               },
               {
                 "name": "cancelled",
                 "type": "boolean",
                 "example": "false",
-                "description": "True if the wait was cancelled by context before completing"
+                "description": "True if the sleep was cancelled by context before completing"
               }
             ],
             "optional": [
@@ -4294,7 +4294,7 @@
               }
             ]
           },
-          "schema_endpoint": "/api/capabilities/wait/schema"
+          "schema_endpoint": "/api/capabilities/sleep/schema"
         }
       ],
       "metadata": {

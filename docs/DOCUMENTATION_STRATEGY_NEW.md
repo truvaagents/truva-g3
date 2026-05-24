@@ -4,12 +4,12 @@
 >
 > **Last updated:** 2026-05-21.
 >
-> **Implementation status (2026-05-21):** Both surfaces are live — [truvag3.dev](https://truvag3.dev) (website) and [docs.truvag3.dev](https://docs.truvag3.dev) (docs). Phases 1–3 complete, Phase 4 mostly complete (one outstanding step — see below), Phase 5 complete, Phase 6 largely complete, Phase 7 partial, Phase 8A pending, Phase 8B optional/deferred. Per-phase status annotated inline in the [Execution plan](#execution-plan).
+> **Implementation status (2026-05-21):** Both surfaces are live — [truvag3.dev](https://truvag3.dev) (website) and [docs.truvag3.dev](https://docs.truvag3.dev) (docs). Phases 1–3 complete, Phase 4 mostly complete (one outstanding step — see below), Phase 5 complete, Phase 6 largely complete, Phase 7 partial, **Phase 8A complete**, Phase 8B optional/deferred. Per-phase status annotated inline in the [Execution plan](#execution-plan).
 >
 > **Known outstanding items:**
 > - **Phase 4 step 19** — Docusaurus glassmorphism landing not yet decommissioned. [docs-site/src/pages/index.tsx](../docs-site/src/pages/index.tsx) still renders Hero + WhyTruvaG3, duplicating the website homepage's role.
 > - **Phase 7** — Launch-readiness items (GA4, OG tags, Lighthouse audit, cross-browser smoke, README canonical URL update) status not tracked here; verify before announcing.
-> - **Phase 8A — search engine discoverability** — entirely pending. Docs sitemap exists (auto-generated) but contains a stray scaffolder URL; website has no sitemap or robots.txt; neither surface submitted to Google Search Console. **Required for the "come up in search" goal.** See the [Search engine discoverability](#search-engine-discoverability) section.
+> - **Phase 8A — search engine discoverability** — ✓ Complete. Both sitemaps and `robots.txt` files live; all 52 URLs across both surfaces return `200` direct (no redirect hops); both sitemaps submitted to GSC + Bing. **One mid-flight fix worth noting:** Docusaurus defaults emit no-slash URLs in the sitemap while CF Pages serves the canonical slashed form (`/docs/intro/`), so every docs URL was 307-redirecting. Fixed by setting `trailingSlash: true` in [docs-site/docusaurus.config.ts](../docs-site/docusaurus.config.ts) and sweeping all www→docs links to add the trailing slash. Future Docusaurus surfaces on CF Pages should set this from day one (now folded into Phase 2 step 7).
 > - **Phase 8B — search/social appearance polish** — optional. Defer until 8A confirms pages are getting indexed.
 > - **Open decisions** table at the end of this doc — most rows still "Undecided".
 
@@ -101,7 +101,7 @@ The principle *"different aesthetics across surfaces is correct, not a bug"* hol
 
 **Cross-surface navigation:**
 
-- `truvag3.dev` navbar → "Docs" link → `docs.truvag3.dev/docs/intro`
+- `truvag3.dev` navbar → "Docs" link → `docs.truvag3.dev/docs/intro/`
 - `docs.truvag3.dev` navbar → "Blog / Whitepapers" links → `truvag3.dev/blogs/` and `truvag3.dev/whitepapers/`
 - Both sites share brand-color tokens and the two-tone TruvaG3 mark for visual continuity, but otherwise are free to diverge in layout, typography, and density.
 
@@ -346,7 +346,7 @@ Should answer "why should I care about TruvaG3?" within the first viewport. Requ
 1. **Hero**
    - Two-tone TruvaG3 brand mark.
    - Tagline: "True. Dynamic Discovery. Decentralized. Observable."
-   - Primary CTA: "Get started" → `docs.truvag3.dev/docs/intro`
+   - Primary CTA: "Get started" → `docs.truvag3.dev/docs/intro/`
    - Secondary CTA: "View on GitHub" → repo URL
    - Optional: short tagline-extension sentence below.
 
@@ -432,7 +432,7 @@ As of 2026-05-21:
 
 ### Per-surface strategy
 
-**`docs.truvag3.dev` — let the framework do it.** Docusaurus already ships `/sitemap.xml` at build time with sensible defaults (`changefreq: weekly`, `priority: 0.5`). We just need to (a) delete the stray scaffolder demo page that's leaking into the sitemap and (b) add a `robots.txt` in [docs-site/static/](../docs-site/static/) that points at the sitemap. No `docusaurus.config.ts` change needed unless we later want to drop priority on specific pages.
+**`docs.truvag3.dev` — let the framework do it.** Docusaurus ships `/sitemap.xml` at build time with sensible defaults (`changefreq: weekly`, `priority: 0.5`). To make it crawl cleanly we need to (a) delete the stray scaffolder demo page that's leaking into the sitemap, (b) add a `robots.txt` in [docs-site/static/](../docs-site/static/) that points at the sitemap, and (c) set `trailingSlash: true` in [docs-site/docusaurus.config.ts](../docs-site/docusaurus.config.ts) so sitemap URLs and internal `<link rel="canonical">` tags match the slashed form CF Pages actually serves. Without (c) every docs URL 307s, which is suboptimal for crawl budget and reads as "Page with redirect" in GSC.
 
 **`truvag3.dev` (www/) — script-generate, don't hand-author.** The website has 20 URLs today (1 homepage + 3 under `blogs/` + 16 under `whitepapers/`), but blogs and whitepapers are growth categories — a hand-authored `sitemap.xml` rots within months. A tiny Python script that walks `www/**/*.html` and emits `sitemap.xml` is the right size; Cloudflare Pages serves the result verbatim. Two sub-decisions about how the generator runs:
 
@@ -508,6 +508,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 7. **Update `docs-site/docusaurus.config.ts` first:**
    - `baseUrl: '/'` (was `'/truva-g3/'`)
    - `url: 'https://docs.truvag3.dev'` (was `'https://truvaagents.github.io'`)
+   - `trailingSlash: true` — Docusaurus emits `route/index.html` and CF Pages serves the slashed form (`/docs/intro/`) as canonical. Without this, the auto-generated sitemap lists no-slash URLs that 307-redirect, every docs URL costs an extra crawl hop, and GSC flags "Page with redirect." (Discovered the hard way during Phase 8A validation; folding into Phase 2 here so future Docusaurus surfaces on CF Pages don't repeat the gotcha.)
    - Commit and push.
    - **Until the custom domain is live**, the local dev server URL changes — `npm run start` now serves at `http://localhost:3000/` (no `/truva-g3` prefix).
 8. Push repo to GitHub if not already pushed.
@@ -515,7 +516,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 10. Create Pages project `truva-g3-docs`: connect to repo, root directory `docs-site/`, build command `npm install && npm run build`, output `build`.
 11. First deploy lands at `https://truva-g3-docs.pages.dev/`. **Verify the site renders with styles and links work before adding the custom domain.** (If you skipped step 7, you'll see unstyled pages here — that's the failure mode the ordering prevents.)
 12. Add custom domain `docs.truvag3.dev`. Add DNS record per your chosen DNS strategy (D1 or D2). Wait for SSL cert (~5 min).
-13. Verify `docs.truvag3.dev/docs/intro` resolves and renders styled.
+13. Verify `docs.truvag3.dev/docs/intro/` resolves and renders styled.
 
 ### Phase 3 — Cloudflare Pages — website surface (~10 min) — ✓ Complete
 
@@ -569,7 +570,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 36. Update README.md to point to `truvag3.dev` as the canonical project URL.
 
-### Phase 8A — Search engine discoverability (~1 hour) — pending
+### Phase 8A — Search engine discoverability (~1 hour) — ✓ Complete
 
 The minimum to make every URL on both surfaces crawlable and submitted to Google. **Required for the "come up in search" goal.** Independent of launch — ship before or after, but **before** is preferable so launch traffic lands in a GSC that's already collecting data.
 
@@ -579,6 +580,7 @@ The minimum to make every URL on both surfaces crawlable and submitted to Google
     Allow: /
     Sitemap: https://docs.truvag3.dev/sitemap.xml
     ```
+    Confirm `trailingSlash: true` is set in [docs-site/docusaurus.config.ts](../docs-site/docusaurus.config.ts) — this should already have landed in Phase 2 step 7, but if you skipped it, set it now and sweep any `docs.truvag3.dev/docs/<page>` links across `www/` to add the trailing slash so external references match the canonical form.
 
 39. **Website sitemap generator.** Create [scripts/generate-www-sitemap.py](../scripts/generate-www-sitemap.py): walks `www/**/*.html`, emits `www/sitemap.xml`. Run once, commit script and output. Document the regenerate workflow in the script's header comment ("run before committing new blogs/whitepapers").
 
@@ -615,15 +617,20 @@ The minimum to make every URL on both surfaces crawlable and submitted to Google
     # Docs sitemap no longer leaks /markdown-page
     curl -s https://docs.truvag3.dev/sitemap.xml | grep -o "<url>" | wc -l   # expect 32, not 33
     
-    # Every URL in the website sitemap actually returns 200 (no broken entries).
-    # Extract only <loc> values so XML namespace URLs aren't tested; works on both
-    # single-line and multi-line sitemap XML.
-    curl -s https://truvag3.dev/sitemap.xml \
-      | grep -oE '<loc>[^<]+' \
-      | sed 's:<loc>::' \
-      | xargs -I{} curl -sI -o /dev/null -w "%{http_code} {}\n" {}
+    # Every URL in BOTH sitemaps actually returns 200 direct (no 307 redirects).
+    # Extract only <loc> values so XML namespace URLs aren't tested; works on
+    # both single-line and multi-line sitemap XML. If you see any 307s here
+    # the trailingSlash config is missing — see Phase 2 step 7.
+    for SM in https://truvag3.dev/sitemap.xml https://docs.truvag3.dev/sitemap.xml; do
+      echo "--- $SM ---"
+      curl -s "$SM" \
+        | grep -oE '<loc>[^<]+' \
+        | sed 's:<loc>::' \
+        | xargs -I{} curl -sI -o /dev/null -w "%{http_code} {}\n" {} \
+        | sort | uniq -c
+    done
     ```
-    Then in GSC: open URL Inspection on 3–5 key pages (homepage, `/docs/intro`, both blog posts, one whitepaper) and **Request indexing**. Confirm "Success" beside each submitted sitemap (first crawl typically 24–48h; full indexing of new domain can take days-to-weeks).
+    Then in GSC: open URL Inspection on 3–5 key pages (homepage, `/docs/intro/`, both blog posts, one whitepaper) and **Request indexing**. Confirm "Success" beside each submitted sitemap (first crawl typically 24–48h; full indexing of new domain can take days-to-weeks).
 
 ### Phase 8B — Search and social appearance polish (~1.5 hours) — optional
 

@@ -1,6 +1,6 @@
 # Contributing to TruvaG3
 
-Thank you for your interest in contributing to TruvaG3! We welcome contributions from the community and are grateful for your support.
+Thank you for your interest in contributing to TruvaG3! Contributions for bug fixes and documentation updates are welcome.
 
 ## Table of Contents
 
@@ -281,13 +281,27 @@ CI itself runs four jobs — `test`, `lint`, `vuln`, and `examples` (build-only)
 
 Partial passes are not acceptable — the merge gate is all green or none.
 
-The repo also ships a secret-detection pre-commit hook at [`.githooks/pre-commit`](.githooks/pre-commit) that scans staged content for likely API keys (OpenAI, Anthropic, AWS, Slack, etc.). Activate it once per clone:
+The repo also ships a secret-detection pre-commit hook at [`.githooks/pre-commit`](.githooks/pre-commit) that scans staged content for likely API keys (OpenAI, Anthropic, AWS, Slack, etc.). Activate it once per clone — works on macOS, Linux, and Windows (Git Bash, bundled with Git for Windows):
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-If it ever blocks a legitimate commit, fix the false positive in the hook rather than bypassing it with `--no-verify`.
+The hook runs two layers:
+
+1. **Built-in bash patterns** — fast, no dependency; catches obvious provider key formats (`sk-proj-…`, `sk-ant-…`, `gsk_…`, `AIza…`, `AKIA…`, `ghp_…`, etc.).
+2. **gitleaks** (optional but recommended) — adds ~100 maintained rules plus entropy heuristics, catching private keys, JWTs, Stripe/HuggingFace/DigitalOcean tokens, and high-entropy strings near credential keywords. Install:
+
+   ```bash
+   brew install gitleaks            # macOS / Linuxbrew
+   scoop install gitleaks           # Windows (Scoop)
+   choco install gitleaks           # Windows (Chocolatey)
+   # Or download from: https://github.com/gitleaks/gitleaks/releases
+   ```
+
+   If gitleaks isn't installed, the hook skips layer 2 with a warning rather than blocking.
+
+If the hook ever blocks a legitimate commit, fix the false positive (reword placeholders, or add a targeted allow-rule to `.gitleaks.toml`) rather than bypassing it with `--no-verify`.
 
 ## Submitting Changes
 
