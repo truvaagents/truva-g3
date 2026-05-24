@@ -1,7 +1,7 @@
 # Workspace Dockerfile for confluence-tool
 # Usage (from truvag3 root): docker build -f examples/confluence-tool/Dockerfile.workspace -t confluence-tool:latest .
 
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 

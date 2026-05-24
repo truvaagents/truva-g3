@@ -2,7 +2,7 @@
 # This tool provides grocery store capabilities with error injection for resilience testing
 # Usage (from grocery-tool directory): docker build -t grocery-tool:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

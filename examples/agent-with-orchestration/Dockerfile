@@ -2,7 +2,7 @@
 # This Dockerfile builds the agent independently without workspace dependencies
 # Usage (from agent-with-orchestration directory): docker build -t travel-research-agent:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

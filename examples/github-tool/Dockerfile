@@ -3,7 +3,7 @@
 # Usage (from github-tool directory):
 #   docker build -t github-tool:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Build dependencies (CGO disabled, so no C toolchain needed)
 RUN apk add --no-cache git ca-certificates

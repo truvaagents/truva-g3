@@ -2,7 +2,7 @@
 # Builds the tool independently without workspace dependencies
 # Usage: docker build -t geocoding-tool:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

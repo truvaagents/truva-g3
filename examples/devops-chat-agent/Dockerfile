@@ -2,7 +2,7 @@
 # This Dockerfile builds the agent independently without workspace dependencies
 # Usage (from devops-chat-agent directory): docker build -t devops-chat-agent:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Install build dependencies (CGO disabled, so no C toolchain needed)
 RUN apk add --no-cache git ca-certificates

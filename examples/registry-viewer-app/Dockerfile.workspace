@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules (core, orchestration, telemetry)
 # Usage (from truvag3 root): docker build -f examples/registry-viewer-app/Dockerfile.workspace -t registry-viewer:latest .
 
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
