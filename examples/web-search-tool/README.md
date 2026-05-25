@@ -570,38 +570,41 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The web search tool requires Redis for service discovery. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
-```
-
-#### Step 2: Build and Deploy
+The web search tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/web-search-tool
 
-# Build Docker image
-docker build -t web-search-tool:latest .
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
+```
 
-# Load into Kind
-kind load docker-image web-search-tool:latest
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+#### Step 2: Build and Deploy
+
+`setup.sh` handles the Docker build, Kind image load, namespace + ConfigMap creation, and manifest apply. Use these subcommands instead of raw `kubectl`:
+
+```bash
+cd examples/web-search-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + ConfigMap from .env + apply manifest
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=web-search-tool
+./setup.sh status
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/web-search-service 8341:80
+# Port forward the tool service to localhost:8341
+./setup.sh forward
 
 # Test web search
 curl -X POST http://localhost:8341/api/capabilities/web_search \
@@ -825,8 +828,8 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 **2. API errors**
 
 ```bash
-# Check logs for API key issues
-kubectl logs -n truvag3-examples -l app=web-search-tool | grep -i "api"
+# Stream logs and grep for API key issues
+./setup.sh logs | grep -i "api"
 
 # Common issues:
 # - Invalid API key: Check secret configuration
@@ -840,7 +843,7 @@ If you see `"provider": "mock"` in responses:
 1. Verify `SEARCH_API_KEY` is set in the secret
 2. Verify `SEARCH_PROVIDER` is set to `tavily`
 3. Check pod environment: `kubectl exec -n truvag3-examples <pod-name> -- env | grep SEARCH`
-4. Restart deployment: `kubectl rollout restart deployment/web-search-tool -n truvag3-examples`
+4. Restart deployment: `./setup.sh rollout`
 
 **4. Docker build fails**
 
@@ -858,26 +861,55 @@ docker info
 # List existing clusters
 kind get clusters
 
-# Create a new cluster if none exists
-kind create cluster --name truvag3-demo
+# Create a new cluster if none exists (handles the right name + port mappings)
+./setup.sh cluster
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=web-search-tool
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=web-search-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/web-search-service 8341:80
+# Port forward the tool to localhost:8341
+./setup.sh forward
 
-# Test web search
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# General web search
 curl -X POST http://localhost:8341/api/capabilities/web_search \
   -H "Content-Type: application/json" \
   -d '{"query": "best beach destinations Caribbean"}'
+
+# News search
+curl -X POST http://localhost:8341/api/capabilities/web_search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "latest AI developments", "search_type": "news", "max_results": 5}'
 ```
 
 ---

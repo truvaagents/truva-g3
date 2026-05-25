@@ -184,7 +184,7 @@ only `COMMENT` or `REQUEST_CHANGES` per its own posting policy.
 
 **Capabilities not in `/api/capabilities`** — the tool's pod isn't ready
 yet. The readiness probe gates on `/api/capabilities`, so traffic only reaches
-pods that have completed registration. Check `kubectl get pods -n truvag3-examples`.
+pods that have completed registration. Verify with `./setup.sh capabilities` (fetches `/api/capabilities` through a one-shot port-forward).
 
 ## Related
 

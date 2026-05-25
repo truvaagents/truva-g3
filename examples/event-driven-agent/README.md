@@ -131,20 +131,18 @@ cd examples/event-driven-agent
 # Edit .env and uncomment/set your AI provider key(s)
 ```
 
-#### Step 2: Deploy Infrastructure
+#### Step 2: Ensure Infrastructure is Running
 
 ```bash
-cd examples/k8-deployment
-./setup-infrastructure.sh
+cd examples/event-driven-agent
 
-# The script will:
-# - Check if infrastructure components already exist
-# - Skip deployment if they're healthy
-# - Deploy only what's missing
-# - Never delete existing resources
+./setup.sh cluster   # Create Kind cluster (skip if already up)
+./setup.sh infra     # Deploy Redis + OTEL Collector + Prometheus + Jaeger + Grafana + AlertManager (skip if already up)
 ```
 
-This deploys the shared infrastructure components:
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
+
+This brings up the shared infrastructure components:
 - **Redis** - Service discovery, event queue, and deduplication
 - **OTEL Collector** - Telemetry aggregation
 - **Prometheus** - Metrics storage
@@ -156,18 +154,18 @@ This deploys the shared infrastructure components:
 ```bash
 cd examples/event-driven-agent
 
-# Build Docker image
+# Build Docker image only (does not deploy)
 ./setup.sh docker-build
 
-# Deploy to Kubernetes (includes AlertManager)
+# Full deploy: build + load into Kind + create namespace + ConfigMap from .env + apply manifest (includes AlertManager)
 ./setup.sh deploy
 ```
 
 #### Step 4: Verify Deployment
 
 ```bash
-kubectl get pods -n truvag3-examples
-kubectl logs -f deployment/event-driven-agent -n truvag3-examples
+./setup.sh status   # Check pod / service status
+./setup.sh logs     # Stream agent logs
 ```
 
 #### Local Development (Without Kubernetes)
@@ -1077,21 +1075,18 @@ event-driven-agent/
 
 3. **Check worker logs for errors**:
    ```bash
-   kubectl logs -f deployment/event-driven-agent -n truvag3-examples | grep -i "alert_investigation"
+   ./setup.sh logs | grep -i "alert_investigation"
    ```
 
 ### Orchestrator stuck in "initializing"
 
 The orchestrator waits for Redis Discovery to become available. Check:
 
-1. **Redis connectivity**:
-   ```bash
-   kubectl exec -n truvag3-examples deployment/event-driven-agent -- env | grep REDIS_URL
-   ```
+1. **Redis connectivity** — confirm `REDIS_URL` is set in `.env` (the value is folded into the ConfigMap that `setup.sh deploy` builds). Re-run `./setup.sh rollout` after editing `.env` so the pod picks up the change.
 
 2. **Discovery availability** (the orchestrator polls until Discovery is ready):
    ```bash
-   kubectl logs deployment/event-driven-agent -n truvag3-examples | grep -i discovery
+   ./setup.sh logs | grep -i discovery
    ```
 
 ### Alerts being deduplicated unexpectedly
@@ -1142,16 +1137,37 @@ The agent deduplicates alerts by fingerprint with a default 5-minute TTL:
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand (including the `mock-service` driver and split-mode toggles).
+
 ```bash
-# View agent logs
-kubectl logs -f deployment/event-driven-agent -n truvag3-examples
+# Stream agent logs
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=event-driven-agent
+# Check pod / service status (agent + AlertManager + product-catalog-api + monitoring)
+./setup.sh status
 
-# Check AlertManager status
-kubectl get pods -n truvag3-examples -l app=alertmanager
+# Port forward the agent to localhost:8372
+./setup.sh forward
 
+# Port forward agent + AlertManager + monitoring dashboards
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Run the built-in smoke test against the deployed agent
+./setup.sh test
+
+# Remove only the agent (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+Check AlertManager and the agent's runtime state by querying the agent directly (with `./setup.sh forward` running):
+
+```bash
 # Test manual alert trigger
 curl -X POST http://localhost:8372/trigger \
   -H "Content-Type: application/json" \

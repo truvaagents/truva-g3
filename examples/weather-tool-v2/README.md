@@ -572,7 +572,7 @@ docker run -p 8096:8096 \
 ./setup.sh deploy
 
 # Check status
-kubectl get pods -n truvag3-examples -l app=weather-tool-v2
+./setup.sh status
 ```
 
 ---
@@ -775,10 +775,10 @@ Traces can be viewed in Jaeger at http://localhost:16686 when running with the f
 
 Ensure Redis is running and `REDIS_URL` is set:
 ```bash
-# Check if Redis is running
-kubectl get pods -n truvag3-examples -l app=redis
+# Confirm the tool pod sees Redis; status output includes the Redis pod
+./setup.sh status
 
-# Or for local development
+# For local (non-Kubernetes) development
 redis-cli ping
 ```
 
@@ -793,24 +793,55 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:se
 
 Check if the pod is running and port forwarding is active:
 ```bash
-kubectl get pods -n truvag3-examples -l app=weather-tool-v2
-kubectl port-forward -n truvag3-examples svc/weather-tool-v2 8096:8096
+./setup.sh status
+./setup.sh forward
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=weather-tool-v2 -f
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=weather-tool-v2
+# Check pod / service status
+./setup.sh status
 
-# Restart the tool
-kubectl rollout restart -n truvag3-examples deployment/weather-tool-v2
+# Port forward the tool to localhost:8096
+./setup.sh forward
 
-# Full cleanup
-./setup.sh cleanup
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# Weather forecast (with coordinates from geocoding)
+curl -X POST http://localhost:8096/api/capabilities/get_weather_forecast \
+  -H "Content-Type: application/json" \
+  -d '{"lat": 35.6762, "lon": 139.6503, "days": 7}'
+
+# Current weather only
+curl -X POST http://localhost:8096/api/capabilities/get_current_weather \
+  -H "Content-Type: application/json" \
+  -d '{"lat": 40.7128, "lon": -74.0060}'
 ```
 
 ---

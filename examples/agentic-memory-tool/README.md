@@ -246,7 +246,7 @@ curl http://localhost:11434/v1/models
 **2. Tool not appearing in discovery**
 
 ```bash
-kubectl logs -n truvag3-examples -l app=agentic-memory-tool | grep -i "register"
+./setup.sh logs | grep -i "register"
 ```
 
 **3. No events returned**

@@ -584,20 +584,18 @@ cd examples/agent-with-telemetry
 # Edit .env and uncomment/set your AI provider key(s)
 ```
 
-#### Step 2: Deploy Infrastructure
+#### Step 2: Ensure Infrastructure is Running
 
 ```bash
-cd examples/k8-deployment
-./setup-infrastructure.sh
+cd examples/agent-with-telemetry
 
-# The script will:
-# - Check if infrastructure components already exist
-# - Skip deployment if they're healthy
-# - Deploy only what's missing
-# - Never delete existing resources
+./setup.sh cluster   # Create Kind cluster (skip if already up)
+./setup.sh infra     # Deploy Redis + OTEL Collector + Prometheus + Jaeger + Grafana (skip if already up)
 ```
 
-This deploys the shared infrastructure components:
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
+
+This brings up the shared infrastructure components:
 - **Redis** - Service discovery and caching
 - **OTEL Collector** - Telemetry aggregation
 - **Prometheus** - Metrics storage
@@ -606,23 +604,25 @@ This deploys the shared infrastructure components:
 
 #### Step 3: Build and Deploy the Agent
 
+`setup.sh` handles the Docker build, Kind image load, namespace + ConfigMap creation, and manifest apply. Use these subcommands instead of raw `kubectl`:
+
 ```bash
 cd examples/agent-with-telemetry
 
-# Build Docker image
-make docker-build
-docker tag research-agent-telemetry:latest your-registry/research-agent-telemetry:v1
-docker push your-registry/research-agent-telemetry:v1
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
 
-# Update image in k8-deployment.yaml to match your registry
-kubectl apply -f k8-deployment.yaml
+# Full deploy: build + load into Kind + create namespace + ConfigMap from .env + apply manifest
+./setup.sh deploy
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, agent, and port forwards.
 
 #### Step 4: Verify Deployment
 
 ```bash
-kubectl get pods -n truvag3-examples
-kubectl logs -f deployment/research-agent-telemetry -n truvag3-examples
+./setup.sh status   # Check pod / service status
+./setup.sh logs     # Stream agent logs
 ```
 
 #### Local Development (Without Kubernetes)
@@ -1189,7 +1189,7 @@ make clean           # Clean build artifacts
 2. **Verify environment profile**:
    ```bash
    # Check logs for telemetry initialization
-   kubectl logs deployment/research-agent-telemetry -n truvag3-examples | grep -i telemetry
+   ./setup.sh logs | grep -i telemetry
    ```
 
 3. **Test with development profile locally**:
@@ -1224,14 +1224,37 @@ For production deployments:
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View agent logs
-kubectl logs -f deployment/research-agent-telemetry -n truvag3-examples
+# Stream agent logs
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=research-agent-telemetry
+# Check pod / service status
+./setup.sh status
 
-# Test the API
+# Port forward the agent to localhost:8092
+./setup.sh forward
+
+# Port forward agent + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Run the built-in smoke test against the deployed agent
+./setup.sh test
+
+# Remove only the agent (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, test the API directly:
+
+```bash
 curl -X POST http://localhost:8092/api/capabilities/research_topic \
   -H "Content-Type: application/json" \
   -d '{"topic": "latest AI developments", "ai_synthesis": true}'

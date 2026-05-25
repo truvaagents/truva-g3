@@ -230,7 +230,7 @@ qa-agent
 | **Execution DAGs** | Plan steps, dependencies, per-step results and timing | Registry Viewer → Execution DAG tab |
 | **LLM debug** | Full prompts/responses for plan generation, synthesis | Registry Viewer → LLM Debug tab |
 | **Metrics** | Request counts, duration histograms, tool call counts | Grafana (http://localhost:3000) |
-| **Structured logs** | Trace-correlated JSON logs with component attribution | `kubectl logs` or log aggregator |
+| **Structured logs** | Trace-correlated JSON logs with component attribution | `./setup.sh logs` or log aggregator |
 
 ---
 
@@ -433,9 +433,13 @@ kubectl get pods -n truvag3-examples -l app=redis
 
 **2. "Orchestrator initializing" error**
 
-The orchestrator needs time to discover tools. Wait a few seconds and retry. Check if tools are deployed:
+The orchestrator needs time to discover tools. Wait a few seconds and retry. Check the qa-agent itself, then each required tool, from their own directories:
 ```bash
-kubectl get pods -n truvag3-examples
+./setup.sh status
+# Then, from each tool's directory:
+cd ../playwright-tool && ./setup.sh status
+cd ../jira-tool && ./setup.sh status
+cd ../slack-tool && ./setup.sh status
 ```
 
 **3. No tools discovered**
@@ -457,33 +461,51 @@ TRUVAG3_HTTP_WRITE_TIMEOUT=12m
 
 **5. S3 artifacts not uploading**
 
-The playwright-tool handles S3 uploads. Check its configuration:
+The playwright-tool handles S3 uploads. Check its logs from its own directory:
 ```bash
-kubectl logs -n truvag3-examples deploy/playwright-tool | grep -i s3
+cd ../playwright-tool && ./setup.sh logs | grep -i s3
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View agent logs
+# View agent logs (streams)
 ./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=qa-agent
+# Check pod / service status
+./setup.sh status
 
-# Rebuild and redeploy
+# Port forward the qa-agent to localhost:8358
+./setup.sh forward
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Or full no-cache rebuild + redeploy
 ./setup.sh rebuild
 
-# Test the API
+# Run the built-in smoke test suite against the deployed agent
+./setup.sh test
+
+# Remove only the qa-agent (keeps cluster + infra)
+./setup.sh clean
+```
+
+While `./setup.sh forward` is running, send queries with `curl`:
+
+```bash
+# Submit a QA request
 curl -X POST http://localhost:8358/query \
   -H "Content-Type: application/json" \
   -d '{"data": {"query": "Test https://example.com"}}'
 
 # Check orchestrator health
 curl http://localhost:8358/health | python3 -m json.tool
-
-# Remove qa-agent deployment
-./setup.sh clean
 ```
 
 ---

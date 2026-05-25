@@ -344,14 +344,16 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The advisory tool requires Redis for service discovery. If you haven't already set up infrastructure:
+The advisory tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
+cd examples/travel-advisory-tool
+
 ./setup.sh cluster   # Create Kind cluster
 ./setup.sh infra     # Deploy Redis and observability stack
 ```
+
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
 #### Step 2: Build and Deploy
 
@@ -359,23 +361,20 @@ cd examples/travel-chat-agent
 cd examples/travel-advisory-tool
 
 # Build Docker image
-docker build -t travel-advisory-tool:latest .
+./setup.sh docker-build
 
-# Load into Kind
-kind load docker-image travel-advisory-tool:latest
-
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+# Build + load into Kind + apply manifest
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=travel-advisory-tool
+./setup.sh status
 ```
 
 #### Step 3: Test the Tool
 
 ```bash
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/travel-advisory-service 8345:80
+./setup.sh forward
 
 # Test travel advisory
 curl -X POST http://localhost:8345/api/capabilities/get_travel_advisory \
@@ -571,8 +570,8 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 **2. API errors**
 
 ```bash
-# Check logs
-kubectl logs -n truvag3-examples -l app=travel-advisory-tool | grep -i "api\|error"
+# Stream logs and grep for upstream errors
+./setup.sh logs | grep -i "api\|error"
 
 # Common issues:
 # - Network connectivity: Ensure pod can reach cadataapi.state.gov
@@ -597,23 +596,50 @@ docker info
 **5. Kind cluster not found**
 
 ```bash
+# List existing clusters
 kind get clusters
-kind create cluster --name truvag3-demo
+
+# Create a new cluster if none exists (handles the right name + port mappings)
+./setup.sh cluster
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=travel-advisory-tool
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=travel-advisory-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/travel-advisory-service 8345:80
+# Port forward the tool to localhost:8345
+./setup.sh forward
 
-# Test travel advisory
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# Travel advisory for a country
 curl -X POST http://localhost:8345/api/capabilities/get_travel_advisory \
   -H "Content-Type: application/json" \
   -d '{"country": "Thailand"}'

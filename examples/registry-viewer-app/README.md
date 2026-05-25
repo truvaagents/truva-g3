@@ -208,39 +208,30 @@ The app expects services to be stored in Redis with keys matching the pattern `{
 ./setup.sh docker-run redis
 ```
 
-### Manual Docker Commands
+### Docker Container (via setup.sh)
 
 ```bash
-# Build
-docker build -t registry-viewer:latest .
+# Build the image
+./setup.sh docker
 
-# Run with mock data
-docker run -p 8100:8100 registry-viewer:latest
+# Run the container with mock data
+./setup.sh docker-run
 
-# Run with Redis
-docker run -p 8100:8100 registry-viewer:latest \
-  -mock=false -redis-url=redis://host.docker.internal:6379
+# Run the container connected to Redis (host network)
+./setup.sh docker-run redis
 ```
 
 ## Kubernetes Deployment
 
-### Using setup.sh
-
 ```bash
-# Deploy to existing Kind cluster with Redis
+# Deploy to existing Kind cluster (build + load into Kind + apply manifest)
 ./setup.sh deploy
+
+# Port forward the app to localhost:8100
 ./setup.sh forward
 ```
 
-### Manual Deployment
-
-```bash
-# Apply manifests
-kubectl apply -f k8-deployment.yaml
-
-# Port forward
-kubectl port-forward -n truvag3-examples svc/registry-viewer-service 8100:8100
-```
+> **Note:** This app assumes the Kind cluster and Redis are already running — it has no `cluster` / `infra` / `full-deploy` subcommands. Bring those up via any sibling agent first (e.g., `cd ../travel-chat-agent && ./setup.sh full-deploy`) or via `examples/k8-deployment/` directly.
 
 ## Project Structure
 

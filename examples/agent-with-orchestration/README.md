@@ -1244,20 +1244,35 @@ cd ../news-tool && ./setup.sh deploy
 ### Useful Commands
 
 ```bash
-# View agent logs
+# View agent logs (streams)
 ./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=travel-research-orchestration
+# Check pod / service status
+./setup.sh status
+
+# Port forward the agent to localhost:8094
+./setup.sh forward
+
+# Port forward agent + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
 
 # Check Redis tool registration
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
 
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and redeploy (use after changing Go code)
+./setup.sh rebuild
+
 # Test the API
 ./setup.sh test
 
-# Full cleanup
+# Remove only the agent (keeps cluster + infra)
 ./setup.sh cleanup
+
+# Tear down the entire Kind cluster
+./setup.sh cleanup-all
 ```
 
 ---

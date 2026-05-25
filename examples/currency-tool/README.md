@@ -565,7 +565,7 @@ cd examples/currency-tool
 cp .env.example .env
 
 # Build and deploy
-./setup.sh docker
+./setup.sh docker-build
 ./setup.sh deploy
 ```
 
@@ -733,15 +733,18 @@ pkill -f 'kubectl.*port-forward.*currency-tool'
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=currency-tool
+./setup.sh status
 
 # Test the API directly
 curl -X POST http://localhost:8097/api/capabilities/convert_currency \
   -H "Content-Type: application/json" \
   -d '{"from": "USD", "to": "EUR", "amount": 100}'
 
-# Full cleanup
-./setup.sh cleanup
+# Tool cleanup (keeps cluster + infra)
+./setup.sh clean
+
+# Full cleanup (tears down the Kind cluster)
+./setup.sh clean-all
 ```
 
 ---

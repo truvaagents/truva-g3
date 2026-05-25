@@ -644,7 +644,7 @@ make test
 
 ```bash
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/research-agent-service 8090:80
+./setup.sh forward
 
 # In another terminal, test it
 curl http://localhost:8090/health
@@ -804,7 +804,7 @@ curl -X POST http://localhost:8090/api/capabilities/research_topic \
 
 ```bash
 # Start port forwarding
-kubectl port-forward -n truvag3-examples svc/research-agent-service 8090:80
+./setup.sh forward
 
 # Test health endpoint
 curl http://localhost:8090/health
@@ -1476,10 +1476,10 @@ func main() {
 ### Build and Run
 
 ```bash
-# Build
-docker build -t research-agent:latest .
+# Build the Docker image
+./setup.sh docker-build
 
-# Run with AI (requires API key)
+# Run with AI (requires API key) — standalone container, bypasses Kubernetes
 docker run -p 8090:8090 \
   -e REDIS_URL=redis://host.docker.internal:6379 \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
@@ -1497,34 +1497,27 @@ docker-compose up
 ### Quick Deploy
 
 ```bash
-# 1. Deploy infrastructure
-kubectl apply -f k8-deployment/namespace.yaml
-kubectl apply -f k8-deployment/redis.yaml
+# 1. Configure your AI provider keys in .env (OPENAI_API_KEY / GROQ_API_KEY / etc.)
+cp .env.example .env
+# Edit .env to set your provider key(s)
 
-# 2. Create AI secrets
-kubectl create secret generic ai-keys \
-  --from-literal=openai-api-key=$OPENAI_API_KEY \
-  --from-literal=groq-api-key=$GROQ_API_KEY \
-  -n truvag3-examples
+# 2. Deploy: builds the image, loads it into Kind, creates the namespace + Secret
+#    from .env, and applies the agent manifest in one step
+./setup.sh deploy
 
-# 3. Deploy agent
-kubectl apply -f agent-example/k8-deployment.yaml
-
-# 4. Check status
-kubectl get pods -n truvag3-examples -l app=research-agent
-kubectl logs -f deployment/research-agent -n truvag3-examples
+# 3. Check status and stream logs
+./setup.sh status
+./setup.sh logs
 ```
 
 ### Complete Stack with Monitoring
 
 ```bash
-# Deploy everything including monitoring
-kubectl apply -k k8-deployment/
+# One-shot deploy: cluster + monitoring infra (Redis, Prometheus, Grafana, Jaeger) + agent
+./setup.sh full-deploy
 
-# Access services
-kubectl port-forward svc/research-agent-service 8090:80 -n truvag3-examples
-kubectl port-forward svc/grafana 3000:80 -n truvag3-examples
-kubectl port-forward svc/jaeger-query 16686:80 -n truvag3-examples
+# Port forward the agent + all monitoring dashboards
+./setup.sh forward-all
 ```
 
 ### Scaling Configuration
@@ -1663,7 +1656,7 @@ redis-cli -u $REDIS_URL ping
 redis-cli KEYS "truvag3:services:*"
 
 # Verify agent has Discovery permissions
-kubectl logs deployment/research-agent -n truvag3-examples | grep -i discovery
+./setup.sh logs | grep -i discovery
 ```
 
 ### Issue: AI requests failing
@@ -1676,7 +1669,7 @@ curl -H "Authorization: Bearer $OPENAI_API_KEY" \
   https://api.openai.com/v1/models
 
 # Check agent logs for AI errors
-kubectl logs deployment/research-agent -n truvag3-examples | grep -i "ai\|openai\|anthropic"
+./setup.sh logs | grep -i "ai\|openai\|anthropic"
 ```
 
 ### Issue: Tool calls timing out
@@ -1881,19 +1874,19 @@ All capabilities include `input_summary` with field hints:
 You can inspect this data in your cluster:
 ```bash
 # Get the full agent entry
-kubectl exec -it deployment/redis -n default -- \
+kubectl exec -it deployment/redis -n truvag3-examples -- \
   redis-cli GET "truvag3:services:research-assistant"
 
 # List all registered services
-kubectl exec -it deployment/redis -n default -- \
+kubectl exec -it deployment/redis -n truvag3-examples -- \
   redis-cli KEYS "truvag3:services:*"
 
 # See all agents
-kubectl exec -it deployment/redis -n default -- \
+kubectl exec -it deployment/redis -n truvag3-examples -- \
   redis-cli SMEMBERS "truvag3:types:agent"
 
 # Check which services have specific capabilities
-kubectl exec -it deployment/redis -n default -- \
+kubectl exec -it deployment/redis -n truvag3-examples -- \
   redis-cli SMEMBERS "truvag3:capabilities:research_topic"
 ```
 

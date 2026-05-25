@@ -757,7 +757,7 @@ pkill -f 'kubectl.*port-forward.*currency-global-tool'
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=currency-global-tool
+./setup.sh status
 
 # Test the API directly
 curl -X POST http://localhost:8346/api/capabilities/convert_currency \

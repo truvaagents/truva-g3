@@ -344,40 +344,49 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The Prometheus query tool requires Redis for service discovery and a Prometheus server for querying metrics. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., devops-chat-agent)
-cd examples/devops-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis, Prometheus, and observability stack
-```
-
-#### Step 2: Build and Deploy
+The Prometheus query tool requires Redis for service discovery and a Prometheus server for querying metrics. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/prometheus-query-tool
 
-# Build Docker image
-docker build -t prometheus-query-tool:latest .
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis, Prometheus, and observability stack
+```
 
-# Load into Kind
-kind load docker-image prometheus-query-tool:latest
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+#### Step 2: Build and Deploy
+
+`setup.sh` handles the Docker build, Kind image load, namespace creation, and manifest apply. Use these subcommands instead of raw `kubectl`:
+
+```bash
+cd examples/prometheus-query-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + apply manifest
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=prometheus-query-tool
+./setup.sh status
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/prometheus-query-tool-service 8371:80
+# Port forward the tool service to localhost:8371
+./setup.sh forward
 
-# Test instant PromQL query
+# Or run a built-in smoke test against the deployed tool
+./setup.sh test
+```
+
+In a second terminal (while `./setup.sh forward` is running):
+
+```bash
 curl -X POST http://localhost:8371/api/capabilities/query_metrics \
   -H "Content-Type: application/json" \
   -d '{"query": "up"}'
@@ -675,7 +684,7 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 
 ```bash
 # Check logs
-kubectl logs -n truvag3-examples -l app=prometheus-query-tool | grep -i "api\|error"
+./setup.sh logs | grep -i "api\|error"
 
 # Common issues:
 # - Prometheus not deployed: Ensure prometheus-server is running in truvag3-examples
@@ -701,22 +710,49 @@ docker info
 **5. Kind cluster not found**
 
 ```bash
+# List existing clusters
 kind get clusters
-kind create cluster --name truvag3-demo
+
+# Create a new cluster if none exists (handles the right name + port mappings)
+./setup.sh cluster
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=prometheus-query-tool
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=prometheus-query-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/prometheus-query-tool-service 8371:80
+# Port forward the tool to localhost:8371
+./setup.sh forward
 
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
 # Test instant query
 curl -X POST http://localhost:8371/api/capabilities/query_metrics \
   -H "Content-Type: application/json" \

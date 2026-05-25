@@ -164,8 +164,8 @@ You'll still need at least `stock-market-tool` running somewhere reachable (eith
 ### Docker Build (Standalone Image)
 
 ```bash
-# Build the image
-docker build -t agent-with-human-approval:latest .
+# Build the image via setup.sh (uses Dockerfile.workspace + local modules)
+./setup.sh docker
 
 # Run with environment variables.
 # IMPORTANT: paste a real OPENAI_API_KEY value, or omit the flag entirely.
@@ -1326,23 +1326,17 @@ To trace the full request flow:
 
 ### Viewing Logs
 
-**Important:** When using `kubectl logs` with a label selector (`-l`), the output may be truncated to only ~10 lines. Use the explicit pod name with `--tail` for complete logs:
+Stream logs through `setup.sh` (follows the agent pod, no manual label selectors needed):
 
 ```bash
-# Get pod name
-POD=$(kubectl get pods -n truvag3-examples -l app=agent-with-human-approval -o jsonpath='{.items[0].metadata.name}')
-
-# View recent logs (recommended)
-kubectl logs -n truvag3-examples $POD --tail=500
-
 # Stream logs in real-time
-kubectl logs -n truvag3-examples $POD -f --tail=100
+./setup.sh logs
 
 # Search for a specific request ID
-kubectl logs -n truvag3-examples $POD --tail=2000 | grep "your-request-id"
+./setup.sh logs | grep "your-request-id"
 ```
 
-**Alternative: Access log files directly** (for complete logs including rotated entries):
+**Alternative: Access log files directly** (for complete logs including rotated entries that may have aged out of the in-cluster log buffer):
 ```bash
 # Get Kind cluster node name
 NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')

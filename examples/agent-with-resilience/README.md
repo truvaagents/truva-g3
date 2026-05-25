@@ -887,17 +887,17 @@ response := ResearchResponse{
 ## Kubernetes Deployment
 
 ```bash
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+# Deploy to Kubernetes (builds image, loads into Kind, applies manifests)
+./setup.sh deploy
 
 # Check status
-kubectl get pods -n truvag3-examples -l app=research-agent-resilience
+./setup.sh status
 
 # View logs
-kubectl logs -n truvag3-examples -l app=research-agent-resilience -f
+./setup.sh logs
 
 # Port forward for local access
-kubectl port-forward -n truvag3-examples svc/research-agent-resilience 8093:8093
+./setup.sh forward
 ```
 
 ---
@@ -964,23 +964,11 @@ This example is fully self-contained. All required components are included in th
 
 **Deploy to Kubernetes:**
 ```bash
-# Option 1: Use setup.sh (builds and deploys everything)
+# This builds and deploys everything (agent + grocery-tool + grocery-store-api):
 ./setup.sh deploy
-
-# Option 2: Manual deployment
-# Build Docker images
-docker build -t grocery-store-api:latest ../mock-services/grocery-store-api/
-docker build -t grocery-tool:latest ../grocery-tool/
-docker build -t research-agent-resilience:latest .
-
-# Load to Kind (if using Kind)
-kind load docker-image grocery-store-api:latest grocery-tool:latest research-agent-resilience:latest
-
-# Deploy manifests
-kubectl apply -f ../mock-services/grocery-store-api/k8-deployment.yaml
-kubectl apply -f ../grocery-tool/k8-deployment.yaml
-kubectl apply -f k8-deployment.yaml
 ```
+
+> The `deploy` subcommand handles Docker builds, the Kind image load, namespace/ConfigMap setup, and applying all required manifests in the correct order. See `./setup.sh help` for the full list of subcommands.
 
 ### Error Injection Modes
 
@@ -1264,8 +1252,7 @@ The complete lifecycle demonstrates:
 
 ```bash
 # Filter for resilience-related logs
-kubectl logs -n truvag3-examples deployment/research-agent-resilience --since=5m \
-  | grep -E "(circuit|retry|error|fail|succeed)"
+./setup.sh logs | grep -E "(circuit|retry|error|fail|succeed)"
 ```
 
 **Key Log Messages:**
@@ -1341,18 +1328,32 @@ agent-with-resilience/
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View agent logs
-kubectl logs -n truvag3-examples deployment/research-agent-resilience -f
+# Stream agent logs
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=research-agent-resilience
+# Check pod / service status
+./setup.sh status
 
-# Test the API
+# Port forward the agent to localhost:8093
+./setup.sh forward
+
+# Port forward agent + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Run the built-in resilience smoke test against the deployed agent
 ./setup.sh test
 
-# Full cleanup
+# Remove only the agent (keeps cluster + infra)
 ./setup.sh cleanup
+
+# Tear down the entire Kind cluster
+./setup.sh cleanup-all
 ```
 
 ---

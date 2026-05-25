@@ -575,7 +575,7 @@ docker run -p 8095:8095 \
 ./setup.sh deploy
 
 # Check status
-kubectl get pods -n truvag3-examples -l app=geocoding-tool
+./setup.sh status
 ```
 
 ---
@@ -753,8 +753,8 @@ The Nominatim API allows only 1 request per second. Wait a moment and retry. Con
 
 Check pod status and logs:
 ```bash
-kubectl get pods -n truvag3-examples -l app=geocoding-tool
-kubectl logs -n truvag3-examples -l app=geocoding-tool
+./setup.sh status
+./setup.sh logs
 ```
 
 ### Useful Commands
@@ -764,13 +764,16 @@ kubectl logs -n truvag3-examples -l app=geocoding-tool
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=geocoding-tool
+./setup.sh status
 
 # Test the API
 curl http://localhost:8095/health
 
-# Full cleanup
-./setup.sh cleanup
+# Tool cleanup (keeps cluster + infra)
+./setup.sh clean
+
+# Full cleanup (tears down the Kind cluster)
+./setup.sh clean-all
 ```
 
 ---

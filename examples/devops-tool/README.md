@@ -217,9 +217,6 @@ Once complete, port-forward to access locally:
 ```bash
 # Forward to localhost:8347
 ./setup.sh forward
-
-# Or manually:
-kubectl port-forward -n truvag3-examples svc/devops-tool-service 8347:80
 ```
 
 | Service | URL | Description |
@@ -232,39 +229,49 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The devops tool requires Redis for service discovery. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
-```
-
-#### Step 2: Build and Deploy
+The devops tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/devops-tool
 
-# Build Docker image
-docker build -t devops-tool:latest .
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
+```
 
-# Load into Kind
-kind load docker-image devops-tool:latest --name truvag3-demo-$(whoami)
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
-# Deploy to Kubernetes (includes RBAC)
-kubectl apply -f k8-deployment.yaml
+#### Step 2: Build and Deploy
+
+`setup.sh` handles the Docker build, Kind image load, namespace + ConfigMap creation, RBAC, and manifest apply. Use these subcommands instead of raw `kubectl`:
+
+```bash
+cd examples/devops-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + ConfigMap from .env + apply manifest (RBAC included)
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=devops-tool
+./setup.sh status
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/devops-tool-service 8347:80
+# Port forward the tool service to localhost:8347
+./setup.sh forward
 
+# Or run a built-in smoke test against the deployed tool
+./setup.sh test
+```
+
+In a second terminal (while `./setup.sh forward` is running):
+
+```bash
 # Health check
 curl http://localhost:8347/health
 
@@ -567,7 +574,7 @@ Executes an arbitrary kubectl command. Requires `args`. Blocked commands return 
 
 ### Test with curl
 
-After deploying and port-forwarding (`./setup.sh forward` or `kubectl port-forward -n truvag3-examples svc/devops-tool-service 8347:80`):
+After deploying and port-forwarding (`./setup.sh forward`):
 
 ```bash
 # 1. Health check
@@ -751,10 +758,10 @@ All handlers emit span events with `request_id`, and kubectl executions are trac
 
 Ensure Redis is running and `REDIS_URL` is set:
 ```bash
-# Check if Redis is running
-kubectl get pods -n truvag3-examples -l app=redis
+# Confirm the tool pod sees Redis; status output includes the Redis pod
+./setup.sh status
 
-# Or for local development
+# For local (non-Kubernetes) development
 redis-cli ping
 ```
 
@@ -769,8 +776,8 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:se
 
 Check if the pod is running and port forwarding is active:
 ```bash
-kubectl get pods -n truvag3-examples -l app=devops-tool
-kubectl port-forward -n truvag3-examples svc/devops-tool-service 8347:80
+./setup.sh status
+./setup.sh forward
 ```
 
 **4. "FORBIDDEN_COMMAND" error**
@@ -790,18 +797,55 @@ kubectl auth can-i --list --as=system:serviceaccount:truvag3-examples:devops-too
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=devops-tool -f
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=devops-tool
+# Check pod / service status
+./setup.sh status
 
-# Restart the tool
-kubectl rollout restart -n truvag3-examples deployment/devops-tool
+# Port forward the tool to localhost:8347
+./setup.sh forward
 
-# Full cleanup
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
 ./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# Health check
+curl -s http://localhost:8347/health | jq .
+
+# List all capabilities
+curl -s http://localhost:8347/api/capabilities | jq .
+
+# Get cluster status
+curl -s -X POST http://localhost:8347/api/capabilities/get_cluster_status \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+
+# Get pods in a namespace
+curl -s -X POST http://localhost:8347/api/capabilities/get_pods \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "truvag3-examples"}' | jq .
 ```
 
 ---

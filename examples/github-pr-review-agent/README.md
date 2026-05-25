@@ -212,7 +212,7 @@ the agent's environment, or the signature header is missing/malformed. Check
 
 **Webhook returns 202 but nothing happens.** The task is queued, but the
 worker is missing or `github-tool` isn't registered in discovery. Check:
-`kubectl get pods -n truvag3-examples` and verify `github-tool` is `Running`.
+`kubectl get pods -n truvag3-examples -l app=github-tool` and verify it's `Running`.
 
 **Tasks stay `running` forever.** AI provider key invalid, or `github-tool`
 unreachable. Check task result via `GET /api/v1/tasks/{id}`; check Jaeger for

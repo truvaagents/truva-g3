@@ -1,6 +1,6 @@
-# Stock Market Tool
+# Fiscal Data Tool
 
-A TruvaG3 tool that provides real-time stock market data using the [Finnhub.io](https://finnhub.io/) API. This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides U.S. federal fiscal data and global government fiscal indicators using the [U.S. Treasury Fiscal Data API](https://fiscaldata.treasury.gov/api-documentation/) and the [World Bank Open Data API](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
 
 ## Table of Contents
 
@@ -20,11 +20,13 @@ A TruvaG3 tool that provides real-time stock market data using the [Finnhub.io](
 
 ## How to Run This Example
 
-This tool provides stock market data capabilities that agents can discover and use. Unlike agents, tools are independent - they only need Redis for service discovery and don't orchestrate other components.
+This tool provides fiscal data capabilities that agents can discover and use. Unlike agents, tools are independent - they only need Redis for service discovery and don't orchestrate other components.
 
 ### Prerequisites
 
 Before running this example, you need to install the following tools. Choose the instructions for your operating system.
+
+> **Note:** No API key is required. Both the [U.S. Treasury Fiscal Data API](https://fiscaldata.treasury.gov/api-documentation/) and the [World Bank Open Data API](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation) are free, public, and unauthenticated.
 
 #### 1. Docker Desktop
 
@@ -174,11 +176,6 @@ Kind runs local Kubernetes clusters using Docker containers.
 brew install kind
 ```
 
-**Using MacPorts:**
-```bash
-sudo port selfupdate && sudo port install kind
-```
-
 **Manual binary installation (Apple Silicon):**
 ```bash
 curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-darwin-arm64
@@ -214,12 +211,6 @@ choco install kind
 winget install Kubernetes.kind
 ```
 
-**Using Scoop:**
-```powershell
-scoop bucket add main
-scoop install main/kind
-```
-
 **Manual binary installation:**
 ```powershell
 curl.exe -Lo kind-windows-amd64.exe https://kind.sigs.k8s.io/dl/v0.31.0/kind-windows-amd64
@@ -251,11 +242,6 @@ chmod +x ./kind
 sudo mv ./kind /usr/local/bin/kind
 ```
 
-**Using Go (if Go is installed):**
-```bash
-go install sigs.k8s.io/kind@v0.31.0
-```
-
 **Verify installation:**
 ```bash
 kind --version
@@ -284,20 +270,6 @@ kubectl is the command-line tool for interacting with Kubernetes clusters.
 brew install kubectl
 ```
 
-**Manual binary installation (Apple Silicon):**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/arm64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
-```
-
-**Manual binary installation (Intel):**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/amd64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
-```
-
 **Verify installation:**
 ```bash
 kubectl version --client
@@ -314,20 +286,6 @@ kubectl version --client
 choco install kubernetes-cli
 ```
 
-**Using Winget:**
-```powershell
-winget install -e --id Kubernetes.kubectl
-```
-
-**Manual binary installation:**
-```powershell
-# Download kubectl
-curl.exe -LO "https://dl.k8s.io/release/v1.31.0/bin/windows/amd64/kubectl.exe"
-
-# Move to a directory in your PATH
-Move-Item .\kubectl.exe C:\Windows\System32\kubectl.exe
-```
-
 **Verify installation:**
 ```powershell
 kubectl version --client
@@ -341,30 +299,7 @@ kubectl version --client
 
 **Using apt (Ubuntu/Debian):**
 ```bash
-# Add Kubernetes apt repository
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
-
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo chmod 644 /etc/apt/sources.list.d/kubernetes.list
-
-sudo apt-get update
-sudo apt-get install -y kubectl
-```
-
-**Using snap:**
-```bash
-sudo snap install kubectl --classic
-```
-
-**Manual binary installation:**
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-chmod +x ./kubectl
-sudo mv ./kubectl /usr/local/bin/kubectl
+sudo apt-get update && sudo apt-get install -y kubectl
 ```
 
 **Verify installation:**
@@ -395,34 +330,16 @@ Go is required for local development and running without Docker.
 brew install go
 ```
 
-**Manual installation:**
-1. Download the macOS installer from [go.dev/dl](https://go.dev/dl/)
-2. Open the downloaded `.pkg` file
-3. Follow the installation prompts
-
 **Verify installation:**
 ```bash
 go version
 # Expected: go version go1.26.x darwin/arm64 (or darwin/amd64)
 ```
 
-**Set up Go workspace (if not using modules):**
-```bash
-# Add to ~/.zshrc or ~/.bash_profile
-export GOPATH=$HOME/go
-export PATH=$PATH:$GOPATH/bin
-```
-
 </details>
 
 <details>
 <summary><strong>Windows Installation</strong></summary>
-
-**Using the MSI installer (recommended):**
-1. Download the Windows installer from [go.dev/dl](https://go.dev/dl/)
-2. Run the `.msi` installer
-3. Follow the installation wizard
-4. The installer sets PATH automatically
 
 **Using Chocolatey:**
 ```powershell
@@ -442,26 +359,10 @@ go version
 
 **Manual installation (recommended for latest version):**
 ```bash
-# Download Go (replace version as needed)
 curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-
-# Remove any previous installation and extract
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
-
-# Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
-```
-
-**Using apt (may not have latest version):**
-```bash
-sudo apt update
-sudo apt install golang-go
-```
-
-**Using snap:**
-```bash
-sudo snap install go --classic
 ```
 
 **Verify installation:**
@@ -471,25 +372,6 @@ go version
 ```
 
 </details>
-
----
-
-#### 5. Finnhub API Key (Optional)
-
-The Finnhub API key is **optional**. Without it, the tool returns realistic mock data, which is useful for development and testing.
-
-**To get real-time stock data:**
-
-1. Visit [finnhub.io/register](https://finnhub.io/register)
-2. Sign up for a free account
-3. Navigate to your dashboard
-4. Copy your API key
-
-**Free tier includes:**
-- 60 API calls per minute
-- Real-time US stock quotes
-- Company profiles and news
-- 1 year of historical data
 
 ---
 
@@ -524,31 +406,19 @@ echo "All checks complete!"
 
 ### Quick Start (Recommended)
 
-The fastest way to get the stock tool running:
+The fastest way to get this tool running:
 
 ```bash
-cd examples/stock-market-tool
+cd examples/fiscal-data-tool
 
 # 1. Create .env from the example file (safe - won't overwrite existing)
 [ ! -f .env ] && cp .env.example .env
-```
 
-**⚠️ STOP HERE (Optional)** - If you want real stock data, open `.env` and configure your API key:
-
-```bash
-nano .env    # or: code .env / vim .env
-```
-
-**Optional:** Set your Finnhub API key in `.env`:
-- `FINNHUB_API_KEY=your-api-key-here` (Get free key at [finnhub.io/register](https://finnhub.io/register))
-- Without a key, the tool returns realistic mock data (useful for development)
-
-After reviewing your configuration, continue with deployment:
-
-```bash
 # 2. Deploy to Kubernetes (requires cluster and Redis to be running)
 ./setup.sh deploy
 ```
+
+> **Note:** This tool uses free public APIs and does not require any API keys.
 
 **What `./setup.sh deploy` does:**
 1. Builds the Docker image
@@ -560,7 +430,7 @@ Once complete, the tool is available at:
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **Stock API** | http://localhost:8082 | Stock market data API |
+| **Fiscal Data API** | http://localhost:8364 | Treasury + World Bank fiscal data API |
 
 ### Step-by-Step Deployment
 
@@ -568,28 +438,28 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The stock tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
+The fiscal data tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
-cd examples/stock-market-tool
+cd examples/fiscal-data-tool
 
 ./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
+./setup.sh infra     # Deploy Redis and observability stack (Prometheus, Grafana, Jaeger)
 ```
 
 > Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
 #### Step 2: Build and Deploy
 
-`setup.sh` handles the Docker build, Kind image load, namespace + Secret creation (from `.env`), and manifest apply. Use these subcommands instead of raw `kubectl`:
+`setup.sh` handles the Docker build, Kind image load, namespace + ConfigMap creation, and manifest apply. Use these subcommands instead of raw `kubectl`:
 
 ```bash
-cd examples/stock-market-tool
+cd examples/fiscal-data-tool
 
 # Build the Docker image only (does not deploy)
 ./setup.sh docker-build
 
-# Full deploy: build + load into Kind + create namespace + Secret from .env + apply manifest
+# Full deploy: build + load into Kind + create namespace + ConfigMap from .env + apply manifest
 ./setup.sh deploy
 
 # Verify deployment
@@ -601,7 +471,7 @@ cd examples/stock-market-tool
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward the tool service to localhost:8082
+# Port forward the tool service to localhost:8364
 ./setup.sh forward
 
 # Or run a built-in smoke test against the deployed tool
@@ -611,21 +481,23 @@ cd examples/stock-market-tool
 In a second terminal (while `./setup.sh forward` is running):
 
 ```bash
-curl -X POST http://localhost:8082/api/capabilities/stock_quote \
+curl -X POST http://localhost:8364/api/capabilities/national_debt \
   -H "Content-Type: application/json" \
-  -d '{"symbol": "AAPL"}'
+  -d '{}'
 ```
 
 ---
 
 ## Features
 
-- **Real-time Stock Quotes** - Get current price, change, high, low, and trading data
-- **Company Profiles** - Retrieve company information, market cap, industry, and more
-- **Company News** - Fetch recent news articles for specific stocks
-- **Market News** - Get general market news and headlines
-- **Automatic Service Discovery** - Registers with Redis for agent discovery
-- **Graceful Fallback** - Uses mock data when API key is not configured
+- **U.S. National Debt** - Historical debt-to-the-penny totals with public vs. intragovernmental breakdown
+- **Treasury Securities Rates** - Average interest rates on Bills, Notes, Bonds, and TIPS
+- **Treasury Exchange Rates** - Official U.S. Treasury reporting rates for foreign currencies
+- **Federal Spending** - Monthly receipts, outlays, and surplus/deficit from the Monthly Treasury Statement
+- **Global Fiscal Indicators** - Debt-to-GDP, revenue-to-GDP, and expenditure-to-GDP for 200+ countries via the World Bank
+- **Cross-Country Comparison** - Side-by-side fiscal health comparison across multiple economies
+- **No API Key Required** - Both upstream APIs are free and unauthenticated
+- **Distributed Tracing** - Full OpenTelemetry integration with W3C TraceContext
 
 ---
 
@@ -633,131 +505,241 @@ curl -X POST http://localhost:8082/api/capabilities/stock_quote \
 
 The tool registers these capabilities with the service mesh:
 
-### 1. Stock Quote (`stock_quote`)
+### 1. National Debt (`national_debt`)
 
-**Endpoint:** `/api/capabilities/stock_quote`
+**Endpoint:** `/api/capabilities/national_debt`
 
-Gets real-time stock price and trading data.
+Gets the U.S. national debt from the Treasury Department, broken down into debt held by the public and intragovernmental holdings.
 
 **Request:**
 ```json
 {
-  "symbol": "AAPL"
+  "limit": 10,
+  "start_date": "2024-01-01"
 }
 ```
 
 **Response:**
 ```json
 {
-  "symbol": "AAPL",
-  "current_price": 178.25,
-  "change": 2.45,
-  "percent_change": 1.39,
-  "high": 179.50,
-  "low": 176.80,
-  "open": 177.00,
-  "previous_close": 175.80,
-  "timestamp": 1704928800,
-  "source": "Finnhub API"
+  "success": true,
+  "data": {
+    "records": [
+      {
+        "date": "2024-12-31",
+        "total_public_debt": 36219234567890.12,
+        "debt_held_by_public": 28456789012345.67,
+        "intragovernmental_holdings": 7762445555544.45,
+        "fiscal_year": "2025",
+        "fiscal_quarter": "1"
+      }
+    ],
+    "source": "U.S. Treasury Fiscal Data API"
+  }
 }
 ```
 
-### 2. Company Profile (`company_profile`)
+### 2. Treasury Rates (`treasury_rates`)
 
-**Endpoint:** `/api/capabilities/company_profile`
+**Endpoint:** `/api/capabilities/treasury_rates`
 
-Gets comprehensive company information.
+Gets average interest rates on U.S. Treasury securities including Treasury Bills, Notes, Bonds, and TIPS.
 
 **Request:**
 ```json
 {
-  "symbol": "TSLA"
+  "security_type": "Treasury Bonds",
+  "limit": 10,
+  "start_date": "2024-01-01"
+}
+```
+
+**Valid `security_type` values:** `Treasury Bills`, `Treasury Notes`, `Treasury Bonds`, `Treasury Inflation-Protected Securities`. Omit to retrieve all security types.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "records": [
+      {
+        "date": "2024-12-31",
+        "security_type": "Treasury Bonds",
+        "security_desc": "Treasury Bonds",
+        "avg_interest_rate": 3.245,
+        "fiscal_year": "2025"
+      }
+    ],
+    "source": "U.S. Treasury Fiscal Data API"
+  }
+}
+```
+
+### 3. Exchange Rates (`exchange_rates`)
+
+**Endpoint:** `/api/capabilities/exchange_rates`
+
+Gets official U.S. Treasury exchange rates for foreign currencies. These are quarterly Treasury reporting rates used for federal government reporting — not real-time market rates.
+
+**Request:**
+```json
+{
+  "currencies": "Euro Zone-Euro,Japan-Yen,United Kingdom-Pound",
+  "limit": 10,
+  "start_date": "2024-01-01"
+}
+```
+
+> Use Treasury currency format (e.g., `Euro Zone-Euro`, `Japan-Yen`, `Canada-Dollar`). Omit to retrieve all currencies.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "records": [
+      {
+        "date": "2024-12-31",
+        "country_currency": "Euro Zone-Euro",
+        "exchange_rate": 0.962,
+        "effective_date": "2024-12-31"
+      }
+    ],
+    "source": "U.S. Treasury Fiscal Data API"
+  }
+}
+```
+
+### 4. Federal Spending (`federal_spending`)
+
+**Endpoint:** `/api/capabilities/federal_spending`
+
+Gets a summary of federal government receipts (revenue) and outlays (spending) from the Monthly Treasury Statement.
+
+**Request:**
+```json
+{
+  "limit": 12,
+  "start_date": "2024-01-01"
 }
 ```
 
 **Response:**
 ```json
 {
-  "name": "Tesla Inc.",
-  "ticker": "TSLA",
-  "exchange": "NASDAQ",
-  "industry": "Auto Manufacturers",
-  "country": "US",
-  "currency": "USD",
-  "market_capitalization": 789000.5,
-  "ipo": "2010-06-29",
-  "website": "https://www.tesla.com",
-  "logo": "https://finnhub.io/api/logo?symbol=TSLA",
-  "source": "Finnhub API"
+  "success": true,
+  "data": {
+    "records": [
+      {
+        "date": "2024-12-31",
+        "fiscal_year": "2025",
+        "fiscal_month": "December",
+        "receipts": 458123456789.00,
+        "outlays": 612987654321.00,
+        "surplus_or_deficit": -154864197532.00
+      }
+    ],
+    "source": "U.S. Treasury Fiscal Data API"
+  }
 }
 ```
 
-### 3. Company News (`company_news`)
+> The `fiscal_month` field is populated from the Treasury API's `record_calendar_month` value (e.g., `"December"`), not the fiscal-calendar month number.
 
-**Endpoint:** `/api/capabilities/company_news`
+### 5. Global Fiscal Data (`global_fiscal_data`)
 
-Fetches recent news articles for a specific stock.
+**Endpoint:** `/api/capabilities/global_fiscal_data`
+
+Gets government fiscal data (debt, revenue, expenditure as percentage of GDP) for any country worldwide from the World Bank. Covers 200+ countries.
+
+> For detailed U.S. Treasury data, use [`national_debt`](#1-national-debt-national_debt) or [`federal_spending`](#4-federal-spending-federal_spending) instead.
 
 **Request:**
 ```json
 {
-  "symbol": "NVDA",
-  "from": "2024-01-01",
-  "to": "2024-01-31"
+  "country": "Japan",
+  "year": "2022"
+}
+```
+
+Accepts either a country name (`Japan`, `Germany`) or an ISO3 code (`JPN`, `DEU`). World Bank data may lag 1-2 years; omit `year` to get the latest available.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "country": "Japan",
+    "country_code": "JPN",
+    "region": "East Asia & Pacific",
+    "income_level": "High income",
+    "debt_to_gdp_pct": 219.95,
+    "revenue_to_gdp_pct": 21.43,
+    "expenditure_to_gdp_pct": 27.18,
+    "data_year": "2022",
+    "source": "World Bank Open Data"
+  }
+}
+```
+
+> Indicator fields (`debt_to_gdp_pct`, `revenue_to_gdp_pct`, `expenditure_to_gdp_pct`) are omitted when the World Bank has no value for that country/year combination.
+
+### 6. Compare Country Fiscal (`compare_country_fiscal`)
+
+**Endpoint:** `/api/capabilities/compare_country_fiscal`
+
+Compares government fiscal health across multiple countries (2-10) using World Bank data, covering debt-to-GDP, revenue-to-GDP, and expenditure-to-GDP ratios.
+
+**Request:**
+```json
+{
+  "countries": "JPN,DEU,USA",
+  "year": "2022"
 }
 ```
 
 **Response:**
 ```json
 {
-  "symbol": "NVDA",
-  "news": [
-    {
-      "headline": "NVIDIA announces new AI chip",
-      "summary": "Company reveals next-generation GPU for data centers...",
-      "source": "TechCrunch",
-      "url": "https://...",
-      "image": "https://...",
-      "published": 1704928800
-    }
-  ],
-  "from": "2024-01-01",
-  "to": "2024-01-31",
-  "source": "Finnhub API"
+  "success": true,
+  "data": {
+    "countries": [
+      {
+        "country": "Japan",
+        "country_code": "JPN",
+        "region": "East Asia & Pacific",
+        "income_level": "High income",
+        "debt_to_gdp_pct": 219.95,
+        "revenue_to_gdp_pct": 21.43,
+        "expenditure_to_gdp_pct": 27.18,
+        "data_year": "2022",
+        "source": "World Bank Open Data"
+      }
+    ],
+    "data_year": "2022",
+    "source": "World Bank Open Data"
+  }
 }
 ```
 
-### 4. Market News (`market_news`)
-
-**Endpoint:** `/api/capabilities/market_news`
-
-Gets general market news and headlines.
-
-**Request:**
-```json
-{
-  "category": "general"
-}
-```
-
-**Categories:** `general`, `forex`, `crypto`, `merger`
+> Countries that fail to resolve (unknown code) or return no World Bank data are silently skipped. If none of the requested countries resolve, the request returns `500 SERVICE_UNAVAILABLE`.
 
 ---
 
 ## Architecture
 
 ```
-Stock Tool (Passive)
+Fiscal Data Tool (Passive)
     |
     +-- Registers capabilities in Redis
     +-- Receives requests from agents
-    +-- Calls Finnhub API
-    +-- Falls back to mock data if API fails
+    +-- Calls U.S. Treasury Fiscal Data API (no auth)
+    +-- Calls World Bank Open Data API (no auth)
     +-- Returns standardized responses
 
 Agents (Active)
     |
-    +-- Discover stock tool via Redis
+    +-- Discover fiscal data tool via Redis
     +-- Use AI for tool selection
     +-- Generate payloads automatically
     +-- Orchestrate multi-tool workflows
@@ -765,14 +747,14 @@ Agents (Active)
 
 ### Integration with Agents
 
-Once deployed, the stock tool is automatically discovered by agents via Redis. You can query stock data through natural language:
+Once deployed, the fiscal data tool is automatically discovered by agents via Redis. You can query fiscal data through natural language:
 
 ```bash
 # Query through an orchestrating agent
 curl -X POST http://localhost:8091/api/capabilities/research_topic \
   -H "Content-Type: application/json" \
   -d '{
-    "topic": "current price of Apple stock",
+    "topic": "Compare debt-to-GDP between Japan, Germany, and the U.S.",
     "ai_synthesis": true
   }'
 ```
@@ -785,45 +767,58 @@ curl -X POST http://localhost:8091/api/capabilities/research_topic \
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `FINNHUB_API_KEY` | Finnhub API key for real data | - | No* |
 | `REDIS_URL` | Redis connection URL | - | Yes |
-| `PORT` | HTTP server port | `8082` | No |
-| `NAMESPACE` | Kubernetes namespace | `default` | No |
+| `PORT` | HTTP server port | `8364` | No |
+| `NAMESPACE` | Kubernetes namespace passed to the framework | — (set to `truvag3-examples` via the ConfigMap that `setup.sh` builds from `.env`) | No |
+| `APP_ENV` | Environment (development/staging/production) | `development` | No |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint | - | No |
 | `DEV_MODE` | Development mode flag | `false` | No |
 | `TRUVAG3_LOG_LEVEL` | Logging level (error\|warn\|info\|debug) | `info` | No |
 | `TRUVAG3_LOG_FORMAT` | Log format (json\|text) | `json` | No |
 
-*Tool works without API key but returns simulated data.
+### .env File
+
+Copy `.env.example` to `.env` and adjust as needed:
+
+```bash
+cp .env.example .env
+# Defaults work for local development
+```
 
 ---
 
 ## API Rate Limits
 
-Free tier limits (Finnhub):
+Both upstream APIs are free and unauthenticated, with generous limits for typical usage:
 
-| Limit | Value |
-|-------|-------|
-| **Calls per minute** | 60 |
-| **Monthly limit** | Varies by endpoint |
+| API | Rate Limit |
+|-----|------------|
+| **U.S. Treasury Fiscal Data API** | No published hard limit; the API is designed for public open-data access |
+| **World Bank Open Data API** | No published hard limit; intended for public research and analytics |
 
 The tool implements:
-- 1-minute result caching for stock quotes
-- Graceful fallback to mock data on errors
-- Structured error logging for rate limit tracking
+- Traced HTTP client for all API calls (OpenTelemetry spans)
+- 30-second per-request timeout with HTTP/2 keep-alive pooling
+- Structured error logging with retryable error classification
+- Per-capability latency histograms and request counters
 
 ---
 
 ## Project Structure
 
 ```
-stock-market-tool/
-├── main.go                 # Entry point, framework setup
-├── stock_tool.go           # Tool definition, capability registration
-├── finnhub_client.go       # Finnhub API client
+fiscal-data-tool/
+├── main.go                 # Entry point, framework setup, telemetry init
+├── fiscal_data_tool.go     # Tool definition, capability registration
+├── treasury_client.go      # U.S. Treasury Fiscal Data API client
+├── worldbank_client.go     # World Bank Open Data API client
 ├── handlers.go             # HTTP handlers for each capability
 ├── go.mod                  # Go module definition
-├── Dockerfile              # Container image definition
+├── Dockerfile              # Standalone container image
+├── Dockerfile.workspace    # Development build from workspace root
 ├── k8-deployment.yaml      # Kubernetes manifests
+├── setup.sh                # Full lifecycle management script
+├── .env.example            # Environment variable template
 └── README.md               # This file
 ```
 
@@ -837,42 +832,65 @@ stock-market-tool/
 
 Ensure the tool is registered with Redis:
 ```bash
-# Check Redis connection
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
+# List all registered services
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:services:*"
 
-# Should show: truvag3:service:stock-service
+# Confirm this tool is registered by name (resolves to the service ID)
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli GET "truvag3:names:fiscal-data-tool"
 ```
 
-**2. API errors**
+**2. "REDIS_URL is required" error**
+
+Ensure Redis is running and `REDIS_URL` is set:
+```bash
+# Confirm the tool pod sees Redis; status output includes the Redis pod
+./setup.sh status
+
+# For local (non-Kubernetes) development
+redis-cli ping
+```
+
+**3. Treasury API returns no data**
 
 ```bash
-# Check logs for API key issues
-./setup.sh logs | grep -i "api"
+# Stream logs and grep for upstream errors
+./setup.sh logs | grep -i "treasury"
 
 # Common issues:
-# - Invalid API key: Check secret configuration
-# - Rate limit: Wait 1 minute or upgrade Finnhub plan
-# - Invalid symbol: Use valid US stock ticker symbols
+# - Invalid start_date: must be YYYY-MM-DD format
+# - Invalid security_type: use exact Treasury labels (Treasury Bills, Treasury Notes, ...)
+# - Invalid currencies: use Treasury currency format (e.g., 'Euro Zone-Euro')
 ```
 
-**3. Mock data being used when API key is configured**
+**4. World Bank returns null indicators**
 
-If you see "Mock Data" in responses:
-1. Verify `FINNHUB_API_KEY` is set in `.env` (the Secret is rebuilt from `.env` on each deploy)
-2. Stream startup logs and look for the API key detection line: `./setup.sh logs`
-3. Restart the deployment to pick up a fresh Secret: `./setup.sh rollout`
+```bash
+# Stream logs and grep for World Bank errors
+./setup.sh logs | grep -i "world bank"
 
-**4. Docker build fails**
+# Common issues:
+# - Country code not recognized: try ISO3 (JPN, DEU) instead of country names
+# - Recent year requested: World Bank fiscal data typically lags 1-2 years; omit 'year' for latest
+# - Indicator unavailable for that country: some economies don't report all three indicators
+```
+
+**5. `compare_country_fiscal` rejects request**
+
+```bash
+# Common validation errors:
+# - "at least 2 countries required": pass at least 2 comma-separated values
+# - "maximum 10 countries allowed": limit to 10 per request
+# - "countries field is required": ensure the 'countries' string is non-empty
+```
+
+**6. Docker build fails**
 
 ```bash
 # Ensure Docker is running
 docker info
-
-# If using Docker Desktop, ensure it's started
-# Check Docker Desktop icon in system tray (Windows) or menu bar (macOS)
 ```
 
-**5. Kind cluster not found**
+**7. Kind cluster not found**
 
 ```bash
 # List existing clusters
@@ -893,13 +911,13 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 # Check pod / service status
 ./setup.sh status
 
-# Port forward the tool to localhost:8082
+# Port forward the tool to localhost:8364
 ./setup.sh forward
 
 # Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
 ./setup.sh forward-all
 
-# Restart the deployment (e.g., to pick up a new Secret from .env)
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
 ./setup.sh rollout
 
 # Rebuild image and restart (use after changing Go code)
@@ -918,10 +936,25 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 While `./setup.sh forward` is running, send capability requests with `curl`:
 
 ```bash
-# Test stock quote
-curl -X POST http://localhost:8082/api/capabilities/stock_quote \
+# National debt (latest record)
+curl -X POST http://localhost:8364/api/capabilities/national_debt \
   -H "Content-Type: application/json" \
-  -d '{"symbol": "AAPL"}'
+  -d '{}'
+
+# Treasury rates filtered by security type
+curl -X POST http://localhost:8364/api/capabilities/treasury_rates \
+  -H "Content-Type: application/json" \
+  -d '{"security_type": "Treasury Bonds", "limit": 5}'
+
+# Global fiscal data for a country
+curl -X POST http://localhost:8364/api/capabilities/global_fiscal_data \
+  -H "Content-Type: application/json" \
+  -d '{"country": "Japan"}'
+
+# Cross-country comparison
+curl -X POST http://localhost:8364/api/capabilities/compare_country_fiscal \
+  -H "Content-Type: application/json" \
+  -d '{"countries": "JPN,DEU,USA"}'
 ```
 
 ---
@@ -932,9 +965,8 @@ curl -X POST http://localhost:8082/api/capabilities/stock_quote \
 
 ```bash
 # Set environment variables
-export FINNHUB_API_KEY="your-api-key-here"
 export REDIS_URL="redis://localhost:6379"
-export PORT=8082
+export PORT=8364
 
 # Run the tool
 go run .
@@ -942,19 +974,18 @@ go run .
 
 ### Adding New Capabilities
 
-1. Add request/response types in `stock_tool.go`
+1. Add request/response types in `fiscal_data_tool.go`
 2. Register capability in `registerCapabilities()`
 3. Implement handler in `handlers.go`
-4. Add Finnhub client method in `finnhub_client.go` if needed
+4. Add upstream client method in `treasury_client.go` or `worldbank_client.go` if needed
 
 ---
 
 ## Related Examples
 
-- [travel-chat-agent](../travel-chat-agent/) - Streaming chat agent that can use this tool
-- [agent-with-orchestration](../agent-with-orchestration/) - Basic orchestration example
-- [weather-tool-v2](../weather-tool-v2/) - Weather data tool
-- [currency-tool](../currency-tool/) - Currency exchange tool
-- [country-info-tool](../country-info-tool/) - Country information tool
+- [economic-data-tool](../economic-data-tool/) - Macroeconomic indicators (BEA, BLS, FRED)
+- [stock-market-tool](../stock-market-tool/) - Real-time stock quotes and company data
+- [currency-tool](../currency-tool/) - Currency exchange rates
+- [travel-chat-agent](../travel-chat-agent/) - Streaming chat agent that can orchestrate tools
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).

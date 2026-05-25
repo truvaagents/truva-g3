@@ -47,16 +47,19 @@ If you don't have a cluster yet:
 ### Step-by-Step Deployment
 
 ```bash
-# 1. Ensure infrastructure is running
-cd examples/devops-chat-agent  # or any agent
+# 1. Ensure infrastructure is running (skip if already up from another example —
+#    the cluster + infra are shared across all TruvaG3 examples).
+cd examples/devops-observability-tool
 ./setup.sh cluster
 ./setup.sh infra
 
-# 2. Deploy the tool
-cd examples/devops-observability-tool
+# 2. Deploy the tool (builds image, loads into Kind, creates namespace, applies manifest)
 ./setup.sh deploy
 
-# 3. Test
+# 3. Verify status
+./setup.sh status
+
+# 4. Run the built-in smoke test
 ./setup.sh test
 ```
 
@@ -367,7 +370,7 @@ devops-observability-tool/
 
 Loki has a 30-hour query window limit. Use `since: "24h"` or shorter.
 ```bash
-# Verify Loki is running
+# Verify Loki is running (Loki is part of the shared infra stack)
 kubectl get pods -n truvag3-examples -l app=loki
 ```
 
@@ -382,8 +385,7 @@ Check that the tool is registered with all 9 capabilities:
 # Via setup.sh test (handles port-forward automatically)
 ./setup.sh test
 
-# Or manually with port-forward
-kubectl port-forward -n truvag3-examples svc/devops-observability-tool-service 8378:80
+# Or manually: in one terminal run `./setup.sh forward`, then in another:
 curl -s http://localhost:8378/api/capabilities | jq '.[].name'
 ```
 

@@ -596,7 +596,7 @@ To get your API key:
 
 ```bash
 # Build the Docker image
-./setup.sh docker
+./setup.sh docker-build
 
 # Deploy to Kubernetes
 ./setup.sh deploy
@@ -794,16 +794,19 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:se
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=news-tool
+./setup.sh status
 
 # Restart the tool
-./setup.sh restart
+./setup.sh rollout
 
 # Run locally (without Kubernetes)
 ./setup.sh run
 
-# Full cleanup
-./setup.sh cleanup
+# Tool cleanup (keeps cluster + infra)
+./setup.sh clean
+
+# Full cleanup (tears down the Kind cluster)
+./setup.sh clean-all
 ```
 
 ---

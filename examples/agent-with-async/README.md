@@ -644,7 +644,7 @@ cd examples/agent-with-async
 ./setup.sh deploy
 
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/async-travel-agent-service 8098:80
+./setup.sh forward
 ```
 
 ---
@@ -1007,18 +1007,15 @@ The agent integrates with OpenTelemetry for comprehensive observability:
 ### Accessing Observability Stack
 
 ```bash
-# Jaeger (Distributed Tracing)
-kubectl port-forward -n truvag3-examples svc/jaeger-query 16686:80
-# Open http://localhost:16686
-
-# Prometheus (Metrics)
-kubectl port-forward -n truvag3-examples svc/prometheus 9090:9090
-# Open http://localhost:9090
-
-# Grafana (Dashboards)
-kubectl port-forward -n truvag3-examples svc/grafana 3000:3000
-# Open http://localhost:3000
+# Port forward agent + Jaeger + Prometheus + Grafana in one shot
+./setup.sh forward-all
 ```
+
+Once running, open:
+
+- **Jaeger** (distributed tracing): http://localhost:16686
+- **Prometheus** (metrics): http://localhost:9090
+- **Grafana** (dashboards, admin/admin): http://localhost:3000
 
 ### Distributed Tracing with Jaeger
 
@@ -1173,11 +1170,24 @@ Worker logs are structured JSON for easy parsing. Example log output during task
 ```
 
 **View Worker Logs:**
+
+For most debugging, prefer the observability stack — Jaeger gives you per-task spans (including orchestration events and task IDs), Prometheus gives you metric queries (success rate, durations, tool calls):
+
+```bash
+# Port forward agent + Jaeger + Prometheus + Grafana
+./setup.sh forward-all
+```
+
+- **Jaeger** (per-task spans): http://localhost:16686 → Service `async-travel-agent-worker`
+- **Prometheus** (metrics): http://localhost:9090
+
+For raw container output, the agent's `setup.sh` does not currently expose a `logs` wrapper, so use `kubectl logs` directly (this is a documented exception — like the `kubectl exec ... redis-cli` Redis introspection pattern used elsewhere):
+
 ```bash
 # Tail worker logs
 kubectl logs -f -n truvag3-examples -l app=async-travel-agent-worker
 
-# Filter for specific task
+# Filter for a specific task
 kubectl logs -n truvag3-examples -l app=async-travel-agent-worker | grep "task_id"
 
 # Filter for orchestration events

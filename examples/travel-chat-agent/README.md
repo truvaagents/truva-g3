@@ -75,11 +75,13 @@ At minimum, set ONE provider key in your `.env` file. In `.env.example`, `OPENAI
 # 3. Deploy the required tools (each tool has its own setup script).
 #    Each line returns to examples/travel-chat-agent so the next `cd ../...`
 #    resolves correctly. Run from the examples/travel-chat-agent directory.
-#    Start with these four to cover weather + country/currency lookups:
+#    Start with these five to cover weather + country/currency lookups
+#    and time-aware queries (the agent has no built-in clock):
 cd ../weather-tool-v2 && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../geocoding-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../currency-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../country-info-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../system-utilities-tool && ./setup.sh deploy && cd ../travel-chat-agent
 
 #    Add these to unlock flight, hotel, advisory, and places queries:
 cd ../flight-tool && ./setup.sh deploy && cd ../travel-chat-agent
@@ -149,6 +151,7 @@ cd ../weather-tool-v2 && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../geocoding-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../currency-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../country-info-tool && ./setup.sh deploy && cd ../travel-chat-agent
+cd ../system-utilities-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../flight-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../hotel-tool && ./setup.sh deploy && cd ../travel-chat-agent
 cd ../travel-advisory-tool && ./setup.sh deploy && cd ../travel-chat-agent
@@ -210,6 +213,7 @@ These extend the agent's reach beyond the prompt's explicit instructions.
 
 | Tool | Purpose | Documentation |
 |------|---------|---------------|
+| **system-utilities-tool** | Current time, timezone conversion, date math (e.g., "what time is it in Tokyo?", "if I leave NYC at 9am, what time is that in London?"). Recommended — the agent has no built-in clock. | [README](../system-utilities-tool/README.md) |
 | **news-tool** | News articles (e.g., "any news about Tokyo before I travel?") | [README](../news-tool/README.md) |
 | **stock-market-tool** | Stock prices | [README](../stock-market-tool/README.md) |
 | **grocery-tool** | Grocery store API | [README](../grocery-tool/README.md) |
@@ -621,9 +625,9 @@ redis-cli ping
 
 **2. "Orchestrator is initializing" error**
 
-The orchestrator needs time to discover tools. Wait a few seconds and retry. Check if tools are deployed:
+The orchestrator needs time to discover tools. Wait a few seconds and retry. Stream the agent logs to watch tool discovery, and run `./setup.sh status` from each tool's directory (e.g., `cd ../weather-tool-v2 && ./setup.sh status`):
 ```bash
-kubectl get pods -n truvag3-examples
+./setup.sh logs
 ```
 
 **3. No tools discovered**
@@ -649,27 +653,42 @@ curl -v http://travel-chat-agent.localhost/health
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand. Travel-chat-agent's `setup.sh` does not expose a `status` subcommand — stream logs to check startup instead.
+
 ```bash
-# View agent logs
+# Stream agent logs (use this to verify startup, tool discovery, and request handling)
 ./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=travel-chat-agent
+# Verify all ingress routes (Chat UI, agent API, Grafana, Jaeger, Prometheus)
+./setup.sh verify
 
+# Port forward the agent + monitoring dashboards
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image + redeploy (use after changing Go code)
+./setup.sh rebuild
+
+# Run the built-in smoke test suite against the deployed agent
+./setup.sh test
+
+# Remove only the agent (keeps cluster + infra)
+./setup.sh cleanup
+
+# Tear down the entire Kind cluster
+./setup.sh cleanup-all
+```
+
+For low-level introspection that `setup.sh` doesn't wrap:
+
+```bash
 # Check ingress routes
 kubectl get ingress -n truvag3-examples
 
 # Check Redis session data
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 2 KEYS 'truvag3:sessions:*'
-
-# Test the API
-./setup.sh test
-
-# Verify all ingress routes
-./setup.sh verify
-
-# Full cleanup
-./setup.sh cleanup-all
 ```
 
 ---

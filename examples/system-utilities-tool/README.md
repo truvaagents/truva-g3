@@ -72,14 +72,16 @@ If you prefer to understand each step:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The tool requires Redis for service discovery. If you haven't already set up infrastructure:
+The tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
-# From any example with a setup script
-cd examples/stock-market-tool   # or any other example
-./setup.sh cluster              # Create Kind cluster
-./setup.sh infra                # Deploy Redis and observability stack
+cd examples/system-utilities-tool
+
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
 ```
+
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
 #### Step 2: Build and Deploy
 
@@ -93,14 +95,14 @@ cd examples/system-utilities-tool
 ./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=system-utilities-tool
+./setup.sh status
 ```
 
 #### Step 3: Test the Tool
 
 ```bash
 # Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/system-utilities-service 8348:80
+./setup.sh forward
 
 # Test current time
 curl -X POST http://localhost:8348/api/capabilities/get_current_time \
@@ -525,7 +527,7 @@ system-utilities-tool/
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*" | grep system
 
 # Check tool logs
-kubectl logs -n truvag3-examples -l app=system-utilities-tool --tail=20
+./setup.sh logs
 ```
 
 **2. execute_command returns permission denied**
@@ -561,30 +563,63 @@ Default timeout is 30 seconds (max 300). For long-running commands, increase the
 **5. Pod not starting**
 
 ```bash
-# Check pod events
-kubectl describe pod -n truvag3-examples -l app=system-utilities-tool
+# Check pod status
+./setup.sh status
 
 # Check logs
-kubectl logs -n truvag3-examples -l app=system-utilities-tool --tail=50
+./setup.sh logs
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=system-utilities-tool -f --tail=100
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=system-utilities-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/system-utilities-service 8348:80
+# Port forward the tool to localhost:8348
+./setup.sh forward
 
-# Run all tests via setup script
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new ConfigMap from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
 ./setup.sh test
 
-# Rebuild and redeploy
-./setup.sh rebuild
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# Current time in a timezone
+curl -X POST http://localhost:8348/api/capabilities/get_current_time \
+  -H "Content-Type: application/json" \
+  -d '{"timezone": "America/New_York"}'
+
+# Execute a shell command
+curl -X POST http://localhost:8348/api/capabilities/execute_command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "echo hello world"}'
+
+# Generate UUIDs
+curl -X POST http://localhost:8348/api/capabilities/generate_id \
+  -H "Content-Type: application/json" \
+  -d '{"type": "uuid", "count": 3}'
 ```
 
 ---

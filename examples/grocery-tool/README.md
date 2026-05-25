@@ -981,7 +981,7 @@ The grocery-store-api backend is not reachable:
 kubectl get pods -n truvag3-examples -l app=grocery-store-api
 
 # Check the API URL configuration
-kubectl logs -n truvag3-examples -l app=grocery-tool | grep GROCERY_API_URL
+./setup.sh logs | grep GROCERY_API_URL
 ```
 
 **3. Rate limit errors (429)**
@@ -1010,7 +1010,7 @@ pkill -f 'kubectl.*port-forward.*truvag3-examples'
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=grocery-tool
+./setup.sh status
 
 # Check Redis service registry
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'

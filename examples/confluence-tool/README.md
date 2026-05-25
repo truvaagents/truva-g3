@@ -1,6 +1,8 @@
-# JIRA Tool
+# Confluence Tool
 
-A TruvaG3 tool that provides JIRA Cloud issue management capabilities using the [Atlassian JIRA REST API v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+A TruvaG3 tool that provides Confluence Cloud page management capabilities using the [Atlassian Confluence REST API v2](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/). This tool demonstrates the passive tool pattern - it registers capabilities with the service mesh but does not discover other components.
+
+> **Heads-up: this is a write-capable tool.** `create_page` and `update_page` mutate Confluence data. The API token you provide governs what the tool can change — scope it to a workspace where unintended writes are recoverable, especially during development.
 
 ## Table of Contents
 
@@ -20,7 +22,7 @@ A TruvaG3 tool that provides JIRA Cloud issue management capabilities using the 
 
 ## How to Run This Example
 
-This tool provides JIRA issue management capabilities that agents can discover and use. Unlike agents, tools are independent - they only need Redis for service discovery and don't orchestrate other components.
+This tool provides Confluence page management capabilities that agents can discover and use. Unlike agents, tools are independent - they only need Redis for service discovery and don't orchestrate other components.
 
 ### Prerequisites
 
@@ -341,18 +343,19 @@ go version
 
 ---
 
-#### 5. JIRA API Token
+#### 5. Confluence API Token
 
-A JIRA API token is **required** for this tool. The tool connects to your Atlassian Cloud instance.
+A Confluence (Atlassian) API token is **required** for this tool. The tool connects to your Atlassian Cloud instance and uses the same token format as JIRA — if you already have a JIRA API token from [jira-tool](../jira-tool/README.md), the same token works here.
 
 1. Visit [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
 2. Click "Create API token"
-3. Give it a label (e.g., "TruvaG3 JIRA Tool")
+3. Give it a label (e.g., "TruvaG3 Confluence Tool")
 4. Copy the generated token
 
 **You'll also need:**
 - Your Atlassian instance URL (e.g., `https://mycompany.atlassian.net`)
 - Your Atlassian account email
+- Confluence enabled on your Atlassian Cloud workspace, with at least one space the token's user can read
 
 ---
 
@@ -387,24 +390,24 @@ echo "All checks complete!"
 
 ### Quick Start (Recommended)
 
-The fastest way to get the JIRA tool running:
+The fastest way to get the Confluence tool running:
 
 ```bash
-cd examples/jira-tool
+cd examples/confluence-tool
 
 # 1. Create .env from the example file (safe - won't overwrite existing)
 [ ! -f .env ] && cp .env.example .env
 ```
 
-**Edit `.env`** with your JIRA credentials:
+**Edit `.env`** with your Confluence credentials:
 
 ```bash
 nano .env    # or: code .env / vim .env
 ```
 
-- `JIRA_BASE_URL=https://mycompany.atlassian.net`
-- `JIRA_USER_EMAIL=you@example.com`
-- `JIRA_API_TOKEN=your-api-token` (Get from [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens))
+- `CONFLUENCE_BASE_URL=https://mycompany.atlassian.net`
+- `CONFLUENCE_USER_EMAIL=you@example.com`
+- `CONFLUENCE_API_TOKEN=your-api-token` (Get from [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens))
 
 After configuring your credentials, continue with deployment:
 
@@ -423,7 +426,7 @@ Once complete, the tool is available at:
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **JIRA API** | http://localhost:8366 | JIRA issue management API |
+| **Confluence API** | http://localhost:8376 | Confluence page management API |
 
 ### Step-by-Step Deployment
 
@@ -431,23 +434,23 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The JIRA tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
+The Confluence tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
-cd examples/jira-tool
+cd examples/confluence-tool
 
 ./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
+./setup.sh infra     # Deploy Redis and observability stack (Prometheus, Grafana, Jaeger)
 ```
 
 > Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
 #### Step 2: Build and Deploy
 
-`setup.sh` handles the Docker build, Kind image load, namespace + Secret creation, and manifest apply. Configure your JIRA credentials in `.env` (see Quick Start above), then `./setup.sh deploy` creates the Kubernetes Secret from `.env` automatically. Use these subcommands instead of raw `kubectl`:
+Configure your credentials in `.env` (see Quick Start above), then `./setup.sh deploy` creates the Kubernetes Secret from `.env` automatically. `setup.sh` also handles the Docker build, Kind image load, namespace creation, and manifest apply.
 
 ```bash
-cd examples/jira-tool
+cd examples/confluence-tool
 
 # Build the Docker image only (does not deploy)
 ./setup.sh docker-build
@@ -464,7 +467,7 @@ cd examples/jira-tool
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward the tool service to localhost:8366
+# Port forward the tool service to localhost:8376
 ./setup.sh forward
 
 # Or run a built-in smoke test against the deployed tool
@@ -474,23 +477,21 @@ cd examples/jira-tool
 In a second terminal (while `./setup.sh forward` is running):
 
 ```bash
-# Test get issue
-curl -X POST http://localhost:8366/api/capabilities/get_issue \
+# Test list spaces (no required input — fetch this first to get space IDs)
+curl -X POST http://localhost:8376/api/capabilities/list_spaces \
   -H "Content-Type: application/json" \
-  -d '{"issue_key": "PROJ-123"}'
+  -d '{"limit": 10}'
 ```
 
 ---
 
 ## Features
 
-- **Issue Retrieval** - Get full issue details by key with optional field filtering
-- **JQL Search** - Search issues using JIRA Query Language with pagination
-- **Issue Creation** - Create bugs, tasks, stories, and epics with full field support
-- **Issue Updates** - Modify summary, description, priority, and labels
-- **Comments** - Add comments to issues with automatic ADF conversion
-- **Workflow Transitions** - Move issues through workflow states (e.g., To Do -> In Progress -> Done)
-- **Assignment** - Assign or unassign issues to team members
+- **Space Discovery** - List Confluence spaces with their numeric IDs (required input for page creation)
+- **Page Retrieval** - Get a page by ID with optional body content
+- **CQL Search** - Search pages by free text or raw Confluence Query Language (e.g., `type=page AND title~"outage"`)
+- **Page Creation** - Create new pages from markdown-like text (headings, bullets, paragraphs auto-convert to Confluence storage format)
+- **Page Updates** - Update title and/or body of an existing page (handles version increment automatically)
 - **Automatic Service Discovery** - Registers with Redis for agent discovery
 - **Distributed Tracing** - Full OpenTelemetry integration with W3C TraceContext
 
@@ -500,158 +501,156 @@ curl -X POST http://localhost:8366/api/capabilities/get_issue \
 
 The tool registers these capabilities with the service mesh:
 
-### 1. Get Issue (`get_issue`)
+### 1. List Spaces (`list_spaces`)
 
-**Endpoint:** `/api/capabilities/get_issue`
+**Endpoint:** `/api/capabilities/list_spaces`
 
-Gets a single JIRA issue by key with full details.
+Lists Confluence spaces with their numeric IDs. Run this first — `create_page` needs the numeric space ID (e.g. `"360452"`), not the human-friendly space key.
 
 **Request:**
 ```json
 {
-  "issue_key": "PROJ-123",
-  "fields": "summary,status,assignee"
+  "limit": 25
 }
 ```
 
 **Response:**
 ```json
 {
-  "key": "PROJ-123",
-  "summary": "Login page returns 500 error",
-  "status": "In Progress",
-  "assignee": "Jane Smith",
-  "priority": "High",
-  "labels": ["backend", "urgent"],
-  "created": "2026-01-15T10:30:00.000+0000",
-  "updated": "2026-02-20T14:22:00.000+0000",
-  "description": "Steps to reproduce: 1. Go to /login..."
-}
-```
-
-### 2. Search Issues (`search_issues`)
-
-**Endpoint:** `/api/capabilities/search_issues`
-
-Searches JIRA issues using JQL (JIRA Query Language).
-
-**Request:**
-```json
-{
-  "jql": "project = MYPROJ AND status = 'To Do'",
-  "fields": "summary,status,assignee,priority",
-  "max_results": 10
-}
-```
-
-**Response:**
-```json
-{
-  "total": 42,
-  "issues": [
+  "spaces": [
     {
-      "key": "MYPROJ-101",
-      "summary": "Add dark mode support",
-      "status": "To Do",
-      "assignee": "John Doe",
-      "priority": "Medium"
+      "id": "360452",
+      "key": "OPS",
+      "name": "Operations",
+      "type": "global",
+      "status": "current",
+      "homepage_id": "98305",
+      "url": "https://mycompany.atlassian.net/wiki/spaces/OPS",
+      "description": "Runbooks, post-mortems, on-call docs"
     }
-  ]
+  ],
+  "total": 1,
+  "source": "Confluence API"
 }
 ```
 
-### 3. Create Issue (`create_issue`)
+### 2. Search Pages (`search_pages`)
 
-**Endpoint:** `/api/capabilities/create_issue`
+**Endpoint:** `/api/capabilities/search_pages`
 
-Creates a new JIRA issue in a project.
+Searches Confluence pages by free text or raw CQL. Free-text queries are auto-wrapped as `type=page AND (title~"<query>" OR text~"<query>")`. Raw CQL is detected by the presence of `=` or `~` in the query string and passed through unchanged.
 
 **Request:**
 ```json
 {
-  "project_key": "PROJ",
-  "summary": "Login page returns 500 error",
-  "issue_type": "Bug",
-  "description": "Steps to reproduce: 1. Go to /login 2. Click submit",
-  "priority": "High",
-  "labels": "backend,urgent"
+  "query": "post-mortem",
+  "space_key": "OPS",
+  "limit": 10
 }
 ```
 
 **Response:**
 ```json
 {
-  "key": "PROJ-456",
-  "id": "10042",
-  "self": "https://mycompany.atlassian.net/rest/api/3/issue/10042"
+  "query": "post-mortem",
+  "results": [
+    {
+      "page_id": "458753",
+      "title": "Post-Mortem: Stock Tool Outage 2026-03-05",
+      "space_key": "OPS",
+      "space_name": "Operations",
+      "url": "/spaces/OPS/pages/458753/Post-Mortem-Stock-Tool-Outage",
+      "excerpt": "The stock-market-tool experienced a 15-minute outage...",
+      "version": 3,
+      "updated_at": "2026-03-06T14:22:00.000Z"
+    }
+  ],
+  "total": 1,
+  "source": "Confluence API"
 }
 ```
 
-### 4. Update Issue (`update_issue`)
+### 3. Get Page (`get_page`)
 
-**Endpoint:** `/api/capabilities/update_issue`
+**Endpoint:** `/api/capabilities/get_page`
 
-Updates fields on an existing JIRA issue.
+Retrieves a single page by ID. Set `include_body: true` to fetch the storage-format (XHTML) body alongside metadata.
 
 **Request:**
 ```json
 {
-  "issue_key": "PROJ-123",
-  "summary": "Updated issue title",
-  "priority": "High",
-  "add_labels": "critical,p0",
-  "remove_labels": "backlog"
-}
-```
-
-### 5. Add Comment (`add_comment`)
-
-**Endpoint:** `/api/capabilities/add_comment`
-
-Adds a comment to a JIRA issue.
-
-**Request:**
-```json
-{
-  "issue_key": "PROJ-123",
-  "body": "Fixed in commit abc123. Ready for QA."
+  "page_id": "458753",
+  "include_body": true
 }
 ```
 
 **Response:**
 ```json
 {
-  "comment_id": "10023",
-  "author": "jane.smith@example.com",
-  "created": "2026-02-25T09:15:00.000+0000"
+  "page_id": "458753",
+  "title": "Post-Mortem: Stock Tool Outage 2026-03-05",
+  "space_id": "360452",
+  "url": "https://mycompany.atlassian.net/wiki/spaces/OPS/pages/458753",
+  "version": 3,
+  "status": "current",
+  "content": "<h2>Summary</h2><p>The stock-market-tool experienced a 15-minute outage...</p>",
+  "created_at": "2026-03-05T14:30:00.000Z",
+  "source": "Confluence API"
 }
 ```
 
-### 6. Transition Issue (`transition_issue`)
+### 4. Create Page (`create_page`)
 
-**Endpoint:** `/api/capabilities/transition_issue`
+**Endpoint:** `/api/capabilities/create_page`
 
-Changes a JIRA issue's workflow status. Automatically fetches available transitions and matches by name.
+Creates a new page in a Confluence space. The `content` field accepts a markdown-like dialect (`##` headings, `-` / `*` bullets, blank-line paragraph breaks) which the tool converts to Confluence storage format (XHTML) before posting.
 
 **Request:**
 ```json
 {
-  "issue_key": "PROJ-123",
-  "transition_name": "In Progress"
+  "space_id": "360452",
+  "title": "Post-Mortem: Stock Tool Outage 2026-03-05",
+  "content": "## Summary\nThe stock-market-tool experienced a 15-minute outage.\n\n## Timeline\n- 14:00 Alert triggered\n- 14:15 Service restored",
+  "parent_id": "98305"
 }
 ```
 
-### 7. Assign Issue (`assign_issue`)
+**Response:**
+```json
+{
+  "page_id": "458753",
+  "url": "https://mycompany.atlassian.net/wiki/spaces/OPS/pages/458753",
+  "title": "Post-Mortem: Stock Tool Outage 2026-03-05",
+  "space_id": "360452",
+  "version": 1,
+  "created_at": "2026-03-05T14:30:00.000Z",
+  "source": "Confluence API"
+}
+```
 
-**Endpoint:** `/api/capabilities/assign_issue`
+### 5. Update Page (`update_page`)
 
-Assigns or unassigns a JIRA issue.
+**Endpoint:** `/api/capabilities/update_page`
+
+Updates the title and/or body of an existing page. The tool transparently handles Confluence's required version-increment dance: it fetches the current version, increments it, and submits the update — callers don't need to track versions. At least one of `title` or `content` must be supplied; an empty `title` keeps the existing title.
 
 **Request:**
 ```json
 {
-  "issue_key": "PROJ-123",
-  "account_id": "5b10ac8d82e05b22cc7d4ef5"
+  "page_id": "458753",
+  "title": "Post-Mortem: Stock Tool Outage (Resolved)",
+  "content": "## Resolution\nRoot cause identified as API rate limiting..."
+}
+```
+
+**Response:**
+```json
+{
+  "page_id": "458753",
+  "url": "https://mycompany.atlassian.net/wiki/spaces/OPS/pages/458753",
+  "title": "Post-Mortem: Stock Tool Outage (Resolved)",
+  "version": 4,
+  "source": "Confluence API"
 }
 ```
 
@@ -660,35 +659,50 @@ Assigns or unassigns a JIRA issue.
 ## Architecture
 
 ```
-JIRA Tool (Passive)
+Confluence Tool (Passive)
     |
     +-- Registers capabilities in Redis
     +-- Receives requests from agents
-    +-- Authenticates via JIRA Basic Auth (email + API token)
-    +-- Calls Atlassian JIRA REST API v3
+    +-- Authenticates via Atlassian Basic Auth (email + API token)
+    +-- Calls Confluence REST API v2 (v1 for CQL search)
+    +-- Converts markdown-like content to storage-format XHTML
     +-- Returns standardized responses
 
 Agents (Active)
     |
-    +-- Discover JIRA tool via Redis
+    +-- Discover Confluence tool via Redis
     +-- Use AI for tool selection
     +-- Generate payloads automatically
-    +-- Orchestrate multi-tool workflows
+    +-- Orchestrate multi-tool workflows (e.g., JIRA outage -> Confluence post-mortem)
 ```
 
 ### Integration with Agents
 
-Once deployed, the JIRA tool is automatically discovered by agents via Redis. You can manage JIRA issues through natural language:
+Once deployed, the Confluence tool is automatically discovered by agents via Redis. A common workflow is pairing it with [jira-tool](../jira-tool/README.md) — when an incident closes in JIRA, an orchestrating agent can fetch the issue, draft a post-mortem, and publish it to Confluence in a single conversation:
 
 ```bash
 # Query through an orchestrating agent
 curl -X POST http://localhost:8350/api/capabilities/research_topic \
   -H "Content-Type: application/json" \
   -d '{
-    "topic": "What are the open bugs in the PROJ project?",
+    "topic": "Draft a post-mortem in the OPS space for JIRA issue PROJ-456 and link the resolved ticket.",
     "ai_synthesis": true
   }'
 ```
+
+### Markdown-like Content Conversion
+
+`create_page` and `update_page` accept a lightweight markdown subset that gets converted to Confluence storage format (XHTML) before posting:
+
+| Input | Storage format |
+|-------|----------------|
+| `## Heading` | `<h2>Heading</h2>` |
+| `### Heading` | `<h3>Heading</h3>` |
+| `- Item` or `* Item` | `<ul><li>Item</li></ul>` |
+| Plain text line | `<p>Plain text line</p>` |
+| Blank line | Paragraph break (closes open list) |
+
+Special characters (`&`, `<`, `>`, `"`) are HTML-escaped. The converter is intentionally minimal — for richer formatting (tables, code blocks, links), pass storage-format XHTML directly in `content`.
 
 ---
 
@@ -698,15 +712,28 @@ curl -X POST http://localhost:8350/api/capabilities/research_topic \
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `JIRA_BASE_URL` | Atlassian Cloud instance URL | - | Yes |
-| `JIRA_USER_EMAIL` | Atlassian account email | - | Yes |
-| `JIRA_API_TOKEN` | JIRA API token | - | Yes |
+| `CONFLUENCE_BASE_URL` | Atlassian Cloud instance URL (e.g., `https://mycompany.atlassian.net`) | - | Yes |
+| `CONFLUENCE_USER_EMAIL` | Atlassian account email | - | Yes |
+| `CONFLUENCE_API_TOKEN` | Atlassian API token (same as JIRA) | - | Yes |
 | `REDIS_URL` | Redis connection URL | - | Yes |
-| `PORT` | HTTP server port | `8366` | No |
+| `PORT` | HTTP server port | `8376` | No |
 | `NAMESPACE` | Kubernetes namespace | — (set to the pod's namespace by the manifest's downward API) | No |
 | `DEV_MODE` | Development mode flag | `false` | No |
+| `APP_ENV` | Environment profile (development\|staging\|production) | `development` | No |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint | - | No |
 | `TRUVAG3_LOG_LEVEL` | Logging level (error\|warn\|info\|debug) | `info` | No |
 | `TRUVAG3_LOG_FORMAT` | Log format (json\|text) | `json` | No |
+
+### Required Confluence Permissions
+
+The Atlassian account that owns the API token needs the following per-space permissions for the spaces it will operate on:
+
+| Capability | Required Permission |
+|------------|--------------------|
+| `list_spaces` | "View" on at least one space (only spaces the user can see are returned) |
+| `search_pages`, `get_page` | "View" on the target space(s) |
+| `create_page` | "Add pages" on the target space |
+| `update_page` | "Add pages" + page is not under restricted editing |
 
 ---
 
@@ -716,12 +743,13 @@ Atlassian Cloud rate limits:
 
 | Limit | Value |
 |-------|-------|
-| **REST API** | Varies by endpoint (typically generous) |
+| **REST API** | Varies by endpoint (typically generous; see [Atlassian rate-limiting docs](https://developer.atlassian.com/cloud/confluence/rate-limiting/)) |
 | **Concurrent requests** | Based on Atlassian plan |
 
 The tool implements:
 - HTTP Basic Auth with API token (no OAuth complexity)
 - Traced HTTP client for all API calls (OpenTelemetry spans)
+- Structured upstream-error classification (maps 4xx/5xx + retryability)
 - Structured error logging for rate limit tracking
 - Graceful error responses on API failures
 
@@ -730,14 +758,13 @@ The tool implements:
 ## Project Structure
 
 ```
-jira-tool/
+confluence-tool/
 ├── main.go                 # Entry point, framework setup, telemetry init
-├── jira_tool.go            # Tool definition, capability registration
-├── jira_client.go          # JIRA REST API v3 client (7 endpoints)
+├── confluence_tool.go      # Tool definition, capability registration, types
+├── confluence_client.go    # Confluence REST API v2 client + markdown-to-storage converter
 ├── handlers.go             # HTTP handlers for each capability
 ├── go.mod                  # Go module definition
-├── Dockerfile              # Standalone container image
-├── Dockerfile.workspace    # Development build from workspace root
+├── Dockerfile.workspace    # Container build from workspace root
 ├── k8-deployment.yaml      # Kubernetes manifests
 ├── setup.sh                # Full lifecycle management script
 ├── .env.example            # Environment variable template
@@ -757,7 +784,7 @@ Ensure the tool is registered with Redis:
 # Check Redis connection
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 
-# Should show: truvag3:service:jira-tool-service
+# Should show: truvag3:service:confluence-tool-service
 ```
 
 **2. Authentication errors (401)**
@@ -769,7 +796,7 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 # Common issues:
 # - Invalid API token: Regenerate at https://id.atlassian.com/manage-profile/security/api-tokens
 # - Wrong email: Must match the Atlassian account that created the token
-# - Wrong base URL: Must be https://your-domain.atlassian.net (no trailing slash)
+# - Wrong base URL: Must be https://your-domain.atlassian.net (no trailing slash, no /wiki suffix)
 ```
 
 **3. Permission errors (403)**
@@ -779,28 +806,43 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 ./setup.sh logs | grep -i "403\|permission"
 
 # Common issues:
-# - API token user doesn't have access to the project
-# - Insufficient project permissions for the operation (e.g., create/transition)
-# - Issue-level security restrictions
+# - Token user lacks "View" on the target space
+# - Token user lacks "Add pages" permission for create_page/update_page
+# - Page is under restricted editing (page restrictions override space permissions)
 ```
 
-**4. JQL search returns no results**
+**4. `create_page` fails with "space not found" or 400**
+
+```bash
+# Common issue: passing the space KEY (e.g. "OPS") instead of the numeric space ID.
+# Confluence REST API v2 requires the numeric ID for page creation.
+# Fix: run list_spaces first and use the `id` field, not `key`.
+curl -X POST http://localhost:8376/api/capabilities/list_spaces \
+  -H "Content-Type: application/json" -d '{"limit": 25}'
+```
+
+**5. Search returns no results**
 
 ```bash
 # Common issues:
-# - Invalid project key: Verify the project exists in your JIRA instance
-# - Escaped quotes: Use single quotes in JQL (project = 'My Project')
-# - Field names: Use JIRA field names, not display names
+# - Free-text queries match against title and text only — page macros and attachments aren't indexed
+# - space_key is case-sensitive (typically uppercase like "OPS", "ENG")
+# - CQL detection: queries containing "=" or "~" are treated as raw CQL — escape these in plain searches
+# - Indexing lag: newly created pages may not appear in search results immediately
 ```
 
-**5. Docker build fails**
+**6. `update_page` returns version conflict**
+
+The tool fetches the current version before writing, so version conflicts only happen if another writer updates the page between the GET and the PUT. Retry the call — the tool re-fetches the current version on every invocation.
+
+**7. Docker build fails**
 
 ```bash
 # Ensure Docker is running
 docker info
 ```
 
-**6. Kind cluster not found**
+**8. Kind cluster not found**
 
 ```bash
 # List existing clusters
@@ -821,7 +863,7 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 # Check pod / service status
 ./setup.sh status
 
-# Port forward the tool to localhost:8366
+# Port forward the tool to localhost:8376
 ./setup.sh forward
 
 # Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
@@ -846,20 +888,24 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 While `./setup.sh forward` is running, send capability requests with `curl`:
 
 ```bash
-# Get issue
-curl -X POST http://localhost:8366/api/capabilities/get_issue \
+# List spaces (no required input — start here to get space IDs)
+curl -X POST http://localhost:8376/api/capabilities/list_spaces \
   -H "Content-Type: application/json" \
-  -d '{"issue_key": "PROJ-123"}'
+  -d '{"limit": 10}'
 
-# Search issues with JQL
-curl -X POST http://localhost:8366/api/capabilities/search_issues \
+# Search pages
+curl -X POST http://localhost:8376/api/capabilities/search_pages \
   -H "Content-Type: application/json" \
-  -d '{"jql": "project = PROJ AND status = \"To Do\"", "max_results": 5}'
+  -d '{"query": "post-mortem", "space_key": "OPS", "limit": 5}'
 
-# Add a comment
-curl -X POST http://localhost:8366/api/capabilities/add_comment \
+# Create a page (replace space_id with a real ID from list_spaces)
+curl -X POST http://localhost:8376/api/capabilities/create_page \
   -H "Content-Type: application/json" \
-  -d '{"issue_key": "PROJ-123", "body": "Fixed in commit abc123. Ready for QA."}'
+  -d '{
+    "space_id": "360452",
+    "title": "Test Page from TruvaG3",
+    "content": "## Hello\nThis page was created by the confluence-tool."
+  }'
 ```
 
 ---
@@ -870,11 +916,11 @@ curl -X POST http://localhost:8366/api/capabilities/add_comment \
 
 ```bash
 # Set environment variables
-export JIRA_BASE_URL="https://mycompany.atlassian.net"
-export JIRA_USER_EMAIL="you@example.com"
-export JIRA_API_TOKEN="your-api-token"
+export CONFLUENCE_BASE_URL="https://mycompany.atlassian.net"
+export CONFLUENCE_USER_EMAIL="you@example.com"
+export CONFLUENCE_API_TOKEN="your-api-token"
 export REDIS_URL="redis://localhost:6379"
-export PORT=8366
+export PORT=8376
 
 # Run the tool
 go run .
@@ -882,19 +928,19 @@ go run .
 
 ### Adding New Capabilities
 
-1. Add request/response types in `jira_tool.go`
+1. Add request/response types in `confluence_tool.go`
 2. Register capability in `registerCapabilities()`
 3. Implement handler in `handlers.go`
-4. Add JIRA client method in `jira_client.go` if needed
+4. Add Confluence client method in `confluence_client.go` if needed
 
 ---
 
 ## Related Examples
 
-- [devops-chat-agent](../devops-chat-agent/) - DevOps chat agent that can use this tool
+- [jira-tool](../jira-tool/) - JIRA issue management tool (same Atlassian auth — token is reusable)
+- [devops-chat-agent](../devops-chat-agent/) - DevOps chat agent that pairs well with this tool for post-mortems
 - [agent-with-orchestration](../agent-with-orchestration/) - Orchestration example
-- [stock-market-tool](../stock-market-tool/) - Stock market data tool
-- [hotel-tool](../hotel-tool/) - Hotel search tool (LiteAPI)
+- [slack-tool](../slack-tool/) - Slack messaging tool (announce new Confluence pages)
 - [web-search-tool](../web-search-tool/) - Web search tool
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).

@@ -543,39 +543,49 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The flight tool requires Redis for service discovery. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
-```
-
-#### Step 2: Build and Deploy
+The flight tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/flight-tool
 
-# Build Docker image
-docker build -t flight-tool:latest .
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
+```
 
-# Load into Kind
-kind load docker-image flight-tool:latest
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+#### Step 2: Build and Deploy
+
+`setup.sh` handles the Docker build, Kind image load, namespace + Secret creation, and manifest apply. Use these subcommands instead of raw `kubectl`:
+
+```bash
+cd examples/flight-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + Secret from .env + apply manifest
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=flight-tool
+./setup.sh status
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/flight-tool-service 8342:80
+# Port forward the tool service to localhost:8342
+./setup.sh forward
 
+# Or run a built-in smoke test against the deployed tool
+./setup.sh test
+```
+
+In a second terminal (while `./setup.sh forward` is running):
+
+```bash
 # Test flight search
 curl -X POST http://localhost:8342/api/capabilities/search_flights \
   -H "Content-Type: application/json" \
@@ -860,20 +870,19 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 **2. Authentication / 401 errors**
 
 ```bash
-# Check logs for token issues
-kubectl logs -n truvag3-examples -l app=flight-tool | grep -i "token\|401\|unauthorized"
+# Stream logs and grep for token issues
+./setup.sh logs | grep -i "token\|401\|unauthorized"
 
 # Common issues:
-# - Empty TRAVELPAYOUTS_TOKEN: check the flight-tool-secrets secret
-#     kubectl get secret -n truvag3-examples flight-tool-secrets -o yaml
+# - Empty TRAVELPAYOUTS_TOKEN: confirm your .env has the token set, then re-run ./setup.sh deploy
 # - Wrong token: re-copy from https://www.travelpayouts.com/developers/api
 ```
 
 **3. API errors or empty results**
 
 ```bash
-# Check logs for API issues
-kubectl logs -n truvag3-examples -l app=flight-tool | grep -i "api\|error"
+# Stream logs and grep for API issues
+./setup.sh logs | grep -i "api\|error"
 
 # Common issues:
 # - Invalid IATA code: Use valid 3-letter codes (JFK, NRT, LHR)
@@ -898,26 +907,60 @@ docker info
 # List existing clusters
 kind get clusters
 
-# Create a new cluster if none exists
-kind create cluster --name truvag3-demo
+# Create a new cluster if none exists (handles the right name + port mappings)
+./setup.sh cluster
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=flight-tool
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=flight-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/flight-tool-service 8342:80
+# Port forward the tool to localhost:8342
+./setup.sh forward
 
-# Test flight search
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new Secret from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
+# Flight search
 curl -X POST http://localhost:8342/api/capabilities/search_flights \
   -H "Content-Type: application/json" \
   -d '{"origin": "JFK", "destination": "NRT", "departure_date": "2026-04-15"}'
+
+# Airport autocomplete
+curl -X POST http://localhost:8342/api/capabilities/search_airports \
+  -H "Content-Type: application/json" \
+  -d '{"keyword": "Tokyo"}'
+
+# Cheapest dates
+curl -X POST http://localhost:8342/api/capabilities/cheapest_dates \
+  -H "Content-Type: application/json" \
+  -d '{"origin": "JFK", "destination": "NRT", "departure_date": "2026-04-01"}'
 ```
 
 ---

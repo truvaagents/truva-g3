@@ -482,69 +482,49 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The tool requires Redis for service discovery. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
-```
-
-#### Step 2: Build and Deploy
+The tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/playwright-tool
 
-# Use the setup script — it handles configmap + S3 secret creation from .env
-# (a plain `kubectl apply -f k8-deployment.yaml` will leave the pod in
-# CreateContainerConfigError because the manifest references
-# `playwright-tool-env-config` and `playwright-s3-credentials` that don't
-# exist until ./setup.sh creates them from .env)
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
+```
+
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
+
+#### Step 2: Build and Deploy
+
+Configure your S3 credentials in `.env` (see Quick Start above), then `./setup.sh deploy` creates the ConfigMap and S3 credentials Secret from `.env` automatically. A plain manifest apply would leave the pod in `CreateContainerConfigError` because the manifest references `playwright-tool-env-config` and `playwright-s3-credentials` that don't exist until `setup.sh` builds them.
+
+```bash
+cd examples/playwright-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + ConfigMap + Secret from .env + apply manifest
 ./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=playwright-tool
+./setup.sh status
 ```
 
-<details>
-<summary><strong>Manual breakdown (what setup.sh deploy does)</strong></summary>
-
-```bash
-# 1. Build Docker image
-docker build -t playwright-tool:latest .
-
-# 2. Load into Kind
-# setup.sh creates clusters as "truvag3-demo-$(whoami)" — use the same
-# pattern, or run `kind get clusters` and pass the exact name you have
-kind load docker-image playwright-tool:latest --name "truvag3-demo-$(whoami)"
-
-# 3. Create the S3 credentials secret from .env
-kubectl create secret generic playwright-s3-credentials \
-  --namespace truvag3-examples \
-  --from-literal=S3_ACCESS_KEY="$(grep ^S3_ACCESS_KEY= .env | cut -d= -f2-)" \
-  --from-literal=S3_SECRET_KEY="$(grep ^S3_SECRET_KEY= .env | cut -d= -f2-)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# 4. Create the ConfigMap from .env
-kubectl create configmap playwright-tool-env-config \
-  --namespace truvag3-examples \
-  --from-env-file=.env \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# 5. Apply the Deployment + Service
-kubectl apply -f k8-deployment.yaml
-```
-
-</details>
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/playwright-tool-service 8349:80
+# Port forward the tool service to localhost:8349
+./setup.sh forward
 
-# Test stealth_browser
+# Or run a built-in smoke test against the deployed tool
+./setup.sh test
+```
+
+In a second terminal (while `./setup.sh forward` is running):
+
+```bash
 curl -X POST http://localhost:8349/api/capabilities/stealth_browser \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "extract_content": "text"}'
@@ -1016,7 +996,7 @@ playwright-tool/
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*" | grep playwright
 
 # Check tool logs
-kubectl logs -n truvag3-examples -l app=playwright-tool --tail=20
+./setup.sh logs
 ```
 
 **2. Browser timeouts on JS-heavy SPAs**
@@ -1061,7 +1041,7 @@ If steps fail with "selector not found" on a SPA:
 kubectl exec -n truvag3-examples deploy/playwright-tool -- env | grep S3_
 
 # Check logs for S3 errors
-kubectl logs -n truvag3-examples -l app=playwright-tool | grep -i s3
+./setup.sh logs | grep -i s3
 ```
 
 Common causes:
@@ -1083,33 +1063,51 @@ curl -X POST http://localhost:8349/api/capabilities/get_artifacts \
 **7. Pod not starting**
 
 ```bash
-# Check pod events
-kubectl describe pod -n truvag3-examples -l app=playwright-tool
+# Check pod / service status
+./setup.sh status
 
-# Check logs
-kubectl logs -n truvag3-examples -l app=playwright-tool --tail=50
+# Stream logs
+./setup.sh logs
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=playwright-tool -f --tail=100
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=playwright-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/playwright-tool-service 8349:80
+# Port forward the tool to localhost:8349
+./setup.sh forward
 
-# List registered capabilities
-curl -s http://localhost:8349/api/capabilities | jq '[.[].name]'
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
 
-# Run all tests via setup script
+# Restart the deployment (e.g., to pick up new S3 creds from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
 ./setup.sh test
 
-# Rebuild and redeploy
-./setup.sh rebuild
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, you can query the tool with `curl`:
+
+```bash
+# List registered capabilities
+curl -s http://localhost:8349/api/capabilities | jq '[.[].name]'
 ```
 
 ---

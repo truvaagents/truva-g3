@@ -642,9 +642,9 @@ redis-cli ping
 
 **2. "Orchestrator is initializing" error**
 
-The orchestrator needs time to discover tools. Wait a few seconds and retry. Check if tools are deployed:
+The orchestrator needs time to discover tools. Wait a few seconds and retry, then confirm tools are discoverable:
 ```bash
-kubectl get pods -n truvag3-examples
+curl -s http://devops-chat-agent.localhost/discover | jq .
 ```
 
 **3. No tools discovered**
@@ -687,11 +687,8 @@ curl -v http://devops-chat-agent.localhost/health
 ### Useful Commands
 
 ```bash
-# View agent logs
+# View agent logs (also the quickest way to verify the pod is up)
 ./setup.sh logs
-
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=devops-chat-agent
 
 # Check ingress routes
 kubectl get ingress -n truvag3-examples

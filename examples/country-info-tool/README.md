@@ -691,13 +691,16 @@ The RestCountries API is a free public service. If it's temporarily unavailable,
 ./setup.sh logs
 
 # Check pod status
-kubectl get pods -n truvag3-examples -l app=country-info-tool
+./setup.sh status
 
 # Run locally (for development)
 ./setup.sh run
 
-# Full cleanup
-./setup.sh cleanup
+# Tool cleanup (keeps cluster + infra)
+./setup.sh clean
+
+# Full cleanup (tears down the Kind cluster)
+./setup.sh clean-all
 ```
 
 ---

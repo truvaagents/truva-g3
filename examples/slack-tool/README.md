@@ -431,40 +431,49 @@ If you prefer to understand each step or need more control:
 
 #### Step 1: Ensure Infrastructure is Running
 
-The Slack tool requires Redis for service discovery. If you haven't already set up infrastructure:
-
-```bash
-# From any agent example (e.g., travel-chat-agent)
-cd examples/travel-chat-agent
-./setup.sh cluster   # Create Kind cluster
-./setup.sh infra     # Deploy Redis and observability stack
-```
-
-#### Step 2: Build and Deploy
+The Slack tool requires Redis for service discovery. If you haven't already set up infrastructure, run these from this directory:
 
 ```bash
 cd examples/slack-tool
 
-# Build Docker image
-docker build -t slack-tool:latest .
+./setup.sh cluster   # Create Kind cluster
+./setup.sh infra     # Deploy Redis and observability stack
+```
 
-# Load into Kind
-kind load docker-image slack-tool:latest
+> Skip these if you've already brought up the cluster + infra from another example — they're shared across all TruvaG3 examples in the `truvag3-examples` namespace.
 
-# Deploy to Kubernetes
-kubectl apply -f k8-deployment.yaml
+#### Step 2: Build and Deploy
+
+`setup.sh` handles the Docker build, Kind image load, namespace + Secret creation, and manifest apply. Configure your credentials in `.env` (see Quick Start above), then `./setup.sh deploy` creates the Kubernetes Secret from `.env` automatically.
+
+```bash
+cd examples/slack-tool
+
+# Build the Docker image only (does not deploy)
+./setup.sh docker-build
+
+# Full deploy: build + load into Kind + create namespace + Secret from .env + apply manifest
+./setup.sh deploy
 
 # Verify deployment
-kubectl get pods -n truvag3-examples -l app=slack-tool
+./setup.sh status
 ```
+
+> **Tip:** If you don't already have a cluster and infrastructure, `./setup.sh full-deploy` does everything from scratch in one shot — cluster, monitoring, tool, and port forwards.
 
 #### Step 3: Test the Tool
 
 ```bash
-# Port forward to access locally
-kubectl port-forward -n truvag3-examples svc/slack-tool-service 8363:80
+# Port forward the tool service to localhost:8363
+./setup.sh forward
 
-# Test list channels
+# Or run a built-in smoke test against the deployed tool
+./setup.sh test
+```
+
+In a second terminal (while `./setup.sh forward` is running):
+
+```bash
 curl -X POST http://localhost:8363/api/capabilities/list_channels \
   -H "Content-Type: application/json" \
   -d '{"limit": 10, "exclude_archived": true}'
@@ -672,7 +681,7 @@ curl -X POST http://localhost:8363/api/capabilities/search_messages \
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (starts with `xoxb-`) | - | Yes |
 | `REDIS_URL` | Redis connection URL | - | Yes |
 | `PORT` | HTTP server port | `8363` | No |
-| `NAMESPACE` | Kubernetes namespace | `default` | No |
+| `NAMESPACE` | Kubernetes namespace | — (set to the pod's namespace by the manifest's downward API) | No |
 | `DEV_MODE` | Development mode flag | `false` | No |
 | `APP_ENV` | Environment profile (development\|staging\|production) | `development` | No |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint | - | No |
@@ -746,7 +755,7 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
 
 ```bash
 # Check logs for auth issues
-kubectl logs -n truvag3-examples -l app=slack-tool | grep -i "auth\|invalid_auth\|not_authed"
+./setup.sh logs | grep -i "auth\|invalid_auth\|not_authed"
 
 # Common issues:
 # - Invalid bot token: Regenerate at https://api.slack.com/apps -> OAuth & Permissions
@@ -758,7 +767,7 @@ kubectl logs -n truvag3-examples -l app=slack-tool | grep -i "auth\|invalid_auth
 
 ```bash
 # Check logs for permission issues
-kubectl logs -n truvag3-examples -l app=slack-tool | grep -i "missing_scope\|not_in_channel\|ekm_access_denied"
+./setup.sh logs | grep -i "missing_scope\|not_in_channel\|ekm_access_denied"
 
 # Common issues:
 # - Missing bot token scopes: Add chat:write, chat:write.public, channels:read, search:read
@@ -788,22 +797,46 @@ docker info
 # List existing clusters
 kind get clusters
 
-# Create a new cluster if none exists
-kind create cluster --name truvag3-demo
+# Create a new cluster if none exists (handles the right name + port mappings)
+./setup.sh cluster
 ```
 
 ### Useful Commands
 
+All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see every subcommand.
+
 ```bash
-# View tool logs
-kubectl logs -n truvag3-examples -l app=slack-tool
+# View tool logs (streams)
+./setup.sh logs
 
-# Check pod status
-kubectl get pods -n truvag3-examples -l app=slack-tool
+# Check pod / service status
+./setup.sh status
 
-# Port forward for local testing
-kubectl port-forward -n truvag3-examples svc/slack-tool-service 8363:80
+# Port forward the tool to localhost:8363
+./setup.sh forward
 
+# Port forward tool + monitoring dashboards (Grafana, Prometheus, Jaeger)
+./setup.sh forward-all
+
+# Restart the deployment (e.g., to pick up a new Secret from .env)
+./setup.sh rollout
+
+# Rebuild image and restart (use after changing Go code)
+./setup.sh rollout --build
+
+# Run the built-in smoke test suite against the deployed tool
+./setup.sh test
+
+# Remove only the tool (keeps cluster + infra)
+./setup.sh clean
+
+# Tear down the entire Kind cluster
+./setup.sh clean-all
+```
+
+While `./setup.sh forward` is running, send capability requests with `curl`:
+
+```bash
 # Test send message
 curl -X POST http://localhost:8363/api/capabilities/send_message \
   -H "Content-Type: application/json" \
