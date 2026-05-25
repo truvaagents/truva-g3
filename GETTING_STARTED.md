@@ -22,6 +22,12 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 > - **Coding agents:** [Claude Code](https://claude.com/claude-code) + [OpenAI Codex](https://github.com/openai/codex)
 > - **Container runtime:** [OrbStack](https://orbstack.dev/)
 > - **Kubernetes UI:** [Lens Desktop](https://k8slens.dev/) (see [Optional: Kubernetes UI](#optional-kubernetes-ui) below for the free alternative)
+> - **AI models:** Each agent's `.env.example` ships the author's defaults
+>   (e.g. `gpt-4.1`, `claude-sonnet-4-6`, `gpt-oss-120b`). During
+>   development, frontier non-reasoning models have been consistently more
+>   effective for this framework's workloads than dedicated reasoning
+>   models, which tend to add latency without clearly improving outcomes
+>   here. Treat these as a starting point; override per-agent in `.env`.
 
 TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
 
@@ -30,7 +36,7 @@ TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](h
 > **Go version**: the framework's `go.mod` declares `go 1.26.2`, so building
 > from source needs Go 1.26+. With Go's toolchain auto-upgrade (default since
 > Go 1.21), an older Go install will fetch 1.26.2 on first build — but some
-> corporate environments disable auto-upgrade, so installing a current Go
+> controlled environments disable auto-upgrade, so installing a current Go
 > directly is the simplest path.
 
 **macOS:**
