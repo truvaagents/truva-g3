@@ -1,11 +1,11 @@
 # TruvaG3 — A Microagents Framework
 
-[![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org/dl/)
+[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org/dl/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
 > **A different way to wire agents and tools.** Specialized agents and tools register their capabilities with a shared registry, find each other by logical name at runtime, and coordinate without a central conductor — the microservices pattern, applied to multi-agent systems.
 
-> **About this framework.** TruvaG3 is the open-source reference implementation of the microagents architecture described in [A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](www/blogs/microagents-architecture.html). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
+> **About this framework.** TruvaG3 is the open-source reference implementation of the microagents architecture described in [A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](https://truvag3.dev/blogs/microagents-architecture). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
 
 The architecture has five defining properties, each implemented here:
 
@@ -24,7 +24,7 @@ Two coordination layers fall out of the design:
 
 **Distributed-systems patterns**: capability-based service discovery (Redis/Valkey by default; pluggable behind `core.Discovery`), resilience primitives (circuit breakers, semantic retry, panic recovery), and OpenTelemetry instrumentation with distributed tracing and unified metrics. Written in Go for a small runtime footprint (~15-44MB containers, ~6-45MB runtime memory) and direct use of Kubernetes primitives.
 
-**Where this is most useful**: when the goal is not a single agent but a network of agents and tools that can be developed and operated independently, on infrastructure you already run. Self-hosted operation, namespace-oriented isolation, direct in-cluster service communication, and growth from a handful of participants to a large internal fleet — all without an external SaaS control plane.
+**Where this is most useful**: when the goal is not a single agent but a network of agents and tools that can be developed and operated independently, on kubernetes infrastructure. Self-hosted operation, namespace-oriented isolation, direct in-cluster service communication, and growth from a handful of participants to a large internal fleet — all without an external SaaS control plane.
 
 ## Table of Contents
 
@@ -107,7 +107,7 @@ This makes TruvaG3 well-suited to deployments that include:
 
 ### 3. Why Go? Language Is No Longer a Barrier
 
-**The AI-Assisted Coding Revolution**: With GitHub Copilot, Claude Code, and Cursor, programming language syntax is no longer a barrier. If you understand programming concepts, AI assistants help you write idiomatic code in any language.
+**The AI-Assisted Coding Revolution**: With Claude Code, Codex, Cursor, GitHub Copilot, etc., programming language syntax is no longer a barrier. If you understand programming concepts, AI assistants help you write idiomatic code in any language.
 
 **So Why Choose Go for AI Tools and Agents?**
 
@@ -584,7 +584,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 ### Guides
 
 **Architecture deep-dives:**
-- [A Microagents Reference Architecture](www/blogs/microagents-architecture.html) — the reference-architecture article this framework implements
+- [A Microagents Reference Architecture](https://truvag3.dev/blogs/microagents-architecture) — the reference-architecture article this framework implements
 - [Introduction to TruvaG3](www/blogs/truvag3-introduction.html) — framework overview
 
 **Building:**
@@ -677,7 +677,7 @@ See the [examples/](examples/) directory for the full set of bundled Tools — d
 ## Next Steps
 
 1. **Run it locally** → [GETTING_STARTED.md](GETTING_STARTED.md) — set up a kind cluster, deploy the bundled examples, and (in section 4) build your own components with the included scaffolds
-2. **Read the architecture article** → [A Microagents Reference Architecture](www/blogs/microagents-architecture.html) — the design this framework implements
+2. **Read the architecture article** → [A Microagents Reference Architecture](https://truvag3.dev/blogs/microagents-architecture) — the design this framework implements
 3. **Survey the framework's capabilities** → [Framework Features Guide](docs/overview/FRAMEWORK_FEATURES_GUIDE.md) — comprehensive feature map across modules
 
 ## Contributing

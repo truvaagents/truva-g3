@@ -1119,7 +1119,7 @@ replace (
 For publishing to a container registry. Copies the tool directory only — no local module references.
 
 ```dockerfile
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
@@ -1169,7 +1169,7 @@ docker build -f examples/your-tool/Dockerfile.workspace -t your-tool:latest .
 # Workspace Dockerfile for your-tool
 # Usage (from truvag3 root): docker build -f examples/your-tool/Dockerfile.workspace -t your-tool:latest .
 
-FROM golang:1.25.7-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 

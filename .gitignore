@@ -14,6 +14,21 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Node.js dependencies (docs-site uses npm; any future Node project too)
+node_modules/
+
+# Python build artifacts (in case any Python tooling lands later)
+__pycache__/
+*.pyc
+*.pyo
+
+# Generic build caches
+.cache/
+
+# Local CLI state — may contain auth tokens or per-session data
+.wrangler/
+.claude/
+
 # env file
 .env
 .env.local
