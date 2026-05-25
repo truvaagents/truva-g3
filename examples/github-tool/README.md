@@ -1,6 +1,6 @@
 # GitHub Tool
 
-> **Work in progress.** This example is incomplete and has not been validated end-to-end.
+> **Work in progress.** This example is incomplete and has not been validated end-to-end. Contributions to verify the flow are welcome.
 
 A passive TruvaG3 tool that wraps the GitHub REST API for the
 [`github-pr-review-agent`](../github-pr-review-agent/). Owns GitHub auth,

@@ -1,6 +1,6 @@
 # GitHub PR Review Agent
 
-> **Work in progress.** This example is incomplete and has not been validated end-to-end.
+> **Work in progress.** This example is incomplete and has not been validated end-to-end. Contributions to verify the flow are welcome.
 
 An async TruvaG3 agent that reviews GitHub pull requests. Receives `pull_request`
 webhooks, fetches PR bundles through the [`github-tool`](../github-tool/), runs

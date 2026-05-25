@@ -110,9 +110,9 @@ examples can reuse the same cluster.
 | Example | Type | What It Demonstrates | README |
 |---|---|---|---|
 | [travel-chat-agent](travel-chat-agent/) | Agent/App | Travel assistant with chat UI integration and multiple travel tools | Yes |
-| [devops-chat-agent](devops-chat-agent/) | Agent/App | DevOps assistant that uses operational tools | Pending |
+| [devops-chat-agent](devops-chat-agent/) | Agent/App | DevOps assistant that uses operational tools | Yes |
 | [qa-agent](qa-agent/) | Agent/App | Question-answering flow with orchestration and memory | Yes |
-| [github-pr-review-agent](github-pr-review-agent/) | Agent/App | GitHub PR review workflow | Yes, WIP |
+| [github-pr-review-agent](github-pr-review-agent/) | Agent/App | **WIP — untested end-to-end.** GitHub PR review workflow | Yes |
 
 ### Travel and Location Tools
 
@@ -158,13 +158,13 @@ examples can reuse the same cluster.
 | [devops-observability-tool](devops-observability-tool/) | Tool | Observability investigation helpers | Yes |
 | [prometheus-query-tool](prometheus-query-tool/) | Tool | Prometheus query capabilities | Yes |
 | [system-utilities-tool](system-utilities-tool/) | Tool | Time, command, ID, and browser utility capabilities | Yes |
-| [playwright-tool](playwright-tool/) | Tool | Browser automation capability wrapper | Pending |
+| [playwright-tool](playwright-tool/) | Tool | Browser automation capability wrapper | Yes |
 
 ### Collaboration and Productivity Tools
 
 | Example | Type | What It Demonstrates | README |
 |---|---|---|---|
-| [github-tool](github-tool/) | Tool | GitHub REST API wrapper for PR review flows | Yes, WIP |
+| [github-tool](github-tool/) | Tool | **WIP — untested end-to-end.** GitHub REST API wrapper for PR review flows | Yes |
 | [jira-tool](jira-tool/) | Tool | Jira issue lookup and search | Yes |
 | [slack-tool](slack-tool/) | Tool | Slack channel, message search, and send actions | Yes |
 | [slack-gateway](slack-gateway/) | Gateway | Slack gateway integration | Pending |
