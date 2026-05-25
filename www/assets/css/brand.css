@@ -3,7 +3,7 @@
  *
  * Mirrors website/src/css/custom.css so the docs site (Docusaurus at
  * docs.truvag3.dev) and the website (this folder, at truvag3.dev) share
- * one visual identity. Tokens sampled from TruvaG3-Logo.png.
+ * one visual identity. Tokens sampled from https://assets.truvag3.dev/TruvaG3-Logo.png.
  *
  * Keep these values in sync with website/src/css/custom.css. Edits to
  * brand color need to be applied in both places.

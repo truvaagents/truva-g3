@@ -1,0 +1,65 @@
+# gitleaks config for TruvaG3.
+#
+# Inherits gitleaks' default rule set and adds an allowlist for known
+# documentation placeholders and verified-historical false positives.
+#
+# Picked up automatically by `gitleaks detect` / `gitleaks protect` when
+# run from the repo root (see the pre-commit hook in .githooks/).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "TruvaG3 placeholders and historical false positives"
+
+# --------------------------------------------------------------------
+# Forward-looking pattern allowlist
+# Matches placeholder values commonly used in our docs and examples.
+# Keep these tight — they should never match a real secret format.
+# --------------------------------------------------------------------
+regexes = [
+  # Literal "YOUR_*" / "YourAPIKey" style placeholders
+  '''YourAPIKey''',
+  '''YOUR_[A-Z_]+''',
+  '''your-?api-?key''',
+  '''your-?real-?(api-)?key''',
+  '''your-?token''',
+  '''placeholder''',
+
+  # Truncated JWT examples (real JWTs are never truncated like this)
+  '''eyJ[A-Za-z0-9_-]+\.\.\.''',
+
+  # Base64-encoded doc placeholders — listed individually so the
+  # allowlist is auditable. Decoded values are obviously fake.
+  '''c2stWW91ckFQSUtleUhlcmU=''',  # sk-YourAPIKeyHere
+  '''c2stWW91clJlYWxLZXlIZXJl''',   # sk-YourRealKeyHere
+  '''c2stYW50LXlvdXJrZXk=''',       # sk-ant-yourkey
+  '''cGFzc3dvcmQ=''',                # password
+  '''ZGJwYXNzd29yZA==''',            # dbpassword
+]
+
+# --------------------------------------------------------------------
+# Path allowlist — files where the default rules consistently misfire
+# on non-secret content. Use sparingly.
+#
+# core/request_context.go declares typed Go context keys
+# ("truvag3_step_id" etc.) as const string assignments, which the
+# generic-api-key rule matches structurally. The constants are
+# internal API names, not secrets.
+# --------------------------------------------------------------------
+paths = [
+  '''core/request_context\.go''',
+]
+
+# --------------------------------------------------------------------
+# Pre-public-release audit notes (2026-05-25)
+# 10 historical findings in commit 11c255d (initial commit) were
+# manually verified clean. All are handled above:
+#
+#   - core/request_context.go:15  → paths allowlist
+#   - docs/OAUTH_SECURITY_GUIDE.md:306,826  → truncated-JWT regex
+#   - docs/guides/KUBERNETES.md:951,1405,2072,2073,2077  → base64
+#     placeholder regexes (file since deleted from HEAD)
+#   - examples/places-tool/README.md:601  → YOUR_SERVICE_API_KEY regex
+#   - docs/API_REFERENCE.md:3582  → truncated-JWT regex
+# --------------------------------------------------------------------

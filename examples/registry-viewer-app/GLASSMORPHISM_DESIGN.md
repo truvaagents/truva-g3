@@ -399,10 +399,10 @@ weight/size differs.
 
 ### Where the colors come from
 
-Sampled from `TruvaG3-Logo.png` at the project root. If the canonical
-logo is ever updated, re-sample the mid-tone (label center), highlight
-(brightest stroke), and shadow (deepest stroke) of each colored word
-and update the six tokens above.
+Sampled from [TruvaG3-Logo.png](https://assets.truvag3.dev/TruvaG3-Logo.png).
+If the canonical logo is ever updated, re-sample the mid-tone (label
+center), highlight (brightest stroke), and shadow (deepest stroke) of
+each colored word and update the six tokens above.
 
 **Cross-UI consistency:** the same six tokens are duplicated inline in
 each `examples/chat-ui/*.html`'s `<style>` block (dashboard, welcome,
@@ -513,7 +513,7 @@ body {
   --accent-purple: #da8fff;
   --accent-teal: #64d2ff;
 
-  /* Brand colors (sampled from TruvaG3-Logo.png — see "Brand Mark" §) */
+  /* Brand colors (sampled from https://assets.truvag3.dev/TruvaG3-Logo.png — see "Brand Mark" §) */
   --brand-truva:       #8FCBED;  /* icy blue, mid-tone */
   --brand-truva-light: #DBEEFB;  /* icy blue, highlight */
   --brand-truva-dark:  #4A8AB8;  /* icy blue, shadow */
