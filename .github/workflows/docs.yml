@@ -1,0 +1,45 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'docs-site/**'
+      - 'scripts/rewrite-getting-started-links.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'docs-site/**'
+      - 'scripts/rewrite-getting-started-links.py'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: docusaurus build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          # docs-site/package.json pins "engines": { "node": ">=20.0" }
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs-site/package-lock.json
+      - name: Install dependencies
+        working-directory: docs-site
+        run: npm ci
+      - name: Build site
+        # `npm run build` runs the prebuild step (Python sync-docs script) first,
+        # then `docusaurus build`. Docusaurus 3.x defaults `onBrokenLinks: throw`,
+        # so any broken internal link in docs/ will fail this job.
+        working-directory: docs-site
+        run: npm run build
