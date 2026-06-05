@@ -1,0 +1,1411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Internal vs Remote Tools — How AI Agent Frameworks Wire In Each</title>
+<meta name="description" content="A reference map of where tools can live across ten AI agent frameworks and the documented declaration and call mechanism for each: in-process code, MCP servers, OpenAPI specs, remote agents over A2A, and generic RPC.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="Internal vs Remote Tools — How AI Agent Frameworks Wire In Each">
+<meta property="og:description" content="A reference map of where tools can live across ten AI agent frameworks and the documented declaration and call mechanism for each: in-process code, MCP servers, OpenAPI specs, remote agents over A2A, and generic RPC.">
+<meta property="og:url" content="https://truvag3.dev/whitepapers/agent-remote-tools">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Internal vs Remote Tools — How AI Agent Frameworks Wire In Each">
+<meta name="twitter:description" content="A reference map of where tools can live across ten AI agent frameworks and the documented declaration and call mechanism for each.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #121826;
+    --bg-3: #1a2236;
+    --ink: #e6edf7;
+    --muted: #9aa6bd;
+    --line: #2a3550;
+    --accent: #7cc4ff;
+    --warn: #fbbf24;
+    --good: #34d399;
+    --brand-truva-light: #DBEEFB;
+    --brand-truva-dark:  #4A8AB8;
+    --brand-g3-light:    #FFD080;
+    --brand-g3-dark:     #C56710;
+    --lc:   #1F6FEB;   --lg:  #14b8a6;   --crew: #7c3aed;
+    --adk:  #EA4335;   --sk:  #2EA5FF;   --ma:   #ec4899;
+    --maf:  #512BD4;   --l4j: #ED8B00;   --gk:   #00ADD8;
+    --rg:   #B7410E;
+    /* Mechanism accent colors */
+    --internal: #6ee7b7;
+    --mcp:      #a78bfa;
+    --openapi:  #fbbf24;
+    --a2a:      #f472b6;
+    --rpc:      #94a3b8;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code, td code, h3 code, h4 code { color: #c9e2ff; background: rgba(124,196,255,.08); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  pre {
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #cfe1ff;
+    margin: 8px 0 12px;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+  pre .hi {
+    background: rgba(251, 191, 36, 0.18);
+    color: #fde68a;
+    padding: 0 3px;
+    border-radius: 3px;
+    font-weight: 600;
+    border-bottom: 1px dashed rgba(251, 191, 36, 0.55);
+  }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  header.hero {
+    padding: 64px 0 36px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .research-date {
+    display: inline-block;
+    margin-bottom: 18px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+  .ai-capsule {
+    display: inline-block;
+    margin-bottom: 18px;
+    margin-left: 8px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  header.hero h1 {
+    font-size: clamp(28px, 4.4vw, 46px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 0%, #9ec5ff 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero .subtitle {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 820px;
+    margin: 0 auto 22px;
+  }
+  .pillrow {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); font-size: 13px; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; text-decoration: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  /* Sections */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section .lede { color: var(--muted); max-width: 820px; margin: 0 0 28px; }
+
+  /* Universal pattern grid */
+  .universal-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+  }
+  @media (max-width: 980px) { .universal-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 540px) { .universal-grid { grid-template-columns: 1fr; } }
+  .uni-item {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 14px 16px;
+  }
+  .uni-item b { color: #fff; display: block; margin: 4px 0 4px; font-size: 14px; }
+  .uni-item .tag {
+    display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 999px;
+    background: #19243d; color: #9fc2ff; font-weight: 600; letter-spacing: 0.04em;
+  }
+  .uni-item p { margin: 6px 0 0; color: #cfd9ee; font-size: 13px; line-height: 1.45; }
+
+  /* Framework cards */
+  .frameworks { display: grid; gap: 28px; }
+  .fw-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+  }
+  .fw-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255,255,255,0.015);
+  }
+  .fw-badge {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 16px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+    flex-shrink: 0;
+  }
+  .fw-head h3 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+  .fw-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .lang-pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    vertical-align: 3px;
+    margin-left: 10px;
+    background: var(--bg-2);
+    border: 1px solid currentColor;
+  }
+  .lang-pill.py     { color: #FFD43B; }
+  .lang-pill.ts     { color: #4cb6ff; }
+  .lang-pill.dotnet { color: #a78bfa; }
+  .lang-pill.java   { color: #ED8B00; }
+  .lang-pill.go     { color: #00ADD8; }
+  .lang-pill.rust   { color: #fb6b3c; }
+
+  .fw-body { padding: 22px 22px 18px; }
+  .metaphor {
+    margin: 0 0 18px; padding: 10px 14px;
+    background: #0e1a2e; border-left: 3px solid var(--accent); border-radius: 8px;
+    color: #cfe1ff; font-style: italic; font-size: 14px;
+  }
+
+  /* Mechanism blocks within a card */
+  .mech {
+    border-top: 1px solid var(--line);
+    padding: 18px 0 4px;
+    margin-top: 6px;
+  }
+  .mech:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .mech-title {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 8px;
+    padding: 3px 11px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid currentColor;
+  }
+  .mech-title.internal { color: var(--internal); }
+  .mech-title.mcp      { color: var(--mcp); }
+  .mech-title.openapi  { color: var(--openapi); }
+  .mech-title.a2a      { color: var(--a2a); }
+  .mech-title.rpc      { color: var(--rpc); }
+  .mech p { margin: 0 0 10px; color: #d4dcef; font-size: 14.5px; }
+  .mech p.note {
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px dashed var(--line);
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  .twocol-snip {
+    display: grid; grid-template-columns: 1fr; gap: 0;
+  }
+
+  /* Tradeoffs miniblocks */
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+  @media (max-width: 600px) { .twocol { grid-template-columns: 1fr; } }
+  .miniblock { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .miniblock h5 { margin: 0 0 4px; font-size: 12px; color: #a8b6d6; letter-spacing: .05em; text-transform: uppercase; }
+  .miniblock p { margin: 0; font-size: 13px; color: #dbe6ff; }
+
+  .src {
+    margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
+    font-size: 12.5px; color: var(--muted);
+  }
+  .src a { color: var(--accent); }
+  /* Per-snippet source attribution sits directly under each <pre>. */
+  .snip-src {
+    margin: -6px 0 14px;
+    padding-left: 4px;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .snip-src::before { content: "↳  "; color: #4b6688; }
+  .snip-src a {
+    color: var(--muted);
+    border-bottom: 1px dotted rgba(154,166,189,.4);
+    text-decoration: none;
+  }
+  .snip-src a:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* Comparison table */
+  .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1000px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; font-weight: 600; }
+  th.fw, td.fw { white-space: nowrap; }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .yes { color: var(--good); font-weight: 600; }
+  .no  { color: #94a3b8; }
+  .partial { color: var(--warn); font-weight: 600; }
+
+  /* Takeaways */
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; color: #fff; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; }
+  .ta .tag {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    background: #19243d; color: #9fc2ff; margin-bottom: 8px;
+  }
+
+  /* Glossary */
+  .gloss { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 22px; }
+  @media (max-width: 720px) { .gloss { grid-template-columns: 1fr; } }
+  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); color: #cfd9ee; }
+  .gloss b { color: #fff; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  .copyright { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 1.5rem; margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>May 25, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Internal vs Remote Tools — How AI Agent Frameworks Wire In Each</h1>
+    <p class="subtitle">
+      A reference map of where tools can live across ten AI agent frameworks &mdash; spanning
+      <b>Python</b>, <b>TypeScript</b>, <b>.NET</b>, <b>Java</b>, <b>Go</b>, and <b>Rust</b> &mdash;
+      and the official declaration and call mechanism for each: in-process code, MCP servers,
+      OpenAPI specs, remote agents over A2A, and generic RPC. Every code snippet is taken from
+      the framework's own documentation.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#universal"><span class="dot" style="background:#9ec5ff"></span>The five wiring points</a>
+      <a class="pill" href="#langchain"><span class="dot" style="background:var(--lc)"></span>LangChain</a>
+      <a class="pill" href="#langgraph"><span class="dot" style="background:var(--lg)"></span>LangGraph</a>
+      <a class="pill" href="#crewai"><span class="dot" style="background:var(--crew)"></span>CrewAI</a>
+      <a class="pill" href="#adk"><span class="dot" style="background:var(--adk)"></span>Google ADK</a>
+      <a class="pill" href="#sk"><span class="dot" style="background:var(--sk)"></span>Semantic Kernel</a>
+      <a class="pill" href="#mastra"><span class="dot" style="background:var(--ma)"></span>Mastra</a>
+      <a class="pill" href="#maf"><span class="dot" style="background:var(--maf)"></span>MS Agent Framework</a>
+      <a class="pill" href="#l4j"><span class="dot" style="background:var(--l4j)"></span>LangChain4j</a>
+      <a class="pill" href="#genkit"><span class="dot" style="background:var(--gk)"></span>Genkit Go</a>
+      <a class="pill" href="#rig"><span class="dot" style="background:var(--rg)"></span>Rig</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Cheat sheet</a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= UNIVERSAL PATTERN ================= -->
+<section id="universal">
+  <div class="container">
+    <h2>The five places a tool can live</h2>
+    <p class="lede">
+      Across the ten frameworks profiled here, tools are sourced from five categories. The
+      framework determines which categories have first-class APIs and which require custom code.
+      Each category is described below; per-framework support is summarised in the
+      <a href="#compare">side-by-side table</a>.
+    </p>
+    <div class="universal-grid">
+      <div class="uni-item">
+        <span class="tag" style="color: var(--internal); border: 1px solid currentColor; background: transparent">INTERNAL</span>
+        <b>In-process code</b>
+        <p>A function, class, or annotated method that runs in the agent's own runtime. Schema is derived from the host language's type system or from explicit metadata.</p>
+      </div>
+      <div class="uni-item">
+        <span class="tag" style="color: var(--mcp); border: 1px solid currentColor; background: transparent">MCP</span>
+        <b>Model Context Protocol</b>
+        <p>An open JSON-RPC protocol for tool servers, defined at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>. Transports include stdio (subprocess), streamable HTTP, and SSE. Tools are discovered at runtime via <code>list_tools</code>.</p>
+      </div>
+      <div class="uni-item">
+        <span class="tag" style="color: var(--openapi); border: 1px solid currentColor; background: transparent">OPENAPI</span>
+        <b>REST / OpenAPI</b>
+        <p>The framework parses an OpenAPI 3.x specification and generates one tool per operation, with parameters typed from the spec.</p>
+      </div>
+      <div class="uni-item">
+        <span class="tag" style="color: var(--a2a); border: 1px solid currentColor; background: transparent">A2A</span>
+        <b>Remote agent (A2A)</b>
+        <p>Another agent running on a different host, described by an <code>agent-card.json</code> at a <code>.well-known/</code> URL, invoked over HTTP per the <a href="https://a2a-protocol.org">A2A protocol</a>.</p>
+      </div>
+      <div class="uni-item">
+        <span class="tag" style="color: var(--rpc); border: 1px solid currentColor; background: transparent">RPC</span>
+        <b>Generic RPC / gRPC</b>
+        <p>No framework on this list provides a first-class generator from a gRPC / Thrift / other RPC schema. The documented pattern is to call the RPC client from within an in-process tool body.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FRAMEWORK CARDS ================= -->
+<section id="frameworks" style="border-bottom: none;">
+  <div class="container">
+    <h2>Ten frameworks, five wiring points</h2>
+    <p class="lede">
+      Each card lists the in-process baseline (recapped from the companion paper
+      <a href="/whitepapers/agent-tool-wiring.html">How AI Agent Frameworks Wire In Tools and Agents</a>),
+      then the framework's documented mechanism for MCP, OpenAPI, A2A, and generic RPC.
+      Highlighted spans mark the line of code where each external tool source is attached to the
+      agent.
+    </p>
+
+    <div class="frameworks">
+
+      <!-- ============ LANGCHAIN ============ -->
+      <article class="fw-card" id="langchain">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--lc)">Lc</div>
+          <div>
+            <h3>LangChain <span class="lang-pill py">Python</span></h3>
+            <div class="sub">Decorator for internal; <code>langchain-mcp-adapters</code> for MCP; community <code>RequestsToolkit</code> for OpenAPI.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">All external tool sources are exposed through adapter packages that produce a list of LangChain tools, which is passed to <code>create_agent</code>.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: the <code>@tool</code> decorator turns a function into a tool; pass the list to <code>create_agent</code>.</p>
+            <pre><code>from langchain.tools import tool
+from langchain.agents import create_agent
+
+@tool
+def search_database(query: str) -&gt; str:
+    """Search the customer database."""
+    return f"results for {query}"
+
+agent = create_agent("openai:gpt-4o", <span class="hi">tools=[search_database]</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain.com/oss/python/langchain/tools">docs.langchain.com · Tools · @tool decorator + create_agent</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP</span>
+            <p>The <code>langchain-mcp-adapters</code> package ships <code>MultiServerMCPClient</code>, which connects to one or many MCP servers (stdio, SSE, or streamable HTTP) and returns a list of LangChain tools.</p>
+            <pre><code>from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.agents import create_agent
+
+client = MultiServerMCPClient({
+    "math": {
+        "transport": "stdio",
+        "command": "python",
+        "args": ["/path/to/math_server.py"],
+    },
+    "weather": {
+        "transport": "streamable_http",
+        "url": "http://localhost:8000/mcp",
+    },
+})
+
+tools = await client.get_tools()
+agent = create_agent("anthropic:claude-sonnet-4-6", <span class="hi">tools=tools</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain.com/oss/python/langchain/mcp">docs.langchain.com · MCP · MultiServerMCPClient</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI / REST</span>
+            <p>Use <code>RequestsToolkit</code> from <code>langchain_community</code> to expose generic HTTP verbs, then pair with prompt-based OpenAPI guidance. There is no auto-generator from spec to typed tools in core; the <code>langchain-community</code> openapi planner is the closest first-class option.</p>
+            <pre><code>from langchain_community.agent_toolkits.openapi.toolkit import RequestsToolkit
+from langchain_community.utilities.requests import TextRequestsWrapper
+
+toolkit = RequestsToolkit(
+    requests_wrapper=TextRequestsWrapper(headers={"Authorization": "Bearer …"}),
+    allow_dangerous_requests=True,
+)
+agent = create_agent(model, <span class="hi">tools=toolkit.get_tools()</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain.com/oss/python/integrations/tools/openapi">docs.langchain.com · OpenAPI integration · RequestsToolkit</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">Not first-class in LangChain core. The recommended path is LangGraph's <code>RemoteGraph</code> (see next card) — wrap a deployed graph and embed it as a tool or subgraph.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">Open the gRPC / Thrift / custom-RPC client inside the body of an <code>@tool</code>-decorated function. LangChain doesn't add anything special; the tool is just a callable.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>All external tool sources are converted to LangChain <code>BaseTool</code> instances by adapter packages.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>Each remote source requires a separate adapter package. Connection lifecycle and authentication are configured per-adapter.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://docs.langchain.com/oss/python/langchain/mcp">LangChain MCP docs</a> · <a href="https://docs.langchain.com/oss/python/integrations/tools/openapi">OpenAPI integration</a></div>
+        </div>
+      </article>
+
+      <!-- ============ LANGGRAPH ============ -->
+      <article class="fw-card" id="langgraph">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--lg)">Lg</div>
+          <div>
+            <h3>LangGraph <span class="lang-pill py">Python</span></h3>
+            <div class="sub">Inherits LangChain's adapters; adds <code>RemoteGraph</code> as the first-class A2A primitive.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">A <code>RemoteGraph</code> is invoked or embedded as a subgraph using the same APIs as a local compiled graph.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: tools are LangChain tools; the <code>ToolNode</code> fans them out in parallel.</p>
+            <pre><code>from langgraph.prebuilt import create_react_agent
+graph = create_react_agent(model, <span class="hi">tools=[check_weather]</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://reference.langchain.com/python/langgraph.prebuilt/chat_agent_executor/create_react_agent">reference.langchain.com · langgraph.prebuilt · create_react_agent</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP</span>
+            <p>Inherits from LangChain — drop the <code>MultiServerMCPClient</code> output straight into <code>create_react_agent</code> or a <code>ToolNode</code>.</p>
+            <pre><code>from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+tools = await MultiServerMCPClient({
+    "github": {"transport": "streamable_http", "url": "https://mcp.github.com"},
+}).get_tools()
+
+graph = create_react_agent("openai:gpt-4o", <span class="hi">tools=tools</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain.com/oss/python/langchain/mcp">docs.langchain.com · MCP · LangGraph integration via LangChain adapters</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI / REST</span>
+            <p class="note">Same as LangChain — use <code>RequestsToolkit</code> or community OpenAPI planners. There is no LangGraph-specific OpenAPI loader.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A) — <code>RemoteGraph</code></span>
+            <p><code>RemoteGraph</code> connects to a deployed LangGraph Platform graph at the given <code>url</code> and exposes the same interface as a local compiled graph. It can be invoked directly or embedded as a node in a parent graph.</p>
+            <pre><code>from langgraph.pregel.remote import RemoteGraph
+from langgraph.graph import StateGraph, MessagesState
+
+# Connect to a graph deployed on LangGraph Platform
+remote_graph = RemoteGraph("research_agent", url="https://&lt;deployment&gt;.langgraph.cloud")
+
+# 1. Call it directly
+result = await remote_graph.ainvoke(
+    {"messages": [{"role": "user", "content": "analyse Q1 earnings"}]}
+)
+
+# 2. Or embed it as a subgraph node in a larger orchestrator
+builder = StateGraph(MessagesState)
+builder.add_node(<span class="hi">"researcher", remote_graph</span>)   # remote graph as a local node
+builder.add_edge("researcher", "writer")
+super_graph = builder.compile()</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain.com/langsmith/use-remote-graph">docs.langchain.com · LangSmith · Use RemoteGraph</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">Wrap the RPC client in any LangChain tool, or inside a custom node function — graph nodes are async Python callables.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p><code>RemoteGraph</code> uses the LangGraph SDK over HTTP. Checkpointer state is maintained on the remote deployment.</p></div>
+            <div class="miniblock"><h5>Constraints</h5><p>The remote endpoint must implement the LangGraph Platform API; arbitrary HTTP agents are not directly supported.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://docs.langchain.com/langsmith/use-remote-graph"><code>RemoteGraph</code> docs</a> · MCP and OpenAPI inherited from LangChain</div>
+        </div>
+      </article>
+
+      <!-- ============ CREWAI ============ -->
+      <article class="fw-card" id="crewai">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--crew)">Cr</div>
+          <div>
+            <h3>CrewAI <span class="lang-pill py">Python</span></h3>
+            <div class="sub">Declarative <code>mcps=[...]</code> field on the Agent; first-class <code>A2AClientConfig</code> for remote agents.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">Internal tools, MCP servers, and remote A2A endpoints are declared via dedicated fields on the <code>Agent</code> constructor: <code>tools=</code>, <code>mcps=</code>, and <code>a2a=</code>.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: subclass <code>BaseTool</code> or use the <code>@tool</code> decorator; pass instances via <code>tools=</code>.</p>
+            <pre><code>from crewai import Agent
+researcher = Agent(role="Analyst", goal="…", backstory="…", <span class="hi">tools=[MyTool()]</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.crewai.com/en/concepts/tools">docs.crewai.com · Tools · Agent(tools=[...]) pattern</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — the <code>mcps=</code> field</span>
+            <p>The <code>mcps=</code> list on <code>Agent</code> accepts string references (remote HTTPS URLs or catalog slugs) and structured transport objects (<code>MCPServerStdio</code>, <code>MCPServerHTTP</code>, <code>MCPServerSSE</code>) in the same list. Stdio, streamable HTTP, and SSE transports are supported.</p>
+            <pre><code>from crewai import Agent
+from crewai.mcp import MCPServerStdio, MCPServerHTTP, MCPServerSSE
+
+agent = Agent(
+    role="Research Analyst",
+    goal="Research with full control over MCP connections",
+    backstory="Expert researcher",
+    <span class="hi">mcps=[
+        # String reference — remote HTTPS MCP server
+        "https://mcp.exa.ai/mcp?api_key=your_key",
+        # Stdio transport for a local subprocess MCP server
+        MCPServerStdio(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-filesystem"],
+        ),
+        # Streamable HTTP for a remote MCP server
+        MCPServerHTTP(
+            url="https://api.example.com/mcp",
+            headers={"Authorization": "Bearer your_token"},
+        ),
+    ]</span>,
+)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.crewai.com/en/mcp/overview">docs.crewai.com · MCP overview · Structured Configurations (mcps= field)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI / REST</span>
+            <p class="note">No first-class OpenAPI loader. REST endpoints are typically wrapped in a custom <code>BaseTool</code> subclass or accessed by fronting the API with an MCP server and declaring it via <code>mcps=</code>.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p>Installed with the <code>crewai[a2a]</code> extra. The <code>a2a=</code> field on <code>Agent</code> takes an <code>A2AClientConfig</code> pointing at the remote agent's <code>agent-card.json</code> endpoint.</p>
+            <pre><code>from crewai import Agent
+from crewai.a2a import A2AClientConfig
+
+agent = Agent(
+    role="Coordinator",
+    goal="Delegate work to a remote A2A agent",
+    backstory="Expert delegator",
+    <span class="hi">a2a=A2AClientConfig(
+        endpoint="https://remote.example.com/.well-known/agent-card.json",
+        timeout=120,
+        max_turns=10,
+    )</span>,
+)</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.crewai.com/en/learn/a2a-agent-delegation">docs.crewai.com · Agent-to-Agent (A2A) Protocol · A2AClientConfig</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">Wrap the RPC client call inside a custom <code>BaseTool._run</code> or <code>@tool</code>-decorated function.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>Tool sources are declared via dedicated fields on <code>Agent</code>: <code>tools=</code>, <code>mcps=</code>, <code>a2a=</code>.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>OpenAPI ingestion is not provided as a first-class field; use a custom <code>BaseTool</code> or an MCP fronting server.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://docs.crewai.com/en/mcp/overview">CrewAI MCP docs</a> · <a href="https://docs.crewai.com/en/learn/a2a-agent-delegation">A2A agent delegation</a></div>
+        </div>
+      </article>
+
+      <!-- ============ GOOGLE ADK ============ -->
+      <article class="fw-card" id="adk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--adk)">Ad</div>
+          <div>
+            <h3>Google ADK <span class="lang-pill py">Python</span></h3>
+            <div class="sub">Built-in <code>MCPToolset</code>, <code>OpenAPIToolset</code>, and <code>RemoteA2aAgent</code> — every remote mechanism is a first-class object.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">Each external tool source is represented by a dedicated class (<code>MCPToolset</code>, <code>OpenAPIToolset</code>, <code>RemoteA2aAgent</code>) attached to <code>LlmAgent</code> via <code>tools=</code> or <code>sub_agents=</code>.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: a plain Python function is auto-wrapped as a <code>FunctionTool</code> when passed to <code>LlmAgent(tools=[…])</code>.</p>
+            <pre><code>from google.adk.agents import LlmAgent
+weather_agent = LlmAgent(model="gemini-2.0-flash", <span class="hi">tools=[get_weather]</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://google.github.io/adk-docs/tools-custom/function-tools/">google.github.io/adk-docs · Function tools (LlmAgent auto-wrapping)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>MCPToolset</code></span>
+            <p>An <code>MCPToolset</code> instance is added to an agent's <code>tools=</code> list. At runtime it connects to the MCP server (stdio or SSE) and exposes the server's tools to the agent.</p>
+            <pre><code>from google.adk.agents import LlmAgent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+
+mcp_toolset = MCPToolset(
+    name="github_mcp",
+    stdio_command="docker",
+    stdio_args=["run", "-i", "--rm", "-e", "GITHUB_TOKEN",
+                "ghcr.io/github/github-mcp-server"],
+    env={"GITHUB_TOKEN": os.getenv("GITHUB_TOKEN")},
+)
+
+agent = LlmAgent(
+    name="github_agent",
+    model="gemini-2.0-flash",
+    <span class="hi">tools=[mcp_toolset]</span>,
+)</code></pre>
+            <div class="snip-src">Source: <a href="https://google.github.io/adk-docs/tools-custom/mcp-tools/">google.github.io/adk-docs · MCP tools · MCPToolset</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI — <code>OpenAPIToolset</code></span>
+            <p><code>OpenAPIToolset</code> parses an OpenAPI JSON or YAML specification and generates one tool per operation, with parameter schemas derived from the spec.</p>
+            <pre><code>from google.adk.tools.openapi_tool.openapi_spec_parser.openapi_toolset \
+    import OpenAPIToolset
+
+toolset = OpenAPIToolset(
+    spec_str=open("petstore.openapi.json").read(),
+    spec_str_type="json",
+)
+
+agent = LlmAgent(
+    name="petstore_agent",
+    model="gemini-2.0-flash",
+    <span class="hi">tools=[toolset]</span>,
+)</code></pre>
+            <div class="snip-src">Source: <a href="https://google.github.io/adk-docs/tools-custom/openapi-tools/">google.github.io/adk-docs · OpenAPI tools · OpenAPIToolset</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent — <code>RemoteA2aAgent</code></span>
+            <p><code>RemoteA2aAgent</code> takes an <code>agent_card</code> (URL or local file path) and is attached to a parent agent's <code>sub_agents=</code> list. The runtime handles the A2A protocol exchange.</p>
+            <pre><code>from google.adk.agents import LlmAgent
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+
+prime_agent = RemoteA2aAgent(
+    name="prime_agent",
+    description="Agent that checks if numbers are prime.",
+    agent_card="http://localhost:8001/a2a/check_prime/.well-known/agent.json",
+    timeout=300.0,
+)
+
+root_agent = LlmAgent(
+    model="gemini-2.0-flash",
+    <span class="hi">sub_agents=[prime_agent]</span>,
+)</code></pre>
+            <div class="snip-src">Source: <a href="https://google.github.io/adk-docs/a2a/quickstart-consuming/">google.github.io/adk-docs · A2A · Quickstart consuming a remote agent</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to call the gRPC client inside a function tool.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>Each remote tool source has a dedicated class (<code>MCPToolset</code>, <code>OpenAPIToolset</code>, <code>RemoteA2aAgent</code>).</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>Per-mechanism classes add API surface compared with a single-field declaration model.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://google.github.io/adk-docs/tools-custom/mcp-tools/">MCP tools</a> · <a href="https://google.github.io/adk-docs/tools-custom/openapi-tools/">OpenAPI tools</a> · <a href="https://google.github.io/adk-docs/a2a/quickstart-consuming/">A2A consuming quickstart</a></div>
+        </div>
+      </article>
+
+      <!-- ============ SEMANTIC KERNEL ============ -->
+      <article class="fw-card" id="sk">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--sk)">Sk</div>
+          <div>
+            <h3>Microsoft Semantic Kernel <span class="lang-pill py">Python</span></h3>
+            <div class="sub">Plugins are the universal abstraction: <code>MCPStdioPlugin</code>, <code>add_plugin_from_openapi</code>, all registered on the Kernel.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">All tool sources are represented as plugins registered on the <code>Kernel</code>. With <code>FunctionChoiceBehavior.Auto()</code>, the Kernel resolves and invokes the matching plugin function.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: a class of <code>@kernel_function</code>-decorated methods, registered on the Kernel.</p>
+            <pre><code>from semantic_kernel import Kernel
+from semantic_kernel.functions import kernel_function
+
+class WeatherPlugin:
+    @kernel_function(description="Gets the weather for a city")
+    def get_weather(self, city: str) -&gt; str: return f"sunny in {city}"
+
+kernel = Kernel()
+<span class="hi">kernel.add_plugin(WeatherPlugin(), plugin_name="weather")</span></code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/kernel">learn.microsoft.com · Understanding the kernel (Python plugin example)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>MCPStdioPlugin</code> / <code>MCPSsePlugin</code></span>
+            <p>An MCP server is wrapped as a plugin via an async context manager (<code>MCPStdioPlugin</code> for stdio transport, <code>MCPSsePlugin</code> for SSE) and registered on the Kernel via <code>kernel.add_plugin</code>.</p>
+            <pre><code>import os
+from semantic_kernel import Kernel
+from semantic_kernel.connectors.mcp import MCPStdioPlugin
+
+async with MCPStdioPlugin(
+    name="Github",
+    description="Github Plugin",
+    command="docker",
+    args=["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "ghcr.io/github/github-mcp-server"],
+    env={"GITHUB_PERSONAL_ACCESS_TOKEN":
+         os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")},
+) as github_plugin:
+    kernel = Kernel()
+    <span class="hi">kernel.add_plugin(github_plugin)</span></code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-mcp-plugins">learn.microsoft.com · Adding MCP plugins · MCPStdioPlugin (GitHub example)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI — <code>add_plugin_from_openapi</code></span>
+            <p><code>kernel.add_plugin_from_openapi</code> accepts an OpenAPI spec URL or file path and registers one kernel function per operation.</p>
+            <pre><code>from semantic_kernel import Kernel
+from semantic_kernel.connectors.openapi_plugin import \
+    OpenAPIFunctionExecutionParameters
+
+kernel = Kernel()
+<span class="hi">await kernel.add_plugin_from_openapi(
+    plugin_name="lights",
+    openapi_document_path="https://example.com/v1/swagger.json",
+    execution_settings=OpenAPIFunctionExecutionParameters(
+        enable_payload_namespacing=True,
+    ),
+)</span></code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-openapi-plugins">learn.microsoft.com · Adding OpenAPI plugins · add_plugin_from_openapi</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">No first-class A2A primitive in the Python SDK. The documented pattern is to expose the producing agent's Kernel as an MCP server (via <code>kernel.as_mcp_server</code>) and consume it from the calling agent via <code>MCPStdioPlugin</code> or <code>MCPSsePlugin</code>.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to wrap the gRPC client in a kernel function registered via <code>kernel.add_function()</code>.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>A single abstraction (plugin) covers internal code, MCP, and OpenAPI sources.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>A2A is achieved by composing an MCP server on one side with an MCP plugin on the other; no dedicated A2A class exists.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-mcp-plugins">MCP plugins</a> · <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-openapi-plugins">OpenAPI plugins</a></div>
+        </div>
+      </article>
+
+      <!-- ============ MASTRA ============ -->
+      <article class="fw-card" id="mastra">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--ma)">Ma</div>
+          <div>
+            <h3>Mastra <span class="lang-pill ts">TypeScript</span></h3>
+            <div class="sub"><code>MCPClient</code> from <code>@mastra/mcp</code>, plus a first-class <code>A2AAgent</code> for remote agents.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">MCP tools are attached via <code>tools: await mcp.listTools()</code>. Remote A2A agents are attached via the <code>agents:</code> map on the <code>Agent</code> constructor.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: <code>createTool({...})</code> with Zod schemas; attach via the agent's <code>tools</code> map.</p>
+            <pre><code>export const weatherAgent = new Agent({
+  id: 'weather-agent', model: 'openai/gpt-4o',
+  <span class="hi">tools: { weatherTool }</span>,
+})</code></pre>
+            <div class="snip-src">Source: <a href="https://mastra.ai/docs/agents/using-tools">mastra.ai · Agents · Using tools (Agent with tools map)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>MCPClient</code></span>
+            <p>The <code>MCPClient</code> constructor accepts a <code>servers</code> map keyed by server name. Each server is configured with <code>command</code>/<code>args</code> for stdio transport or <code>url</code> for HTTP transport. <code>listTools()</code> returns a tools map suitable for an <code>Agent</code>'s <code>tools</code> field.</p>
+            <pre><code>import { MCPClient } from '@mastra/mcp'
+import { Agent } from '@mastra/core/agent'
+
+export const mcp = new MCPClient({
+  id: 'mcp-client',
+  servers: {
+    wikipedia: { command: 'npx', args: ['-y', 'wikipedia-mcp'] },
+    weather:   { url: new URL(`https://server.smithery.ai/.../mcp?api_key=${KEY}`) },
+  },
+})
+
+export const researchAgent = new Agent({
+  id: 'research-agent',
+  model: 'openai/gpt-4o',
+  instructions: 'Use the Wikipedia and weather MCP servers when needed.',
+  <span class="hi">tools: await mcp.listTools()</span>,
+})</code></pre>
+            <div class="snip-src">Source: <a href="https://mastra.ai/docs/mcp/overview">mastra.ai · MCP overview · MCPClient + listTools</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI / REST</span>
+            <p class="note">No first-class OpenAPI loader. REST calls are typically made inside the <code>execute</code> function of a <code>createTool</code> definition.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent — <code>A2AAgent</code></span>
+            <p><code>A2AAgent</code> takes an A2A-compliant <code>.well-known</code> agent-card URL and optional headers. It is attached under a supervising agent's <code>agents</code> map, where Mastra auto-exposes it as a tool named <code>agent-&lt;key&gt;</code>.</p>
+            <pre><code>import { Agent } from '@mastra/core/agent'
+import { A2AAgent } from '@mastra/core/a2a'
+
+const a2aWeatherAgent = new A2AAgent({
+  url: 'https://py.acme.com/api/a2a/.well-known/a2a-weather-agent/agent-card.json',
+  headers: { 'x-api-key': process.env.A2A_AGENT_API_KEY! },
+})
+
+export const weatherAgent = new Agent({
+  id: 'weather-agent',
+  model: 'anthropic/claude-opus-4-6',
+  instructions: 'Delegate weather questions to a2aWeatherAgent.',
+  <span class="hi">agents: { a2aWeatherAgent }</span>,
+})</code></pre>
+            <div class="snip-src">Source: <a href="https://mastra.ai/blog/introducing-agent-to-agent-support">mastra.ai · Introducing Agent-to-Agent support · A2AAgent example</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. Node gRPC libraries can be called inside the tool's <code>execute</code> function.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>Internal tools, MCP tools, sub-agents, and A2A agents are all attached via constructor fields on <code>Agent</code> (<code>tools</code>, <code>agents</code>).</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>No OpenAPI loader; spec-to-client codegen is sourced from the broader TypeScript ecosystem.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://mastra.ai/docs/mcp/overview">Mastra MCP overview</a> · <a href="https://mastra.ai/blog/introducing-agent-to-agent-support">Mastra A2A announcement</a></div>
+        </div>
+      </article>
+
+      <!-- ============ MS AGENT FRAMEWORK ============ -->
+      <article class="fw-card" id="maf">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--maf)">Mf</div>
+          <div>
+            <h3>Microsoft Agent Framework <span class="lang-pill dotnet">.NET</span></h3>
+            <div class="sub"><code>McpClientFactory</code> for MCP; OpenAPI via the Semantic Kernel plugin pipeline.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">All tool sources are exposed as <code>AITool</code> instances. Factories (<code>AIFunctionFactory</code>, <code>McpClientFactory</code>) produce them from method references or remote endpoints.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: any C# method becomes a tool via <code>AIFunctionFactory.Create</code>.</p>
+            <pre><code>AIAgent agent = client.AsAIAgent(
+    model: "gpt-4o-mini",
+    instructions: "You are a helpful assistant",
+    <span class="hi">tools: [ AIFunctionFactory.Create(GetWeather) ]</span>);</code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/agent-framework/agents/tools/function-tools">learn.microsoft.com · Function tools (AIFunctionFactory.Create)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>McpClientFactory</code></span>
+            <p>An MCP client is created via <code>McpClientFactory.CreateAsync</code> with a transport (e.g. <code>StdioClientTransport</code>). <code>ListToolsAsync</code> returns the available tools, which are cast to <code>AITool</code> and passed to the agent.</p>
+            <pre><code>await using var mcpClient = await McpClientFactory.CreateAsync(
+    new StdioClientTransport(new() {
+        Name = "MCPServer",
+        Command = "npx",
+        Arguments = ["-y", "@modelcontextprotocol/server-github"],
+    }));
+
+var mcpTools = await mcpClient.ListToolsAsync();
+
+AIAgent agent = new AIProjectClient(endpoint, new DefaultAzureCredential())
+    .AsAIAgent(
+        model: deploymentName,
+        <span class="hi">tools: [.. mcpTools.Cast&lt;AITool&gt;()]</span>);</code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools">learn.microsoft.com · Local MCP tools (McpClientFactory.CreateAsync)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI</span>
+            <p>OpenAPI ingestion is provided via the Semantic Kernel pipeline. <code>kernel.ImportPluginFromOpenApi</code> registers a plugin whose functions are passed to the agent as tools.</p>
+            <pre><code>var kernel = new Kernel();
+<span class="hi">kernel.ImportPluginFromOpenApi("GitHubPlugin",
+    new Uri("https://api.github.com/openapi.json"))</span>;
+// Pass kernel.Plugins["GitHubPlugin"] functions to the agent's tools list.</code></pre>
+            <div class="snip-src">Source: <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-openapi-plugins">learn.microsoft.com · Adding OpenAPI plugins · ImportPluginFromOpenApi (inherited by MAF)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">No first-class A2A primitive in the current SDK. The documented patterns are to expose the remote agent as an MCP server and consume it via <code>McpClientFactory</code>, or to host remote agents through workflow primitives on Azure AI Foundry.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to call a gRPC client (e.g. <code>Grpc.Net.Client</code>) inside a method exposed via <code>AIFunctionFactory.Create</code>.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>OpenAPI support is inherited via the Semantic Kernel plugin pipeline. Hosted under ASP.NET Core with standard DI.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>Cross-vendor agent collaboration is documented via MCP rather than a dedicated A2A primitive.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools">MAF MCP tools</a> · <a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-openapi-plugins">SK OpenAPI plugins</a></div>
+        </div>
+      </article>
+
+      <!-- ============ LANGCHAIN4J ============ -->
+      <article class="fw-card" id="l4j">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--l4j)">L4j</div>
+          <div>
+            <h3>LangChain4j <span class="lang-pill java">Java</span></h3>
+            <div class="sub">Three-step MCP pattern: <code>McpTransport</code> → <code>McpClient</code> → <code>McpToolProvider</code> → <code>AiServices</code>.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">Tools are sourced from a <code>ToolProvider</code> or supplied directly via <code>@Tool</code>-annotated objects. MCP integration is implemented as an <code>McpToolProvider</code>.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: <code>@Tool</code>-annotated POJO methods, registered with <code>AiServices.builder().tools(...)</code>.</p>
+            <pre><code>Assistant assistant = AiServices.builder(Assistant.class)
+    .chatModel(model)
+    <span class="hi">.tools(new Calculator())</span>
+    .build();</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain4j.dev/tutorials/tools">docs.langchain4j.dev · Tools (Function Calling) · AiServices.builder().tools(...)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — transport → client → provider</span>
+            <p>Construct an <code>McpTransport</code> (stdio, streamable HTTP, WebSocket, or Docker), wrap it in a <code>DefaultMcpClient</code>, register the client with an <code>McpToolProvider</code>, and attach the provider to the AI service via <code>AiServices.builder(...).toolProvider(...)</code>.</p>
+            <pre><code>// 1. Transport — start an MCP server as a subprocess
+McpTransport transport = StdioMcpTransport.builder()
+    .command(List.of("/usr/bin/npm", "exec",
+        "@modelcontextprotocol/server-everything@0.6.2"))
+    .build();
+
+// 2. Client
+McpClient mcpClient = DefaultMcpClient.builder()
+    .key("MyMCPClient")
+    .transport(transport)
+    .build();
+
+// 3. Tool provider — optionally filter which tools to expose
+McpToolProvider toolProvider = McpToolProvider.builder()
+    .mcpClients(mcpClient)
+    .filterToolNames("get_issue", "list_issues")
+    .build();
+
+// 4. Wire into AI service
+Bot bot = AiServices.builder(Bot.class)
+    .chatModel(model)
+    <span class="hi">.toolProvider(toolProvider)</span>
+    .build();</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.langchain4j.dev/tutorials/mcp">docs.langchain4j.dev · MCP · StdioMcpTransport + McpToolProvider pipeline</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI</span>
+            <p class="note">No first-class OpenAPI loader. REST calls are typically wrapped in <code>@Tool</code>-annotated methods, or accessed via an MCP fronting server.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">No first-class A2A primitive. Local agents can be exposed as tools; remote agents are accessed by wrapping them as an MCP server.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to call a Java gRPC client inside a <code>@Tool</code>-annotated method.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>MCP coverage includes stdio, streamable HTTP, WebSocket, and Docker transports.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>Tool registration is a four-step pipeline: transport → client → provider → AI service.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://docs.langchain4j.dev/tutorials/mcp">LangChain4j MCP tutorial</a></div>
+        </div>
+      </article>
+
+      <!-- ============ GENKIT GO ============ -->
+      <article class="fw-card" id="genkit">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--gk)">Gk</div>
+          <div>
+            <h3>Genkit <span class="lang-pill go">Go</span></h3>
+            <div class="sub">Dedicated <code>plugins/mcp</code> package; multi-server management via <code>MCPManager</code>.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">MCP servers are registered in an <code>MCPManager</code>; the manager holds connections and exposes tools keyed by server name.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: <code>genkit.DefineTool</code> with a typed input struct; pass via <code>ai.WithTools</code>.</p>
+            <pre><code>getWeatherTool := genkit.DefineTool(g, "getWeather", "Gets the weather",
+    func(ctx *ai.ToolContext, in WeatherInput) (string, error) { /* ... */ })
+
+resp, _ := genkit.Generate(ctx, g, ai.WithPrompt("…"),
+    <span class="hi">ai.WithTools(getWeatherTool)</span>)</code></pre>
+            <div class="snip-src">Source: <a href="https://genkit.dev/docs/go/tool-calling/">genkit.dev · Tool calling (Go) · DefineTool + WithTools</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>MCPManager</code></span>
+            <p>The <code>plugins/mcp</code> package provides <code>NewMCPManager</code>, which holds multiple MCP server connections. Servers may be declared up front via <code>MCPManagerOptions.MCPServers</code> or added at runtime via <code>ConnectServer</code>.</p>
+            <pre><code>package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/mcp"
+)
+
+func main() {
+    ctx := context.Background()
+    g, _ := genkit.Init(ctx)
+
+    // Configure one or more MCP servers up front
+    manager, err := mcp.NewMCPManager(mcp.MCPManagerOptions{
+        Name: "my-app",
+        MCPServers: map[string]mcp.MCPClientOptions{
+            "everything": {
+                Name: "everything-server",
+                <span class="hi">Stdio: &mcp.StdioConfig{
+                    Command: "npx",
+                    Args:    []string{"-y", "@modelcontextprotocol/server-everything"},
+                }</span>,
+            },
+        },
+    })
+    if err != nil { log.Fatal(err) }
+
+    // Connect additional servers at runtime
+    _ = manager.ConnectServer(ctx, "weather", mcp.MCPClientOptions{
+        Name: "weather-server",
+        Stdio: &mcp.StdioConfig{Command: "python", Args: []string{"weather_server.py"}},
+    })
+}</code></pre>
+            <div class="snip-src">Source: <a href="https://pkg.go.dev/github.com/firebase/genkit/go/plugins/mcp">pkg.go.dev · firebase/genkit/go/plugins/mcp · NewMCPManager + ConnectServer</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI</span>
+            <p class="note">No first-class OpenAPI loader. The documented pattern is to generate a Go client from the spec (e.g. with <code>oapi-codegen</code>) and call it inside a <code>genkit.DefineTool</code> handler.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">No first-class A2A primitive. The documented pattern is to set <code>WithReturnToolRequests(true)</code> to take over the tool-call loop and proxy requests to remote agents over HTTP.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to call a Go gRPC client inside a tool handler.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>Compiles to a single Go binary. The MCP manager uses goroutines to multiplex connections to multiple servers.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>Of the four remote sources, only MCP has first-class support; OpenAPI and A2A require custom code.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://pkg.go.dev/github.com/firebase/genkit/go/plugins/mcp">pkg.go.dev · plugins/mcp</a> · <a href="https://genkit.dev/docs/go/tool-calling/">Genkit Go tool calling</a></div>
+        </div>
+      </article>
+
+      <!-- ============ RIG ============ -->
+      <article class="fw-card" id="rig">
+        <div class="fw-head">
+          <div class="fw-badge" style="background: var(--rg)">Rg</div>
+          <div>
+            <h3>Rig <span class="lang-pill rust">Rust</span></h3>
+            <div class="sub">MCP via the <code>rmcp</code> Cargo feature; tool servers can mix static, dynamic, and MCP tools.</div>
+          </div>
+        </div>
+        <div class="fw-body">
+          <div class="metaphor">As of Rig 0.16, MCP integration uses the official Rust MCP SDK (<code>rmcp</code>) under the <code>rmcp</code> Cargo feature. The earlier <code>mcp-core</code> integration is deprecated and scheduled for removal in 0.18.</div>
+
+          <div class="mech">
+            <span class="mech-title internal">Internal</span>
+            <p>Recap: implement the <code>Tool</code> trait or use the <code>#[rig_tool]</code> macro; attach via the agent builder's <code>.tool(...)</code>.</p>
+            <pre><code>let agent = client.agent("gpt-4o")
+    .preamble("You are a calculator.")
+    <span class="hi">.tool(Adder)</span>
+    .build();</code></pre>
+            <div class="snip-src">Source: <a href="https://docs.rig.rs/docs/concepts/tools#using-tools-with-agents">docs.rig.rs · Tools · Using Tools with Agents (.tool() builder)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title mcp">MCP — <code>rmcp</code> integration</span>
+            <p>The <code>rmcp</code> Cargo feature enables the official Rust MCP SDK. The application connects to an MCP server through <code>rmcp</code> transports, lists tools, and attaches each to a Rig agent (or to a shared <code>ToolServer</code> handle) via <code>.rmcp_tool(tool, peer)</code> on the agent builder. The earlier <code>mcp-core</code> integration is deprecated and scheduled for removal in 0.18.</p>
+            <pre><code># Cargo.toml
+rig-core = { version = "0.16", features = ["rmcp"] }
+rmcp     = { version = "0.x", features = ["client", "transport-child-process"] }</code></pre>
+            <div class="snip-src">Source: <a href="https://github.com/0xPlaygrounds/rig/discussions/635">github.com/0xPlaygrounds/rig · Discussion #635 · Rig 0.16.0 release (rmcp Cargo feature)</a></div>
+            <pre><code>use rig::providers::openai;
+use rmcp::{ServiceExt, transport::child_process::TokioChildProcess};
+use tokio::process::Command;
+
+// 1. Connect to the MCP server as a subprocess
+let transport = TokioChildProcess::new(
+    Command::new("npx").args(["-y", "@modelcontextprotocol/server-everything"]),
+)?;
+let mcp_client = ().serve(transport).await?;
+
+// 2. Discover its tools and attach them to a Rig agent
+let tools = mcp_client.list_tools(Default::default()).await?;
+let mut builder = openai::Client::from_env()
+    .agent("gpt-4o")
+    .preamble("Use the available MCP tools.");
+
+for tool in tools.tools {
+    builder = <span class="hi">builder.rmcp_tool(tool, mcp_client.peer().clone())</span>;
+}
+let agent = builder.build();</code></pre>
+            <div class="snip-src">Source: <a href="https://github.com/0xPlaygrounds/rig/discussions/635">github.com/0xPlaygrounds/rig · Discussion #635 · rmcp integration pattern</a> · <a href="https://docs.rig.rs/docs/concepts/tools">docs.rig.rs · Tools (ToolServer + rmcp)</a></div>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title openapi">OpenAPI</span>
+            <p class="note">No first-class OpenAPI loader. The documented pattern is to generate a typed client from the spec (e.g. with <code>progenitor</code> or <code>openapitor</code>) and call it from a Rig <code>Tool</code> implementation.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title a2a">Remote agent (A2A)</span>
+            <p class="note">No first-class A2A primitive. Tool sharing across agents in the same process is supported by the <code>ToolServer</code> handle. For cross-process coordination, the documented pattern is to expose the agent as an MCP server via <code>rmcp</code> and consume it via the MCP pattern above.</p>
+          </div>
+
+          <div class="mech">
+            <span class="mech-title rpc">Generic RPC</span>
+            <p class="note">No first-class gRPC binding. The documented pattern is to call Tonic (or another Rust RPC client) inside a <code>Tool</code> trait implementation.</p>
+          </div>
+
+          <div class="twocol">
+            <div class="miniblock"><h5>Mechanism</h5><p>MCP integration uses the official Rust MCP SDK (<code>rmcp</code>) under the <code>rmcp</code> Cargo feature.</p></div>
+            <div class="miniblock"><h5>Notes</h5><p>The <code>mcp-core</code> → <code>rmcp</code> migration is in progress; the <code>mcp-core</code> integration is scheduled for removal in 0.18.</p></div>
+          </div>
+          <div class="src">Source · <a href="https://github.com/0xPlaygrounds/rig/discussions/635">Rig 0.16.0 release notes (rmcp integration)</a> · <a href="https://docs.rig.rs/docs/concepts/tools">Rig Tools docs</a></div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON ================= -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side · first-class remote-tool support</h2>
+    <p class="lede">
+      <span class="yes">●</span> = first-class API ·
+      <span class="partial">◐</span> = supported via wrapper / sibling library ·
+      <span class="no">○</span> = no first-class support; the documented pattern is to call the source from an in-process tool body.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="fw"><span class="dot" style="background:var(--lc)"></span> LangChain</th>
+            <th class="fw"><span class="dot" style="background:var(--lg)"></span> LangGraph</th>
+            <th class="fw"><span class="dot" style="background:var(--crew)"></span> CrewAI</th>
+            <th class="fw"><span class="dot" style="background:var(--adk)"></span> ADK</th>
+            <th class="fw"><span class="dot" style="background:var(--sk)"></span> Semantic Kernel</th>
+            <th class="fw"><span class="dot" style="background:var(--ma)"></span> Mastra</th>
+            <th class="fw"><span class="dot" style="background:var(--maf)"></span> MS Agent Fw</th>
+            <th class="fw"><span class="dot" style="background:var(--l4j)"></span> LangChain4j</th>
+            <th class="fw"><span class="dot" style="background:var(--gk)"></span> Genkit Go</th>
+            <th class="fw"><span class="dot" style="background:var(--rg)"></span> Rig</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Internal tools</td>
+            <td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td>
+            <td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MCP (consumer)</td>
+            <td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td>
+            <td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td>
+          </tr>
+          <tr>
+            <td class="row-hd">MCP server (exposing your tools)</td>
+            <td class="partial">◐</td><td class="partial">◐</td><td class="partial">◐</td><td class="yes">●</td><td class="yes">●</td>
+            <td class="yes">●</td><td class="partial">◐</td><td class="partial">◐</td><td class="yes">●</td><td class="yes">●</td>
+          </tr>
+          <tr>
+            <td class="row-hd">OpenAPI / REST loader</td>
+            <td class="partial">◐</td><td class="partial">◐</td><td class="no">○</td><td class="yes">●</td><td class="yes">●</td>
+            <td class="no">○</td><td class="yes">●</td><td class="no">○</td><td class="no">○</td><td class="no">○</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Remote agent (A2A)</td>
+            <td class="no">○</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="no">○</td>
+            <td class="yes">●</td><td class="no">○</td><td class="no">○</td><td class="no">○</td><td class="no">○</td>
+          </tr>
+          <tr>
+            <td class="row-hd">A2A primitive name</td>
+            <td><span class="no">—</span></td>
+            <td><code>RemoteGraph</code></td>
+            <td><code>A2AClientConfig</code></td>
+            <td><code>RemoteA2aAgent</code></td>
+            <td><span class="no">via MCP</span></td>
+            <td><code>A2AAgent</code></td>
+            <td><span class="no">via MCP</span></td>
+            <td><span class="no">via MCP</span></td>
+            <td><span class="no">—</span></td>
+            <td><span class="no">via MCP</span></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MCP transports</td>
+            <td>stdio · SSE · HTTP</td>
+            <td>inherits LC</td>
+            <td>stdio · SSE · HTTP</td>
+            <td>stdio · SSE</td>
+            <td>stdio · SSE</td>
+            <td>stdio · HTTP</td>
+            <td>stdio · HTTP</td>
+            <td>stdio · HTTP · WS · Docker</td>
+            <td>stdio · HTTP</td>
+            <td>via <code>rmcp</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Canonical doc</td>
+            <td><a href="https://docs.langchain.com/oss/python/langchain/mcp">MCP</a></td>
+            <td><a href="https://docs.langchain.com/langsmith/use-remote-graph">RemoteGraph</a></td>
+            <td><a href="https://docs.crewai.com/en/mcp/overview">MCP</a> · <a href="https://docs.crewai.com/en/learn/a2a-agent-delegation">A2A</a></td>
+            <td><a href="https://google.github.io/adk-docs/tools-custom/mcp-tools/">MCP</a> · <a href="https://google.github.io/adk-docs/a2a/quickstart-consuming/">A2A</a></td>
+            <td><a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/plugins/adding-mcp-plugins">MCP</a></td>
+            <td><a href="https://mastra.ai/docs/mcp/overview">MCP</a> · <a href="https://mastra.ai/blog/introducing-agent-to-agent-support">A2A</a></td>
+            <td><a href="https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools">MCP</a></td>
+            <td><a href="https://docs.langchain4j.dev/tutorials/mcp">MCP</a></td>
+            <td><a href="https://pkg.go.dev/github.com/firebase/genkit/go/plugins/mcp">mcp pkg</a></td>
+            <td><a href="https://github.com/0xPlaygrounds/rig/discussions/635">rmcp release</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAKEAWAYS ================= -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Summary observations</h2>
+    <p class="lede">Six factual observations drawn from the per-framework data above.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">MCP</span>
+        <h4>1 · MCP consumer support is present in all ten frameworks</h4>
+        <p>Every framework profiled here ships first-class MCP consumer support, either in core or via an officially-maintained adapter package. MCP server (producer) support is present in six: ADK, Semantic Kernel, Mastra, Genkit Go, Rig, and via separate packages in the LangChain/LangGraph and CrewAI ecosystems.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">DECLARATION</span>
+        <h4>2 · Declaration patterns fall into three shapes</h4>
+        <p>A single constructor field listing all sources (CrewAI <code>mcps=</code>, Mastra <code>tools:</code> / <code>agents:</code>); a dedicated class per source (ADK <code>MCPToolset</code> / <code>OpenAPIToolset</code> / <code>RemoteA2aAgent</code>); or a builder pipeline (LangChain4j transport → client → provider → AI service).</p>
+      </div>
+      <div class="ta">
+        <span class="tag">A2A</span>
+        <h4>3 · Four frameworks expose a first-class A2A primitive</h4>
+        <p>ADK (<code>RemoteA2aAgent</code>), CrewAI (<code>A2AClientConfig</code>), Mastra (<code>A2AAgent</code>), and LangGraph (<code>RemoteGraph</code>, requires a LangGraph Platform endpoint). In the other six frameworks, remote-agent access is documented via MCP composition.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">OPENAPI</span>
+        <h4>4 · First-class OpenAPI ingestion is present in three frameworks</h4>
+        <p>ADK (<code>OpenAPIToolset</code>), Semantic Kernel (<code>kernel.add_plugin_from_openapi</code>), and Microsoft Agent Framework (via the Semantic Kernel plugin pipeline). In the other seven frameworks, the documented pattern is to wrap an HTTP call in a custom tool body or front the API with an MCP server.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">RPC</span>
+        <h4>5 · No framework provides a first-class gRPC generator</h4>
+        <p>None of the ten frameworks generates tools from a gRPC, Thrift, or other RPC schema. In every case the documented pattern is to call the RPC client from within an in-process tool body.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">PORTABILITY</span>
+        <h4>6 · MCP is the most portable tool-definition surface</h4>
+        <p>An MCP server can be consumed by all ten frameworks via their documented MCP integration. Tool definitions placed inside an MCP server are therefore portable across frameworks without modification; framework-specific tool definitions are not.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GLOSSARY ================= -->
+<section id="glossary">
+  <div class="container">
+    <h2>Mini-glossary</h2>
+    <p class="lede">Terms used above that mean slightly different things in different frameworks.</p>
+    <div class="gloss">
+      <div><b>MCP</b> (Model Context Protocol) — open JSON-RPC protocol for exposing tools, resources, and prompts to LLM agents. See <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>.</div>
+      <div><b>MCP transport</b> — how the client talks to the server: <code>stdio</code> (server runs as a subprocess), <code>streamable-http</code> (HTTP POST + optional SSE), <code>sse</code> (legacy server-sent events), or <code>websocket</code> (LangChain4j extension).</div>
+      <div><b>Agent card</b> (A2A) — a <code>.well-known/agent-card.json</code> document at the remote agent's URL describing its capabilities, skills, auth, and supported modes.</div>
+      <div><b>A2A</b> (Agent-to-Agent Protocol) — open standard for one agent calling another over HTTP using the agent-card discovery + JSON-RPC messaging. Cross-framework by design.</div>
+      <div><b>OpenAPI toolset / toolkit</b> — a framework-level converter from an OpenAPI 3.x spec to a set of tools, one per operation (or one generic verb-based tool).</div>
+      <div><b>RemoteGraph</b> (LangGraph) — proxy object that talks to a graph deployed on LangGraph Platform; behaves identically to a local compiled graph for callers.</div>
+      <div><b>RemoteA2aAgent</b> (ADK) — agent class that wraps a remote A2A endpoint; attached to a parent agent's <code>sub_agents=</code> list.</div>
+      <div><b>MCPManager</b> (Genkit Go) — top-level container for multiple MCP server connections, with <code>ConnectServer</code> for dynamic add and per-server tool resolution.</div>
+      <div><b>ToolProvider</b> (LangChain4j) — interface that supplies a list of tools to <code>AiServices</code> at build or invocation time; MCP is one such provider.</div>
+      <div><b>rmcp</b> — the official Rust SDK for MCP; in Rig 0.16+ it's the canonical MCP integration (the older <code>mcp-core</code> is being phased out).</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Compiled from the upstream documentation of LangChain, LangGraph, CrewAI, Google ADK,
+    Microsoft Semantic Kernel, Mastra, Microsoft Agent Framework, LangChain4j, Genkit, and Rig.
+    Sibling paper: <a href="/whitepapers/agent-tool-wiring.html">How AI Agent Frameworks Wire In Tools and Agents</a>.
+    <p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('a.pill').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
