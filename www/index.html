@@ -596,6 +596,7 @@ response, _ := orchestrator.ProcessRequest(ctx,
       Long-form pieces about the architecture and the broader research that
       informs it.
     </p>
+    <h3 class="read-group-heading">Blogs</h3>
     <div class="read-list">
       <a class="read-item" href="/blogs/microagents-architecture.html">
         <span class="kind">Reference architecture</span>
@@ -607,32 +608,66 @@ response, _ := orchestrator.ProcessRequest(ctx,
         <span class="title">TruvaG3 — A Guided Tour</span>
         <span class="desc">Why the framework exists, how the architecture works in practice, what ships in the box, and how to decide whether it fits your situation.</span>
       </a>
-      <a class="read-item" href="/whitepapers/agent-to-agent-communication.html">
-        <span class="kind">Whitepaper</span>
-        <span class="title">Agent-to-Agent Communication in AI Agent Frameworks</span>
-        <span class="desc">How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel handle discovery, embedding, and distributed calls between agents.</span>
-      </a>
+    </div>
+    <details class="read-expand">
+      <summary><span class="when-closed">Show 1 more blog</span><span class="when-open">Hide</span></summary>
+      <div class="read-list">
+        <a class="read-item" href="/blogs/truvag3-agentic-memory.html">
+          <span class="kind">Memory architecture</span>
+          <span class="title">Agentic Memory in TruvaG3</span>
+          <span class="desc">A guided tour of TruvaG3's four-tier shared memory system — the research it came from, the pipeline hooks that wire it in, and how a fleet of agents stops repeating each other's work.</span>
+        </a>
+      </div>
+    </details>
+
+    <h3 class="read-group-heading">Whitepapers</h3>
+    <div class="read-list">
       <a class="read-item" href="/whitepapers/agent-orchestration.html">
         <span class="kind">Whitepaper</span>
         <span class="title">How AI Agent Frameworks Orchestrate Tool Calls</span>
         <span class="desc">A side-by-side look at how the major frameworks turn a user request into a sequence of tool calls — planning models, executor loops, and re-planning strategies.</span>
       </a>
-      <a class="read-item" href="/whitepapers/agent-human-in-the-loop.html">
+      <a class="read-item" href="/whitepapers/mcp-explained.html">
         <span class="kind">Whitepaper</span>
-        <span class="title">Human-in-the-Loop in AI Agent Frameworks</span>
-        <span class="desc">Approval gates, interrupt-and-resume patterns, and approval-state persistence across the major frameworks — where the human fits, and what each framework expects.</span>
-      </a>
-      <a class="read-item" href="/whitepapers/operational-excellence-index.html">
-        <span class="kind">Whitepaper series</span>
-        <span class="title">Operational Excellence in AI Agent Frameworks</span>
-        <span class="desc">Configuration, deployment, observability, performance, testing — operational practices for running agent systems in production.</span>
-      </a>
-      <a class="read-item" href="/whitepapers/agent-errors-index.html">
-        <span class="kind">Whitepaper series</span>
-        <span class="title">Error Handling in AI Agent Frameworks</span>
-        <span class="desc">Provider errors, multi-agent failure modes, data compliance, and operational error handling across major agent frameworks.</span>
+        <span class="title">Model Context Protocol — How It Works</span>
+        <span class="desc">A protocol-level reference for MCP — the wire model, transports, lifecycle, and OAuth 2.1, on the desktop and in the cloud.</span>
       </a>
     </div>
+    <details class="read-expand">
+      <summary><span class="when-closed">Show 6 more whitepapers</span><span class="when-open">Hide</span></summary>
+      <div class="read-list">
+        <a class="read-item" href="/whitepapers/agent-tool-wiring.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">How AI Agent Frameworks Wire In Tools and Agents</span>
+          <span class="desc">A code-first reference across ten AI agent frameworks — how each one declares tools, defines their schemas, and composes multiple agents.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/agent-remote-tools.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">Internal vs Remote Tools — How AI Agent Frameworks Wire In Each</span>
+          <span class="desc">Where tools can live across ten AI agent frameworks — in-process code, MCP servers, OpenAPI specs, A2A, and generic RPC — and the documented declaration and call mechanism for each.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/agent-to-agent-communication.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">Agent-to-Agent Communication in AI Agent Frameworks</span>
+          <span class="desc">How LangChain, LangGraph, CrewAI, Google ADK, and Microsoft Semantic Kernel handle discovery, embedding, and distributed calls between agents.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/agent-human-in-the-loop.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">Human-in-the-Loop in AI Agent Frameworks</span>
+          <span class="desc">Approval gates, interrupt-and-resume patterns, and approval-state persistence across the major frameworks — where the human fits, and what each framework expects.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/operational-excellence-index.html">
+          <span class="kind">Whitepaper series</span>
+          <span class="title">Operational Excellence in AI Agent Frameworks</span>
+          <span class="desc">Configuration, deployment, observability, performance, testing — operational practices for running agent systems in production.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/agent-errors-index.html">
+          <span class="kind">Whitepaper series</span>
+          <span class="title">Error Handling in AI Agent Frameworks</span>
+          <span class="desc">Provider errors, multi-agent failure modes, data compliance, and operational error handling across major agent frameworks.</span>
+        </a>
+      </div>
+    </details>
   </div>
 </section>
 
