@@ -970,6 +970,7 @@ Unlike LangChain (which binds memory to a session at construction), TruvaG3 pass
 
 ## 14. Further Reading
 
+- [Pipeline Hooks Guide](../orchestration/PIPELINE_HOOKS_GUIDE.md) — The mechanism reference behind every scenario in this guide: stage contracts, `PipelineContext`, enrichment flow, short-circuiting, and execution guarantees
 - [API Reference](../reference/API_REFERENCE.md) — Full orchestrator API, including `OrchestratorDependencies` and `PromptBuilder`
 - [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md) — Tier 1 defaults, Tier 2 compaction, and advanced overrides
 - [Orchestration Modes Guide](../orchestration/ORCHESTRATION_MODES_GUIDE.md) — How planning, execution, and synthesis work
