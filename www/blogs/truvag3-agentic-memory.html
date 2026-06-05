@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Memory in TruvaG3: A Team With a Shared Notebook</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<meta name="description" content="A guided tour of TruvaG3's four-tier agentic memory system — the research it came from, the five pipeline hooks that wire it in, and how a fleet of agents stops repeating each other's work.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="Agentic Memory in TruvaG3: A Team With a Shared Notebook">
+<meta property="og:description" content="A guided tour of TruvaG3's four-tier agentic memory system — the research it came from, the five pipeline hooks that wire it in, and how a fleet of agents stops repeating each other's work.">
+<meta property="og:url" content="https://truvag3.dev/blogs/truvag3-agentic-memory">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agentic Memory in TruvaG3: A Team With a Shared Notebook">
+<meta name="twitter:description" content="A guided tour of TruvaG3's four-tier agentic memory system — the research it came from, the five pipeline hooks that wire it in, and how a fleet of agents stops repeating each other's work.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<style>
+  :root {
+    /* Dark theme — mirrored from truvag3-introduction so this article
+     * visually continues from the rest of truvag3.dev. */
+    --fg: #9aa6bd;
+    --muted: #9aa6bd;
+    --accent: #7cc4ff;
+    --rule: #2a3550;
+    --code-bg: #1a2236;
+    --aside-bg: #121826;
+    --aside-border: #C56710;
+    /* Per-memory-type accent palette used in the SVG figures.
+     * Each of the four shared-memory tiers + user memory gets its own
+     * hue so the reader can track a tier across multiple diagrams. */
+    --m-episodic: #f59e0b;      /* amber — events, recorded actions */
+    --m-coord:    #fbbf24;      /* yellow — transient locks */
+    --m-knowledge: #a78bfa;     /* purple — learned, semantic */
+    --m-reflect:  #34d399;      /* green — synthesis, distillation */
+    --m-user:     #7cc4ff;      /* blue — per-user, private */
+    --m-bad:      #f87171;      /* failure / duplicated work */
+  }
+  html {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, #0b0f17 60%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    line-height: 1.55;
+    font-weight: 400;
+    margin: 0;
+    background: transparent;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  article {
+    max-width: 760px;
+    margin: 2rem auto;
+    padding: 0 1.25rem;
+    font-size: 17px;
+  }
+  header.article-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2rem;
+  }
+  header.article-header h1 {
+    font-size: 1.85rem;
+    line-height: 1.25;
+    margin: 0 0 0.6rem 0;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 45%, #c4b5fd 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.article-header p.dek {
+    color: var(--muted);
+    font-size: 1.1rem;
+    margin: 0 0 0.8rem 0;
+    line-height: 1.45;
+  }
+  header.article-header .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin-top: 2.4rem;
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  h3 {
+    font-size: 1.25rem;
+    margin-top: 1.8rem;
+    margin-bottom: 0.4rem;
+    color: #e6edf7;
+  }
+  p { margin: 0.7rem 0; }
+  p > strong:first-child,
+  li > strong:first-child {
+    font-weight: 600;
+    font-size: 0.95em;
+    color: var(--accent);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* ── Code blocks · IDE-style chrome ─────────────────────────────────
+   * Code blocks are styled to feel like a dark-theme editor pane:
+   *  - a faux titlebar at the top with three macOS-style traffic-light
+   *    dots, drawn with two pseudo-elements (no extra HTML required);
+   *  - a deeper near-black background that contrasts strongly with the
+   *    page's slate-blue body;
+   *  - VS Code Dark+ inspired token colors overriding Prism Tomorrow's
+   *    defaults so keywords, strings, comments, and types each show in
+   *    distinct, vibrant hues.
+   * Inline <code> remains subtle — a softly-tinted pill on the running
+   * prose, not chrome'd.
+   */
+  pre {
+    background: #0d1117;
+    color: #d4d4d4;
+    padding: 42px 18px 18px 18px;
+    overflow-x: auto;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px solid #1f2937;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset,
+                0 6px 20px rgba(0,0,0,0.35);
+    position: relative;
+    margin: 1.5rem 0;
+  }
+  /* Titlebar (gradient strip across the top of every code block) */
+  pre::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 30px;
+    background: linear-gradient(180deg, #21262d 0%, #161b22 100%);
+    border-bottom: 1px solid #1f2937;
+    border-radius: 10px 10px 0 0;
+  }
+  /* Three traffic-light dots inside the titlebar */
+  pre::after {
+    content: '';
+    position: absolute;
+    top: 10px; left: 14px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #ff5f57;
+    box-shadow:
+      18px 0 0 #febc2e,
+      36px 0 0 #28c840;
+  }
+  pre[class*="language-"] {
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+    padding: 42px 18px 18px 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    text-shadow: none;
+  }
+  code[class*="language-"] {
+    text-shadow: none;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    color: #d4d4d4;
+  }
+  code {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: #cfe1ff;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+    color: inherit;
+  }
+  /* VS Code Dark+ inspired token palette — overrides Prism Tomorrow's
+   * defaults to give every block the same editor-like color scheme.
+   * !important is used because Prism Tomorrow's own token rules ship with
+   * roughly equal specificity; without !important, whichever stylesheet
+   * loads later wins, which is fragile. With !important here, the palette
+   * is deterministic regardless of stylesheet load order. */
+  pre[class*="language-"] .token.comment,
+  pre[class*="language-"] .token.prolog,
+  pre[class*="language-"] .token.doctype,
+  pre[class*="language-"] .token.cdata        { color: #6a9955 !important; font-style: italic; }
+  pre[class*="language-"] .token.punctuation  { color: #d4d4d4 !important; }
+  pre[class*="language-"] .token.property,
+  pre[class*="language-"] .token.boolean,
+  pre[class*="language-"] .token.number,
+  pre[class*="language-"] .token.constant,
+  pre[class*="language-"] .token.symbol,
+  pre[class*="language-"] .token.deleted      { color: #b5cea8 !important; }
+  pre[class*="language-"] .token.selector,
+  pre[class*="language-"] .token.string,
+  pre[class*="language-"] .token.char,
+  pre[class*="language-"] .token.builtin,
+  pre[class*="language-"] .token.inserted     { color: #ce9178 !important; }
+  pre[class*="language-"] .token.operator,
+  pre[class*="language-"] .token.entity,
+  pre[class*="language-"] .token.url          { color: #d4d4d4 !important; }
+  pre[class*="language-"] .token.atrule,
+  pre[class*="language-"] .token.keyword      { color: #569cd6 !important; }
+  pre[class*="language-"] .token.function,
+  pre[class*="language-"] .token.class-name   { color: #dcdcaa !important; }
+  pre[class*="language-"] .token.regex,
+  pre[class*="language-"] .token.important,
+  pre[class*="language-"] .token.variable     { color: #9cdcfe !important; }
+  /* XML/HTML tag names and attribute names get their own treatment
+   * because Prism nests these tokens (e.g. <span class="token tag"><span
+   * class="token punctuation">&lt;</span><span class="token tag">name</span></span>).
+   * Targeting the leaf .tag and .attr-name is what colors them correctly. */
+  pre[class*="language-"] .token.tag,
+  pre[class*="language-"] .token.tag > .token.tag,
+  pre[class*="language-"] .token.tag .token.punctuation { color: #569cd6 !important; }
+  pre[class*="language-"] .token.attr-name              { color: #9cdcfe !important; }
+  pre[class*="language-"] .token.attr-value,
+  pre[class*="language-"] .token.attr-value .token.punctuation { color: #ce9178 !important; }
+  pre[class*="language-"] .token.namespace               { color: #4ec9b0 !important; opacity: 1; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border-bottom: 1px solid var(--rule);
+    padding: 0.55rem 0.7rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+    color: #e6edf7;
+  }
+  aside.callout {
+    background: var(--aside-bg);
+    border-left: 3px solid var(--aside-border);
+    padding: 0.85rem 1.1rem;
+    margin: 1.4rem 0;
+    font-size: 0.95rem;
+    border-radius: 3px;
+  }
+  aside.callout strong { color: #e6edf7; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  /* Highlight inline emphasis with amber, like the intro blog. */
+  .highlight-amber { color: #FFA040; }
+
+  /* Figures use the whitepaper diagram convention: dark-on-dark cards
+   * with per-tier accent colors and animated dashed flow lines. */
+  figure { margin: 1.6rem 0; }
+  figure svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 0.4rem;
+    line-height: 1.5;
+  }
+  figcaption strong { color: var(--accent); font-weight: 600; }
+
+  /* Collapsible TOC — native <details>/<summary>; no JS. */
+  details.toc {
+    margin: 1.5rem 0 2.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.75rem 1.25rem;
+    background: var(--code-bg);
+  }
+  details.toc summary {
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+    color: var(--accent);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+  }
+  details.toc summary::-webkit-details-marker { display: none; }
+  details.toc summary::before {
+    content: '▸';
+    display: inline-block;
+    transition: transform 0.15s ease;
+    color: var(--accent);
+    font-size: 0.85em;
+  }
+  details.toc[open] summary::before { transform: rotate(90deg); }
+  details.toc ul {
+    list-style: none;
+    padding-left: 0;
+    margin: 0.85rem 0 0.25rem;
+  }
+  details.toc > ul > li { margin: 0.5rem 0; }
+  details.toc > ul > li > a {
+    font-weight: 600;
+    font-size: 0.93rem;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  details.toc ul ul {
+    margin: 0.35rem 0 0.6rem;
+    padding-left: 1.25rem;
+    border-left: 1px solid var(--rule);
+  }
+  details.toc ul ul li { margin: 0.25rem 0 0.25rem 0.5rem; }
+  details.toc ul ul a {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 400;
+    text-decoration: none;
+  }
+  details.toc a:hover { text-decoration: underline; color: #e6edf7; }
+
+  /* Tier-tag pills — used inline to label which memory tier a passage
+   * is about, color-coded to match the SVGs. */
+  .tier {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #19243d;
+    border: 1px solid var(--rule);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .tier.episodic  { color: var(--m-episodic);  border-color: rgba(245,158,11,.4); }
+  .tier.coord     { color: var(--m-coord);     border-color: rgba(251,191,36,.4); }
+  .tier.knowledge { color: var(--m-knowledge); border-color: rgba(167,139,250,.4); }
+  .tier.reflect   { color: var(--m-reflect);   border-color: rgba(52,211,153,.4); }
+  .tier.user      { color: var(--m-user);      border-color: rgba(124,196,255,.4); }
+
+  /* Cheat-sheet grid — small dark cards, mirrors whitepaper takeaways. */
+  .takeaways {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin: 1.4rem 0;
+  }
+  @media (max-width: 600px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .ta h4 { margin: 6px 0 6px; font-size: 14.5px; color: #e6edf7; }
+  .ta p { margin: 0; font-size: 13.5px; color: var(--fg); }
+  .ta .tag {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #19243d;
+    color: #9fc2ff;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .footer-note {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+
+  /* Animated dashed flow lines (whitepaper convention). */
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+</style>
+</head>
+<body>
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+
+<article>
+
+<header class="article-header">
+  <h1>Agentic Memory in TruvaG3: A Team With a Shared Notebook</h1>
+  <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3's</a> four-tier shared memory system — the academic research it came from, the five pipeline hooks that wire it into the orchestrator, how a fleet of agents stops repeating each other's work, and how a single chat agent finally remembers what a user said last week.</p>
+  <p class="meta">Neelabh Tripathi · May 27, 2026</p>
+</header>
+
+<details class="toc">
+  <summary>Contents</summary>
+  <ul>
+    <li><a href="#amnesia">The amnesia problem</a></li>
+    <li><a href="#research">Where the design came from</a>
+      <ul>
+        <li><a href="#research-survey">A survey, not a vector DB bolt-on</a></li>
+        <li><a href="#research-findings">Three findings that shaped everything</a></li>
+      </ul>
+    </li>
+    <li><a href="#four-tiers">Four interfaces, swappable backends</a></li>
+    <li><a href="#pipeline">How memory plugs into the pipeline</a>
+      <ul>
+        <li><a href="#five-hooks">Five hooks, three stages</a></li>
+        <li><a href="#what-llm-sees">What the LLM actually sees</a></li>
+      </ul>
+    </li>
+    <li><a href="#compaction">Activity compaction: surviving thousands of events</a></li>
+    <li><a href="#coordination">Real-time coordination signals</a></li>
+    <li><a href="#knowledge">Knowledge extraction and the reflection job</a></li>
+    <li><a href="#user-memory">User memory: per-user personalization</a>
+      <ul>
+        <li><a href="#reconciliation">Fact reconciliation in four operations</a></li>
+        <li><a href="#recall">Five parallel recall paths</a></li>
+      </ul>
+    </li>
+    <li><a href="#scoping">Domain scoping and physical isolation</a></li>
+    <li><a href="#wiring">What the wiring looks like</a>
+      <ul>
+        <li><a href="#swapping-a-backend">Swapping a backend</a></li>
+      </ul>
+    </li>
+    <li><a href="#cheat">Architect's cheat sheet</a></li>
+    <li><a href="#further">Where to go next</a></li>
+  </ul>
+</details>
+
+<!-- ===================== AMNESIA ===================== -->
+<section>
+<h2 id="amnesia">The amnesia problem</h2>
+
+<p>In TruvaG3, every <code>ProcessRequest</code> call starts with a blank slate. The orchestrator plans against the registry, executes the DAG, synthesizes a response, and forgets everything. The next call — even one made one second later, by the same agent, against the same entity — begins again from zero.</p>
+
+<p>That is fine for a single tool. It is a problem the moment you have <em>two agents that can act on the same entity</em>. Without shared memory, agents fail in three concrete ways. <strong>Duplicated work</strong> — two agents independently investigate the same root cause, burning LLM tokens and tool invocations on the same five-step plan. <strong>Missing context</strong> — Agent B makes a decision without knowing Agent A's recent action on the same entity, leading to conflicting remediations or contradictory customer messages. <strong>No institutional learning</strong> — the same class of incident gets resolved fifty times, and the fifty-first still runs the full investigation, because the system has accumulated nothing.</p>
+
+<p><span class="highlight-amber">The picture below is what this looks like in a typical TruvaG3 deployment.</span> An event-driven agent reacts to an OOMKilled alert and creates a JIRA ticket. Five minutes later, a chat agent receives a related question about the same pod. Without shared memory, the second agent has no idea the first one ran.</p>
+
+<figure id="fig-amnesia">
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Without memory vs With memory. Two side-by-side timelines showing how two agents fail without shared memory and succeed with it. The 'With memory' column has a shared-memory store between the two agents — the first agent writes to it, the second agent reads from it before planning.">
+  <defs>
+    <marker id="am-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+    </marker>
+    <marker id="am-arr-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f59e0b"/>
+    </marker>
+    <marker id="am-arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="am-mem" x1="0" x2="1">
+      <stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- column titles -->
+  <text x="190" y="28" text-anchor="middle" fill="#f87171" font-size="14" font-weight="700">Without memory</text>
+  <text x="570" y="28" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">With memory</text>
+  <line x1="380" y1="46" x2="380" y2="455" stroke="#2a3550" stroke-dasharray="4 4"/>
+
+  <!-- ─────────── LEFT COLUMN · Without memory ─────────── -->
+
+  <!-- Agent A -->
+  <rect x="40" y="60" width="300" height="62" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="56" y="82" fill="#e6edf7" font-size="13" font-weight="700">event-driven-agent</text>
+  <text x="56" y="100" fill="#9aa6bd" font-size="11">Pod X is OOMKilled · alert received</text>
+  <text x="56" y="114" fill="#9aa6bd" font-size="11">5-step investigation · creates JIRA DEVOPS-42</text>
+
+  <!-- "5 min later, no shared memory" — long arrow spanning the full
+       vertical gap that the right column uses for the shared-memory box -->
+  <path d="M190,128 L190,247" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#am-arr)" fill="none"/>
+  <text x="205" y="170" fill="#9aa6bd" font-size="11" font-style="italic">5 min later</text>
+  <text x="205" y="186" fill="#9aa6bd" font-size="11" font-style="italic">— no record</text>
+  <text x="205" y="202" fill="#9aa6bd" font-size="11" font-style="italic">— no signal</text>
+  <text x="205" y="218" fill="#9aa6bd" font-size="11" font-style="italic">— no knowledge</text>
+
+  <!-- Agent B -->
+  <rect x="40" y="252" width="300" height="62" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="56" y="274" fill="#e6edf7" font-size="13" font-weight="700">devops-chat-agent</text>
+  <text x="56" y="292" fill="#9aa6bd" font-size="11">"Why is pod X slow?"</text>
+  <text x="56" y="306" fill="#9aa6bd" font-size="11">Investigates from scratch — no idea A ran</text>
+
+  <!-- Outcome -->
+  <rect x="40" y="332" width="300" height="115" rx="10" fill="#2a1a1f" stroke="#f87171"/>
+  <text x="56" y="354" fill="#f87171" font-size="12" font-weight="700">OUTCOME</text>
+  <text x="56" y="377" fill="#fca5a5" font-size="11.5">• DUPLICATE 5-step investigation</text>
+  <text x="56" y="396" fill="#fca5a5" font-size="11.5">• DUPLICATE JIRA ticket created</text>
+  <text x="56" y="415" fill="#fca5a5" font-size="11.5">• DUPLICATE Slack notification</text>
+  <text x="56" y="434" fill="#fca5a5" font-size="11.5">• Conflicting remediations · tokens wasted</text>
+
+  <!-- ─────────── RIGHT COLUMN · With memory ─────────── -->
+
+  <!-- Agent A -->
+  <rect x="420" y="60" width="300" height="62" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="436" y="82" fill="#e6edf7" font-size="13" font-weight="700">event-driven-agent</text>
+  <text x="436" y="100" fill="#9aa6bd" font-size="11">Pod X OOMKilled · creates DEVOPS-42</text>
+  <text x="436" y="114" fill="#9aa6bd" font-size="11">Writes AgentEvent → episodic memory</text>
+
+  <!-- Write arrows — two diagonals from the bottom of EDA flowing into
+       the top of the shared-memory blob. Animated dashed (flow-line)
+       to suggest data movement. -->
+  <path d="M500,124 Q 510,148 530,168" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#am-arr-amber)" fill="none" class="flow-line"/>
+  <path d="M640,124 Q 630,148 610,168" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#am-arr-amber)" fill="none" class="flow-line"/>
+  <text x="486" y="148" fill="#f59e0b" font-size="11" font-style="italic">writes</text>
+
+  <!-- Shared memory blob — bigger, centered, with a sub-label so the
+       reader knows what's inside it. -->
+  <rect x="460" y="172" width="220" height="50" rx="10" fill="url(#am-mem)" opacity="0.94"/>
+  <text x="570" y="194" text-anchor="middle" fill="#1a0f0a" font-size="13" font-weight="700">shared memory</text>
+  <text x="570" y="211" text-anchor="middle" fill="#1a0f0a" font-size="10.5" font-style="italic">events · coordination · knowledge</text>
+
+  <!-- Read arrow — straight down from blob bottom to DCA top, with a
+       clear label so the read direction is unambiguous. -->
+  <path d="M570,224 L570,247" stroke="#a78bfa" stroke-width="1.8" marker-end="url(#am-arr-purple)" fill="none"/>
+  <text x="586" y="240" fill="#a78bfa" font-size="11" font-style="italic">reads</text>
+
+  <!-- Agent B (aligned with the left column's Agent B at y=252) -->
+  <rect x="420" y="252" width="300" height="62" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="436" y="274" fill="#e6edf7" font-size="13" font-weight="700">devops-chat-agent</text>
+  <text x="436" y="292" fill="#9aa6bd" font-size="11">"Why is pod X slow?"</text>
+  <text x="436" y="306" fill="#a78bfa" font-size="11">Reads memory: A restarted pod X · DEVOPS-42</text>
+
+  <!-- Outcome (aligned with the left column's outcome at y=332) -->
+  <rect x="420" y="332" width="300" height="115" rx="10" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="436" y="354" fill="#34d399" font-size="12" font-weight="700">OUTCOME</text>
+  <text x="436" y="377" fill="#a7f3d0" font-size="11.5">• 2-step plan: check status, add comment</text>
+  <text x="436" y="396" fill="#a7f3d0" font-size="11.5">• No duplicate ticket</text>
+  <text x="436" y="415" fill="#a7f3d0" font-size="11.5">• Consistent action across agents</text>
+  <text x="436" y="434" fill="#a7f3d0" font-size="11.5">• Fewer tokens spent · faster turnaround</text>
+</svg>
+<figcaption><strong>Figure 1.</strong> <strong>The amnesia problem and the shared-notebook fix.</strong> Two agents, same entity, two sequential requests. On the left, each agent investigates independently — duplicated tools, duplicated tickets, duplicated notifications. On the right, the first agent's actions are written into shared memory; the second agent reads them before planning and produces a different, smaller plan. The shared memory does not change <em>what</em> an agent can do — it changes what the agent <em>knows</em> when it starts.</figcaption>
+</figure>
+
+<p>Everything in the rest of this article is an answer to the same question asked at different timescales: <em>how does Agent B see what Agent A just did?</em> Five seconds ago. Five minutes ago. Five weeks ago. And how does that visibility survive a backend restart, scale to thousands of events, and not block the request path when it fails?</p>
+</section>
+
+<!-- ===================== RESEARCH ===================== -->
+<section>
+<h2 id="research">Where the design came from</h2>
+
+<h3 id="research-survey">A survey, not a vector DB bolt-on</h3>
+
+<p>The temptation when adding "memory" to an agent framework is to attach a vector database and call it done. Every paper that took that route — store everything, retrieve by similarity — found the same failure mode: as memory grows, signal-to-noise collapses and decision quality degrades. TruvaG3's memory system was designed against a literature survey first, then implemented. The relevant lineage:</p>
+
+<table>
+<thead>
+<tr><th>Source</th><th>What it gave us</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2304.03442">Stanford Generative Agents (2023)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">Park et al., arXiv <a href="https://arxiv.org/abs/2304.03442">2304.03442</a></span></td>
+  <td>The three-tier model — memory stream, reflection, planning — and the now-standard <em>recency · importance · relevance</em> retrieval triad. Their hard finding: without a periodic reflection pass, agents became incoherent within a few hundred turns.</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2310.08560">MemGPT (2023)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">Packer et al., arXiv <a href="https://arxiv.org/abs/2310.08560">2310.08560</a></span></td>
+  <td>The LLM as its own memory manager — paging information in and out of the context window via explicit function calls. TruvaG3's enrichment hook is the "page in" mechanism.</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2502.12110">A-MEM (2025)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">Xu et al., arXiv <a href="https://arxiv.org/abs/2502.12110">2502.12110</a></span></td>
+  <td>Agentic memory — the store actively organizes, connects, and evolves its contents instead of passively accumulating them. Source of the ADD / UPDATE / CONTRADICT / DUPLICATE reconciliation pattern.</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2502.05453">DAMCS (2025)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">arXiv <a href="https://arxiv.org/abs/2502.05453">2502.05453</a></span></td>
+  <td>The cognitive-science three-tier model — sensory (raw tool output), episodic (events), procedural (learned how-to). Maps cleanly onto TruvaG3's <code>ExecutionStore</code> → <code>AgentEvent</code> → <code>KnowledgeFragment</code> progression.</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2506.07398">G-Memory (2025)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">arXiv <a href="https://arxiv.org/abs/2506.07398">2506.07398</a></span></td>
+  <td>Provenance — every fragment tracks who created it, what evidence it was based on, and the derivation chain. Critical for enterprise audit trails. Lives in <code>KnowledgeFragment.SourceEvents</code> (which events produced the fragment) and <code>AgentEvent.ParentEvent</code> (which request derived from which).</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2603.10062">Multi-Agent Memory from CompArch (2026)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">arXiv <a href="https://arxiv.org/abs/2603.10062">2603.10062</a></span></td>
+  <td>The L1/L2/RAM/Disk analogy and the consistency-model benchmark. Strong consistency cost 3-5× latency; eventual consistency caused decision conflicts in ~12% of scenarios. Causal consistency — what Redis Streams give you for free — was the sweet spot.</td>
+</tr>
+<tr>
+  <td><strong><a href="https://arxiv.org/abs/2603.13110">AgentRM (2026)</a></strong><br><span style="color:var(--muted);font-size:11.5px;font-family:'SF Mono',monospace">arXiv <a href="https://arxiv.org/abs/2603.13110">2603.13110</a></span></td>
+  <td>The number that motivated the entire compaction layer: with no memory management, effective context degrades to noise within ~50 turns. With simple compression, agents retain ~37% of entity information across sessions.</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="research-findings">Three findings that shaped everything</h3>
+
+<p>Three results recurred across the literature, and shaped the design directly.</p>
+
+<p><strong>Raw event logging is necessary but insufficient.</strong> Every "store everything" approach degraded under load; a reflection or distillation layer is required. <strong>Retrieval must be multi-signal.</strong> Pure embedding similarity misses temporally relevant information, and the recency-importance-relevance triad has held up across every follow-on paper. <strong>Consistency model matters.</strong> Stale reads cause measurable decision quality loss, but strong consistency is too expensive — causal consistency is the right floor.</p>
+
+</section>
+
+<!-- ===================== FOUR TIERS ===================== -->
+<section>
+<h2 id="four-tiers">Four interfaces, swappable backends</h2>
+
+<p>The memory system decomposes into four independent <strong>interfaces defined in <code>core</code></strong> — each solves a distinct problem, each can be implemented and scaled separately, each degrades gracefully when missing. The interfaces are the framework's contract; the backends that implement them are the framework's defaults — opinionated but replaceable. A separate fifth interface, user memory, handles per-user private facts and is covered in <a href="#user-memory">§7</a>.</p>
+
+<table>
+<thead>
+<tr><th>Memory type</th><th>Interface (in <code>core</code>)</th><th>What it stores</th><th>Default backend (in <code>memory</code>)</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="tier episodic">Episodic</span></td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>EpisodicMemory</code></a></td>
+  <td>Structured events: "Agent X did Y to entity Z at time T with outcome W"</td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>StreamEpisodicMemory</code></a> · Redis Streams (or <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works">in-memory</a> for tests)</td>
+</tr>
+<tr>
+  <td><span class="tier coord">Coordinator</span></td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>InvestigationCoordinator</code></a></td>
+  <td>Who currently holds the claim on which entity (with TTL)</td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>AtomicLockCoordinator</code></a> · Redis SETNX</td>
+</tr>
+<tr>
+  <td><span class="tier knowledge">Knowledge</span></td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>SharedKnowledge</code></a></td>
+  <td>Embedded knowledge fragments — learned patterns, resolution strategies</td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#knowledge-extraction-learning-from-experience"><code>VectorSharedKnowledge</code></a> · Qdrant (vector DB, gRPC)</td>
+</tr>
+<tr>
+  <td><span class="tier reflect">Reflector</span></td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>MemoryReflector</code></a></td>
+  <td>Higher-level synthesized insights from many episodic events</td>
+  <td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job"><code>LLMMemoryReflector</code></a> · uses the configured <code>AIClient</code> + episodic backend</td>
+</tr>
+</tbody>
+</table>
+
+<p>Each interface lives in the <code>core</code> kernel; concrete backends live in the separate <code>memory</code> module, which absorbs the heavy client dependencies (Redis client, Qdrant gRPC + protobuf) so <code>core</code> stays lightweight. A Phase-1 deployment that needs only episodic memory and coordination compiles with <em>none of</em> the vector-DB dependencies. A Phase-2 deployment that wants knowledge search opts in by passing an embedding client.</p>
+
+<aside class="callout">
+<strong>The backends are defaults, not requirements.</strong> <a href="https://redis.io/">Redis</a> is the default backend for episodic events, the investigation coordinator, the activity coordinator, and the digest cache because it is already on most platforms' bill of materials (it backs the framework's discovery layer too — see the <a href="microagents-architecture.html">architecture article</a>) and <a href="https://redis.io/docs/latest/develop/data-types/streams/">Redis Streams</a> provide causal consistency for free. <a href="https://qdrant.tech/">Qdrant</a> is the default for the knowledge store because it is purpose-built for vector search, <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>, and ships an official Go gRPC client. <span class="highlight-amber">Neither is wired into the framework — both sit behind <code>core</code> interfaces.</span> An application that prefers <a href="https://github.com/pgvector/pgvector">pgvector</a>, <a href="https://docs.nats.io/nats-concepts/jetstream">NATS JetStream</a>, <a href="https://github.com/valkey-io/valkey-search">valkey-search</a>, <a href="https://weaviate.io/">Weaviate</a>, or <a href="https://milvus.io/">Milvus</a> writes (or pulls in) a backend that satisfies the same interface and passes it through <code>ToDeps()</code>. Backends targeting the same interface are interchangeable with zero application code change beyond the constructor line in <code>main.go</code>. This is the same pattern the framework uses for AI providers: contracts in <code>core</code>, implementations elsewhere, applications pick at import time.
+</aside>
+
+<figure id="fig-tiers">
+<svg viewBox="0 0 760 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four memory backends over the core micro-kernel. Episodic, Coordinator, Knowledge, and Reflector each implement a core interface; the application wires them via NewSharedBackends.">
+  <defs>
+    <marker id="ft-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+    </marker>
+    <linearGradient id="ft-core" x1="0" x2="1">
+      <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Whole figure is shifted left by 20px (boxes originally started at
+       x=40 and the rightmost touched x=760, giving 40/0 margins).
+       New layout uses 20/20 margins so neither column hugs the perimeter. -->
+
+  <text x="20" y="28" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">FOUR INTERFACES (core) · DEFAULT BACKENDS (memory module, swappable)</text>
+
+  <!-- Episodic -->
+  <rect x="20" y="50" width="170" height="110" rx="12" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="105" y="75" text-anchor="middle" fill="#fde68a" font-size="13" font-weight="700">core.EpisodicMemory</text>
+  <text x="105" y="93" text-anchor="middle" fill="#fcd34d" font-size="11" font-style="italic">interface</text>
+  <text x="105" y="115" text-anchor="middle" fill="#9aa6bd" font-size="10.5">default: StreamEpisodicMemory</text>
+  <text x="105" y="129" text-anchor="middle" fill="#9aa6bd" font-size="10.5">backend: Redis Streams</text>
+  <text x="105" y="147" text-anchor="middle" fill="#9aa6bd" font-size="10.5">alt: pgvector · NATS · in-mem</text>
+
+  <!-- Coordinator -->
+  <rect x="205" y="50" width="170" height="110" rx="12" fill="#2a240c" stroke="#fbbf24"/>
+  <text x="290" y="75" text-anchor="middle" fill="#fde68a" font-size="13" font-weight="700">core.Investigation</text>
+  <text x="290" y="91" text-anchor="middle" fill="#fde68a" font-size="13" font-weight="700">Coordinator</text>
+  <text x="290" y="109" text-anchor="middle" fill="#fcd34d" font-size="11" font-style="italic">interface</text>
+  <text x="290" y="129" text-anchor="middle" fill="#9aa6bd" font-size="10.5">default: AtomicLockCoordinator</text>
+  <text x="290" y="147" text-anchor="middle" fill="#9aa6bd" font-size="10.5">backend: Redis SETNX</text>
+
+  <!-- Knowledge -->
+  <rect x="390" y="50" width="170" height="110" rx="12" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="475" y="75" text-anchor="middle" fill="#ddd6fe" font-size="13" font-weight="700">core.SharedKnowledge</text>
+  <text x="475" y="93" text-anchor="middle" fill="#c4b5fd" font-size="11" font-style="italic">interface</text>
+  <text x="475" y="115" text-anchor="middle" fill="#9aa6bd" font-size="10.5">default: VectorSharedKnowledge</text>
+  <text x="475" y="129" text-anchor="middle" fill="#9aa6bd" font-size="10.5">backend: Qdrant (vector DB)</text>
+  <text x="475" y="147" text-anchor="middle" fill="#9aa6bd" font-size="10.5">alt: pgvector · Weaviate · Milvus</text>
+
+  <!-- Reflector -->
+  <rect x="575" y="50" width="165" height="110" rx="12" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="657" y="75" text-anchor="middle" fill="#a7f3d0" font-size="13" font-weight="700">core.MemoryReflector</text>
+  <text x="657" y="93" text-anchor="middle" fill="#a7f3d0" font-size="11" font-style="italic">interface</text>
+  <text x="657" y="115" text-anchor="middle" fill="#9aa6bd" font-size="10.5">default: LLMMemoryReflector</text>
+  <text x="657" y="129" text-anchor="middle" fill="#9aa6bd" font-size="10.5">uses configured AIClient</text>
+  <text x="657" y="147" text-anchor="middle" fill="#9aa6bd" font-size="10.5">distills events → fragments</text>
+
+  <!-- arrows down to core (one per interface, dropping straight into it) -->
+  <path d="M105,162 L105,200" stroke="#9ec5ff" stroke-width="1.5" stroke-dasharray="3 3" fill="none"/>
+  <path d="M290,162 L290,200" stroke="#9ec5ff" stroke-width="1.5" stroke-dasharray="3 3" fill="none"/>
+  <path d="M475,162 L475,200" stroke="#9ec5ff" stroke-width="1.5" stroke-dasharray="3 3" fill="none"/>
+  <path d="M657,162 L657,200" stroke="#9ec5ff" stroke-width="1.5" stroke-dasharray="3 3" fill="none"/>
+
+  <!-- core micro-kernel — spans the full width of the four interface
+       boxes above (x=20..740) so every interface drops cleanly into it
+       without the leftmost and rightmost boxes looking disconnected. -->
+  <rect x="20" y="205" width="720" height="80" rx="14" fill="url(#ft-core)" opacity="0.9"/>
+  <text x="380" y="232" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">core (micro-kernel)</text>
+  <text x="380" y="254" text-anchor="middle" fill="#dbeafe" font-size="11.5">interfaces · types · NoOp defaults</text>
+  <text x="380" y="272" text-anchor="middle" fill="#dbeafe" font-size="11.5">deps: go-redis · uuid · testify only</text>
+
+  <!-- arrow down to app -->
+  <path d="M380,290 L380,320" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#ft-arr)" fill="none"/>
+
+  <!-- application — slightly narrower than core, so the layering reads
+       as "the application sits on top of the kernel, which underpins
+       all four interfaces above". -->
+  <rect x="60" y="325" width="640" height="60" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="380" y="349" text-anchor="middle" fill="#e6edf7" font-size="13" font-weight="700">application · main.go</text>
+  <text x="380" y="368" text-anchor="middle" fill="#9aa6bd" font-size="11.5">memory.NewSharedBackends(...) · orchestration.BuildMemoryHooks(...) · framework.RegisterRunnable(...)</text>
+
+  <text x="20" y="403" fill="#9aa6bd" font-size="10.5" font-style="italic">Phase 1 (episodic + coordinator) always created. Phase 2 (knowledge + reflector) opt-in via TRUVAG3_VECTOR_DB_URL + embedding client.</text>
+</svg>
+<figcaption><strong>Figure 2.</strong> <strong>Four <code>core</code> interfaces, swappable backends.</strong> Every tier lives behind a Go interface defined in <code>core</code>. The boxes name the interface first and the default backend second — Redis Streams and Qdrant ship as the production defaults because most platforms already operate Redis and Qdrant is purpose-built for vector search, but they are replaceable. Any backend that satisfies the same <code>core</code> interface is a drop-in alternative; the rest of the framework never knows the difference. The application's <code>main.go</code> is the only place that wires backends to hooks; the orchestrator itself never imports <code>memory</code>, only the <code>core</code> interfaces.</figcaption>
+</figure>
+
+<p>One detail in Figure 2 deserves its own paragraph, because it is the design choice that makes the rest of the system safe to deploy. <strong>Every backend is fail-open</strong>, regardless of which implementation is wired in. Runtime errors return <code>(nil, nil)</code>, not <code>(nil, error)</code>. If the knowledge backend is unreachable, search returns empty; the LLM plans without enrichment. If the episodic backend is unreachable, the activity coordinator returns empty signals; the planner proceeds without coordination. If the LLM-driven compaction times out, the cached digest is used; if there is no cached digest, the raw last-N events are sent through. Memory is an enhancement, never a prerequisite — the orchestration pipeline cannot fail because of a memory backend, whichever one you have plugged in.</p>
+</section>
+
+<!-- ===================== PIPELINE ===================== -->
+<section>
+<h2 id="pipeline">How memory plugs into the pipeline</h2>
+
+<h3 id="five-hooks">Five hooks, three stages</h3>
+
+<p>Memory is not invoked imperatively — agent code does not call <code>memory.Recall()</code> or <code>memory.Record()</code>. Everything happens through TruvaG3's existing pipeline-hook mechanism: middleware that runs at well-defined stages of <code>ProcessRequest</code>, registered once at startup. There are five hooks; they run in a fixed order on every request; they are fail-open individually so a failure in one does not break the others.</p>
+
+<figure id="fig-pipeline">
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five pipeline hooks across three stages — before planning, after execution, after synthesis.">
+  <defs>
+    <marker id="pp-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+    </marker>
+    <marker id="pp-arr-y" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+    </marker>
+    <linearGradient id="pp-llm" x1="0" x2="1">
+      <stop offset="0" stop-color="#3a6df0"/><stop offset="1" stop-color="#7a3df0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- User request -->
+  <rect x="320" y="14" width="120" height="32" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+  <text x="380" y="35" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">User request</text>
+  <path d="M380,46 L380,64" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#pp-arr)" fill="none"/>
+
+  <!-- STAGE 1: BEFORE PLANNING -->
+  <rect x="30" y="70" width="700" height="140" rx="12" fill="#171f33" stroke="#3a4a72"/>
+  <text x="48" y="92" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">STAGE 1 · BEFORE PLANNING</text>
+
+  <rect x="50" y="100" width="320" height="96" rx="10" fill="#2a240c" stroke="#fbbf24"/>
+  <text x="64" y="122" fill="#fde68a" font-size="13" font-weight="700">1 · ActivityAnnouncementHook</text>
+  <text x="64" y="142" fill="#9aa6bd" font-size="11.5">writes "I'm working on entity X" signal</text>
+  <text x="64" y="160" fill="#9aa6bd" font-size="11.5">reads other agents' live signals</text>
+  <text x="64" y="184" fill="#fbbf24" font-size="11" font-style="italic">→ injects &lt;agent_coordination&gt;</text>
+
+  <rect x="390" y="100" width="320" height="96" rx="10" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="404" y="122" fill="#ddd6fe" font-size="13" font-weight="700">2 · MemoryEnrichmentHook</text>
+  <text x="404" y="142" fill="#9aa6bd" font-size="11.5">queries episodic + compacts digest</text>
+  <text x="404" y="160" fill="#9aa6bd" font-size="11.5">searches shared knowledge (vector)</text>
+  <text x="404" y="184" fill="#a78bfa" font-size="11" font-style="italic">→ injects &lt;agent_memory&gt;</text>
+
+  <path d="M380,212 L380,232" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#pp-arr)" fill="none"/>
+
+  <!-- Plan / Execute / Synthesize band -->
+  <rect x="120" y="234" width="520" height="78" rx="12" fill="url(#pp-llm)" opacity="0.92"/>
+  <text x="380" y="258" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Plan → Execute → Synthesize</text>
+  <text x="380" y="278" text-anchor="middle" fill="#dbeafe" font-size="11.5">LLM sees &lt;agent_coordination&gt; and &lt;agent_memory&gt; in the planning prompt</text>
+  <text x="380" y="296" text-anchor="middle" fill="#dbeafe" font-size="11.5">DAG executes with parallelism · synthesis composes the response</text>
+
+  <!-- Two branches down -->
+  <path d="M250,312 L250,332" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#pp-arr)" fill="none"/>
+  <path d="M510,312 L510,332" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#pp-arr)" fill="none"/>
+
+  <!-- STAGE 2: AFTER EXECUTION -->
+  <rect x="30" y="335" width="350" height="125" rx="12" fill="#171f33" stroke="#3a4a72"/>
+  <text x="48" y="357" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">STAGE 2 · AFTER EXECUTION</text>
+
+  <rect x="50" y="365" width="310" height="40" rx="8" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="64" y="384" fill="#fde68a" font-size="12" font-weight="700">3 · MemoryRecordHook</text>
+  <text x="64" y="399" fill="#9aa6bd" font-size="11">records AgentEvent per step (LLM summarizes)</text>
+
+  <rect x="50" y="410" width="310" height="40" rx="8" fill="#2a240c" stroke="#fbbf24"/>
+  <text x="64" y="429" fill="#fde68a" font-size="12" font-weight="700">5 · ActivityCleanupHook</text>
+  <text x="64" y="444" fill="#9aa6bd" font-size="11">removes "working on X" signal · async</text>
+
+  <!-- STAGE 3: AFTER SYNTHESIS -->
+  <rect x="395" y="335" width="335" height="125" rx="12" fill="#171f33" stroke="#3a4a72"/>
+  <text x="413" y="357" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">STAGE 3 · AFTER SYNTHESIS</text>
+
+  <rect x="415" y="365" width="295" height="85" rx="8" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="429" y="385" fill="#a7f3d0" font-size="12" font-weight="700">4 · KnowledgeExtractionHook</text>
+  <text x="429" y="403" fill="#9aa6bd" font-size="11">LLM extracts reusable knowledge fragments</text>
+  <text x="429" y="421" fill="#9aa6bd" font-size="11">embeds → stores via core.SharedKnowledge</text>
+  <text x="429" y="439" fill="#34d399" font-size="11" font-style="italic">async · fail-open · doesn't block response</text>
+</svg>
+<figcaption><strong>Figure 3.</strong> <strong>Five memory hooks across three pipeline stages.</strong> Two hooks fire <em>before planning</em> — one announces and reads activity signals, one queries episodic and knowledge and writes the digest into the prompt. After the DAG finishes, the record hook writes events for every step and the cleanup hook removes the "working on this" signal. After synthesis, the knowledge-extraction hook distills the response into a reusable fragment, asynchronously. Every hook is fail-open; a failure logs a warning and the pipeline continues without that hook's contribution.</figcaption>
+</figure>
+
+<h3 id="what-llm-sees">What the LLM actually sees</h3>
+
+<p>The hooks contribute two new XML sections to the planning prompt. The first is <span class="tier coord">Coordination</span> — real-time signals from agents currently active in the same domain:</p>
+
+<pre><code class="language-xml">&lt;agent_coordination&gt;
+Other agents currently active in domain 'infrastructure':
+- event-driven-agent: investigating "TruvaG3HighLatency on product-catalog-api"
+  (status: executing, started 3s ago)
+&lt;/agent_coordination&gt;</code></pre>
+
+<p>The second is <span class="tier episodic">Episodic</span> + <span class="tier knowledge">Knowledge</span> — a compacted digest of recent domain activity plus the most recent events at full detail, plus any vector-retrieved knowledge fragments:</p>
+
+<pre><code class="language-xml">&lt;agent_memory&gt;
+Domain activity summary (last 2 hours, 106 events):
+- Deployment restart: agent-with-human-approval restarted via rollout (200ms)
+- JIRA: ticket DEVOPS-49 created for the restart, comment added with details
+- Slack: notification sent to #notifications with JIRA reference
+- Monitoring: 4 Prometheus queries run by event-driven-agent
+
+Most recent events (detail):
+- [2026-05-26 23:31] devops-chat-agent: Queried logs for orch-1774... (success)
+- [2026-05-26 23:30] devops-chat-agent: Created JIRA ticket DEVOPS-52 (success)
+
+Prior knowledge relevant to this request:
+- OOMKilled on pods with &lt;256Mi memory is typically resolved by doubling
+  the memory limit. Check resource quotas first. (importance: 0.82)
+&lt;/agent_memory&gt;</code></pre>
+
+<p>This is what the LLM sees when it generates its plan. <span class="highlight-amber">It is not asked to "consider memory" — the memory is already in the prompt</span>, and the LLM treats it like any other context. The behaviour change is emergent: the planner naturally writes shorter plans when the digest tells it the work was already done, and it naturally references existing tickets when the digest names them.</p>
+</section>
+
+<!-- ===================== COMPACTION ===================== -->
+<section>
+<h2 id="compaction">Activity compaction: surviving thousands of events</h2>
+
+<p>The naive version of the enrichment hook sends every recent event through to the LLM on every request. At 200 events per planning prompt, that is 5,000-10,000 tokens of context overhead — every request, every agent. It will work, and it will be expensive.</p>
+
+<p><span class="tier episodic">Episodic</span> compaction solves this with an LLM-summarized digest that lives in the digest cache (<a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>core.DigestCache</code></a> — <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#activity-compaction-scaling-to-thousands-of-events">default backend is Redis</a>, <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#activity-compaction-scaling-to-thousands-of-events">in-memory</a> ships for tests, anything else can be plugged in) and is shared across every agent in the domain. The hook's behaviour depends on what is in the cache and how many new events have arrived since the last compaction:</p>
+
+<figure id="fig-compaction">
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Activity compaction state machine. Four outcomes depending on cache state and new event count.">
+  <defs>
+    <marker id="cm-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+    </marker>
+    <marker id="cm-arr-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f59e0b"/>
+    </marker>
+  </defs>
+
+  <!-- Trigger -->
+  <rect x="30" y="140" width="140" height="60" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="100" y="166" text-anchor="middle" fill="#e6edf7" font-size="13" font-weight="700">Request arrives</text>
+  <text x="100" y="184" text-anchor="middle" fill="#9aa6bd" font-size="11">BeforePlanning</text>
+
+  <!-- Decision diamond -->
+  <polygon points="280,140 350,170 280,200 210,170" fill="#1a2236" stroke="#f59e0b"/>
+  <text x="280" y="166" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="700">cache state?</text>
+  <text x="280" y="182" text-anchor="middle" fill="#9aa6bd" font-size="10">how many new?</text>
+
+  <path d="M170,170 L210,170" stroke="#9ec5ff" stroke-width="1.5" marker-end="url(#cm-arr)" fill="none"/>
+
+  <!-- Four outcomes -->
+  <rect x="410" y="40" width="320" height="50" rx="10" fill="#2a1a1f" stroke="#f87171"/>
+  <text x="424" y="60" fill="#fca5a5" font-size="12" font-weight="700">A · Cache miss (cold start)</text>
+  <text x="424" y="78" fill="#fecaca" font-size="11">200 events → full LLM compaction (5-10s) → cache</text>
+
+  <rect x="410" y="100" width="320" height="50" rx="10" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="424" y="120" fill="#a7f3d0" font-size="12" font-weight="700">B · Cache hit · 0 new events</text>
+  <text x="424" y="138" fill="#bbf7d0" font-size="11">cached digest reused · 0 ms · no LLM call</text>
+
+  <rect x="410" y="160" width="320" height="50" rx="10" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="424" y="180" fill="#ddd6fe" font-size="12" font-weight="700">C · Cache hit · few new events (&lt; 20)</text>
+  <text x="424" y="198" fill="#e9d5ff" font-size="11">incremental update · prev digest + delta (0.5-1s)</text>
+
+  <rect x="410" y="220" width="320" height="50" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="424" y="240" fill="#fde68a" font-size="12" font-weight="700">D · Burst · 20+ new events</text>
+  <text x="424" y="258" fill="#fcd34d" font-size="11">full recompaction · LLM (5-10s) · new cache</text>
+
+  <path d="M350,160 L410,65" stroke="#f87171" stroke-width="1.5" stroke-dasharray="3 3" fill="none"/>
+  <path d="M350,170 L410,125" stroke="#34d399" stroke-width="1.5" fill="none"/>
+  <path d="M350,175 L410,185" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+  <path d="M350,185 L410,245" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 3" fill="none" class="flow-line"/>
+
+  <!-- Steady state band -->
+  <rect x="30" y="300" width="700" height="42" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="380" y="322" text-anchor="middle" fill="#9aa6bd" font-size="12">
+    Typical steady state · 80% cached (0ms) + 15% incremental (0.5s) + 5% full (5s) =
+    <tspan fill="#34d399" font-weight="700">~0.3s average</tspan>
+  </text>
+  <text x="380" y="336" text-anchor="middle" fill="#9aa6bd" font-size="10.5">
+    cache is shared across every agent in the domain — first agent pays the cost, all peers read it back
+  </text>
+</svg>
+<figcaption><strong>Figure 4.</strong> <strong>Activity compaction is a four-state cache.</strong> Cold start is rare. Most requests hit a warm cache that is either reused as-is or incrementally updated with a handful of new events. Burst recompaction kicks in when more than <code>TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD</code> events have arrived (default 20). The digest cache is shared across every agent in the same domain — when one agent pays the cost of recompaction, all peers benefit on their next request.</figcaption>
+</figure>
+
+<p>The cache key is the domain, not the agent. When <code>event-driven-agent</code> compacts the digest, <code>devops-chat-agent</code> reads it back as a cache hit on the next request. <strong>This is what makes the compaction pattern affordable in a fleet</strong> — the LLM cost is amortized across every agent in the domain, not paid per agent.</p>
+
+<p>The span event <code>activity.compaction.cache_decision</code> labels the path taken on each request — <code>cached</code>, <code>incremental</code>, <code>full</code>, or <code>full_recompact</code>. If a production deployment shows <code>path=full</code> on every request, the cache is broken — the configured digest-cache backend is unreachable, the TTL is too short, or the digest cache wasn't wired into the enrichment hook. The condition is visible without reading a single application log.</p>
+</section>
+
+<!-- ===================== COORDINATION ===================== -->
+<section>
+<h2 id="coordination">Real-time coordination signals</h2>
+
+<p><span class="tier episodic">Episodic</span> memory has a built-in latency: events are visible after execution completes, which is typically 2-4 seconds. For most workloads that is fine. For <em>concurrent</em> requests — an alert that fires while a chat session is already mid-investigation against the same pod — 2-4 seconds is too slow. The two agents can both start a five-step plan before either of them sees the other's event.</p>
+
+<p>This is what the <span class="tier coord">Coordinator</span> solves. It is a separate, lightweight store implementing <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>core.ActivityCoordinator</code></a>: transient keys with TTL, no JSON payloads, no LLM calls. The default backend writes through <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#real-time-coordination-what-are-other-agents-doing-right-now">Redis</a> (with an <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#real-time-coordination-what-are-other-agents-doing-right-now">in-memory fallback</a> for tests); any KV store with atomic SETNX + TTL semantics can be substituted. An agent writes a signal the moment it starts processing a request and removes it the moment the response is synthesized:</p>
+
+<figure id="fig-coordination">
+<svg viewBox="0 0 760 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Real-time coordination timeline. Two agents, one entity. The first agent writes a signal that the second reads before planning.">
+  <defs>
+    <marker id="co-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="28" fill="#e6edf7" font-size="14" font-weight="700">Two agents, one pod, no duplicated work</text>
+
+  <!-- ── event-driven-agent track (y=50..130) — outer perimeter widened
+       to x=40..720 so the inner signal box has visible padding (20px on
+       the left, 60px on the right) instead of hugging the rim. ── -->
+  <rect x="40" y="50" width="680" height="80" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="58" y="68" fill="#9aa6bd" font-size="11" letter-spacing="0.04em">event-driven-agent</text>
+  <rect x="60" y="80" width="600" height="42" rx="8" fill="#2a240c" stroke="#fbbf24"/>
+  <text x="74" y="100" fill="#fde68a" font-size="12" font-weight="700">signal: "investigating Pod X" (TTL 5min)</text>
+  <text x="74" y="116" fill="#fcd34d" font-size="11">KV with TTL — no JSON payload, no LLM call</text>
+
+  <circle cx="60" cy="101" r="6" fill="#fbbf24"/>
+  <text x="40" y="42" fill="#9aa6bd" font-size="11">alert fires</text>
+  <circle cx="660" cy="101" r="6" fill="#fbbf24"/>
+  <text x="624" y="42" fill="#9aa6bd" font-size="11">signal removed</text>
+
+  <!-- ── devops-chat-agent track — taller (height 145, was 115) and now
+       widened to x=40..720 to match the EDA track above. The extra
+       width gives the rightmost inner box ("responds to user") room to
+       hold the full quoted string without clipping. ── -->
+  <rect x="40" y="192" width="680" height="145" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="58" y="210" fill="#9aa6bd" font-size="11" letter-spacing="0.04em">devops-chat-agent (second request, same pod)</text>
+
+  <!-- ── signal arrow — fully in the gap between the two tracks, lands
+       at the top of the "reads signal" inner box (y=242). Drawn AFTER
+       the DCA outer rect so the arrowhead is not occluded by its fill. ── -->
+  <path d="M180,122 L180,237" stroke="#fbbf24" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#co-arr)" fill="none" class="flow-line"/>
+  <text x="190" y="172" fill="#fbbf24" font-size="11" font-style="italic">1s later — same domain · signal visible</text>
+
+  <!-- Inner action row — pushed down to y=242 (was y=222) so the
+       arrowhead has room above it and below the header label. -->
+  <rect x="180" y="242" width="135" height="40" rx="6" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="188" y="260" fill="#fde68a" font-size="11" font-weight="700">reads signal</text>
+  <text x="188" y="274" fill="#fcd34d" font-size="10">sees E-D-A is on it</text>
+
+  <rect x="320" y="242" width="170" height="40" rx="6" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="328" y="260" fill="#a7f3d0" font-size="11" font-weight="700">signal in prompt</text>
+  <text x="328" y="274" fill="#bbf7d0" font-size="10">planner can defer or adapt</text>
+
+  <!-- "responds to user" box widened 160 → 200 so the quoted ETA string
+       fits inside without the trailing quote clipping the right edge. -->
+  <rect x="500" y="242" width="200" height="40" rx="6" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="508" y="260" fill="#e6edf7" font-size="11" font-weight="700">responds to user</text>
+  <text x="508" y="274" fill="#9aa6bd" font-size="10">"investigation in flight, ETA 30s"</text>
+
+  <circle cx="180" cy="297" r="5" fill="#e6edf7"/>
+  <text x="180" y="319" text-anchor="middle" fill="#9aa6bd" font-size="10">same alert arrives</text>
+
+  <!-- ── Timeline axis (moved to y=360 to follow the taller layout) ── -->
+  <line x1="60" y1="360" x2="700" y2="360" stroke="#3a4a72" stroke-width="1.2"/>
+  <line x1="60"  y1="355" x2="60"  y2="365" stroke="#3a4a72" stroke-width="1.2"/>
+  <line x1="180" y1="355" x2="180" y2="365" stroke="#3a4a72" stroke-width="1.2"/>
+  <line x1="320" y1="355" x2="320" y2="365" stroke="#3a4a72" stroke-width="1.2"/>
+  <line x1="500" y1="355" x2="500" y2="365" stroke="#3a4a72" stroke-width="1.2"/>
+  <line x1="660" y1="355" x2="660" y2="365" stroke="#3a4a72" stroke-width="1.2"/>
+  <text x="60"  y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 0s</text>
+  <text x="180" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 1s</text>
+  <text x="320" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 3s</text>
+  <text x="500" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 28s</text>
+  <text x="660" y="380" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 30s</text>
+</svg>
+<figcaption><strong>Figure 5.</strong> <strong>Real-time signals close the 2-4 second gap.</strong> The event-driven agent writes a signal to the activity coordinator's KV store (default backend: Redis) the moment it starts processing the alert (T = 0). One second later, the chat agent reads the same domain's signals and the planner sees E-D-A's activity in its <code>&lt;agent_coordination&gt;</code> prompt block — giving it the option to defer, coordinate, or adapt rather than blindly starting a parallel investigation. The signal is removed when the originating agent finishes; if it crashes, the TTL expires automatically. No cleanup process, no leaked locks.</figcaption>
+</figure>
+
+<p>Two design choices keep this affordable. <strong>The signal is a KV entry with a TTL</strong> — on the default Redis backend that is one <code>SET … EX 300</code>, but the interface only assumes "put, get, expire," so the same hook works against any KV-with-TTL backend. No JSON, no large payloads, no LLM call to write or read. The TTL is longer than the longest expected request (default 5 minutes), so a crash never leaves a permanent claim. <strong>The signal is plain text written in natural language</strong> — "investigating TruvaG3HighLatency on product-catalog-api" — and the LLM reads it the same way it reads the rest of the prompt. The decision of whether to defer is made by the planner, not by a hardcoded rule, so agents can coordinate even when their work overlaps in ways the framework cannot anticipate.</p>
+</section>
+
+<!-- ===================== KNOWLEDGE + REFLECTION ===================== -->
+<section>
+<h2 id="knowledge">Knowledge extraction and the reflection job</h2>
+
+<p><span class="tier episodic">Episodic</span> events answer "what did Agent X just do?" <span class="tier knowledge">Knowledge</span> fragments answer the harder question: "what have we, collectively, learned about this class of problem?" These two questions need different storage. Episodic events expire after 60 days (the default <code>EpisodicMemory</code> backend honours <code>TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN</code> and TTL); knowledge fragments live in the <code>SharedKnowledge</code> backend with no TTL, surfaced through semantic search. The default <code>SharedKnowledge</code> implementation is vector-DB-backed (Qdrant out of the box), but any backend that satisfies the interface works — pgvector for teams already running Postgres, valkey-search once it matures, or a custom implementation for an internal system.</p>
+
+<p>TruvaG3 produces knowledge fragments through <em>two complementary paths</em>, running on different timescales. The first is the <strong>KnowledgeExtractionHook</strong> — it runs after every synthesis, distills the current request's findings into a 1-2 sentence fragment, embeds it, and stores it. Fast, immediate, high-volume. The second is the <span class="tier reflect">Reflector</span> — a background job that runs every 24 hours, scans episodic events older than seven days, and asks the LLM to identify patterns <em>across many past events for the same entity</em>. Slower, distilled, pattern-aware.</p>
+
+<figure id="fig-lifecycle">
+<svg viewBox="0 0 760 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The life of one event, from recording to permanent knowledge fragment.">
+  <defs>
+    <marker id="lc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
+    </marker>
+    <marker id="lc-arr-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="26" fill="#e6edf7" font-size="14" font-weight="700">The life of one event, from recording to durable knowledge</text>
+
+  <!-- Long timeline -->
+  <line x1="30" y1="200" x2="740" y2="200" stroke="#3a4a72" stroke-width="1.4"/>
+  <line x1="60"  y1="194" x2="60"  y2="206" stroke="#3a4a72" stroke-width="1.4"/>
+  <line x1="170" y1="194" x2="170" y2="206" stroke="#3a4a72" stroke-width="1.4"/>
+  <line x1="320" y1="194" x2="320" y2="206" stroke="#3a4a72" stroke-width="1.4"/>
+  <line x1="500" y1="194" x2="500" y2="206" stroke="#3a4a72" stroke-width="1.4"/>
+  <line x1="650" y1="194" x2="650" y2="206" stroke="#3a4a72" stroke-width="1.4"/>
+
+  <text x="60"  y="222" text-anchor="middle" fill="#9aa6bd" font-size="11">T = 0</text>
+  <text x="170" y="222" text-anchor="middle" fill="#9aa6bd" font-size="11">≤ 24h</text>
+  <text x="320" y="222" text-anchor="middle" fill="#9aa6bd" font-size="11">7 days</text>
+  <text x="500" y="222" text-anchor="middle" fill="#9aa6bd" font-size="11">60 days</text>
+  <text x="650" y="222" text-anchor="middle" fill="#9aa6bd" font-size="11">6 months</text>
+
+  <!-- Stages —
+       Box 1 (recorded) was 105px wide; "MemoryRecordHook" and
+       "EpisodicMemory · 60d" both clipped the right edge. Widened to
+       130px by extending leftward (was x=30, now x=5) so the longer
+       internal labels fit. Right edge stays at x=135 so the gap to
+       Box 2 at x=140 is preserved. -->
+  <rect x="5" y="60" width="130" height="105" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="70" y="82" text-anchor="middle" fill="#fde68a" font-size="12" font-weight="700">recorded</text>
+  <text x="70" y="100" text-anchor="middle" fill="#9aa6bd" font-size="11">tool runs</text>
+  <text x="70" y="116" text-anchor="middle" fill="#9aa6bd" font-size="11">MemoryRecordHook</text>
+  <text x="70" y="132" text-anchor="middle" fill="#9aa6bd" font-size="11">writes event</text>
+  <text x="70" y="150" text-anchor="middle" fill="#fbbf24" font-size="10">EpisodicMemory · 60d</text>
+
+  <rect x="140" y="60" width="125" height="105" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="202" y="82" text-anchor="middle" fill="#fde68a" font-size="12" font-weight="700">in digest</text>
+  <text x="202" y="100" text-anchor="middle" fill="#9aa6bd" font-size="11">compactor sees</text>
+  <text x="202" y="116" text-anchor="middle" fill="#9aa6bd" font-size="11">event in 24h window</text>
+  <text x="202" y="132" text-anchor="middle" fill="#9aa6bd" font-size="11">surfaced to LLM</text>
+  <text x="202" y="150" text-anchor="middle" fill="#fbbf24" font-size="10">via &lt;agent_memory&gt;</text>
+
+  <rect x="270" y="60" width="175" height="105" rx="10" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="357" y="82" text-anchor="middle" fill="#a7f3d0" font-size="12" font-weight="700">reflection-eligible</text>
+  <text x="357" y="100" text-anchor="middle" fill="#9aa6bd" font-size="11">≥ AGE_THRESHOLD old</text>
+  <text x="357" y="116" text-anchor="middle" fill="#9aa6bd" font-size="11">paired with peer events</text>
+  <text x="357" y="132" text-anchor="middle" fill="#9aa6bd" font-size="11">for the same entity</text>
+  <text x="357" y="150" text-anchor="middle" fill="#34d399" font-size="10">background job picks up</text>
+
+  <rect x="450" y="60" width="165" height="105" rx="10" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="532" y="82" text-anchor="middle" fill="#ddd6fe" font-size="12" font-weight="700">distilled to fragment</text>
+  <text x="532" y="100" text-anchor="middle" fill="#9aa6bd" font-size="11">reflector LLM extracts</text>
+  <text x="532" y="116" text-anchor="middle" fill="#9aa6bd" font-size="11">1-3 fragments</text>
+  <text x="532" y="132" text-anchor="middle" fill="#9aa6bd" font-size="11">embed → SharedKnowledge</text>
+  <text x="532" y="150" text-anchor="middle" fill="#a78bfa" font-size="10">no TTL — permanent</text>
+
+  <!-- Box 5 (event expires) was 120px wide; "EpisodicMemory · 60d" and
+       "in SharedKnowledge" both ran close to the right edge. Widened to
+       135px by extending rightward (was w=120, now w=135) so the labels
+       have comfortable padding. Right edge now at x=755, still inside
+       the 760-unit viewBox. -->
+  <rect x="620" y="60" width="135" height="105" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="687" y="82" text-anchor="middle" fill="#e6edf7" font-size="12" font-weight="700">event expires</text>
+  <text x="687" y="100" text-anchor="middle" fill="#9aa6bd" font-size="11">EpisodicMemory · 60d</text>
+  <text x="687" y="116" text-anchor="middle" fill="#9aa6bd" font-size="11">original gone</text>
+  <text x="687" y="132" text-anchor="middle" fill="#9aa6bd" font-size="11">fragments survive</text>
+  <text x="687" y="150" text-anchor="middle" fill="#a78bfa" font-size="10">in SharedKnowledge</text>
+
+  <!-- arrows down — each anchored to its box's centre. Box 1 and Box 5
+       centres moved (70 and 687 respectively) after the widening above;
+       Boxes 2-4 unchanged. -->
+  <path d="M70,170  L70,194"  stroke="#9ec5ff" stroke-width="1.4" marker-end="url(#lc-arr)" fill="none"/>
+  <path d="M202,170 L202,194" stroke="#9ec5ff" stroke-width="1.4" marker-end="url(#lc-arr)" fill="none"/>
+  <path d="M357,170 L357,194" stroke="#9ec5ff" stroke-width="1.4" marker-end="url(#lc-arr)" fill="none"/>
+  <path d="M532,170 L532,194" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#lc-arr-p)" fill="none"/>
+  <path d="M687,170 L687,194" stroke="#9ec5ff" stroke-width="1.4" marker-end="url(#lc-arr)" fill="none"/>
+
+  <!-- Future query band -->
+  <rect x="50" y="252" width="660" height="135" rx="12" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="68" y="278" fill="#ddd6fe" font-size="13" font-weight="700">T = 6 months later · a new but related incident arrives</text>
+  <text x="68" y="304" fill="#9aa6bd" font-size="12">→ Semantic search retrieves the reflected fragment from SharedKnowledge</text>
+  <text x="68" y="324" fill="#9aa6bd" font-size="12">→ Planner sees "Prior knowledge: OOMKilled on &lt;256Mi pods is resolved by doubling memory"</text>
+  <text x="68" y="344" fill="#9aa6bd" font-size="12">→ 2-step plan applied directly — even though the original event has aged out of the episodic store</text>
+  <text x="68" y="370" fill="#a78bfa" font-style="italic" font-size="11.5">Knowledge outlives the events it was distilled from.</text>
+</svg>
+<figcaption><strong>Figure 6.</strong> <strong>Knowledge outlives the events it was distilled from.</strong> An event is visible to the compactor for the first 24 hours, eligible for reflection once it crosses the age threshold (default 7 days), and expires from the episodic store at 60 days. By that point, the reflector has already extracted any durable patterns into <code>SharedKnowledge</code> fragments. A new incident months later, semantically related to those patterns, gets a 2-step plan instead of a 5-step investigation — using knowledge derived from events that no longer exist in the episodic store.</figcaption>
+</figure>
+
+<p>The reflection job is the part of the system that most directly maps onto the Stanford Generative Agents finding — agents without a reflection layer became incoherent within a few hundred turns. TruvaG3's version (<a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job"><code>memory/reflection_job.go</code></a>) runs as a framework <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>Runnable</code></a> with one line of wiring:</p>
+
+<pre><code class="language-go">// Reflection job: long-term knowledge retention via background distillation.
+// Returns nil silently if Phase 2 backends aren't available.
+if reflectionJob, _ := memory.BuildReflectionJob(memBackends.ToDeps(), agent.AI, agent.Logger); reflectionJob != nil {
+    framework.RegisterRunnable(reflectionJob)
+}</code></pre>
+
+<p>Two operational properties matter. <strong>It is multi-replica safe.</strong> The job acquires a distributed lock keyed by domain before each pass (<a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job">default backend: Redis</a>; the lock is a <code>core.DistributedLock</code> abstraction so any KV with atomic check-and-set will do). Other replicas log "lock held by another replica, skipping" and return. <strong>Model choice matters more than for any other LLM call in the system.</strong> Reflection writes durable knowledge that influences every future request — a bad fragment lingers in the knowledge store and surfaces as confident "prior knowledge" for as long as it remains. The default model is the agent's main AI client; <code>TRUVAG3_REFLECTION_MODEL=fast</code> trades fragment quality for cost, which is acceptable for high-volume cost-sensitive deployments but not the right default.</p>
+
+<aside class="callout">
+<strong>Why we don't just keep all events forever.</strong> The default episodic backend ages events out at 60 days (any backend implementation is free to retain longer, but the cost grows with volume). The activity compactor only looks back 24 hours. Without reflection, every event older than that window becomes invisible to the LLM and eventually expires unread. The 50th OOMKill incident is just as forgotten as the 1st. Reflection is what closes that gap — it converts <em>ephemeral activity into durable patterns</em> before the activity disappears.
+</aside>
+</section>
+
+<!-- ===================== USER MEMORY ===================== -->
+<section>
+<h2 id="user-memory">User memory: per-user personalization</h2>
+
+<p>Everything covered so far is <em>shared agent memory</em> — cross-agent visibility within a domain. TruvaG3 also ships a separate, complementary system for per-user private facts: <span class="tier user">user memory</span>. Different store, different hooks, different privacy boundary, different lifecycle. The mental model is a personal assistant's notebook versus a team's shared notebook.</p>
+
+<table>
+<thead>
+<tr><th></th><th>Shared memory</th><th>User memory</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Scope</strong></td><td>All agents in a domain</td><td>One user only</td></tr>
+<tr><td><strong>Content</strong></td><td>"Agent X restarted pod Y"</td><td>"User prefers DFW airport"</td></tr>
+<tr><td><strong>Visibility</strong></td><td>Domain-wide</td><td>Private to user</td></tr>
+<tr><td><strong>Lifetime</strong></td><td>24h lookback + knowledge persists</td><td>Months / years; evolves with user</td></tr>
+<tr><td><strong>GDPR delete</strong></td><td>Not per-user</td><td><code>Forget("user-42")</code> → one call</td></tr>
+<tr><td><strong>Enrichment tag</strong></td><td><code>&lt;agent_memory&gt;</code></td><td><code>&lt;user_profile&gt;</code></td></tr>
+<tr><td><strong>Interface</strong></td><td><code>core.EpisodicMemory</code> + <code>core.SharedKnowledge</code></td><td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>core.UserMemory</code></a></td></tr>
+<tr><td><strong>Default backend</strong></td><td>Redis Streams + Qdrant <span style="color:var(--muted);font-size:11px">(swappable)</span></td><td><a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#user-memory-per-user-personalization"><code>VectorUserMemory</code></a> (Qdrant) or <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#user-memory-per-user-personalization"><code>InMemoryUserMemory</code></a> <span style="color:var(--muted);font-size:11px">(swappable)</span></td></tr>
+</tbody>
+</table>
+
+<h3 id="reconciliation">Fact reconciliation in four operations</h3>
+
+<p>The interesting part of user memory is not the storage — it is what happens when a new fact contradicts an existing one. A user who says "I am vegetarian" on Monday and "I'm not vegetarian anymore" on Friday should not have both facts in their profile. The system needs to recognize the relationship and update accordingly.</p>
+
+<figure id="fig-reconciliation">
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fact reconciliation. New candidate facts pass through vector similarity; below threshold they ADD directly, above threshold the LLM classifies the relationship into ADD, UPDATE, CONTRADICT, or DUPLICATE.">
+  <defs>
+    <marker id="rc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#7cc4ff"/>
+    </marker>
+    <marker id="rc-arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/>
+    </marker>
+    <marker id="rc-arr-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f59e0b"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="26" fill="#e6edf7" font-size="14" font-weight="700">Fact reconciliation: classifying a new candidate against what's known</text>
+
+  <!-- Candidate -->
+  <rect x="30" y="60" width="170" height="60" rx="10" fill="#0e2236" stroke="#7cc4ff"/>
+  <text x="44" y="82" fill="#bae6fd" font-size="12" font-weight="700">Candidate fact</text>
+  <text x="44" y="100" fill="#9aa6bd" font-size="11">extracted from</text>
+  <text x="44" y="114" fill="#9aa6bd" font-size="11">latest conversation</text>
+
+  <path d="M200,90 L230,90" stroke="#7cc4ff" stroke-width="1.5" marker-end="url(#rc-arr)" fill="none"/>
+
+  <!-- Similarity -->
+  <rect x="230" y="60" width="190" height="60" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="244" y="82" fill="#e6edf7" font-size="12" font-weight="700">Vector similarity</text>
+  <text x="244" y="100" fill="#9aa6bd" font-size="11">cosine against existing</text>
+  <text x="244" y="114" fill="#9aa6bd" font-size="11">facts (vector search)</text>
+
+  <path d="M420,90 L450,90" stroke="#7cc4ff" stroke-width="1.5" marker-end="url(#rc-arr)" fill="none"/>
+
+  <!-- Below / Above threshold paths -->
+  <rect x="450" y="45" width="280" height="36" rx="8" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="464" y="68" fill="#a7f3d0" font-size="12" font-weight="700">below 0.75 → ADD directly (no LLM)</text>
+
+  <rect x="450" y="100" width="280" height="36" rx="8" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="464" y="123" fill="#fde68a" font-size="12" font-weight="700">above 0.75 → LLM reconciliation</text>
+
+  <text x="20" y="170" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">LLM CLASSIFIES THE RELATIONSHIP INTO ONE OF FOUR OPERATIONS</text>
+
+  <rect x="30" y="185" width="170" height="135" rx="10" fill="#0d2a1d" stroke="#34d399"/>
+  <text x="44" y="207" fill="#a7f3d0" font-size="13" font-weight="700">ADD</text>
+  <text x="44" y="225" fill="#9aa6bd" font-size="11">no similar fact exists</text>
+  <text x="44" y="245" fill="#9aa6bd" font-size="11">"User likes hiking"</text>
+  <text x="44" y="261" fill="#9aa6bd" font-size="11">→ stored as-is</text>
+  <text x="44" y="297" fill="#34d399" font-size="10.5" font-style="italic">most common path</text>
+  <text x="44" y="311" fill="#34d399" font-size="10.5" font-style="italic">for new users</text>
+
+  <rect x="210" y="185" width="170" height="135" rx="10" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="224" y="207" fill="#ddd6fe" font-size="13" font-weight="700">UPDATE</text>
+  <text x="224" y="225" fill="#9aa6bd" font-size="11">refines existing fact</text>
+  <text x="224" y="247" fill="#9aa6bd" font-size="11">"Likes cricket" →</text>
+  <text x="224" y="261" fill="#9aa6bd" font-size="11">"...with friends on</text>
+  <text x="224" y="275" fill="#9aa6bd" font-size="11">weekends"</text>
+
+  <rect x="390" y="185" width="170" height="135" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="404" y="207" fill="#fde68a" font-size="13" font-weight="700">CONTRADICT</text>
+  <text x="404" y="225" fill="#9aa6bd" font-size="11">new supersedes old</text>
+  <text x="404" y="245" fill="#9aa6bd" font-size="11">"Vegetarian" → "No longer</text>
+  <text x="404" y="261" fill="#9aa6bd" font-size="11">vegetarian"</text>
+  <text x="404" y="281" fill="#fbbf24" font-size="11">→ old deleted,</text>
+  <text x="404" y="295" fill="#fbbf24" font-size="11">→ new stored</text>
+
+  <rect x="570" y="185" width="170" height="135" rx="10" fill="#171f33" stroke="#3a4a72"/>
+  <text x="584" y="207" fill="#e6edf7" font-size="13" font-weight="700">DUPLICATE</text>
+  <text x="584" y="225" fill="#9aa6bd" font-size="11">same info exists</text>
+  <text x="584" y="247" fill="#9aa6bd" font-size="11">→ skip storage</text>
+  <text x="584" y="263" fill="#9aa6bd" font-size="11">→ update last_used</text>
+  <text x="584" y="277" fill="#9aa6bd" font-size="11">→ timestamp</text>
+
+  <text x="20" y="346" fill="#9aa6bd" font-size="10.5" font-style="italic">Cost optimization: when no similar fact exists (cosine &lt; 0.75), reconciliation skips the LLM call entirely. For new users, most facts ADD directly with zero reconciliation cost.</text>
+</svg>
+<figcaption><strong>Figure 7.</strong> <strong>Fact reconciliation — four operations, one LLM call.</strong> Embedding similarity finds candidate matches; the LLM classifies the actual semantic relationship. Pure vector similarity cannot distinguish "prefers window seats" from "prefers aisle seats" — both are high-similarity, both are about seating, and the meanings are opposite. The LLM call is the part that handles the contradiction correctly.</figcaption>
+</figure>
+
+<h3 id="recall">Five parallel recall paths</h3>
+
+<p>Recall is structured around five parallel paths, each contributing different facts to the planning prompt: <strong>identity</strong> (who the user is — always recalled), <strong>stable_namespace</strong> (facts tagged with stable identifiers), <strong>query</strong> (semantic match against the current request), <strong>summary</strong> (rolling session summaries from previous conversations), and <strong>universal</strong> (facts that cross every agent — name, language, timezone). Each path emits its own span in <a href="https://www.jaegertracing.io/">Jaeger</a>, so a developer can see which paths contributed to a given response.</p>
+
+<p>The result, in the planning prompt, is a <code>&lt;user_profile&gt;</code> tag with confidence-banded facts:</p>
+
+<pre><code class="language-xml">&lt;user_profile&gt;
+Identity:
+- User lives in Coppell, TX (explicit, high confidence)
+
+Constraint:
+- User and family are vegetarian, no eggs or gelatin (explicit, high confidence)
+
+Preference:
+- User prefers DFW airport for flights (explicit, high confidence)
+
+Relationship:
+- Family of three: user, wife, and 12-year-old son (explicit, high confidence)
+
+Summary:
+- Planned a week-long family itinerary in Zurich with hotel picks and vegetarian restaurant recommendations near each one (derived, 3 days ago)
+- Asked about Switzerland weather, currency, and travel tips (derived, 3 days ago)
+&lt;/user_profile&gt;</code></pre>
+
+<p>The travel agent now plans around the user's dietary constraints, family size, and airport preference — without the user repeating any of it. Extraction runs <em>after</em> the response is streamed, so the user sees the answer immediately and the new facts are stored asynchronously. GDPR erasure is a single API call: <code>userMemory.Forget(ctx, userID)</code> deletes every vector and payload for that user. The interface is the boundary; swapping Qdrant for PostgreSQL with pgvector is a backend change, not an application change.</p>
+</section>
+
+<!-- ===================== SCOPING ===================== -->
+<section>
+<h2 id="scoping">Domain scoping and physical isolation</h2>
+
+<p>An enterprise deployment has multiple agent types, each with multiple replicas, serving different business domains. A platform team needs to know exactly what is shared, what is isolated, and how compliance boundaries are enforced. TruvaG3 operates at two levels: <span class="highlight-amber">logical isolation by default, physical isolation when regulated.</span></p>
+
+<figure id="fig-scoping">
+<svg viewBox="0 0 760 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two standard domains share centralized memory backend instances with query-time scope filters. A regulated healthcare domain runs its own dedicated backend instances in a separate namespace.">
+  <text x="20" y="26" fill="#e6edf7" font-size="14" font-weight="700">Two scopes: shared backends, regulated backends</text>
+
+  <!-- Standard band -->
+  <rect x="30" y="55" width="500" height="335" rx="12" fill="#171f33" stroke="#3a4a72"/>
+  <text x="48" y="78" fill="#9aa6bd" font-size="11" letter-spacing="0.06em">STANDARD DOMAINS · LOGICAL ISOLATION</text>
+
+  <!-- domain: infrastructure -->
+  <rect x="50" y="95" width="220" height="115" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="64" y="116" fill="#fde68a" font-size="12" font-weight="700">domain: infrastructure</text>
+  <text x="64" y="138" fill="#9aa6bd" font-size="11">devops-chat-agent</text>
+  <text x="64" y="154" fill="#9aa6bd" font-size="11">event-driven-agent</text>
+  <text x="64" y="170" fill="#9aa6bd" font-size="11">agent-with-human-approval</text>
+  <text x="64" y="194" fill="#fbbf24" font-size="10.5" font-style="italic">share events + knowledge</text>
+
+  <!-- domain: commerce -->
+  <rect x="290" y="95" width="220" height="115" rx="10" fill="#2a1f0c" stroke="#f59e0b"/>
+  <text x="304" y="116" fill="#fde68a" font-size="12" font-weight="700">domain: commerce</text>
+  <text x="304" y="138" fill="#9aa6bd" font-size="11">order-exception-agent</text>
+  <text x="304" y="154" fill="#9aa6bd" font-size="11">refund-agent</text>
+  <text x="304" y="170" fill="#9aa6bd" font-size="11">customer-support-agent</text>
+  <text x="304" y="194" fill="#fbbf24" font-size="10.5" font-style="italic">share events + knowledge</text>
+
+  <!-- Global crosses both -->
+  <rect x="50" y="228" width="460" height="50" rx="10" fill="#1f1a30" stroke="#a78bfa"/>
+  <text x="64" y="250" fill="#ddd6fe" font-size="12" font-weight="700">ScopeGlobal events — visible across both domains</text>
+  <text x="64" y="268" fill="#9aa6bd" font-size="11">"service-X is down" · entity state changes · cross-domain correlations</text>
+
+  <!-- Shared infra -->
+  <rect x="50" y="293" width="460" height="36" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+  <text x="280" y="316" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="700">EpisodicMemory backend + SharedKnowledge backend</text>
+
+  <rect x="50" y="338" width="460" height="40" rx="8" fill="#171f33" stroke="#3a4a72"/>
+  <text x="280" y="358" text-anchor="middle" fill="#9aa6bd" font-size="11">scope filter on every query — runs inside the backend's index</text>
+  <text x="280" y="372" text-anchor="middle" fill="#9aa6bd" font-size="11">traversal, not as a post-filter</text>
+
+  <!-- Regulated band -->
+  <rect x="550" y="55" width="180" height="335" rx="12" fill="#2a1a1f" stroke="#f87171"/>
+  <text x="568" y="72" fill="#fca5a5" font-size="11" letter-spacing="0.06em">REGULATED ·</text>
+  <text x="568" y="87" fill="#fca5a5" font-size="11" letter-spacing="0.06em">PHYSICAL ISOLATION</text>
+
+  <rect x="570" y="95" width="140" height="115" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+  <text x="584" y="116" fill="#e6edf7" font-size="12" font-weight="700">domain: healthcare</text>
+  <text x="584" y="138" fill="#9aa6bd" font-size="11">clinical-agent</text>
+  <text x="584" y="154" fill="#fca5a5" font-size="11">(HIPAA)</text>
+  <text x="584" y="180" fill="#9aa6bd" font-size="10.5">K8s NetworkPolicy</text>
+  <text x="584" y="195" fill="#9aa6bd" font-size="10.5">denies cross-namespace</text>
+
+  <rect x="570" y="228" width="140" height="50" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+  <text x="640" y="251" text-anchor="middle" fill="#9ec5ff" font-size="11.5" font-weight="700">dedicated</text>
+  <text x="640" y="266" text-anchor="middle" fill="#9aa6bd" font-size="10.5">episodic backend</text>
+
+  <rect x="570" y="293" width="140" height="50" rx="8" fill="#0e1a2e" stroke="#3a8aff"/>
+  <text x="640" y="316" text-anchor="middle" fill="#9ec5ff" font-size="11.5" font-weight="700">dedicated</text>
+  <text x="640" y="331" text-anchor="middle" fill="#9aa6bd" font-size="10.5">knowledge backend</text>
+
+  <text x="640" y="370" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="700">no traffic crosses</text>
+</svg>
+<figcaption><strong>Figure 8.</strong> <strong>Two isolation levels, one piece of application code.</strong> Standard domains share centralized backend instances with logical isolation enforced at query time — every <code>SearchKnowledge</code> call includes a <code>callerDomain</code> filter that runs inside the backend's index traversal, not as a post-filter. Regulated domains (HIPAA, PCI-DSS) get separate backend instances in a different K8s namespace with a NetworkPolicy that denies all ingress. Same code, same interfaces; only the connection address (and, optionally, the backend implementation itself) differs. The framework module does not enforce compliance — infrastructure does, and that boundary is the right place for it.</figcaption>
+</figure>
+
+<p>Every <code>AgentEvent</code> and <code>KnowledgeFragment</code> carries three fields that determine visibility: <code>AgentDomain</code>, <code>AgentName</code>, and <code>Scope</code>. Scope is one of three values:</p>
+
+<table>
+<thead>
+<tr><th>Scope</th><th>Visible to</th><th>Example</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ScopePrivate</code></td><td>Owning agent only</td><td>Internal reasoning trace, intermediate failure state. Never stored in shared knowledge.</td></tr>
+<tr><td><code>ScopeSharedDomain</code></td><td>Agents in the same domain</td><td>DevOps incident details. Visible across the infrastructure fleet, invisible to commerce agents.</td></tr>
+<tr><td><code>ScopeGlobal</code></td><td>All agents, any domain</td><td>"service-X is down" — entity state changes that cross domain boundaries.</td></tr>
+</tbody>
+</table>
+
+<p>The investigation-coordinator claim has one known limitation: the lock key is the entity ID only, not <code>type:id</code>. Two entities of different types that happen to share an ID — <code>pod/foo</code> and <code>service/foo</code> — will collide on the lock. The framework documents this honestly because it has low practical impact in most domains and a fix would require breaking the lock-key format. It is the kind of trade-off worth surfacing rather than hiding.</p>
+</section>
+
+<!-- ===================== WIRING ===================== -->
+<section>
+<h2 id="wiring">What the wiring looks like</h2>
+
+<p>The wiring is shorter than the architecture might suggest. Two function calls — one in the <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md"><code>memory</code></a> module to create backends, one in the <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md"><code>orchestration</code></a> module to create hooks from those backends — and the orchestrator gets memory on every request. The example below shows the <em>default</em> wiring (Redis + Qdrant) from the bundled <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent"><code>devops-chat-agent</code></a>; replacing either backend is covered after the snippets.</p>
+
+<pre><code class="language-go">// 1. Memory module creates all backends. The default factory takes a Redis
+//    client because Redis is the default backend; to swap, skip this factory
+//    and construct your own backends against core.EpisodicMemory etc. directly.
+//    Phase 1 (episodic + coordination + activity + digest cache) always created.
+//    Phase 2 (knowledge store) auto-detected from TRUVAG3_VECTOR_DB_URL.
+backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
+    memory.WithAgentName("my-agent"),
+    memory.WithDomain("infrastructure"),
+    memory.WithEmbeddingClient(embedder),   // enables Phase 2
+)
+defer backends.Close()
+
+// 2. Orchestration module creates the 5 hooks from the backends.
+hooks, activityCoord := orchestration.BuildMemoryHooks(
+    backends.ToDeps(), agent.AI, agent.Logger,
+)
+
+// 3. Pass into the orchestrator.
+deps := orchestration.OrchestratorDependencies{
+    Discovery:           discovery,
+    AIClient:            agent.AI,
+    PipelineHooks:       hooks,
+    ActivityCoordinator: activityCoord,
+}
+
+// 4. Long-term retention: reflection job as a framework Runnable.
+if reflectionJob, _ := memory.BuildReflectionJob(
+    backends.ToDeps(), agent.AI, agent.Logger,
+); reflectionJob != nil {
+    framework.RegisterRunnable(reflectionJob)
+}</code></pre>
+
+<p>For a user-memory-enabled chat agent (the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent"><code>travel-chat-agent</code></a> pattern), one more block:</p>
+
+<pre><code class="language-go">// 5. User memory: separate backend, separate hooks.
+userMemBackend, _ := memory.NewUserMemoryBackend(agent.Logger,
+    memory.WithUserMemoryNamespace("travel"),
+    memory.WithUserMemoryEmbeddingClient(embedder),
+)
+defer userMemBackend.Close()
+
+userHooks, userHooksCloser := orchestration.BuildUserMemoryHooks(
+    userMemBackend.ToDeps(), agent.AI, agent.Logger,
+)
+defer userHooksCloser.Close()
+
+// Shared + user hooks compose into a single pipeline.
+deps.PipelineHooks = append(hooks, userHooks...)</code></pre>
+
+<p>Both wirings ship as working production code. Behavioural customization — domain-specific entity extraction, importance scoring, custom retrieval weights, longer lookback windows — is opt-in via additional options to <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#customising-memory-behaviour"><code>BuildMemoryHooks</code></a>. Numeric tuning (token budgets, TTLs, summarizer model alias) goes through <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md"><code>TRUVAG3_*</code> environment variables</a>.</p>
+
+<h3 id="swapping-a-backend">Swapping a backend</h3>
+
+<p>Replacing the default Redis or Qdrant backend is a constructor-line change, not a framework change. The application skips <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#step-2-add-memory-to-your-agent"><code>NewSharedBackends</code></a> (the convenience factory that assumes Redis), constructs whichever backend it wants, and assembles its own <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-it-works"><code>core.SharedMemoryDeps</code></a>:</p>
+
+<pre><code class="language-go">// Example: a deployment that prefers pgvector for SharedKnowledge
+// (Postgres is already on the platform's bill of materials).
+import (
+    "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/memory"
+    "acme/pgvectormem"      // user-owned package implementing core.SharedKnowledge
+)
+
+episodic, _ := memory.NewStreamEpisodicMemory(                  // keep Redis here
+    memory.WithEpisodicRedisClient(redisClient),
+    memory.WithEpisodicDomain("infrastructure"),
+)
+coordinator, _ := memory.NewAtomicLockCoordinator(
+    memory.WithCoordinatorRedisClient(redisClient),
+    memory.WithCoordinatorDomain("infrastructure"),
+)
+knowledge := pgvectormem.New(pgPool, ...)                       // ← custom backend
+
+deps := &amp;core.SharedMemoryDeps{
+    AgentName:   "my-agent",
+    AgentDomain: "infrastructure",
+    Episodic:    episodic,
+    Coordinator: coordinator,
+    Knowledge:   knowledge,                                     // any core.SharedKnowledge
+    Embedder:    embedder,
+    // ActivityCoordinator and DigestCache are optional; leave nil
+    // to disable signals/cache, or wire memory.NewRedisActivityCoordinator
+    // and memory.NewRedisDigestCache against the same client.
+}
+hooks, activityCoord := orchestration.BuildMemoryHooks(deps, agent.AI, agent.Logger)</code></pre>
+
+<p>The rest of the framework — the five hooks, the activity compactor, the reflection job, the LLM prompt builders — never knows the backend changed. The same applies to every <code>core</code> memory interface: <code>EpisodicMemory</code> can be swapped for a NATS JetStream implementation, <code>DigestCache</code> for any KV cache, <code>UserMemory</code> for a Postgres-backed implementation. The conformance package (<code>core/conformance</code>) ships a test suite that validates a custom backend against the same contract the bundled defaults pass.</p>
+
+<p>One subtle wiring property is worth pulling out. <span class="highlight-amber">The orchestration module does not import the memory module.</span> The dependency graph is <code>orchestration → core</code> (interfaces only), <code>memory → core + telemetry</code> (default implementations), and <code>main.go → orchestration + memory + ai</code> (wiring). This means a Phase-1 deployment that does not import the memory module's vector backend never pulls in gRPC or protobuf, and a deployment that wires only custom backends does not need to import the bundled <code>memory</code> module at all.</p>
+</section>
+
+<!-- ===================== CHEAT SHEET ===================== -->
+<section>
+<h2 id="cheat">Architect's cheat sheet</h2>
+
+<p>Six things to remember when you walk into a design review with this system on the whiteboard.</p>
+
+<div class="takeaways">
+  <div class="ta">
+    <span class="tag">CONTRACT</span>
+    <h4>1 · The interfaces are the framework; the backends are defaults</h4>
+    <p>Four <code>core</code> interfaces — <code>EpisodicMemory</code>, <code>InvestigationCoordinator</code>, <code>SharedKnowledge</code>, <code>MemoryReflector</code> — are the framework's contract. Redis and Qdrant are the production defaults; pgvector, NATS, Weaviate, or a custom backend each work by satisfying the same interface.</p>
+  </div>
+  <div class="ta">
+    <span class="tag">DESIGN</span>
+    <h4>2 · Memory is an enhancement, not a prerequisite</h4>
+    <p>Every backend is fail-open, whichever one is plugged in. If the episodic backend is unreachable, the planner runs without enrichment. If the knowledge backend is unreachable, search returns empty. The pipeline cannot fail because of a memory backend.</p>
+  </div>
+  <div class="ta">
+    <span class="tag">RESEARCH</span>
+    <h4>3 · Recency · Importance · Relevance — all three</h4>
+    <p>Pure vector similarity misses temporally relevant information. The Stanford triad held up across every follow-on paper. Weights are tunable per agent type; defaults are balanced.</p>
+  </div>
+  <div class="ta">
+    <span class="tag">SCALE</span>
+    <h4>4 · The digest cache is what makes this affordable</h4>
+    <p>The naive version sends 200 events through the LLM per request. The cached digest is shared across every agent in the domain — first agent pays the cost, all peers read the cache. Watch <code>activity.compaction.cache_decision</code>.</p>
+  </div>
+  <div class="ta">
+    <span class="tag">RETENTION</span>
+    <h4>5 · Reflection is what makes memory durable</h4>
+    <p>Episodic events age out on the configured TTL; the activity compactor only looks back 24 hours. Without reflection, every event older than that window is invisible and eventually gone. The background job converts ephemeral activity into permanent <code>SharedKnowledge</code> fragments.</p>
+  </div>
+  <div class="ta">
+    <span class="tag">PRIVACY</span>
+    <h4>6 · Shared and user memory are separate concerns</h4>
+    <p>Different interfaces, different hooks, different lifecycles. Shared memory is domain-wide; user memory is private and per-user. <code>Forget(userID)</code> is a single call that deletes everything for one user — GDPR-shaped from day one.</p>
+  </div>
+</div>
+</section>
+
+<!-- ===================== FURTHER ===================== -->
+<section>
+<h2 id="further">Where to go next</h2>
+
+<p>Recommended reading order, by goal:</p>
+
+<ul>
+  <li><strong>Operate it.</strong> The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md">Agent Memory User Guide</a> is the user-facing tour — every environment variable, every observability signal, every troubleshooting path.</li>
+  <li><strong>Understand the architecture.</strong> <a href="https://github.com/truvaagents/truva-g3/blob/main/memory/ARCHITECTURE.md">memory/ARCHITECTURE.md</a> covers the storage backend contract, the sharing topology, and why the four interfaces are the way they are.</li>
+  <li><strong>Read the original research.</strong> The literature survey and design log are in <code>orchestration/notes/UNIFIED_AGENT_MEMORY_RESEARCH_AND_PLAN.md</code> in the framework's historical repository. It cites every paper above with arXiv IDs.</li>
+  <li><strong>Read working code.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">devops-chat-agent</a> wires shared memory plus reflection. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a> wires shared plus user memory. Both are deployed in the bundled Kind setup.</li>
+</ul>
+</section>
+
+<p class="footer-note">TruvaG3 is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
+
+<p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+
+</article>
+
+<!-- Prism syntax highlighting.
+     IMPORTANT: load core with `data-manual` so it does NOT auto-highlight
+     before the language components have registered. Then load every
+     language component (Go is not built-in; markup/XML is built-in but we
+     load it explicitly for clarity), and finally call highlightAll once
+     every grammar is available. This guarantees Go code blocks actually
+     get tokenized — otherwise they render as plain text in a single color. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" data-manual></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-markup.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
+<script>
+  // All grammars are now registered — kick off highlighting once.
+  if (window.Prism) { Prism.highlightAll(); }
+</script>
+</body>
+</html>
