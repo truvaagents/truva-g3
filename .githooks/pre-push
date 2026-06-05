@@ -1,0 +1,81 @@
+#!/bin/bash
+# Pre-push hook: validate the Docusaurus build when docs/ or docs-site/ change.
+# Install: git config core.hooksPath .githooks  (already configured in this repo)
+#
+# Behavior:
+#   - If the commits being pushed don't touch docs/ or docs-site/, exits silently.
+#   - Otherwise runs `npm run build` from docs-site/ and blocks the push on failure.
+#   - Soft-skips (with a warning) if npm or node_modules are missing — CI catches it.
+#   - Bypass with: git push --no-verify
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+ZERO="0000000000000000000000000000000000000000"
+
+# Pre-push receives one line per ref being pushed on stdin:
+#   <local_ref> <local_oid> <remote_ref> <remote_oid>
+# Determine the commit range for each ref and check whether docs/ or docs-site/
+# is touched anywhere in the about-to-be-pushed history.
+DOCS_TOUCHED=0
+while read -r local_ref local_oid remote_ref remote_oid; do
+    if [ "$local_oid" = "$ZERO" ]; then
+        # Deleting a ref — nothing to inspect
+        continue
+    fi
+
+    if [ "$remote_oid" = "$ZERO" ]; then
+        # New branch on the remote — compare against origin/main if available
+        if git rev-parse --verify origin/main >/dev/null 2>&1; then
+            base="$(git merge-base "$local_oid" origin/main 2>/dev/null || true)"
+            if [ -n "$base" ] && [ "$base" != "$local_oid" ]; then
+                range="$base..$local_oid"
+            else
+                range="$local_oid"
+            fi
+        else
+            range="$local_oid"
+        fi
+    else
+        range="$remote_oid..$local_oid"
+    fi
+
+    if git diff --name-only "$range" -- docs/ docs-site/ 2>/dev/null | grep -q .; then
+        DOCS_TOUCHED=1
+        break
+    fi
+done
+
+if [ "$DOCS_TOUCHED" -eq 0 ]; then
+    exit 0
+fi
+
+echo "📚 Docs change detected — validating Docusaurus build before push..."
+
+if ! command -v npm >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  npm not installed — skipping build check.${NC}"
+    echo "    CI will run the same check on the PR."
+    exit 0
+fi
+
+if [ ! -d docs-site/node_modules ]; then
+    echo -e "${YELLOW}⚠️  docs-site/node_modules missing — skipping build check.${NC}"
+    echo "    Run 'cd docs-site && npm install' once to enable this gate."
+    echo "    CI will still run the same check on the PR."
+    exit 0
+fi
+
+if (cd docs-site && npm run build); then
+    echo -e "${GREEN}✅ Docusaurus build passed${NC}"
+    exit 0
+else
+    echo ""
+    echo -e "${RED}🚨 Push blocked: Docusaurus build failed.${NC}"
+    echo ""
+    echo "Fix the errors above and re-push, or bypass with: git push --no-verify"
+    exit 1
+fi
