@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules (includes type coercion fix)
 # Usage (from truvag3 root): docker build -f examples/agent-with-orchestration/Dockerfile.workspace -t travel-research-agent:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

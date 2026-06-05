@@ -2,7 +2,7 @@
 # This Dockerfile builds the tool independently without workspace dependencies
 # Usage (from world-health-tool directory): docker build -t world-health-tool:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

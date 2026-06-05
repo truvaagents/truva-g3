@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules (includes SSE Flusher fix)
 # Usage (from truvag3 root): docker build -f examples/my-streaming-agent/Dockerfile.workspace -t my-streaming-agent:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 # Install build dependencies (CGO disabled, so no C toolchain needed)
 RUN apk add --no-cache git ca-certificates

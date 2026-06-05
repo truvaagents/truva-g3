@@ -1,7 +1,7 @@
 # Standalone Dockerfile for semantic-scholar-tool
 # Usage (from semantic-scholar-tool directory): docker build -t semantic-scholar-tool:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
