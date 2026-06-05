@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/telemetry
 
-go 1.26.3
+go 1.26.4
 
 replace github.com/truvaagents/truva-g3/core => ../core
 
