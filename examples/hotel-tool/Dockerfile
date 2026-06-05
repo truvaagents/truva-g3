@@ -1,5 +1,5 @@
 # Standalone Dockerfile for hotel-tool
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 WORKDIR /app
 COPY go.mod go.sum ./

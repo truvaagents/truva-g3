@@ -1,7 +1,7 @@
 # Standalone Dockerfile for my-async-agent
 # Usage (from my-async-agent directory): docker build -t my-async-agent:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 

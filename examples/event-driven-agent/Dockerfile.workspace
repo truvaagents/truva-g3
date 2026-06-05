@@ -1,7 +1,7 @@
 # Workspace Dockerfile for event-driven-agent
 # Usage (from truvag3 root): docker build -f examples/event-driven-agent/Dockerfile.workspace -t event-driven-agent:latest .
 
-FROM golang:1.26.3-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
@@ -19,7 +19,7 @@ COPY resilience/ ./resilience/
 COPY examples/event-driven-agent/ ./examples/event-driven-agent/
 
 # Create go.work for local module resolution
-RUN echo 'go 1.26.2' > go.work && \
+RUN echo 'go 1.26.4' > go.work && \
     echo '' >> go.work && \
     echo 'use (' >> go.work && \
     echo '    ./ai' >> go.work && \
