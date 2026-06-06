@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/my-streaming-agent
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/truvaagents/truva-g3/ai v0.9.1

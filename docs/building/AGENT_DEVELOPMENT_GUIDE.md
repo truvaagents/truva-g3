@@ -1669,7 +1669,7 @@ Agents depend on four framework modules: `ai`, `core`, `orchestration`, and `tel
 ```go
 module github.com/truvaagents/truva-g3/examples/your-agent
 
-go 1.26.2
+go 1.26.4
 
 require (
     github.com/google/uuid v1.6.0

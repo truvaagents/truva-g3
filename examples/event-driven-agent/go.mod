@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/event-driven-agent
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5
