@@ -101,6 +101,7 @@ type userMemoryHookConfig struct {
 	persistencePolicy     UserFactPersistencePolicy
 	retrievalWeights      core.RetrievalWeights
 	synchronousExtraction bool
+	userIDNormalizer      UserIDNormalizer
 }
 
 // BuildUserMemoryHooksOption configures behavioural plugs.
@@ -154,6 +155,24 @@ func WithUserFactPersistencePolicy(p UserFactPersistencePolicy) BuildUserMemoryH
 			return fmt.Errorf("user fact persistence policy cannot be nil")
 		}
 		c.persistencePolicy = p
+		return nil
+	}
+}
+
+// WithUserIDNormalizer canonicalizes user_id before it is used as the user
+// memory isolation key. The same normalizer is applied to both recall
+// (enrichment) and storage (extraction), so reads and writes always agree.
+//
+// Default (no option) is identity — case-sensitive, verbatim isolation. Pass
+// NormalizeUserIDLowercaseTrim to fold casing/whitespace variants of the same
+// id into one bucket. Normalization changes the identity key, so it is a
+// deliberate code-level policy rather than a per-deployment env toggle.
+func WithUserIDNormalizer(n UserIDNormalizer) BuildUserMemoryHooksOption {
+	return func(c *userMemoryHookConfig) error {
+		if n == nil {
+			return fmt.Errorf("user id normalizer cannot be nil")
+		}
+		c.userIDNormalizer = n
 		return nil
 	}
 }
@@ -266,10 +285,15 @@ func BuildUserMemoryHooks(
 		cfg.persistencePolicy = NewDefaultUserFactPersistencePolicy()
 	}
 
-	// Build hooks in correct pipeline order
-	enrichHook := NewUserMemoryEnrichmentHook(deps.UserMemory, deps.Namespace, logger)
+	// Pass the same normalizer to both hooks so recall and storage stay in
+	// lockstep. When nil, each hook independently defaults to identity, which is
+	// still identical across the two.
+	enrichHook := NewUserMemoryEnrichmentHook(deps.UserMemory, deps.Namespace, logger,
+		WithUserMemoryEnrichmentUserIDNormalizer(cfg.userIDNormalizer),
+	)
 	extractOpts := []UserMemoryExtractionOption{
 		WithUserExtractionPersistencePolicy(cfg.persistencePolicy),
+		WithUserExtractionUserIDNormalizer(cfg.userIDNormalizer),
 	}
 	// Layer 1 preset defaults to async. Developers can opt out via
 	// WithSynchronousExtraction() — if the flag is not set, enable async.

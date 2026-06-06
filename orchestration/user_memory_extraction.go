@@ -65,13 +65,14 @@ type UserMemoryExtractionHook struct {
 	extractor         UserFactExtractor
 	reconciler        UserFactReconciler
 	persistencePolicy UserFactPersistencePolicy
-	summaryModel      string         // from TRUVAG3_USER_MEMORY_EXTRACTION_MODEL
-	summaryMaxRespLen int            // from TRUVAG3_USER_MEMORY_SUMMARY_MAX_RESPONSE_LEN (default: 500)
-	maxSplitClauses   int            // from TRUVAG3_USER_MEMORY_MAX_SPLIT_CLAUSES (default: 3)
-	debugStore        LLMDebugStore  // optional — set by factory duck-typing propagation
-	debugWg           sync.WaitGroup // tracks in-flight debug recordings
-	asynchronous      bool           // default false (sync); enable via WithAsynchronousUserExtraction
-	extractionWg      sync.WaitGroup // tracks in-flight async extraction goroutines
+	summaryModel      string           // from TRUVAG3_USER_MEMORY_EXTRACTION_MODEL
+	summaryMaxRespLen int              // from TRUVAG3_USER_MEMORY_SUMMARY_MAX_RESPONSE_LEN (default: 500)
+	maxSplitClauses   int              // from TRUVAG3_USER_MEMORY_MAX_SPLIT_CLAUSES (default: 3)
+	normalizeUserID   UserIDNormalizer // canonicalizes user_id before storage (default: identity)
+	debugStore        LLMDebugStore    // optional — set by factory duck-typing propagation
+	debugWg           sync.WaitGroup   // tracks in-flight debug recordings
+	asynchronous      bool             // default false (sync); enable via WithAsynchronousUserExtraction
+	extractionWg      sync.WaitGroup   // tracks in-flight async extraction goroutines
 }
 
 // UserMemoryExtractionOption configures UserMemoryExtractionHook (Layer 3).
@@ -83,6 +84,17 @@ func WithUserExtractionPersistencePolicy(p UserFactPersistencePolicy) UserMemory
 	return func(h *UserMemoryExtractionHook) {
 		if p != nil {
 			h.persistencePolicy = p
+		}
+	}
+}
+
+// WithUserExtractionUserIDNormalizer sets the function that canonicalizes
+// user_id before facts are stored. Pair it with the matching enrichment-hook
+// option so reads and writes land in the same bucket. Nil is ignored.
+func WithUserExtractionUserIDNormalizer(n UserIDNormalizer) UserMemoryExtractionOption {
+	return func(h *UserMemoryExtractionHook) {
+		if n != nil {
+			h.normalizeUserID = n
 		}
 	}
 }
@@ -157,6 +169,11 @@ func NewUserMemoryExtractionHook(
 	for _, opt := range opts {
 		opt(h)
 	}
+	// Default to identity when no normalizer was supplied. Must match the
+	// enrichment hook's choice so storage and recall agree.
+	if h.normalizeUserID == nil {
+		h.normalizeUserID = IdentityUserIDNormalizer
+	}
 	return h
 }
 
@@ -221,6 +238,12 @@ func (h *UserMemoryExtractionHook) AfterSynthesis(ctx context.Context, pctx *cor
 	userID, ok := pctx.Metadata["user_id"].(string)
 	if !ok || userID == "" {
 		return response, nil // No user context — skip, pass response through
+	}
+	// Canonicalize before storage so facts land in the same bucket recall reads.
+	// normalizeUserID is constructor-guaranteed non-nil (defaults to identity).
+	userID = h.normalizeUserID(userID)
+	if userID == "" {
+		return response, nil // Normalized away — nothing to attribute
 	}
 
 	// Snapshot the inputs as values before (possibly) crossing a goroutine
