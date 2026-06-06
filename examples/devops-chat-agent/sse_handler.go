@@ -287,8 +287,8 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract user ID from header
-	userID := r.Header.Get("X-User-ID")
+	// Extract user ID from header (canonicalized — see getUserID)
+	userID := getUserID(r)
 
 	// Create or get session
 	sessionID := req.SessionID

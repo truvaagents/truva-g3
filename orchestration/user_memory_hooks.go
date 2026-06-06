@@ -28,16 +28,17 @@ type UserMemoryEnrichmentHook struct {
 	userMemory        core.UserMemory
 	namespace         string
 	logger            core.Logger
-	maxFacts          int            // from TRUVAG3_USER_MEMORY_MAX_FACTS_IN_PROMPT (default: 15)
-	maxIdentityFacts  int            // from TRUVAG3_USER_MEMORY_MAX_IDENTITY_FACTS (default: 5)
-	maxDurableFacts   int            // from TRUVAG3_USER_MEMORY_MAX_DURABLE_FACTS_IN_PROMPT (default: 8)
-	maxTransientFacts int            // from TRUVAG3_USER_MEMORY_MAX_TRANSIENT_FACTS_IN_PROMPT (default: 4)
-	maxSummaryFacts   int            // from TRUVAG3_USER_MEMORY_MAX_SUMMARY_FACTS_IN_PROMPT (default: 3)
-	maxStableFacts    int            // from TRUVAG3_USER_MEMORY_MAX_STABLE_FACTS_PER_CATEGORY (default: 2)
-	maxUniversalFacts int            // from TRUVAG3_USER_MEMORY_MAX_UNIVERSAL_FACTS (default: 5)
-	minConfidence     float64        // from TRUVAG3_USER_MEMORY_MIN_CONFIDENCE (default: 0.3)
-	debugStore        LLMDebugStore  // optional — set by factory duck-typing propagation
-	debugWg           sync.WaitGroup // tracks in-flight debug recordings
+	maxFacts          int              // from TRUVAG3_USER_MEMORY_MAX_FACTS_IN_PROMPT (default: 15)
+	maxIdentityFacts  int              // from TRUVAG3_USER_MEMORY_MAX_IDENTITY_FACTS (default: 5)
+	maxDurableFacts   int              // from TRUVAG3_USER_MEMORY_MAX_DURABLE_FACTS_IN_PROMPT (default: 8)
+	maxTransientFacts int              // from TRUVAG3_USER_MEMORY_MAX_TRANSIENT_FACTS_IN_PROMPT (default: 4)
+	maxSummaryFacts   int              // from TRUVAG3_USER_MEMORY_MAX_SUMMARY_FACTS_IN_PROMPT (default: 3)
+	maxStableFacts    int              // from TRUVAG3_USER_MEMORY_MAX_STABLE_FACTS_PER_CATEGORY (default: 2)
+	maxUniversalFacts int              // from TRUVAG3_USER_MEMORY_MAX_UNIVERSAL_FACTS (default: 5)
+	minConfidence     float64          // from TRUVAG3_USER_MEMORY_MIN_CONFIDENCE (default: 0.3)
+	normalizeUserID   UserIDNormalizer // canonicalizes user_id before recall (default: identity)
+	debugStore        LLMDebugStore    // optional — set by factory duck-typing propagation
+	debugWg           sync.WaitGroup   // tracks in-flight debug recordings
 }
 
 // UserMemoryEnrichmentOption configures UserMemoryEnrichmentHook (Layer 3).
@@ -103,7 +104,23 @@ func NewUserMemoryEnrichmentHook(
 	for _, opt := range opts {
 		opt(h)
 	}
+
+	// Default to identity when no normalizer was supplied (no-op, case-sensitive).
+	if h.normalizeUserID == nil {
+		h.normalizeUserID = IdentityUserIDNormalizer
+	}
 	return h
+}
+
+// WithUserMemoryEnrichmentUserIDNormalizer sets the function that canonicalizes
+// user_id before recall. Pair it with the matching extraction-hook option so
+// reads and writes land in the same bucket. Nil is ignored (keeps the default).
+func WithUserMemoryEnrichmentUserIDNormalizer(n UserIDNormalizer) UserMemoryEnrichmentOption {
+	return func(h *UserMemoryEnrichmentHook) {
+		if n != nil {
+			h.normalizeUserID = n
+		}
+	}
 }
 
 func (h *UserMemoryEnrichmentHook) Name() string { return "user-memory-enrichment" }
@@ -156,6 +173,12 @@ func (h *UserMemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *cor
 	userID, ok := pctx.Metadata["user_id"].(string)
 	if !ok || userID == "" {
 		return nil, nil // No user context — skip silently
+	}
+	// Canonicalize before any recall so reads match the form used at storage.
+	// normalizeUserID is constructor-guaranteed non-nil (defaults to identity).
+	userID = h.normalizeUserID(userID)
+	if userID == "" {
+		return nil, nil // Normalized away (e.g. whitespace-only) — nothing to recall
 	}
 
 	requestID := GetRequestID(ctx)

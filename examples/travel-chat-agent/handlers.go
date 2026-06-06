@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -275,9 +276,14 @@ func extractPathParam(path, prefix string) string {
 	return param
 }
 
-// getUserID extracts the user ID from the X-User-ID header.
+// getUserID extracts the user ID from the X-User-ID header and canonicalizes
+// it (lowercase + trim). Normalizing at this single edge keeps session identity
+// (session ownership, listing, history) and user memory in the same bucket
+// regardless of how the caller cased the header — "Joe", " joe ", and "JOE" are
+// one user. Uses the framework's canonical form so the app edge and the user
+// memory hooks can never disagree.
 func getUserID(r *http.Request) string {
-	return r.Header.Get("X-User-ID")
+	return orchestration.NormalizeUserIDLowercaseTrim(r.Header.Get("X-User-ID"))
 }
 
 // handleListSessions lists sessions for a user with pagination.

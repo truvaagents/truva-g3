@@ -472,9 +472,12 @@ func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 }
 
-// getUserID extracts the user ID from the X-User-ID header.
+// getUserID extracts the user ID from the X-User-ID header and canonicalizes
+// it (lowercase + trim) so session identity and user memory share one bucket
+// regardless of header casing. Uses the framework's canonical form so the app
+// edge and the user memory hooks can never disagree.
 func getUserID(r *http.Request) string {
-	return r.Header.Get("X-User-ID")
+	return orchestration.NormalizeUserIDLowercaseTrim(r.Header.Get("X-User-ID"))
 }
 
 // writeJSON writes a JSON response with CORS headers.
