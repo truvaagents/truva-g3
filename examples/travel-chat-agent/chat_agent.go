@@ -238,9 +238,8 @@ devops-chat-agent and return its synthesized response.`,
 
 	// Activate user_id canonicalization in the memory hooks as defense-in-depth.
 	// The app already normalizes at the edge (getUserID), so metadata["user_id"]
-	// arrives canonical; this keeps recall/storage consistent even for any future
-	// caller that reaches the hooks with a non-normalized id, without depending on
-	// the TRUVAG3_USER_MEMORY_USER_ID_NORMALIZATION deployment env var.
+	// arrives canonical; this keeps recall and storage consistent even for any
+	// future caller that reaches the hooks with a non-normalized id.
 	userHooks, userHooksCloser := orchestration.BuildUserMemoryHooks(userMemBackend.ToDeps(), t.AI, t.Logger,
 		orchestration.WithUserIDNormalizer(orchestration.NormalizeUserIDLowercaseTrim),
 	)

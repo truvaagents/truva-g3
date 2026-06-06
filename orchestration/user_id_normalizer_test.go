@@ -79,29 +79,74 @@ func TestEnrichmentHook_DefaultIsCaseSensitive(t *testing.T) {
 	assert.Nil(t, pctx.Enrichments, "case-sensitive default must not cross buckets")
 }
 
-// Storage and recall agree end-to-end: a fact stored under the normalized "joe"
-// is recalled by a later "JOE" request when both use the same normalizer.
+// The extraction hook normalizes user_id before storage: a fact extracted for
+// a mixed-case "Joe" lands in the canonical "joe" bucket, not "Joe".
+func TestExtractionHook_NormalizesUserIDOnStorage(t *testing.T) {
+	mem := newTestUserMemory()
+	ctx := context.Background()
+	extractor := newSlowFactExtractor([]core.UserFact{
+		{Content: "User prefers aisle seats", Category: "preference", Source: core.SourceExplicit, Confidence: 0.95},
+	}, 0)
+
+	// Synchronous (Layer-3 default): AfterSynthesis blocks until storage.
+	hook := NewUserMemoryExtractionHook(
+		mem, nil, nil, "travel", &core.NoOpLogger{},
+		extractor, &addAllReconciler{},
+		WithUserExtractionUserIDNormalizer(NormalizeUserIDLowercaseTrim),
+	)
+	t.Cleanup(func() { _ = hook.Close() })
+
+	_, err := hook.AfterSynthesis(ctx, &core.PipelineContext{
+		Request:  "book me an aisle seat",
+		Metadata: map[string]interface{}{"user_id": "Joe"},
+	}, "aisle seat booked")
+	require.NoError(t, err)
+
+	canonical, _ := mem.Recall(ctx, "joe", "travel", "", 10)
+	require.NotEmpty(t, canonical, "extraction must store under the normalized user id")
+	assert.Equal(t, "User prefers aisle seats", canonical[0].Content)
+
+	raw, _ := mem.Recall(ctx, "Joe", "travel", "", 10)
+	assert.Empty(t, raw, "nothing should be stored under the raw mixed-case id")
+}
+
+// End-to-end: a fact STORED via the extraction hook for "Joe" is RECALLED via
+// the enrichment hook for "JOE" — both hooks fold to the same canonical bucket.
+// Exercises both chokepoints (AfterSynthesis storage + BeforePlanning recall),
+// not a manual mem.Remember seed.
 func TestExtractionAndEnrichment_ShareCanonicalBucket(t *testing.T) {
 	mem := newTestUserMemory()
 	ctx := context.Background()
+	norm := NormalizeUserIDLowercaseTrim
 
-	normalized := NormalizeUserIDLowercaseTrim("Joe")
-	require.Equal(t, "joe", normalized)
-	require.NoError(t, mem.Remember(ctx, normalized, core.UserFact{
-		FactID: "f1", Namespace: "travel", Category: "preference",
-		Content: "User prefers aisle seats", Source: core.SourceExplicit, Confidence: 0.95,
-	}))
+	// Storage side: extraction hook persists a fact for "Joe".
+	extractor := newSlowFactExtractor([]core.UserFact{
+		{Content: "User prefers aisle seats", Category: "preference", Source: core.SourceExplicit, Confidence: 0.95},
+	}, 0)
+	extractHook := NewUserMemoryExtractionHook(
+		mem, nil, nil, "travel", &core.NoOpLogger{},
+		extractor, &addAllReconciler{},
+		WithUserExtractionUserIDNormalizer(norm),
+	)
+	t.Cleanup(func() { _ = extractHook.Close() })
+	_, err := extractHook.AfterSynthesis(ctx, &core.PipelineContext{
+		Request:  "book me an aisle seat",
+		Metadata: map[string]interface{}{"user_id": "Joe"},
+	}, "aisle seat booked")
+	require.NoError(t, err)
 
-	hook := NewUserMemoryEnrichmentHook(mem, "travel", &core.NoOpLogger{},
-		WithUserMemoryEnrichmentUserIDNormalizer(NormalizeUserIDLowercaseTrim),
+	// Recall side: enrichment hook for a different casing ("JOE") finds it.
+	enrichHook := NewUserMemoryEnrichmentHook(mem, "travel", &core.NoOpLogger{},
+		WithUserMemoryEnrichmentUserIDNormalizer(norm),
 	)
 	pctx := &core.PipelineContext{
 		Request:  "aisle seats",
 		Metadata: map[string]interface{}{"user_id": "JOE"},
 	}
-	_, err := hook.BeforePlanning(ctx, pctx)
+	_, err = enrichHook.BeforePlanning(ctx, pctx)
 	require.NoError(t, err)
 	require.NotNil(t, pctx.Enrichments)
 	profile, _ := pctx.Enrichments[core.EnrichmentUserProfile].(string)
-	assert.Contains(t, profile, "User prefers aisle seats")
+	assert.Contains(t, profile, "User prefers aisle seats",
+		"a fact stored for 'Joe' must be recalled for 'JOE' via the shared canonical bucket")
 }
