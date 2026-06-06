@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/jira-tool
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/truvaagents/truva-g3/core v0.9.1

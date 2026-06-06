@@ -333,7 +333,7 @@ truvag3_check_prerequisites() {
     _truvag3_log_info "Checking prerequisites..."
 
     if ! command -v go &> /dev/null; then
-        echo "ERROR: Go is not installed. Please install Go 1.25+ from https://golang.org/dl/"
+        echo "ERROR: Go is not installed. Please install Go 1.26+ from https://golang.org/dl/"
         exit 1
     fi
     _truvag3_log_success "Go installed: $(go version)"

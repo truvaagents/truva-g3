@@ -33,9 +33,9 @@ TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](h
 
 ### Required Software
 
-> **Go version**: the framework's `go.mod` declares `go 1.26.2`, so building
+> **Go version**: the framework's `go.mod` declares `go 1.26.4`, so building
 > from source needs Go 1.26+. With Go's toolchain auto-upgrade (default since
-> Go 1.21), an older Go install will fetch 1.26.2 on first build — but some
+> Go 1.21), an older Go install will fetch 1.26.4 on first build — but some
 > controlled environments disable auto-upgrade, so installing a current Go
 > directly is the simplest path.
 
@@ -55,7 +55,7 @@ brew install kind kubectl
 **Linux (Ubuntu/Debian):**
 ```bash
 # Go (substitute the latest 1.26+ release for $GO_VERSION)
-GO_VERSION=1.26.2
+GO_VERSION=1.26.4
 wget "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"

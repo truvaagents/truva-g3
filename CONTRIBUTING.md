@@ -83,7 +83,7 @@ By participating in this project, you agree to abide by our Code of Conduct:
 
 ### Prerequisites
 
-- **Go 1.26 or higher** (the module is pinned to `go 1.26.2` in `go.mod`)
+- **Go 1.26 or higher** (the module is pinned to `go 1.26.4` in `go.mod`)
 - **Docker** (recommended) for running the in-tree Redis/Valkey backend used by integration tests and example deployments
 - **kind** (Kubernetes-in-Docker) for running the example multi-agent system locally
 

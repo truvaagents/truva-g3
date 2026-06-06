@@ -217,7 +217,7 @@ build_app() {
     # Create temporary go.work to use local framework modules
     log_info "Creating temporary go.work for local module resolution..."
     cat > go.work << 'GOWORK'
-go 1.25.7
+go 1.26.4
 
 use (
     .

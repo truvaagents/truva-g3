@@ -329,9 +329,9 @@ go version
 
 **Manual installation (recommended for latest version):**
 ```bash
-curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.4.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.4.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 ```
 

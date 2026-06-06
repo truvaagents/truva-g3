@@ -67,7 +67,7 @@ control plane isn't an option.
 
 ## What you need
 
-- **Go 1.26+** (the framework's `go.mod` declares 1.26.2)
+- **Go 1.26+** (the framework's `go.mod` declares 1.26.4)
 - **Docker** (or [Podman](https://podman.io/) as a drop-in)
 - **Kind + kubectl** — for the local Kubernetes cluster
 - **One AI provider API key** — [Groq](https://groq.com/) has a free tier and is the fastest to start; OpenAI, Anthropic, Gemini, and others are supported
