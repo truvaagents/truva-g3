@@ -376,9 +376,11 @@ below or from the travel quickstart).
 
 #### Step 3: Deploy the cluster-management tools (and chat-ui)
 
-These six tools all talk to in-cluster services only — no external API keys.
-The trailing `chat-ui` deploy makes the dashboard at http://chat.localhost
-available; it's idempotent if the travel quickstart already deployed it:
+These six tools (plus `scheduled-executor`, the internal coordinator that
+drains `scheduler-tool`'s queue and dispatches due tasks to target agents)
+all talk to in-cluster services only — no external API keys. The trailing
+`chat-ui` deploy makes the dashboard at http://chat.localhost available;
+it's idempotent if the travel quickstart already deployed it:
 
 ```bash
 cd ../devops-tool                && ./setup.sh deploy && cd -
@@ -386,6 +388,7 @@ cd ../devops-observability-tool  && ./setup.sh deploy && cd -
 cd ../prometheus-query-tool      && ./setup.sh deploy && cd -
 cd ../system-utilities-tool      && ./setup.sh deploy && cd -
 cd ../scheduler-tool             && ./setup.sh deploy && cd -
+cd ../scheduled-executor         && ./setup.sh deploy && cd -   # consumer side of scheduler-tool
 cd ../agentic-memory-tool        && ./setup.sh deploy && cd -
 cd ../chat-ui                    && ./setup.sh deploy && cd -   # frontend
 ```
@@ -396,7 +399,8 @@ cd ../chat-ui                    && ./setup.sh deploy && cd -   # frontend
 | [devops-observability-tool](examples/devops-observability-tool/) | Search logs and traces | Loki + Jaeger |
 | [prometheus-query-tool](examples/prometheus-query-tool/) | Run PromQL queries | Prometheus |
 | [system-utilities-tool](examples/system-utilities-tool/) | Time, date, timezone math | Go stdlib |
-| [scheduler-tool](examples/scheduler-tool/) | Cron-style scheduled execution | In-cluster |
+| [scheduler-tool](examples/scheduler-tool/) | Cron-style scheduled execution (producer — creates schedules, promotes due tasks) | In-cluster |
+| [scheduled-executor](examples/scheduled-executor/) | Consumer side of `scheduler-tool` — drains the queue and HTTP-dispatches due tasks to target agents (internal coordinator, not LLM-facing) | Redis + target agents |
 | [agentic-memory-tool](examples/agentic-memory-tool/) | Semantic memory recall | Redis + Qdrant |
 
 #### Step 4: Test the agent
