@@ -135,8 +135,8 @@ setup_api_keys() {
 
     load_env
 
-    # Country Info Tool uses the free RestCountries API - no API keys needed
-    print_info "Country Info Tool uses the free RestCountries API - no API keys required"
+    # Country Info Tool serves an embedded offline dataset - no API keys needed
+    print_info "Country Info Tool uses an embedded offline dataset (no API keys required)"
 
     # Skip secret creation for this tool
     print_success "Configuration complete (no API keys needed)"

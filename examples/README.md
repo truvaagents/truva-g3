@@ -135,7 +135,7 @@ examples can reuse the same cluster.
 | [economic-data-tool](economic-data-tool/) | Tool | Economic data access | Pending |
 | [fiscal-data-tool](fiscal-data-tool/) | Tool | Fiscal data access | Pending |
 | [demographics-tool](demographics-tool/) | Tool | Demographic data access | Pending |
-| [country-info-tool](country-info-tool/) | Tool | Country profile data from public APIs | Yes |
+| [country-info-tool](country-info-tool/) | Tool | Country profile data from a bundled offline dataset (`go:embed`) | Yes |
 | [world-health-tool](world-health-tool/) | Tool | World health indicators | Yes |
 
 ### Research, Medical, and Knowledge Tools

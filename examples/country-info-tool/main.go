@@ -32,7 +32,9 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		telemetry.Shutdown(ctx)
+		if err := telemetry.Shutdown(ctx); err != nil {
+			log.Printf("Warning: Telemetry shutdown error: %v", err)
+		}
 	}()
 
 	port := 8098
@@ -64,7 +66,7 @@ func main() {
 
 	log.Println("Country Info Tool Service Starting...")
 	log.Printf("Server Port: %d\n", port)
-	log.Println("API: RestCountries (free, no API key required)")
+	log.Println("Data: embedded mledoze/countries dataset (ODbL); population/timezones via apicountries.com (no API key)")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -89,8 +91,13 @@ func validateConfig() error {
 	if redisURL == "" {
 		return fmt.Errorf("REDIS_URL required")
 	}
-	if !strings.HasPrefix(redisURL, "redis://") {
-		return fmt.Errorf("invalid REDIS_URL format")
+	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
+		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	}
+	if portStr := os.Getenv("PORT"); portStr != "" {
+		if _, err := strconv.Atoi(portStr); err != nil {
+			return fmt.Errorf("invalid PORT value: %v", err)
+		}
 	}
 	return nil
 }
@@ -102,8 +109,10 @@ func initTelemetry(serviceName string) {
 	}
 	var profile telemetry.Profile
 	switch env {
-	case "production":
+	case "production", "prod":
 		profile = telemetry.ProfileProduction
+	case "staging", "stage", "qa":
+		profile = telemetry.ProfileStaging
 	default:
 		profile = telemetry.ProfileDevelopment
 	}
