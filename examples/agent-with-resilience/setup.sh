@@ -73,11 +73,11 @@ setup_redis() {
         echo "Starting Redis via Docker..."
 
         # Stop existing container if any
-        docker stop truvag3-redis 2>/dev/null || true
-        docker rm truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
         # Start Redis
-        docker run -d \
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
             redis:7-alpine
@@ -280,20 +280,20 @@ build_docker() {
 
     # Build grocery-store-api (no local replace directives, uses local context)
     if [ -d "$GROCERY_API_DIR" ]; then
-        docker build $no_cache_flag -t grocery-store-api:latest "$GROCERY_API_DIR"
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -t grocery-store-api:latest "$GROCERY_API_DIR"
         log_success "grocery-store-api:latest built"
     fi
 
     # Build grocery-tool with Dockerfile.workspace (has local replace directives)
     if [ -d "$GROCERY_TOOL_DIR" ]; then
         log_info "Building grocery-tool with Dockerfile.workspace (using local modules)..."
-        docker build $no_cache_flag -f "$GROCERY_TOOL_DIR/Dockerfile.workspace" -t grocery-tool:latest "$truvag3_root"
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -f "$GROCERY_TOOL_DIR/Dockerfile.workspace" -t grocery-tool:latest "$truvag3_root"
         log_success "grocery-tool:latest built (from local workspace)"
     fi
 
     # Build agent with Dockerfile.workspace (has local replace directives)
     log_info "Building agent with Dockerfile.workspace (using local modules)..."
-    docker build $no_cache_flag -f "$AGENT_DIR/Dockerfile.workspace" -t research-agent-resilience:latest "$truvag3_root"
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -f "$AGENT_DIR/Dockerfile.workspace" -t research-agent-resilience:latest "$truvag3_root"
     log_success "research-agent-resilience:latest built (from local workspace)"
 }
 
@@ -409,8 +409,8 @@ cleanup() {
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
     # Remove local binary
     rm -f "$SCRIPT_DIR/research-agent-resilience"
@@ -439,7 +439,7 @@ check_redis_available() {
     fi
 
     # Check Docker Redis
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q truvag3-redis; then
+    if "${TRUVAG3_CONTAINER_RUNTIME:-docker}" ps --format '{{.Names}}' 2>/dev/null | grep -q truvag3-redis; then
         log_success "Redis available (Docker: truvag3-redis)"
         export REDIS_URL="redis://localhost:6379"
         return 0

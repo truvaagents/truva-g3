@@ -74,7 +74,8 @@ check_command() {
 check_prerequisites() {
     print_step "Checking prerequisites..."
     check_command "go" "https://go.dev/doc/install"
-    check_command "docker" "https://docs.docker.com/get-docker/"
+    # Container runtime resolved by the shared lib (docker or podman)
+    check_command "${TRUVAG3_CONTAINER_RUNTIME:-docker}" "https://docs.docker.com/get-docker/ (or https://podman.io/)"
     check_command "kind" "https://kind.sigs.k8s.io/docs/user/quick-start/#installation"
     check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
     print_success "All prerequisites installed"
@@ -150,7 +151,7 @@ cmd_docker_build() {
 
     print_step "Building with Dockerfile.workspace (using local modules)..."
     local truvag3_root="$(dirname "$(dirname "$SCRIPT_DIR")")"
-    docker build $no_cache_flag -f "$SCRIPT_DIR/Dockerfile.workspace" -t "$APP_NAME:latest" "$truvag3_root"
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -f "$SCRIPT_DIR/Dockerfile.workspace" -t "$APP_NAME:latest" "$truvag3_root"
 
     print_success "Docker image built: $APP_NAME:latest (from local workspace)"
     echo ""
@@ -572,8 +573,8 @@ cleanup() {
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
     # Remove local binary
     rm -f "$SCRIPT_DIR/research-agent"

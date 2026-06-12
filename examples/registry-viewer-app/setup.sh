@@ -11,6 +11,10 @@ EXAMPLES_DIR="$(dirname "$SCRIPT_DIR")"
 TRUVAG3_ROOT="$(dirname "$EXAMPLES_DIR")"
 K8_DEPLOYMENT_DIR="$EXAMPLES_DIR/k8-deployment"
 
+# Shared environment library: container-runtime detection (docker/podman) and a
+# kind() wrapper that makes `kind load docker-image` work under podman.
+source "$K8_DEPLOYMENT_DIR/setup-env-lib.sh"
+
 # Configuration
 NAMESPACE="truvag3-examples"
 APP_NAME="registry-viewer"
@@ -87,12 +91,15 @@ check_prerequisites() {
     fi
     log_success "Go installed: $(go version)"
 
-    # Check Docker (optional)
-    if command -v docker &> /dev/null; then
-        log_success "Docker installed"
+    # Container runtime (docker or podman) — resolved by the shared lib at source
+    # time. Check the resolved runtime, not docker specifically, so a podman-only
+    # host isn't wrongly flagged as having no runtime.
+    local runtime="${TRUVAG3_CONTAINER_RUNTIME:-docker}"
+    if command -v "$runtime" &> /dev/null; then
+        log_success "$runtime installed"
         DOCKER_AVAILABLE=true
     else
-        log_warn "Docker not found (required for K8s deployment)"
+        log_warn "$runtime not found (required for K8s deployment)"
         DOCKER_AVAILABLE=false
     fi
 
@@ -155,7 +162,7 @@ build_docker() {
     # Build from truvag3 root using Dockerfile.workspace
     # This allows copying local modules (core, orchestration, telemetry) into the build context
     cd "$TRUVAG3_ROOT"
-    docker build $no_cache_flag \
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag \
         -f examples/registry-viewer-app/Dockerfile.workspace \
         -t "$IMAGE_NAME" .
 
@@ -407,7 +414,7 @@ status() {
 
     echo ""
     echo "Docker:"
-    if docker image inspect "$IMAGE_NAME" &>/dev/null 2>&1; then
+    if "${TRUVAG3_CONTAINER_RUNTIME:-docker}" image inspect "$IMAGE_NAME" &>/dev/null 2>&1; then
         echo "  Image: EXISTS"
     else
         echo "  Image: NOT FOUND"
@@ -516,13 +523,13 @@ docker_run() {
     fi
 
     # Build if image doesn't exist
-    if ! docker image inspect "$IMAGE_NAME" &>/dev/null 2>&1; then
+    if ! "${TRUVAG3_CONTAINER_RUNTIME:-docker}" image inspect "$IMAGE_NAME" &>/dev/null 2>&1; then
         build_docker
     fi
 
     # Stop existing container
-    docker stop $APP_NAME 2>/dev/null || true
-    docker rm $APP_NAME 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop $APP_NAME 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm $APP_NAME 2>/dev/null || true
 
     local redis_arg=""
     if [ "$1" = "redis" ]; then
@@ -538,7 +545,7 @@ docker_run() {
     echo "Press Ctrl+C to stop"
     echo ""
 
-    docker run --rm -p $APP_PORT:$APP_PORT --name $APP_NAME "$IMAGE_NAME" $redis_arg
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run --rm -p $APP_PORT:$APP_PORT --name $APP_NAME "$IMAGE_NAME" $redis_arg
 }
 
 # Handle arguments

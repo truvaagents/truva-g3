@@ -20,6 +20,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Shared environment library: container-runtime detection (docker/podman) and a
+# kind() wrapper that makes `kind load docker-image` work under podman.
+source "$(dirname "$SCRIPT_DIR")/k8-deployment/setup-env-lib.sh"
+
 # Configuration
 CLUSTER_NAME="truvag3-demo-$(whoami)"
 NAMESPACE="truvag3-examples"
@@ -49,13 +53,14 @@ print_header() {
 check_prerequisites() {
     log_info "Checking prerequisites..."
 
-    # Check Docker
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed"
-        echo "Please install Docker from https://www.docker.com/"
+    # Check the resolved container runtime (docker or podman; set by the shared lib)
+    local runtime="${TRUVAG3_CONTAINER_RUNTIME:-docker}"
+    if ! command -v "$runtime" &> /dev/null; then
+        log_error "$runtime is not installed"
+        echo "Please install Docker (https://www.docker.com/) or Podman (https://podman.io/)"
         exit 1
     fi
-    log_success "Docker installed"
+    log_success "$runtime installed"
 
     # Check kubectl
     if ! command -v kubectl &> /dev/null; then
@@ -99,7 +104,7 @@ build_image() {
     fi
 
     log_info "Building Docker image..."
-    docker build $no_cache -t ${APP_NAME}:latest .
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache -t ${APP_NAME}:latest .
     log_success "${APP_NAME}:latest built"
 }
 

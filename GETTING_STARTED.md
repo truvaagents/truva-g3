@@ -122,21 +122,28 @@ Clone the repo into the WSL filesystem (`~/truva-g3`) rather than `/mnt/c/...` �
 - **OCI-compliant** - Uses the same container image formats as Docker
 
 ```bash
-# macOS
+# macOS — note: kind needs a ROOTFUL podman machine
 brew install podman
-podman machine init && podman machine start
+podman machine init --rootful && podman machine start
 
 # Linux (Ubuntu/Debian)
 sudo apt install podman
 
-# Optional: Alias docker to podman
-alias docker=podman
+# The setup scripts auto-detect the running runtime (preferring Docker if its
+# daemon is up). To force podman — e.g. when Docker is also installed — set this.
+# An `alias docker=podman` will NOT work: setup.sh runs non-interactively.
+export TRUVAG3_CONTAINER_RUNTIME=podman
 
 # Kind works with Podman via:
 KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster
 ```
 
-For multi-container setups, use [Podman Compose](https://github.com/containers/podman-compose) which works with existing `docker-compose.yml` files.
+> **On Podman, especially beyond the quickstart?** macOS needs a rootful
+> machine, `alias docker=podman` won't reach `setup.sh`, the machine often
+> needs sizing up for the full example catalog, and there's a known gvproxy
+> ingress quirk. These (with upstream issue links) are collected in
+> [Podman Troubleshooting](docs/reference/PODMAN_TROUBLESHOOTING.md) — the
+> quickstart's ~7 tools work on the defaults.
 
 ### Verify Your Setup
 
@@ -285,6 +292,7 @@ cd ../currency-tool         && ./setup.sh deploy && cd -
 cd ../country-info-tool     && ./setup.sh deploy && cd -
 cd ../system-utilities-tool && ./setup.sh deploy && cd -
 cd ../travel-advisory-tool  && ./setup.sh deploy && cd -
+cd ../scheduler-tool        && ./setup.sh deploy && cd -
 # (optional, see table below) cd ../news-tool          && ./setup.sh deploy && cd -
 # (optional, see table below) cd ../flight-tool        && ./setup.sh deploy && cd -
 # (optional, see table below) cd ../hotel-tool         && ./setup.sh deploy && cd -
@@ -305,13 +313,14 @@ flights, hotels, local places, and headlines.
 | country-info-tool | Country facts — capital, languages, currency code, region | No (free, no auth) | [RestCountries](https://restcountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
 | system-utilities-tool | Current time, timezone conversion, date math (e.g. "next Friday") | No (self-contained) | None — Go stdlib (timezone DB, date math) | [examples/system-utilities-tool/](examples/system-utilities-tool/) |
 | travel-advisory-tool | Official US State Department safety advisories per country | No (free, no auth) | [Travel Advisories API](https://cadataapi.state.gov/) | [examples/travel-advisory-tool/](examples/travel-advisory-tool/) |
+| scheduler-tool | Schedule delayed and recurring (cron-style) tasks for the agent to run later | No (self-contained) | None — in-cluster | [examples/scheduler-tool/](examples/scheduler-tool/) |
 | news-tool | Destination news / current events | **Yes** — `GNEWS_API_KEY` | [GNews.io](https://gnews.io/) (free tier: 100 req/day) | [examples/news-tool/](examples/news-tool/) |
 | flight-tool | Flight search and airport/city IATA-code lookup | **Yes** — `TRAVELPAYOUTS_TOKEN` | [Travelpayouts](https://www.travelpayouts.com/) (free signup) | [examples/flight-tool/](examples/flight-tool/) |
 | hotel-tool | Hotel search by ISO country code + city name | **Yes** — `LITEAPI_KEY` | [LiteAPI](https://liteapi.travel/) | [examples/hotel-tool/](examples/hotel-tool/) |
 | places-tool | Restaurants, attractions, and "nearby" search around coordinates | **Yes** — `FOURSQUARE_API_KEY` and/or `GEOAPIFY_API_KEY` | [Foursquare](https://location.foursquare.com/developer/) / [Geoapify](https://www.geoapify.com/places-api) | [examples/places-tool/](examples/places-tool/) |
 | currency-global-tool | Currency conversion across 170+ currencies (richer alternative to currency-tool) | **Yes** — `CURRENCYBEACON_API_KEY` | [CurrencyBeacon](https://currencybeacon.com/) | [examples/currency-global-tool/](examples/currency-global-tool/) |
 
-The first six tools (no-key) are deployed by the commands in step 4 above and
+The first seven tools (no-key) are deployed by the commands in step 4 above and
 require no additional configuration. For each keyed tool, edit its `.env`
 (e.g. `examples/flight-tool/.env`) and set the relevant key before running
 `./setup.sh deploy`. The agent discovers whatever is running via Redis — you
@@ -857,6 +866,13 @@ Common on Linux/Windows. Add the hostnames you use to your hosts file:
 ```
 
 macOS resolves `*.localhost` automatically.
+
+**Ingress hostnames intermittently time out on Podman (`curl` returns `000`) while pods are healthy:**
+
+This is Podman's gvproxy host→VM port forwarder degrading, not a cluster
+problem — see [Podman Troubleshooting — Ingress hostnames intermittently time
+out (gvproxy)](docs/reference/PODMAN_TROUBLESHOOTING.md#ingress-hostnames-intermittently-time-out-gvproxy)
+for the one-time machine refresh that restores it.
 
 **"connection refused" to Redis:**
 

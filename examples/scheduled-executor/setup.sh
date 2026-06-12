@@ -62,9 +62,9 @@ setup_redis() {
 
     if [ "${DOCKER_AVAILABLE:-false}" = true ]; then
         print_info "Starting Redis via Docker..."
-        docker stop truvag3-redis 2>/dev/null || true
-        docker rm truvag3-redis 2>/dev/null || true
-        docker run -d \
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
             redis:7-alpine

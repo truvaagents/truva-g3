@@ -109,7 +109,7 @@ docker_build() {
 
     # Build from truvag3 root using Dockerfile.workspace (local modules)
     cd "$TRUVAG3_ROOT"
-    docker build $no_cache_flag \
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag \
         -f examples/event-driven-agent/Dockerfile.workspace \
         -t $APP_NAME:latest .
     cd "$SCRIPT_DIR"
