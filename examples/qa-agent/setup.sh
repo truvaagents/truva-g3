@@ -94,7 +94,7 @@ cmd_docker_build() {
 
     local truvag3_root="$(dirname "$(dirname "$SCRIPT_DIR")")"
     print_info "Building from truvag3 root: $truvag3_root"
-    docker build $no_cache_flag \
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag \
         -f "$SCRIPT_DIR/Dockerfile.workspace" \
         -t $APP_NAME:latest \
         "$truvag3_root"

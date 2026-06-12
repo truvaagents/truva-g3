@@ -94,6 +94,16 @@ _truvag3_log_success() {
     fi
 }
 
+_truvag3_log_warn() {
+    if type print_warn &>/dev/null; then
+        print_warn "$1"
+    elif type log_warn &>/dev/null; then
+        log_warn "$1"
+    else
+        echo "[WARN] $1"
+    fi
+}
+
 # ─── FUNCTIONS ───────────────────────────────────────────────────────────────
 
 # truvag3_create_secret <secret_name> <namespace> [extra_keys...]
@@ -324,11 +334,89 @@ truvag3_create_tool_secret() {
 # Auto-detect K8S_DEPLOYMENT_DIR (directory containing this file)
 TRUVAG3_K8S_DEPLOYMENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# truvag3_detect_container_runtime
+#
+# Resolves which container runtime to use (docker or podman) and exports it as
+# TRUVAG3_CONTAINER_RUNTIME so the rest of the scripts are engine-agnostic. Also
+# sets DOCKER_AVAILABLE for backward compatibility.
+#
+# Resolution order:
+#   1. An explicit TRUVAG3_CONTAINER_RUNTIME set by the caller is honored as-is.
+#   2. docker, but only if its daemon actually responds (`docker info`). A docker
+#      CLI with no running daemon (e.g. Docker Desktop/OrbStack stopped) is skipped.
+#   3. podman, if installed.
+#
+# When the resolved runtime is podman, KIND_EXPERIMENTAL_PROVIDER=podman is
+# exported so `kind` uses podman as well.
+truvag3_detect_container_runtime() {
+    # 1. Respect an explicit choice — but validate it so a typo or a missing
+    #    binary surfaces here with a clear message, not as a cryptic build error.
+    if [ -n "${TRUVAG3_CONTAINER_RUNTIME:-}" ]; then
+        case "$TRUVAG3_CONTAINER_RUNTIME" in
+            docker|podman) ;;
+            *)
+                echo "ERROR: TRUVAG3_CONTAINER_RUNTIME='$TRUVAG3_CONTAINER_RUNTIME' is not supported (use 'docker' or 'podman')"
+                exit 1 ;;
+        esac
+        if ! command -v "$TRUVAG3_CONTAINER_RUNTIME" &> /dev/null; then
+            # Binary not installed — mark unavailable (like the "no runtime found"
+            # branch) so build/Redis gates report it cleanly instead of trying to
+            # exec a missing binary. Not a hard exit: detection runs at source time
+            # for every subcommand, and status/logs/help shouldn't be blocked.
+            _truvag3_log_warn "Pinned runtime '$TRUVAG3_CONTAINER_RUNTIME' is not installed / not on PATH — build and deploy steps will fail until it is"
+            export DOCKER_AVAILABLE=false
+            return
+        elif ! "$TRUVAG3_CONTAINER_RUNTIME" info &> /dev/null; then
+            # Binary present but its daemon/machine is down. Warn (symmetric with
+            # the auto-detect ladder below) but still honor the choice and proceed:
+            # the build step will surface the real engine error.
+            if [ "$TRUVAG3_CONTAINER_RUNTIME" = "podman" ]; then
+                _truvag3_log_warn "Pinned runtime 'podman' is installed but its machine is not running; run 'podman machine start'"
+            else
+                _truvag3_log_warn "Pinned runtime 'docker' is installed but its daemon is not responding; start Docker"
+            fi
+        else
+            _truvag3_log_success "Container runtime (pinned): $TRUVAG3_CONTAINER_RUNTIME"
+        fi
+    # 2. Prefer docker if its daemon is reachable.
+    elif command -v docker &> /dev/null && docker info &> /dev/null; then
+        export TRUVAG3_CONTAINER_RUNTIME=docker
+        _truvag3_log_success "Container runtime: docker"
+    # 3. Otherwise podman, but only if its machine is actually running
+    #    (symmetric with the docker daemon check above — a stopped podman machine
+    #    would otherwise be picked silently and then fail at build time).
+    elif command -v podman &> /dev/null && podman info &> /dev/null; then
+        export TRUVAG3_CONTAINER_RUNTIME=podman
+        _truvag3_log_success "Container runtime: podman"
+    # 4. A CLI is installed but its daemon/machine isn't up. Pick it and warn so
+    #    the next step fails with a clear "start your runtime" message rather than
+    #    a silent wrong choice. Docker is preferred when both are down.
+    elif command -v docker &> /dev/null; then
+        export TRUVAG3_CONTAINER_RUNTIME=docker
+        _truvag3_log_warn "docker found but its daemon is not responding; start Docker (or start/install podman)"
+    elif command -v podman &> /dev/null; then
+        export TRUVAG3_CONTAINER_RUNTIME=podman
+        _truvag3_log_warn "podman found but its machine is not running; run 'podman machine start' (or start/install Docker)"
+    else
+        export TRUVAG3_CONTAINER_RUNTIME=docker
+        _truvag3_log_info "No container runtime found (docker or podman required for K8s deployment)"
+        export DOCKER_AVAILABLE=false
+        return
+    fi
+
+    export DOCKER_AVAILABLE=true
+
+    # kind needs to be told to use podman explicitly; docker is its default.
+    if [ "$TRUVAG3_CONTAINER_RUNTIME" = "podman" ]; then
+        export KIND_EXPERIMENTAL_PROVIDER=podman
+    fi
+}
+
 # truvag3_check_prerequisites
 #
-# Checks that required tools are installed: go, docker, kind, kubectl.
-# Marks optional tools as available via DOCKER_AVAILABLE, KIND_AVAILABLE, etc.
-# Exits with error if Go is not installed.
+# Checks that required tools are installed: go, a container runtime
+# (docker or podman), kind, kubectl. Marks optional tools as available via
+# DOCKER_AVAILABLE, KIND_AVAILABLE, etc. Exits with error if Go is not installed.
 truvag3_check_prerequisites() {
     _truvag3_log_info "Checking prerequisites..."
 
@@ -338,13 +426,7 @@ truvag3_check_prerequisites() {
     fi
     _truvag3_log_success "Go installed: $(go version)"
 
-    if command -v docker &> /dev/null; then
-        _truvag3_log_success "Docker installed"
-        export DOCKER_AVAILABLE=true
-    else
-        _truvag3_log_info "Docker not found (required for K8s deployment)"
-        export DOCKER_AVAILABLE=false
-    fi
+    truvag3_detect_container_runtime
 
     if command -v kubectl &> /dev/null; then
         _truvag3_log_success "kubectl installed"
@@ -627,8 +709,74 @@ truvag3_build_docker() {
         _truvag3_log_info "Building $image_name..."
     fi
 
-    docker build $no_cache_flag -f "$dockerfile" -t "$image_name" "$context"
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -f "$dockerfile" -t "$image_name" "$context"
     _truvag3_log_success "$image_name built"
+}
+
+# _truvag3_podman_load_image <image_name> <cluster_name>
+#
+# Loads a podman-built image into a Kind cluster via a saved archive.
+#
+# Why not `kind load docker-image`? With the podman provider that path is
+# unreliable, and podman tags local builds as `localhost/<name>` — which
+# containerd on the node will NOT match against a manifest's bare
+# `image: <name>:tag` (containerd normalizes that to `docker.io/library/<name>:tag`).
+# So we retag to the normalized ref, then load it as an image archive.
+_truvag3_podman_load_image() {
+    local image_name="$1"
+    local cluster_name="$2"
+
+    local node_ref="$image_name"
+    case "$image_name" in
+        */*) : ;;                                   # already namespaced/registry-qualified
+        *)   node_ref="docker.io/library/$image_name" ;;
+    esac
+    if [ "$node_ref" != "$image_name" ]; then
+        podman tag "$image_name" "$node_ref"
+    fi
+
+    local archive
+    archive="$(mktemp -t kind-img-XXXXXX).tar"
+    podman save -o "$archive" "$node_ref"
+    command kind load image-archive "$archive" --name "$cluster_name"
+    rm -f "$archive"
+}
+
+# kind() — transparent wrapper around the real `kind` binary.
+#
+# When the resolved runtime is podman, `kind load docker-image <imgs...> --name <c>`
+# is rewritten to the archive-based load (see _truvag3_podman_load_image), since
+# `kind load docker-image` does not work reliably with podman. Every other kind
+# invocation (create/get/load image-archive/etc.) passes straight through.
+#
+# This lets the many example scripts that call `kind load docker-image` inline
+# work under podman without each one being modified.
+kind() {
+    if [ "${TRUVAG3_CONTAINER_RUNTIME:-docker}" = "podman" ] && \
+       [ "${1:-}" = "load" ] && [ "${2:-}" = "docker-image" ]; then
+        shift 2
+        local images=() cluster=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --name)   cluster="$2"; shift 2 ;;
+                --name=*) cluster="${1#--name=}"; shift ;;
+                *)        images+=("$1"); shift ;;
+            esac
+        done
+        # Fall back to the current kind context if --name was omitted.
+        if [ -z "$cluster" ]; then
+            local ctx
+            ctx=$(kubectl config current-context 2>/dev/null)
+            [[ "$ctx" == kind-* ]] && cluster="${ctx#kind-}"
+            [ -z "$cluster" ] && cluster="${CLUSTER_NAME:-}"
+        fi
+        local img
+        for img in "${images[@]}"; do
+            _truvag3_podman_load_image "$img" "$cluster"
+        done
+        return $?
+    fi
+    command kind "$@"
 }
 
 # truvag3_load_to_kind <image_name> [cluster_name]
@@ -665,6 +813,24 @@ truvag3_load_to_kind() {
     fi
 
     _truvag3_log_info "Loading $image_name to Kind cluster '$cluster_name'..."
-    kind load docker-image --name "$cluster_name" "$image_name"
+
+    if [ "${TRUVAG3_CONTAINER_RUNTIME:-docker}" = "podman" ]; then
+        _truvag3_podman_load_image "$image_name" "$cluster_name"
+    else
+        command kind load docker-image --name "$cluster_name" "$image_name"
+    fi
+
     _truvag3_log_success "$image_name loaded to Kind"
 }
+
+# ─── SOURCE-TIME RUNTIME DETECTION ───────────────────────────────────────────
+# Resolve the container runtime as soon as the library is sourced so that
+# TRUVAG3_CONTAINER_RUNTIME (and KIND_EXPERIMENTAL_PROVIDER for podman) are set
+# for every script — including the many tool setup.sh scripts that build/load
+# images without first calling truvag3_check_prerequisites.
+#
+# Always call this, even when TRUVAG3_CONTAINER_RUNTIME is already pinned: the
+# function honors the pinned value but ALSO exports KIND_EXPERIMENTAL_PROVIDER
+# and DOCKER_AVAILABLE for it. Guarding on the pinned var would skip those
+# exports, leaving kind without its podman provider on the source-time path.
+truvag3_detect_container_runtime

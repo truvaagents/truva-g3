@@ -628,6 +628,8 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [Limits Cheatsheet](docs/reference/LIMITS_CHEATSHEET.md) — runtime limits and tuning knobs
 - [Intelligent Error Handling](docs/orchestration/INTELLIGENT_ERROR_HANDLING.md) — LLM-assisted error analysis details
 - [TruvaG3 Tools vs MCP Servers](docs/reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md) — terminology and integration mapping
+- [Podman Troubleshooting](docs/reference/PODMAN_TROUBLESHOOTING.md) — running on Podman + kind (rootful machine, image loading, gvproxy ingress, machine sizing)
+- [Windows + WSL2 Troubleshooting](docs/reference/WINDOWS_TROUBLESHOOTING.md) — running the bash setup scripts on Windows via WSL2
 
 ## Examples
 

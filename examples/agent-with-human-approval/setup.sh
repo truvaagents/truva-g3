@@ -64,11 +64,11 @@ setup_redis() {
         log_info "Starting Redis via Docker..."
 
         # Stop existing container if any
-        docker stop truvag3-redis 2>/dev/null || true
-        docker rm truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
         # Start Redis
-        docker run -d \
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
             redis:7-alpine
@@ -252,7 +252,7 @@ build_docker() {
 
     # Build from truvag3 root using Dockerfile.workspace
     cd "$TRUVAG3_ROOT"
-    docker build $no_cache_flag \
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag \
         -f examples/agent-with-human-approval/Dockerfile.workspace \
         -t agent-with-human-approval:latest .
 
@@ -796,8 +796,8 @@ cleanup() {
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
     # Remove local binary
     rm -f "$SCRIPT_DIR/agent-with-human-approval"

@@ -59,11 +59,11 @@ setup_redis() {
         log_info "Starting Redis via Docker..."
 
         # Stop existing container if any
-        docker stop truvag3-redis 2>/dev/null || true
-        docker rm truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
         # Start Redis
-        docker run -d \
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
             redis:7-alpine
@@ -245,7 +245,7 @@ build_docker() {
 # Load images to Kind
 load_to_kind() {
     truvag3_load_to_kind "travel-chat-agent:latest"
-    if docker image inspect chat-ui:latest &>/dev/null; then
+    if "${TRUVAG3_CONTAINER_RUNTIME:-docker}" image inspect chat-ui:latest &>/dev/null; then
         truvag3_load_to_kind "chat-ui:latest"
     fi
 }
@@ -550,8 +550,8 @@ cleanup() {
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
     # Remove local binary
     rm -f "$SCRIPT_DIR/travel-chat-agent"

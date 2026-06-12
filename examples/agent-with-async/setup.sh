@@ -71,11 +71,11 @@ setup_redis() {
         echo "Starting Redis via Docker..."
 
         # Stop existing container if any
-        docker stop truvag3-redis 2>/dev/null || true
-        docker rm truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
         # Start Redis
-        docker run -d \
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
             redis:7-alpine
@@ -260,11 +260,11 @@ build_docker() {
     # Dockerfile which pulls dependencies from GitHub-tagged releases.
     if [ -f "$AGENT_DIR/Dockerfile.workspace" ]; then
         log_info "Building with LOCAL workspace modules (Dockerfile.workspace)"
-        docker build $no_cache_flag -f "$AGENT_DIR/Dockerfile.workspace" -t $APP_NAME:latest "$TRUVAG3_ROOT"
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -f "$AGENT_DIR/Dockerfile.workspace" -t $APP_NAME:latest "$TRUVAG3_ROOT"
     else
         log_info "Building standalone (Dockerfile) — dependencies from GitHub"
         cd "$AGENT_DIR"
-        docker build $no_cache_flag -t $APP_NAME:latest .
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag -t $APP_NAME:latest .
     fi
     log_success "$APP_NAME:latest built"
 }
@@ -558,8 +558,8 @@ cleanup() {
     kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
 
     # Stop local Redis
-    docker stop truvag3-redis 2>/dev/null || true
-    docker rm truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
 
     # Remove local binary
     rm -f "$SCRIPT_DIR/async-travel-agent"
