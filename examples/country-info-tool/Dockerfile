@@ -3,6 +3,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 COPY go.mod go.sum* ./
 COPY *.go ./
+COPY data/ ./data/
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux GONOSUMDB=github.com/truvaagents/truva-g3/*
 RUN go mod download && go build -ldflags '-w -s' -o country-info-tool .
 

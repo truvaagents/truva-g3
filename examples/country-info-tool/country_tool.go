@@ -1,17 +1,34 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
-// CountryTool provides country information using RestCountries API
+// countriesData is the embedded mledoze/countries dataset (ODbL). It powers
+// offline name/ISO-code matching and supplies all fields except population and
+// timezones (those are enriched at runtime). See data/ATTRIBUTION.md.
+//
+//go:embed data/countries.json
+var countriesData []byte
+
+// CountryTool provides country information from an embedded offline dataset
+// (mledoze/countries), enriched with population/timezones from apicountries.com.
 type CountryTool struct {
 	*core.BaseTool
 	httpClient *http.Client
+	countries  []mledozeCountry
+	index      map[string]*mledozeCountry
+	// cache stores enrichment results (population/timezones). BaseTool deliberately
+	// has no Memory field; response caching is opted into per the Tool Dev Guide.
+	cache *core.MemoryStore
 }
 
 // CountryRequest represents the input for country info
@@ -40,8 +57,8 @@ type CountryResponse struct {
 	CountryCode string `json:"country_code"`
 }
 
-// RestCountriesResponse represents the API response
-type RestCountriesResponse struct {
+// mledozeCountry is the subset of an mledoze/countries record this tool uses.
+type mledozeCountry struct {
 	Name struct {
 		Common   string `json:"common"`
 		Official string `json:"official"`
@@ -49,47 +66,91 @@ type RestCountriesResponse struct {
 	Capital    []string          `json:"capital"`
 	Region     string            `json:"region"`
 	Subregion  string            `json:"subregion"`
-	Population int64             `json:"population"`
 	Area       float64           `json:"area"`
 	Languages  map[string]string `json:"languages"`
-	Timezones  []string          `json:"timezones"`
 	Currencies map[string]struct {
 		Name   string `json:"name"`
 		Symbol string `json:"symbol"`
 	} `json:"currencies"`
-	Flag  string `json:"flag"`
-	Flags struct {
-		PNG string `json:"png"`
-		SVG string `json:"svg"`
-	} `json:"flags"`
-	CCA2 string `json:"cca2"`
+	Flag         string   `json:"flag"`
+	CCA2         string   `json:"cca2"`
+	CCA3         string   `json:"cca3"`
+	CIOC         string   `json:"cioc"`
+	AltSpellings []string `json:"altSpellings"`
+}
+
+// enrichment holds the two fields the offline dataset lacks (population,
+// timezones). Fetched from apicountries.com by exact ISO code and cached.
+type enrichment struct {
+	Population int64    `json:"population"`
+	Timezones  []string `json:"timezones"`
 }
 
 const (
-	ErrCodeCountryNotFound    = "COUNTRY_NOT_FOUND"
-	ErrCodeServiceUnavailable = "SERVICE_UNAVAILABLE"
-	ErrCodeInvalidRequest     = "INVALID_REQUEST"
+	ErrCodeCountryNotFound = "COUNTRY_NOT_FOUND"
+	ErrCodeInvalidRequest  = "INVALID_REQUEST"
 )
 
-const RestCountriesBaseURL = "https://restcountries.com/v3.1"
+// CountryAPIBaseURL is the keyless enrichment source for population/timezones,
+// which the embedded dataset does not provide. Looked up by exact ISO code.
+const CountryAPIBaseURL = "https://apicountries.com"
 
 func NewCountryTool() *CountryTool {
-	transport := &http.Transport{
+	// Traced HTTP client: creates a child span per outgoing call (population/
+	// timezone enrichment) for end-to-end visibility in Jaeger.
+	tracedClient := telemetry.NewTracedHTTPClientWithTransport(&http.Transport{
 		MaxIdleConns:        10,
 		MaxIdleConnsPerHost: 5,
 		IdleConnTimeout:     90 * time.Second,
-	}
+	})
+	tracedClient.Timeout = 30 * time.Second
 
 	tool := &CountryTool{
-		BaseTool: core.NewTool("country-info-tool"),
-		httpClient: &http.Client{
-			Transport: otelhttp.NewTransport(transport),
-			Timeout:   30 * time.Second,
-		},
+		BaseTool:   core.NewTool("country-info-tool"),
+		httpClient: tracedClient,
+		cache:      core.NewMemoryStore(),
 	}
 
+	tool.loadCountries()
 	tool.registerCapabilities()
 	return tool
+}
+
+// loadCountries parses the embedded mledoze dataset and builds a case-insensitive
+// lookup index. Authoritative keys (common/official name, ISO alpha-2/alpha-3,
+// IOC code) are added first; alternative spellings only fill gaps so they can
+// never shadow a real country name. Panics on failure — the data is embedded and
+// validated at build time, so a parse error is a broken build, not a runtime case.
+func (c *CountryTool) loadCountries() {
+	if err := json.Unmarshal(countriesData, &c.countries); err != nil {
+		panic(fmt.Sprintf("country-info-tool: failed to parse embedded countries.json: %v", err))
+	}
+
+	c.index = make(map[string]*mledozeCountry, len(c.countries)*4)
+	add := func(key string, country *mledozeCountry) {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			return
+		}
+		if _, exists := c.index[key]; !exists {
+			c.index[key] = country
+		}
+	}
+
+	for i := range c.countries {
+		country := &c.countries[i]
+		add(country.Name.Common, country)
+		add(country.Name.Official, country)
+		add(country.CCA2, country)
+		add(country.CCA3, country)
+		add(country.CIOC, country)
+	}
+	for i := range c.countries {
+		country := &c.countries[i]
+		for _, alt := range country.AltSpellings {
+			add(alt, country)
+		}
+	}
 }
 
 func (c *CountryTool) registerCapabilities() {

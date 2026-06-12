@@ -1,6 +1,6 @@
 # Country Info Tool
 
-A TruvaG3 tool that provides country information using the [RestCountries](https://restcountries.com/) API. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
+A TruvaG3 tool that provides country information from a **bundled offline dataset** ([mledoze/countries](https://github.com/mledoze/countries), ODbL), enriched at runtime with population and timezones from the keyless [apicountries.com](https://apicountries.com/) API. No API key is required. This tool is independent and can be deployed standalone - it only requires Redis for service discovery.
 
 ## Table of Contents
 
@@ -9,6 +9,7 @@ A TruvaG3 tool that provides country information using the [RestCountries](https
   - [Quick Start (Recommended)](#quick-start-recommended)
   - [Step-by-Step Deployment](#step-by-step-deployment)
 - [Features](#features)
+- [Data & License](#data--license)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
 - [Project Structure](#project-structure)
@@ -24,7 +25,7 @@ Running this tool locally is the best way to understand how TruvaG3 tools provid
 
 Before running this example, you need to install the following tools. Choose the instructions for your operating system.
 
-> **Note:** No API key is required. This tool uses the free [RestCountries](https://restcountries.com/) API.
+> **Note:** No API key is required. Core country data is served from a bundled offline dataset; population and timezones are fetched from the keyless [apicountries.com](https://apicountries.com/) API (best-effort).
 
 #### 1. Docker Desktop
 
@@ -571,7 +572,15 @@ cp .env.example .env
 
 - **Country Details**: Get capital, population, languages, currency, timezones
 - **Flag Emoji and URL**: Unicode flag emoji and PNG flag URL
-- **Free API**: No API key required - uses the public RestCountries API
+- **No API key, offline-first**: Country data is embedded ([mledoze/countries](https://github.com/mledoze/countries), ODbL); only population/timezones are fetched online
+
+---
+
+## Data & License
+
+Country data — name, capital, region, languages, currency, flag emoji, ISO codes, and the alternative spellings used for name matching — is served from a **bundled offline copy** of the [mledoze/countries](https://github.com/mledoze/countries) dataset, embedded into the binary via `go:embed` ([data/countries.json](data/countries.json)).
+
+The dataset is licensed under the **Open Data Commons Open Database License (ODbL) v1.0**; its license text and full attribution are shipped alongside it in [data/LICENSE](data/LICENSE) and [data/ATTRIBUTION.md](data/ATTRIBUTION.md). The dataset does not include population or timezones, which are enriched at runtime from the keyless [apicountries.com](https://apicountries.com/) API by exact ISO code (best-effort).
 
 ---
 
@@ -680,9 +689,9 @@ pkill -f 'kubectl.*port-forward.*truvag3-examples'
 ./setup.sh forward
 ```
 
-**3. RestCountries API not responding**
+**3. Population/timezones missing from a response**
 
-The RestCountries API is a free public service. If it's temporarily unavailable, wait and retry. Check the API status at [restcountries.com](https://restcountries.com/).
+Those two fields are enriched from [apicountries.com](https://apicountries.com/); every other field comes from the bundled offline dataset. If the enrichment service is temporarily unavailable, the tool still returns the country (without population/timezones) and logs a warning — retry later.
 
 ### Useful Commands
 

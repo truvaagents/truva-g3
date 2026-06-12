@@ -6,3 +6,15 @@ and licensed under the Apache License, Version 2.0.
 
 TruvaG3™ is a trademark of Neelabh Tripathi. The Apache License 2.0
 does not grant any rights to use the TruvaG3 mark.
+
+-------------------------------------------------------------------------------
+
+Third-party data
+
+This product bundles the mledoze/countries dataset
+(https://github.com/mledoze/countries) in the country-info-tool example
+(examples/country-info-tool/data/countries.json), licensed under the
+Open Data Commons Open Database License (ODbL) v1.0. The license text and
+attribution are included alongside the data; see
+examples/country-info-tool/data/LICENSE and
+examples/country-info-tool/data/ATTRIBUTION.md.

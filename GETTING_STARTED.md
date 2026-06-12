@@ -310,7 +310,7 @@ flights, hotels, local places, and headlines.
 | weather-tool-v2 | Current conditions and forecasts for any coordinate | No (free, no auth) | [Open-Meteo](https://open-meteo.com/) | [examples/weather-tool-v2/](examples/weather-tool-v2/) |
 | geocoding-tool | City/landmark name → latitude/longitude (input for weather and places) | No (free, no auth) | [Nominatim / OpenStreetMap](https://nominatim.org/) | [examples/geocoding-tool/](examples/geocoding-tool/) |
 | currency-tool | Currency conversion across 31 ECB currencies | No (free, no auth) | [Frankfurter](https://frankfurter.dev/) | [examples/currency-tool/](examples/currency-tool/) |
-| country-info-tool | Country facts — capital, languages, currency code, region | No (free, no auth) | [RestCountries](https://restcountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
+| country-info-tool | Country facts — capital, languages, currency code, region | No (free, no auth) | Bundled dataset + [apicountries.com](https://apicountries.com/) | [examples/country-info-tool/](examples/country-info-tool/) |
 | system-utilities-tool | Current time, timezone conversion, date math (e.g. "next Friday") | No (self-contained) | None — Go stdlib (timezone DB, date math) | [examples/system-utilities-tool/](examples/system-utilities-tool/) |
 | travel-advisory-tool | Official US State Department safety advisories per country | No (free, no auth) | [Travel Advisories API](https://cadataapi.state.gov/) | [examples/travel-advisory-tool/](examples/travel-advisory-tool/) |
 | scheduler-tool | Schedule delayed and recurring (cron-style) tasks for the agent to run later | No (self-contained) | None — in-cluster | [examples/scheduler-tool/](examples/scheduler-tool/) |
