@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Execution Telemetry Depth — How Deep Can You Debug an Agent? · Operational Excellence</title>
+<meta name="description" content="The observability chapter measured whether spans exist and how they nest. This companion goes one layer deeper: when an agent misbehaves in production, can you actually see the prompt it sent, the visible reasoning it produced, the tool it called with which arguments, and what came back? And is that visibility free, flag-gated, or locked to a vendor? A source-grounded infographic across ten frameworks.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="Execution Telemetry Depth — How Deep Can You Debug an Agent?">
+<meta property="og:description" content="Can you actually see the full ReAct loop — prompt, visible reasoning, tool call, observation — in production? Is it free, flag-gated, or vendor-locked? A source-grounded infographic across ten agent frameworks.">
+<meta property="og:url" content="https://truvag3.dev/whitepapers/operational-excellence-observability-depth">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Execution Telemetry Depth — How Deep Can You Debug an Agent?">
+<meta name="twitter:description" content="Can you actually see the full ReAct loop — prompt, visible reasoning, tool call, observation — in production? Is it free, flag-gated, or vendor-locked? A source-grounded infographic across ten agent frameworks.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399; --err: #f87171;
+    --blue: #60a5fa; --ch: #22d3ee;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .chap-nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .chap-nav .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 12.5px; }
+  .chap-nav a { padding: 5px 11px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+  .chap-nav a:hover { border-color: #3a4a72; text-decoration: none; }
+  .chap-nav a.active { background: #0a3a4a; border-color: var(--ch); color: #a5f3fc; }
+  .chap-nav .home { color: var(--muted); }
+  .chap-nav .num { color: var(--muted); font-weight: 700; margin-right: 6px; }
+
+  header.hero { padding: 56px 0 36px; text-align: center; border-bottom: 1px solid var(--line); }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #a5f3fc 60%, #22d3ee 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 16.5px; max-width: 840px; margin: 0 auto 18px; }
+  .chap-tag { display: inline-block; margin-bottom: 14px; padding: 4px 12px; border-radius: 999px; background: #0a3a4a; border: 1px solid var(--ch); color: #a5f3fc; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h2 .num { color: var(--ch); margin-right: 10px; font-weight: 700; }
+  section .lede { color: var(--muted); max-width: 840px; margin: 0 0 22px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
+  .card p { margin: 0 0 10px; color: var(--muted); } .card p:last-child { margin-bottom: 0; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 820px; }
+  th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  td { color: var(--muted); }
+  thead th { background: var(--bg-2); }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; color: var(--ink); }
+  .lang-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-3); color: var(--muted); margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
+
+  .toc { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .toc ol { margin: 6px 0 0; padding-left: 22px; }
+  .toc li { margin: 5px 0; }
+
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; }
+  .ta p { margin: 0; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0a3a4a; color: #a5f3fc; margin-bottom: 8px; letter-spacing: .04em; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--accent); }
+
+  /* ===== Infographic components (new) ===== */
+
+  /* Three-layer depth stack */
+  .layers { display: grid; gap: 10px; margin: 6px 0 4px; }
+  .layer { position: relative; border-radius: 12px; padding: 16px 18px 16px 64px; border: 1px solid var(--line); }
+  .layer .lnum { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
+  .layer h5 { margin: 0 0 4px; font-size: 15px; color: var(--ink); }
+  .layer p { margin: 0; color: var(--muted); font-size: 13.5px; }
+  .layer.l1 { background: linear-gradient(90deg, rgba(52,211,153,.12), transparent 70%); border-color: rgba(52,211,153,.4); }
+  .layer.l1 .lnum { background: rgba(52,211,153,.18); color: var(--good); border: 1px solid rgba(52,211,153,.5); }
+  .layer.l2 { background: linear-gradient(90deg, rgba(124,196,255,.12), transparent 70%); border-color: rgba(124,196,255,.4); }
+  .layer.l2 .lnum { background: rgba(124,196,255,.16); color: var(--accent); border: 1px solid rgba(124,196,255,.5); }
+  .layer.l3 { background: linear-gradient(90deg, rgba(251,191,36,.12), transparent 70%); border-color: rgba(251,191,36,.4); }
+  .layer.l3 .lnum { background: rgba(251,191,36,.16); color: var(--warn); border: 1px solid rgba(251,191,36,.5); }
+  .layer .pill { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--muted); margin-top: 8px; letter-spacing: .03em; }
+
+  /* ReAct loop diagram */
+  .react { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 6px 0; }
+  @media (max-width: 880px) { .react { grid-template-columns: 1fr 1fr; } }
+  .step { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; position: relative; }
+  .step .kicker { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ch); font-weight: 700; }
+  .step h5 { margin: 4px 0 6px; font-size: 14.5px; color: var(--ink); }
+  .step p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .step .capn { display: inline-block; margin-top: 9px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(96,165,250,.14); border: 1px solid rgba(96,165,250,.4); color: #bcdcff; }
+  .step .ar { position: absolute; right: -11px; top: 50%; transform: translateY(-50%); color: var(--line); font-size: 18px; z-index: 1; }
+  @media (max-width: 880px) { .step .ar { display: none; } }
+
+  /* Capture matrix legend + cells */
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 4px 0 12px; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1; }
+  .b-yes { background: rgba(52,211,153,.16); color: var(--good); border: 1px solid rgba(52,211,153,.5); }
+  .b-flag { background: rgba(251,191,36,.16); color: var(--warn); border: 1px solid rgba(251,191,36,.5); }
+  .b-addon { background: rgba(96,165,250,.16); color: var(--blue); border: 1px solid rgba(96,165,250,.5); }
+  .b-no { background: rgba(248,113,113,.16); color: var(--err); border: 1px solid rgba(248,113,113,.5); }
+  td.cap { text-align: center; }
+
+  /* Depth gauges */
+  .gauges { display: grid; gap: 9px; margin: 6px 0; }
+  .grow { display: grid; grid-template-columns: 168px 1fr; gap: 14px; align-items: center; }
+  @media (max-width: 720px) { .grow { grid-template-columns: 120px 1fr; } }
+  .grow .gname { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .grow .gname .lang-tag { display: block; margin: 2px 0 0; }
+  .track { position: relative; height: 30px; border-radius: 8px; background: var(--bg-3); border: 1px solid var(--line); overflow: hidden; }
+  .fill { height: 100%; display: flex; align-items: center; padding-left: 11px; font-size: 12px; font-weight: 600; color: #06240f; white-space: nowrap; }
+  .t4 .fill { width: 100%; background: linear-gradient(90deg, #34d399, #10b981); color: #052012; }
+  .t3 .fill { width: 74%; background: linear-gradient(90deg, #7cc4ff, #38bdf8); color: #06283a; }
+  .t2 .fill { width: 50%; background: linear-gradient(90deg, #fbbf24, #f59e0b); color: #2a1c00; }
+  .t1 .fill { width: 26%; background: linear-gradient(90deg, #f87171, #ef4444); color: #2a0707; }
+
+  /* Free vs paid split */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0 4px; }
+  @media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
+  .panel { border-radius: 14px; padding: 18px 20px; border: 1px solid var(--line); }
+  .panel.free { background: linear-gradient(160deg, rgba(52,211,153,.10), transparent 80%); border-color: rgba(52,211,153,.4); }
+  .panel.paid { background: linear-gradient(160deg, rgba(251,191,36,.10), transparent 80%); border-color: rgba(251,191,36,.4); }
+  .panel h4 { margin: 0 0 6px; font-size: 15px; color: var(--ink); }
+  .panel .sub { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; }
+  .panel ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+  .panel li { margin: 5px 0; }
+
+  /* Lock-in zones */
+  .zones { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 8px 0 4px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+  @media (max-width: 880px) { .zones { grid-template-columns: 1fr 1fr; } }
+  .zone { padding: 14px 14px 16px; border-right: 1px solid var(--line); }
+  .zone:last-child { border-right: none; }
+  .zone .ztop { height: 6px; border-radius: 999px; margin-bottom: 11px; }
+  .zone h5 { margin: 0 0 8px; font-size: 13px; color: var(--ink); }
+  .zone .fw { display: block; font-size: 12.5px; color: var(--muted); margin: 4px 0; }
+  .zone p { margin: 9px 0 0; font-size: 11.5px; color: var(--muted); }
+  .z1 .ztop { background: var(--good); } .z2 .ztop { background: var(--ch); }
+  .z3 .ztop { background: var(--warn); } .z4 .ztop { background: var(--err); }
+  .axis-labels { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+  /* Citations */
+  .cite { font-size: 9.5px; vertical-align: super; line-height: 0; white-space: nowrap; font-weight: 600; }
+  .cite a { color: var(--accent); padding: 0 1px; }
+  td.src { white-space: nowrap; font-size: 11.5px; }
+  td.src a { color: var(--accent); padding: 0 2px; font-weight: 600; }
+  .methnote { background: var(--bg-2); border: 1px solid var(--line); border-left: 3px solid var(--ch); border-radius: 10px; padding: 14px 18px; font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .methnote code { color: var(--accent); }
+  .refgroup { margin: 0 0 16px; }
+  .refgroup h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--accent); letter-spacing: .05em; text-transform: uppercase; }
+  .refrow { display: flex; gap: 10px; padding: 4px 0; font-size: 12.5px; border-bottom: 1px solid rgba(42,53,80,.45); }
+  .refrow:target { background: rgba(124,196,255,.10); border-radius: 6px; }
+  .refrow .rn { color: var(--muted); min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .refrow .rbody { overflow-wrap: anywhere; }
+  .refrow .meta { color: var(--muted); }
+
+  @media print { body { background: white; color: black; } section { page-break-inside: avoid; } }
+  .copyright { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 1.5rem; margin-bottom: 0; }
+  .ai-capsule { display: inline-block; margin-bottom: 18px; margin-left: 8px; padding: 5px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--warn); color: var(--warn); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<nav class="chap-nav">
+  <div class="container row">
+    <a class="home" href="operational-excellence-index.html">← Index</a>
+    <a href="operational-excellence-observability.html"><span class="num">1</span>Observability</a>
+    <a class="active" href="operational-excellence-observability-depth.html"><span class="num">1·5</span>Telemetry Depth</a>
+    <a href="operational-excellence-performance.html"><span class="num">2</span>Performance</a>
+    <a href="operational-excellence-deployment.html"><span class="num">3</span>Deployment</a>
+    <a href="operational-excellence-testing.html"><span class="num">4</span>Testing</a>
+    <a href="operational-excellence-configuration.html"><span class="num">5</span>Configuration</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="chap-tag">Deep Dive · Companion to Chapter 1</div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>How deep can you actually debug?</h1>
+    <p class="subtitle">
+      The observability chapter asked whether spans exist and how they nest. This companion asks the
+      question you only feel at 2&nbsp;a.m.: when the agent gives a wrong answer, can you see the
+      <b>exact prompt it sent</b>, the <b>visible reasoning it produced</b>, the <b>tool it called with which
+      arguments</b>, and <b>what came back</b> — the full ReAct loop? And is that visibility
+      <b>free</b>, hidden behind a <b>flag</b>, or locked to a <b>vendor</b>? A source-grounded
+      infographic across the same <b>ten frameworks</b>.
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What's in this deep dive</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#layers">Three layers of telemetry — and where Chapter&nbsp;1 stopped</a></li>
+        <li><a href="#react">What "going deep" means — the ReAct loop</a></li>
+        <li><a href="#matrix">The capture matrix — who records what</a></li>
+        <li><a href="#depth">Debug-depth gauge — how far you get out of the box</a></li>
+        <li><a href="#freepaid">Free, flag-gated, or paid?</a></li>
+        <li><a href="#lockin">Vendor lock-in spectrum</a></li>
+        <li><a href="#decide">Decision guide</a></li>
+        <li><a href="#refs">References &amp; sources</a> — code claims commit-pinned, docs linked</li>
+      </ol>
+    </div>
+    <p class="lede" style="margin-top:18px;">
+      The ten frameworks, unchanged from Chapter&nbsp;1: <b>LangChain</b>, <b>LangGraph</b>,
+      <b>CrewAI</b>, <b>Google ADK</b>, <b>Microsoft Semantic Kernel</b> (Python), <b>Mastra</b>
+      (TypeScript), <b>Microsoft Agent Framework</b> (.NET), <b>LangChain4j</b> (Java),
+      <b>Genkit</b> (Go), and <b>Rig</b> (Rust).
+    </p>
+    <div class="methnote" style="margin-top:18px;">
+      <b>How to trust this page.</b> Every claim below is footnoted to a source. Code claims link to a
+      <b>commit-pinned GitHub permalink</b> (exact file and line, so the link won't rot as the repos
+      move); behavioural, flag, and pricing claims link to official docs (live pages, not pinned). The
+      full list is in <a href="#refs">References</a> — code permalinks were captured June&nbsp;2026 from
+      each repo's then-current <code>HEAD</code>, with the exact commit SHAs listed there.
+    </div>
+  </div>
+</section>
+
+<!-- LAYERS -->
+<section id="layers">
+  <div class="container">
+    <h2><span class="num">1</span>Three layers of telemetry</h2>
+    <p class="lede">
+      "I have tracing" can mean three very different things. Almost every framework gives you the
+      first layer for free. The layer that actually lets you debug a wrong answer — the verbatim
+      content — is a separate decision, and the layer that decides whether you're trapped is a third.
+      Chapter&nbsp;1 measured Layer&nbsp;1. This page is about Layers&nbsp;2 and&nbsp;3.
+    </p>
+
+    <div class="layers">
+      <div class="layer l1">
+        <div class="lnum">1</div>
+        <h5>Metadata — structure &amp; numbers</h5>
+        <p>Span shape, model name, token counts, latency, finish reason, error type. Tells you <i>that</i> an LLM call happened and how long it took — never what was said.</p>
+        <span class="pill">Chapter 1 lives here · on by default almost everywhere</span>
+      </div>
+      <div class="layer l2">
+        <div class="lnum">2</div>
+        <h5>Content — the words themselves</h5>
+        <p>The verbatim prompt, the model's completion (including any visible reasoning it emits), the tool name + arguments, and the tool's result. This is what you read to understand <i>why</i> the agent did the wrong thing.</p>
+        <span class="pill">Often gated behind a "sensitive data" flag · the subject of this page</span>
+      </div>
+      <div class="layer l3">
+        <div class="lnum">3</div>
+        <h5>Destination — where it can go</h5>
+        <p>Is the content emitted as vendor-neutral OpenTelemetry you can point anywhere, or is the only well-paved path a specific SaaS product you'll keep paying for?</p>
+        <span class="pill">Free vs paid &amp; lock-in · §5 and §6</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h4>The trap to avoid</h4>
+      <p>
+        A framework can score "usable spans on day one" in Chapter&nbsp;1 and still show you
+        <i>not a single prompt</i> without extra work. MS Agent Framework is the textbook case: you
+        get spans and token counts out of the box, but the prompt and response stay dark until you
+        flip a sensitive-data switch<span class="cite"><a href="#r37">37</a></span>. Semantic Kernel
+        is stricter still — its LLM spans stay off until you set one of its two diagnostics flags
+        (only a bare <code>execute_tool</code> span is emitted ungated), and content needs the
+        <i>sensitive</i> one<span class="cite"><a href="#r34">34</a></span>. That gap — between "I have
+        tracing" and "I can read what my agent actually said" — is, in our experience, one of the
+        most common production surprises.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- REACT -->
+<section id="react">
+  <div class="container">
+    <h2><span class="num">2</span>What "going deep" actually means</h2>
+    <p class="lede">
+      Debugging an agent means replaying its reasoning loop. A single step has four things worth
+      capturing — and a framework can capture any subset. "It logs LLM calls" usually means only the
+      first and maybe the second. True depth means all four, every step, verbatim.
+    </p>
+
+    <div class="react">
+      <div class="step">
+        <div class="kicker">Input</div>
+        <h5>Prompt sent</h5>
+        <p>System instructions + user message + the entire prior conversation, exactly as serialized to the model.</p>
+        <span class="capn">Capture point 1</span>
+        <span class="ar">→</span>
+      </div>
+      <div class="step">
+        <div class="kicker">Thought</div>
+        <h5>Completion</h5>
+        <p>The model's raw output text — including any <i>visible</i> "thought" it emits before an action. (Hidden reasoning tokens aren't returned by providers, so they can't be traced.)</p>
+        <span class="capn">Capture point 2</span>
+        <span class="ar">→</span>
+      </div>
+      <div class="step">
+        <div class="kicker">Action</div>
+        <h5>Tool call + arguments</h5>
+        <p>Which tool the model chose and the <i>actual</i> arguments it passed — not just "a tool ran".</p>
+        <span class="capn">Capture point 3</span>
+        <span class="ar">→</span>
+      </div>
+      <div class="step">
+        <div class="kicker">Observation</div>
+        <h5>Tool result</h5>
+        <p>The verbatim content the tool returned, which feeds the next reasoning step and closes the loop.</p>
+        <span class="capn">Capture point 4</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h4>Why all four, not just the call</h4>
+      <p>
+        In practice, many wrong answers aren't model failures — they're loop failures. The tool returned stale
+        data (you need capture&nbsp;4), or the model hallucinated an argument (capture&nbsp;3), or the
+        prompt template silently dropped a variable (capture&nbsp;1), or the reasoning went sideways
+        before the call (capture&nbsp;2). Miss any one capture point and you're guessing about that
+        class of bug. The matrix below scores each framework on whether it emits all four to a
+        backend you control.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- MATRIX -->
+<section id="matrix">
+  <div class="container">
+    <h2><span class="num">3</span>The capture matrix</h2>
+    <p class="lede">
+      For each framework: are the four capture points actually emitted to your telemetry backend?
+      The distinction that matters is not "does the data exist" — it nearly always exists in-process —
+      but "does the official path put it where you can search it."
+    </p>
+    <p class="lede" style="margin-top:-8px;">
+      A note on "Completion": this column means the model's full output text, including any
+      <i>visible</i> reasoning or "thought" it emits as part of that output. Hidden reasoning tokens
+      from reasoning models are generally not returned by the provider's API at all, so no framework
+      can trace them — what you get is the text the model actually returned.
+    </p>
+
+    <div class="legend">
+      <span><span class="badge b-yes">✓</span> Emitted to your backend</span>
+      <span><span class="badge b-flag">⚑</span> Captured, but behind a flag</span>
+      <span><span class="badge b-addon">＋</span> Only via an add-on / your own code</span>
+      <span><span class="badge b-no">✕</span> Not emitted</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Framework</th>
+            <th>Prompt</th>
+            <th>Completion</th>
+            <th>Tool args</th>
+            <th>Tool result</th>
+            <th>Out-of-the-box state · where it lives</th>
+            <th>Sources</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">LangChain<span class="lang-tag">Python</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td>Verbatim in callbacks for free; reasoning preserved in <code>AgentAction.log</code>. Export to a backend is opt-in (<code>LANGSMITH_TRACING</code> — hence the flags); content is not redacted unless you ask.</td>
+            <td class="src"><a href="#r1">1</a><a href="#r2">2</a><a href="#r3">3</a><a href="#r4">4</a><a href="#r5">5</a><a href="#r8">8</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangGraph<span class="lang-tag">Python</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td>Identical to LangChain — reuses <code>langchain-core</code> callbacks (same opt-in export). No separate content path.</td>
+            <td class="src"><a href="#r6">6</a><a href="#r1">1</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">CrewAI<span class="lang-tag">Python</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td>Core <code>telemetry.py</code> is anonymized usage data — <b>no content</b>. Full content rides the event bus → reaches a backend only via a third-party instrumentor (OpenLIT / OpenInference), or via built-in tracing → CrewAI AMP.</td>
+            <td class="src"><a href="#r11">11</a><a href="#r12">12</a><a href="#r13">13</a><a href="#r14">14</a><a href="#r17">17</a><a href="#r71">71</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Google ADK<span class="lang-tag">Python</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td><b>ON by default</b> — <code>ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS</code> defaults true; full <code>llm_request</code>/<code>llm_response</code>/<code>tool_call_args</code>/<code>tool_response</code> on spans. (Defaults <i>off</i> on managed Cloud deploy unless you set it explicitly.)</td>
+            <td class="src"><a href="#r19">19</a><a href="#r20">20</a><a href="#r21">21</a><a href="#r22">22</a><a href="#r23">23</a><a href="#r25">25</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td><b>LLM telemetry off by default</b> — spans + metrics need <code>…ENABLE_OTEL_DIAGNOSTICS</code> <i>or</i> <code>…_SENSITIVE</code> (either enables diagnostics); content needs <code>…_SENSITIVE</code>. Both default off, so the model-diagnostics decorators no-op until set; only a bare <code>execute_tool</code> span is ungated. Then emits <code>gen_ai.*.message</code> events + tool arg/result attrs.</td>
+            <td class="src"><a href="#r29">29</a><a href="#r30">30</a><a href="#r31">31</a><a href="#r32">32</a><a href="#r33">33</a><a href="#r34">34</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td><b>No separate content flag</b> — once observability is configured on the Mastra instance, <code>input</code>/<code>output</code> (incl. tool args + results) are captured by default; redaction / hide / sampling are opt-in.</td>
+            <td class="src"><a href="#r43">43</a><a href="#r44">44</a><a href="#r45">45</a><a href="#r46">46</a><a href="#r48">48</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td class="cap"><span class="badge b-flag">⚑</span></td>
+            <td>Spans + token metrics by default; content needs <code>EnableSensitiveData</code> / <code>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT</code>. Standard Gen AI events.</td>
+            <td class="src"><a href="#r37">37</a><a href="#r38">38</a><a href="#r39">39</a><a href="#r42">42</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td class="cap"><span class="badge b-addon">＋</span></td>
+            <td>Official modules emit <b>token/latency metadata only</b>. Full messages live in <code>ChatModelListener</code> objects in-process — you write a listener that serializes them onto spans yourself.</td>
+            <td class="src"><a href="#r56">56</a><a href="#r57">57</a><a href="#r58">58</a><a href="#r59">59</a><a href="#r60">60</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Genkit<span class="lang-tag">Go</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td><b>ON by default</b> — full verbatim JSON in <code>genkit:input</code>/<code>genkit:output</code>, untruncated in the local Dev UI. Cloud export truncates at 128k chars and is toggleable.</td>
+            <td class="src"><a href="#r50">50</a><a href="#r51">51</a><a href="#r52">52</a><a href="#r53">53</a><a href="#r54">54</a></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Rig<span class="lang-tag">Rust</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td class="cap"><span class="badge b-yes">✓</span></td>
+            <td>Prompt / completion / tool name+args / result recorded onto Gen-AI-semconv spans at <b>INFO</b>; full verbatim request/response JSON at <b>TRACE</b>. Appears once you attach a subscriber that admits INFO (tool-dispatch args need DEBUG).</td>
+            <td class="src"><a href="#r63">63</a><a href="#r64">64</a><a href="#r65">65</a><a href="#r66">66</a><a href="#r67">67</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>How to read this</h4>
+      <p>
+        Six frameworks emit the full loop to a backend you control with no per-field heroics: ADK,
+        Mastra, Genkit and Rig do it on by default; MS Agent Framework does it the moment you flip
+        the sensitive-data flag, and Semantic Kernel the moment you set its <i>sensitive</i> flag
+        (which also switches on the LLM spans and metrics). LangChain / LangGraph also capture
+        everything verbatim — export itself is opt-in (one env var), and the real question is the
+        destination, covered next. The two genuine gaps are
+        <b>CrewAI</b> (its native telemetry is anonymized; content needs an add-on or its own SaaS)
+        and <b>LangChain4j</b> (official telemetry is metadata-only; content is yours to wire).
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- DEPTH -->
+<section id="depth">
+  <div class="container">
+    <h2><span class="num">4</span>Debug-depth gauge</h2>
+    <p class="lede">
+      Same data, framed as a single question: <b>how far can you debug straight out of the box,
+      before writing custom code?</b> Four tiers — from "attach an exporter and read everything" to
+      "the content is on you."
+    </p>
+
+    <div class="gauges">
+      <div class="grow t4"><div class="gname">Google ADK<span class="lang-tag">Python</span></div><div class="track"><div class="fill">Full ReAct content · ON by default</div></div></div>
+      <div class="grow t4"><div class="gname">Mastra<span class="lang-tag">TypeScript</span></div><div class="track"><div class="fill">Full ReAct content · no content flag</div></div></div>
+      <div class="grow t4"><div class="gname">Genkit<span class="lang-tag">Go</span></div><div class="track"><div class="fill">Full content in Dev UI · ON, untruncated</div></div></div>
+      <div class="grow t4"><div class="gname">Rig<span class="lang-tag">Rust</span></div><div class="track"><div class="fill">Full content on spans at INFO · near-turnkey</div></div></div>
+      <div class="grow t3"><div class="gname">MS Agent Framework<span class="lang-tag">.NET</span></div><div class="track"><div class="fill">Full content · flip one flag</div></div></div>
+      <div class="grow t3"><div class="gname">Semantic Kernel<span class="lang-tag">Python</span></div><div class="track"><div class="fill">Full content · flip the sensitive flag (spans follow)</div></div></div>
+      <div class="grow t2"><div class="gname">LangChain<span class="lang-tag">Python</span></div><div class="track"><div class="fill">Full content · choose the path</div></div></div>
+      <div class="grow t2"><div class="gname">LangGraph<span class="lang-tag">Python</span></div><div class="track"><div class="fill">Full content · choose the path</div></div></div>
+      <div class="grow t2"><div class="gname">CrewAI<span class="lang-tag">Python</span></div><div class="track"><div class="fill">Full content · add an instrumentor</div></div></div>
+      <div class="grow t1"><div class="gname">LangChain4j<span class="lang-tag">Java</span></div><div class="track"><div class="fill">Metadata only · content is DIY</div></div></div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h4>What separates the tiers</h4>
+      <p>
+        The top tier costs you one exporter and nothing else — the words are already on the spans.
+        The second tier is identical in fidelity; the only difference is a deliberate, sane default:
+        Microsoft ships content <i>off</i> so you don't accidentally stream user PII to a dashboard,
+        and you opt in per environment (Agent Framework still emits spans + metrics meanwhile;
+        Semantic Kernel gates even its LLM spans behind a diagnostics flag — either flag enables them). The third tier captures everything too, but makes you pick a
+        route — point LangChain at your own OTLP collector, or drop OpenLIT in front of CrewAI. Only
+        LangChain4j leaves the content emission entirely to you.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- FREE / PAID -->
+<section id="freepaid">
+  <div class="container">
+    <h2><span class="num">5</span>Free, flag-gated, or paid?</h2>
+    <p class="lede">
+      The headline first, because it cuts against the reputations: <b>capturing the content is
+      free and open-source in all ten frameworks.</b> You never pay to record the prompt and
+      response. What's sometimes paid is the <i>destination</i> — the hosted UI you choose to send
+      it to — and that is always optional.
+    </p>
+
+    <div class="split">
+      <div class="panel free">
+        <h4>Free forever — the data</h4>
+        <p class="sub">Open-source instrumentation, in every framework</p>
+        <ul>
+          <li>Recording the full ReAct loop (prompt, completion, tool args, tool result)</li>
+          <li>Exporting it as vendor-neutral OpenTelemetry to a collector you run — turnkey in most; for Genkit and Rig the spans are standard OTel but you register the exporter yourself</li>
+          <li>Self-hosted backends: Jaeger, Grafana Tempo, OpenTelemetry Collector, Genkit's local Dev UI, your own log store</li>
+        </ul>
+      </div>
+      <div class="panel paid">
+        <h4>Optional &amp; paid — the destination</h4>
+        <p class="sub">Convenient hosted UIs &amp; evals — never required to see content</p>
+        <ul>
+          <li>LangSmith (LangChain family) · Mastra Cloud · CrewAI AMP</li>
+          <li>Azure Application Insights (SK, MS Agent Framework)</li>
+          <li>Google Cloud Trace / Genkit Monitoring (ADK, Genkit)</li>
+          <li>Third-party SaaS: Datadog, Langfuse, Arize, Braintrust, &amp;c.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:16px;">
+      <table>
+        <thead><tr><th>Framework</th><th>Capturing content is free?</th><th>Optional paid product</th><th>Is the paid product required?</th><th>Sources</th></tr></thead>
+        <tbody>
+          <tr><td class="row-hd">LangChain<span class="lang-tag">Python</span></td><td>Yes — Apache-2.0 callbacks</td><td>LangSmith</td><td>No — SDK emits OTLP to your own backend (since late 2024)</td><td class="src"><a href="#r7">7</a><a href="#r9">9</a><a href="#r10">10</a></td></tr>
+          <tr><td class="row-hd">LangGraph<span class="lang-tag">Python</span></td><td>Yes</td><td>LangSmith · LangGraph Platform</td><td>No — same OTLP path as LangChain</td><td class="src"><a href="#r6">6</a><a href="#r10">10</a></td></tr>
+          <tr><td class="row-hd">CrewAI<span class="lang-tag">Python</span></td><td>Yes — via OSS OpenLIT / OpenInference</td><td>CrewAI AMP</td><td>Only for the <i>built-in</i> tracing path; the add-on path is free</td><td class="src"><a href="#r11">11</a><a href="#r16">16</a><a href="#r17">17</a><a href="#r18">18</a><a href="#r70">70</a></td></tr>
+          <tr><td class="row-hd">Google ADK<span class="lang-tag">Python</span></td><td>Yes — standard OTel SDK</td><td>Google Cloud Trace</td><td>No — any OTLP backend works</td><td class="src"><a href="#r26">26</a><a href="#r27">27</a><a href="#r28">28</a></td></tr>
+          <tr><td class="row-hd">Semantic Kernel<span class="lang-tag">Python</span></td><td>Yes — standard OTel SDK</td><td>Azure App Insights</td><td>No</td><td class="src"><a href="#r35">35</a><a href="#r36">36</a></td></tr>
+          <tr><td class="row-hd">Mastra<span class="lang-tag">TypeScript</span></td><td>Yes — local storage + Studio</td><td>Mastra Cloud</td><td>No</td><td class="src"><a href="#r47">47</a><a href="#r49">49</a></td></tr>
+          <tr><td class="row-hd">MS Agent Framework<span class="lang-tag">.NET</span></td><td>Yes — std OTel + M.E.AI</td><td>Azure App Insights</td><td>No — added conditionally, alongside OTLP</td><td class="src"><a href="#r40">40</a><a href="#r41">41</a></td></tr>
+          <tr><td class="row-hd">LangChain4j<span class="lang-tag">Java</span></td><td>Yes — Apache-2.0</td><td>— (no first-party paid product)</td><td>—</td><td class="src"><a href="#r61">61</a><a href="#r62">62</a></td></tr>
+          <tr><td class="row-hd">Genkit<span class="lang-tag">Go</span></td><td>Yes — Dev UI needs no cloud</td><td>Google Cloud / Genkit Monitoring</td><td>No, but cloud <i>export</i> needs a GCP project &amp; truncates</td><td class="src"><a href="#r53">53</a><a href="#r55">55</a></td></tr>
+          <tr><td class="row-hd">Rig<span class="lang-tag">Rust</span></td><td>Yes — MIT</td><td>— (no first-party paid product)</td><td>—</td><td class="src"><a href="#r68">68</a><a href="#r69">69</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h4>The two reputations worth correcting</h4>
+      <p>
+        "LangChain means paying for LangSmith" and "CrewAI tracing means CrewAI's cloud" are both now
+        escapable. LangChain's SDK can send traces only to your own OTLP collector — its
+        <code>LANGSMITH_OTEL_ONLY</code> mode bypasses LangSmith<span class="cite"><a href="#r7">7</a><a href="#r9">9</a></span>;
+        CrewAI's execution content can be exported to any OTLP backend through a free OSS instrumentor
+        like OpenLIT, which logs prompts and completions to span attributes by default<span class="cite"><a href="#r17">17</a><a href="#r70">70</a></span>.
+        The paid products buy you a polished UI and eval tooling — not access to your own telemetry.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- LOCK-IN -->
+<section id="lockin">
+  <div class="container">
+    <h2><span class="num">6</span>Vendor lock-in spectrum</h2>
+    <p class="lede">
+      "Pure telemetry" means the content is standard OpenTelemetry you can repoint at any backend on
+      a config change. "Lock-in" means the well-paved path runs through one vendor and getting out is
+      real work. Here's where each framework sits.
+    </p>
+
+    <div class="zones">
+      <div class="zone z1">
+        <div class="ztop"></div>
+        <h5>None — pure OTel</h5>
+        <span class="fw">Semantic Kernel</span>
+        <span class="fw">MS Agent Framework</span>
+        <span class="fw">Mastra</span>
+        <span class="fw">Rig</span>
+        <span class="fw">LangChain4j</span>
+        <p>Standard <code>gen_ai.*</code> attributes / events (Mastra uses its own span format instead, but ships ~10 exporters in-tree, incl. OTel). Swap backends freely.</p>
+      </div>
+      <div class="zone z2">
+        <div class="ztop"></div>
+        <h5>Minor caveat — Google-flavored</h5>
+        <span class="fw">Google ADK</span>
+        <span class="fw">Genkit</span>
+        <p>Content travels on valid OTel spans (vendor-neutral transport), so it goes anywhere — but on Google-specific attribute keys rather than the <code>gen_ai.*</code> conventions, so it renders best in Google Cloud. ADK uses <code>gcp.vertex.agent.*</code> keys<span class="cite"><a href="#r19">19</a></span>; Genkit uses <code>genkit:input</code>/<code>genkit:output</code> and ships only a GCP prod exporter, which truncates<span class="cite"><a href="#r50">50</a><a href="#r52">52</a></span>.</p>
+      </div>
+      <div class="zone z3">
+        <div class="ztop"></div>
+        <h5>Escapable — easy path is the vendor</h5>
+        <span class="fw">LangChain</span>
+        <span class="fw">LangGraph</span>
+        <p>LangSmith is the path of least resistance, but an OTLP exit exists and content isn't captive<span class="cite"><a href="#r7">7</a></span>. You choose neutrality; you don't get it by default.</p>
+      </div>
+      <div class="zone z4">
+        <div class="ztop"></div>
+        <h5>Built-in path locks in</h5>
+        <span class="fw">CrewAI</span>
+        <p>Native <code>tracing=True</code> posts content to <code>app.crewai.com</code> over a proprietary API — not OTLP<span class="cite"><a href="#r14">14</a><a href="#r15">15</a></span>. Staying neutral means bypassing it with a third-party instrumentor.</p>
+      </div>
+    </div>
+    <div class="axis-labels">
+      <span>← Repoint with a config change</span>
+      <span>Getting out is real work →</span>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h4>The nuance most comparisons miss</h4>
+      <p>
+        Lock-in here is about the <i>default path</i>, not a hard wall. Every framework's content can
+        ultimately reach a neutral backend, because it all rides on OpenTelemetry primitives. The
+        question is how much that costs you: nothing for the green group, a slightly less polished
+        view for the Google pair, a deliberate config choice for the LangChain family, and an extra
+        component you install for CrewAI.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- DECISION GUIDE -->
+<section id="decide">
+  <div class="container">
+    <h2>Decision guide</h2>
+    <p class="lede">Pick by the constraint you actually have.</p>
+
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">TURNKEY DEPTH</span>
+        <h4>"I want to read every prompt &amp; response out of the box"</h4>
+        <p>
+          <b>ADK, Mastra, Genkit, Rig.</b> Full ReAct content is on the spans by default — attach an
+          exporter and you're reading the loop. Genkit's local Dev UI is the fastest path to an
+          untruncated inspector.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">PII-SAFE BY DEFAULT</span>
+        <h4>"I want metadata always, content only when I say so"</h4>
+        <p>
+          <b>MS Agent Framework, Semantic Kernel.</b> Agent Framework ships spans + token metrics on,
+          with content one explicit sensitive-data flag away. Semantic Kernel is stricter — even its LLM
+          spans stay off until you enable a diagnostics flag — a posture some teams prefer for regulated workloads
+          where nothing should emit unasked.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">NO VENDOR, EVER</span>
+        <h4>"I never want to depend on a SaaS"</h4>
+        <p>
+          <b>SK, MS Agent Framework, Mastra, Rig, LangChain4j.</b> All exportable to self-hosted
+          Jaeger or Tempo with no SaaS in the path — SK, Agent Framework and Rig on standard
+          <code>gen_ai.*</code> OTel; Mastra via its in-tree OTel exporter (own span format).
+          LangChain4j is the only one where you must write the content listener yourself.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">FREE TRACE UI</span>
+        <h4>"I want a great trace UI without paying"</h4>
+        <p>
+          <b>Genkit</b> (local Dev UI, untruncated) and the <b>LangChain family</b> via the free
+          LangSmith tier (~5K traces, 14-day retention)<span class="cite"><a href="#r10">10</a></span> — with a documented OTLP escape hatch if you
+          outgrow it.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">WATCH-OUTS</span>
+        <h4>"Where will I be surprised?"</h4>
+        <p>
+          <b>CrewAI</b> — core telemetry is anonymized; add OpenLIT or you'll see no content<span class="cite"><a href="#r11">11</a></span>.
+          <b>LangChain4j</b> — official modules are metadata-only<span class="cite"><a href="#r57">57</a></span>. <b>Genkit</b> — cloud export
+          truncates at 128k<span class="cite"><a href="#r52">52</a></span>. <b>ADK</b> — content defaults off on managed Cloud deploy unless you set the env var yourself<span class="cite"><a href="#r24">24</a></span>.
+        </p>
+      </div>
+      <div class="ta">
+        <span class="tag">BOTTOM LINE</span>
+        <h4>The one-sentence verdict</h4>
+        <p>
+          Capturing the full ReAct loop is free everywhere; six frameworks make it easy and
+          vendor-neutral; the real differences are a <i>flag</i> (Microsoft), an <i>add-on</i>
+          (CrewAI), or <i>your own code</i> (LangChain4j) — not a paywall.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- REFERENCES -->
+<section id="refs">
+  <div class="container">
+    <h2>References &amp; sources</h2>
+    <p class="lede">
+      Every claim above maps to a numbered reference here. Code references are GitHub permalinks
+      pinned to a specific commit (so the file and line stay valid); doc references are official
+      pages. Verified June&nbsp;5,&nbsp;2026; OpenLIT reference re-verified June&nbsp;9,&nbsp;2026.
+    </p>
+    <div class="methnote">
+      <b>Pinned commits.</b> LangChain <code>cdafe60</code> · LangGraph <code>2b1abc8</code> ·
+      CrewAI <code>913a3ab</code> · Google ADK <code>9670ce2</code> · Semantic Kernel
+      <code>417d62f</code> · MS Agent Framework <code>dcc218d</code> · Mastra <code>d53cfc2</code> ·
+      Genkit <code>783fbf2</code> · LangChain4j <code>fa449aa</code> · Rig <code>dab75e0</code> ·
+      OpenLIT <code>290e8ee</code>.
+    </div>
+
+    <div class="refgroup">
+      <h4>LangChain &amp; LangGraph</h4>
+      <div class="refrow" id="r1"><span class="rn">1</span><span class="rbody"><a href="https://github.com/langchain-ai/langchain/blob/cdafe607af6ba4c0ae8c73575488f74ce7962da1/libs/core/langchain_core/callbacks/base.py#L311">callbacks/base.py — <code>on_chat_model_start</code> / <code>on_llm_start</code> carry full messages &amp; prompts</a> <span class="meta">· langchain-core</span></span></div>
+      <div class="refrow" id="r2"><span class="rn">2</span><span class="rbody"><a href="https://github.com/langchain-ai/langchain/blob/cdafe607af6ba4c0ae8c73575488f74ce7962da1/libs/core/langchain_core/tracers/core.py#L202">tracers/core.py — tracer writes <code>inputs={"messages"/"prompts"}</code> and <code>outputs["generations"]</code></a> <span class="meta">· verbatim prompt + completion</span></span></div>
+      <div class="refrow" id="r3"><span class="rn">3</span><span class="rbody"><a href="https://github.com/langchain-ai/langchain/blob/cdafe607af6ba4c0ae8c73575488f74ce7962da1/libs/core/langchain_core/agents.py#L57">agents.py — <code>AgentAction.log</code> preserves the model's "thought" before the tool call</a></span></div>
+      <div class="refrow" id="r4"><span class="rn">4</span><span class="rbody"><a href="https://github.com/langchain-ai/langchain/blob/cdafe607af6ba4c0ae8c73575488f74ce7962da1/libs/core/langchain_core/callbacks/base.py#L244">callbacks/base.py — <code>on_tool_end</code> (L244) &amp; <code>on_tool_start</code> (L409) carry tool output &amp; input</a></span></div>
+      <div class="refrow" id="r5"><span class="rn">5</span><span class="rbody"><a href="https://github.com/langchain-ai/langchain/blob/cdafe607af6ba4c0ae8c73575488f74ce7962da1/libs/core/langchain_core/tracers/context.py#L132">tracers/context.py — <code>_tracing_v2_is_enabled()</code>: trace export is opt-in (delegates to the langsmith SDK, which reads <code>LANGSMITH_TRACING</code>)</a></span></div>
+      <div class="refrow" id="r6"><span class="rn">6</span><span class="rbody"><a href="https://github.com/langchain-ai/langgraph/blob/2b1abc807b282245211f5ba8f292aaf3e24f1e07/libs/langgraph/langgraph/pregel/_messages.py#L12">langgraph/pregel/_messages.py — imports &amp; subclasses langchain-core <code>BaseCallbackHandler</code> (no own LLM telemetry)</a></span></div>
+      <div class="refrow" id="r7"><span class="rn">7</span><span class="rbody"><a href="https://docs.langchain.com/langsmith/trace-with-opentelemetry">LangSmith docs — Trace with OpenTelemetry (<code>LANGSMITH_OTEL_ENABLED</code>; send to an alternate provider)</a></span></div>
+      <div class="refrow" id="r8"><span class="rn">8</span><span class="rbody"><a href="https://docs.langchain.com/langsmith/mask-inputs-outputs">LangSmith docs — Mask inputs/outputs (<code>LANGSMITH_HIDE_INPUTS</code> / <code>HIDE_OUTPUTS</code>)</a></span></div>
+      <div class="refrow" id="r9"><span class="rn">9</span><span class="rbody"><a href="https://blog.langchain.com/opentelemetry-langsmith/">LangChain blog — OpenTelemetry support in LangSmith (Dec 2024)</a></span></div>
+      <div class="refrow" id="r10"><span class="rn">10</span><span class="rbody"><a href="https://www.langchain.com/pricing">LangChain — LangSmith pricing (free/Plus tiers)</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>CrewAI</h4>
+      <div class="refrow" id="r11"><span class="rn">11</span><span class="rbody"><a href="https://github.com/crewAIInc/crewAI/blob/913a3abeadb0491eb09f98af2f36082b67747b68/lib/crewai/src/crewai/telemetry/telemetry.py#L4">telemetry/telemetry.py — module docstring: core telemetry is anonymized, "no prompts … responses … collected"</a></span></div>
+      <div class="refrow" id="r12"><span class="rn">12</span><span class="rbody"><a href="https://github.com/crewAIInc/crewAI/blob/913a3abeadb0491eb09f98af2f36082b67747b68/lib/crewai/src/crewai/telemetry/telemetry.py#L717">telemetry/telemetry.py — content added to spans only when <code>share_crew=True</code></a></span></div>
+      <div class="refrow" id="r13"><span class="rn">13</span><span class="rbody"><a href="https://github.com/crewAIInc/crewAI/blob/913a3abeadb0491eb09f98af2f36082b67747b68/lib/crewai/src/crewai/events/types/llm_events.py#L94">events/types/llm_events.py — <code>LLMCallStarted/Completed</code> events carry full messages + response (event bus)</a></span></div>
+      <div class="refrow" id="r14"><span class="rn">14</span><span class="rbody"><a href="https://github.com/crewAIInc/crewAI/blob/913a3abeadb0491eb09f98af2f36082b67747b68/lib/crewai-core/src/crewai_core/plus_api.py#L335">plus_api.py — built-in tracing POSTs batches to <code>/crewai_plus/api/v1/tracing/batches/…</code> on app.crewai.com</a></span></div>
+      <div class="refrow" id="r15"><span class="rn">15</span><span class="rbody"><a href="https://github.com/crewAIInc/crewAI/blob/913a3abeadb0491eb09f98af2f36082b67747b68/lib/crewai-core/src/crewai_core/constants.py#L14">crewai_core/constants.py — <code>DEFAULT_CREWAI_ENTERPRISE_URL = "https://app.crewai.com"</code></a></span></div>
+      <div class="refrow" id="r16"><span class="rn">16</span><span class="rbody"><a href="https://docs.crewai.com/en/observability/overview">CrewAI docs — Observability overview</a></span></div>
+      <div class="refrow" id="r17"><span class="rn">17</span><span class="rbody"><a href="https://docs.crewai.com/en/observability/openlit">CrewAI docs — OpenLIT integration (free OSS OTLP content capture)</a></span></div>
+      <div class="refrow" id="r18"><span class="rn">18</span><span class="rbody"><a href="https://docs.crewai.com/en/observability/tracing">CrewAI docs — Built-in Tracing (CrewAI AMP)</a></span></div>
+      <div class="refrow" id="r70"><span class="rn">70</span><span class="rbody"><a href="https://github.com/openlit/openlit/blob/290e8ee94e20fdff572e3f4f77391dd96edf23f2/sdk/python/src/openlit/__init__.py#L191">OpenLIT sdk <code>__init__.py</code> — <code>capture_message_content</code> defaults <code>True</code> in <code>openlit.init()</code> (L191); disable via <code>capture_message_content=False</code> or <code>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false</code> (L407)</a> <span class="meta">· docs.crewai.com/en/observability/openlit</span></span></div>
+      <div class="refrow" id="r71"><span class="rn">71</span><span class="rbody"><a href="https://docs.crewai.com/en/observability/arize-phoenix">CrewAI docs — Arize Phoenix integration via OpenInference (<code>openinference-instrumentation-crewai</code>)</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Google ADK</h4>
+      <div class="refrow" id="r19"><span class="rn">19</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/tracing.py#L342">telemetry/tracing.py — span attr <code>gcp.vertex.agent.llm_request</code> (full serialized request)</a></span></div>
+      <div class="refrow" id="r20"><span class="rn">20</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/tracing.py#L371">telemetry/tracing.py — <code>gcp.vertex.agent.llm_response</code> = <code>model_dump_json()</code></a></span></div>
+      <div class="refrow" id="r21"><span class="rn">21</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/tracing.py#L223">telemetry/tracing.py — <code>gen_ai.tool.name</code> + <code>gcp.vertex.agent.tool_call_args</code></a></span></div>
+      <div class="refrow" id="r22"><span class="rn">22</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/tracing.py#L253">telemetry/tracing.py — <code>gcp.vertex.agent.tool_response</code> (tool result)</a></span></div>
+      <div class="refrow" id="r23"><span class="rn">23</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/tracing.py#L546">telemetry/tracing.py — <code>ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS</code> defaults to <code>'true'</code></a></span></div>
+      <div class="refrow" id="r24"><span class="rn">24</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/cli/cli_deploy.py#L1081">cli/cli_deploy.py — defaults content capture to <code>'false'</code> on <code>--otel_to_cloud</code> deploy (a user-set value is respected)</a></span></div>
+      <div class="refrow" id="r25"><span class="rn">25</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/_experimental_semconv.py#L155">telemetry/_experimental_semconv.py — <code>get_content_capturing_mode()</code> reads <code>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT</code></a></span></div>
+      <div class="refrow" id="r26"><span class="rn">26</span><span class="rbody"><a href="https://github.com/google/adk-python/blob/9670ce2644f422892997c65940e7330f1a26f799/src/google/adk/telemetry/google_cloud.py#L171">telemetry/google_cloud.py — Cloud Trace exporter is a generic <code>OTLPSpanExporter</code> (optional)</a></span></div>
+      <div class="refrow" id="r27"><span class="rn">27</span><span class="rbody"><a href="https://google.github.io/adk-docs/observability/">ADK docs — Observability</a></span></div>
+      <div class="refrow" id="r28"><span class="rn">28</span><span class="rbody"><a href="https://google.github.io/adk-docs/observability/cloud-trace/">ADK docs — Cloud Trace</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Microsoft Semantic Kernel</h4>
+      <div class="refrow" id="r29"><span class="rn">29</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/utils/telemetry/model_diagnostics/decorators.py#L367">model_diagnostics/decorators.py — <code>_set_completion_input</code> emits <code>gen_ai.{system,user,assistant,tool}.message</code></a></span></div>
+      <div class="refrow" id="r30"><span class="rn">30</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/utils/telemetry/model_diagnostics/decorators.py#L444">model_diagnostics/decorators.py — <code>_set_completion_response</code> emits the <code>gen_ai.choice</code> event</a></span></div>
+      <div class="refrow" id="r31"><span class="rn">31</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/utils/telemetry/model_diagnostics/gen_ai_attributes.py#L48">model_diagnostics/gen_ai_attributes.py — <code>ROLE_EVENT_MAP</code> &amp; Gen AI event-name constants</a></span></div>
+      <div class="refrow" id="r32"><span class="rn">32</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/utils/telemetry/model_diagnostics/function_tracer.py#L65">model_diagnostics/function_tracer.py — <code>execute_tool</code> span</a></span></div>
+      <div class="refrow" id="r33"><span class="rn">33</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/functions/kernel_function.py#L288">functions/kernel_function.py — sets <code>gen_ai.tool.call.arguments</code> (L269) &amp; <code>gen_ai.tool.call.result</code> (L288)</a></span></div>
+      <div class="refrow" id="r34"><span class="rn">34</span><span class="rbody"><a href="https://github.com/microsoft/semantic-kernel/blob/417d62f8b1131e94058488396b670d32661a9318/python/semantic_kernel/utils/telemetry/model_diagnostics/model_diagnostics_settings.py#L30">model_diagnostics_settings.py — <code>…ENABLE_OTEL_DIAGNOSTICS</code> &amp; <code>…_SENSITIVE</code> both default <code>False</code></a></span></div>
+      <div class="refrow" id="r35"><span class="rn">35</span><span class="rbody"><a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/enterprise-readiness/observability/telemetry-with-console">Microsoft Learn — SK observability with console</a></span></div>
+      <div class="refrow" id="r36"><span class="rn">36</span><span class="rbody"><a href="https://learn.microsoft.com/en-us/semantic-kernel/concepts/enterprise-readiness/observability/telemetry-advanced">Microsoft Learn — SK observability advanced (diagnostics env vars)</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Microsoft Agent Framework (.NET)</h4>
+      <div class="refrow" id="r37"><span class="rn">37</span><span class="rbody"><a href="https://github.com/microsoft/agent-framework/blob/dcc218dbac8164add0b0e740d4fcf20113f7ff49/dotnet/src/Microsoft.Agents.AI/OpenTelemetryAgent.cs#L120">OpenTelemetryAgent.cs — <code>EnableSensitiveData</code> property + remarks (captures user inputs, LLM responses, function args &amp; results); env <code>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT</code></a></span></div>
+      <div class="refrow" id="r38"><span class="rn">38</span><span class="rbody"><a href="https://github.com/microsoft/agent-framework/blob/dcc218dbac8164add0b0e740d4fcf20113f7ff49/dotnet/src/Microsoft.Agents.AI/OpenTelemetryConsts.cs#L8">OpenTelemetryConsts.cs — source name <code>Experimental.Microsoft.Agents.AI</code>, <code>invoke_agent</code> span</a></span></div>
+      <div class="refrow" id="r39"><span class="rn">39</span><span class="rbody"><a href="https://github.com/microsoft/agent-framework/blob/dcc218dbac8164add0b0e740d4fcf20113f7ff49/dotnet/src/Microsoft.Agents.AI.Workflows/Observability/WorkflowTelemetryOptions.cs#L22">WorkflowTelemetryOptions.cs — <code>EnableSensitiveData</code> defaults to false</a></span></div>
+      <div class="refrow" id="r40"><span class="rn">40</span><span class="rbody"><a href="https://github.com/microsoft/agent-framework/blob/dcc218dbac8164add0b0e740d4fcf20113f7ff49/dotnet/samples/02-agents/AgentOpenTelemetry/Program.cs#L45">samples/AgentOpenTelemetry/Program.cs — OTLP exporter unconditional; Azure Monitor only conditional</a></span></div>
+      <div class="refrow" id="r41"><span class="rn">41</span><span class="rbody"><a href="https://learn.microsoft.com/en-us/agent-framework/agents/observability">Microsoft Learn — Agent Framework observability</a></span></div>
+      <div class="refrow" id="r42"><span class="rn">42</span><span class="rbody"><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/">OpenTelemetry — Gen AI semantic conventions (content-capture env var)</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Mastra (TypeScript)</h4>
+      <div class="refrow" id="r43"><span class="rn">43</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/packages/core/src/observability/types/tracing.ts#L763">observability/types/tracing.ts — span <code>input</code>/<code>output</code> fields carry the content</a></span></div>
+      <div class="refrow" id="r44"><span class="rn">44</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/packages/core/src/observability/types/tracing.ts#L1225">observability/types/tracing.ts — <code>EndSpanOptions</code> / <code>UpdateSpanOptions</code> carry input/output</a></span></div>
+      <div class="refrow" id="r45"><span class="rn">45</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/packages/core/src/tools/tool-builder/builder.ts#L710">tools/tool-builder/builder.ts — tool span set with <code>{ input: args }</code> / <code>{ output: result }</code></a></span></div>
+      <div class="refrow" id="r46"><span class="rn">46</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/packages/core/src/observability/types/tracing.ts#L1354">observability/types/tracing.ts — <code>TracingOptions.hideInput</code> / <code>hideOutput</code> (redaction is opt-in)</a></span></div>
+      <div class="refrow" id="r47"><span class="rn">47</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/tree/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/observability">observability/ — in-tree exporters: langfuse, datadog, braintrust, arize, arthur, laminar, langsmith, posthog, sentry, otel-exporter</a></span></div>
+      <div class="refrow" id="r48"><span class="rn">48</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/observability/mastra/src/span_processors/sensitive-data-filter.ts#L46">span_processors/sensitive-data-filter.ts — <code>SensitiveDataFilter</code> processor</a></span></div>
+      <div class="refrow" id="r49"><span class="rn">49</span><span class="rbody"><a href="https://github.com/mastra-ai/mastra/blob/d53cfc2c7f8d78343a4aa84ec4e129ba25f3325e/docs/src/content/en/docs/observability/tracing/overview.mdx">Mastra docs (source) — AI tracing overview</a> <span class="meta">· site: mastra.ai/en/docs/observability/tracing/overview</span></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Genkit (Go)</h4>
+      <div class="refrow" id="r50"><span class="rn">50</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/core/tracing/tracing.go#L346">go/core/tracing/tracing.go — sets <code>genkit:input</code> / <code>genkit:output</code> attributes (full JSON)</a></span></div>
+      <div class="refrow" id="r51"><span class="rn">51</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/core/tracing/store.go#L39">go/core/tracing/store.go — local trace store <code>SpanData.Attributes</code> (untruncated, Dev UI)</a></span></div>
+      <div class="refrow" id="r52"><span class="rn">52</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/plugins/googlecloud/utils.go#L31">go/plugins/googlecloud/utils.go — <code>MaxLogContentLength = 128000</code> truncation on Cloud export</a></span></div>
+      <div class="refrow" id="r53"><span class="rn">53</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/plugins/firebase/telemetry.go#L71">go/plugins/firebase/telemetry.go — <code>DisableLoggingInputAndOutput</code> defaults false (IO logging on)</a></span></div>
+      <div class="refrow" id="r54"><span class="rn">54</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/core/tracing/tracing.go#L118">go/core/tracing/tracing.go — local telemetry server via <code>GENKIT_TELEMETRY_SERVER</code></a></span></div>
+      <div class="refrow" id="r55"><span class="rn">55</span><span class="rbody"><a href="https://github.com/firebase/genkit/blob/783fbf23287484b6514732808c2b9a814848a402/go/core/tracing/doc.go#L64">go/core/tracing/doc.go — Dev UI inspector: input/output inspection per action</a> <span class="meta">· site: genkit.dev/go/docs/observability</span></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>LangChain4j (Java)</h4>
+      <div class="refrow" id="r56"><span class="rn">56</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/langchain4j-micrometer-metrics/src/main/java/dev/langchain4j/micrometer/metrics/listeners/MicrometerMetricsChatModelListener.java#L80">MicrometerMetricsChatModelListener.java — records only <code>gen_ai.client.token.usage</code> (no content)</a></span></div>
+      <div class="refrow" id="r57"><span class="rn">57</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/langchain4j-micrometer-metrics/src/main/java/dev/langchain4j/micrometer/metrics/conventions/OTelGenAiAttributes.java#L3">OTelGenAiAttributes.java — attribute vocabulary is metadata-only; no message-content key</a></span></div>
+      <div class="refrow" id="r58"><span class="rn">58</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/langchain4j-observation/src/main/java/dev/langchain4j/observation/convention/DefaultChatModelConvention.java#L60">DefaultChatModelConvention.java — span keys: operation/provider/model/outcome/tokens only (no prompt/completion)</a></span></div>
+      <div class="refrow" id="r59"><span class="rn">59</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/langchain4j-core/src/main/java/dev/langchain4j/model/chat/listener/ChatModelRequestContext.java#L30">ChatModelRequestContext.java — full messages exposed in-process to your listener via <code>chatRequest().messages()</code></a></span></div>
+      <div class="refrow" id="r60"><span class="rn">60</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/langchain4j-core/src/main/java/dev/langchain4j/agent/tool/ToolExecutionRequest.java#L38">ToolExecutionRequest.java — <code>name()</code> / <code>arguments()</code> available in-process</a></span></div>
+      <div class="refrow" id="r61"><span class="rn">61</span><span class="rbody"><a href="https://github.com/langchain4j/langchain4j/blob/fa449aab26ee0f59d92fcaae03adc941aa1bcc57/LICENSE#L1">LICENSE — Apache-2.0 (open-source license; proves the code is OSS, not absence of a commercial offering)</a></span></div>
+      <div class="refrow" id="r62"><span class="rn">62</span><span class="rbody"><a href="https://docs.langchain4j.dev/tutorials/observability/">LangChain4j docs — Observability (<code>ChatModelListener</code> + Micrometer modules)</a></span></div>
+    </div>
+
+    <div class="refgroup">
+      <h4>Rig (Rust)</h4>
+      <div class="refrow" id="r63"><span class="rn">63</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/src/agent/prompt_request/mod.rs#L590">rig-core agent/prompt_request/mod.rs — <code>invoke_agent</code> span records <code>gen_ai.prompt</code> (L609) &amp; <code>gen_ai.completion</code> (L891)</a></span></div>
+      <div class="refrow" id="r64"><span class="rn">64</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/src/agent/prompt_request/mod.rs#L943">rig-core mod.rs — <code>execute_tool</code> span records <code>gen_ai.tool.name</code>/<code>call.arguments</code>/<code>call.result</code></a></span></div>
+      <div class="refrow" id="r65"><span class="rn">65</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/src/agent/prompt_request/mod.rs#L1044">rig-core mod.rs — <code>tracing::info!</code> logs executed tool result at INFO</a></span></div>
+      <div class="refrow" id="r66"><span class="rn">66</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/src/providers/deepseek.rs#L558">rig-core providers/deepseek.rs — provider <code>chat</code> span; full request/response JSON at TRACE (L581/L618)</a></span></div>
+      <div class="refrow" id="r67"><span class="rn">67</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/src/tool/mod.rs#L373">rig-core tool/mod.rs — tool dispatch args logged at DEBUG</a></span></div>
+      <div class="refrow" id="r68"><span class="rn">68</span><span class="rbody"><a href="https://github.com/0xPlaygrounds/rig/blob/dab75e0c38f4b52bc15608e58329291b7cb14fc0/crates/rig-core/Cargo.toml#L5">rig-core Cargo.toml — <code>license = "MIT"</code> (open-source license; proves the code is OSS, not absence of a commercial offering)</a></span></div>
+      <div class="refrow" id="r69"><span class="rn">69</span><span class="rbody"><a href="https://docs.rig.rs/docs/concepts/observability">Rig docs — Observability (follows OTel Gen AI semantic conventions)</a></span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <a href="operational-excellence-observability.html">← Chapter 1 · Observability</a> ·
+    <a href="operational-excellence-index.html">Index</a> ·
+    Next: <a href="operational-excellence-performance.html">Chapter 2 · Performance →</a>
+    <p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Source-grounded against upstream code of all ten frameworks.</p>
+  </div>
+</footer>
+
+</body>
+</html>
