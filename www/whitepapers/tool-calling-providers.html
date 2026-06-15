@@ -1,0 +1,1658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How AI Providers Support Tool Calls — A JSON-Level Reference</title>
+<meta name="description" content="A protocol-level, JSON-first comparison of how nine AI provider APIs support tool / function calling — OpenAI (Chat Completions and Responses), Anthropic, Google Gemini, Ollama, Mistral, Cohere, AWS Bedrock, Groq, and xAI. Shows the request and response shapes, and the precise boundary between your agent runtime and the model provider. Claims are cited to official documentation.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="How AI Providers Support Tool Calls — A JSON-Level Reference">
+<meta property="og:description" content="Provider-documented tool-calling request and response JSON for OpenAI, Anthropic, Gemini, Ollama, Mistral, Cohere, AWS Bedrock, Groq, and xAI — and the boundary between your agent runtime and the model provider.">
+<meta property="og:url" content="https://truvag3.dev/whitepapers/tool-calling-providers">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How AI Providers Support Tool Calls — A JSON-Level Reference">
+<meta name="twitter:description" content="Provider-documented tool-calling request and response JSON across nine AI provider APIs, and the boundary between agent runtime and model provider.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="/assets/css/code-highlight.css">
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399;
+    --brand-truva-light: #DBEEFB; --brand-truva-dark: #4A8AB8;
+    --brand-g3-light: #FFD080; --brand-g3-dark: #C56710;
+    /* Boundary accents */
+    --runtime: #60a5fa;  /* blue — your agent runtime */
+    --model:   #34d399;  /* green — the model provider */
+    --wire:    #fbbf24;  /* amber — the JSON on the wire */
+    /* Per-provider accents */
+    --oai:   #10a37f;   /* OpenAI */
+    --anth:  #d97757;   /* Anthropic */
+    --gem:   #4285f4;   /* Google Gemini */
+    --olla:  #94a3b8;   /* Ollama */
+    --mis:   #ff7000;   /* Mistral */
+    --coh:   #bf6ee8;   /* Cohere */
+    --bed:   #f5b301;   /* AWS Bedrock */
+    --groq:  #e0426a;   /* Groq / xAI */
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code, td code, h3 code, h4 code { color: #c9e2ff; background: rgba(124,196,255,.08); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  pre {
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow: auto; font-size: 12.5px; line-height: 1.55; color: #cfe1ff;
+    margin: 8px 0 6px;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+  pre .hi { background: rgba(251, 191, 36, 0.18); color: #fde68a; padding: 0 3px; border-radius: 3px; font-weight: 600; border-bottom: 1px dashed rgba(251, 191, 36, 0.55); }
+  pre .cm { color: #6b7c9c; font-style: italic; }
+  .snip-src {
+    margin: 0 0 16px; padding-left: 4px;
+    font-size: 11.5px; color: var(--muted); line-height: 1.45;
+  }
+  .snip-src::before { content: "↳  "; color: #4b6688; }
+  .snip-src a { color: var(--muted); border-bottom: 1px dotted rgba(154,166,189,.4); text-decoration: none; }
+  .snip-src a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  header.hero { padding: 64px 0 36px; text-align: center; border-bottom: 1px solid var(--line); position: relative; }
+  .research-date { display: inline-block; margin-bottom: 18px; padding: 5px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+  .ai-capsule { display: inline-block; margin-bottom: 18px; margin-left: 8px; padding: 5px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--warn); color: var(--warn); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 46px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #9ec5ff 60%, #c4b5fd 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 17px; max-width: 860px; margin: 0 auto 22px; }
+  .pillrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); font-size: 13px; cursor: pointer; transition: transform .15s ease, background .15s ease, border-color .15s ease; }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; text-decoration: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  /* Sections */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h3 { font-size: 19px; margin: 26px 0 8px; }
+  section h4 { font-size: 12px; margin: 18px 0 6px; color: var(--accent); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; }
+  section .lede { color: var(--muted); max-width: 860px; margin: 0 0 28px; }
+  section p { color: var(--muted); }
+
+  /* Diagram + explanation card */
+  .diagram-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px; margin: 22px 0 28px;
+  }
+  .diagram-card .svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; margin-bottom: 14px; overflow-x: auto;
+  }
+  .diagram-card svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .diagram-card .caption { font-size: 12.5px; color: var(--muted); margin: 4px 0 14px; text-align: center; }
+
+  /* Explanation list under diagram */
+  .legend-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .legend-list li {
+    display: grid; grid-template-columns: 28px 1fr; gap: 12px;
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .legend-list li .num { background: var(--accent); color: #0a1a2b; border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 700; font-size: 12.5px; }
+  .legend-list li b { color: #fff; display: block; margin-bottom: 2px; font-size: 13.5px; }
+  .legend-list li p { margin: 0; font-size: 13.5px; color: #cfd9ee; }
+
+  /* Two-column "who owns what" grid */
+  .owns-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0 6px; }
+  @media (max-width: 760px) { .owns-grid { grid-template-columns: 1fr; } }
+  .owns { border-radius: 12px; padding: 16px 18px; border: 1px solid var(--line); }
+  .owns.rt { background: rgba(96,165,250,.07); border-color: rgba(96,165,250,.35); }
+  .owns.md { background: rgba(52,211,153,.07); border-color: rgba(52,211,153,.35); }
+  .owns h4 { margin: 0 0 10px; text-transform: none; letter-spacing: 0; font-size: 15px; }
+  .owns.rt h4 { color: #93c5fd; }
+  .owns.md h4 { color: #6ee7b7; }
+  .owns ul { margin: 0; padding-left: 18px; }
+  .owns li { margin: 6px 0; font-size: 13.5px; color: #cfd9ee; }
+
+  /* Provider cards */
+  .prov-card { background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005)); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; margin-bottom: 28px; }
+  .prov-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.015); }
+  .prov-badge { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); flex-shrink: 0; }
+  .prov-head h3 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+  .prov-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .endpoint-pill { display: inline-block; font-size: 11px; padding: 3px 11px; border-radius: 999px; font-weight: 600; letter-spacing: 0.02em; vertical-align: 3px; margin-left: 10px; background: var(--bg-2); border: 1px solid currentColor; color: #9fc2ff; }
+  .prov-body { padding: 22px; }
+  .step-label { display: inline-block; font-size: 10.5px; padding: 2px 9px; border-radius: 999px; background: #19243d; color: #9fc2ff; margin-bottom: 6px; letter-spacing: .04em; text-transform: uppercase; }
+  .step-label.r1 { background: rgba(96,165,250,.14); color: #93c5fd; }
+  .step-label.r2 { background: rgba(52,211,153,.14); color: #6ee7b7; }
+  .step-label.r3 { background: rgba(251,191,36,.14); color: #fcd34d; }
+  .prov-notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  @media (max-width: 760px) { .prov-notes { grid-template-columns: 1fr; } }
+  .prov-notes .nb { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .prov-notes .nb h5 { margin: 0 0 4px; font-size: 11px; color: #a8b6d6; letter-spacing: .05em; text-transform: uppercase; }
+  .prov-notes .nb p { margin: 0; font-size: 13px; color: #dbe6ff; }
+  .src { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); font-size: 12.5px; color: var(--muted); }
+  .src a { color: var(--accent); }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto; overflow-y: hidden;
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  /* Hide the native bar; we render our own always-visible one below the table. */
+  .table-wrap { scrollbar-width: none; -ms-overflow-style: none; }
+  .table-wrap::-webkit-scrollbar { display: none; }
+  /* Custom, always-visible horizontal scrollbar */
+  .hscroll {
+    height: 12px; margin: 10px 0 2px; position: relative;
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px;
+  }
+  .hscroll-thumb {
+    position: absolute; top: 1px; bottom: 1px; left: 0; width: 60px;
+    background: #3a4a72; border-radius: 999px; cursor: grab;
+    transition: background .15s ease;
+  }
+  .hscroll-thumb:hover { background: var(--accent); }
+  .hscroll-thumb:active { cursor: grabbing; background: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1040px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; font-weight: 600; }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+
+  /* Takeaways */
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; color: #fff; text-transform: none; letter-spacing: 0; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #19243d; color: #9fc2ff; margin-bottom: 8px; }
+
+  /* Glossary */
+  .gloss { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 22px; }
+  @media (max-width: 720px) { .gloss { grid-template-columns: 1fr; } }
+  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); color: #cfd9ee; }
+  .gloss b { color: #fff; }
+
+  /* Notes / callouts */
+  .note-box { background: rgba(124,196,255,.06); border: 1px solid rgba(124,196,255,.25); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; margin: 14px 0; font-size: 14px; color: #d4dcef; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  .copyright { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 1.5rem; margin-bottom: 0; }
+
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+
+  /* Section rail (left scroll-spy nav) */
+  #toc-rail {
+    position: fixed; left: 12px; top: 50%; transform: translateY(-50%);
+    z-index: 50; display: flex; flex-direction: column; gap: 10px;
+    padding: 0; background: transparent; border: none;
+    max-height: 88vh;
+  }
+  /* Each item is ONE pill that holds the dot and the label inside a single
+     boundary. At rest it collapses to just the dot; on hover (whole rail) or
+     when active it expands to show the label within the same pill. */
+  #toc-rail .toc-dot {
+    display: inline-flex; align-items: center; gap: 12px;
+    text-decoration: none; line-height: 1; white-space: nowrap;
+    padding: 9px 13px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent;
+    box-shadow: none; overflow: hidden; max-width: 44px;
+    transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .d {
+    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; opacity: .55;
+    transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .lbl {
+    font-size: 16px; color: var(--muted); opacity: 0;
+    transition: opacity .18s ease, color .18s ease;
+  }
+  /* Expanded state — whole rail on hover, plus the active item at rest */
+  #toc-rail:hover .toc-dot,
+  #toc-rail .toc-dot.active {
+    max-width: 360px;
+    background: #0e1422; border-color: var(--line);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  }
+  #toc-rail:hover .toc-dot .lbl,
+  #toc-rail .toc-dot.active .lbl { opacity: 1; }
+  #toc-rail .toc-dot:hover .d,
+  #toc-rail .toc-dot.active .d { opacity: 1; }
+  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
+  #toc-rail .toc-dot:hover .lbl { color: var(--ink); }
+  #toc-rail .toc-dot.active .d { width: 19px; height: 19px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
+  #toc-rail .toc-dot.active .lbl { color: var(--ink); font-weight: 600; }
+  /* JS-driven fits for zoom / narrow margins:
+     .no-active-label → collapse the active pill back to a dot when it would cross
+     into the content (hover still expands it as a transient overlay).
+     .rail-hidden     → not even the dots fit; hide the whole rail. */
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active {
+    max-width: 44px; background: transparent; border-color: transparent; box-shadow: none;
+  }
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
+  #toc-rail.rail-hidden { display: none; }
+  @media (max-width: 1180px) { #toc-rail { display: none; } }
+
+  /* Back-to-top */
+  #to-top {
+    position: fixed; right: 22px; bottom: 22px; z-index: 60;
+    width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--bg-2); color: var(--accent); font-size: 18px; line-height: 1; cursor: pointer;
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease, border-color .2s ease;
+    box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  #to-top.show { opacity: 1; transform: none; pointer-events: auto; }
+  #to-top:hover { border-color: #3a4a72; }
+
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .prov-card { break-inside: avoid; }
+  }
+</style>
+</head>
+<body data-highlight="json">
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>June 14, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>How AI Providers Support Tool Calls</h1>
+    <p class="subtitle">
+      A JSON-first reference across nine provider APIs &mdash; <b>OpenAI</b> (Chat Completions and
+      Responses), <b>Anthropic</b>, <b>Google&nbsp;Gemini</b>, <b>Ollama</b>, <b>Mistral</b>,
+      <b>Cohere</b>, <b>AWS&nbsp;Bedrock</b>, <b>Groq</b>, and <b>xAI</b>. It first draws the practical
+      line between what <b>your agent runtime</b> does and what the <b>model provider</b> does, then
+      shows the literal request and response shapes each provider sends and receives. The examples and
+      claims are cited to the provider's own documentation.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#concept"><span class="dot" style="background:#9ec5ff"></span>The concept</a>
+      <a class="pill" href="#boundary"><span class="dot" style="background:var(--runtime)"></span>The boundary</a>
+      <a class="pill" href="#loop"><span class="dot" style="background:var(--wire)"></span>The loop</a>
+      <a class="pill" href="#openai"><span class="dot" style="background:var(--oai)"></span>OpenAI</a>
+      <a class="pill" href="#anthropic"><span class="dot" style="background:var(--anth)"></span>Anthropic</a>
+      <a class="pill" href="#gemini"><span class="dot" style="background:var(--gem)"></span>Gemini</a>
+      <a class="pill" href="#ollama"><span class="dot" style="background:var(--olla)"></span>Ollama</a>
+      <a class="pill" href="#mistral"><span class="dot" style="background:var(--mis)"></span>Mistral</a>
+      <a class="pill" href="#cohere"><span class="dot" style="background:var(--coh)"></span>Cohere</a>
+      <a class="pill" href="#bedrock"><span class="dot" style="background:var(--bed)"></span>AWS Bedrock</a>
+      <a class="pill" href="#groq"><span class="dot" style="background:var(--groq)"></span>Groq &amp; xAI</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Summary</a>
+    </div>
+  </div>
+</header>
+
+<!-- Left section rail (scroll-spy) -->
+<aside id="toc-rail" aria-label="Section navigation">
+  <a class="toc-dot" href="#concept"   data-target="concept"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The concept</span></a>
+  <a class="toc-dot" href="#boundary"  data-target="boundary"><span class="d" style="background:var(--runtime)"></span><span class="lbl">The boundary</span></a>
+  <a class="toc-dot" href="#loop"      data-target="loop"><span class="d" style="background:var(--wire)"></span><span class="lbl">The loop</span></a>
+  <a class="toc-dot" href="#openai"    data-target="openai"><span class="d" style="background:var(--oai)"></span><span class="lbl">OpenAI</span></a>
+  <a class="toc-dot" href="#anthropic" data-target="anthropic"><span class="d" style="background:var(--anth)"></span><span class="lbl">Anthropic</span></a>
+  <a class="toc-dot" href="#gemini"    data-target="gemini"><span class="d" style="background:var(--gem)"></span><span class="lbl">Gemini</span></a>
+  <a class="toc-dot" href="#ollama"    data-target="ollama"><span class="d" style="background:var(--olla)"></span><span class="lbl">Ollama</span></a>
+  <a class="toc-dot" href="#mistral"   data-target="mistral"><span class="d" style="background:var(--mis)"></span><span class="lbl">Mistral</span></a>
+  <a class="toc-dot" href="#cohere"    data-target="cohere"><span class="d" style="background:var(--coh)"></span><span class="lbl">Cohere</span></a>
+  <a class="toc-dot" href="#bedrock"   data-target="bedrock"><span class="d" style="background:var(--bed)"></span><span class="lbl">AWS Bedrock</span></a>
+  <a class="toc-dot" href="#groq"      data-target="groq"><span class="d" style="background:var(--groq)"></span><span class="lbl">Groq &amp; xAI</span></a>
+  <a class="toc-dot" href="#compare"   data-target="compare"><span class="d" style="background:#fff"></span><span class="lbl">Side-by-side</span></a>
+  <a class="toc-dot" href="#takeaways" data-target="takeaways"><span class="d" style="background:var(--good)"></span><span class="lbl">Summary</span></a>
+  <a class="toc-dot" href="#glossary"  data-target="glossary"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Glossary</span></a>
+</aside>
+
+<button id="to-top" aria-label="Back to top" title="Back to top">&uarr;</button>
+
+<!-- ============================================================
+     SECTION 0 — THE CONCEPT
+     ============================================================ -->
+<section id="concept">
+  <div class="container">
+    <h2>What a "tool call" actually is</h2>
+    <p class="lede">
+      A language model can only do one thing: <u>read a sequence of tokens and emit a sequence of
+      tokens</u>. It cannot query a database, send an email, or read a file. "Tool calling" (also called
+      "function calling") is the convention by which a model emits a <b>structured request to run a
+      named function with named arguments</b>, and the application &mdash; not the model &mdash;
+      runs it. <span style="color: #e08a3c;">The model never executes anything.</span> It only ever <i>asks</i>, in JSON, and then waits
+      for the answer to come back in the next request.
+    </p>
+    <p class="snip-src">
+      Sources for the above: Anthropic states it directly &mdash; &ldquo;The model never executes anything on its own.
+      It emits a structured request, your code (or Anthropic's servers) runs the operation, and the result flows back
+      into the conversation&rdquo;
+      (<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">platform.claude.com · How tool use works · The tool-use contract</a>).
+      OpenAI: a function definition &ldquo;allows the model to pass data to your application, where your code can access
+      data or take actions,&rdquo; and &ldquo;when the model calls a function, you must execute it and return the result&rdquo;
+      (<a href="https://platform.openai.com/docs/guides/function-calling">platform.openai.com · Function calling</a>).
+      Google: &ldquo;Instead of generating text responses, the model determines when to call specific functions and provides
+      the necessary parameters to execute real-world actions&rdquo;
+      (<a href="https://ai.google.dev/gemini-api/docs/function-calling">ai.google.dev · Function calling</a>).
+    </p>
+    <p>
+      Every provider in this paper implements the same three-part contract, even though the field
+      names differ. First the application <b>declares</b> the available tools (a name, a description,
+      and a JSON Schema for the arguments). Then, when the model decides a tool is needed, it
+      <b>emits a tool call</b> in its response &mdash; and signals, via a stop/finish reason, that it
+      is pausing to wait for a result. Finally the application <b>executes</b> the function and
+      <b>returns the result</b> as a new message, after which the model either calls another tool or
+      writes the final answer. The differences between providers are entirely in the shape of those
+      three JSON payloads and in who is expected to drive the loop.
+    </p>
+    <p class="snip-src">
+      Sources: <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI · Function calling</a>
+      · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview">Anthropic · Tool use overview</a>
+      · <a href="https://ai.google.dev/gemini-api/docs/function-calling">Google · Function calling</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 1 — THE BOUNDARY
+     ============================================================ -->
+<section id="boundary">
+  <div class="container">
+    <h2>1 · The boundary: your agent runtime vs. the model provider</h2>
+    <p class="lede">
+      The single most important idea in tool calling is the line between the two halves of the
+      system. On the left is <b>your agent runtime</b> &mdash; your process, holding the conversation
+      history, the tool code, and the loop. On the right is the <b>model provider</b> &mdash; a
+      model provider endpoint that, given the current conversation context and tool catalogue, returns
+      the next step. Most chat-style APIs expect your runtime to send the relevant history each turn;
+      some Responses-style APIs can instead reference provider-stored previous responses. Either way,
+      the model decides <i>what</i> to call; your runtime decides <i>whether and how</i> to run client
+      tools. Secrets, side effects, and local tool execution stay on your side of the line.
+    </p>
+
+    <div class="diagram-card">
+      <div class="svg-wrap">
+<svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The boundary between agent runtime and model provider">
+  <defs>
+    <marker id="b-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+    <marker id="b-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+    <linearGradient id="g-rt" x1="0" x2="1"><stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="g-md" x1="0" x2="1"><stop offset="0" stop-color="#065f46"/><stop offset="1" stop-color="#10b981"/></linearGradient>
+  </defs>
+
+  <!-- Runtime zone -->
+  <rect x="12" y="50" width="370" height="330" rx="14" fill="url(#g-rt)" opacity="0.16" stroke="#3b82f6" stroke-dasharray="4 5"/>
+  <text x="30" y="78" fill="#93c5fd" font-size="13" font-weight="700">YOUR AGENT RUNTIME — your process / your servers</text>
+
+  <rect x="30" y="96" width="334" height="40" rx="8" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="197" y="121" text-anchor="middle" fill="#cfe1ff" font-size="12">Conversation state (messages[]) · tool catalogue (tools[])</text>
+  <rect x="30" y="146" width="334" height="40" rx="8" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="197" y="171" text-anchor="middle" fill="#cfe1ff" font-size="12">The agent loop · stop conditions · retries</text>
+  <rect x="30" y="196" width="334" height="56" rx="8" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="197" y="219" text-anchor="middle" fill="#cfe1ff" font-size="12">Tool execution (runs the real code)</text>
+  <text x="197" y="238" text-anchor="middle" fill="#9ec5ff" font-size="11">DB queries · HTTP calls · file I/O · API keys</text>
+  <rect x="30" y="262" width="334" height="40" rx="8" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="197" y="287" text-anchor="middle" fill="#cfe1ff" font-size="12">Secrets &amp; side effects live here — never sent to the model</text>
+
+  <!-- Model zone -->
+  <rect x="518" y="50" width="370" height="330" rx="14" fill="url(#g-md)" opacity="0.16" stroke="#10b981" stroke-dasharray="4 5"/>
+  <text x="536" y="78" fill="#6ee7b7" font-size="13" font-weight="700">MODEL PROVIDER — HTTP endpoint</text>
+
+  <rect x="536" y="96" width="334" height="40" rx="8" fill="#03241f" stroke="#34d399"/>
+  <text x="703" y="121" text-anchor="middle" fill="#bbf7d0" font-size="12">Reads messages[] + tools[] for this request only</text>
+  <rect x="536" y="146" width="334" height="56" rx="8" fill="#03241f" stroke="#34d399"/>
+  <text x="703" y="169" text-anchor="middle" fill="#bbf7d0" font-size="12">Decides: answer in text, or call a tool?</text>
+  <text x="703" y="188" text-anchor="middle" fill="#a7f3d0" font-size="11">picks tool name + generates JSON arguments</text>
+  <rect x="536" y="212" width="334" height="40" rx="8" fill="#03241f" stroke="#34d399"/>
+  <text x="703" y="237" text-anchor="middle" fill="#bbf7d0" font-size="12">Emits a tool-call + a "stop / finish" signal</text>
+  <rect x="536" y="262" width="334" height="40" rx="8" fill="#03241f" stroke="#34d399"/>
+  <text x="703" text-anchor="middle" fill="#bbf7d0" font-size="12"><tspan x="703" y="279">May store response context,</tspan><tspan x="703" y="295">but never your client tool code</tspan></text>
+
+  <!-- Arrows across the boundary -->
+  <text x="450" y="150" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">request</text>
+  <text x="450" y="165" text-anchor="middle" fill="#9aa6bd" font-size="10">tools[] + messages[]</text>
+  <path d="M384,175 L516,175" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#b-blue)"/>
+
+  <text x="450" y="248" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">response</text>
+  <text x="450" y="263" text-anchor="middle" fill="#9aa6bd" font-size="10">tool call (name + args)</text>
+  <path d="M516,228 L384,228" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#b-green)" class="flow-line"/>
+
+  <text x="450" y="338" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700">THE LINE</text>
+  <text x="450" y="354" text-anchor="middle" fill="#9aa6bd" font-size="10">HTTPS / JSON</text>
+  <line x1="450" y1="50" x2="450" y2="380" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="2 6" opacity="0.7"/>
+</svg>
+      </div>
+      <div class="caption">Figure 1 · The boundary. Your runtime owns client tool code and execution. The provider maps the supplied or referenced context plus tools to the next step. Only JSON crosses the line for client tools — never your secrets, and never the running tool.</div>
+
+      <div class="owns-grid">
+        <div class="owns rt">
+          <h4>Your agent runtime does</h4>
+          <ul>
+            <li>Holds the conversation state for chat-style APIs and sends the relevant history or previous-response reference each turn.</li>
+            <li>Declares the tool catalogue: name, description, JSON-Schema arguments.</li>
+            <li>Parses the model's tool call and <b>executes the real function</b>.</li>
+            <li>Appends the result and drives the loop until the model stops calling tools.</li>
+            <li>Owns all secrets, auth, and side effects.</li>
+          </ul>
+        </div>
+        <div class="owns md">
+          <h4>The model provider does</h4>
+          <ul>
+            <li>Reads <code>messages</code> + <code>tools</code> for this one request.</li>
+            <li>Decides whether to answer in text or request a tool.</li>
+            <li>Chooses the tool and generates its arguments as JSON.</li>
+            <li>Signals "I'm pausing for a tool result" via a stop/finish reason.</li>
+            <li>May store provider-side response context, but client tool code, auth, and side effects remain outside the model.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="snip-src">
+        Sources: <a href="https://platform.openai.com/docs/guides/function-calling#handling-function-calls">OpenAI · Handling function calls</a>
+        · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls">Anthropic · Handle tool calls</a>
+        (&ldquo;the Claude API integrates tools directly into the <code>user</code> and <code>assistant</code> message structure&rdquo;)
+        · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use-client-side.html">AWS · Bedrock client-side tool use</a>.
+        On server-side response storage (the &ldquo;may store response context&rdquo; note):
+        <a href="https://developers.openai.com/api/docs/guides/conversation-state">OpenAI · Conversation state</a>
+        (Responses API defaults to <code>store: true</code> and continues a turn via <code>previous_response_id</code>)
+        · <a href="https://docs.x.ai/developers/tools/function-calling">xAI · Function calling</a> (continues via <code>previous_response_id</code>).
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 2 — THE LOOP
+     ============================================================ -->
+<section id="loop">
+  <div class="container">
+    <h2>2 · The full tool-call workflow</h2>
+    <p class="lede">
+      Tool calling is a loop, not a single round trip. The runtime keeps re-sending the growing
+      conversation, or a provider-supported previous-response reference, until the model returns an
+      answer with no further tool calls. The sequence below is the common shape; later sections show
+      the provider-documented JSON each provider uses at each numbered step.
+    </p>
+
+    <div class="diagram-card">
+      <div class="svg-wrap">
+<svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The tool-calling loop sequence">
+  <defs>
+    <marker id="l-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
+    <marker id="l-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
+    <marker id="l-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <!-- lifelines -->
+  <rect x="70" y="20" width="220" height="44" rx="10" fill="url(#g-rt)" opacity="0.85"/>
+  <text x="180" y="40" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Your agent runtime</text>
+  <text x="180" y="56" text-anchor="middle" fill="#dbeafe" font-size="10">loop + tool execution</text>
+  <line x1="180" y1="64" x2="180" y2="440" stroke="#3b82f6" stroke-width="1.4" stroke-dasharray="3 5"/>
+
+  <rect x="610" y="20" width="220" height="44" rx="10" fill="url(#g-md)" opacity="0.85"/>
+  <text x="720" y="40" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Model provider</text>
+  <text x="720" y="56" text-anchor="middle" fill="#d1fae5" font-size="10">HTTP endpoint</text>
+  <line x1="720" y1="64" x2="720" y2="440" stroke="#10b981" stroke-width="1.4" stroke-dasharray="3 5"/>
+
+  <!-- Step 1 -->
+  <circle cx="180" cy="100" r="11" fill="#9ec5ff"/><text x="180" y="104" text-anchor="middle" fill="#0a1a2b" font-size="12" font-weight="700">1</text>
+  <text x="300" y="92" fill="#cfe1ff" font-size="12" font-weight="600">DECLARE + ASK</text>
+  <text x="300" y="108" fill="#9aa6bd" font-size="11">POST context + tools[]  (or previous-response ref)</text>
+  <path d="M192,118 L708,118" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#l-blue)"/>
+
+  <!-- Step 2 -->
+  <circle cx="720" cy="150" r="11" fill="#34d399"/><text x="720" y="154" text-anchor="middle" fill="#04261d" font-size="12" font-weight="700">2</text>
+  <text x="600" y="150" text-anchor="end" fill="#bbf7d0" font-size="12" font-weight="600">DECIDE</text>
+  <text x="600" y="166" text-anchor="end" fill="#9aa6bd" font-size="11">pick tool + build args; set stop = "tool call"</text>
+  <path d="M708,184 L192,184" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#l-green)" class="flow-line"/>
+  <text x="450" y="178" text-anchor="middle" fill="#34d399" font-size="11">returns tool call: name + JSON arguments + id</text>
+
+  <!-- Step 3 -->
+  <circle cx="180" cy="222" r="11" fill="#9ec5ff"/><text x="180" y="226" text-anchor="middle" fill="#0a1a2b" font-size="12" font-weight="700">3</text>
+  <text x="300" y="218" fill="#cfe1ff" font-size="12" font-weight="600">EXECUTE</text>
+  <text x="300" y="234" fill="#9aa6bd" font-size="11">runtime parses the args and runs the real function in your code</text>
+  <rect x="300" y="242" width="330" height="28" rx="8" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="465" y="260" text-anchor="middle" fill="#9ec5ff" font-size="10.5">e.g. your get_weather("Paris") returns "18°C, clear"</text>
+
+  <!-- Step 4 -->
+  <circle cx="180" cy="312" r="11" fill="#fbbf24"/><text x="180" y="316" text-anchor="middle" fill="#3a2a02" font-size="12" font-weight="700">4</text>
+  <text x="300" y="304" fill="#fcd34d" font-size="12" font-weight="600">RETURN RESULT</text>
+  <text x="300" y="320" fill="#9aa6bd" font-size="11">send tool result, then continue the turn</text>
+  <path d="M192,332 L708,332" stroke="#fbbf24" stroke-width="2" fill="none" marker-end="url(#l-amber)"/>
+
+  <!-- Step 5 -->
+  <circle cx="720" cy="362" r="11" fill="#34d399"/><text x="720" y="366" text-anchor="middle" fill="#04261d" font-size="12" font-weight="700">5</text>
+  <text x="600" y="362" text-anchor="end" fill="#bbf7d0" font-size="12" font-weight="600">ANSWER or LOOP</text>
+  <text x="600" y="378" text-anchor="end" fill="#9aa6bd" font-size="11">final text (stop = "end"), or another tool call → step 3</text>
+  <path d="M708,396 L192,396" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#l-green)" class="flow-line"/>
+
+  <!-- loop-back: after the runtime receives step 5, return to step 3 if more tool calls -->
+  <circle cx="180" cy="396" r="3.5" fill="#9aa6bd"/>
+  <path d="M180,400 C104,402 104,248 169,224" stroke="#9aa6bd" stroke-width="1.4" fill="none" stroke-dasharray="4 4" marker-end="url(#l-blue)"/>
+  <text x="96" y="312" text-anchor="middle" fill="#9aa6bd" font-size="10" transform="rotate(-90 96 312)">if another tool call → back to step 3</text>
+</svg>
+      </div>
+      <div class="caption">Figure 2 · The loop. Steps 1 and 4 are requests your runtime sends; steps 2 and 5 are the model's responses; step 3 is the only place client-side code runs. Chat-style APIs re-send history; Responses-style APIs may also let you reference prior provider-stored responses.</div>
+
+      <ol class="legend-list">
+        <li><span class="num">1</span><div><b>Declare &amp; ask</b><p>The runtime POSTs the conversation plus the tool catalogue, or a provider-supported reference to prior response context plus any new input.</p></div></li>
+        <li><span class="num">2</span><div><b>Decide</b><p>The model either writes text or emits a structured tool call — a tool name plus JSON arguments — and sets a stop/finish reason that means &ldquo;I'm waiting for a result&rdquo; (e.g. OpenAI <code>tool_calls</code>, Anthropic <code>tool_use</code>, Bedrock <code>tool_use</code>).</p></div></li>
+        <li><span class="num">3</span><div><b>Execute</b><p>The runtime parses the arguments and runs the actual function. For developer-defined (client) tools this is the only step that touches your systems, and it runs on your side of the line; some providers also offer built-in tools that they execute server-side.</p></div></li>
+        <li><span class="num">4</span><div><b>Return result</b><p>The runtime sends the result back as a new message or input item (a <code>tool</code> role, a <code>tool_result</code> block, a <code>functionResponse</code> part, a <code>function_call_output</code> item, …).</p></div></li>
+        <li><span class="num">5</span><div><b>Answer or loop</b><p>The model either produces the final answer (stop reason &ldquo;end&rdquo;) or requests another tool, in which case the runtime returns to step 3. The loop is owned by the runtime, not the provider.</p></div></li>
+      </ol>
+      <p class="snip-src">
+        Sources: <a href="https://platform.openai.com/docs/guides/function-calling#function-tool-example">OpenAI · worked example loop</a>
+        · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview#how-tool-use-works">Anthropic · How tool use works</a>
+        · <a href="https://ai.google.dev/gemini-api/docs/function-calling#how_function_calling_works">Gemini · How function calling works</a>
+        · <a href="https://docs.mistral.ai/studio-api/conversations/function-calling">Mistral · Function calling steps</a>
+      </p>
+    </div>
+
+    <div class="note-box">
+      <b>One vocabulary, many spellings.</b> Throughout the loop, "the model wants a tool" is signalled
+      differently per provider: OpenAI uses <code>finish_reason: "tool_calls"</code>, Anthropic and
+      Bedrock use <code>stop_reason</code>/<code>stopReason: "tool_use"</code>, Gemini surfaces a
+      <code>functionCall</code> part, and Ollama simply populates <code>message.tool_calls</code>. The
+      sections below give the provider-documented JSON for each.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PROVIDERS
+     ============================================================ -->
+<section id="providers" style="border-bottom:none; padding-bottom: 18px;">
+  <div class="container">
+    <h2>Nine APIs, one contract</h2>
+    <p class="lede">
+      Each card below walks the same three steps from Figure 2 — <span style="color:#93c5fd">declare</span>,
+      <span style="color:#6ee7b7">model emits a call</span>, <span style="color:#fcd34d">return the result</span> —
+      using JSON taken from the provider's own documentation. A source line under every block links the
+      source page it came from.
+    </p>
+    <p style="color: var(--muted);">
+      All nine APIs share that high-level contract, but the concrete JSON is not interchangeable: none are
+      wire-compatible end to end, though several cluster around the OpenAI Chat Completions shape. They
+      differ along five axes (the comparison table near the end gives the per-provider detail):
+    </p>
+    <div class="prov-notes" style="margin: 18px 0 6px;">
+      <div class="nb"><h5>Declaration shape</h5><p>A <code>function</code> wrapper, a flat object, or Bedrock's nested <code>toolSpec</code>. Schema field: <code>parameters</code>, <code>input_schema</code>, or <code>inputSchema.json</code>.</p></div>
+      <div class="nb"><h5>&ldquo;Wants a tool&rdquo; signal</h5><p>A finish/stop reason, a typed <code>functionCall</code> / <code>function_call</code> item, or just the presence of <code>tool_calls</code>.</p></div>
+      <div class="nb"><h5>Argument encoding</h5><p>Arguments arrive either as a JSON <i>string</i> you parse, or as an already-parsed <i>object</i>.</p></div>
+      <div class="nb"><h5>Result channel</h5><p>A <code>tool</code>-role message, a <code>tool_result</code> block in a user message, a <code>function_call_output</code> item, or a <code>functionResponse</code> part.</p></div>
+      <div class="nb"><h5>&ldquo;Force a tool&rdquo; naming</h5><p>The same intent is spelled <code>required</code>, <code>any</code>, <code>ANY</code>, or <code>REQUIRED</code>.</p></div>
+    </div>
+    <p style="color: var(--muted);">
+      In short: one provider means one shape; several providers means translating between these — typically
+      with a thin per-provider adapter over a shared internal representation, or a framework that abstracts
+      them behind one interface.
+    </p>
+  </div>
+</section>
+
+<!-- ============ OPENAI ============ -->
+<section id="openai">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--oai)">AI</div>
+        <div>
+          <h3>OpenAI <span class="endpoint-pill" style="color:var(--oai)">Chat Completions + Responses</span></h3>
+          <div class="sub">The format most other providers follow. Two surfaces: the classic <code>/v1/chat/completions</code> and the newer <code>/v1/responses</code>.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <h4 style="color:var(--oai)">Surface A · Chat Completions (<code>/v1/chat/completions</code>)</h4>
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Each tool is wrapped in a <code>function</code> object inside the <code>tools</code> array. The arguments are a JSON Schema; <code>strict: true</code> enforces the schema exactly.</p>
+        <pre><code>"tools": [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "Retrieves current weather for the given location.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City and country e.g. Bogotá, Colombia"
+          }
+        },
+        "required": ["location"],
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#strict-mode">platform.openai.com · Function calling · Strict mode (Chat Completions <code>get_weather</code> example)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The assistant message carries a <code>tool_calls</code> array (each with an <code>id</code>, a <code>function.name</code>, and a <b>string</b> <code>arguments</code>), and the response sets <code>finish_reason: "tool_calls"</code>. Multiple entries appear when the model calls tools in parallel.</p>
+        <pre><code>"tool_calls": [
+  {
+    "id": "call_12345xyz",
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "arguments": "{\"location\":\"Paris, France\"}"
+    }
+  },
+  {
+    "id": "call_67890abc",
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "arguments": "{\"location\":\"Bogotá, Colombia\"}"
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#handling-function-calls">platform.openai.com · Handling function calls</a> · <a href="https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models">OpenAI Cookbook · &ldquo;the output will contain finish_reason: tool_calls&rdquo;</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result goes back as a message with <code>role: "tool"</code>, referencing the call by <code>tool_call_id</code>. Per the docs, a <code>tool</code> message must follow a preceding message that had <code>tool_calls</code>.</p>
+        <pre><code>{
+  "role": "tool",
+  "tool_call_id": "call_12345xyz",
+  "content": "{\"temperature\": \"15 C\", \"conditions\": \"cloudy\"}"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#handling-function-calls">platform.openai.com · Function calling · Handling function calls (tool-role result)</a> · <a href="https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models">OpenAI Cookbook · tool-role message</a></div>
+
+        <h4 style="color:var(--oai); margin-top:26px;">Surface B · Responses API (<code>/v1/responses</code>)</h4>
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>The Responses API <b>flattens</b> the tool object — <code>name</code>, <code>description</code>, <code>parameters</code>, and <code>strict</code> sit at the top level, with no nested <code>function</code> wrapper.</p>
+        <pre><code>{
+  "type": "function",
+  "name": "get_weather",
+  "description": "Retrieves current weather for the given location.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "location": { "type": "string", "description": "City and country e.g. Bogotá, Colombia" },
+      "units": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+    },
+    "required": ["location", "units"],
+    "additionalProperties": false
+  },
+  "strict": true
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#defining-functions">platform.openai.com · Function calling · Defining functions (Responses)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The response <code>output</code> array contains items of <code>type: "function_call"</code>. Note the separate <code>call_id</code> (used to submit the result) distinct from the item's own <code>id</code>.</p>
+        <pre><code>[
+  {
+    "id": "fc_12345xyz",
+    "call_id": "call_12345xyz",
+    "type": "function_call",
+    "name": "get_weather",
+    "arguments": "{\"location\":\"Paris, France\"}"
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#handling-function-calls">platform.openai.com · Handling function calls (Responses)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is a <code>function_call_output</code> item that references <code>call_id</code> (not <code>id</code>). The output is typically a string in any format you choose.</p>
+        <pre><code>{
+  "type": "function_call_output",
+  "call_id": "call_12345xyz",
+  "output": "70 degrees and sunny."
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.openai.com/docs/guides/function-calling#handling-function-calls">platform.openai.com · Handling function calls</a> · <a href="https://platform.openai.com/docs/guides/function-calling#formatting-results">Formatting results</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p><code>"auto"</code>, <code>"required"</code>, <code>"none"</code>, or a named function. Chat uses <code>{"type":"function","function":{"name":...}}</code>; Responses uses the flat <code>{"type":"function","name":...}</code> and adds an <code>allowed_tools</code> subset form.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>On by default; set <code>parallel_tool_calls: false</code> to allow at most one. Not available with built-in tools.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Chat streams <code>delta.tool_calls</code> chunks; Responses emits semantic events like <code>response.function_call_arguments.delta</code>.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://platform.openai.com/docs/guides/function-calling#tool-choice">tool_choice</a> · <a href="https://platform.openai.com/docs/guides/function-calling#parallel-function-calling">Parallel function calling</a> · <a href="https://platform.openai.com/docs/guides/function-calling#streaming">Streaming</a> · <a href="https://platform.openai.com/docs/guides/function-calling#strict-mode">Strict mode</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ANTHROPIC ============ -->
+<section id="anthropic">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--anth)">An</div>
+        <div>
+          <h3>Anthropic — Claude <span class="endpoint-pill" style="color:var(--anth)">Messages API</span></h3>
+          <div class="sub">Tools live inside the normal <code>user</code>/<code>assistant</code> message structure — there is no special <code>tool</code> or <code>function</code> role.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Each tool in the <code>tools</code> array uses <code>name</code>, <code>description</code>, and <code>input_schema</code> (a JSON Schema object). Note the field is <code>input_schema</code>, not <code>parameters</code>.</p>
+        <pre><code>{
+  "name": "get_weather",
+  "description": "Get the current weather in a given location",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The city and state, e.g. San Francisco, CA"
+      },
+      "unit": {
+        "type": "string",
+        "enum": ["celsius", "fahrenheit"],
+        "description": "The unit of temperature"
+      }
+    },
+    "required": ["location"]
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools">platform.claude.com · Tool use · Define tools (name / description / input_schema)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The response sets <code>stop_reason: "tool_use"</code> and includes one or more <code>tool_use</code> content blocks, each with an <code>id</code>, a <code>name</code>, and the parsed <code>input</code> object (already JSON, not a string).</p>
+        <pre><code>{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I'll check the current weather in San Francisco."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01A09q90qw90lq917835lq9",
+      "name": "get_weather",
+      "input": { "location": "San Francisco, CA" }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools">platform.claude.com · Model responses with tools</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls">Handle tool calls (stop_reason "tool_use")</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is sent back in a new <code>user</code> message whose <code>content</code> begins with a <code>tool_result</code> block referencing <code>tool_use_id</code>. Tool-result blocks must come first in the array; <code>is_error: true</code> reports a failure.</p>
+        <pre><code>{
+  "role": "user",
+  "content": [
+    {
+      "type": "tool_result",
+      "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+      "content": "15 degrees and cloudy"
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls">platform.claude.com · Handling results from client tools (tool_result / tool_use_id)</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use">is_error example</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p><code>auto</code> (default with tools), <code>any</code> (must use some tool), <code>tool</code> with a <code>name</code> (forces one), and <code>none</code>. With <code>any</code>/<code>tool</code> no leading prose is emitted.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>On by default — one assistant turn can hold several <code>tool_use</code> blocks; all their <code>tool_result</code> blocks must return in a single user message. Disable with <code>disable_parallel_tool_use</code>.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Supported, including fine-grained streaming of tool-call input as it is generated.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools">Forcing tool use</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use">Parallel tool use</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming">Fine-grained tool streaming</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ GEMINI ============ -->
+<section id="gemini">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--gem)">Ge</div>
+        <div>
+          <h3>Google Gemini <span class="endpoint-pill" style="color:var(--gem)">generateContent</span></h3>
+          <div class="sub">Tools are <code>functionDeclarations</code>; turns are <code>parts</code> inside <code>contents</code>. Endpoint: <code>POST …/v1beta/models/{model}:generateContent</code>.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Tools go in <code>tools[].functionDeclarations[]</code>; each declaration has <code>name</code>, <code>description</code>, and an OpenAPI-subset <code>parameters</code> schema.</p>
+        <pre><code>"tools": [
+  {
+    "functionDeclarations": [
+      {
+        "name": "schedule_meeting",
+        "description": "Schedules a meeting with specified attendees at a given time and date.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "attendees": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of people attending the meeting."
+            },
+            "date":  { "type": "string", "description": "Date of the meeting (e.g., '2024-07-29')" },
+            "time":  { "type": "string", "description": "Time of the meeting (e.g., '15:00')" },
+            "topic": { "type": "string", "description": "The subject or topic of the meeting." }
+          },
+          "required": ["attendees", "date", "time", "topic"]
+        }
+      }
+    ]
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://ai.google.dev/gemini-api/docs/function-calling">ai.google.dev · Function calling · REST request (Schedule Meeting)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The model returns a <code>functionCall</code> part inside <code>candidates[].content.parts[]</code>, with the function <code>name</code>, the <code>args</code> object, and (for Gemini 3 models) a unique <code>id</code>. Always scan the parts array rather than assuming position.</p>
+        <pre><code>{
+  "functionCall": {
+    "name": "schedule_meeting",
+    "args": {
+      "attendees": ["Bob", "Alice"],
+      "date": "2025-03-27",
+      "time": "10:00",
+      "topic": "Q3 planning"
+    },
+    "id": "UNIQUE_CALL_ID"
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://ai.google.dev/gemini-api/docs/function-calling#how_function_calling_works">ai.google.dev · How function calling works (functionCall: name / args / id)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The runtime appends a turn containing a <code>functionResponse</code> part with the matching <code>name</code>, the <code>response</code> payload, and the same <code>id</code> for Gemini 3 models.</p>
+        <pre><code>{
+  "functionResponse": {
+    "name": "schedule_meeting",
+    "response": { "result": "Meeting scheduled for 2025-03-27 at 10:00." },
+    "id": "UNIQUE_CALL_ID"
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://ai.google.dev/gemini-api/docs/function-calling">ai.google.dev · Function calling · functionResponse (name / response / id)</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>Mode</h5><p><code>function_calling_config.mode</code>: <code>AUTO</code> (model decides), <code>ANY</code> (must call a function, optionally limited by <code>allowed_function_names</code>), <code>NONE</code>, and <code>VALIDATED</code>.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>Supports parallel calls (several <code>functionCall</code> parts in one turn), sequential/compositional calling, and mixing with built-in tools.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Available via <code>streamGenerateContent</code>; the Live API offers tool use for earlier model families.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://ai.google.dev/gemini-api/docs/function-calling#function_calling_modes">Function calling modes</a> · <a href="https://ai.google.dev/gemini-api/docs/function-calling#parallel_function_calling">Parallel function calling</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ OLLAMA ============ -->
+<section id="ollama">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--olla); color:#0b0f17">Ol</div>
+        <div>
+          <h3>Ollama — local models <span class="endpoint-pill" style="color:var(--olla)">/api/chat</span></h3>
+          <div class="sub">Mirrors OpenAI's <code>tools</code>/<code>function</code>/<code>parameters</code> shape, but <code>arguments</code> come back as a parsed object, not a string.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>The <code>tools</code> array uses the OpenAI-style <code>{ "type": "function", "function": { … } }</code> shape against the local <code>/api/chat</code> endpoint.</p>
+        <pre><code>{
+  "model": "llama3.2",
+  "messages": [
+    { "role": "user", "content": "what is the weather in tokyo?" }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get the weather in a given city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string", "description": "The city to get the weather for" }
+          },
+          "required": ["city"]
+        }
+      }
+    }
+  ],
+  "stream": false
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">github.com/ollama/ollama · docs/api.md · Chat request (with tools)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The assistant message carries a <code>tool_calls</code> array. Unlike OpenAI, the <code>arguments</code> field is a JSON <b>object</b>, already parsed.</p>
+        <pre><code>{
+  "model": "llama3.2",
+  "message": {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "function": {
+          "name": "get_weather",
+          "arguments": { "city": "Tokyo" }
+        }
+      }
+    ]
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">github.com/ollama/ollama · docs/api.md · Chat response (with tools)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is appended as a message with <code>role: "tool"</code>, carrying the <code>content</code> string and the <code>tool_name</code> it answers.</p>
+        <pre><code>{
+  "role": "tool",
+  "content": "11 degrees celsius",
+  "tool_name": "get_weather"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">github.com/ollama/ollama · docs/api.md · Chat request (with history, with tools)</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p>The native <code>/api/chat</code> docs do not list a <code>tool_choice</code>/mode parameter. The OpenAI-compatible <code>/v1/chat/completions</code> endpoint now lists <code>tool_choice</code> as a supported request field.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>Supported — multiple entries can appear in <code>tool_calls</code>.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>With <code>"stream": true</code>, the tool call arrives in a chunk with <code>"done": false</code>, then a final <code>"done": true</code> / <code>"done_reason": "stop"</code> object.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://docs.ollama.com/api/openai-compatibility">docs.ollama.com · OpenAI compatibility (supported request fields)</a> · <a href="https://ollama.com/blog/tool-support">ollama.com/blog · Tool support</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MISTRAL ============ -->
+<section id="mistral">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--mis)">Mi</div>
+        <div>
+          <h3>Mistral AI <span class="endpoint-pill" style="color:var(--mis)">chat/completions</span></h3>
+          <div class="sub">OpenAI-shaped: <code>tools</code> with a <code>function</code> wrapper, <code>tool_calls</code> in the response, results via a <code>tool</code> role.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Tools use the familiar <code>{ "type": "function", "function": { name, description, parameters } }</code> shape.</p>
+        <pre><code>"tools": [
+  {
+    "type": "function",
+    "function": {
+      "name": "retrieve_payment_status",
+      "description": "Get payment status of a transaction",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "transaction_id": { "type": "string", "description": "The transaction id." }
+        },
+        "required": ["transaction_id"]
+      }
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.mistral.ai/studio-api/conversations/function-calling">docs.mistral.ai · Function calling · Step 1 (tool definition)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The model returns a <code>tool_calls</code> array; each entry has an <code>id</code>, a <code>type</code>, and a <code>function</code> with a <b>string</b> <code>arguments</code> field you parse yourself.</p>
+        <pre><code>[
+  {
+    "function": {
+      "name": "retrieve_payment_status",
+      "arguments": "{\"transaction_id\": \"T1001\"}"
+    },
+    "id": "D681PevKs",
+    "type": "function"
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.mistral.ai/studio-api/conversations/function-calling">docs.mistral.ai · Function calling · Step 3 (raw output)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is a <code>tool</code> message with the function <code>name</code>, the <code>content</code> result, and the matching <code>tool_call_id</code>.</p>
+        <pre><code>{
+  "role": "tool",
+  "name": "retrieve_payment_status",
+  "content": "{\"status\": \"Paid\"}",
+  "tool_call_id": "D681PevKs"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.mistral.ai/studio-api/conversations/function-calling">docs.mistral.ai · Function calling · Step 5 (tool result)</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p><code>"auto"</code> (default), <code>"any"</code> (forces tool use), <code>"none"</code> (prevents it). Mistral's force-equivalent is <code>"any"</code>.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>Controlled by <code>parallel_tool_calls</code> (default <code>true</code>); set <code>false</code> to force single tool calling.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Supported by the chat endpoint generally; the function-calling guide itself shows the non-streaming flow.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://docs.mistral.ai/studio-api/conversations/function-calling">docs.mistral.ai · Function calling (tool_choice / parallel_tool_calls)</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COHERE ============ -->
+<section id="cohere">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--coh)">Co</div>
+        <div>
+          <h3>Cohere — Command <span class="endpoint-pill" style="color:var(--coh)">v2 Chat API</span></h3>
+          <div class="sub">OpenAI-like declaration, but the response includes a <code>tool_plan</code>, and results return as <code>document</code> blocks that feed built-in citations. Endpoint: <code>POST /v2/chat</code>.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Tools use the <code>{ "type": "function", "function": { … } }</code> shape with a JSON-Schema <code>parameters</code> block.</p>
+        <pre><code>"tools": [
+  {
+    "type": "function",
+    "function": {
+      "name": "search_docs",
+      "description": "Search documentation and return relevant snippets as documents.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query":  { "type": "string",  "description": "The search query to look up in the docs." },
+          "top_k":  { "type": "integer", "description": "How many documents to return." }
+        },
+        "required": ["query"]
+      }
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.cohere.com/docs/tool-use-overview">docs.cohere.com · Tool use overview · tool schema</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The assistant message returns a <code>tool_plan</code> (the model's reasoning) alongside <code>tool_calls</code> (each with an auto-generated <code>id</code> and a string <code>arguments</code>).</p>
+        <pre><code>{
+  "role": "assistant",
+  "tool_plan": "I will search the docs for how tool use works in Cohere.",
+  "tool_calls": [
+    {
+      "id": "search_docs_1byjy32y4hvq",
+      "type": "function",
+      "function": {
+        "name": "search_docs",
+        "arguments": "{\"query\":\"tool use Cohere\",\"top_k\":3}"
+      }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.cohere.com/docs/tool-use-overview">docs.cohere.com · Generate tool calls (tool_plan + tool_calls)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is a <code>tool</code> message referencing <code>tool_call_id</code>, whose <code>content</code> is a list of <code>document</code> blocks — a Cohere-specific shape that drives its citation generation.</p>
+        <pre><code>{
+  "role": "tool",
+  "tool_call_id": "search_docs_1byjy32y4hvq",
+  "content": [
+    {
+      "type": "document",
+      "document": {
+        "data": "{\"title\": \"Tool use overview\", \"text\": \"Tool use connects models to external tools.\"}"
+      }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.cohere.com/docs/tool-use-overview">docs.cohere.com · Tool use overview · returning results (document blocks)</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p><code>"REQUIRED"</code> forces tool call(s); <code>"NONE"</code> forces a direct answer; unset lets the model decide. Compatible with Command R7B and newer only.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>Documented — the model can return several <code>tool_calls</code>; you append one <code>tool</code> message per call.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Supported via a dedicated tool-use streaming guide.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://docs.cohere.com/docs/tool-use-usage-patterns">docs.cohere.com · Usage patterns (forcing tool use / parallel)</a> · <a href="https://docs.cohere.com/docs/tool-use-streaming">Streaming for tool use</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ AWS BEDROCK ============ -->
+<section id="bedrock">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--bed); color:#0b0f17">Be</div>
+        <div>
+          <h3>AWS Bedrock <span class="endpoint-pill" style="color:var(--bed)">Converse API</span></h3>
+          <div class="sub">A model-agnostic shape: <code>toolConfig.tools[].toolSpec</code> with <code>inputSchema.json</code>; calls and results are content blocks; <code>stopReason</code> is <code>"tool_use"</code>.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>Tools live under <code>toolConfig.tools[].toolSpec</code>; the schema sits inside <code>inputSchema.json</code> and its top-level type must be <code>object</code>.</p>
+        <pre><code>"toolConfig": {
+  "tools": [
+    {
+      "toolSpec": {
+        "name": "top_song",
+        "description": "Get the most popular song played on a radio station.",
+        "inputSchema": {
+          "json": {
+            "type": "object",
+            "properties": {
+              "sign": {
+                "type": "string",
+                "description": "The call sign for the radio station, e.g. WZPZ."
+              }
+            },
+            "required": ["sign"]
+          }
+        }
+      }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use-client-side.html">docs.aws.amazon.com · Bedrock · client-side tool use</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolSpecification.html">API ref · ToolSpecification / ToolInputSchema</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The response sets <code>stopReason: "tool_use"</code>; a <code>toolUse</code> content block carries a <code>toolUseId</code>, a <code>name</code>, and the parsed <code>input</code> object.</p>
+        <pre><code>{
+  "stopReason": "tool_use",
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "toolUse": {
+            "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+            "name": "top_song",
+            "input": { "sign": "WZPZ" }
+          }
+        }
+      ]
+    }
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolUseBlock.html">docs.aws.amazon.com · API ref · ToolUseBlock (toolUseId / name / input)</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html">Converse (stopReason values)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result goes back in a <code>user</code> message containing a <code>toolResult</code> block that references the same <code>toolUseId</code>; <code>status</code> may be <code>success</code> or <code>error</code>.</p>
+        <pre><code>{
+  "role": "user",
+  "content": [
+    {
+      "toolResult": {
+        "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+        "content": [
+          { "json": { "song": "Elemental Hotel", "artist": "8 Storey Hike" } }
+        ]
+      }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultBlock.html">docs.aws.amazon.com · API ref · ToolResultBlock (toolUseId / content / status)</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use-client-side.html">client-side tool use</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>toolChoice</h5><p>A union: <code>auto</code> (default), <code>any</code> (must call some tool, no text), or <code>tool</code> (a named tool; Claude 3 &amp; Nova only). No separate <code>none</code>/<code>required</code> members.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>The response <code>content</code> array can hold multiple <code>toolUse</code> blocks; there is no <code>parallel_tool_calls</code> toggle.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Use <code>ConverseStream</code>, which emits <code>toolUse</code> deltas.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html">API ref · ToolChoice</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use.html">Bedrock · Use a tool to complete a response</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ GROQ & xAI ============ -->
+<section id="groq">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--groq)">Gx</div>
+        <div>
+          <h3>Groq &amp; xAI (Grok) <span class="endpoint-pill" style="color:var(--groq)">OpenAI-compatible surfaces</span></h3>
+          <div class="sub">Groq documents an OpenAI-compatible Chat Completions shape. xAI's current function-calling docs emphasize Responses-style tools and its SDK chat helper, so the envelopes are related but not identical.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+
+        <p>Groq documents itself as &ldquo;mostly compatible with OpenAI's client libraries&rdquo;: point the SDK at <code>https://api.groq.com/openai/v1</code>. xAI also accepts OpenAI clients at <code>https://api.x.ai/v1</code>, but its current function-calling guide is written around the Responses API. The two surfaces are shown separately below.</p>
+
+        <h4 style="color:var(--groq)">Surface A · Groq (Chat Completions)</h4>
+
+        <span class="step-label r1">1 · Declare</span>
+        <pre><code>"tools": [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "Get current weather for a location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": { "type": "string", "description": "City and state, e.g. San Francisco, CA" },
+          "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+        },
+        "required": ["location"]
+      }
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://console.groq.com/docs/tool-use">console.groq.com · Tool use · tool definitions</a> · <a href="https://console.groq.com/docs/openai">OpenAI compatibility (base_url swap)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <pre><code>{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_abc123",
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"location\": \"San Francisco, CA\", \"unit\": \"fahrenheit\"}"
+      }
+    }
+  ]
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://console.groq.com/docs/tool-use">console.groq.com · Tool use · model returns tool call requests</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <pre><code>{
+  "role": "tool",
+  "tool_call_id": "call_abc123",
+  "name": "get_weather",
+  "content": "{\"temperature\": 72, \"condition\": \"sunny\", \"unit\": \"fahrenheit\"}"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://console.groq.com/docs/tool-use">console.groq.com · Tool use · tool execution and results</a></div>
+
+        <h4 style="color:var(--groq); margin-top:26px;">Surface B · xAI / Grok (Responses)</h4>
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>xAI's function-calling guide uses the Responses API, so the tool object is <b>flat</b> (<code>type</code>, <code>name</code>, <code>description</code>, <code>parameters</code>) — the same shape as OpenAI's Responses surface.</p>
+        <pre><code>"tools": [
+  {
+    "type": "function",
+    "name": "get_temperature",
+    "description": "Get current temperature for a location",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string", "description": "City name" },
+        "unit": { "type": "string", "enum": ["celsius", "fahrenheit"], "default": "fahrenheit" }
+      },
+      "required": ["location"]
+    }
+  }
+]</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.x.ai/developers/tools/function-calling">docs.x.ai · Function calling · Quick Start (Responses)</a></div>
+
+        <span class="step-label r2">2 · Model emits a call</span>
+        <p>The response <code>output</code> array carries items of <code>type: "function_call"</code>, each with a <code>call_id</code>, a <code>name</code>, and a string <code>arguments</code>.</p>
+        <pre><code>{
+  "type": "function_call",
+  "call_id": "call_12345xyz",
+  "name": "get_temperature",
+  "arguments": "{\"location\":\"San Francisco\"}"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.x.ai/developers/tools/function-calling">docs.x.ai · Function calling · Handling tool calls (item.call_id / name / arguments)</a></div>
+
+        <span class="step-label r3">3 · Return the result</span>
+        <p>The result is a <code>function_call_output</code> item referencing <code>call_id</code>; the turn continues with <code>previous_response_id</code>.</p>
+        <pre><code>{
+  "type": "function_call_output",
+  "call_id": "call_12345xyz",
+  "output": "{\"temperature\": 59, \"unit\": \"fahrenheit\"}"
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://docs.x.ai/developers/tools/function-calling">docs.x.ai · Function calling · function_call_output + call_id</a></div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>tool_choice</h5><p>xAI documents <code>auto</code>, <code>required</code>, <code>none</code>, and a named function form. Groq's OpenAI-compatible chat endpoint lists <code>tool_choice</code> as a supported request field.</p></div>
+          <div class="nb"><h5>Parallel calls</h5><p>Groq supports parallel tool use on a per-model basis; xAI enables <code>parallel_tool_calls</code> by default and lets you set it <code>false</code>.</p></div>
+          <div class="nb"><h5>Streaming</h5><p>Groq streams tool-call deltas OpenAI-style; xAI notes that its function call is returned whole in a single chunk rather than streamed across chunks.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://console.groq.com/docs/openai">console.groq.com · OpenAI compatibility</a> · <a href="https://console.groq.com/docs/tool-use">console.groq.com · Tool use</a> · <a href="https://docs.x.ai/developers/tools/function-calling">docs.x.ai · Function calling (Responses, tool choice, parallel, streaming)</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     COMPARISON
+     ============================================================ -->
+<section id="compare">
+  <div class="container">
+    <h2>Side-by-side · the three JSON shapes</h2>
+    <p class="lede">Read across a row to see how each API answers the same question. The client-tool contract is the same; field names, nesting, and state-handling conventions differ.</p>
+    <div class="table-wrap" id="cmpScroller">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th><span class="dot" style="background:var(--oai)"></span> OpenAI (Chat)</th>
+            <th><span class="dot" style="background:var(--oai)"></span> OpenAI (Responses)</th>
+            <th><span class="dot" style="background:var(--anth)"></span> Anthropic</th>
+            <th><span class="dot" style="background:var(--gem)"></span> Gemini</th>
+            <th><span class="dot" style="background:var(--olla)"></span> Ollama</th>
+            <th><span class="dot" style="background:var(--mis)"></span> Mistral</th>
+            <th><span class="dot" style="background:var(--coh)"></span> Cohere v2</th>
+            <th><span class="dot" style="background:var(--bed)"></span> Bedrock</th>
+            <th><span class="dot" style="background:var(--groq)"></span> Groq / xAI</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">Tools declared under</td>
+            <td><code>tools[].function</code></td>
+            <td><code>tools[]</code> (flat)</td>
+            <td><code>tools[]</code></td>
+            <td><code>tools[].functionDeclarations[]</code></td>
+            <td><code>tools[].function</code></td>
+            <td><code>tools[].function</code></td>
+            <td><code>tools[].function</code></td>
+            <td><code>toolConfig.tools[].toolSpec</code></td>
+            <td>Groq Chat: <code>tools[].function</code><br>xAI Responses: flat <code>tools[]</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Schema field</td>
+            <td><code>parameters</code></td>
+            <td><code>parameters</code></td>
+            <td><code>input_schema</code></td>
+            <td><code>parameters</code></td>
+            <td><code>parameters</code></td>
+            <td><code>parameters</code></td>
+            <td><code>parameters</code></td>
+            <td><code>inputSchema.json</code></td>
+            <td><code>parameters</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">"Wants a tool" signal</td>
+            <td><code>finish_reason: "tool_calls"</code></td>
+            <td><code>output[]</code> <code>function_call</code> item</td>
+            <td><code>stop_reason: "tool_use"</code></td>
+            <td><code>functionCall</code> part</td>
+            <td><code>message.tool_calls</code> present</td>
+            <td><code>tool_calls</code> present</td>
+            <td><code>tool_calls</code> (+ <code>tool_plan</code>)</td>
+            <td><code>stopReason: "tool_use"</code></td>
+            <td>Groq Chat: <code>tool_calls</code><br>xAI Responses: <code>function_call</code> item</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Call carries</td>
+            <td><code>id</code>, <code>name</code>, <code>arguments</code> (str)</td>
+            <td><code>call_id</code>, <code>name</code>, <code>arguments</code> (str)</td>
+            <td><code>id</code>, <code>name</code>, <code>input</code> (obj)</td>
+            <td><code>name</code>, <code>args</code> (obj), <code>id</code></td>
+            <td><code>name</code>, <code>arguments</code> (obj)</td>
+            <td><code>id</code>, <code>name</code>, <code>arguments</code> (str)</td>
+            <td><code>id</code>, <code>name</code>, <code>arguments</code> (str)</td>
+            <td><code>toolUseId</code>, <code>name</code>, <code>input</code> (obj)</td>
+            <td>Groq: <code>id</code>, <code>name</code>, <code>arguments</code> (str)<br>xAI: <code>call_id</code>, <code>name</code>, <code>arguments</code> (str)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Result returned as</td>
+            <td><code>role: "tool"</code> + <code>tool_call_id</code></td>
+            <td><code>function_call_output</code> + <code>call_id</code></td>
+            <td><code>user</code> msg, <code>tool_result</code> block</td>
+            <td><code>functionResponse</code> part</td>
+            <td><code>role: "tool"</code> + <code>tool_name</code></td>
+            <td><code>role: "tool"</code> + <code>tool_call_id</code></td>
+            <td><code>role: "tool"</code>, <code>document</code> blocks</td>
+            <td><code>user</code> msg, <code>toolResult</code> block</td>
+            <td>Groq Chat: <code>role: "tool"</code> + <code>tool_call_id</code><br>xAI Responses: <code>function_call_output</code> + <code>call_id</code></td>
+          </tr>
+          <tr>
+            <td class="row-hd">Force / restrict</td>
+            <td><code>tool_choice</code>: auto/required/none/named</td>
+            <td><code>tool_choice</code>: + <code>allowed_tools</code></td>
+            <td><code>tool_choice</code>: auto/any/tool/none</td>
+            <td><code>mode</code>: AUTO/ANY/NONE/VALIDATED</td>
+            <td>native: not documented; compat: <code>tool_choice</code> supported</td>
+            <td><code>tool_choice</code>: auto/any/none</td>
+            <td><code>tool_choice</code>: REQUIRED/NONE</td>
+            <td><code>toolChoice</code>: auto/any/tool</td>
+            <td>auto/required/none/named</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Parallel calls</td>
+            <td><code>parallel_tool_calls</code></td>
+            <td><code>parallel_tool_calls</code></td>
+            <td>default; <code>disable_parallel_tool_use</code></td>
+            <td>parallel + compositional</td>
+            <td>multiple <code>tool_calls</code></td>
+            <td><code>parallel_tool_calls</code></td>
+            <td>multiple <code>tool_calls</code></td>
+            <td>multiple <code>toolUse</code> blocks</td>
+            <td>per-model / <code>parallel_tool_calls</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="hscroll" id="cmpScrollbar" aria-hidden="true"><div class="hscroll-thumb"></div></div>
+    <p class="snip-src" style="margin-top:14px;">Every cell is sourced to the provider docs cited in that provider's section above. Scroll the bar above (or the table) to see all columns.</p>
+  </div>
+</section>
+
+<!-- ============================================================
+     TAKEAWAYS
+     ============================================================ -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Summary observations</h2>
+    <p class="lede">Six factual observations drawn from the per-provider JSON above.</p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">CONTRACT</span>
+        <h4>1 · One contract, nine spellings</h4>
+        <p>Every API implements the same declare → model-emits-call → return-result loop for client tools. The model emits a structured request; your runtime executes client-side tools and returns results. The differences are field names, nesting, and state-handling conventions.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">SHAPE</span>
+        <h4>2 · Three families of declaration</h4>
+        <p>The OpenAI Chat <code>tools[].function</code> wrapper (also Ollama, Mistral, Cohere, and Groq Chat); flat variants (OpenAI Responses, xAI Responses, Anthropic's <code>input_schema</code>, Gemini's <code>functionDeclarations</code>); and Bedrock's nested <code>toolSpec.inputSchema.json</code>.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">ARGS</span>
+        <h4>3 · String vs. object arguments</h4>
+        <p>OpenAI, Mistral, Cohere, Groq, and xAI return <code>arguments</code> as a JSON <b>string</b> you must parse. Anthropic (<code>input</code>), Gemini (<code>args</code>), Ollama, and Bedrock (<code>input</code>) hand back an already-parsed object.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">SIGNAL</span>
+        <h4>4 · Four ways to say "I want a tool"</h4>
+        <p>A finish reason (<code>finish_reason: "tool_calls"</code>), a stop reason (<code>stop_reason</code>/<code>stopReason: "tool_use"</code>), a typed content block/part (<code>tool_use</code>, <code>functionCall</code>), or simply the presence of a <code>tool_calls</code> field (Ollama).</p>
+      </div>
+      <div class="ta">
+        <span class="tag">RESULT</span>
+        <h4>5 · A dedicated role, or a message block</h4>
+        <p>Several chat-style APIs add a dedicated <code>tool</code> role. Anthropic and Bedrock fold the result into a normal <code>user</code> message as a <code>tool_result</code> / <code>toolResult</code> block, while Responses-style APIs use a <code>function_call_output</code> item.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">CHOICE</span>
+        <h4>6 · "Force a tool" has no standard name</h4>
+        <p>The same intent is <code>required</code> (OpenAI, xAI), <code>any</code> (Anthropic, Mistral, Bedrock), <code>ANY</code> (Gemini), or <code>REQUIRED</code> (Cohere). Ollama's native API docs do not document an equivalent, while its OpenAI-compatible endpoint lists <code>tool_choice</code> as supported.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     GLOSSARY
+     ============================================================ -->
+<section id="glossary">
+  <div class="container">
+    <h2>Mini-glossary</h2>
+    <p class="lede">Terms that mean the same thing but are spelled differently across providers.</p>
+    <div class="gloss">
+      <div><b>Tool call / function call</b> — the model's structured request to run a named function with named arguments. The model never runs it.</div>
+      <div><b>Agent runtime</b> — your process: holds conversation state and tool code, executes tools, and drives the loop.</div>
+      <div><b>Tool declaration</b> — name + description + JSON-Schema arguments (<code>parameters</code>, <code>input_schema</code>, or <code>inputSchema.json</code>).</div>
+      <div><b>Stop / finish reason</b> — the field that signals the model paused to wait for a tool result (<code>tool_calls</code> / <code>tool_use</code>).</div>
+      <div><b>tool_choice / mode</b> — controls whether the model may, must, or must not call a tool, and optionally which one.</div>
+      <div><b>Parallel tool calls</b> — more than one tool requested in a single assistant turn, run concurrently by the runtime.</div>
+      <div><b>tool_use_id / toolUseId / call_id</b> — the correlation key linking a result back to the call that produced it.</div>
+      <div><b>tool_plan</b> (Cohere) — the model's natural-language reasoning returned alongside its tool calls.</div>
+      <div><b>functionResponse</b> (Gemini) — the part that carries a tool's result back into <code>contents</code>.</div>
+      <div><b>OpenAI-compatible</b> — an endpoint that accepts an OpenAI API shape. Ollama and Groq document Chat Completions-compatible tool use; xAI's current guide documents OpenAI-compatible Responses-style function calling.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Compiled from the official documentation of OpenAI, Anthropic, Google, Ollama, Mistral, Cohere,
+    AWS, Groq, and xAI. JSON examples are drawn from, or minimally adapted from, the provider's own
+    docs; deep links sit under each snippet. Format adapted from the companion papers
+    <a href="/whitepapers/mcp-explained.html">Model Context Protocol — How It Works</a> and
+    <a href="/whitepapers/agent-tool-wiring.html">How AI Agent Frameworks Wire In Tools and Agents</a>.
+    <p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  // Smooth-scroll for header pills AND the left rail
+  document.querySelectorAll('a.pill, #toc-rail .toc-dot').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+
+  // Scroll-spy: highlight the rail item for the section currently in view
+  const railLinks = Array.from(document.querySelectorAll('#toc-rail .toc-dot'));
+  const sections = railLinks
+    .map(a => document.getElementById(a.dataset.target))
+    .filter(Boolean);
+
+  function syncRail() {
+    if (!sections.length) return;
+    const probe = window.scrollY + window.innerHeight * 0.30;
+    let current = sections[0];
+    for (const s of sections) {
+      if (s.offsetTop <= probe) current = s;
+    }
+    railLinks.forEach(a => a.classList.toggle('active', a.dataset.target === current.id));
+  }
+
+  // Back-to-top button
+  const toTop = document.getElementById('to-top');
+  function syncTop() {
+    if (toTop) toTop.classList.toggle('show', window.scrollY > 600);
+  }
+  if (toTop) {
+    toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  }
+
+  // Keep the rail from overlapping content when the page is zoomed/magnified
+  // or the window is narrow. Measures the real left margin at the current zoom.
+  const railEl = document.getElementById('toc-rail');
+  const measureContainer = document.querySelector('section .container');
+  function fitRail() {
+    if (!railEl || !measureContainer) return;
+    if (railEl.matches(':hover')) return; // don't reflow while the user is using it
+    const contentEdge = measureContainer.getBoundingClientRect().left + 24; // text start (24px container padding)
+    railEl.classList.remove('rail-hidden', 'no-active-label');
+    // 1) Does a collapsed dot pill fit in the left margin at all? (non-active items
+    //    stay collapsed, so they measure the bare dot footprint.)
+    const collapsed = railEl.querySelector('.toc-dot:not(.active)');
+    const collapsedRight = (collapsed || railEl).getBoundingClientRect().right;
+    if (collapsedRight + 10 > contentEdge) {
+      railEl.classList.add('rail-hidden');
+      return;
+    }
+    // 2) Does the expanded active pill (dot + label) stay out of the content?
+    const active = railEl.querySelector('.toc-dot.active');
+    if (active) {
+      const r = active.getBoundingClientRect();
+      if (r.right + 10 > contentEdge) railEl.classList.add('no-active-label');
+    }
+  }
+
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      window.requestAnimationFrame(() => { syncRail(); syncTop(); fitRail(); ticking = false; });
+      ticking = true;
+    }
+  }, { passive: true });
+  window.addEventListener('resize', () => { syncRail(); fitRail(); }, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => { syncRail(); fitRail(); });
+  }
+  syncRail(); syncTop(); fitRail();
+
+  // Custom always-visible horizontal scrollbar for the comparison table
+  (function () {
+    const sc = document.getElementById('cmpScroller');
+    const bar = document.getElementById('cmpScrollbar');
+    if (!sc || !bar) return;
+    const thumb = bar.querySelector('.hscroll-thumb');
+    const MIN = 40;
+
+    function sync() {
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      if (ratio >= 1) {                 // nothing to scroll → full-width thumb
+        thumb.style.width = '100%';
+        thumb.style.transform = 'translateX(0)';
+        return;
+      }
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      thumb.style.width = tw + 'px';
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      const maxThumb = bar.clientWidth - tw;
+      const x = maxScroll > 0 ? (sc.scrollLeft / maxScroll) * maxThumb : 0;
+      thumb.style.transform = 'translateX(' + x + 'px)';
+    }
+
+    let dragging = false, startX = 0, startLeft = 0;
+    thumb.addEventListener('mousedown', e => {
+      dragging = true; startX = e.clientX; startLeft = sc.scrollLeft;
+      document.body.style.userSelect = 'none'; e.preventDefault();
+    });
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      const maxThumb = bar.clientWidth - tw;
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      if (maxThumb > 0) sc.scrollLeft = startLeft + ((e.clientX - startX) / maxThumb) * maxScroll;
+    });
+    window.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
+    // Click on the track to jump
+    bar.addEventListener('mousedown', e => {
+      if (e.target === thumb) return;
+      const rect = bar.getBoundingClientRect();
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      const target = (e.clientX - rect.left - tw / 2) / (bar.clientWidth - tw);
+      sc.scrollLeft = Math.max(0, Math.min(1, target)) * (sc.scrollWidth - sc.clientWidth);
+    });
+
+    sc.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', sync);
+    sync();
+  })();
+</script>
+<script src="/assets/js/code-highlight.js"></script>
+
+</body>
+</html>

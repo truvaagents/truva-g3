@@ -101,3 +101,8 @@
     font-size: 14px;
   }
 }
+
+/* Site-wide text selection — keep selected text readable over muted body text.
+ * Uses --ink with a fallback so it works on any page that loads this file. */
+::selection      { background: rgba(124, 196, 255, .30); color: var(--ink, #e6edf7); }
+::-moz-selection { background: rgba(124, 196, 255, .30); color: var(--ink, #e6edf7); }
