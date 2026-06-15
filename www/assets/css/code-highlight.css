@@ -1,0 +1,14 @@
+/**
+ * Shared JSON syntax-highlight tokens for TruvaG3 code blocks.
+ *
+ * Pair with /assets/js/code-highlight.js. Colors use CSS custom properties
+ * with sensible fallbacks, so any page may override them by setting
+ * --tok-* on :root without touching this file.
+ *
+ * The highlighter wraps tokens in <span class="t-*"> inside <pre><code>.
+ */
+pre code .t-key   { color: var(--tok-key,   #7cc4ff); } /* property names  — accent blue */
+pre code .t-str   { color: var(--tok-str,   #9fe0a0); } /* string values   — green       */
+pre code .t-num   { color: var(--tok-num,   #fbbf24); } /* numbers         — amber        */
+pre code .t-lit   { color: var(--tok-lit,   #c4b5fd); } /* true/false/null — violet       */
+pre code .t-punct { color: var(--tok-punct, #8aa0c0); } /* braces/commas   — muted        */

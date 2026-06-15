@@ -23,6 +23,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="/assets/css/code-highlight.css">
 <style>
   :root {
     --bg: #0b0f17;
@@ -112,21 +113,24 @@
 
   /* Universal loop diagram */
   .universal-grid {
-    display: grid; grid-template-columns: 1.1fr .9fr; gap: 28px; align-items: center;
+    display: grid; grid-template-columns: 1fr; gap: 22px;
   }
   @media (max-width: 880px) { .universal-grid { grid-template-columns: 1fr; } }
   .uni-svg-wrap {
     background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
   }
-  .uni-list { display: grid; gap: 12px; }
+  .uni-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
   .uni-item {
     background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    color: var(--muted);
   }
   .uni-item b { color: #fff; }
   .uni-item .tag {
     display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
     background: #19243d; color: #9fc2ff; margin-right:8px;
   }
+  .two-card { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+  @media (max-width: 880px) { .two-card { grid-template-columns: 1fr; } }
 
   /* Framework cards */
   .frameworks { display: grid; gap: 28px; }
@@ -162,9 +166,9 @@
   @media (max-width: 980px) { .fw-svg { border-right: none; border-bottom: 1px solid var(--line); } }
   .fw-text { padding: 22px; }
   .fw-text h4 { margin: 14px 0 6px; font-size: 14px; color: var(--accent); letter-spacing:.04em; text-transform: uppercase; }
-  .fw-text p { margin: 0 0 10px; }
+  .fw-text p { margin: 0 0 10px; color: var(--muted); }
   .fw-text ul { padding-left: 18px; margin: 0 0 4px; }
-  .fw-text li { margin: 4px 0; }
+  .fw-text li { margin: 4px 0; color: var(--muted); }
   .metaphor {
     margin: 4px 0 12px; padding: 10px 14px;
     background: #0e1a2e; border-left: 3px solid var(--accent); border-radius: 8px;
@@ -174,7 +178,7 @@
   @media (max-width: 600px) { .twocol { grid-template-columns: 1fr; } }
   .miniblock { background: var(--bg-3); border:1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   .miniblock h5 { margin:0 0 4px; font-size:12px; color:#a8b6d6; letter-spacing:.05em; text-transform: uppercase; }
-  .miniblock p { margin:0; font-size:13.5px; color:#dbe6ff; }
+  .miniblock p { margin:0; font-size:13.5px; color: var(--muted); }
 
   /* Comparison table */
   .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; }
@@ -195,7 +199,7 @@
     background: var(--bg-2); border:1px solid var(--line); border-radius: 14px; padding: 18px;
   }
   .ta h4 { margin: 0 0 8px; font-size: 15px; }
-  .ta p { margin:0; color:#cfd9ee; font-size: 14px; }
+  .ta p { margin:0; color: var(--muted); font-size: 14px; }
   .ta .tag {
     display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
     background: #19243d; color: #9fc2ff; margin-bottom:8px;
@@ -204,7 +208,7 @@
   /* Glossary */
   .gloss { display:grid; grid-template-columns: repeat(2, 1fr); gap: 10px 22px; }
   @media (max-width: 720px) { .gloss { grid-template-columns: 1fr; } }
-  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); color: var(--muted); }
   .gloss b { color: #fff; }
 
   /* Footer */
@@ -313,7 +317,7 @@
     </p>
     <div class="universal-grid">
       <div class="uni-svg-wrap">
-        <svg viewBox="0 0 780 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Universal agent loop">
+        <svg viewBox="0 0 820 524" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Agent loop split across the agent harness and the model provider">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/>
@@ -332,93 +336,179 @@
             </linearGradient>
           </defs>
 
-          <!-- ====== top row: User → Reason → Decide → Final ====== -->
-
-          <!-- User Task -->
-          <rect x="20" y="70" width="130" height="80" rx="12" fill="#1a2236" stroke="#3a4a72"/>
-          <text x="85" y="105" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">User Task</text>
-          <text x="85" y="125" text-anchor="middle" fill="#9aa6bd" font-size="11">"Book me a flight"</text>
+          <!-- ====== MODEL PROVIDER zone (top) ====== -->
+          <rect x="14" y="20" width="792" height="104" rx="14" fill="rgba(52,211,153,.06)" stroke="#34d399" stroke-dasharray="4 5"/>
+          <text x="30" y="42" fill="#6ee7b7" font-size="12" font-weight="700">MODEL PROVIDER — the LLM endpoint</text>
 
           <!-- Reason (LLM) -->
-          <rect x="200" y="50" width="210" height="120" rx="14" fill="url(#llmG)" opacity="0.92"/>
-          <text x="305" y="88" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">1. Reason</text>
-          <text x="305" y="112" text-anchor="middle" fill="#dbeafe" font-size="12">LLM call with tool schemas</text>
-          <text x="305" y="132" text-anchor="middle" fill="#dbeafe" font-size="12">→ tool_call OR final answer</text>
+          <rect x="300" y="48" width="240" height="60" rx="12" fill="url(#llmG)" opacity="0.92"/>
+          <text x="420" y="73" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Reason — the LLM call</text>
+          <text x="420" y="92" text-anchor="middle" fill="#dbeafe" font-size="11">picks a tool, or returns the final answer</text>
+
+          <!-- ====== API boundary ====== -->
+          <line x1="14" y1="160" x2="806" y2="160" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="2 6" opacity="0.85"/>
+          <text x="806" y="153" text-anchor="end" fill="#fbbf24" font-size="11" font-weight="600">API boundary · HTTPS / JSON</text>
+
+          <!-- ====== AGENT HARNESS zone (bottom) ====== -->
+          <rect x="14" y="180" width="792" height="330" rx="14" fill="rgba(96,165,250,.06)" stroke="#3b82f6" stroke-dasharray="4 5"/>
+          <text x="30" y="202" fill="#93c5fd" font-size="12" font-weight="700">AGENT HARNESS — your process</text>
+
+          <!-- User Task -->
+          <rect x="40" y="232" width="120" height="56" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="100" y="256" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">User Task</text>
+          <text x="100" y="274" text-anchor="middle" fill="#9aa6bd" font-size="10">"Book me a flight"</text>
 
           <!-- Decide diamond -->
-          <polygon points="525,55 590,110 525,165 460,110" fill="#1a2236" stroke="#3a4a72"/>
-          <text x="525" y="106" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">4. Continue?</text>
-          <text x="525" y="124" text-anchor="middle" fill="#9aa6bd" font-size="10">tool_calls present?</text>
+          <polygon points="430,218 480,260 430,302 380,260" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="430" y="256" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Continue?</text>
+          <text x="430" y="272" text-anchor="middle" fill="#9aa6bd" font-size="9">tool_calls?</text>
 
           <!-- Final Answer -->
-          <rect x="630" y="70" width="130" height="80" rx="12" fill="#0e1a2e" stroke="#3a8aff"/>
-          <text x="695" y="103" text-anchor="middle" fill="#9ec5ff" font-size="14" font-weight="600">Final Answer</text>
-          <text x="695" y="123" text-anchor="middle" fill="#9aa6bd" font-size="11">return to user</text>
+          <rect x="600" y="232" width="170" height="56" rx="12" fill="#0e1a2e" stroke="#3a8aff"/>
+          <text x="685" y="256" text-anchor="middle" fill="#9ec5ff" font-size="13" font-weight="600">Final Answer</text>
+          <text x="685" y="274" text-anchor="middle" fill="#9aa6bd" font-size="10">return to user</text>
 
-          <!-- ====== bottom row: Observe ← Act ====== -->
+          <!-- Context / state (entry point + what gets sent to the model) -->
+          <rect x="40" y="388" width="200" height="72" rx="12" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="140" y="412" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">Context + state</text>
+          <text x="140" y="429" text-anchor="middle" fill="#9aa6bd" font-size="10">user task · messages · scratchpad</text>
+          <text x="140" y="444" text-anchor="middle" fill="#6f7f9b" font-size="9">entry point · sent to the model</text>
 
-          <!-- Observe -->
-          <rect x="200" y="300" width="210" height="90" rx="12" fill="#1a2236" stroke="#3a4a72"/>
-          <text x="305" y="335" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">3. Observe + Update State</text>
-          <text x="305" y="357" text-anchor="middle" fill="#9aa6bd" font-size="11">scratchpad · messages · events</text>
+          <!-- Tools registry (compact) -->
+          <rect x="300" y="398" width="120" height="52" rx="10" fill="#1a2236" stroke="#3a4a72"/>
+          <text x="360" y="420" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Tools</text>
+          <text x="360" y="436" text-anchor="middle" fill="#9aa6bd" font-size="9">schemas + handlers</text>
 
           <!-- Act -->
-          <rect x="480" y="290" width="210" height="110" rx="14" fill="url(#toolG)" opacity="0.92"/>
-          <text x="585" y="325" text-anchor="middle" fill="#062a23" font-size="15" font-weight="700">2. Act</text>
-          <text x="585" y="349" text-anchor="middle" fill="#062a23" font-size="12">Run the picked tool</text>
-          <text x="585" y="367" text-anchor="middle" fill="#062a23" font-size="12">(API · code · retrieval · sub-agent)</text>
+          <rect x="540" y="388" width="230" height="72" rx="12" fill="url(#toolG)" opacity="0.92"/>
+          <text x="655" y="418" text-anchor="middle" fill="#062a23" font-size="14" font-weight="700">Act — run the tool</text>
+          <text x="655" y="437" text-anchor="middle" fill="#062a23" font-size="10">API · code · retrieval · sub-agent</text>
 
-          <!-- ====== arrows (no overlap) ====== -->
+          <!-- ====== arrows ====== -->
 
-          <!-- User → Reason -->
-          <path d="M150,110 L200,110" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+          <!-- User Task → State -->
+          <path d="M100,288 L112,388" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
 
-          <!-- Reason → Decide -->
-          <path d="M410,110 L460,110" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+          <!-- State → Reason (request crosses the boundary, going up) -->
+          <path d="M220,388 C290,270 322,170 358,108" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+          <text x="266" y="342" fill="#9ec5ff" font-size="10.5" font-weight="600">request</text>
+          <text x="266" y="356" fill="#9aa6bd" font-size="10">context + tool schemas</text>
+
+          <!-- Tools → request (tool schemas are sent together with the context) -->
+          <path d="M330,398 L240,372" fill="none" stroke="#9ec5ff" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#arrow)"/>
+
+          <!-- Reason → Decide (response crosses the boundary, coming down) -->
+          <path d="M442,108 L433,216" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowG)" class="flow-line"/>
+          <text x="449" y="139" fill="#34d399" font-size="10.5" font-weight="600">response</text>
+          <text x="449" y="152" fill="#9aa6bd" font-size="10">tool_call OR final</text>
 
           <!-- Decide → Final (no) -->
-          <path d="M590,110 L630,110" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrowG)"/>
-          <text x="610" y="100" text-anchor="middle" fill="#34d399" font-size="11">no</text>
+          <path d="M480,260 L600,260" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrowG)"/>
+          <text x="540" y="251" text-anchor="middle" fill="#34d399" font-size="11">no</text>
 
-          <!-- Decide → Act (yes, curved down-right) -->
-          <path d="M555,150 Q 620,210 605,290" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
-          <text x="618" y="205" fill="#fbbf24" font-size="11">yes</text>
+          <!-- Decide → Act (yes) -->
+          <path d="M430,302 C520,350 655,350 655,366 L655,388" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
+          <text x="450" y="310" fill="#fbbf24" font-size="11">yes</text>
 
-          <!-- Act → Observe -->
-          <path d="M480,345 L410,345" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+          <!-- Act → Tools (dispatch / invoke a handler) -->
+          <path d="M540,424 L426,424" fill="none" stroke="#9ec5ff" stroke-width="2" marker-end="url(#arrow)"/>
+          <text x="483" y="416" text-anchor="middle" fill="#9ec5ff" font-size="10">dispatch</text>
 
-          <!-- Observe → Reason (loop back, curves through the empty area between User and the loop body) -->
-          <path d="M250,300 Q 170,235 215,170" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
-          <text x="40" y="225" fill="#fbbf24" font-size="11">append + re-prompt</text>
+          <!-- Act → State (append result / observe, loop back) -->
+          <path d="M655,460 L655,486 L150,486 L150,460" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowY)" class="flow-line"/>
+          <text x="402" y="481" text-anchor="middle" fill="#fbbf24" font-size="10">append result (observe), loop</text>
         </svg>
+        <div style="text-align:center; font-size:12px; color:var(--muted); margin-top:10px;">
+          Reason runs at the <b style="color:#6ee7b7">model provider</b>; the other steps run in the
+          <b style="color:#93c5fd">agent harness</b>, which owns the loop, the state, and the tools (it sends
+          the tool schemas to the model and dispatches to their handlers). Only the request and response
+          cross the boundary.
+        </div>
       </div>
 
       <div class="uni-list">
         <div class="uni-item">
-          <span class="tag">1 · Reason</span><b>LLM call</b><br>
+          <span class="tag">Reason</span><b>LLM call</b><br>
           The model is shown the conversation so far <i>plus</i> the available tools, and asked
           to either emit a tool call or a final answer. Modern frameworks rely on the provider's
           native function-calling JSON; older ones parsed free-text (ReAct).
         </div>
         <div class="uni-item">
-          <span class="tag">2 · Act</span><b>Tool dispatch</b><br>
+          <span class="tag">Act</span><b>Tool dispatch</b><br>
           The framework looks up the tool by name, validates arguments against a schema, and runs
           it. The tool can be a Python function, an HTTP call, code execution, retrieval — or
           another agent.
         </div>
         <div class="uni-item">
-          <span class="tag">3 · Observe</span><b>State update</b><br>
+          <span class="tag">Observe</span><b>State update</b><br>
           The tool result is appended to whatever store the framework uses for memory:
           a scratchpad, a list of messages, a graph channel, a Session/Event log, or a chat history.
         </div>
         <div class="uni-item">
-          <span class="tag">4 · Decide</span><b>Continue or stop</b><br>
+          <span class="tag">Decide</span><b>Continue or stop</b><br>
           Stop when the LLM emits no more tool calls, when it returns an explicit "final answer"
           structure, or when a guardrail trips: max iterations, time budget, or a custom termination
           strategy.
         </div>
       </div>
     </div>
+
+    <h3 style="margin: 36px 0 6px; font-size: 19px;">Asking the model: native function calling vs ReAct</h3>
+    <p class="lede" style="margin-bottom: 18px;">
+      The Reason step is implemented in one of two ways. Both end with the framework running a tool and
+      feeding the result back; they differ in <i>how the model expresses the call</i> and <i>who has to
+      parse it</i>.
+    </p>
+    <div class="two-card">
+      <div class="uni-item">
+        <span class="tag">Native function calling</span><b>Provider-structured JSON</b>
+        <p style="margin: 8px 0 10px; color: var(--muted);">
+          The request carries the tool definitions, and the model returns the tool call — a tool name plus
+          JSON arguments — in a <b>dedicated response field, separate from its natural-language text</b>. The
+          framework reads that field directly instead of scanning the model's prose for an action. With
+          strict / structured-output modes the provider can also <b>guarantee</b> the JSON is valid and
+          matches your schema. You still parse the arguments, but you don't have to extract the call from
+          free text or hope it is well-formed. This is what OpenAI, Anthropic, Gemini, and the other current
+          providers emit natively.
+        </p>
+        <pre><code class="lang-json">// assistant message field (OpenAI Chat Completions)
+"tool_calls": [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}"
+    }
+  }
+]</code></pre>
+        <div style="margin-top: 8px; font-size: 12px; color: var(--muted);">
+          Source: <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI · Function calling</a>
+          · companion paper <a href="/whitepapers/tool-calling-providers.html">How AI Providers Support Tool Calls</a>
+        </div>
+      </div>
+      <div class="uni-item">
+        <span class="tag">ReAct</span><b>Free-text, framework-parsed</b>
+        <p style="margin: 8px 0 10px; color: var(--muted);">
+          Before native function calling, the model was prompted to interleave reasoning and actions as
+          plain text in a <code>Thought / Action / Action Input / Observation</code> format. The framework
+          parses that text to extract the action and its input, runs the tool, and appends the observation.
+          It works with any text model, but is more brittle: it depends on the model formatting its output
+          exactly as instructed. Prompting the model to reply in JSON narrows the format gap, but without
+          the provider's schema guarantee the framework must still locate the call in the text and defend
+          against malformed or prose-wrapped output.
+        </p>
+        <pre><code>Thought: I should look up the weather.
+Action: get_weather
+Action Input: {"city": "Paris"}
+Observation: 15°C, cloudy
+... (the loop repeats until a final answer) ...</code></pre>
+        <div style="margin-top: 8px; font-size: 12px; color: var(--muted);">
+          Source: <a href="https://arxiv.org/abs/2210.03629">Yao et al., &ldquo;ReAct&rdquo; (ICLR 2023, arXiv:2210.03629)</a>
+          · <a href="https://react-lm.github.io/">project page</a>
+        </div>
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -1189,5 +1279,6 @@
   });
 </script>
 
+<script src="/assets/js/code-highlight.js"></script>
 </body>
 </html>

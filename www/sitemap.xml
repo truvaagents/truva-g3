@@ -50,7 +50,7 @@
   </url>
   <url>
     <loc>https://truvag3.dev/whitepapers/agent-orchestration</loc>
-    <lastmod>2026-05-22T14:13:39-05:00</lastmod>
+    <lastmod>2026-06-14T00:00:00-05:00</lastmod>
   </url>
   <url>
     <loc>https://truvag3.dev/whitepapers/agent-remote-tools</loc>
@@ -67,6 +67,10 @@
   <url>
     <loc>https://truvag3.dev/whitepapers/mcp-explained</loc>
     <lastmod>2026-06-01T00:00:00-05:00</lastmod>
+  </url>
+  <url>
+    <loc>https://truvag3.dev/whitepapers/tool-calling-providers</loc>
+    <lastmod>2026-06-14T00:00:00-05:00</lastmod>
   </url>
   <url>
     <loc>https://truvag3.dev/whitepapers/</loc>
