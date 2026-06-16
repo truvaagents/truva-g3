@@ -955,23 +955,26 @@ func TestExecutePhaseLoop_ClarificationShortCircuit(t *testing.T) {
 // normal (non-clarification) plan must NOT populate response.Clarification.
 func TestExecutePhaseLoop_NormalPlan_ClarificationNil(t *testing.T) {
 	discovery := NewMockDiscovery()
+	// Register the agent the MockAIClient's canned plan actually references
+	// (stock-analyzer / analyze_stock). Validation now re-runs to a fixpoint, so the
+	// registered agent must match the plan or the phase fails.
 	_ = discovery.Register(context.Background(), &core.ServiceRegistration{
-		ID:           "test-1",
-		Name:         "test-agent",
+		ID:           "stock-1",
+		Name:         "stock-analyzer",
 		Address:      "localhost",
 		Port:         8080,
-		Capabilities: []core.Capability{{Name: "test_capability"}},
+		Capabilities: []core.Capability{{Name: "analyze_stock"}},
 	})
 
 	// Use the existing MockAIClient which returns a normal (non-clarification) plan
 	mockAI := NewMockAIClient()
 	o := NewAIOrchestrator(DefaultConfig(), discovery, mockAI)
 	o.catalog.agents = map[string]*AgentInfo{
-		"test-1": {
+		"stock-1": {
 			Registration: &core.ServiceRegistration{
-				ID: "test-1", Name: "test-agent", Address: "localhost", Port: 8080,
+				ID: "stock-1", Name: "stock-analyzer", Address: "localhost", Port: 8080,
 			},
-			Capabilities: []EnhancedCapability{{Name: "test_capability"}},
+			Capabilities: []EnhancedCapability{{Name: "analyze_stock"}},
 		},
 	}
 	o.executor = NewSmartExecutor(o.catalog)

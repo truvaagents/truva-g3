@@ -1266,9 +1266,9 @@ func TestBuildIterativePlanningInstructions_ContainsDependsOnRule(t *testing.T) 
 
 	result := BuildIterativePlanningInstructions(config)
 
-	// The rule is folded into the existing positive directive (per Issue 5 Principle 3:
-	// positive instructions > abstract MUST rules)
-	expected := "with depends_on listing every referenced step-N"
+	// The rule now distinguishes same-phase (depends_on) from prior-phase (implicit_deps)
+	// references, matching validateDependencyConsistency.
+	expected := "same-phase references in depends_on"
 	if !strings.Contains(result, expected) {
 		t.Errorf("BuildIterativePlanningInstructions should tie depends_on to template references.\nExpected to find: %q\nGot:\n%s", expected, result)
 	}

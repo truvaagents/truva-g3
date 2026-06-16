@@ -1912,78 +1912,23 @@ func (o *AIOrchestrator) executePhaseLoop(
 			}
 		}
 
-		// --- Validate plan ---
+		// --- Normalize + validate plan (fixpoint) ---
 		// Skip for HITL resume plans: they were validated at generation time and contain
 		// the exact checkpoint plan restored from DB 6. Re-validating against the current
 		// agent registry could reject the plan for transient agent availability changes
 		// between interrupt and resume, discarding the user-approved plan.
 		// See Issue 5 in BUG_CONTINUATION_PROMPT_MISSING_CUSTOM_INSTRUCTIONS_AND_RESUME_REPLAY.md.
-		if planSource != "hitl_resume" {
-			if valErr := o.validatePlan(plan); valErr != nil {
-				if o.logger != nil {
-					o.logger.WarnWithContext(phaseCtx, "Phase plan validation failed — triggering regeneration", map[string]interface{}{
-						"operation":        "phase_validation_regeneration_trigger",
-						"request_id":       requestID,
-						"phase":            phaseCount,
-						"validation_error": valErr.Error(),
-						"plan_id":          plan.PlanID,
-						"plan_terminal":    plan.IsTerminal(),
-						"plan_step_count":  len(plan.Steps),
-					})
-				}
-				telemetry.AddSpanEvent(phaseCtx, "orchestrator.validation.regeneration_triggered",
-					attribute.String("request_id", requestID),
-					attribute.Int("phase_number", phaseCount),
-					attribute.String("validation_error", valErr.Error()),
-					attribute.String("plan_id", plan.PlanID),
-					attribute.Bool("plan_terminal", plan.IsTerminal()),
-				)
-				if len(allStepResults) > 0 {
-					originalPlan := plan // capture before overwrite
-					plan, err = o.regenerateContinuationPlan(
-						phaseCtx, request, requestID,
-						allStepResults, executedStepIDs,
-						continuationNote, phaseCount, valErr,
-						originalPlan.Terminal,
-					)
-					if err == nil {
-						regenEvents = append(regenEvents, map[string]interface{}{
-							"phase_number":         phaseCount,
-							"validation_error":     valErr.Error(),
-							"original_plan_id":     originalPlan.PlanID,
-							"original_terminal":    originalPlan.IsTerminal(),
-							"original_steps":       len(originalPlan.Steps),
-							"regenerated_plan_id":  plan.PlanID,
-							"regenerated_terminal": plan.IsTerminal(),
-							"regenerated_steps":    len(plan.Steps),
-						})
-					}
-				} else {
-					plan, err = o.regeneratePlan(phaseCtx, request, requestID, valErr)
-				}
-				if err != nil {
-					phaseSpan.RecordError(err)
-					phaseSpan.End()
-					if phaseCancel != nil {
-						phaseCancel()
-					}
-					return nil, fmt.Errorf("failed to generate valid plan (phase %d): %w", phaseCount, err)
-				}
-			}
-		}
-
-		// ORCH-020 template-safety validators: RC2 (unknown-shape macros) →
-		// RC3 (declaration consistency) → RC1 (existence + output-schema field).
-		// All three produce actionable error messages that feed back into
-		// regeneratePlan / regenerateContinuationPlan. Order matters: RC2
-		// rejects the cheapest class of defect (hallucinated macros) before
-		// RC3 asks more nuanced questions about the plan graph.
-		// Skip for HITL resume plans (same rationale as validatePlan skip above).
+		//
+		// The validators run as a FIXPOINT loop (not a single pass): any regeneration restarts
+		// validation from the top, so a regeneration triggered by a later validator cannot slip a
+		// defect past an earlier one (e.g. a hallucinated agent past validatePlan). The per-step
+		// telemetry lives in runPlanValidationGauntlet; A2 (normalizeTerminalSynthesisPlan) runs at
+		// the top of each round.
 		if planSource != "hitl_resume" {
 			// Build executedStepCaps from prior-phase completed results so RC1
-			// can validate cross-phase references. Sourced from actual
-			// StepResult data, NOT from LLM-declared implicit_deps (per RC7
-			// tightening: implicit_deps is advisory, not authoritative).
+			// (validateTemplatePaths) can validate cross-phase references. Sourced from actual
+			// StepResult data, NOT from LLM-declared implicit_deps (per RC7 tightening:
+			// implicit_deps is advisory, not authoritative). Stable across the loop.
 			var executedStepCaps map[string]stepCapability
 			if len(allStepResults) > 0 {
 				executedStepCaps = make(map[string]stepCapability, len(allStepResults))
@@ -1995,180 +1940,66 @@ func (o *AIOrchestrator) executePhaseLoop(
 				}
 			}
 
-			// RC2 — reject plans containing {{...}} tokens that don't match the
-			// supported {{stepId.fieldPath}} shape (e.g. hallucinated {{today_plus_1}}).
-			if macroErr := validateNoUnknownMacros(plan); macroErr != nil {
-				if o.logger != nil {
-					o.logger.WarnWithContext(phaseCtx, "Unknown macro in plan — triggering regeneration", map[string]interface{}{
-						"operation":        "unknown_macro_validation",
-						"request_id":       requestID,
-						"phase":            phaseCount,
-						"plan_id":          plan.PlanID,
-						"validation_error": macroErr.Error(),
-						"error_type":       "unknown_macro",
-					})
+			maxRounds := o.config.IterativePlanning.MaxValidationRounds
+			if maxRounds <= 0 {
+				// A config built without DefaultConfig() leaves this 0, which would otherwise give
+				// up after zero regenerations. Fall back to the shared default (no drift).
+				maxRounds = defaultMaxValidationRounds
+			}
+			validationStart := time.Now() // for duration_ms on the give-up path
+
+			for round := 0; ; round++ {
+				// A2: collapse terminal synthesis pseudo-steps (→ zero-step terminal plan if all
+				// dropped). knownStepIDs rebuilt each round because regeneration changes plan.Steps.
+				o.normalizeTerminalSynthesisPlan(phaseCtx, plan, knownStepIDSet(executedStepIDs, plan), requestID)
+
+				valErr := o.runPlanValidationGauntlet(phaseCtx, plan, executedStepCaps, executedStepIDs, phaseCount, requestID)
+				if valErr == nil {
+					break // passed every validator
 				}
-				telemetry.AddSpanEvent(phaseCtx, "orchestrator.unknown_macro_validation.regeneration_triggered",
-					attribute.String("request_id", requestID),
-					attribute.Int("phase_number", phaseCount),
-					attribute.String("plan_id", plan.PlanID),
-					attribute.String("validation_error", macroErr.Error()),
-				)
-				telemetry.Counter("orchestration.plan.rejected_unknown_macro",
-					"error_type", "unknown_macro",
-					"module", telemetry.ModuleOrchestration,
-				)
-				if len(allStepResults) > 0 {
-					plan, err = o.regenerateContinuationPlan(
-						phaseCtx, request, requestID,
-						allStepResults, executedStepIDs,
-						continuationNote, phaseCount, macroErr,
-						plan.Terminal,
+				if round >= maxRounds {
+					// Give up: an explicit phase failure beats dispatching a known-bad plan.
+					err = fmt.Errorf("plan failed validation after %d regeneration rounds (phase %d): %w", maxRounds, phaseCount, valErr)
+					telemetry.RecordSpanError(phaseCtx, err)
+					telemetry.AddSpanEvent(phaseCtx, "orchestrator.plan_validation.exhausted",
+						attribute.String("request_id", requestID),
+						attribute.Int("phase_number", phaseCount),
+						attribute.Int("rounds", maxRounds),
 					)
-				} else {
-					plan, err = o.regeneratePlan(phaseCtx, request, requestID, macroErr)
-				}
-				if err != nil {
+					telemetry.Counter("orchestration.plan.validation_exhausted",
+						"module", telemetry.ModuleOrchestration,
+						"error_type", "plan_validation_exhausted",
+					)
+					if o.logger != nil {
+						o.logger.ErrorWithContext(phaseCtx, "Plan validation exhausted — failing phase", map[string]interface{}{
+							"operation":   "plan_validation",
+							"request_id":  requestID,
+							"phase":       phaseCount,
+							"error":       valErr.Error(),
+							"error_type":  "plan_validation_exhausted",
+							"rounds":      maxRounds,
+							"duration_ms": time.Since(validationStart).Milliseconds(),
+						})
+					}
 					phaseSpan.RecordError(err)
 					phaseSpan.End()
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return nil, fmt.Errorf("failed to generate valid plan after unknown macro rejection (phase %d): %w", phaseCount, err)
+					return nil, err
 				}
-			}
 
-			// RC3 — enforce templates ⊆ depends_on (same-phase) ∪ implicit_deps (cross-phase).
-			if depErr := o.validateDependencyConsistency(plan); depErr != nil {
-				if o.logger != nil {
-					o.logger.WarnWithContext(phaseCtx, "Missing depends_on/implicit_deps for templated step — triggering regeneration", map[string]interface{}{
-						"operation":        "missing_dependency_validation",
-						"request_id":       requestID,
-						"phase":            phaseCount,
-						"plan_id":          plan.PlanID,
-						"validation_error": depErr.Error(),
-						"error_type":       "missing_dependency",
-					})
-				}
-				telemetry.AddSpanEvent(phaseCtx, "orchestrator.missing_dependency_validation.regeneration_triggered",
-					attribute.String("request_id", requestID),
-					attribute.Int("phase_number", phaseCount),
-					attribute.String("plan_id", plan.PlanID),
-					attribute.String("validation_error", depErr.Error()),
-				)
-				telemetry.Counter("orchestration.plan.rejected_missing_dependency",
-					"error_type", "missing_dependency",
-					"module", telemetry.ModuleOrchestration,
-				)
-				if len(allStepResults) > 0 {
-					plan, err = o.regenerateContinuationPlan(
-						phaseCtx, request, requestID,
-						allStepResults, executedStepIDs,
-						continuationNote, phaseCount, depErr,
-						plan.Terminal,
-					)
-				} else {
-					plan, err = o.regeneratePlan(phaseCtx, request, requestID, depErr)
-				}
-				if err != nil {
-					phaseSpan.RecordError(err)
-					phaseSpan.End()
-					if phaseCancel != nil {
-						phaseCancel()
-					}
-					return nil, fmt.Errorf("failed to generate valid plan after missing-dependency rejection (phase %d): %w", phaseCount, err)
-				}
-			}
-
-			// RC1 — cross-phase-aware validateTemplatePaths: rejects references
-			// to steps absent from both the current plan AND executedStepCaps,
-			// and verifies the requested field exists in the referenced
-			// capability's declared output schema (when available).
-			if templateErr := o.validateTemplatePaths(plan, executedStepCaps); templateErr != nil {
-				if o.logger != nil {
-					o.logger.WarnWithContext(phaseCtx, "Template path validation failed — triggering regeneration", map[string]interface{}{
-						"operation":        "cross_phase_missing_step_validation",
-						"request_id":       requestID,
-						"phase":            phaseCount,
-						"validation_error": templateErr.Error(),
-						"plan_id":          plan.PlanID,
-						"error_type":       "cross_phase_missing_step",
-					})
-				}
-				telemetry.AddSpanEvent(phaseCtx, "orchestrator.cross_phase_validation.regeneration_triggered",
-					attribute.String("request_id", requestID),
-					attribute.Int("phase_number", phaseCount),
-					attribute.String("validation_error", templateErr.Error()),
-					attribute.String("plan_id", plan.PlanID),
-				)
-				telemetry.Counter("orchestration.plan.rejected_cross_phase_missing_step",
-					"error_type", "cross_phase_missing_step",
-					"module", telemetry.ModuleOrchestration,
-				)
-				if len(allStepResults) > 0 {
-					plan, err = o.regenerateContinuationPlan(
-						phaseCtx, request, requestID,
-						allStepResults, executedStepIDs,
-						continuationNote, phaseCount, templateErr,
-						plan.Terminal,
-					)
-				} else {
-					plan, err = o.regeneratePlan(phaseCtx, request, requestID, templateErr)
-				}
-				if err != nil {
-					phaseSpan.RecordError(err)
-					phaseSpan.End()
-					if phaseCancel != nil {
-						phaseCancel()
-					}
-					return nil, fmt.Errorf("failed to generate valid plan after template validation (phase %d): %w", phaseCount, err)
-				}
-			}
-		}
-
-		// Step ID conflict check for continuation phases.
-		// Skip for HITL resume plans: they intentionally contain already-executed steps
-		// that the executor will skip via WithCompletedSteps. The conflict check is
-		// designed for LLM-generated continuation plans where step ID reuse is a
-		// hallucination — resume plans are the exact checkpoint plan, not LLM output.
-		// See Issue 5 in BUG_CONTINUATION_PROMPT_MISSING_CUSTOM_INSTRUCTIONS_AND_RESUME_REPLAY.md.
-		if phaseCount > 1 && planSource != "hitl_resume" {
-			if conflictErr := validateNoStepIDConflicts(plan, executedStepIDs); conflictErr != nil {
-				if o.logger != nil {
-					o.logger.WarnWithContext(phaseCtx, "Step ID conflict detected — triggering regeneration", map[string]interface{}{
-						"operation":      "step_id_conflict_regeneration_trigger",
-						"request_id":     requestID,
-						"phase":          phaseCount,
-						"conflict_error": conflictErr.Error(),
-						"plan_id":        plan.PlanID,
-						"plan_terminal":  plan.IsTerminal(),
-					})
-				}
-				telemetry.AddSpanEvent(phaseCtx, "orchestrator.step_id_conflict.regeneration_triggered",
-					attribute.String("request_id", requestID),
-					attribute.Int("phase_number", phaseCount),
-					attribute.String("conflict_error", conflictErr.Error()),
-					attribute.String("plan_id", plan.PlanID),
-					attribute.Bool("plan_terminal", plan.IsTerminal()),
-				)
+				// Regenerate from the validation error and loop (re-normalize + re-validate from top).
 				originalPlan := plan // capture before overwrite
-				plan, err = o.regenerateContinuationPlan(
-					phaseCtx, request, requestID,
-					allStepResults, executedStepIDs,
-					continuationNote, phaseCount, conflictErr,
-					originalPlan.Terminal,
-				)
-				if err == nil {
-					regenEvents = append(regenEvents, map[string]interface{}{
-						"phase_number":         phaseCount,
-						"validation_error":     conflictErr.Error(),
-						"original_plan_id":     originalPlan.PlanID,
-						"original_terminal":    originalPlan.IsTerminal(),
-						"original_steps":       len(originalPlan.Steps),
-						"regenerated_plan_id":  plan.PlanID,
-						"regenerated_terminal": plan.IsTerminal(),
-						"regenerated_steps":    len(plan.Steps),
-					})
+				if len(allStepResults) > 0 {
+					plan, err = o.regenerateContinuationPlan(
+						phaseCtx, request, requestID,
+						allStepResults, executedStepIDs,
+						continuationNote, phaseCount, valErr,
+						originalPlan.Terminal,
+					)
+				} else {
+					plan, err = o.regeneratePlan(phaseCtx, request, requestID, valErr)
 				}
 				if err != nil {
 					phaseSpan.RecordError(err)
@@ -2176,8 +2007,18 @@ func (o *AIOrchestrator) executePhaseLoop(
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return nil, fmt.Errorf("continuation plan step ID conflicts unresolved (phase %d): %w", phaseCount, err)
+					return nil, fmt.Errorf("failed to generate valid plan (phase %d): %w", phaseCount, err)
 				}
+				regenEvents = append(regenEvents, map[string]interface{}{
+					"phase_number":         phaseCount,
+					"validation_error":     valErr.Error(),
+					"original_plan_id":     originalPlan.PlanID,
+					"original_terminal":    originalPlan.IsTerminal(),
+					"original_steps":       len(originalPlan.Steps),
+					"regenerated_plan_id":  plan.PlanID,
+					"regenerated_terminal": plan.IsTerminal(),
+					"regenerated_steps":    len(plan.Steps),
+				})
 			}
 		}
 
@@ -4689,6 +4530,14 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			break
 		}
 
+		// Fix A2 (Finding 1): collapse a terminal synthesis pseudo-step BEFORE the internal
+		// hallucination/structural checks below — otherwise the first continuation generation
+		// bounces on the pseudo-step's unregistered agent and burns a hallucination-triggered
+		// regeneration before the phase-loop normalizer ever sees the plan. This lets the first
+		// terminal synthesis plan be accepted as a zero-step terminal plan. The phase-loop fixpoint
+		// normalizes again on regenerated plans (idempotent).
+		o.normalizeTerminalSynthesisPlan(ctx, plan, knownStepIDSet(executedStepIDs, plan), requestID)
+
 		// Hallucination validation
 		if o.config != nil && o.config.HallucinationValidationEnabled && promptResult.AllowedAgents != nil {
 			hallucinatedAgent, hallErr := o.validatePlanAgainstAllowedAgents(ctx, plan, promptResult.AllowedAgents)
@@ -5885,6 +5734,333 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 
 	plan.CreatedAt = time.Now()
 	return &plan, nil
+}
+
+// knownStepIDSet returns the step IDs that can satisfy a template reference at this point:
+// completed prior-phase IDs ∪ the current plan's own step IDs. Rebuilt per round because
+// plan.Steps changes on regeneration.
+func knownStepIDSet(executedStepIDs []string, plan *RoutingPlan) map[string]struct{} {
+	known := make(map[string]struct{}, len(executedStepIDs)+len(plan.Steps))
+	for _, id := range executedStepIDs {
+		known[id] = struct{}{}
+	}
+	for _, s := range plan.Steps {
+		known[s.StepID] = struct{}{}
+	}
+	return known
+}
+
+// agentInCatalog reports whether an agent with this name is registered. Reuses the catalog's
+// FindByName (scans under RLock, no full-map copy) and inherits its case-sensitive exact match —
+// the same policy the executor's dispatch (findAgentByName) uses, so the detector agrees with the
+// component that would actually run the step.
+func (o *AIOrchestrator) agentInCatalog(name string) bool {
+	return o.catalog != nil && o.catalog.FindByName(name) != nil
+}
+
+// capabilityRegistered reports whether any catalogued agent exposes this capability. Reuses the
+// catalog's precomputed capability index (FindByCapability, O(1)) instead of scanning every agent.
+func (o *AIOrchestrator) capabilityRegistered(capName string) bool {
+	return o.catalog != nil && capName != "" && len(o.catalog.FindByCapability(capName)) > 0
+}
+
+// stepOutputTemplateExact matches a string that is EXACTLY one framework step-output template
+// (anchored). Rejects mixed literal+template strings like "send {{step-1.response.data}} to Bob",
+// which the unanchored stepOutputTemplatePattern would wrongly accept.
+var stepOutputTemplateExact = regexp.MustCompile(`^\{\{[\w-]+\.[\w-]+(?:\.[\w-]+)*\}\}$`)
+
+// onlyAggregatesPriorOutputs reports whether EVERY parameter leaf is a step-output template, so
+// the step supplies NO literal external input of ANY type. Recurses maps/slices. A numeric/bool
+// leaf, a mixed literal+template string, or an empty/nil container all fail (conservative).
+// Domain-agnostic — inspects template shape only, never domain keywords.
+func onlyAggregatesPriorOutputs(v interface{}) bool {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if len(val) == 0 {
+			return false
+		}
+		for _, item := range val {
+			if !onlyAggregatesPriorOutputs(item) {
+				return false
+			}
+		}
+		return true
+	case []interface{}:
+		if len(val) == 0 {
+			return false
+		}
+		for _, item := range val {
+			if !onlyAggregatesPriorOutputs(item) {
+				return false
+			}
+		}
+		return true
+	case string:
+		return stepOutputTemplateExact.MatchString(strings.TrimSpace(val))
+	default:
+		return false // numbers, bools, nil → literal external input
+	}
+}
+
+// detectTerminalSynthesisPseudoSteps is SIDE-EFFECT-FREE (unit-testable in isolation).
+// It returns the steps in a TERMINAL plan that are non-dispatchable aggregations of prior
+// outputs — the framework's own synthesis expressed (wrongly) as a dispatched step. The
+// framework synthesizes the final answer itself (o.synthesizer over all completed results),
+// so such a step is redundant by construction.
+//
+// knownStepIDs is the set of step IDs that can satisfy a template reference: completed
+// prior-phase IDs plus the current plan's own step IDs.
+//
+// FAIL-OPEN: returns nil unless every signal proves the step is a SATISFIABLE aggregation of
+// EXISTING outputs, and returns nil entirely when the catalog is unavailable (can't prove →
+// don't touch).
+func (o *AIOrchestrator) detectTerminalSynthesisPseudoSteps(plan *RoutingPlan, knownStepIDs map[string]struct{}) []RoutingStep {
+	if plan == nil || !plan.IsTerminal() || len(plan.Steps) == 0 || o.catalog == nil {
+		return nil
+	}
+	// Step IDs referenced by some step in this plan (depends_on, implicit_deps, or templates).
+	// A referenced step is never dropped: removing it would leave a dangling reference that
+	// validatePlan/validateTemplatePaths would then reject, forcing a needless regeneration round.
+	// Synthesis pseudo-steps are terminal aggregators that nothing references, so they stay droppable.
+	referenced := make(map[string]struct{})
+	for _, s := range plan.Steps {
+		for _, d := range s.DependsOn {
+			referenced[d] = struct{}{}
+		}
+		for _, d := range s.ImplicitDeps {
+			referenced[d] = struct{}{}
+		}
+		if p, ok := s.Metadata["parameters"].(map[string]interface{}); ok {
+			for id := range collectReferencedStepIDs(p) {
+				referenced[id] = struct{}{}
+			}
+		}
+	}
+
+	var dropped []RoutingStep
+	for _, step := range plan.Steps {
+		if _, isReferenced := referenced[step.StepID]; isReferenced {
+			continue // another step depends on this one — dropping it would dangle the reference
+		}
+		capName, _ := step.Metadata["capability"].(string)
+		params, _ := step.Metadata["parameters"].(map[string]interface{})
+
+		refs := collectReferencedStepIDs(params)
+		if len(refs) == 0 {
+			continue // references no prior step ⇒ not an aggregation
+		}
+		// Every referenced step must be satisfiable. If a ref points at an unknown step
+		// (e.g. {{step-999...}}), fail open so validateTemplatePaths rejects it and the loop
+		// regenerates — never silently drop a malformed reference.
+		allRefsKnown := true
+		for id := range refs {
+			if _, ok := knownStepIDs[id]; !ok {
+				allRefsKnown = false
+				break
+			}
+		}
+
+		if allRefsKnown &&
+			!o.agentInCatalog(step.AgentName) && // agent absent from full catalog
+			!o.capabilityRegistered(capName) && // capability registered nowhere
+			onlyAggregatesPriorOutputs(params) { // every leaf is a step-output template
+			dropped = append(dropped, step)
+		}
+	}
+	return dropped
+}
+
+// normalizeTerminalSynthesisPlan strips detected synthesis pseudo-steps and emits telemetry.
+// Thin effectful wrapper around the pure detector. Returns true if it changed the plan.
+//
+// The framework's contract for a terminal/synthesis phase is a zero-step terminal plan: the
+// final user-facing answer is produced by o.synthesizer from all completed step results, not by
+// a dispatched step. When the planner instead emits a synthesis pseudo-step routed to a
+// non-existent agent, this collapses it (→ zero-step terminal plan when it was the only step).
+func (o *AIOrchestrator) normalizeTerminalSynthesisPlan(ctx context.Context, plan *RoutingPlan, knownStepIDs map[string]struct{}, requestID string) bool {
+	dropped := o.detectTerminalSynthesisPseudoSteps(plan, knownStepIDs)
+	if len(dropped) == 0 {
+		return false
+	}
+	droppedIDs := make(map[string]struct{}, len(dropped))
+	for _, s := range dropped {
+		droppedIDs[s.StepID] = struct{}{}
+	}
+	kept := plan.Steps[:0:0]
+	for _, s := range plan.Steps {
+		if _, drop := droppedIDs[s.StepID]; !drop {
+			kept = append(kept, s)
+		}
+	}
+	plan.Steps = kept
+
+	// Observability (NOT an error — a successful correction). WARN log + span event + counter,
+	// NO RecordSpanError. Message is neutral because a mixed plan may retain real steps.
+	for _, step := range dropped {
+		capName, _ := step.Metadata["capability"].(string)
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Normalized terminal synthesis pseudo-step out of plan", map[string]interface{}{
+				"operation":       "terminal_synthesis_normalization",
+				"request_id":      requestID,
+				"plan_id":         plan.PlanID,
+				"step_id":         step.StepID,
+				"agent_name":      step.AgentName,
+				"capability":      capName,
+				"remaining_steps": len(plan.Steps),
+			})
+		}
+		telemetry.AddSpanEvent(ctx, "orchestrator.terminal_synthesis.normalized",
+			attribute.String("request_id", requestID),
+			attribute.String("plan_id", plan.PlanID),
+			attribute.String("dropped_agent", step.AgentName),
+			attribute.String("dropped_capability", capName),
+			attribute.Int("remaining_steps", len(plan.Steps)),
+		)
+		telemetry.Counter("orchestration.plan.terminal_synthesis_normalized",
+			"module", telemetry.ModuleOrchestration)
+	}
+	return true
+}
+
+// runPlanValidationGauntlet runs the plan validators in order and returns the FIRST failure,
+// emitting that validator's WARN log + span event + counter. Telemetry strings (log messages,
+// operation values, span-event names, counter names) are preserved VERBATIM from the former inline
+// blocks in executePhaseLoop — Loki/Jaeger/Grafana key off them. It does NOT regenerate: the
+// caller's fixpoint loop owns regeneration, so every validator re-runs after a regeneration.
+func (o *AIOrchestrator) runPlanValidationGauntlet(
+	ctx context.Context,
+	plan *RoutingPlan,
+	executedStepCaps map[string]stepCapability,
+	executedStepIDs []string,
+	phaseCount int,
+	requestID string,
+) error {
+	// validatePlan — agent existence + capability + same-phase deps
+	if valErr := o.validatePlan(plan); valErr != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Phase plan validation failed — triggering regeneration", map[string]interface{}{
+				"operation":        "phase_validation_regeneration_trigger",
+				"request_id":       requestID,
+				"phase":            phaseCount,
+				"validation_error": valErr.Error(),
+				"plan_id":          plan.PlanID,
+				"plan_terminal":    plan.IsTerminal(),
+				"plan_step_count":  len(plan.Steps),
+			})
+		}
+		telemetry.AddSpanEvent(ctx, "orchestrator.validation.regeneration_triggered",
+			attribute.String("request_id", requestID),
+			attribute.Int("phase_number", phaseCount),
+			attribute.String("validation_error", valErr.Error()),
+			attribute.String("plan_id", plan.PlanID),
+			attribute.Bool("plan_terminal", plan.IsTerminal()),
+		)
+		return valErr
+	}
+
+	// RC2 — reject plans containing {{...}} tokens that don't match the supported
+	// {{stepId.fieldPath}} shape (e.g. hallucinated {{today_plus_1}}).
+	if macroErr := validateNoUnknownMacros(plan); macroErr != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Unknown macro in plan — triggering regeneration", map[string]interface{}{
+				"operation":        "unknown_macro_validation",
+				"request_id":       requestID,
+				"phase":            phaseCount,
+				"plan_id":          plan.PlanID,
+				"validation_error": macroErr.Error(),
+				"error_type":       "unknown_macro",
+			})
+		}
+		telemetry.AddSpanEvent(ctx, "orchestrator.unknown_macro_validation.regeneration_triggered",
+			attribute.String("request_id", requestID),
+			attribute.Int("phase_number", phaseCount),
+			attribute.String("plan_id", plan.PlanID),
+			attribute.String("validation_error", macroErr.Error()),
+		)
+		telemetry.Counter("orchestration.plan.rejected_unknown_macro",
+			"error_type", "unknown_macro",
+			"module", telemetry.ModuleOrchestration,
+		)
+		return macroErr
+	}
+
+	// RC3 — enforce templates ⊆ depends_on (same-phase) ∪ implicit_deps (cross-phase).
+	if depErr := o.validateDependencyConsistency(plan); depErr != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Missing depends_on/implicit_deps for templated step — triggering regeneration", map[string]interface{}{
+				"operation":        "missing_dependency_validation",
+				"request_id":       requestID,
+				"phase":            phaseCount,
+				"plan_id":          plan.PlanID,
+				"validation_error": depErr.Error(),
+				"error_type":       "missing_dependency",
+			})
+		}
+		telemetry.AddSpanEvent(ctx, "orchestrator.missing_dependency_validation.regeneration_triggered",
+			attribute.String("request_id", requestID),
+			attribute.Int("phase_number", phaseCount),
+			attribute.String("plan_id", plan.PlanID),
+			attribute.String("validation_error", depErr.Error()),
+		)
+		telemetry.Counter("orchestration.plan.rejected_missing_dependency",
+			"error_type", "missing_dependency",
+			"module", telemetry.ModuleOrchestration,
+		)
+		return depErr
+	}
+
+	// RC1 — cross-phase-aware validateTemplatePaths: rejects references to steps absent from both
+	// the current plan AND executedStepCaps, and verifies the requested field exists in the
+	// referenced capability's declared output schema (when available).
+	if templateErr := o.validateTemplatePaths(plan, executedStepCaps); templateErr != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Template path validation failed — triggering regeneration", map[string]interface{}{
+				"operation":        "cross_phase_missing_step_validation",
+				"request_id":       requestID,
+				"phase":            phaseCount,
+				"validation_error": templateErr.Error(),
+				"plan_id":          plan.PlanID,
+				"error_type":       "cross_phase_missing_step",
+			})
+		}
+		telemetry.AddSpanEvent(ctx, "orchestrator.cross_phase_validation.regeneration_triggered",
+			attribute.String("request_id", requestID),
+			attribute.Int("phase_number", phaseCount),
+			attribute.String("validation_error", templateErr.Error()),
+			attribute.String("plan_id", plan.PlanID),
+		)
+		telemetry.Counter("orchestration.plan.rejected_cross_phase_missing_step",
+			"error_type", "cross_phase_missing_step",
+			"module", telemetry.ModuleOrchestration,
+		)
+		return templateErr
+	}
+
+	// Step ID conflict check for continuation phases (phase 1 has no prior step IDs to clash with).
+	if phaseCount > 1 {
+		if conflictErr := validateNoStepIDConflicts(plan, executedStepIDs); conflictErr != nil {
+			if o.logger != nil {
+				o.logger.WarnWithContext(ctx, "Step ID conflict detected — triggering regeneration", map[string]interface{}{
+					"operation":      "step_id_conflict_regeneration_trigger",
+					"request_id":     requestID,
+					"phase":          phaseCount,
+					"conflict_error": conflictErr.Error(),
+					"plan_id":        plan.PlanID,
+					"plan_terminal":  plan.IsTerminal(),
+				})
+			}
+			telemetry.AddSpanEvent(ctx, "orchestrator.step_id_conflict.regeneration_triggered",
+				attribute.String("request_id", requestID),
+				attribute.Int("phase_number", phaseCount),
+				attribute.String("conflict_error", conflictErr.Error()),
+				attribute.String("plan_id", plan.PlanID),
+				attribute.Bool("plan_terminal", plan.IsTerminal()),
+			)
+			return conflictErr
+		}
+	}
+
+	return nil
 }
 
 // validatePlan checks if the plan is executable
