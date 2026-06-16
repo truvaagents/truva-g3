@@ -42,6 +42,7 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 | Max phases per request | 5 | `TRUVAG3_ITERATIVE_MAX_PHASES` | — |
 | Max total steps (all phases) | 200 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | — |
 | Phase timeout | 180s | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
+| Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
 
 ## Execution Limits
 

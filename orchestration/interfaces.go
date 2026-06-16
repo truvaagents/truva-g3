@@ -668,6 +668,11 @@ type SemanticRetryConfig struct {
 	EnableForIndependentSteps bool `json:"enable_for_independent_steps"`
 }
 
+// defaultMaxValidationRounds is the default for IterativePlanConfig.MaxValidationRounds. Defined
+// once and referenced by DefaultConfig() and by the phase loop's clamp for configs not built via
+// DefaultConfig() (e.g. zero-value structs), so the two never drift.
+const defaultMaxValidationRounds = 4
+
 // IterativePlanConfig controls multi-phase DAG planning behavior.
 // When enabled, the LLM planner can signal that a plan is partial (terminal: false),
 // causing the orchestrator to execute the known phase, feed results back to the planner,
@@ -697,6 +702,16 @@ type IterativePlanConfig struct {
 	// Default: 180s
 	// Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
 	PhaseTimeout time.Duration `json:"phase_timeout"`
+
+	// MaxValidationRounds bounds how many times the phase loop will regenerate a
+	// plan that fails validation before failing the phase. Prevents an infinite
+	// regenerate↔reject loop. SEMANTICS: this is the number of REGENERATION attempts
+	// AFTER the first validation failure — total validations = 1 (initial) + N. With
+	// the default 4, the initial plan plus up to 4 regenerated plans are validated
+	// (5 validations, 4 regenerations) before the phase fails.
+	// Default: 4
+	// Env: TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS
+	MaxValidationRounds int `json:"max_validation_rounds"`
 }
 
 // TieredCapabilityConfig configures tiered capability resolution for token optimization.
@@ -927,10 +942,11 @@ func DefaultConfig() *OrchestratorConfig {
 
 	// Iterative Planning defaults (enabled by default for multi-phase DAG support)
 	config.IterativePlanning = IterativePlanConfig{
-		Enabled:       true,
-		MaxPhases:     5,
-		MaxTotalSteps: 200,
-		PhaseTimeout:  180 * time.Second,
+		Enabled:             true,
+		MaxPhases:           5,
+		MaxTotalSteps:       200,
+		PhaseTimeout:        180 * time.Second,
+		MaxValidationRounds: defaultMaxValidationRounds,
 	}
 
 	// Layer 4: Semantic Retry defaults
@@ -995,6 +1011,11 @@ func DefaultConfig() *OrchestratorConfig {
 	if v := os.Getenv("TRUVAG3_ITERATIVE_PHASE_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			config.IterativePlanning.PhaseTimeout = d
+		}
+	}
+	if v := os.Getenv("TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.IterativePlanning.MaxValidationRounds = n
 		}
 	}
 

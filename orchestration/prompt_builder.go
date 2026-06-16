@@ -199,7 +199,8 @@ If your plan requires information not yet available, generate a PARTIAL plan:
 
 PHASE SPLIT RULE:
 - If a step's parameters are expressible as "{{step-N.response.data.field}}" templates,
-  include it in the SAME phase with depends_on listing every referenced step-N — do not split into a new phase.
+  include it in the SAME phase rather than splitting into a new phase.
+- List same-phase references in depends_on; list prior-phase references in implicit_deps.
 - Only set terminal: false when the plan STRUCTURE (which steps, how many)
   depends on the semantic CONTENT of a result.
 
@@ -212,6 +213,14 @@ PLAN OPTIMIZATION:
 When to use "terminal": true (default):
 - All entities are explicitly named (weather in Tokyo, stock price of AAPL)
 - All parameters are known or expressible as template references
+
+Final answer (composed by the framework):
+The framework writes the final user-facing answer from all completed step results.
+When the only work left is producing that answer, emit a terminal plan with no steps:
+
+{ "plan_id": "...", "terminal": true, "steps": [] }
+
+Every step you emit names a real agent from the catalog and performs a tool action.
 
 CLARIFICATION ESCAPE VALVE:
 Use "needs_user_input" when the next step depends on information that only the

@@ -622,10 +622,11 @@ The orchestrator's `executePhaseLoop()` method drives the cycle:
 
 ```go
 type IterativePlanConfig struct {
-    Enabled       bool          // Default: true
-    MaxPhases     int           // Default: 5
-    MaxTotalSteps int           // Default: 200
-    PhaseTimeout  time.Duration // Default: 180s per phase
+    Enabled             bool          // Default: true
+    MaxPhases           int           // Default: 5
+    MaxTotalSteps       int           // Default: 200
+    PhaseTimeout        time.Duration // Default: 180s per phase
+    MaxValidationRounds int           // Default: 4 — regenerations after first validation failure
 }
 ```
 
@@ -652,6 +653,7 @@ TRUVAG3_ITERATIVE_PLANNING_ENABLED=true   # Default: true
 TRUVAG3_ITERATIVE_MAX_PHASES=5            # Default: 5
 TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200     # Default: 200
 TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s      # Default: 180s
+TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS=4 # Default: 4
 ```
 
 #### Tiered Approach to Iterative Planning
