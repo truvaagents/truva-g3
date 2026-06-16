@@ -1981,7 +1981,10 @@ func (o *AIOrchestrator) executePhaseLoop(
 							"duration_ms": time.Since(validationStart).Milliseconds(),
 						})
 					}
-					phaseSpan.RecordError(err)
+					// Note: telemetry.RecordSpanError above already recorded err on this
+					// span (it is the active span in phaseCtx) and set its status, so we do
+					// not call phaseSpan.RecordError again here — that would duplicate the
+					// error event in traces.
 					phaseSpan.End()
 					if phaseCancel != nil {
 						phaseCancel()
@@ -5923,10 +5926,12 @@ func (o *AIOrchestrator) normalizeTerminalSynthesisPlan(ctx context.Context, pla
 }
 
 // runPlanValidationGauntlet runs the plan validators in order and returns the FIRST failure,
-// emitting that validator's WARN log + span event + counter. Telemetry strings (log messages,
-// operation values, span-event names, counter names) are preserved VERBATIM from the former inline
-// blocks in executePhaseLoop — Loki/Jaeger/Grafana key off them. It does NOT regenerate: the
-// caller's fixpoint loop owns regeneration, so every validator re-runs after a regeneration.
+// emitting that validator's WARN log + span event (and a rejection counter for the RC1/RC2/RC3
+// validators; validatePlan and the step-ID-conflict check emit no counter). Telemetry strings
+// (log messages, operation values, span-event names, counter names) are preserved VERBATIM from
+// the former inline blocks in executePhaseLoop — Loki/Jaeger/Grafana key off them. It does NOT
+// regenerate: the caller's fixpoint loop owns regeneration, so every validator re-runs after a
+// regeneration.
 func (o *AIOrchestrator) runPlanValidationGauntlet(
 	ctx context.Context,
 	plan *RoutingPlan,
