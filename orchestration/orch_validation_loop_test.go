@@ -295,3 +295,56 @@ func TestGenerateContinuationPlan_NormalizesSynthesisPseudoStepFirstPass(t *test
 		t.Fatalf("expected exactly 1 planning call (normalized first-pass, no hallucination regeneration); got %d", ai.planCalls)
 	}
 }
+
+// synthPseudoInitialJSON is an INITIAL (phase-1) terminal plan: two real gather steps plus a
+// synthesis pseudo-step (unregistered "default" agent, unregistered capability, params that are
+// only templates referencing the two gather steps in the same plan).
+const synthPseudoInitialJSON = `{"plan_id":"p1-synth","original_request":"t","mode":"autonomous","terminal":true,"steps":[` +
+	`{"step_id":"step-1","agent_name":"good-agent","namespace":"default","instruction":"get x","depends_on":[],"metadata":{"capability":"do","parameters":{"q":"x"}}},` +
+	`{"step_id":"step-2","agent_name":"good-agent","namespace":"default","instruction":"get y","depends_on":[],"metadata":{"capability":"do","parameters":{"q":"y"}}},` +
+	`{"step_id":"step-3","agent_name":"default","namespace":"default","instruction":"synthesize","depends_on":[],"implicit_deps":[],"metadata":{"capability":"synthesize_xy","parameters":{"a":"{{step-1.response.data}}","b":"{{step-2.response.data}}"}}}` +
+	`]}`
+
+// TestGenerateExecutionPlan_NormalizesSynthesisPseudoStepFirstPass proves the same Finding-1 fix
+// on the INITIAL plan path (generateExecutionPlan): the parse-time normalizer strips the terminal
+// synthesis pseudo-step BEFORE the hallucination check, so the phase-1 plan is accepted on the
+// first generation (the two real gather steps retained, the "default"-agent synth step dropped)
+// with NO hallucination-triggered regeneration. Mirrors the continuation-path test above.
+func TestGenerateExecutionPlan_NormalizesSynthesisPseudoStepFirstPass(t *testing.T) {
+	discovery := NewMockDiscovery()
+	_ = discovery.Register(context.Background(), &core.ServiceRegistration{
+		ID:           "g1",
+		Name:         "good-agent",
+		Address:      "localhost",
+		Port:         8080,
+		Capabilities: []core.Capability{{Name: "do"}},
+	})
+	cfg := DefaultConfig()
+	cfg.EnableTieredResolution = false // avoid a tiered-selection AI call; keep the hallucination check ON
+	ai := &scriptedAIClient{plans: []string{synthPseudoInitialJSON}, synth: "synthesized"}
+	o := NewAIOrchestrator(cfg, discovery, ai)
+	o.catalog.agents = map[string]*AgentInfo{
+		"g1": {
+			Registration: &core.ServiceRegistration{ID: "g1", Name: "good-agent", Address: "localhost", Port: 8080},
+			Capabilities: []EnhancedCapability{{Name: "do"}},
+		},
+	}
+
+	plan, err := o.generateExecutionPlan(context.Background(), "get x and y then summarize", "req-1")
+	if err != nil {
+		t.Fatalf("generateExecutionPlan returned error: %v", err)
+	}
+	// The synthesis pseudo-step (step-3, agent=default) must be stripped; the two real gather steps remain.
+	if len(plan.Steps) != 2 {
+		t.Fatalf("expected the synthesis pseudo-step stripped (2 steps remaining); got %d", len(plan.Steps))
+	}
+	for _, s := range plan.Steps {
+		if s.AgentName == "default" {
+			t.Fatalf("synthesis pseudo-step (agent=default) was not stripped: %+v", s)
+		}
+	}
+	// Normalized before the hallucination check ⇒ no hallucination-triggered regeneration.
+	if ai.planCalls != 1 {
+		t.Fatalf("expected exactly 1 planning call (normalized first-pass); got %d", ai.planCalls)
+	}
+}

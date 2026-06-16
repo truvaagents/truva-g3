@@ -3861,9 +3861,15 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		// Parse the LLM response into a plan
 		plan, parseErr := o.parsePlan(aiResponse.Content)
 		if parseErr == nil {
+			// Collapse a terminal synthesis pseudo-step BEFORE the hallucination check below, so an
+			// initial plan whose only remaining work is the final answer is accepted as a zero-step
+			// terminal plan instead of bouncing on the pseudo-step's unregistered agent and burning a
+			// hallucination-triggered regeneration. Mirrors the parse-time call in
+			// generateContinuationPlan. Phase 1 has no prior executed steps → knownStepIDSet(nil, plan).
+			o.normalizeTerminalSynthesisPlan(ctx, plan, knownStepIDSet(nil, plan), requestID)
+
 			// Parse succeeded - optionally validate against allowed agents (hallucination detection)
 			// Validation can be disabled via HallucinationValidationEnabled: false
-			// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for detailed analysis
 			validationEnabled := true
 			if o.config != nil && !o.config.HallucinationValidationEnabled {
 				validationEnabled = false
@@ -4121,6 +4127,9 @@ STRICT RULES FOR THIS RETRY:
 						// Continue to next retry - hallErr is still set from previous validation
 						continue
 					}
+
+					// Normalize before re-validating, same as the first-parse path above.
+					o.normalizeTerminalSynthesisPlan(ctx, plan, knownStepIDSet(nil, plan), requestID)
 
 					// Record successful regeneration attempt
 					telemetry.AddSpanEvent(ctx, "llm.hallucination_regeneration_complete",
