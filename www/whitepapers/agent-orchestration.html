@@ -430,8 +430,9 @@
         <div class="uni-item">
           <span class="tag">Reason</span><b>LLM call</b><br>
           The model is shown the conversation so far <i>plus</i> the available tools, and asked
-          to either emit a tool call or a final answer. Modern frameworks rely on the provider's
-          native function-calling JSON; older ones parsed free-text (ReAct).
+          to either emit a tool call or a final answer. Both styles run the same reason–act–observe
+          loop; they differ in how the action is <i>encoded</i> — provider-native function-calling JSON
+          (modern) or the free-text Thought / Action / Observation that ReAct originally parsed.
         </div>
         <div class="uni-item">
           <span class="tag">Act</span><b>Tool dispatch</b><br>
@@ -453,11 +454,11 @@
       </div>
     </div>
 
-    <h3 style="margin: 36px 0 6px; font-size: 19px;">Asking the model: native function calling vs ReAct</h3>
+    <h3 style="margin: 36px 0 6px; font-size: 19px;">Encoding the action: native function calling vs text-based ReAct</h3>
     <p class="lede" style="margin-bottom: 18px;">
-      The Reason step is implemented in one of two ways. Both end with the framework running a tool and
-      feeding the result back; they differ in <i>how the model expresses the call</i> and <i>who has to
-      parse it</i>.
+      Both run the same reason–act–observe loop that ReAct introduced, and both end with the framework
+      running a tool and feeding the result back. They differ only in how the action is <i>encoded</i> —
+      and therefore in <i>who has to parse it</i>.
     </p>
     <div class="two-card">
       <div class="uni-item">
@@ -487,10 +488,11 @@
         </div>
       </div>
       <div class="uni-item">
-        <span class="tag">ReAct</span><b>Free-text, framework-parsed</b>
+        <span class="tag">Text-based ReAct</span><b>Free-text, framework-parsed</b>
         <p style="margin: 8px 0 10px; color: var(--muted);">
-          Before native function calling, the model was prompted to interleave reasoning and actions as
-          plain text in a <code>Thought / Action / Action Input / Observation</code> format. The framework
+          ReAct names the reason–act loop itself; in its original formulation the model was prompted to
+          interleave reasoning and actions as plain text in a <code>Thought / Action / Action Input /
+          Observation</code> format. The framework
           parses that text to extract the action and its input, runs the tool, and appends the observation.
           It works with any text model, but is more brittle: it depends on the model formatting its output
           exactly as instructed. Prompting the model to reply in JSON narrows the format gap, but without
