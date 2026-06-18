@@ -197,6 +197,9 @@ spec:
           value: "info"
         - name: TRUVAG3_LOG_FORMAT
           value: "json"
+        # Max concurrent kubectl subprocesses per pod (bounds peak memory).
+        - name: DEVOPS_KUBECTL_MAX_CONCURRENCY
+          value: "3"
         - name: TRUVAG3_K8S_SERVICE_NAME
           value: "devops-tool-service"
         - name: TRUVAG3_K8S_SERVICE_PORT
@@ -213,10 +216,17 @@ spec:
         resources:
           requests:
             cpu: "10m"
-            memory: "16Mi"
+            memory: "32Mi"
           limits:
+            # kubectl_command forks real kubectl binaries (~25Mi RSS each) and
+            # buffers full --all-namespaces output in memory. A health-check plan
+            # can fan out ~8-10 concurrent kubectl_command calls; 64Mi caused the
+            # cgroup to stall allocations (memory.events max≈95k, oom_kill=0),
+            # killing in-flight kubectl with exit -1 and empty output. The tool
+            # also caps concurrent kubectl execs (DEVOPS_KUBECTL_MAX_CONCURRENCY,
+            # default 3) so peak memory stays bounded regardless of fan-out width.
             cpu: "100m"
-            memory: "64Mi"
+            memory: "200Mi"
         livenessProbe:
           httpGet:
             path: /health
