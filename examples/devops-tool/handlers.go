@@ -142,18 +142,29 @@ func (d *DevOpsTool) handleGetClusterStatus(w http.ResponseWriter, r *http.Reque
 	// Get cluster info
 	result := executeKubectl(ctx, []string{"cluster-info"}, 15)
 
-	// If nodes requested, append node info
+	// If nodes requested, append node info. Surface a failed sub-command
+	// (e.g. busy/timeout under load) as a visible "unavailable" marker rather
+	// than silently dropping the section — otherwise a partial report reads as
+	// a healthy cluster.
 	if includeNodes {
 		nodeResult := executeKubectl(ctx, []string{"get", "nodes", "-o", "wide"}, 15)
 		if nodeResult.ExitCode == 0 {
 			result.Stdout += "\n---\nNodes:\n" + nodeResult.Stdout
+		} else {
+			result.Stdout += fmt.Sprintf("\n---\nNodes: unavailable (exit %d: %s)\n",
+				nodeResult.ExitCode, strings.TrimSpace(nodeResult.Stderr))
 		}
 	}
 
-	// Append component status
+	// Append component status (same visible-degradation handling as nodes).
 	csResult := executeKubectl(ctx, []string{"get", "componentstatuses", "--no-headers"}, 10)
-	if csResult.ExitCode == 0 && csResult.Stdout != "" {
-		result.Stdout += "\n---\nComponent Status:\n" + csResult.Stdout
+	if csResult.ExitCode == 0 {
+		if csResult.Stdout != "" {
+			result.Stdout += "\n---\nComponent Status:\n" + csResult.Stdout
+		}
+	} else {
+		result.Stdout += fmt.Sprintf("\n---\nComponent Status: unavailable (exit %d: %s)\n",
+			csResult.ExitCode, strings.TrimSpace(csResult.Stderr))
 	}
 
 	if result.ExitCode != 0 {
