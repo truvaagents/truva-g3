@@ -19,9 +19,9 @@ type LogsTool struct {
 // QueryLogsRequest represents the input for query_logs.
 type QueryLogsRequest struct {
 	Query     string `json:"query"`               // Required: LogQL query
-	Limit     int    `json:"limit,omitempty"`      // Optional: max lines (default: 100, max: 1000)
-	Direction string `json:"direction,omitempty"`  // Optional: "backward" (default) or "forward"
-	Since     string `json:"since,omitempty"`      // Optional: relative duration (default: "1h")
+	Limit     int    `json:"limit,omitempty"`     // Optional: max lines (default: 100, max: 1000)
+	Direction string `json:"direction,omitempty"` // Optional: "backward" (default) or "forward"
+	Since     string `json:"since,omitempty"`     // Optional: relative duration (default: "1h")
 }
 
 // QueryLogsRangeRequest represents the input for query_logs_range.
@@ -29,9 +29,9 @@ type QueryLogsRangeRequest struct {
 	Query     string `json:"query"`               // Required: LogQL query
 	Start     string `json:"start"`               // Required: range start (RFC3339 or epoch)
 	End       string `json:"end"`                 // Required: range end (RFC3339 or epoch)
-	Limit     int    `json:"limit,omitempty"`      // Optional: max lines (default: 100, max: 1000)
-	Direction string `json:"direction,omitempty"`  // Optional: "backward" (default) or "forward"
-	Step      string `json:"step,omitempty"`       // Optional: resolution step for metric queries
+	Limit     int    `json:"limit,omitempty"`     // Optional: max lines (default: 100, max: 1000)
+	Direction string `json:"direction,omitempty"` // Optional: "backward" (default) or "forward"
+	Step      string `json:"step,omitempty"`      // Optional: resolution step for metric queries
 }
 
 // GetLabelsRequest represents the input for get_labels.
@@ -61,12 +61,13 @@ type LogsQueryResponse struct {
 	Streams      []LogStream `json:"streams"`
 	TotalEntries int         `json:"total_entries"`
 	Query        string      `json:"query"`
-	Source       string      `json:"source"` // always "loki"
+	Source       string      `json:"source"`         // always "loki"
+	Hint         string      `json:"hint,omitempty"` // set only on empty results that look like a query problem (e.g. a non-indexed selector label)
 }
 
 // LogStream is a single stream in the logs query response.
 type LogStream struct {
-	Labels  string     `json:"labels"`  // Serialized label set
+	Labels  string     `json:"labels"` // Serialized label set
 	Entries []LogEntry `json:"entries"`
 }
 
@@ -115,7 +116,7 @@ type GetTraceOperationsRequest struct {
 
 // FindTracesRequest represents the input for find_traces.
 type FindTracesRequest struct {
-	Service     string `json:"service"`               // Required: service name
+	Service     string `json:"service"`                // Required: service name
 	Operation   string `json:"operation,omitempty"`    // Optional: operation/span name filter
 	Lookback    string `json:"lookback,omitempty"`     // Optional: time window (default: "1h")
 	MinDuration string `json:"min_duration,omitempty"` // Optional: minimum trace duration
@@ -220,7 +221,7 @@ func (t *LogsTool) registerCapabilities() {
 	// --- query_logs ---
 	t.RegisterCapability(core.Capability{
 		Name: "query_logs",
-		Description: "Queries recent log lines from Loki using LogQL. " +
+		Description: "Queries recent log lines from Loki using LogQL over a relative window: pass since (e.g. 6h) for 'recent' or 'last N hours/minutes' and the tool computes the range from now. " +
 			"Use for errors, crashes, or keyword/request_id search across services. " +
 			"Examples: " +
 			"single service errors - {service_name=\"myapp\"} |= \"error\"; " +
@@ -237,8 +238,10 @@ func (t *LogsTool) registerCapabilities() {
 		Handler:     t.handleQueryLogs,
 		InputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "query", Type: "string", Example: `{service_name="product-catalog-api"} |= "error"`,
-					Description: "LogQL query. Examples: single service - {service_name=\"myapp\"} |= \"error\"; trace one request across services - {service_name=~\".+\"} |= \"req-id\". For broader keyword search, narrow to specific services first or keep since<=6h."},
+				{Name: "query", Type: "string", Example: `{k8s_namespace_name="truvag3-examples"} |~ "(?i)error|warn"`,
+					Description: "LogQL query. Indexed stream labels: service_name, k8s_pod_name, k8s_namespace_name, k8s_deployment_name, deployment_environment (target a pod with k8s_pod_name, a namespace with k8s_namespace_name). " +
+						"Line filters: |= matches a literal substring, |~ matches a regex - use |~ for multiple keywords or case-insensitive matching, e.g. {service_name=\"myapp\"} |~ \"(?i)error|warn\"; use |= for one exact term such as a request id, e.g. {service_name=~\".+\"} |= \"req-id\". " +
+						"JSON fields (level, request_id, operation) are structured metadata: filter with | level=\"ERROR\" (no | json needed)."},
 			},
 			OptionalFields: []core.FieldHint{
 				{Name: "limit", Type: "integer", Example: "100", Description: "Max log lines (default: 100, max: 1000)"},
@@ -253,6 +256,9 @@ func (t *LogsTool) registerCapabilities() {
 				{Name: "query", Type: "string", Description: "The LogQL query that was executed"},
 				{Name: "source", Type: "string", Example: "loki", Description: "Data source identifier"},
 			},
+			OptionalFields: []core.FieldHint{
+				{Name: "hint", Type: "string", Description: "Present only when the result is empty due to a likely query problem (e.g. a selector label that is not indexed)"},
+			},
 		},
 	})
 
@@ -260,7 +266,7 @@ func (t *LogsTool) registerCapabilities() {
 	t.RegisterCapability(core.Capability{
 		Name: "query_logs_range",
 		Description: "Queries log lines within an explicit time range using LogQL. " +
-			"Use when investigating a specific incident window with known start/end times. " +
+			"Use when investigating a specific incident window with known start/end timestamps; for 'recent' or 'last N hours/minutes', use query_logs with since instead (it computes the window from now, avoiding timestamp math). " +
 			"Examples: " +
 			"single service over a 30-minute window - {service_name=\"myapp\"} |= \"error\" with start/end 30 minutes apart; " +
 			"trace one request across services - {service_name=~\".+\"} |= \"req-id\" with start/end bracketing the request lifetime. " +
@@ -274,8 +280,10 @@ func (t *LogsTool) registerCapabilities() {
 		Handler:     t.handleQueryLogsRange,
 		InputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "query", Type: "string", Example: `{service_name="product-catalog-api"} |= "error"`,
-					Description: "LogQL query. Start with specific selectors; broaden only if the narrow query returns nothing."},
+				{Name: "query", Type: "string", Example: `{k8s_namespace_name="truvag3-examples"} |~ "(?i)error|warn"`,
+					Description: "LogQL query. Start with specific selectors; broaden only if the narrow query returns nothing. " +
+						"Indexed stream labels: service_name, k8s_pod_name, k8s_namespace_name, k8s_deployment_name, deployment_environment (target a pod with k8s_pod_name, a namespace with k8s_namespace_name). " +
+						"Line filters: |= matches a literal substring, |~ matches a regex - use |~ for multiple keywords or case-insensitive matching, e.g. |~ \"(?i)error|warn\"."},
 				{Name: "start", Type: "string", Example: "2026-03-26T14:00:00Z",
 					Description: "Range start time (RFC3339 or unix epoch)"},
 				{Name: "end", Type: "string", Example: "2026-03-26T14:30:00Z",
@@ -293,6 +301,9 @@ func (t *LogsTool) registerCapabilities() {
 				{Name: "total_entries", Type: "integer", Example: "0", Description: "Total log entries returned"},
 				{Name: "query", Type: "string", Description: "The LogQL query that was executed"},
 				{Name: "source", Type: "string", Example: "loki", Description: "Data source identifier"},
+			},
+			OptionalFields: []core.FieldHint{
+				{Name: "hint", Type: "string", Description: "Present only when the result is empty due to a likely query problem (e.g. a selector label that is not indexed)"},
 			},
 		},
 	})
@@ -390,9 +401,9 @@ func (t *LogsTool) registerCapabilities() {
 			"Use when the user asks about Jaeger, traces, or distributed tracing to discover available services. " +
 			"Returns: array of service names. " +
 			"No parameters required.",
-		InputTypes:  []string{"json"},
-		OutputTypes: []string{"json"},
-		Handler:     t.handleGetTraceServices,
+		InputTypes:   []string{"json"},
+		OutputTypes:  []string{"json"},
+		Handler:      t.handleGetTraceServices,
 		InputSummary: &core.SchemaSummary{},
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{

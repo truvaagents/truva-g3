@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -185,6 +186,9 @@ func (t *LogsTool) handleQueryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := buildLogsResponse(streams, req.Query)
+	if resp.TotalEntries == 0 {
+		resp.Hint = t.unknownLabelHint(ctx, req.Query)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
@@ -260,6 +264,9 @@ func (t *LogsTool) handleQueryLogsRange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := buildLogsResponse(streams, req.Query)
+	if resp.TotalEntries == 0 {
+		resp.Hint = t.unknownLabelHint(ctx, req.Query)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
@@ -850,6 +857,90 @@ func buildLogsResponse(streams []lokiStream, query string) LogsQueryResponse {
 		Query:        query,
 		Source:       "loki",
 	}
+}
+
+// labelSuggestions maps common (but non-indexed) selector label names to the
+// indexed equivalent Loki actually uses, so an empty result can suggest a fix.
+var labelSuggestions = map[string]string{
+	"pod":        "k8s_pod_name",
+	"namespace":  "k8s_namespace_name",
+	"container":  "k8s_pod_name",
+	"app":        "k8s_deployment_name",
+	"deployment": "k8s_deployment_name",
+	"service":    "service_name",
+	"job":        "service_name",
+}
+
+// selectorLabelNames extracts the label names used in the stream selector (the
+// first {...} block) of a LogQL query. Label filters after a pipe (e.g.
+// `| level="ERROR"`) reference structured metadata, not stream labels, and are
+// intentionally excluded.
+func selectorLabelNames(query string) []string {
+	open := strings.Index(query, "{")
+	if open < 0 {
+		return nil
+	}
+	rel := strings.Index(query[open:], "}")
+	if rel < 0 {
+		return nil
+	}
+	inner := query[open+1 : open+rel]
+
+	var names []string
+	for _, part := range strings.Split(inner, ",") {
+		part = strings.TrimSpace(part)
+		idx := strings.IndexAny(part, "=!~")
+		if idx <= 0 {
+			continue
+		}
+		if name := strings.TrimSpace(part[:idx]); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// unknownLabelHint returns a diagnostic note when an empty result is likely
+// caused by the stream selector referencing labels that are not indexed in
+// Loki. It returns "" when the selector looks fine or the label list can't be
+// fetched — a best-effort aid, never a hard failure. This is the
+// "misleading empty result" guard from the tool-development guide: a structural
+// no-op selector should not read as a clean "no logs found".
+func (t *LogsTool) unknownLabelHint(ctx context.Context, query string) string {
+	names := selectorLabelNames(query)
+	if len(names) == 0 {
+		return ""
+	}
+
+	known, err := t.lokiClient.Labels(ctx, "", "")
+	if err != nil || len(known) == 0 {
+		return ""
+	}
+	knownSet := make(map[string]struct{}, len(known))
+	for _, k := range known {
+		knownSet[k] = struct{}{}
+	}
+
+	var unknown []string
+	for _, n := range names {
+		if _, ok := knownSet[n]; ok {
+			continue
+		}
+		if sug, has := labelSuggestions[n]; has {
+			unknown = append(unknown, fmt.Sprintf("%q (did you mean %q?)", n, sug))
+		} else {
+			unknown = append(unknown, fmt.Sprintf("%q", n))
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"Zero results may be because the selector references non-indexed stream label(s): %s. Indexed labels are: %s. Re-run with a valid label, or call get_labels to discover the schema.",
+		strings.Join(unknown, ", "),
+		strings.Join(known, ", "),
+	)
 }
 
 // parseNanoTimestamp converts a nanosecond epoch string to RFC3339Nano.
