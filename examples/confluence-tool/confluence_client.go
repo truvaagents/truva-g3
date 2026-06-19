@@ -65,14 +65,14 @@ type ConfluenceLinks struct {
 
 // ConfluenceAPISpace represents a space from the Confluence REST API v2.
 type ConfluenceAPISpace struct {
-	ID          string          `json:"id"`
-	Key         string          `json:"key"`
-	Name        string          `json:"name"`
-	Type        string          `json:"type"`
-	Status      string          `json:"status"`
-	HomepageID  string          `json:"homepageId"`
-	Description *string         `json:"description"`
-	CreatedAt   string          `json:"createdAt"`
+	ID          string           `json:"id"`
+	Key         string           `json:"key"`
+	Name        string           `json:"name"`
+	Type        string           `json:"type"`
+	Status      string           `json:"status"`
+	HomepageID  string           `json:"homepageId"`
+	Description *string          `json:"description"`
+	CreatedAt   string           `json:"createdAt"`
 	Links       *ConfluenceLinks `json:"_links,omitempty"`
 }
 
@@ -468,10 +468,20 @@ func htmlEscape(s string) string {
 	return s
 }
 
+// webURL builds the full Confluence web URL from a relative _links.webui path,
+// e.g. https://mycompany.atlassian.net/wiki/spaces/KEY/pages/123/Title. Built
+// from the tool's configured CONFLUENCE_BASE_URL so callers never hardcode it.
+func (c *ConfluenceClient) webURL(webui string) string {
+	if webui == "" {
+		return ""
+	}
+	return c.baseURL + "/wiki" + webui
+}
+
 // pageURL builds the full web URL for a Confluence page from its _links.
 func (c *ConfluenceClient) pageURL(page *ConfluenceAPIPage) string {
-	if page.Links != nil && page.Links.WebUI != "" {
-		return c.baseURL + "/wiki" + page.Links.WebUI
+	if page.Links != nil {
+		return c.webURL(page.Links.WebUI)
 	}
 	return ""
 }

@@ -404,7 +404,7 @@ func (t *ConfluenceTool) handleSearchPages(rw http.ResponseWriter, r *http.Reque
 			Title:     hit.Title,
 			SpaceKey:  hit.Space.Key,
 			SpaceName: hit.Space.Name,
-			URL:       hit.URL,
+			URL:       t.client.webURL(hit.Links.WebUI),
 			Excerpt:   hit.Excerpt,
 			Version:   hit.Version.Number,
 			UpdatedAt: updatedAt,
@@ -758,11 +758,11 @@ func (t *ConfluenceTool) handleUpdatePage(rw http.ResponseWriter, r *http.Reques
 	)
 
 	t.Logger.InfoWithContext(ctx, "Received update_page request", map[string]interface{}{
-		"operation":  "update_page",
-		"page_id":    req.PageID,
-		"has_title":  req.Title != "",
+		"operation":   "update_page",
+		"page_id":     req.PageID,
+		"has_title":   req.Title != "",
 		"has_content": req.Content != "",
-		"request_id": upstreamRequestID,
+		"request_id":  upstreamRequestID,
 	})
 
 	telemetry.AddSpanEvent(ctx, "calling_confluence_api",
@@ -964,8 +964,8 @@ func (t *ConfluenceTool) handleListSpaces(rw http.ResponseWriter, r *http.Reques
 			desc = *s.Description
 		}
 		spaceURL := ""
-		if s.Links != nil && s.Links.WebUI != "" {
-			spaceURL = t.client.baseURL + "/wiki" + s.Links.WebUI
+		if s.Links != nil {
+			spaceURL = t.client.webURL(s.Links.WebUI)
 		}
 		spaces = append(spaces, SpaceInfo{
 			ID:          s.ID,
