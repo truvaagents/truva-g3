@@ -153,6 +153,7 @@ Place JIRA/Slack steps in a separate phase after investigation and remediation c
 			"JIRA tickets use project_key 'DEVOPS' with severity, root cause, remediation, verification, and alert fingerprint",
 			"Slack messages should read like a human-written incident note: alert summary, investigation findings with metric values and pod names, root cause, remediation taken, verification result, and the JIRA link (use the browse_url returned by create_issue or search_issues)",
 			"Group related alerts by fingerprint to avoid duplicate investigations",
+			"When remediating (scaling, restarting a rollout, commenting on a JIRA ticket, sending a Slack message), invoke the corresponding capability and confirm it completed before recording the action as done. For asynchronous actions (a rollout settling, pods scaling up or down), poll the relevant status capability until you observe concrete evidence of completion. Record an action as successful only on that evidence; if it failed, note what failed and what was tried.",
 		},
 	}
 
