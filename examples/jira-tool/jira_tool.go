@@ -56,6 +56,7 @@ func (t *JiraTool) registerCapabilities() {
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
 				{Name: "key", Type: "string", Description: "Issue key (e.g. PROJ-123)"},
+				{Name: "browse_url", Type: "string", Description: "Human-facing browse link for the issue (e.g. https://your-domain.atlassian.net/browse/PROJ-123) — use this when referencing the ticket"},
 				{Name: "summary", Type: "string", Description: "Issue title"},
 				{Name: "status", Type: "string", Description: "Current workflow status"},
 				{Name: "issue_type", Type: "string", Description: "Issue type (Bug, Task, Story, etc.)"},
@@ -100,7 +101,7 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "issues", Type: "array", Description: "List of matching issues with key, summary, status, and requested fields"},
+				{Name: "issues", Type: "array", Description: "List of matching issues, each with key, browse_url, summary, status, and requested fields"},
 				{Name: "total", Type: "number", Description: "Total number of matching issues"},
 				{Name: "max_results", Type: "number", Description: "Maximum results returned"},
 				{Name: "jql", Type: "string", Description: "JQL query that was executed"},
@@ -144,6 +145,7 @@ func (t *JiraTool) registerCapabilities() {
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
 				{Name: "key", Type: "string", Description: "Created issue key (e.g. PROJ-124)"},
+				{Name: "browse_url", Type: "string", Description: "Human-facing browse link for the created issue (e.g. https://your-domain.atlassian.net/browse/PROJ-124) — use this when referencing the ticket"},
 				{Name: "id", Type: "string", Description: "Created issue numeric ID"},
 				{Name: "self", Type: "string", Description: "REST API URL of the created issue"},
 				{Name: "summary", Type: "string", Description: "Issue title as created"},
@@ -438,7 +440,7 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "issues", Type: "array", Description: "List of sprint issues with key, summary, status, and requested fields"},
+				{Name: "issues", Type: "array", Description: "List of sprint issues, each with key, browse_url, summary, status, and requested fields"},
 				{Name: "total", Type: "number", Description: "Total number of issues in the sprint"},
 				{Name: "sprint_id", Type: "number", Description: "Sprint ID queried"},
 			},

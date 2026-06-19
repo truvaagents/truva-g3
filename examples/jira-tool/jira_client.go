@@ -60,12 +60,19 @@ func (c *JiraClient) doRequest(ctx context.Context, method, path string, body io
 	return c.httpClient.Do(req)
 }
 
+// BrowseURL returns the human-facing browse link for an issue key,
+// e.g. https://mycompany.atlassian.net/browse/PROJ-123. Built from the
+// tool's configured JIRA_BASE_URL so callers never hardcode the domain.
+func (c *JiraClient) BrowseURL(issueKey string) string {
+	return c.baseURL + "/browse/" + issueKey
+}
+
 // --- Response Structs ---
 
 type IssueResponse struct {
-	ID        string                 `json:"id"`
-	Key       string                 `json:"key"`
-	Self      string                 `json:"self"`
+	ID     string                 `json:"id"`
+	Key    string                 `json:"key"`
+	Self   string                 `json:"self"`
 	Fields map[string]interface{} `json:"fields"`
 }
 
@@ -98,12 +105,12 @@ type CommentResponse struct {
 }
 
 type UserResponse struct {
-	AccountID   string `json:"accountId"`
-	DisplayName string `json:"displayName"`
-	EmailAddress string `json:"emailAddress"`
-	Active      bool   `json:"active"`
-	AvatarURLs  map[string]string `json:"avatarUrls"`
-	AccountType string `json:"accountType"`
+	AccountID    string            `json:"accountId"`
+	DisplayName  string            `json:"displayName"`
+	EmailAddress string            `json:"emailAddress"`
+	Active       bool              `json:"active"`
+	AvatarURLs   map[string]string `json:"avatarUrls"`
+	AccountType  string            `json:"accountType"`
 }
 
 type ProjectResponse struct {
