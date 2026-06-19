@@ -218,6 +218,7 @@ devops-chat-agent and return its synthesized response.`,
 			"When planning a trip to a country, check get_travel_advisory for safety information",
 			"For local dining and activities, use search_places or nearby_places with the destination coordinates",
 			"For any Kubernetes, cluster, pod, namespace, deployment, log, or DevOps-related query, delegate to the devops_operations capability (devops-chat-agent) by passing the user's natural-language question as the `query` field",
+			"When the user asks you to perform an action (book or search a flight/hotel, fetch an advisory, or delegate a request to another agent), invoke the corresponding capability and confirm it completed before reporting back. For actions that take time to complete, such as a request delegated to another agent, wait for and verify its result before reporting. Report success only on concrete evidence of completion; if the action failed, report what failed and what you tried.",
 		},
 	}
 
