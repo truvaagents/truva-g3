@@ -1,0 +1,1046 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Skills vs Tools vs MCP — Drawing the Boundary</title>
+<meta name="description" content="A source-grounded reference that draws the boundary between three concepts agent builders constantly conflate: tools (function calling), the Model Context Protocol (MCP), and Agent Skills. What each one is, who executes what, how they compose into a stack, and when to reach for which — cited to official documentation.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="Skills vs Tools vs MCP — Drawing the Boundary">
+<meta property="og:description" content="Tools are the unit of action, MCP is the unit of integration, Skills are the unit of know-how. A precise, cited boundary between the three — and how they stack.">
+<meta property="og:url" content="https://truvag3.dev/whitepapers/skills-tools-mcp">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Skills vs Tools vs MCP — Drawing the Boundary">
+<meta name="twitter:description" content="Tools, MCP, and Agent Skills are three different layers, not three competitors. A source-grounded boundary, and how they compose.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="/assets/css/code-highlight.css">
+<style>
+  :root {
+    --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
+    --ink: #e6edf7; --muted: #9aa6bd; --line: #2a3550;
+    --accent: #7cc4ff; --warn: #fbbf24; --good: #34d399;
+    --brand-truva-light: #DBEEFB; --brand-truva-dark: #4A8AB8;
+    --brand-g3-light: #FFD080; --brand-g3-dark: #C56710;
+    /* The three concepts this paper separates */
+    --tool:  #60a5fa;  /* blue   — tools / function calling (the unit of action) */
+    --mcp:   #f59e0b;  /* amber  — MCP (the unit of integration) */
+    --skill: #a78bfa;  /* purple — Agent Skills (the unit of know-how) */
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, var(--bg) 60%);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code, td code, h3 code, h4 code { color: #c9e2ff; background: rgba(124,196,255,.08); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  pre {
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow: auto; font-size: 12.5px; line-height: 1.55; color: #cfe1ff;
+    margin: 8px 0 6px;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+  pre .hi { background: rgba(251, 191, 36, 0.18); color: #fde68a; padding: 0 3px; border-radius: 3px; font-weight: 600; border-bottom: 1px dashed rgba(251, 191, 36, 0.55); }
+  pre .cm { color: #6b7c9c; font-style: italic; }
+  .snip-src {
+    margin: 0 0 16px; padding-left: 4px;
+    font-size: 11.5px; color: var(--muted); line-height: 1.45;
+  }
+  .snip-src::before { content: "↳  "; color: #4b6688; }
+  .snip-src a { color: var(--muted); border-bottom: 1px dotted rgba(154,166,189,.4); text-decoration: none; }
+  .snip-src a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  header.hero { padding: 64px 0 36px; text-align: center; border-bottom: 1px solid var(--line); position: relative; }
+  .research-date { display: inline-block; margin-bottom: 18px; padding: 5px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .research-date b { color: var(--ink); font-weight: 600; letter-spacing: 0; text-transform: none; }
+  .ai-capsule { display: inline-block; margin-bottom: 18px; margin-left: 8px; padding: 5px 14px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--warn); color: var(--warn); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  header.hero h1 { font-size: clamp(28px, 4.4vw, 46px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #9ec5ff 60%, #c4b5fd 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header.hero .subtitle { color: var(--muted); font-size: 17px; max-width: 860px; margin: 0 auto 22px; }
+  .pillrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); font-size: 13px; cursor: pointer; transition: transform .15s ease, background .15s ease, border-color .15s ease; }
+  .pill:hover { transform: translateY(-1px); border-color: #3a4a72; text-decoration: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  /* Sections */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: clamp(22px, 2.5vw, 30px); letter-spacing: -0.01em; margin: 0 0 8px; }
+  section h3 { font-size: 19px; margin: 26px 0 8px; }
+  section h4 { font-size: 12px; margin: 18px 0 6px; color: var(--accent); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; }
+  section .lede { color: var(--muted); max-width: 860px; margin: 0 0 28px; }
+  section p { color: var(--muted); }
+
+  /* Diagram + explanation card */
+  .diagram-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px; margin: 22px 0 28px;
+  }
+  .diagram-card .svg-wrap {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; margin-bottom: 14px; overflow-x: auto;
+  }
+  .diagram-card svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .diagram-card .caption { font-size: 12.5px; color: var(--muted); margin: 4px 0 14px; text-align: center; }
+
+  /* Explanation list under diagram */
+  .legend-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .legend-list li {
+    display: grid; grid-template-columns: 28px 1fr; gap: 12px;
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .legend-list li .num { background: var(--accent); color: #0a1a2b; border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 700; font-size: 12.5px; }
+  .legend-list li b { color: #fff; display: block; margin-bottom: 2px; font-size: 13.5px; }
+  .legend-list li p { margin: 0; font-size: 13.5px; color: #cfd9ee; }
+
+  /* Three-column "who owns what" grid */
+  .owns-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 18px 0 6px; }
+  @media (max-width: 860px) { .owns-grid { grid-template-columns: 1fr; } }
+  .owns { border-radius: 12px; padding: 16px 18px; border: 1px solid var(--line); }
+  .owns.tool  { background: rgba(96,165,250,.07); border-color: rgba(96,165,250,.35); }
+  .owns.mcp   { background: rgba(245,158,11,.07); border-color: rgba(245,158,11,.35); }
+  .owns.skill { background: rgba(167,139,250,.07); border-color: rgba(167,139,250,.35); }
+  .owns h4 { margin: 0 0 10px; text-transform: none; letter-spacing: 0; font-size: 15px; }
+  .owns.tool h4  { color: #93c5fd; }
+  .owns.mcp h4   { color: #fcd34d; }
+  .owns.skill h4 { color: #c4b5fd; }
+  .owns ul { margin: 0; padding-left: 18px; }
+  .owns li { margin: 6px 0; font-size: 13.5px; color: #cfd9ee; }
+
+  /* Concept cards (reuses the provider-card shell) */
+  .prov-card { background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005)); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; margin-bottom: 28px; }
+  .prov-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.015); }
+  .prov-badge { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); flex-shrink: 0; }
+  .prov-head h3 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+  .prov-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .endpoint-pill { display: inline-block; font-size: 11px; padding: 3px 11px; border-radius: 999px; font-weight: 600; letter-spacing: 0.02em; vertical-align: 3px; margin-left: 10px; background: var(--bg-2); border: 1px solid currentColor; color: #9fc2ff; }
+  .prov-body { padding: 22px; }
+  .step-label { display: inline-block; font-size: 12.5px; padding: 3px 11px; border-radius: 999px; background: #19243d; color: #9fc2ff; margin-top: 18px; margin-bottom: 6px; letter-spacing: .04em; text-transform: uppercase; }
+  .step-label.r1 { background: rgba(96,165,250,.14); color: #93c5fd; }
+  .step-label.r2 { background: rgba(245,158,11,.14); color: #fcd34d; }
+  .step-label.r3 { background: rgba(167,139,250,.14); color: #c4b5fd; }
+  .prov-notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  @media (max-width: 760px) { .prov-notes { grid-template-columns: 1fr; } }
+  .prov-notes .nb { background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .prov-notes .nb h5 { margin: 0 0 4px; font-size: 11px; color: #a8b6d6; letter-spacing: .05em; text-transform: uppercase; }
+  .prov-notes .nb p { margin: 0; font-size: 13px; color: #dbe6ff; }
+  .src { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); font-size: 12.5px; color: var(--muted); }
+  .src a { color: var(--accent); }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto; overflow-y: hidden;
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  .table-wrap { scrollbar-width: none; -ms-overflow-style: none; }
+  .table-wrap::-webkit-scrollbar { display: none; }
+  .hscroll {
+    height: 12px; margin: 10px 0 2px; position: relative;
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px;
+  }
+  .hscroll-thumb {
+    position: absolute; top: 1px; bottom: 1px; left: 0; width: 60px;
+    background: #3a4a72; border-radius: 999px; cursor: grab;
+    transition: background .15s ease;
+  }
+  .hscroll-thumb:hover { background: var(--accent); }
+  .hscroll-thumb:active { cursor: grabbing; background: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 880px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { background: var(--bg-2); position: sticky; top: 0; font-weight: 600; }
+  td.row-hd { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  th.c-tool  { color: #93c5fd; }
+  th.c-mcp   { color: #fcd34d; }
+  th.c-skill { color: #c4b5fd; }
+
+  /* Takeaways */
+  .takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 880px) { .takeaways { grid-template-columns: 1fr; } }
+  .ta { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .ta h4 { margin: 0 0 8px; font-size: 15px; color: #fff; text-transform: none; letter-spacing: 0; }
+  .ta p { margin: 0; color: #cfd9ee; font-size: 14px; }
+  .ta .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #19243d; color: #9fc2ff; margin-bottom: 8px; }
+
+  /* Glossary */
+  .gloss { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 22px; }
+  @media (max-width: 720px) { .gloss { grid-template-columns: 1fr; } }
+  .gloss div { padding: 8px 0; border-bottom: 1px dashed var(--line); color: #cfd9ee; }
+  .gloss b { color: #fff; }
+
+  /* Notes / callouts */
+  .note-box { background: rgba(124,196,255,.06); border: 1px solid rgba(124,196,255,.25); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; margin: 14px 0; font-size: 14px; color: #d4dcef; }
+
+  footer { padding: 36px 0 64px; text-align: center; color: var(--muted); font-size: 13px; }
+  .copyright { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 1.5rem; margin-bottom: 0; }
+
+  @keyframes dash { to { stroke-dashoffset: -40; } }
+  .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+
+  /* Section rail (left scroll-spy nav) */
+  #toc-rail {
+    position: fixed; left: 12px; top: 50%; transform: translateY(-50%);
+    z-index: 50; display: flex; flex-direction: column; gap: 10px;
+    padding: 0; background: transparent; border: none;
+    max-height: 88vh;
+  }
+  #toc-rail .toc-dot {
+    display: inline-flex; align-items: center; gap: 12px;
+    text-decoration: none; line-height: 1; white-space: nowrap;
+    padding: 9px 13px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent;
+    box-shadow: none; overflow: hidden; max-width: 44px;
+    transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .d {
+    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; opacity: .55;
+    transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .lbl {
+    font-size: 16px; color: var(--muted); opacity: 0;
+    transition: opacity .18s ease, color .18s ease;
+  }
+  #toc-rail:hover .toc-dot,
+  #toc-rail .toc-dot.active {
+    max-width: 360px;
+    background: #0e1422; border-color: var(--line);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  }
+  #toc-rail:hover .toc-dot .lbl,
+  #toc-rail .toc-dot.active .lbl { opacity: 1; }
+  #toc-rail .toc-dot:hover .d,
+  #toc-rail .toc-dot.active .d { opacity: 1; }
+  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
+  #toc-rail .toc-dot:hover .lbl { color: var(--ink); }
+  #toc-rail .toc-dot.active .d { width: 19px; height: 19px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
+  #toc-rail .toc-dot.active .lbl { color: var(--ink); font-weight: 600; }
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active {
+    max-width: 44px; background: transparent; border-color: transparent; box-shadow: none;
+  }
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
+  #toc-rail.rail-hidden { display: none; }
+  @media (max-width: 1180px) { #toc-rail { display: none; } }
+
+  /* Back-to-top */
+  #to-top {
+    position: fixed; right: 22px; bottom: 22px; z-index: 60;
+    width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--bg-2); color: var(--accent); font-size: 18px; line-height: 1; cursor: pointer;
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease, border-color .2s ease;
+    box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  #to-top.show { opacity: 1; transform: none; pointer-events: auto; }
+  #to-top:hover { border-color: #3a4a72; }
+
+  @media print {
+    body { background: white; color: black; }
+    .pill, nav, footer { display: none; }
+    section { page-break-inside: avoid; }
+    .prov-card { break-inside: avoid; }
+  }
+</style>
+</head>
+<body data-highlight="json">
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="research-date">Research date · <b>June 18, 2026</b></div>
+    <div class="ai-capsule">Generated with AI</div>
+    <h1>Skills vs Tools vs MCP</h1>
+    <p class="subtitle">
+      Three words that agent builders constantly use as if they were interchangeable &mdash;
+      <b style="color:#93c5fd">tools</b>, the <b style="color:#fcd34d">Model&nbsp;Context&nbsp;Protocol</b>,
+      and <b style="color:#c4b5fd">Agent&nbsp;Skills</b> &mdash; are actually three different layers of an
+      agent system, not three competing answers to the same question. This paper draws the boundary:
+      what each one is, who executes what, how they stack together, and when to reach for which. Every
+      claim is cited to the official documentation.
+    </p>
+    <div class="pillrow">
+      <a class="pill" href="#concept"><span class="dot" style="background:#9ec5ff"></span>The confusion</a>
+      <a class="pill" href="#boundary"><span class="dot" style="background:#fff"></span>The boundary</a>
+      <a class="pill" href="#tools"><span class="dot" style="background:var(--tool)"></span>Tools</a>
+      <a class="pill" href="#mcp"><span class="dot" style="background:var(--mcp)"></span>MCP</a>
+      <a class="pill" href="#skills"><span class="dot" style="background:var(--skill)"></span>Skills</a>
+      <a class="pill" href="#compose"><span class="dot" style="background:var(--good)"></span>The stack</a>
+      <a class="pill" href="#compare"><span class="dot" style="background:#fff"></span>Side-by-side</a>
+      <a class="pill" href="#choose"><span class="dot" style="background:#7dd3fc"></span>When to use which</a>
+      <a class="pill" href="#takeaways"><span class="dot" style="background:var(--good)"></span>Summary</a>
+    </div>
+  </div>
+</header>
+
+<!-- Left section rail (scroll-spy) -->
+<aside id="toc-rail" aria-label="Section navigation">
+  <a class="toc-dot" href="#concept"   data-target="concept"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The confusion</span></a>
+  <a class="toc-dot" href="#boundary"  data-target="boundary"><span class="d" style="background:#fff"></span><span class="lbl">The boundary</span></a>
+  <a class="toc-dot" href="#tools"     data-target="tools"><span class="d" style="background:var(--tool)"></span><span class="lbl">Tools</span></a>
+  <a class="toc-dot" href="#mcp"       data-target="mcp"><span class="d" style="background:var(--mcp)"></span><span class="lbl">MCP</span></a>
+  <a class="toc-dot" href="#skills"    data-target="skills"><span class="d" style="background:var(--skill)"></span><span class="lbl">Skills</span></a>
+  <a class="toc-dot" href="#compose"   data-target="compose"><span class="d" style="background:var(--good)"></span><span class="lbl">The stack</span></a>
+  <a class="toc-dot" href="#compare"   data-target="compare"><span class="d" style="background:#fff"></span><span class="lbl">Side-by-side</span></a>
+  <a class="toc-dot" href="#choose"    data-target="choose"><span class="d" style="background:#7dd3fc"></span><span class="lbl">When to use which</span></a>
+  <a class="toc-dot" href="#takeaways" data-target="takeaways"><span class="d" style="background:var(--good)"></span><span class="lbl">Summary</span></a>
+  <a class="toc-dot" href="#glossary"  data-target="glossary"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Glossary</span></a>
+</aside>
+
+<button id="to-top" aria-label="Back to top" title="Back to top">&uarr;</button>
+
+<!-- ============================================================
+     SECTION 0 — THE CONFUSION
+     ============================================================ -->
+<section id="concept">
+  <div class="container">
+    <h2>Three answers to three different questions</h2>
+    <p class="lede">
+      "Should I build this as a tool, an MCP server, or a skill?" is one of the most common questions
+      in agent engineering &mdash; and it is slightly malformed, because the three are not alternatives.
+      They sit at <b>different layers</b>. The cleanest way to tell them apart is to notice that each
+      one answers a <i>different</i> question.
+    </p>
+
+    <div class="owns-grid">
+      <div class="owns tool">
+        <h4>Tools answer: <i>what can the agent do?</i></h4>
+        <ul>
+          <li>A <b>tool</b> (a.k.a. function call) is a single capability the model can invoke &mdash; a name, a description, and a JSON-Schema for its inputs.</li>
+          <li>The model never runs it. It <b>emits a structured request</b>; your code or the provider executes it.</li>
+          <li>The unit of <b>action</b>.</li>
+        </ul>
+      </div>
+      <div class="owns mcp">
+        <h4>MCP answers: <i>how do capabilities get connected?</i></h4>
+        <ul>
+          <li><b>MCP</b> is an open protocol &mdash; a wire format and lifecycle &mdash; for an application to discover and call tools (and resources and prompts) exposed by an external server.</li>
+          <li>It is infrastructure, not a capability: "a standardized way to connect AI applications to external systems."</li>
+          <li>The unit of <b>integration</b>.</li>
+        </ul>
+      </div>
+      <div class="owns skill">
+        <h4>Skills answer: <i>how should the agent do this well?</i></h4>
+        <ul>
+          <li>An <b>Agent Skill</b> is a folder of instructions, scripts, and resources the agent loads on demand to perform a specific task expertly.</li>
+          <li>It is procedural know-how &mdash; "like putting together an onboarding guide for a new hire."</li>
+          <li>The unit of <b>know-how</b>.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="snip-src">
+      Sources, in order: tools &mdash; <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">platform.claude.com · How tool use works</a>
+      (&ldquo;The model never executes anything on its own. It emits a structured request, your code (or Anthropic's servers) runs the operation&rdquo;).
+      MCP &mdash; <a href="https://modelcontextprotocol.io/docs/getting-started/intro">modelcontextprotocol.io · Introduction</a>
+      (&ldquo;MCP is an open-source standard for connecting AI applications to external systems&rdquo;).
+      Skills &mdash; <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com · Equipping agents for the real world with Agent Skills</a>
+      (&ldquo;Building a skill for an agent is like putting together an onboarding guide for a new hire&rdquo;).
+    </p>
+
+    <div class="note-box">
+      <b>The one-sentence boundary.</b> A <span style="color:#93c5fd">tool</span> is a capability the
+      model can call; <span style="color:#fcd34d">MCP</span> is a standard way to deliver tools to the
+      model from outside your codebase; an <span style="color:#c4b5fd">Agent Skill</span> is packaged
+      knowledge that teaches the model how to use those capabilities to accomplish a real task. You will
+      very often use all three at once.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 1 — THE BOUNDARY
+     ============================================================ -->
+<section id="boundary">
+  <div class="container">
+    <h2>1 · The boundary, drawn once</h2>
+    <p class="lede">
+      Picture the running agent as three concentric concerns. At the center is <b>execution</b> &mdash;
+      the model emitting a call and something running it (tools). Around that is <b>connection</b> &mdash;
+      how external capabilities reach the model in the first place (MCP is one standardized option).
+      Wrapping both is <b>direction</b> &mdash; the procedural knowledge that decides which capabilities
+      to use, in what order, to finish a real task (skills). Each layer is independent: you can have
+      tools with no MCP and no skills, MCP with no skills, or a skill that orchestrates tools delivered
+      over MCP.
+    </p>
+
+    <div class="diagram-card">
+      <div class="svg-wrap">
+<svg viewBox="0 0 900 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The boundary between tools, MCP, and skills">
+  <defs>
+    <marker id="ar-tool" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#60a5fa"/></marker>
+    <marker id="ar-mcp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#f59e0b"/></marker>
+  </defs>
+
+  <!-- SKILL outer band -->
+  <rect x="20" y="20" width="860" height="390" rx="18" fill="rgba(167,139,250,0.07)" stroke="#a78bfa" stroke-dasharray="5 6"/>
+  <text x="40" y="46" fill="#c4b5fd" font-size="13" font-weight="700">SKILL — direction: procedural know-how, loaded on demand</text>
+  <text x="40" y="64" fill="#9aa6bd" font-size="11">instructions + scripts + resources · &ldquo;how to do this task well&rdquo;</text>
+
+  <!-- MCP middle band -->
+  <rect x="70" y="86" width="760" height="296" rx="16" fill="rgba(245,158,11,0.07)" stroke="#f59e0b" stroke-dasharray="5 6"/>
+  <text x="90" y="112" fill="#fcd34d" font-size="13" font-weight="700">MCP — connection: a standard way to deliver capabilities</text>
+  <text x="90" y="130" fill="#9aa6bd" font-size="11">host ↔ client ↔ server · tools, resources, prompts over JSON-RPC</text>
+
+  <!-- TOOL core -->
+  <rect x="150" y="156" width="600" height="200" rx="14" fill="rgba(96,165,250,0.10)" stroke="#60a5fa"/>
+  <text x="170" y="182" fill="#93c5fd" font-size="13" font-weight="700">TOOL — execution: one capability the model can call</text>
+
+  <!-- The exchange inside the tool core -->
+  <rect x="180" y="206" width="230" height="44" rx="9" fill="#0a2540" stroke="#3a8aff"/>
+  <text x="295" y="226" text-anchor="middle" fill="#cfe1ff" font-size="12">Model emits a structured call</text>
+  <text x="295" y="242" text-anchor="middle" fill="#9ec5ff" font-size="10.5">name + JSON arguments</text>
+
+  <rect x="490" y="206" width="230" height="44" rx="9" fill="#03241f" stroke="#34d399"/>
+  <text x="605" y="226" text-anchor="middle" fill="#bbf7d0" font-size="12">Your code / server executes</text>
+  <text x="605" y="242" text-anchor="middle" fill="#a7f3d0" font-size="10.5">runs the real function, returns result</text>
+
+  <path d="M410,222 L488,222" stroke="#60a5fa" stroke-width="2" fill="none" marker-end="url(#ar-tool)"/>
+  <path d="M488,236 L412,236" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#ar-tool)" class="flow-line"/>
+
+  <text x="450" y="292" text-anchor="middle" fill="#9aa6bd" font-size="11.5">The model only ever <tspan fill="#cfe1ff" font-style="italic">asks</tspan>. The execution happens outside the model.</text>
+  <text x="450" y="332" text-anchor="middle" fill="#9aa6bd" font-size="11">A tool can be defined in-process, or delivered over MCP, or invoked from inside a skill's instructions.</text>
+</svg>
+      </div>
+      <div class="caption">Figure 1 · Three layers, not three rivals. Tools are the execution primitive; MCP is one standardized way to connect tools (and other context) to the model; skills are the procedural knowledge that drives which capabilities get used. Inner layers can exist without the outer ones.</div>
+    </div>
+
+    <div class="note-box">
+      <b>Why people confuse them.</b> All three end up &ldquo;giving the agent new abilities,&rdquo; so
+      they feel like substitutes. But they add abilities at different layers: a tool adds <i>one</i>
+      callable function; MCP adds a <i>connection</i> through which many tools (and resources and prompts)
+      arrive; a skill adds <i>knowledge</i> about how to combine functions into a reliable workflow.
+      Confusing them leads to predictable mistakes &mdash; e.g. packing step-by-step instructions into a
+      tool description, or setting up an MCP server when a folder of instructions would do.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 2 — TOOLS
+     ============================================================ -->
+<section id="tools">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--tool)">T</div>
+        <div>
+          <h3>Tools <span class="endpoint-pill" style="color:var(--tool)">function calling · the unit of action</span></h3>
+          <div class="sub">A single capability the model can request. The model decides <i>when</i>; your code decides <i>whether and how</i> to run it.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+        <p>
+          A language model can only read and emit tokens; it cannot query a database or send an email.
+          A <b>tool</b> is the convention by which the model emits a structured request to run a named
+          function with named arguments &mdash; and the application, not the model, runs it. As Anthropic
+          puts it, <span style="color:#cfe1ff">&ldquo;Tool use is a contract between your application and the model&hellip; The model never
+          executes anything on its own. It emits a structured request, your code (or Anthropic's servers)
+          runs the operation, and the result flows back into the conversation.&rdquo;</span> Google states the same
+          plainly: &ldquo;The Model doesn't execute the function itself. It's your application's
+          responsibility.&rdquo;
+        </p>
+        <p class="snip-src">
+          Sources: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">platform.claude.com · How tool use works</a>
+          · <a href="https://platform.openai.com/docs/guides/function-calling">platform.openai.com · Function calling</a>
+          · <a href="https://ai.google.dev/gemini-api/docs/function-calling">ai.google.dev · Function calling</a>.
+        </p>
+
+        <span class="step-label r1">1 · Declare</span>
+        <p>A tool is defined by three things: a <code>name</code>, a natural-language <code>description</code>, and a JSON-Schema for its inputs (Anthropic calls the field <code>input_schema</code>; OpenAI and Google call it <code>parameters</code>). All three major providers converge on exactly this primitive.</p>
+        <pre><code>{
+  "name": "get_weather",
+  "description": "Get the current weather in a given location",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "location": { "type": "string", "description": "City and state, e.g. San Francisco, CA" }
+    },
+    "required": ["location"]
+  }
+}</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools">platform.claude.com · Tool use · Define tools</a> (<code>name</code> / <code>description</code> / <code>input_schema</code>). OpenAI and Gemini use <code>parameters</code> for the same JSON-Schema role.</div>
+
+        <span class="step-label r2">2 · The model emits a call</span>
+        <p>When the model decides a tool is needed, it returns a structured call &mdash; a tool name plus JSON arguments. Anthropic signals this with <code>stop_reason: "tool_use"</code>; OpenAI returns the call(s) in a <code>tool_calls</code> array on the assistant message. It does <b>not</b> run anything.</p>
+
+        <span class="step-label r3">3 · Execute and return</span>
+        <p>Your application parses the arguments, runs the real function, and sends the result back as a new message; the model then continues or calls another tool. Anthropic's documented loop: send <code>tools</code> + message → model returns <code>tool_use</code> → execute and format <code>tool_result</code> → send back → repeat while <code>stop_reason</code> is <code>"tool_use"</code>.</p>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">platform.claude.com · How tool use works · The agentic loop</a> · <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI · The tool calling flow</a>.</div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>Who executes</h5><p>Anthropic splits tools into <b>client tools</b> (you run them) and <b>server tools</b> like <code>web_search</code>, <code>web_fetch</code>, and <code>code_execution</code> (Anthropic runs them). OpenAI similarly has function tools vs. built-in tools.</p></div>
+          <div class="nb"><h5>Context cost</h5><p>Every tool definition is injected into a special system prompt and <b>consumes input tokens on each request</b> &mdash; names, descriptions, and schemas all count. Both Anthropic and OpenAI provide &ldquo;tool search&rdquo; to defer rarely used tools precisely because definitions sit in context.</p></div>
+          <div class="nb"><h5>Scope</h5><p>One tool = one capability. Tools don't carry multi-step procedure; a long workflow encoded in a tool description is a warning sign. That's what skills are for.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">Client vs server tools</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview">Tool-use pricing &amp; token table</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool">Tool search tool</a> (Anthropic &mdash; defer-loading tool definitions) · <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI · Function calling</a> (pairing with tool search) · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool">Code execution tool</a>.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 3 — MCP
+     ============================================================ -->
+<section id="mcp">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--mcp)">M</div>
+        <div>
+          <h3>Model Context Protocol <span class="endpoint-pill" style="color:var(--mcp)">the unit of integration</span></h3>
+          <div class="sub">An open protocol that standardizes how an application connects a model to external tools, data, and prompts.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+        <p>
+          MCP is <span style="color:#cfe1ff">&ldquo;an open-source standard for connecting AI applications to external systems.&rdquo;</span>
+          Its own analogy: <span style="color:#cfe1ff">&ldquo;Think of MCP like a USB-C port for AI applications. Just as USB-C provides a
+          standardized way to connect electronic devices, MCP provides a standardized way to connect AI
+          applications to external systems.&rdquo;</span> Crucially, MCP is <i>not</i> a capability &mdash; it is the
+          connective layer that carries capabilities. The spec is explicit that it &ldquo;focuses solely on the protocol
+          for context exchange&mdash;it does not dictate how AI applications use LLMs or manage the provided
+          context.&rdquo;
+        </p>
+        <p class="snip-src">
+          Sources: <a href="https://modelcontextprotocol.io/docs/getting-started/intro">modelcontextprotocol.io · Introduction</a> (definition + USB-C analogy)
+          · <a href="https://modelcontextprotocol.io/docs/learn/architecture">modelcontextprotocol.io · Architecture</a> (&ldquo;focuses solely on the protocol for context exchange&rdquo;)
+          · <a href="https://www.anthropic.com/news/model-context-protocol">anthropic.com · Introducing the Model Context Protocol</a>.
+        </p>
+
+        <span class="step-label r1">Architecture · host / client / server</span>
+        <p>MCP follows a <b>client-host-server</b> architecture. The <b>host</b> is the AI application coordinating everything; it creates one <b>client</b> per server, each holding a 1:1 stateful session; each <b>server</b> exposes capabilities. Servers can be local subprocesses or remote services.</p>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">modelcontextprotocol.io · Specification (2025-11-25) · Architecture</a> · <a href="https://modelcontextprotocol.io/docs/learn/architecture">Concepts · Architecture</a> (host/client/server definitions).</div>
+
+        <span class="step-label r2">What a server exposes · three primitives</span>
+        <p>An MCP server can offer three things, distinguished by who controls them:</p>
+        <pre><code><span class="cm">// Server primitives (modelcontextprotocol.io)</span>
+"tools":     Functions for the AI model to execute     <span class="cm">// model-controlled</span>
+"resources": Context and data for the user or model    <span class="cm">// application-controlled</span>
+"prompts":   Templated messages and workflows          <span class="cm">// user-controlled</span></code></pre>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25">modelcontextprotocol.io · Specification (2025-11-25) overview</a> (Tools / Resources / Prompts one-line definitions) · <a href="https://modelcontextprotocol.io/docs/learn/server-concepts">Concepts · Server concepts</a> (the model- / application- / user-controlled labels).</div>
+
+        <p>Note the nesting that often causes confusion: <b>a &ldquo;tool&rdquo; is one of MCP's primitives.</b> An MCP server is, among other things, a delivery mechanism for tools. MCP didn't replace tools; it standardized how they (and resources and prompts) are discovered and called.</p>
+
+        <span class="step-label r3">Mechanics · JSON-RPC, lifecycle, transports</span>
+        <p>Messages are <b>JSON-RPC 2.0</b>. A session opens with an <code>initialize</code> handshake that negotiates capabilities, then uses methods like <code>tools/list</code> and <code>tools/call</code> (and <code>resources/list</code>, <code>prompts/list</code>). Two standard transports are defined: <b>stdio</b> (server as a subprocess) and <b>Streamable HTTP</b> (which replaced the older HTTP+SSE transport). Authorization is optional, but when used over HTTP transports the spec defines an OAuth 2.1 model.</p>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle">Spec · Lifecycle</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">Spec · Transports</a> (stdio + Streamable HTTP; &ldquo;replaces the HTTP+SSE transport&rdquo;) · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">Spec · Authorization (OAuth 2.1)</a>.</div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>What it standardizes</h5><p>&ldquo;MCP standardizes how to integrate additional context and tools into the ecosystem of AI applications&rdquo; &mdash; explicitly inspired by the Language Server Protocol. Build a server once, use it across many MCP-compatible hosts.</p></div>
+          <div class="nb"><h5>Latest revision</h5><p>The spec is date-versioned; the current revision is <b>2025-11-25</b> (succeeding 2025-06-18). The version string travels in the <code>initialize</code> handshake and the <code>MCP-Protocol-Version</code> header.</p></div>
+          <div class="nb"><h5>Also from the client</h5><p>Beyond the three server primitives, clients can offer features back to servers: <b>sampling</b>, <b>roots</b>, and <b>elicitation</b>.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://modelcontextprotocol.io/specification/2025-11-25">Spec overview (LSP analogy, latest version)</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">Architecture (client features)</a>.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 4 — SKILLS
+     ============================================================ -->
+<section id="skills">
+  <div class="container">
+    <div class="prov-card">
+      <div class="prov-head">
+        <div class="prov-badge" style="background: var(--skill)">S</div>
+        <div>
+          <h3>Agent Skills <span class="endpoint-pill" style="color:var(--skill)">the unit of know-how</span></h3>
+          <div class="sub">A folder of instructions, scripts, and resources the agent loads on demand to become a specialist at a task.</div>
+        </div>
+      </div>
+      <div class="prov-body">
+        <p>
+          <span style="color:#cfe1ff">&ldquo;Agent Skills are modular capabilities that extend Claude's functionality. Each Skill packages
+          instructions, metadata, and optional resources (scripts, templates) that Claude uses
+          automatically when relevant.&rdquo;</span> Where a tool is one callable function and MCP is the connection, a skill
+          is <i>procedural knowledge</i>: the workflows, context, and best practices that &ldquo;transform
+          general-purpose agents into specialists.&rdquo; Anthropic's mental model is an onboarding guide for a
+          new hire &mdash; you're not giving the agent a new hand, you're teaching it how to do the job.
+        </p>
+        <p class="snip-src">
+          Sources: <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">platform.claude.com · Agent Skills · Overview</a>
+          · <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com · Equipping agents for the real world with Agent Skills</a>
+          · <a href="https://www.anthropic.com/news/skills">anthropic.com · Introducing Agent Skills</a>.
+        </p>
+
+        <span class="step-label r1">Structure · a SKILL.md and its bundle</span>
+        <p>At its simplest, a skill is a directory containing a <code>SKILL.md</code> file that must begin with YAML frontmatter carrying two required fields, <code>name</code> and <code>description</code>, followed by the instructions. It can bundle additional markdown, reference files, and executable scripts.</p>
+        <pre><code>pdf-skill/
+├── SKILL.md          <span class="cm"># required: frontmatter + instructions</span>
+├── FORMS.md          <span class="cm"># additional instructions, loaded as needed</span>
+├── REFERENCE.md      <span class="cm"># detailed reference, loaded as needed</span>
+└── scripts/
+    └── fill_form.py  <span class="cm"># run via bash; code never enters context</span>
+
+<span class="cm"># SKILL.md frontmatter:</span>
+---
+name: pdf-processing
+description: Extract text and tables from PDF files, fill forms, merge documents.
+  Use when working with PDF files or when the user mentions PDFs or forms.
+---</code></pre>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">platform.claude.com · Agent Skills · Overview</a> (folder layout + frontmatter) · <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com (&ldquo;a skill is a directory that contains a SKILL.md file&hellip; required metadata: name and description&rdquo;)</a>.</div>
+
+        <span class="step-label r2">The core trick · progressive disclosure</span>
+        <p>Skills stay cheap because the agent loads them in stages &mdash; &ldquo;progressive disclosure: Claude loads information in stages as needed, rather than consuming context upfront.&rdquo; The documented three levels:</p>
+        <div class="table-wrap" style="margin-top:6px;">
+          <table style="min-width:0;">
+            <thead><tr><th>Level</th><th>When loaded</th><th>Token cost</th><th>Content</th></tr></thead>
+            <tbody>
+              <tr><td class="row-hd">1 · Metadata</td><td>Always, at startup</td><td>~100 tokens / skill</td><td><code>name</code> + <code>description</code> from frontmatter</td></tr>
+              <tr><td class="row-hd">2 · Instructions</td><td>When the skill is triggered</td><td>Under 5k tokens</td><td>The SKILL.md body</td></tr>
+              <tr><td class="row-hd">3+ · Resources</td><td>As needed</td><td>Effectively unlimited</td><td>Bundled files &amp; scripts (run via bash, not loaded into context)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">platform.claude.com · Agent Skills · Overview</a> (progressive-disclosure table, verbatim) · <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com (the three levels, in Anthropic's words)</a>.</div>
+
+        <span class="step-label r3">Code, not just prose</span>
+        <p>A skill can include code for the agent to execute as a tool at its discretion. When a bundled script runs, &ldquo;the script's code never loads into the context window. Only the script's output&hellip; consumes tokens.&rdquo; This provides determinism &mdash; sorting a list with a real sorting algorithm beats generating it token by token &mdash; which is why skills run inside a code-execution environment.</p>
+        <div class="snip-src">Source: <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">platform.claude.com · Agent Skills · Overview</a> (scripts run via bash; output-only cost) · <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com (&ldquo;Skills can also include code for Claude to execute as tools&rdquo;)</a>.</div>
+
+        <div class="prov-notes">
+          <div class="nb"><h5>Where they run</h5><p>Supported across Claude.ai, Claude Code, the Claude Agent SDK, and the Claude Developer Platform. On the API, a skill is referenced by <code>skill_id</code> in the <code>container</code> alongside the code execution tool.</p></div>
+          <div class="nb"><h5>Built on code execution</h5><p>On the Claude API, &ldquo;Skills run in a code execution environment where Claude has filesystem access, bash commands, and code execution capabilities&rdquo; &mdash; the code execution tool is the foundation. Across other surfaces (Claude Code, the Agent SDK), skills rely on filesystem access plus that surface's own execution/runtime model.</p></div>
+          <div class="nb"><h5>Composable</h5><p>&ldquo;Skills stack together. Claude automatically identifies which skills are needed and coordinates their use.&rdquo; An open cross-platform standard was published in Dec 2025.</p></div>
+        </div>
+        <div class="src">Source · <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Surfaces (&ldquo;supported today across Claude.ai, Claude Code, the Claude Agent SDK, and the Claude Developer Platform&rdquo;)</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/skills-guide">API skills guide (container + skill_id)</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool">Code execution tool (&ldquo;enables Claude to use Agent Skills&rdquo;)</a>.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 5 — THE STACK
+     ============================================================ -->
+<section id="compose">
+  <div class="container">
+    <h2>5 · How they compose into one stack</h2>
+    <p class="lede">
+      Because they live at different layers, the interesting configuration is all three together. Anthropic
+      is explicit that skills and MCP are complementary &mdash; skills &ldquo;complement Model Context Protocol
+      (MCP) servers by teaching agents more complex workflows that involve external tools and software.&rdquo;
+      A skill supplies the procedure; MCP supplies the connection to outside systems; tools are the calls
+      that actually do the work; and each call executes wherever it lives &mdash; in your process (client
+      tools), in Anthropic's infrastructure (server tools), in an MCP server, or, for a skill's bundled
+      scripts, in a code-execution sandbox. There is no single runtime beneath all of it.
+    </p>
+
+    <div class="diagram-card">
+      <div class="svg-wrap">
+<svg viewBox="0 0 900 424" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="How skills, MCP, and tools stack">
+  <defs>
+    <marker id="s-down" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#9aa6bd"/></marker>
+  </defs>
+
+  <!-- Layer 4: Skill -->
+  <rect x="120" y="24" width="660" height="64" rx="12" fill="rgba(167,139,250,0.12)" stroke="#a78bfa"/>
+  <text x="140" y="50" fill="#c4b5fd" font-size="14" font-weight="700">SKILL · the procedure</text>
+  <text x="140" y="72" fill="#cbd5ee" font-size="11.5">&ldquo;To process this invoice: extract fields, validate totals, then file it.&rdquo; — loaded on demand</text>
+
+  <!-- Layer 3: Tools -->
+  <rect x="120" y="128" width="660" height="64" rx="12" fill="rgba(96,165,250,0.12)" stroke="#60a5fa"/>
+  <text x="140" y="154" fill="#93c5fd" font-size="14" font-weight="700">TOOLS · the callable capabilities</text>
+  <text x="140" y="176" fill="#cbd5ee" font-size="11.5">extract_pdf_fields() · validate_totals() · file_to_accounting() — model emits calls; code runs them</text>
+
+  <!-- Layer 2: MCP -->
+  <rect x="120" y="232" width="660" height="64" rx="12" fill="rgba(245,158,11,0.12)" stroke="#f59e0b"/>
+  <text x="140" y="258" fill="#fcd34d" font-size="14" font-weight="700">MCP · the connection (when a tool lives outside your process)</text>
+  <text x="140" y="280" fill="#cbd5ee" font-size="11.5">the accounting system exposes file_to_accounting() as an MCP server · discovered via tools/list, invoked via tools/call</text>
+
+  <!-- Layer 1: code execution / runtime -->
+  <rect x="120" y="336" width="660" height="64" rx="12" fill="rgba(52,211,153,0.10)" stroke="#34d399"/>
+  <text x="140" y="362" fill="#6ee7b7" font-size="14" font-weight="700">RUNTIME · the agent loop (+ code execution for skill scripts)</text>
+  <text x="140" y="384" fill="#cbd5ee" font-size="11.5">drives the request/execute/return loop; a skill's bundled scripts run in a code-execution sandbox</text>
+
+  <!-- connectors -->
+  <line x1="450" y1="92" x2="450" y2="128" stroke="#9aa6bd" stroke-width="1.5" marker-end="url(#s-down)"/>
+  <line x1="450" y1="196" x2="450" y2="232" stroke="#9aa6bd" stroke-width="1.5" marker-end="url(#s-down)"/>
+  <line x1="450" y1="300" x2="450" y2="336" stroke="#9aa6bd" stroke-width="1.5" marker-end="url(#s-down)"/>
+</svg>
+      </div>
+      <div class="caption">Figure 2 · One worked stack. A skill encodes the workflow; the steps it describes are tool calls; some of those tools are local and some arrive over MCP (and run in their own server). The agent runtime drives the loop, and the skill's own bundled scripts run in a code-execution sandbox. Each layer is optional — but they slot together cleanly.</div>
+
+      <ol class="legend-list">
+        <li><span class="num">1</span><div><b>Tools are the base layer of capability</b><p>Every concrete action &mdash; whether defined in-process, delivered by an MCP server, or bundled inside a skill &mdash; ultimately surfaces to the model as something it can call. The model emits the call; something else executes it.</p></div></li>
+        <li><span class="num">2</span><div><b>MCP is one delivery channel for those tools</b><p>When a capability lives outside your codebase (a SaaS system, a shared internal service), MCP is the standardized way to expose and call it &mdash; without it, you'd hand-write a custom integration. A locally defined tool needs no MCP at all.</p></div></li>
+        <li><span class="num">3</span><div><b>Skills supply the procedure on top</b><p>A skill's instructions tell the model <i>which</i> tools to call and in what order, plus the domain rules and edge cases. Skills can rely on MCP-provided tools and bundle their own scripts; in Claude Code a skill's SKILL.md can even be provided by an MCP server.</p></div></li>
+        <li><span class="num">4</span><div><b>Execution happens wherever each piece lives</b><p>There is no single runtime beneath everything. Client tools run in your process, Anthropic server tools (web search, code execution) in Anthropic's infrastructure, MCP tools in the MCP server, and a skill's bundled scripts in a code-execution sandbox (or, in Claude Code, on the local machine). The code-execution tool is itself a server-side tool &mdash; useful for the deterministic steps a skill runs as code, like <code>fill_form.py</code>.</p></div></li>
+      </ol>
+      <p class="snip-src">
+        Sources: <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com (&ldquo;how Skills can complement Model Context Protocol (MCP) servers&rdquo;)</a>
+        · <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Agent Skills Overview (skills run in a code-execution environment)</a>
+        · <a href="https://code.claude.com/docs/en/skills">code.claude.com · Skills (a skill's SKILL.md can be &ldquo;provided by an MCP server&rdquo;)</a>
+        · <a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">MCP · Server tools (tools/call)</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 6 — SIDE BY SIDE
+     ============================================================ -->
+<section id="compare">
+  <div class="container">
+    <h2>6 · Side-by-side</h2>
+    <p class="lede">
+      The same distinctions, in one view. Read across a row to see how the three layers differ on the
+      dimension that usually decides which one you actually need.
+    </p>
+    <div class="table-wrap" id="cmpScroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th class="c-tool">Tool (function call)</th>
+            <th class="c-mcp">MCP</th>
+            <th class="c-skill">Agent Skill</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-hd">What it is</td>
+            <td>One callable function exposed to the model</td>
+            <td>An open protocol for connecting models to external capabilities</td>
+            <td>A folder of instructions + scripts + resources</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Unit of</td>
+            <td>Action</td>
+            <td>Integration</td>
+            <td>Know-how</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Answers</td>
+            <td>What <i>can</i> the agent do?</td>
+            <td>How do capabilities <i>get connected</i>?</td>
+            <td>How <i>should</i> the agent do this task?</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Who executes</td>
+            <td>Your code (client tool) or the provider (server tool) — never the model</td>
+            <td>The MCP server handles the call — and may itself delegate to the external systems it fronts</td>
+            <td>The model follows the instructions; any bundled scripts run in the relevant runtime (a code-execution sandbox on the API, the local machine in Claude Code)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Form / spec</td>
+            <td><code>name</code> + <code>description</code> + JSON-Schema (<code>input_schema</code> / <code>parameters</code>)</td>
+            <td>JSON-RPC 2.0; <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>; stdio or Streamable HTTP</td>
+            <td><code>SKILL.md</code> with YAML frontmatter (<code>name</code>, <code>description</code>) + bundled files</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Where it lives</td>
+            <td>In your process, or behind a provider/MCP server</td>
+            <td>A local subprocess or a remote HTTP service</td>
+            <td>The filesystem (uploaded via API, or in <code>.claude/skills/</code>)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Context cost</td>
+            <td>Definition sits in context every request (names, descriptions, schemas)</td>
+            <td>Hosts typically surface the server's tools to the model as callable tool definitions once connected</td>
+            <td>~100 tokens until triggered (progressive disclosure); body &amp; files load on demand</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Standardization scope</td>
+            <td>Per-provider JSON shapes (similar but not wire-compatible)</td>
+            <td>Cross-vendor wire standard — &ldquo;build once, integrate everywhere&rdquo;</td>
+            <td>Anthropic format; published as an open cross-platform standard (Dec 2025)</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Analogy</td>
+            <td>A function / API endpoint</td>
+            <td>A USB-C port (or LSP for AI apps)</td>
+            <td>An onboarding guide / runbook for a new hire</td>
+          </tr>
+          <tr>
+            <td class="row-hd">Primary source</td>
+            <td><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">how-tool-use-works</a></td>
+            <td><a href="https://modelcontextprotocol.io/docs/getting-started/intro">modelcontextprotocol.io</a></td>
+            <td><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">agent-skills/overview</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="hscroll" id="cmpScrollbar"><div class="hscroll-thumb"></div></div>
+    <p class="snip-src">
+      Every cell above is drawn from the sources cited in the preceding sections. The comparison is
+      deliberately layer-by-layer: the three are most useful read as a stack, not as a menu of
+      mutually exclusive options.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 7 — WHEN TO USE WHICH
+     ============================================================ -->
+<section id="choose">
+  <div class="container">
+    <h2>7 · When to reach for which</h2>
+    <p class="lede">
+      Because they're layers, the real question is rarely &ldquo;which one&rdquo; but &ldquo;which one
+      <i>first</i>.&rdquo; A practical way to decide, starting from the symptom you're trying to fix.
+    </p>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag" style="background:rgba(96,165,250,.14); color:#93c5fd">Build a tool when</span>
+        <h4>The agent needs to <i>do</i> a discrete thing</h4>
+        <p>There's a specific action or lookup &mdash; query this DB, call that API, send this message &mdash; that the model should be able to invoke. Keep the description concise; one tool, one capability. If the action already lives in your process, a plain tool with no MCP is the simplest correct answer.</p>
+      </div>
+      <div class="ta">
+        <span class="tag" style="background:rgba(245,158,11,.14); color:#fcd34d">Reach for MCP when</span>
+        <h4>The capability lives <i>outside</i> your codebase &mdash; or you want reuse</h4>
+        <p>You're integrating an external or third-party system, or you want one integration to work across many agents and hosts without rewriting it each time. MCP turns &ldquo;a custom connector per app&rdquo; into &ldquo;one server many clients can speak to.&rdquo; If it's purely an in-process function, you don't need MCP.</p>
+      </div>
+      <div class="ta">
+        <span class="tag" style="background:rgba(167,139,250,.14); color:#c4b5fd">Write a skill when</span>
+        <h4>The agent <i>has</i> the tools but doesn't use them <i>well</i></h4>
+        <p>The capabilities exist, yet the agent needs domain procedure: the right sequence, the edge cases, the team's own conventions, the validation steps. Package that as a skill so the knowledge loads only when relevant &mdash; and bundle a script when a step should be deterministic rather than improvised.</p>
+      </div>
+    </div>
+
+    <div class="note-box" style="margin-top:22px;">
+      <b>Two anti-patterns the boundary exposes.</b> (1) <i>A workflow stuffed into a tool description</i> &mdash;
+      multi-step procedure belongs in a skill, not in a function's <code>description</code>, which is paid for
+      in tokens on every request. (2) <i>An MCP server for purely local logic</i> &mdash; if the code runs in
+      your own process and isn't meant to be shared across hosts, a direct tool is simpler than setting up
+      a protocol server. Match the layer to the problem.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 8 — SUMMARY
+     ============================================================ -->
+<section id="takeaways">
+  <div class="container">
+    <h2>Summary</h2>
+    <div class="takeaways">
+      <div class="ta">
+        <span class="tag">Different layers</span>
+        <h4>Not three rivals</h4>
+        <p>Tools are the unit of action, MCP the unit of integration, skills the unit of know-how. They answer different questions and most real agents use all three at once.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">The model only asks</span>
+        <h4>Execution is always outside the model</h4>
+        <p>Whatever the layer, the model emits a structured request; your code, a server, or the sandbox executes it. That invariant is what makes the layers stack cleanly.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">A tool is an MCP primitive</span>
+        <h4>MCP didn't replace tools</h4>
+        <p>&ldquo;Tool&rdquo; is one of MCP's three server primitives. MCP standardized how tools (and resources and prompts) are discovered and called &mdash; it's a delivery channel, not a competitor.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">Knowledge, loaded lazily</span>
+        <h4>Skills add procedure, cheaply</h4>
+        <p>Progressive disclosure keeps a skill near-free (~100 tokens) until it's relevant. Skills teach the agent how to use the capabilities it already has &mdash; and can run deterministic code.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">Complementary by design</span>
+        <h4>Skills + MCP + tools compose</h4>
+        <p>Anthropic states skills &ldquo;complement MCP servers.&rdquo; A skill encodes the workflow, MCP connects the external capabilities, tools are the calls, code execution is the floor.</p>
+      </div>
+      <div class="ta">
+        <span class="tag">Match layer to symptom</span>
+        <h4>Pick by the problem</h4>
+        <p>Need a discrete action → tool. Need to connect or reuse an external system → MCP. Have the tools but want them used expertly → skill.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     GLOSSARY
+     ============================================================ -->
+<section id="glossary">
+  <div class="container">
+    <h2>Glossary</h2>
+    <div class="gloss">
+      <div><b>Tool / function call</b> — A capability declared to the model (name, description, JSON-Schema). The model emits a call; the application or provider executes it.</div>
+      <div><b>Client tool vs server tool</b> — Client tools are executed by your code; server tools (e.g. web search, code execution) are executed by the provider.</div>
+      <div><b>input_schema / parameters</b> — The JSON-Schema describing a tool's arguments. Anthropic uses <code>input_schema</code>; OpenAI and Google use <code>parameters</code>.</div>
+      <div><b>stop_reason: tool_use</b> — Anthropic's signal that the model is pausing to wait for a tool result before continuing. OpenAI instead returns the requested call(s) in a <code>tool_calls</code> array on the assistant message.</div>
+      <div><b>MCP</b> — Model Context Protocol: an open standard for connecting AI applications to external systems via servers.</div>
+      <div><b>MCP host / client / server</b> — The host is the AI app; it creates one client per server (1:1 session); each server exposes capabilities.</div>
+      <div><b>MCP primitives</b> — What a server exposes: <i>tools</i> (model-controlled), <i>resources</i> (app-controlled), <i>prompts</i> (user-controlled).</div>
+      <div><b>JSON-RPC 2.0</b> — The message format MCP uses on the wire, with methods like <code>tools/list</code> and <code>tools/call</code>.</div>
+      <div><b>Transports (MCP)</b> — stdio (server as subprocess) and Streamable HTTP (which replaced HTTP+SSE).</div>
+      <div><b>Agent Skill</b> — A folder packaging instructions, scripts, and resources the agent loads on demand to specialize at a task.</div>
+      <div><b>SKILL.md</b> — A skill's entry file: YAML frontmatter (required <code>name</code> and <code>description</code>) plus instructions.</div>
+      <div><b>Progressive disclosure</b> — The three-level loading model that keeps skills cheap: metadata always, instructions when triggered, resources as needed.</div>
+      <div><b>Code execution tool</b> — A provider-run sandbox (Python/bash) that skills run inside; lets the agent run deterministic code instead of generating it.</div>
+      <div><b>Capability negotiation</b> — The MCP <code>initialize</code> handshake where client and server declare which features they support.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Compiled from the official documentation of Anthropic, the Model Context Protocol specification,
+    OpenAI, and Google. Companion papers:
+    <a href="/whitepapers/agent-skills-explained.html">Agent Skills, From the Ground Up</a> and
+    <a href="/whitepapers/mcp-explained.html">Model Context Protocol — How It Works</a>.
+    <p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+  </div>
+</footer>
+
+<script>
+  // Smooth-scroll for header pills AND the left rail
+  document.querySelectorAll('a.pill, #toc-rail .toc-dot').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+
+  // Scroll-spy: highlight the rail item for the section currently in view
+  const railLinks = Array.from(document.querySelectorAll('#toc-rail .toc-dot'));
+  const sections = railLinks
+    .map(a => document.getElementById(a.dataset.target))
+    .filter(Boolean);
+
+  function syncRail() {
+    if (!sections.length) return;
+    const probe = window.scrollY + window.innerHeight * 0.30;
+    let current = sections[0];
+    for (const s of sections) {
+      if (s.offsetTop <= probe) current = s;
+    }
+    railLinks.forEach(a => a.classList.toggle('active', a.dataset.target === current.id));
+  }
+
+  // Back-to-top button
+  const toTop = document.getElementById('to-top');
+  function syncTop() {
+    if (toTop) toTop.classList.toggle('show', window.scrollY > 600);
+  }
+  if (toTop) {
+    toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  }
+
+  // Keep the rail from overlapping content when the page is zoomed/magnified
+  // or the window is narrow. Measures the real left margin at the current zoom.
+  const railEl = document.getElementById('toc-rail');
+  const measureContainer = document.querySelector('section .container');
+  function fitRail() {
+    if (!railEl || !measureContainer) return;
+    if (railEl.matches(':hover')) return; // don't reflow while the user is using it
+    const contentEdge = measureContainer.getBoundingClientRect().left + 24; // text start (24px container padding)
+    railEl.classList.remove('rail-hidden', 'no-active-label');
+    // 1) Does a collapsed dot pill fit in the left margin at all?
+    const collapsed = railEl.querySelector('.toc-dot:not(.active)');
+    const collapsedRight = (collapsed || railEl).getBoundingClientRect().right;
+    if (collapsedRight + 10 > contentEdge) {
+      railEl.classList.add('rail-hidden');
+      return;
+    }
+    // 2) Does the expanded active pill (dot + label) stay out of the content?
+    const active = railEl.querySelector('.toc-dot.active');
+    if (active) {
+      const r = active.getBoundingClientRect();
+      if (r.right + 10 > contentEdge) railEl.classList.add('no-active-label');
+    }
+  }
+
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      window.requestAnimationFrame(() => { syncRail(); syncTop(); fitRail(); ticking = false; });
+      ticking = true;
+    }
+  }, { passive: true });
+  window.addEventListener('resize', () => { syncRail(); fitRail(); }, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => { syncRail(); fitRail(); });
+  }
+  syncRail(); syncTop(); fitRail();
+
+  // Custom always-visible horizontal scrollbar for the comparison table
+  (function () {
+    const sc = document.getElementById('cmpScroller');
+    const bar = document.getElementById('cmpScrollbar');
+    if (!sc || !bar) return;
+    const thumb = bar.querySelector('.hscroll-thumb');
+    const MIN = 40;
+
+    function sync() {
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      if (ratio >= 1) {
+        thumb.style.width = '100%';
+        thumb.style.transform = 'translateX(0)';
+        return;
+      }
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      thumb.style.width = tw + 'px';
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      const maxThumb = bar.clientWidth - tw;
+      const x = maxScroll > 0 ? (sc.scrollLeft / maxScroll) * maxThumb : 0;
+      thumb.style.transform = 'translateX(' + x + 'px)';
+    }
+
+    let dragging = false, startX = 0, startLeft = 0;
+    thumb.addEventListener('mousedown', e => {
+      dragging = true; startX = e.clientX; startLeft = sc.scrollLeft;
+      document.body.style.userSelect = 'none'; e.preventDefault();
+    });
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      const maxThumb = bar.clientWidth - tw;
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      if (maxThumb > 0) sc.scrollLeft = startLeft + ((e.clientX - startX) / maxThumb) * maxScroll;
+    });
+    window.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
+    bar.addEventListener('mousedown', e => {
+      if (e.target === thumb) return;
+      const rect = bar.getBoundingClientRect();
+      const ratio = sc.clientWidth / sc.scrollWidth;
+      const tw = Math.max(ratio * bar.clientWidth, MIN);
+      const target = (e.clientX - rect.left - tw / 2) / (bar.clientWidth - tw);
+      sc.scrollLeft = Math.max(0, Math.min(1, target)) * (sc.scrollWidth - sc.clientWidth);
+    });
+
+    sc.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', sync);
+    sync();
+  })();
+</script>
+<script src="/assets/js/code-highlight.js"></script>
+
+</body>
+</html>
