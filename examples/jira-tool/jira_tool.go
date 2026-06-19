@@ -56,20 +56,9 @@ func (t *JiraTool) registerCapabilities() {
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
 				{Name: "key", Type: "string", Description: "Issue key (e.g. PROJ-123)"},
+				{Name: "id", Type: "string", Description: "Issue numeric ID"},
 				{Name: "browse_url", Type: "string", Description: "Human-facing browse link for the issue (e.g. https://your-domain.atlassian.net/browse/PROJ-123) — use this when referencing the ticket"},
-				{Name: "summary", Type: "string", Description: "Issue title"},
-				{Name: "status", Type: "string", Description: "Current workflow status"},
-				{Name: "issue_type", Type: "string", Description: "Issue type (Bug, Task, Story, etc.)"},
-				{Name: "project", Type: "string", Description: "Project key"},
-			},
-			OptionalFields: []core.FieldHint{
-				{Name: "description", Type: "string", Description: "Issue description text"},
-				{Name: "priority", Type: "string", Description: "Priority level"},
-				{Name: "assignee", Type: "string", Description: "Assignee display name"},
-				{Name: "reporter", Type: "string", Description: "Reporter display name"},
-				{Name: "labels", Type: "array", Description: "List of labels"},
-				{Name: "created", Type: "string", Description: "Creation timestamp"},
-				{Name: "updated", Type: "string", Description: "Last update timestamp"},
+				{Name: "fields", Type: "object", Description: "JIRA issue fields in the API's native nested shape — access via fields.*, e.g. fields.summary, fields.status.name, fields.issuetype.name, fields.project.key, fields.assignee.displayName, fields.priority.name, fields.labels. Which keys are present depends on the requested 'fields' input."},
 			},
 		},
 	})
@@ -101,9 +90,9 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "issues", Type: "array", Description: "List of matching issues, each with key, browse_url, summary, status, and requested fields"},
-				{Name: "total", Type: "number", Description: "Total number of matching issues"},
-				{Name: "max_results", Type: "number", Description: "Maximum results returned"},
+				{Name: "issues", Type: "array", Description: "List of matching issues, each with top-level key, id, browse_url, and a fields object (summary, status, and any requested fields, in JIRA's native nested shape — e.g. fields.status.name)"},
+				{Name: "total", Type: "number", Example: "0", Description: "Total number of matching issues"},
+				{Name: "max_results", Type: "number", Example: "50", Description: "Maximum results returned"},
 				{Name: "jql", Type: "string", Description: "JQL query that was executed"},
 			},
 		},
@@ -151,7 +140,6 @@ func (t *JiraTool) registerCapabilities() {
 				{Name: "summary", Type: "string", Description: "Issue title as created"},
 				{Name: "project_key", Type: "string", Description: "Project key"},
 				{Name: "issue_type", Type: "string", Description: "Issue type"},
-				{Name: "status", Type: "string", Description: "Initial workflow status"},
 			},
 		},
 	})
@@ -190,8 +178,8 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "key", Type: "string", Description: "Updated issue key"},
-				{Name: "status", Type: "string", Description: "Success status message"},
+				{Name: "issue_key", Type: "string", Description: "Issue key that was updated"},
+				{Name: "message", Type: "string", Description: "Human-readable confirmation message"},
 			},
 		},
 	})
@@ -221,7 +209,6 @@ func (t *JiraTool) registerCapabilities() {
 			RequiredFields: []core.FieldHint{
 				{Name: "comment_id", Type: "string", Description: "Created comment ID"},
 				{Name: "issue_key", Type: "string", Description: "Issue the comment was added to"},
-				{Name: "author", Type: "string", Description: "Comment author display name"},
 				{Name: "created", Type: "string", Description: "Comment creation timestamp"},
 			},
 		},
@@ -251,9 +238,10 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "key", Type: "string", Description: "Transitioned issue key"},
-				{Name: "status", Type: "string", Description: "Success status message"},
-				{Name: "transition", Type: "string", Description: "Name of the applied transition"},
+				{Name: "issue_key", Type: "string", Description: "Issue key that was transitioned"},
+				{Name: "transition_name", Type: "string", Description: "Name of the applied transition"},
+				{Name: "target_status", Type: "string", Description: "Workflow status the issue moved to"},
+				{Name: "message", Type: "string", Description: "Human-readable confirmation message"},
 			},
 		},
 	})
@@ -282,8 +270,9 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "key", Type: "string", Description: "Assigned issue key"},
-				{Name: "status", Type: "string", Description: "Success status message"},
+				{Name: "issue_key", Type: "string", Description: "Issue key that was assigned or unassigned"},
+				{Name: "action", Type: "string", Description: "Action performed (assigned or unassigned)"},
+				{Name: "message", Type: "string", Description: "Human-readable confirmation message"},
 			},
 		},
 	})
@@ -440,9 +429,9 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "issues", Type: "array", Description: "List of sprint issues, each with key, browse_url, summary, status, and requested fields"},
-				{Name: "total", Type: "number", Description: "Total number of issues in the sprint"},
-				{Name: "sprint_id", Type: "number", Description: "Sprint ID queried"},
+				{Name: "issues", Type: "array", Description: "List of sprint issues, each with top-level key, id, browse_url, and a fields object (summary, status, and requested fields, in JIRA's native nested shape — e.g. fields.status.name)"},
+				{Name: "total", Type: "number", Example: "0", Description: "Total number of issues in the sprint"},
+				{Name: "sprint_id", Type: "number", Example: "1", Description: "Sprint ID queried"},
 			},
 		},
 	})
@@ -479,9 +468,10 @@ func (t *JiraTool) registerCapabilities() {
 			RequiredFields: []core.FieldHint{
 				{Name: "worklog_id", Type: "string", Description: "Created worklog entry ID"},
 				{Name: "issue_key", Type: "string", Description: "Issue the worklog was added to"},
-				{Name: "time_spent", Type: "string", Description: "Time spent as recorded"},
+				{Name: "time_spent", Type: "string", Description: "Time spent as recorded (e.g. 2h)"},
+				{Name: "time_spent_seconds", Type: "number", Example: "7200", Description: "Time spent in seconds"},
 				{Name: "started", Type: "string", Description: "When the work started"},
-				{Name: "author", Type: "string", Description: "Worklog author display name"},
+				{Name: "created", Type: "string", Description: "Worklog creation timestamp"},
 			},
 		},
 	})
@@ -512,10 +502,10 @@ func (t *JiraTool) registerCapabilities() {
 
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
-				{Name: "status", Type: "string", Description: "Success status message"},
 				{Name: "link_type", Type: "string", Description: "Link type that was created"},
 				{Name: "inward_key", Type: "string", Description: "Inward issue key"},
 				{Name: "outward_key", Type: "string", Description: "Outward issue key"},
+				{Name: "message", Type: "string", Description: "Human-readable confirmation message"},
 			},
 		},
 	})
@@ -547,8 +537,8 @@ func (t *JiraTool) registerCapabilities() {
 		OutputSummary: &core.SchemaSummary{
 			RequiredFields: []core.FieldHint{
 				{Name: "issue_key", Type: "string", Description: "Issue key the changelog belongs to"},
-				{Name: "changes", Type: "array", Description: "List of change entries with author, timestamp, and field changes (from/to values)"},
-				{Name: "total", Type: "number", Description: "Total number of changelog entries"},
+				{Name: "histories", Type: "array", Description: "List of changelog entries, each with author, timestamp, and field changes (from/to values)"},
+				{Name: "total", Type: "number", Example: "0", Description: "Total number of changelog entries"},
 			},
 		},
 	})

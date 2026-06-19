@@ -349,8 +349,10 @@ func (t *JiraTool) handleSearchIssues(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(core.ToolResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"issues": issues,
-			"total":  result.Total,
+			"issues":      issues,
+			"total":       result.Total,
+			"max_results": maxResults,
+			"jql":         req.JQL,
 		},
 	})
 }
@@ -490,10 +492,13 @@ func (t *JiraTool) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(core.ToolResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"key":        result.Key,
-			"id":         result.ID,
-			"browse_url": t.client.BrowseURL(result.Key),
-			"self":       result.Self,
+			"key":         result.Key,
+			"id":          result.ID,
+			"browse_url":  t.client.BrowseURL(result.Key),
+			"self":        result.Self,
+			"summary":     req.Summary,
+			"project_key": req.ProjectKey,
+			"issue_type":  req.IssueType,
 		},
 	})
 }
@@ -1449,8 +1454,9 @@ func (t *JiraTool) handleGetSprintIssues(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(core.ToolResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"issues": issues,
-			"total":  result.Total,
+			"issues":    issues,
+			"total":     result.Total,
+			"sprint_id": req.SprintID,
 		},
 	})
 }
