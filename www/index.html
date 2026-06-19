@@ -30,12 +30,56 @@
      adding syntax highlighting. -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
 <link rel="stylesheet" href="/assets/css/landing.css">
+<style>
+  /* Section rail (left scroll-spy nav) — mirrors the whitepaper side nav */
+  #toc-rail {
+    position: fixed; left: 12px; top: 50%; transform: translateY(-50%);
+    z-index: 50; display: flex; flex-direction: column; gap: 10px;
+    padding: 0; background: transparent; border: none; max-height: 88vh;
+  }
+  #toc-rail .toc-dot {
+    display: inline-flex; align-items: center; gap: 12px;
+    text-decoration: none; line-height: 1; white-space: nowrap;
+    padding: 9px 13px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent;
+    box-shadow: none; overflow: hidden; max-width: 44px;
+    transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .d {
+    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; opacity: .55;
+    transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
+  }
+  #toc-rail .toc-dot .lbl {
+    font-size: 16px; color: var(--muted); opacity: 0;
+    transition: opacity .18s ease, color .18s ease;
+  }
+  #toc-rail:hover .toc-dot,
+  #toc-rail .toc-dot.active {
+    max-width: 360px; background: #0e1422; border-color: var(--line);
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  }
+  #toc-rail:hover .toc-dot .lbl,
+  #toc-rail .toc-dot.active .lbl { opacity: 1; }
+  #toc-rail .toc-dot:hover .d,
+  #toc-rail .toc-dot.active .d { opacity: 1; }
+  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
+  #toc-rail .toc-dot:hover .lbl { color: var(--ink); }
+  #toc-rail .toc-dot.active .d { width: 19px; height: 19px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
+  #toc-rail .toc-dot.active .lbl { color: var(--ink); font-weight: 600; }
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active {
+    max-width: 44px; background: transparent; border-color: transparent; box-shadow: none;
+  }
+  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
+  #toc-rail.rail-hidden { display: none; }
+  @media (max-width: 1180px) { #toc-rail { display: none; } }
+</style>
 </head>
 <body>
 <nav class="site-nav">
   <div class="container">
     <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
     <div class="nav-links">
+      <a href="#impatient">Local Setup</a>
       <a href="/blogs/">Blog</a>
       <a href="/whitepapers/">Whitepapers</a>
       <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
@@ -44,6 +88,17 @@
   </div>
 </nav>
 
+
+<!-- Left section rail (scroll-spy) — mirrors the whitepaper side nav -->
+<aside id="toc-rail" aria-label="Section navigation">
+  <a class="toc-dot" href="#impatient"             data-target="impatient"><span class="d" style="background:#9ec5ff"></span><span class="lbl">Local Setup</span></a>
+  <a class="toc-dot" href="#what"                   data-target="what"><span class="d" style="background:var(--accent)"></span><span class="lbl">What it is</span></a>
+  <a class="toc-dot" href="#code"                   data-target="code"><span class="d" style="background:#7dd3fc"></span><span class="lbl">See it in code</span></a>
+  <a class="toc-dot" href="#coordination"           data-target="coordination"><span class="d" style="background:var(--warn)"></span><span class="lbl">Architecture</span></a>
+  <a class="toc-dot" href="#developer-to-developer" data-target="developer-to-developer"><span class="d" style="background:var(--good)"></span><span class="lbl">For Developers</span></a>
+  <a class="toc-dot" href="#ops-to-ops"             data-target="ops-to-ops"><span class="d" style="background:#c4b5fd"></span><span class="lbl">For Ops Engineers</span></a>
+  <a class="toc-dot" href="#reading"                data-target="reading"><span class="d" style="background:#f0abfc"></span><span class="lbl">Learn</span></a>
+</aside>
 
 <!-- ================= HERO ================= -->
 <header class="hero">
@@ -634,8 +689,18 @@ response, _ := orchestrator.ProcessRequest(ctx,
       </a>
     </div>
     <details class="read-expand">
-      <summary><span class="when-closed">Show 7 more whitepapers</span><span class="when-open">Hide</span></summary>
+      <summary><span class="when-closed">Show 9 more whitepapers</span><span class="when-open">Hide</span></summary>
       <div class="read-list">
+        <a class="read-item" href="/whitepapers/agent-skills-explained.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">Agent Skills, From the Ground Up</span>
+          <span class="desc">A from-scratch explanation of Agent Skills — the SKILL.md format, the progressive-disclosure trick that keeps them cheap, how a skill is triggered and run, and its implementation across the Claude Developer Platform, Claude Code, the Agent SDK, and the agentskills.io standard.</span>
+        </a>
+        <a class="read-item" href="/whitepapers/skills-tools-mcp.html">
+          <span class="kind">Whitepaper</span>
+          <span class="title">Skills vs Tools vs MCP — Drawing the Boundary</span>
+          <span class="desc">Tools, the Model Context Protocol, and Agent Skills are three different layers, not three competitors — what each one is, who executes what, how they stack into one system, and when to reach for which.</span>
+        </a>
         <a class="read-item" href="/whitepapers/tool-calling-providers.html">
           <span class="kind">Whitepaper</span>
           <span class="title">How AI Providers Support Tool Calls</span>
@@ -742,6 +807,61 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
+
+<script>
+  // Section rail: smooth-scroll + scroll-spy (mirrors the whitepaper side nav)
+  document.querySelectorAll('#toc-rail .toc-dot, .nav-links a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      const id = a.getAttribute('href');
+      if (id && id.startsWith('#')) {
+        const el = document.querySelector(id);
+        if (el) {
+          e.preventDefault();
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          history.replaceState(null, '', id);
+        }
+      }
+    });
+  });
+
+  const railLinks = Array.from(document.querySelectorAll('#toc-rail .toc-dot'));
+  const railSections = railLinks.map(a => document.getElementById(a.dataset.target)).filter(Boolean);
+  function syncRail() {
+    if (!railSections.length) return;
+    const probe = window.scrollY + window.innerHeight * 0.30;
+    let current = railSections[0];
+    for (const s of railSections) { if (s.offsetTop <= probe) current = s; }
+    railLinks.forEach(a => a.classList.toggle('active', a.dataset.target === current.id));
+  }
+
+  const railEl = document.getElementById('toc-rail');
+  const railMeasure = document.querySelector('section .container');
+  function fitRail() {
+    if (!railEl || !railMeasure) return;
+    if (railEl.matches(':hover')) return;
+    const contentEdge = railMeasure.getBoundingClientRect().left + 24;
+    railEl.classList.remove('rail-hidden', 'no-active-label');
+    const collapsed = railEl.querySelector('.toc-dot:not(.active)');
+    const collapsedRight = (collapsed || railEl).getBoundingClientRect().right;
+    if (collapsedRight + 10 > contentEdge) { railEl.classList.add('rail-hidden'); return; }
+    const active = railEl.querySelector('.toc-dot.active');
+    if (active) {
+      const r = active.getBoundingClientRect();
+      if (r.right + 10 > contentEdge) railEl.classList.add('no-active-label');
+    }
+  }
+
+  let railTicking = false;
+  window.addEventListener('scroll', () => {
+    if (!railTicking) {
+      window.requestAnimationFrame(() => { syncRail(); fitRail(); railTicking = false; });
+      railTicking = true;
+    }
+  }, { passive: true });
+  window.addEventListener('resize', () => { syncRail(); fitRail(); }, { passive: true });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { syncRail(); fitRail(); });
+  syncRail(); fitRail();
+</script>
 
 </body>
 </html>
