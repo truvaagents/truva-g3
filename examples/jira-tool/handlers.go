@@ -92,10 +92,10 @@ type GetSprintIssuesRequest struct {
 }
 
 type AddWorklogRequest struct {
-	IssueKey    string `json:"issue_key"`
-	TimeSpent   string `json:"time_spent"`
-	Started     string `json:"started,omitempty"`
-	Comment     string `json:"comment,omitempty"`
+	IssueKey  string `json:"issue_key"`
+	TimeSpent string `json:"time_spent"`
+	Started   string `json:"started,omitempty"`
+	Comment   string `json:"comment,omitempty"`
 }
 
 type LinkIssuesRequest struct {
@@ -233,9 +233,10 @@ func (t *JiraTool) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(core.ToolResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"key":    issue.Key,
-			"id":     issue.ID,
-			"fields": issue.Fields,
+			"key":        issue.Key,
+			"id":         issue.ID,
+			"browse_url": t.client.BrowseURL(issue.Key),
+			"fields":     issue.Fields,
 		},
 	})
 }
@@ -337,9 +338,10 @@ func (t *JiraTool) handleSearchIssues(w http.ResponseWriter, r *http.Request) {
 	issues := make([]map[string]interface{}, 0, len(result.Issues))
 	for _, iss := range result.Issues {
 		issues = append(issues, map[string]interface{}{
-			"key":    iss.Key,
-			"id":     iss.ID,
-			"fields": iss.Fields,
+			"key":        iss.Key,
+			"id":         iss.ID,
+			"browse_url": t.client.BrowseURL(iss.Key),
+			"fields":     iss.Fields,
 		})
 	}
 
@@ -488,9 +490,10 @@ func (t *JiraTool) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(core.ToolResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"key":  result.Key,
-			"id":   result.ID,
-			"self": result.Self,
+			"key":        result.Key,
+			"id":         result.ID,
+			"browse_url": t.client.BrowseURL(result.Key),
+			"self":       result.Self,
 		},
 	})
 }
@@ -1435,9 +1438,10 @@ func (t *JiraTool) handleGetSprintIssues(w http.ResponseWriter, r *http.Request)
 	issues := make([]map[string]interface{}, 0, len(result.Issues))
 	for _, iss := range result.Issues {
 		issues = append(issues, map[string]interface{}{
-			"key":    iss.Key,
-			"id":     iss.ID,
-			"fields": iss.Fields,
+			"key":        iss.Key,
+			"id":         iss.ID,
+			"browse_url": t.client.BrowseURL(iss.Key),
+			"fields":     iss.Fields,
 		})
 	}
 

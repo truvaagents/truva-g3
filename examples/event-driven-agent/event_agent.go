@@ -151,7 +151,7 @@ Place JIRA/Slack steps in a separate phase after investigation and remediation c
 			"For high latency alerts, query Prometheus metrics for the affected service endpoint",
 			"For pod failures, inspect pod status and recent logs before restarting",
 			"JIRA tickets use project_key 'DEVOPS' with severity, root cause, remediation, verification, and alert fingerprint",
-			"Slack messages should read like a human-written incident note: alert summary, investigation findings with metric values and pod names, root cause, remediation taken, verification result, and JIRA link (https://truvag3.atlassian.net/browse/<TICKET-KEY>)",
+			"Slack messages should read like a human-written incident note: alert summary, investigation findings with metric values and pod names, root cause, remediation taken, verification result, and the JIRA link (use the browse_url returned by create_issue or search_issues)",
 			"Group related alerts by fingerprint to avoid duplicate investigations",
 		},
 	}
