@@ -31,9 +31,22 @@ type OrchestratorDependencies struct {
 	// to set Retryable flags. See PARAMETER_BINDING_FIX.md for design rationale.
 	EnableErrorAnalyzer bool
 
-	// Optional: Custom result processor for domain-specific trimming.
-	// If nil and ResultTrim.Enabled, uses default StructuralTrimmer.
+	// Optional: Custom result processor for the SYNTHESIS prompt (Layer 3).
+	// Trims step results before the final answer prompt; MAY be LLM-distilling.
+	// If nil and ResultTrim.Enabled, the factory builds the distiller chain
+	// (ResultDistill.Enabled + AIClient) or a StructuralTrimmer.
 	ResultProcessor ResultProcessor
+
+	// Optional: Custom DETERMINISTIC processor for resolver source data (micro- and
+	// contextual re-resolution prompts). Must be LLM-free — those prompts already drive
+	// their own resolution LLM call. If nil, defaults to StructuralTrimmer. (Phase 8)
+	SourceResultProcessor ResultProcessor
+
+	// Optional: Custom transform for tool/agent INPUT parameters before dispatch (Layer 3).
+	// Operates on the resolved param map — redact, validate, enrich, or trim. If nil, defaults
+	// to identity (fidelity-first: the downstream tool receives the full upstream output). The
+	// built-in byte-budget guard is opt-in (set ResultTrim.MaxAgentInputBytes > 0). (Phase 8)
+	AgentInputProcessor AgentInputProcessor
 
 	// Optional: cache for LLM distillation results, keyed by (result + instruction +
 	// budget). When set, the distiller is wrapped so identical compactions (common in
@@ -324,7 +337,9 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		}
 	}
 
-	// Configure result trimming (large data management)
+	// Seam 1 (Phase 8) — SYNTHESIS result processor. Gated by ResultTrim.Enabled (the prompt-trim
+	// feature); the synthesizer/streaming path also checks Enabled at use-time, so a synthesis
+	// processor is meaningless when trimming is off.
 	if config.ResultTrim.Enabled {
 		if deps.ResultProcessor != nil {
 			orchestrator.SetResultProcessor(deps.ResultProcessor)
@@ -360,6 +375,33 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 				"preserve_keys":          len(config.ResultTrim.PreserveKeys),
 			})
 		}
+	}
+
+	// Seams 2 & 3 (Phase 8) are INDEPENDENT data-flow concerns, wired REGARDLESS of
+	// ResultTrim.Enabled so a custom override (e.g. a fail-closed PII redactor) is never silently
+	// dropped when prompt trimming is off. Only the built-in defaults remain conditional.
+
+	// Seam 2 — RESOLUTION-SOURCE processor (micro- & contextual re-resolution prompts). Deterministic,
+	// never the distiller. A custom override is always honored; the built-in StructuralTrimmer default
+	// is installed only when result trimming is enabled (preserves the prior default behavior).
+	if deps.SourceResultProcessor != nil {
+		orchestrator.SetSourceResultProcessor(deps.SourceResultProcessor)
+	} else if config.ResultTrim.Enabled {
+		orchestrator.SetSourceResultProcessor(NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger))
+	}
+
+	// Seam 3 — AGENT-INPUT transform (tool→tool data flow). A custom transform is always honored; the
+	// built-in byte-budget guard is opt-in via MaxAgentInputBytes > 0 (independent of Enabled).
+	// Otherwise identity (fidelity-first: the downstream tool receives the full upstream output).
+	switch {
+	case deps.AgentInputProcessor != nil:
+		orchestrator.SetAgentInputProcessor(deps.AgentInputProcessor)
+	case config.ResultTrim.MaxAgentInputBytes > 0:
+		orchestrator.SetAgentInputProcessor(NewByteBudgetAgentInputProcessor(
+			NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger),
+			config.ResultTrim.MaxAgentInputBytes, deps.Logger))
+	default:
+		orchestrator.SetAgentInputProcessor(identityAgentInputProcessor{})
 	}
 
 	// Wire pipeline hooks for context engineering

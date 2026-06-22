@@ -1110,7 +1110,7 @@ func DefaultConfig() *OrchestratorConfig {
 		MaxResultBytes:               16384, // 16 KB per result (~4K tokens)
 		MaxTotalPromptBytes:          32768, // 32 KB total (~8K tokens)
 		MaxMicroResolutionBytes:      65536, // 64 KB (~26K tokens) for micro-resolution & semantic retry source data
-		MaxAgentInputBytes:           65536, // 64 KB (~26K tokens) per parameter value for agent/tool HTTP calls
+		MaxAgentInputBytes:           0,     // Phase 8: fidelity-first — tool→tool data flows raw by default; set > 0 (or supply deps.AgentInputProcessor) to enable the byte-budget guard
 		SchemaGuidedMappingThreshold: 16384, // 16 KB — below this, value extraction is fine
 	}
 	if enabled := os.Getenv("TRUVAG3_RESULT_TRIM_ENABLED"); enabled != "" {

@@ -340,6 +340,43 @@ func TestCreateOrchestrator_AppliesLegacyAIOptionFields(t *testing.T) {
 	}
 }
 
+// TestCreateOrchestrator_AgentInputSeam_IndependentOfTrimToggle verifies the Phase 8 agent-input
+// seam is wired regardless of ResultTrim.Enabled — it is an independent data-flow concern, not the
+// prompt-trim feature. Regression for the "custom redactor silently dropped when trimming is off" bug.
+func TestCreateOrchestrator_AgentInputSeam_IndependentOfTrimToggle(t *testing.T) {
+	config := DefaultConfig()
+	config.ResultTrim.Enabled = false // prompt trimming OFF
+
+	// A custom transform (stand-in for a fail-closed PII redactor) must still be installed.
+	orch, err := CreateOrchestrator(config, OrchestratorDependencies{
+		Discovery:           NewMockDiscovery(),
+		AIClient:            NewMockAIClient(),
+		AgentInputProcessor: errAgentInputProcessor{},
+	})
+	if err != nil {
+		t.Fatalf("CreateOrchestrator failed: %v", err)
+	}
+	if orch.executor == nil {
+		t.Fatal("expected executor to be wired")
+	}
+	if _, ok := orch.executor.agentInputProcessor.(errAgentInputProcessor); !ok {
+		t.Errorf("custom AgentInputProcessor dropped when ResultTrim.Enabled=false; got %T",
+			orch.executor.agentInputProcessor)
+	}
+
+	// With no custom transform and the guard off, the default is identity (fidelity-first).
+	orch2, err := CreateOrchestrator(config, OrchestratorDependencies{
+		Discovery: NewMockDiscovery(),
+		AIClient:  NewMockAIClient(),
+	})
+	if err != nil {
+		t.Fatalf("CreateOrchestrator failed: %v", err)
+	}
+	if _, ok := orch2.executor.agentInputProcessor.(identityAgentInputProcessor); !ok {
+		t.Errorf("expected identity default agent-input processor, got %T", orch2.executor.agentInputProcessor)
+	}
+}
+
 func TestCreateOrchestrator_WiresPerPhaseAIOptions(t *testing.T) {
 	config := DefaultConfig()
 	config.EnableTieredResolution = true
