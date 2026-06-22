@@ -1,0 +1,75 @@
+# Network cocoon for openclaw-tool (ANALYSIS.md §6 Layer 3).
+#
+# ⚠️  ADVISORY ON KIND: the default CNI (kindnet) does NOT enforce NetworkPolicy — this file
+#     is silently ignored unless the cluster runs Cilium or Calico. It is included so the
+#     intended egress posture is explicit and ready for a real cluster.
+#
+# ⚠️  POD-WIDE: a NetworkPolicy applies to the whole pod (the adapter + OpenClaw share one IP).
+#     So the egress holes the adapter genuinely needs (DNS, Redis, OTEL) are also reachable by
+#     a compromised OpenClaw. For per-pod egress granularity, split into separate pods (§3/§6).
+#
+# ⚠️  HOSTNAME EGRESS: plain NetworkPolicy is IP/CIDR-based. The LLM hole below is a broad
+#     :443 allow; tighten it to api.anthropic.com with Cilium `toFQDNs`, or close it entirely
+#     by routing the LLM through the adapter (the zero-direct-egress upgrade, §6 Layer 3).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-tool
+  namespace: truvag3-examples
+  labels:
+    app: openclaw-tool
+spec:
+  podSelector:
+    matchLabels:
+      app: openclaw-tool
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Agents in the namespace call the adapter on :8393. OpenClaw's :18789 is never targeted
+    # (loopback only), so no ingress rule references it.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: truvag3-examples
+      ports:
+        - protocol: TCP
+          port: 8393
+  egress:
+    # DNS resolution.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Redis (service discovery) — adapter only, but pod-wide as noted above.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # OTEL collector (telemetry).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4318
+    # LLM provider (OpenClaw's single external dependency for a reasoning-only task). Broad
+    # :443 — tighten to the provider's FQDN with Cilium, or remove once the LLM is routed
+    # through the adapter (zero direct egress).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

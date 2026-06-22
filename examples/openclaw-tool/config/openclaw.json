@@ -1,0 +1,37 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
+    "http": { "endpoints": { "responses": { "enabled": true } } },
+    "controlUi": { "enabled": false },
+    "tools": { "deny": ["browser"] }
+  },
+  "channels": {
+    "slack": { "enabled": false },
+    "discord": { "enabled": false },
+    "telegram": { "enabled": false },
+    "whatsapp": { "enabled": false },
+    "matrix": { "enabled": false },
+    "imessage": { "enabled": false }
+  },
+  "agents": {
+    "defaults": {
+      "sandbox": { "mode": "off" },
+      "model": { "primary": "openai/gpt-5.4-mini" }
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": { "apiKey": "${OPENAI_API_KEY}", "agentRuntime": { "id": "openclaw" } }
+    }
+  },
+  "tools": {
+    "exec": { "host": "gateway", "security": "full", "ask": "off" },
+    "fs": { "workspaceOnly": true }
+  },
+  "plugins": {
+    "slots": { "memory": "none" }
+  }
+}
