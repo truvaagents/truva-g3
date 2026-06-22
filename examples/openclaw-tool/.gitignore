@@ -1,0 +1,11 @@
+# Built adapter binary (produced by `go build` / `./setup.sh build`)
+openclaw-tool
+*.test
+*.out
+
+# Local environment (also covered repo-wide; kept here for safety)
+.env
+
+# OS / editor
+.DS_Store
+*.swp

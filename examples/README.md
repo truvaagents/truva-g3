@@ -159,6 +159,7 @@ examples can reuse the same cluster.
 | [prometheus-query-tool](prometheus-query-tool/) | Tool | Prometheus query capabilities | Yes |
 | [system-utilities-tool](system-utilities-tool/) | Tool | Time, command, ID, and browser utility capabilities | Yes |
 | [playwright-tool](playwright-tool/) | Tool | Browser automation capability wrapper | Yes |
+| [openclaw-tool](openclaw-tool/) | Tool | Contained autonomous OpenClaw agent — `run_task` plus 11 typed data/code/security capabilities | Yes |
 
 ### Collaboration and Productivity Tools
 
@@ -298,6 +299,7 @@ The current example port allocation is:
 | my-tool | 8390 | tool |
 | my-streaming-agent | 8391 | agent |
 | my-async-agent | 8392 | agent |
+| openclaw-tool | 8393 | tool |
 
 Infrastructure defaults:
 
