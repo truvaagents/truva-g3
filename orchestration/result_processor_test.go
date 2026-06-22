@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -825,13 +827,14 @@ func TestLLMDistiller_MaxBytesLessThanTargetSize(t *testing.T) {
 	distiller := NewLLMDistiller(mockAI, config, trimmer, nil)
 
 	largeInput := `{"field1":"value1","field2":"value2","field3":"value3"}`
-	distiller.ProcessForPrompt(context.Background(), largeInput, 200, ResultProcessorContext{
+	// 300 is below TargetSize (500) but above minDistillTargetSize (256), so it is honored.
+	distiller.ProcessForPrompt(context.Background(), largeInput, 300, ResultProcessorContext{
 		StepID: "step-1", AgentName: "test", Instruction: "summarize",
 	})
 
-	// Verify the prompt uses maxBytes (200) as target, not config.TargetSize (500)
-	if !strings.Contains(mockAI.prompt, "200") {
-		t.Errorf("Expected prompt to contain maxBytes target '200', prompt: %.300s", mockAI.prompt)
+	// Verify the prompt uses maxBytes (300) as target, not config.TargetSize (500)
+	if !strings.Contains(mockAI.prompt, "at most 300 characters") {
+		t.Errorf("Expected prompt to use maxBytes target '300', prompt: %.300s", mockAI.prompt)
 	}
 }
 
@@ -1845,5 +1848,139 @@ func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 	}
 	if meta.Method == "" {
 		t.Error("Expected metadata to be populated by structural fallback (input 37b > budget 20b)")
+	}
+}
+
+// --- Phase 0: degenerate-trim detection ---
+
+func TestDegenerateTrim(t *testing.T) {
+	cases := []struct {
+		name              string
+		original, trimmed int
+		wantDegenerate    bool
+		wantRatio         float64
+	}{
+		{"zero original disables check", 0, 100, false, 1},
+		{"negative original disables check", -5, 100, false, 1},
+		{"well below threshold", 100000, 2000, true, 0.02},
+		{"just below threshold", 1000, 49, true, 0.049},
+		{"exactly at threshold is not degenerate", 1000, 50, false, 0.05},
+		{"above threshold", 1000, 500, false, 0.5},
+		{"full passthrough", 1000, 1000, false, 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotDeg, gotRatio := degenerateTrim(tc.original, tc.trimmed)
+			if gotDeg != tc.wantDegenerate {
+				t.Errorf("degenerateTrim(%d,%d) degenerate=%v, want %v",
+					tc.original, tc.trimmed, gotDeg, tc.wantDegenerate)
+			}
+			if math.Abs(gotRatio-tc.wantRatio) > 1e-9 {
+				t.Errorf("degenerateTrim(%d,%d) ratio=%v, want %v",
+					tc.original, tc.trimmed, gotRatio, tc.wantRatio)
+			}
+		})
+	}
+}
+
+// --- Phase 1: extractive distillation prompt ---
+
+// TestBuildDistillationPrompt_Extractive verifies the Phase 1 prompt is extractive
+// for evidence (verbatim units), abstractive for narrative, and explicitly guards
+// against false-absence inferences — while staying domain-agnostic.
+func TestBuildDistillationPrompt_Extractive(t *testing.T) {
+	d := &LLMDistiller{}
+	prompt := d.buildDistillationPrompt(`{"a":1}`, 1024, ResultProcessorContext{
+		AgentName:   "agent",
+		Instruction: "find errors",
+	})
+
+	for _, want := range []string{"VERBATIM", "EVIDENCE", "NARRATIVE", "No matching entries found", "UNKNOWN"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("Expected extractive prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+
+	// Framework defaults must not hardcode any domain vocabulary (no logs/SRE/K8s strings).
+	for _, banned := range []string{"Kubernetes", "Loki", "SRE", "Slack"} {
+		if strings.Contains(prompt, banned) {
+			t.Errorf("Prompt must stay domain-agnostic, found %q", banned)
+		}
+	}
+}
+
+// --- Phase 4: compaction deadline ---
+
+// blockingMockAI blocks until the context is cancelled, then returns the context
+// error — used to exercise the compaction deadline fail-open path.
+type blockingMockAI struct{}
+
+func (blockingMockAI) GenerateResponse(ctx context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (blockingMockAI) StreamResponse(ctx context.Context, _ string, _ *core.AIOptions, _ func(string)) (*core.AIResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestLLMDistiller_CompactionDeadline_FailsOpen verifies that when the LLM call exceeds
+// the compaction deadline, ProcessForPrompt returns promptly via the structural floor
+// rather than blocking the synthesis hot path.
+func TestLLMDistiller_CompactionDeadline_FailsOpen(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 4096, TargetSize: 200,
+		CompactionDeadline: 50 * time.Millisecond,
+	}
+	distiller := NewLLMDistiller(blockingMockAI{}, config, trimmer, nil)
+
+	// Larger than the 100B budget so the structural fallback actually trims and records.
+	input := `{"alpha":"` + strings.Repeat("x", 300) + `","beta":"value"}`
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+
+	start := time.Now()
+	out := distiller.ProcessForPrompt(ctx, input, 100, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "summarize",
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("expected return near the %v deadline, took %v", config.CompactionDeadline, elapsed)
+	}
+	if out == "" {
+		t.Error("expected non-empty structural fallback output on deadline timeout")
+	}
+	if meta.Method == "distill" {
+		t.Errorf("deadline timeout must fall open to structural, not Method=distill (got %q)", meta.Method)
+	}
+}
+
+// TestLLMDistiller_ZeroBudgetDoesNotZeroTarget reproduces the live incident
+// (orch-1781973307736373861): when the BudgetAllocator hands an oversized result a budget
+// of 0, the distiller must NOT build a "max 0 characters" prompt — it must floor the
+// target so the model can still emit a useful compaction.
+func TestLLMDistiller_ZeroBudgetDoesNotZeroTarget(t *testing.T) {
+	mockAI := &distillerMockAI{response: &core.AIResponse{Content: "DISTILLED-LOG-LINES"}}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 4096, TargetSize: 4096,
+	}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	largeInput := `{"streams":"` + strings.Repeat("x", 20000) + `"}`
+	out := distiller.ProcessForPrompt(context.Background(), largeInput, 0, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "find errors",
+	})
+
+	if strings.Contains(mockAI.prompt, "at most 0 characters") {
+		t.Errorf("budget=0 must not produce a 'max 0 characters' prompt")
+	}
+	// A non-positive budget is ignored, so the target stays the full configured TargetSize.
+	if !strings.Contains(mockAI.prompt, "at most 4096 characters") {
+		t.Errorf("expected the target to fall back to TargetSize=4096, prompt head: %.200s", mockAI.prompt)
+	}
+	if out != "DISTILLED-LOG-LINES" {
+		t.Errorf("expected the real distilled output, got %q", out)
 	}
 }

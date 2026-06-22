@@ -978,9 +978,10 @@ func (o *AIOrchestrator) SetLLMDebugStore(store LLMDebugStore) {
 		}
 	}
 
-	// Propagate to LLMDistiller (if result processor is a distiller)
-	if distiller, ok := o.resultProcessor.(*LLMDistiller); ok {
-		distiller.SetLLMDebugStore(store)
+	// Propagate to the result processor when it (or a wrapper, e.g. the distillation
+	// cache) accepts a debug store. Interface assertion so the cache wrapper forwards.
+	if debuggable, ok := o.resultProcessor.(interface{ SetLLMDebugStore(LLMDebugStore) }); ok {
+		debuggable.SetLLMDebugStore(store)
 	}
 
 	if debuggable, ok := o.conversationHistoryPreparer.(interface{ SetLLMDebugStore(LLMDebugStore) }); ok {
@@ -1470,9 +1471,11 @@ func (o *AIOrchestrator) Shutdown(ctx context.Context) error {
 		if preparer, ok := o.conversationHistoryPreparer.(interface{ Shutdown(context.Context) error }); ok {
 			_ = preparer.Shutdown(ctx)
 		}
-		// Wait for LLMDistiller's pending debug recordings
-		if distiller, ok := o.resultProcessor.(*LLMDistiller); ok {
-			distiller.Shutdown()
+		// Wait for the result processor's pending debug recordings (the distiller,
+		// reached directly or through the cache wrapper). Interface assertion so the
+		// cache wrapper forwards to the inner distiller.
+		if shutdownable, ok := o.resultProcessor.(interface{ Shutdown() }); ok {
+			shutdownable.Shutdown()
 		}
 		close(done)
 	}()

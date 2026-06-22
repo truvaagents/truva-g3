@@ -1173,12 +1173,27 @@ func DefaultConfig() *OrchestratorConfig {
 		}
 	}
 
-	// Result Distillation defaults (disabled by default — opt-in)
+	// Result Distillation defaults.
+	//
+	// LLM-first compaction: a small fast model decides what to keep for over-budget
+	// results; the StructuralTrimmer is only the pre-filter and the fail-open floor.
+	// The factory only activates distillation when deps.AIClient != nil; otherwise it
+	// falls back to the StructuralTrimmer floor (see factory.go). Opt out entirely
+	// with TRUVAG3_RESULT_DISTILL_ENABLED=false.
+	//
+	// Model="fast" is a portable alias (Haiku / gpt-4.1-mini / gemini-flash-lite per
+	// provider) and is ChainClient-safe — a concrete model name would break failover
+	// (see AI_PROVIDERS_SETUP_GUIDE.md Issue 7).
 	config.ResultDistill = ResultDistillConfig{
-		Enabled:          false,
-		DistillThreshold: 32768,
-		PreFilterBudget:  32768,
-		TargetSize:       4096,
+		Enabled:            true,
+		DistillThreshold:   16384,
+		PreFilterBudget:    32768,
+		TargetSize:         4096,
+		Model:              "fast",
+		CacheTTL:           5 * time.Minute,
+		CompactionDeadline: 45 * time.Second,
+		ModelContextTokens: 150000, // ~600 KB; above this, chunk → map-reduce
+		MapConcurrency:     8,
 	}
 	if enabled := os.Getenv("TRUVAG3_RESULT_DISTILL_ENABLED"); enabled != "" {
 		config.ResultDistill.Enabled = strings.ToLower(enabled) == "true"
@@ -1200,6 +1215,26 @@ func DefaultConfig() *OrchestratorConfig {
 	}
 	if model := os.Getenv("TRUVAG3_RESULT_DISTILL_MODEL"); model != "" {
 		config.ResultDistill.Model = model
+	}
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			config.ResultDistill.CacheTTL = d
+		}
+	}
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_DEADLINE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			config.ResultDistill.CompactionDeadline = d
+		}
+	}
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.ResultDistill.ModelContextTokens = n
+		}
+	}
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.ResultDistill.MapConcurrency = n
+		}
 	}
 
 	// Execution Debug Store configuration from environment

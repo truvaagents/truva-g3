@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ResultProcessor transforms step results before they are embedded in prompts.
@@ -51,6 +52,32 @@ type ResultDistillConfig struct {
 	//
 	// Env: TRUVAG3_RESULT_DISTILL_MODEL
 	Model string `json:"model,omitempty"`
+	// CacheTTL is how long a distillation result stays cached. The cache is keyed by
+	// (result content + instruction + budget) and is fail-open (a nil cache disables it
+	// with no overhead). Reuses the shared-memory digest cache pattern so scheduled and
+	// repetitive runs — the worst offenders for redundant LLM cost — become cache hits.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_CACHE_TTL
+	CacheTTL time.Duration `json:"cache_ttl,omitempty"`
+	// CompactionDeadline bounds the wall-clock time a single compaction may spend in the
+	// synthesis hot path. On timeout the call fails open: the single-call path falls back
+	// to the structural floor, and the map-reduce path returns the chunks that completed
+	// plus an honest "partial" disclosure. Zero disables the deadline. Set it under the
+	// HTTP gateway timeout that would otherwise cut a long synchronous request.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_DEADLINE
+	CompactionDeadline time.Duration `json:"compaction_deadline,omitempty"`
+	// ModelContextTokens is the usable context (in tokens) of the compaction model.
+	// Results estimated above this are chunked and map-reduced instead of sent in one
+	// call. Tied to the model tier, not a concrete model id, so it stays ChainClient-safe.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS
+	ModelContextTokens int `json:"model_context_tokens,omitempty"`
+	// MapConcurrency caps how many chunks are compacted concurrently in the map-reduce
+	// path. <= 0 falls back to the default.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY
+	MapConcurrency int `json:"map_concurrency,omitempty"`
 }
 
 // ResultTrimMetadata captures what happened during a single trim operation.
@@ -66,6 +93,43 @@ type ResultTrimMetadata struct {
 	Keywords         []string `json:"keywords,omitempty"`
 	MatchedPaths     []string `json:"matched_paths,omitempty"`    // Fields selected by keyword match
 	BudgetAllocated  int      `json:"budget_allocated,omitempty"` // Per-result budget from ProcessMultipleForBudget
+	Degenerate       bool     `json:"degenerate,omitempty"`       // kept too little to be representative of the source
+	KeptRatio        float64  `json:"kept_ratio,omitempty"`       // trimmed_bytes / original_bytes
+}
+
+// degenerateKeptRatio is the threshold below which a structural trim is treated
+// as non-representative: so little of the source survived that the synthesizing
+// LLM must not infer that anything NOT shown is absent. Distillation output is
+// exempt — the LLM there selects content deliberately, so a low ratio is success,
+// not loss (see result_distiller.go).
+const degenerateKeptRatio = 0.05
+
+// degenerateTrim reports whether a trim kept so little of the original that the
+// result is non-representative, along with the kept ratio (trimmed/original).
+// originalBytes <= 0 disables the check (returns false, 1) — used by callers
+// that do not have a meaningful original size in scope.
+func degenerateTrim(originalBytes, trimmedBytes int) (bool, float64) {
+	if originalBytes <= 0 {
+		return false, 1
+	}
+	r := float64(trimmedBytes) / float64(originalBytes)
+	return r < degenerateKeptRatio, r
+}
+
+// degenerateNote returns the honest "severely reduced … UNKNOWN" disclosure when a
+// deterministic-floor trim kept a non-representative fraction of the source, else "".
+// Shared by the plain-text / array / truncate floors so a degenerate result can never
+// reach synthesis behind a coverage-implying note. (LLM distillation is intentionally
+// exempt — a low ratio there is successful compression, not lost content.)
+func degenerateNote(originalBytes, trimmedBytes int) string {
+	degenerate, ratio := degenerateTrim(originalBytes, trimmedBytes)
+	if !degenerate {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\n[severely reduced: kept %d of ~%d bytes (%.2f%%); most content omitted — "+
+			"treat anything NOT shown as UNKNOWN, do not infer it is absent]",
+		trimmedBytes, originalBytes, ratio*100)
 }
 
 // trimMetadataKey is the context key for passing trim metadata out of ProcessForPrompt.
