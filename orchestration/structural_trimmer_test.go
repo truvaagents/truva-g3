@@ -753,10 +753,7 @@ func TestSelectFields_AncestorExclusion(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "general task",
 	})
 
-	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
-		jsonPart = result[:idx]
-	}
+	jsonPart, _ := splitAnnotation(result)
 
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
@@ -801,10 +798,7 @@ func TestSelectFields_DescendantExclusion(t *testing.T) {
 		Instruction: "find the relevant data",
 	})
 
-	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
-		jsonPart = result[:idx]
-	}
+	jsonPart, _ := splitAnnotation(result)
 
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
@@ -1778,13 +1772,10 @@ func TestSelectFields_AncestorSkipsArrayChildren(t *testing.T) {
 	trimmer := NewStructuralTrimmer([]string{"items"}, nil)
 
 	// Budget large enough to fit the entire parent
-	result, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, []string{})
+	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
 
 	// The parent "items" should be selected as a whole, children skipped
-	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
-		jsonPart = result[:idx]
-	}
+	jsonPart, _ := splitAnnotation(result)
 
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
@@ -1829,7 +1820,7 @@ func TestSelectFields_SafetyCheckOvershoot(t *testing.T) {
 	// The tight budget combined with deep nesting increases the chance
 	// that estimated overhead diverges from actual json.Marshal output.
 	budget := len(serialized) - 20
-	result, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, budget, []string{"x", "y", "z"})
+	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, budget, 0, []string{"x", "y", "z"})
 
 	jsonPart := result
 	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
@@ -1850,12 +1841,14 @@ func TestSelectFields_SafetyCheckOvershoot(t *testing.T) {
 // Verifies the annotation format switches when array items are selected.
 
 func TestSelectFields_AnnotationArrayFormat(t *testing.T) {
-	// Items must total >1024 bytes serialized to trigger array decomposition
+	// Each item must exceed 1024 bytes to be decomposed, and the whole "data" object
+	// must exceed the budget so it cannot be kept whole — forcing whole-unit selection
+	// to descend and keep individual array ITEMS (the "array items" annotation path).
 	items := make([]interface{}, 10)
 	for i := 0; i < 10; i++ {
 		items[i] = map[string]interface{}{
 			"title": fmt.Sprintf("Item %d with some content to pad size", i),
-			"body":  strings.Repeat("padding ", 20),
+			"body":  strings.Repeat("padding ", 140), // ~1.1KB → item >1024B, 10 items ≈ 12KB
 		}
 	}
 	obj := map[string]interface{}{
@@ -1866,8 +1859,9 @@ func TestSelectFields_AnnotationArrayFormat(t *testing.T) {
 	}
 
 	trimmer := NewStructuralTrimmer(nil, nil)
-	// Large budget so items are selected AND annotation fits
-	result, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, []string{"item", "content"})
+	// Budget below the whole "data" object (~12KB) but above a single item (~1.1KB),
+	// so individual array items are selected and the annotation fits.
+	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"item", "content"})
 
 	// Should use array annotation format
 	if !strings.Contains(result, "array items") {
@@ -1894,7 +1888,7 @@ func TestSelectFields_AnnotationNonArrayFormat(t *testing.T) {
 
 	trimmer := NewStructuralTrimmer(nil, nil)
 	// Enough budget to fit JSON + annotation
-	result, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 400, []string{"gamma"})
+	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 400, 0, []string{"gamma"})
 
 	if strings.Contains(result, "array items") {
 		t.Error("Non-array annotation should NOT contain 'array items'")
@@ -2023,7 +2017,7 @@ func TestSelectFieldsWithMeta_FieldCounts_FlatObject(t *testing.T) {
 	// Budget 15: wrapper(2) + price(11) = 13 ≤ 15 → selected; +name = 29 > 15 → dropped.
 	obj := map[string]interface{}{"price": 42.0, "name": "Widget"}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	_, kept, dropped, _, _, matchedPaths := trimmer.selectFieldsWithMeta(context.Background(), obj, 15, []string{})
+	_, kept, dropped, _, _, matchedPaths, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 15, 0, []string{})
 
 	if kept != 1 {
 		t.Errorf("Expected fieldsKept=1, got %d", kept)
@@ -2043,7 +2037,7 @@ func TestSelectFieldsWithMeta_MatchedPathsInOutput(t *testing.T) {
 		"beta":  strings.Repeat("b", 50),
 	}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	result, kept, _, _, _, matchedPaths := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, []string{"alpha"})
+	result, kept, _, _, _, matchedPaths, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"alpha"})
 
 	if kept == 0 {
 		t.Fatal("Expected at least one field selected")
@@ -2063,7 +2057,7 @@ func TestSelectFieldsWithMeta_LargeBudgetKeepsAllFields(t *testing.T) {
 		"c": "gamma",
 	}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	_, kept, dropped, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, []string{})
+	_, kept, dropped, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
 
 	if kept != 3 {
 		t.Errorf("Expected all 3 fields kept with large budget, got %d", kept)
@@ -2826,8 +2820,8 @@ func TestSelectFieldsWithMeta_BackfilledCountReturned(t *testing.T) {
 		},
 	}
 
-	_, _, _, backfilledCount, _, _ := trimmer.selectFieldsWithMeta(
-		context.Background(), obj, 32768, []string{"pod"},
+	_, _, _, backfilledCount, _, _, _, _ := trimmer.selectFieldsWithMeta(
+		context.Background(), obj, 32768, 0, []string{"pod"},
 	)
 
 	if backfilledCount == 0 {
@@ -2851,8 +2845,8 @@ func TestSelectFieldsWithMeta_ThresholdSkippedReturned(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, thresholdSkipped, _ := trimmer.selectFieldsWithMeta(
-		context.Background(), obj, 32768, []string{"pod"},
+	_, _, _, _, thresholdSkipped, _, _, _ := trimmer.selectFieldsWithMeta(
+		context.Background(), obj, 32768, 0, []string{"pod"},
 	)
 
 	if thresholdSkipped == 0 {
@@ -2962,12 +2956,16 @@ func TestBuildArrayInventory_ScalarItemsNotDecomposed(t *testing.T) {
 // TestArrayDecomposition_SelectsSubFieldsAcrossItems tests the end-to-end
 // effect: with decomposition, the trimmer can pick individual sub-fields from
 // multiple array items instead of picking only a few complete atomic items.
-func TestArrayDecomposition_SelectsSubFieldsAcrossItems(t *testing.T) {
+// TestArrayDecomposition_NoLeafScatterAcrossItems verifies the Phase 2 whole-unit
+// guard: under a budget that fits only a couple of whole items, the trimmer keeps
+// WHOLE items (name + status + payload together), never a scatter of name/status
+// leaves harvested across many items while dropping their payloads (the old
+// value-density behavior this phase removes).
+func TestArrayDecomposition_NoLeafScatterAcrossItems(t *testing.T) {
 	trimmer := NewStructuralTrimmer(nil, nil)
 	ctx := context.Background()
 
-	// Build a response with an array of 10 large objects.
-	// Each has a "name" field (small, keyword-matching) and a "payload" (large, irrelevant).
+	// Array of 10 large objects, each with small fields (name, status) and a large payload.
 	items := make([]interface{}, 10)
 	for i := 0; i < 10; i++ {
 		items[i] = map[string]interface{}{
@@ -2982,8 +2980,6 @@ func TestArrayDecomposition_SelectsSubFieldsAcrossItems(t *testing.T) {
 	}
 	raw, _ := json.Marshal(obj)
 
-	// Budget is enough for ~4 complete items (~16KB) but with decomposition,
-	// the trimmer can pick "name" and "status" from MORE items.
 	result := trimmer.ProcessForPrompt(ctx, string(raw), 4096, ResultProcessorContext{
 		StepID: "step-1", AgentName: "test", Instruction: "list service names and status",
 	})
@@ -2994,19 +2990,22 @@ func TestArrayDecomposition_SelectsSubFieldsAcrossItems(t *testing.T) {
 		t.Fatalf("Invalid JSON output: %v\nOutput: %.500s", err, result)
 	}
 
-	// Count how many distinct "service-N" names appear in the output
-	nameCount := 0
-	for i := 0; i < 10; i++ {
-		if strings.Contains(jsonPart, fmt.Sprintf("service-%d", i)) {
-			nameCount++
-		}
+	kept, ok := parsed["items"].([]interface{})
+	if !ok || len(kept) == 0 {
+		t.Fatalf("Expected at least one whole item kept, got: %.300s", jsonPart)
 	}
-
-	// With decomposition, we should see names from more items than without.
-	// Without decomposition, each 3.9KB item is atomic → fits ~1 item in 4KB.
-	// With decomposition, "name" (20B) + "status" (12B) per item → fits many.
-	if nameCount < 3 {
-		t.Errorf("Expected names from at least 3 items (decomposition benefit), got %d", nameCount)
+	// Every kept item must be WHOLE: a name without its payload would be the leaf
+	// scatter Phase 2 removes.
+	for i, it := range kept {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			t.Fatalf("item %d not an object: %v", i, it)
+		}
+		if _, hasName := m["name"]; hasName {
+			if _, hasPayload := m["payload"]; !hasPayload {
+				t.Errorf("item %d kept name without payload — leaf scatter must not happen: %v", i, m)
+			}
+		}
 	}
 }
 
@@ -3151,14 +3150,17 @@ func TestDeepNesting_MultiLevel(t *testing.T) {
 	}
 	raw, _ := json.Marshal(obj)
 
-	result := trimmer.ProcessForPrompt(ctx, string(raw), 2048, ResultProcessorContext{
+	// Budget large enough to keep at least one whole node (~2KB). Phase 2 selects whole
+	// units, not keyword-matched leaves: deeply-nested content (nodes[i].metrics.metric_name
+	// = "cpu_usage") survives because the whole node is kept as a unit, not because a
+	// deterministic heuristic cherry-picked the leaf by keyword. Relevance-to-a-query is
+	// the LLM's job now (§2.2).
+	result := trimmer.ProcessForPrompt(ctx, string(raw), 4096, ResultProcessorContext{
 		StepID: "step-1", AgentName: "monitoring", Instruction: "show cpu usage metrics",
 	})
 
-	// With deep decomposition, "cpu_usage" (metric_name) should be selectable
-	// even though it's 3 levels deep (nodes[0].metrics.metric_name).
 	if !strings.Contains(result, "cpu_usage") {
-		t.Errorf("Expected deeply nested 'cpu_usage' to be selected by keyword matching, got: %.500s", result)
+		t.Errorf("Expected deeply nested 'cpu_usage' to survive inside a whole-unit selection, got: %.500s", result)
 	}
 }
 
@@ -3577,5 +3579,220 @@ func BenchmarkStructuralTrimmer_NoBackfill(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		trimmer.ProcessForPrompt(ctx, input, 4096, stepCtx)
+	}
+}
+
+// --- Phase 2: whole-unit selection ---
+
+// TestSelectFields_WholeRecordsNotLeaves verifies the Phase 2 fix: an array of records
+// under a tight budget yields a few WHOLE records (every field of each kept record
+// present, including the large payload), not a scatter of cherry-picked leaf fields
+// across many records. This is the inverse of the old value-density behavior, which
+// would pack tiny high-density leaves (id/label) from many records and drop every
+// payload.
+func TestSelectFields_WholeRecordsNotLeaves(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+
+	// Each record exceeds 1024B (so it decomposes into selectable sub-fields), but a
+	// single record fits the budget — the case where whole-unit vs leaf selection diverges.
+	recs := make([]interface{}, 50)
+	for i := 0; i < 50; i++ {
+		recs[i] = map[string]interface{}{
+			"id":      fmt.Sprintf("rec-%02d", i),
+			"label":   "L",
+			"payload": strings.Repeat("x", 1100), // record ≈ 1.1KB > 1024 → decomposable
+		}
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"records": recs})
+
+	result := trimmer.ProcessForPrompt(context.Background(), string(raw), 4096, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "list records",
+	})
+
+	jsonPart, _ := splitAnnotation(result)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonPart)
+	}
+	records, ok := parsed["records"].([]interface{})
+	if !ok || len(records) == 0 {
+		t.Fatalf("expected some whole records kept, got: %s", jsonPart)
+	}
+	// Every kept record must be WHOLE: all fields present, including the large payload —
+	// never a scattered leaf like {"label":"L"} or {"id":"rec-00"} on its own.
+	for i, r := range records {
+		rec, ok := r.(map[string]interface{})
+		if !ok {
+			t.Fatalf("record %d is not an object: %v", i, r)
+		}
+		for _, field := range []string{"id", "label", "payload"} {
+			if _, has := rec[field]; !has {
+				t.Errorf("record %d missing field %q — Phase 2 must keep WHOLE records, got: %v", i, field, rec)
+			}
+		}
+	}
+}
+
+// TestSelectFields_LogsKeepWholeEntriesNotLabels reproduces the incident shape (Loki
+// streams) and verifies Phase 2 selection keeps whole log entries (the substantive
+// records) rather than starving them for tiny stream labels — the inverse of the
+// value-density defect that kept only labels.logtag.
+func TestSelectFields_LogsKeepWholeEntriesNotLabels(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+
+	line := "2026-06-18T12:00:00Z level=error msg=\"panic: nil pointer dereference in handler\""
+	var streams []interface{}
+	for i := 0; i < 20; i++ {
+		entries := make([]interface{}, 8)
+		for j := range entries {
+			entries[j] = map[string]interface{}{"line": fmt.Sprintf("%s seq=%d-%d", line, i, j)}
+		}
+		streams = append(streams, map[string]interface{}{
+			"labels":  map[string]interface{}{"level": "error", "logtag": "F"},
+			"entries": entries,
+		})
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"streams": streams})
+
+	// Budget below one whole stream (~700B+) but well above one entry (~90B), forcing
+	// a descent that must prefer substantive entries over scaffolding labels.
+	result := trimmer.ProcessForPrompt(context.Background(), string(raw), 1500, ResultProcessorContext{
+		StepID: "step-17", AgentName: "obs-tool", Instruction: "find panic errors",
+	})
+
+	// Whole log lines (the records) must survive.
+	if !strings.Contains(result, "panic: nil pointer dereference") {
+		t.Errorf("Expected verbatim log lines (whole entries) to survive, got: %.400s", result)
+	}
+	// The bytes must be spent on entries, not crowded out by logtag scaffolding. Verify
+	// at least one entry survived per the structure (entries present in output).
+	if !strings.Contains(result, "\"line\"") && !strings.Contains(result, "line=") {
+		t.Errorf("Expected entry 'line' content in output, got: %.400s", result)
+	}
+}
+
+// --- Phase 0: degenerate-trim honest disclosure ---
+
+// TestProcessForPrompt_DegenerateTrim_HonestDisclosure reproduces the incident
+// (req 1781784008606859622): a logs-shaped result whose meaningful content
+// (whole log lines) is far larger than the per-result budget, so the structural
+// trimmer can keep only tiny Loki stream labels. The output must carry the honest
+// "severely reduced / UNKNOWN" disclosure — not the neutral "[trimmed: …]" note,
+// which implies coverage and invites the false-negative inference ("no ERROR
+// entries found") — and the metadata must flag the trim as degenerate.
+func TestProcessForPrompt_DegenerateTrim_HonestDisclosure(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+
+	// Loki-shaped payload: many streams, each with small labels and a large log
+	// line. A single line exceeds the whole per-result budget, so only labels survive.
+	line := strings.Repeat("2026-06-18T12:00:00Z level=info msg=\"request served\" ", 40) // ~2KB
+	var streams []interface{}
+	for i := 0; i < 40; i++ {
+		streams = append(streams, map[string]interface{}{
+			"labels":  map[string]interface{}{"level": "info", "logtag": "F"},
+			"entries": []interface{}{map[string]interface{}{"line": line}},
+		})
+	}
+	payload, err := json.Marshal(map[string]interface{}{"streams": streams})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+	// Budget ~2KB (the incident's per-result budget); original is ~80KB+.
+	result := trimmer.ProcessForPrompt(ctx, string(payload), 2056, ResultProcessorContext{
+		StepID: "step-17", AgentName: "devops-observability-tool", Instruction: "find ERROR logs",
+	})
+
+	tail := result
+	if len(tail) > 400 {
+		tail = tail[len(tail)-400:]
+	}
+
+	if !meta.Degenerate {
+		t.Errorf("Expected metadata.Degenerate=true (kept %d of %d bytes, ratio=%.4f)",
+			meta.TrimmedBytes, meta.OriginalBytes, meta.KeptRatio)
+	}
+	if meta.KeptRatio >= degenerateKeptRatio {
+		t.Errorf("Expected KeptRatio < %.2f, got %.4f", degenerateKeptRatio, meta.KeptRatio)
+	}
+	if !strings.Contains(result, "severely reduced") {
+		t.Errorf("Expected honest 'severely reduced' disclosure, got tail: %s", tail)
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected 'UNKNOWN' guidance in disclosure, got tail: %s", tail)
+	}
+	// The coverage-implying neutral note must NOT be present on a degenerate trim.
+	if strings.Contains(result, "fields kept") || strings.Contains(result, "entries kept") {
+		t.Errorf("Degenerate trim must not use the coverage-implying note, got tail: %s", tail)
+	}
+}
+
+// TestReconstructHierarchy_NestedArrays guards the Finding-3 fix: a path with two array
+// levels (streams[0].entries[2], the incident shape) must rebuild "entries" as a nested
+// ARRAY, not collapse the inner index into a literal "entries[2]" map key.
+func TestReconstructHierarchy_NestedArrays(t *testing.T) {
+	obj := map[string]interface{}{
+		"streams": []interface{}{
+			map[string]interface{}{
+				"labels": map[string]interface{}{"level": "error"},
+				"entries": []interface{}{
+					map[string]interface{}{"line": "first"},
+					map[string]interface{}{"line": "second"},
+					map[string]interface{}{"line": "third"},
+				},
+			},
+		},
+	}
+	selected := map[string]bool{"streams[0].entries[2]": true}
+
+	result := reconstructHierarchy(obj, selected, nil)
+
+	streams, ok := result["streams"].([]interface{})
+	if !ok || len(streams) != 1 {
+		t.Fatalf("expected streams array with 1 item, got %T %v", result["streams"], result["streams"])
+	}
+	stream0, ok := streams[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected stream object, got %T", streams[0])
+	}
+	if _, bad := stream0["entries[2]"]; bad {
+		t.Fatalf("nested array index leaked as a literal map key 'entries[2]': %v", stream0)
+	}
+	entries, ok := stream0["entries"].([]interface{})
+	if !ok || len(entries) != 1 {
+		t.Fatalf("expected nested 'entries' ARRAY with 1 item, got %T %v", stream0["entries"], stream0["entries"])
+	}
+	entry, ok := entries[0].(map[string]interface{})
+	if !ok || entry["line"] != "third" {
+		t.Errorf("expected the index-2 entry (line='third') densified to position 0, got %v", entries[0])
+	}
+}
+
+// TestProcessForPrompt_PlainTextDegenerateDisclosure guards the floor disclosure-parity
+// fix: a large non-JSON (plain text) result trimmed to a tiny budget must carry the honest
+// "severely reduced … UNKNOWN" note — not just "[trimmed: N/M sentences]" — so the
+// synthesizer cannot infer absence from a near-empty floor trim.
+func TestProcessForPrompt_PlainTextDegenerateDisclosure(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+	input := strings.Repeat("alpha beta gamma delta epsilon. ", 400) // ~12.8KB plain text, non-JSON
+
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+	out := trimmer.ProcessForPrompt(ctx, input, 200, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "find errors",
+	})
+
+	if meta.Method != "structural_text" {
+		t.Fatalf("expected Method=structural_text, got %q", meta.Method)
+	}
+	if !meta.Degenerate {
+		t.Errorf("expected Degenerate=true (kept %d of %d bytes)", meta.TrimmedBytes, meta.OriginalBytes)
+	}
+	if !strings.Contains(out, "severely reduced") || !strings.Contains(out, "UNKNOWN") {
+		tail := out
+		if len(tail) > 200 {
+			tail = tail[len(tail)-200:]
+		}
+		t.Errorf("expected honest disclosure on a degenerate plain-text floor trim, got tail: %s", tail)
 	}
 }

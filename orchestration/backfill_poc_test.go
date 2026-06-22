@@ -142,8 +142,13 @@ func TestPOC_DevopsBackfill_RealData(t *testing.T) {
 }
 
 func splitAnnotation(result string) (jsonPart, annotation string) {
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
-		return result[:idx], result[idx:]
+	// Trim annotations come in two forms: the neutral "[trimmed: …]" note and the
+	// degenerate "[severely reduced: …]" honest-disclosure note (Phase 0). Split on
+	// whichever appears first.
+	for _, marker := range []string{"\n[trimmed:", "\n[severely reduced:"} {
+		if idx := strings.Index(result, marker); idx >= 0 {
+			return result[:idx], result[idx:]
+		}
 	}
 	return result, ""
 }

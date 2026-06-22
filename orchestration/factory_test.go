@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // stringContains is a helper for checking if a string contains a substring
@@ -1941,8 +1943,9 @@ func TestWithResultDistill(t *testing.T) {
 		if !config.ResultDistill.Enabled {
 			t.Error("Expected ResultDistill.Enabled=true")
 		}
-		if config.ResultDistill.DistillThreshold != 32768 {
-			t.Errorf("Expected DistillThreshold to remain 32768, got %d", config.ResultDistill.DistillThreshold)
+		// Zero threshold leaves the DefaultConfig value untouched (16384 since Phase 1).
+		if config.ResultDistill.DistillThreshold != 16384 {
+			t.Errorf("Expected DistillThreshold to remain 16384, got %d", config.ResultDistill.DistillThreshold)
 		}
 	})
 
@@ -1951,8 +1954,9 @@ func TestWithResultDistill(t *testing.T) {
 		opt := WithResultDistill(true, -1)
 		opt(config)
 
-		if config.ResultDistill.DistillThreshold != 32768 {
-			t.Errorf("Expected DistillThreshold to remain 32768, got %d", config.ResultDistill.DistillThreshold)
+		// Negative threshold leaves the DefaultConfig value untouched (16384 since Phase 1).
+		if config.ResultDistill.DistillThreshold != 16384 {
+			t.Errorf("Expected DistillThreshold to remain 16384, got %d", config.ResultDistill.DistillThreshold)
 		}
 	})
 
@@ -2601,4 +2605,103 @@ func TestCreateOrchestrator_TieredProvider_NoCustomInstructions(t *testing.T) {
 	if len(tiered.customInstructions) != 0 {
 		t.Errorf("Expected 0 CustomInstructions, got %d", len(tiered.customInstructions))
 	}
+}
+
+// --- Phase 1: LLM distillation is the default result-processing path ---
+
+// TestCreateOrchestrator_DistillationDefaultOn verifies the Phase 1 default flip:
+// distillation is on by default, so with an AIClient present the wired processor is
+// the LLMDistiller; with no AIClient it falls open to the StructuralTrimmer floor;
+// and an injected custom processor (Layer 3) still wins over both.
+func TestCreateOrchestrator_DistillationDefaultOn(t *testing.T) {
+	t.Run("default config enables distillation", func(t *testing.T) {
+		if !DefaultConfig().ResultDistill.Enabled {
+			t.Error("Expected ResultDistill.Enabled=true by default (Phase 1)")
+		}
+	})
+
+	t.Run("AIClient present wires LLMDistiller", func(t *testing.T) {
+		deps := OrchestratorDependencies{
+			Discovery: NewMockDiscovery(),
+			AIClient:  NewMockAIClient(),
+		}
+		orchestrator, err := CreateOrchestrator(DefaultConfig(), deps)
+		if err != nil {
+			t.Fatalf("CreateOrchestrator: %v", err)
+		}
+		if _, ok := orchestrator.resultProcessor.(*LLMDistiller); !ok {
+			t.Errorf("Expected *LLMDistiller, got %T", orchestrator.resultProcessor)
+		}
+	})
+
+	t.Run("no AIClient falls open to StructuralTrimmer", func(t *testing.T) {
+		deps := OrchestratorDependencies{
+			Discovery: NewMockDiscovery(),
+			AIClient:  nil,
+		}
+		orchestrator, err := CreateOrchestrator(DefaultConfig(), deps)
+		if err != nil {
+			t.Fatalf("CreateOrchestrator: %v", err)
+		}
+		if _, ok := orchestrator.resultProcessor.(*StructuralTrimmer); !ok {
+			t.Errorf("Expected *StructuralTrimmer floor when AIClient is nil, got %T", orchestrator.resultProcessor)
+		}
+	})
+
+	t.Run("custom ResultProcessor wins (Layer 3)", func(t *testing.T) {
+		custom := NewStructuralTrimmer([]string{"sentinel"}, nil)
+		deps := OrchestratorDependencies{
+			Discovery:       NewMockDiscovery(),
+			AIClient:        NewMockAIClient(),
+			ResultProcessor: custom,
+		}
+		orchestrator, err := CreateOrchestrator(DefaultConfig(), deps)
+		if err != nil {
+			t.Fatalf("CreateOrchestrator: %v", err)
+		}
+		if orchestrator.resultProcessor != custom {
+			t.Errorf("Expected the injected custom processor to win, got %T", orchestrator.resultProcessor)
+		}
+	})
+
+	t.Run("DistillCache wraps the distiller in a cache (Phase 3)", func(t *testing.T) {
+		deps := OrchestratorDependencies{
+			Discovery:    NewMockDiscovery(),
+			AIClient:     NewMockAIClient(),
+			DistillCache: &core.MockDigestCache{},
+		}
+		orchestrator, err := CreateOrchestrator(DefaultConfig(), deps)
+		if err != nil {
+			t.Fatalf("CreateOrchestrator: %v", err)
+		}
+		if _, ok := orchestrator.resultProcessor.(*cachingProcessor); !ok {
+			t.Errorf("Expected *cachingProcessor when DistillCache is provided, got %T", orchestrator.resultProcessor)
+		}
+	})
+}
+
+// TestBuildDistillationEnabledResultProcessor covers the Layer-2 constructor's wiring.
+func TestBuildDistillationEnabledResultProcessor(t *testing.T) {
+	cfg := DefaultConfig().ResultDistill
+
+	t.Run("AI + cache yields a caching distiller", func(t *testing.T) {
+		p := BuildDistillationEnabledResultProcessor(cfg, NewMockAIClient(), &core.MockDigestCache{}, nil)
+		if _, ok := p.(*cachingProcessor); !ok {
+			t.Errorf("expected *cachingProcessor, got %T", p)
+		}
+	})
+
+	t.Run("AI, no cache yields a bare distiller", func(t *testing.T) {
+		p := BuildDistillationEnabledResultProcessor(cfg, NewMockAIClient(), nil, nil)
+		if _, ok := p.(*LLMDistiller); !ok {
+			t.Errorf("expected *LLMDistiller, got %T", p)
+		}
+	})
+
+	t.Run("nil AI falls open to the StructuralTrimmer floor", func(t *testing.T) {
+		p := BuildDistillationEnabledResultProcessor(cfg, nil, nil, nil)
+		if _, ok := p.(*StructuralTrimmer); !ok {
+			t.Errorf("expected *StructuralTrimmer floor, got %T", p)
+		}
+	})
 }

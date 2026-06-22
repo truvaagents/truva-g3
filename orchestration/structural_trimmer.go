@@ -99,13 +99,17 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 	var data interface{}
 	if err := json.Unmarshal([]byte(response), &data); err != nil {
 		result := t.trimPlainText(response, maxBytes, stepCtx.Instruction)
+		degenerate, keptRatio := degenerateTrim(len(response), len(result))
 		captureTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes: len(response),
 			TrimmedBytes:  len(result),
 			Method:        "structural_text",
 			Keywords:      extractKeywords(stepCtx.Instruction),
+			Degenerate:    degenerate,
+			KeptRatio:     keptRatio,
 		})
-		return result
+		// Honest disclosure when the floor kept a non-representative fraction (no-op otherwise).
+		return result + degenerateNote(len(response), len(result))
 	}
 
 	// Phase 5 Fix 2: Unwrap JSON-valued strings before inventory building so
@@ -131,7 +135,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 	)
 
 	if obj, ok := data.(map[string]interface{}); ok {
-		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths := t.selectFieldsWithMeta(ctx, obj, maxBytes, keywords)
+		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths, degenerate, keptRatio := t.selectFieldsWithMeta(ctx, obj, maxBytes, len(response), keywords)
 		captureTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes:    len(response),
 			TrimmedBytes:     len(result),
@@ -142,6 +146,8 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 			ThresholdSkipped: thresholdSkipped,
 			Keywords:         keywords,
 			MatchedPaths:     matchedPaths,
+			Degenerate:       degenerate,
+			KeptRatio:        keptRatio,
 		})
 		if t.logger != nil {
 			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON object)", map[string]interface{}{
@@ -164,12 +170,15 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 
 	if arr, ok := data.([]interface{}); ok {
 		result, keptCount, totalCount := t.trimArray(arr, maxBytes)
+		degenerate, keptRatio := degenerateTrim(len(response), len(result))
 		captureTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes: len(response),
 			TrimmedBytes:  len(result),
 			Method:        "structural_array",
 			FieldsKept:    keptCount,
 			FieldsDropped: totalCount - keptCount,
+			Degenerate:    degenerate,
+			KeptRatio:     keptRatio,
 		})
 		if t.logger != nil {
 			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON array)", map[string]interface{}{
@@ -181,16 +190,19 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 				"trimmed_bytes":  len(result),
 			})
 		}
-		return result
+		return result + degenerateNote(len(response), len(result))
 	}
 
 	fallback := truncateResultBytes(response, maxBytes)
+	degenerate, keptRatio := degenerateTrim(len(response), len(fallback))
 	captureTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: len(response),
 		TrimmedBytes:  len(fallback),
 		Method:        "truncate",
+		Degenerate:    degenerate,
+		KeptRatio:     keptRatio,
 	})
-	return fallback
+	return fallback + degenerateNote(len(response), len(fallback))
 }
 
 func (t *StructuralTrimmer) buildFieldInventory(obj map[string]interface{}, prefix string, depth int) []fieldEntry {
@@ -374,20 +386,49 @@ func scoreObjectContent(obj map[string]interface{}, keywords []string) float64 {
 	return bonus
 }
 
-func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[string]interface{}, maxBytes int, keywords []string) (string, int, int, int, int, []string) {
+// selectFieldsWithMeta returns the trimmed output plus selection counters, the matched
+// paths, and the degenerate decision (degenerate, keptRatio) computed on the CONTENT
+// length — the same basis used for the in-prompt "severely reduced" annotation — so the
+// caller stamps metadata that agrees with what the synthesizing LLM is told.
+func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[string]interface{}, maxBytes, originalBytes int, keywords []string) (string, int, int, int, int, []string, bool, float64) {
 	inventory := t.buildFieldInventory(obj, "", 0)
 	for i := range inventory {
 		inventory[i].relevance = t.scoreField(inventory[i], keywords)
 	}
 
-	// Sort by value = relevance/size (descending)
+	// Whole-unit selection (Phase 2): sort by depth ASCENDING, then size DESCENDING —
+	// never value-density.
+	//
+	// Semantic relevance to a natural-language query is the LLM's job now: distillation
+	// is the primary path and this StructuralTrimmer is only the pre-filter that bounds
+	// size for the LLM and the fail-open floor. A deterministic algorithm cannot decide
+	// what a query means, so this sort makes no relevance cut. Instead:
+	//   1. depth ascending — whole top-level fields and whole array items are considered
+	//      before any of their nested leaves, so small-but-meaningful fields (a ticker
+	//      symbol, a metric block) and whole records are kept as units rather than being
+	//      crowded out by, or decomposed into, deep scaffolding;
+	//   2. size descending within a depth — when the budget forces a descent below a
+	//      unit that doesn't fit, substantive content (a 2 KB log line) is preferred over
+	//      tiny scaffolding (a 15 B stream label). This is the exact inverse of the old
+	//      value-density defect, which packed labels and dropped every log line.
+	// Combined with the ancestor/descendant dedup below, a unit that fits is kept whole
+	// (everything inside it); only a unit too big to fit is descended into.
+	//
+	// Relevance still informs the secondary backfill pass and key ordering, but never
+	// the primary cut. Positional order is restored in reconstructHierarchy (array items
+	// re-sorted by original index), so selection order does not affect output order.
 	sort.Slice(inventory, func(i, j int) bool {
-		vi := inventory[i].relevance / float64(max(inventory[i].size, 1))
-		vj := inventory[j].relevance / float64(max(inventory[j].size, 1))
-		if vi != vj {
-			return vi > vj
+		if inventory[i].depth != inventory[j].depth {
+			return inventory[i].depth < inventory[j].depth
 		}
-		return inventory[i].size < inventory[j].size
+		if inventory[i].size != inventory[j].size {
+			return inventory[i].size > inventory[j].size
+		}
+		// Stable tiebreakers for equal-size units: original array position, then path.
+		if inventory[i].arrayIndex != inventory[j].arrayIndex {
+			return inventory[i].arrayIndex < inventory[j].arrayIndex
+		}
+		return inventory[i].path < inventory[j].path
 	})
 
 	// Step 3 (§4.4.3 / RESEARCH §7.2): Budget-constrained greedy selection.
@@ -395,10 +436,11 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 	// Ancestor/descendant checks prevent double-counting:
 	//   - If a parent is already selected, skip its children (included via parent).
 	//   - If children are already selected, skip the parent (would re-include everything).
-	selectedSet := make(map[string]bool) // fast lookup for ancestor/descendant checks
-	var selectedPaths []string           // ordered list for annotation
-	wrapperKeys := make(map[string]bool) // intermediate wrapper paths already budgeted
-	budgetUsed := 2                      // "{}" root wrapper
+	selectedSet := make(map[string]bool)         // fast lookup for ancestor/descendant checks
+	var selectedPaths []string                   // ordered list for annotation
+	wrapperKeys := make(map[string]bool)         // intermediate wrapper paths already budgeted
+	arraysWithWholeItem := make(map[string]bool) // arrays from which a whole item was kept
+	budgetUsed := 2                              // "{}" root wrapper
 	droppedCount := 0
 
 	for _, entry := range inventory {
@@ -408,6 +450,15 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 		}
 		// Descendant check: skip if a child under this entry is already selected.
 		if !entry.isScalar && hasDescendant(entry.path, selectedSet) {
+			continue
+		}
+		// Phase 2 whole-unit guard: once whole items of an array have been kept, do not
+		// also pack partial SUB-FIELDS of that array's other (unselected) items into the
+		// leftover budget — that reintroduces the leaf scatter this phase removes (e.g.
+		// keeping {"id":...} from 40 records instead of a few whole records). Whole items
+		// of the array remain eligible; only their individual leaves are suppressed.
+		if ap := containingArrayPath(entry.path); ap != "" && arraysWithWholeItem[ap] {
+			droppedCount++
 			continue
 		}
 
@@ -440,6 +491,11 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 					wrapperKeys[strings.Join(parts[:i+1], ".")] = true
 				}
 			}
+			// Record that this array yielded a whole item, so its other items' leaves
+			// are suppressed above (whole-unit guard).
+			if entry.arrayIndex >= 0 {
+				arraysWithWholeItem[arrayPathOf(entry.path)] = true
+			}
 		} else {
 			droppedCount++
 		}
@@ -466,6 +522,11 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 				continue
 			}
 			if !e.isScalar {
+				continue
+			}
+			// Whole-unit guard (see greedy loop): don't backfill an array item's leaf
+			// when whole items of that array were already kept.
+			if ap := containingArrayPath(e.path); ap != "" && arraysWithWholeItem[ap] {
 				continue
 			}
 			srcVal := navigateToValue(obj, e.path)
@@ -570,9 +631,9 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 		}
 	}
 
-	// Note: No fallback needed. When all relevance scores are 0 (no keyword matches),
-	// the primary sort's size-ascending tiebreaker already produces smallest-first ordering,
-	// which is the optimal greedy selection for maximizing field count within budget.
+	// Note: No fallback needed. The size-descending primary sort keeps whole units
+	// (largest substantive content first); the backfill pass below then recovers
+	// dropped string fields into any leftover budget, highest-relevance first.
 
 	// Step 4 (§4.4.3 / RESEARCH §7.2): Hierarchy reconstruction.
 	// Selected fields at any depth are placed back into their original nesting.
@@ -589,7 +650,7 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 
 	output, err := marshalOrdered(reconstructHierarchy(obj, selectedSet, valueOverrides), fieldRelevance)
 	if err != nil {
-		return truncateResultBytes(fmt.Sprintf("%v", obj), maxBytes), 0, 0, 0, 0, nil
+		return truncateResultBytes(fmt.Sprintf("%v", obj), maxBytes), 0, 0, 0, 0, nil, false, 1
 	}
 
 	// Safety check: if wrapper overhead estimation was slightly off, batch-remove
@@ -656,7 +717,19 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 	if backfilledCount > 0 {
 		backfillNote = fmt.Sprintf(" (%d backfilled)", backfilledCount)
 	}
-	if arrayItemCount > 0 {
+	// Degenerate trim: so little of the source survived that the kept fields are
+	// non-representative. Computed on the content length (output, excluding this
+	// annotation) and returned so the caller's metadata flag matches this decision.
+	// The honest disclosure replaces the neutral "[trimmed: …]" note, which implies
+	// coverage and invites a false-negative inference (e.g. "no ERROR entries found")
+	// about content that was never actually examined.
+	degenerate, keptRatio := degenerateTrim(originalBytes, len(output))
+	if degenerate {
+		annotation = fmt.Sprintf(
+			"\n[severely reduced: kept %d of ~%d bytes (%d/%d items%s); most content omitted — "+
+				"treat anything NOT shown as UNKNOWN, do not infer it is absent]",
+			len(output), originalBytes, len(selectedPaths), candidateCount, backfillNote)
+	} else if arrayItemCount > 0 {
 		annotation = fmt.Sprintf("\n[trimmed: %d/%d entries kept%s (%d array items), %d dropped]",
 			len(selectedPaths), candidateCount, backfillNote, arrayItemCount, droppedCount)
 	} else {
@@ -666,9 +739,9 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 	}
 
 	if len(output)+len(annotation) <= maxBytes {
-		return string(output) + annotation, len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths
+		return string(output) + annotation, len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths, degenerate, keptRatio
 	}
-	return string(output), len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths
+	return string(output), len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths, degenerate, keptRatio
 }
 
 func (t *StructuralTrimmer) trimArray(arr []interface{}, maxBytes int) (string, int, int) {
@@ -769,6 +842,38 @@ func hasAncestor(path string, selected map[string]bool) bool {
 	return false
 }
 
+// arrayPathOf returns the path of the array that owns an array-item path.
+// "records[3]" -> "records"; "streams[0].entries[2]" -> "streams[0].entries".
+// Returns "" if the path is not an array item.
+func arrayPathOf(itemPath string) string {
+	openIdx := strings.LastIndex(itemPath, "[")
+	if openIdx < 0 {
+		return ""
+	}
+	return itemPath[:openIdx]
+}
+
+// containingArrayPath returns the path of the array whose item directly contains the
+// given SUB-FIELD path, or "" if the path is not a sub-field of an array item.
+// "records[3].id" -> "records"; "s[0].entries[2].line" -> "s[0].entries";
+// "records[3]" -> "" (an item itself, not a sub-field); "data.metric" -> "" (no array).
+func containingArrayPath(path string) string {
+	closeIdx := strings.LastIndex(path, "]")
+	// No array bracket, or the path ends at "]" (it is an item, not a sub-field of one).
+	if closeIdx < 0 || closeIdx == len(path)-1 {
+		return ""
+	}
+	// A sub-field of the array item ending at closeIdx must continue with ".suffix".
+	if path[closeIdx+1] != '.' {
+		return ""
+	}
+	openIdx := strings.LastIndex(path[:closeIdx], "[")
+	if openIdx < 0 {
+		return ""
+	}
+	return path[:openIdx]
+}
+
 // hasDescendant reports whether any path in selected is a child of prefix.
 // Checks both "." children (map fields) and "[" children (array items).
 // Examples: "data.news" has descendants "data.news.extra" and "data.news[0]".
@@ -844,154 +949,88 @@ func maxRelevanceForKey(key string, fieldRelevance map[string]float64) float64 {
 	return best
 }
 
-// reconstructHierarchy builds a map containing only the selected fields,
-// preserving the original nesting structure. Handles both map paths
-// ("data.metric.pe_ratio") and array paths ("data.news[0]").
-// Array items are reconstructed as dense arrays sorted by original index
-// (deterministic ordering despite Go's random map iteration).
+// reconstructHierarchy builds a map containing only the selected fields, preserving the
+// original nesting structure. It walks each selected path through splitPath — the same
+// grammar navigateToValue reads — so it handles arbitrary nesting, including arrays inside
+// arrays (e.g. "streams[0].entries[2]" → {"streams":[{"entries":[...]}]}), not just one
+// array level. Array elements become dense arrays sorted by original index (deterministic
+// despite Go's random map iteration; the dense positions renumber the original indices).
 func reconstructHierarchy(obj map[string]interface{}, selectedPaths map[string]bool, valueOverrides map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	// indexedItem tracks both the value and its original array position.
-	// Without this, items collected via `for path := range selectedPaths`
-	// (random Go map iteration) would produce non-deterministic dense arrays.
-	type indexedItem struct {
-		index int
-		value interface{}
+	// reconNode is an interior node (object children by key and/or array elements by index)
+	// or a leaf carrying a selected value. The ancestor/descendant dedup in selection means
+	// a node is never both, so a leaf takes precedence when building output.
+	type reconNode struct {
+		leaf     bool
+		value    interface{}
+		children map[string]*reconNode // object fields
+		elems    map[int]*reconNode    // sparse array indices (densified on build)
 	}
-
-	// Collect array items grouped by parent path for dense reconstruction.
-	// Key: parent path (e.g., "data.news"), Value: items with original indices.
-	arrayItems := make(map[string][]indexedItem)
-
-	// arrayItemObjects tracks reconstructed objects for array sub-field paths.
-	// Key: "parentPath#index" (e.g., "items#0"), Value: merged object fields.
-	// Phase 5 introduces sub-field paths like "items[0].name" alongside atomic
-	// paths like "items[0]". Sub-fields at the same index must be merged into
-	// a single object within the dense array.
-	arrayItemObjects := make(map[string]map[string]interface{})
+	newNode := func() *reconNode {
+		return &reconNode{children: map[string]*reconNode{}, elems: map[int]*reconNode{}}
+	}
+	root := newNode()
 
 	for path := range selectedPaths {
-		// Check if this is an array item path (contains "[")
-		if bracketIdx := strings.Index(path, "["); bracketIdx >= 0 {
-			parentPath := path[:bracketIdx]
-			// Extract the original array index from the path
-			closeBracket := strings.Index(path[bracketIdx:], "]")
-			idx := 0
-			if closeBracket > 1 {
-				for _, c := range path[bracketIdx+1 : bracketIdx+closeBracket] {
-					idx = idx*10 + int(c-'0')
-				}
-			}
-
-			// Check for sub-field suffix after "]" (e.g., "items[0].name" → ".name")
-			afterBracket := path[bracketIdx+closeBracket+1:]
-			if afterBracket != "" && strings.HasPrefix(afterBracket, ".") {
-				// Sub-field path: merge into a reconstructed object for this index.
-				// Split by "." to handle multi-level paths like "metadata.name" →
-				// {"metadata":{"name":"..."}} instead of flat {"metadata.name":"..."}.
-				subFieldParts := strings.Split(afterBracket[1:], ".") // strip leading "."
-				compositeKey := fmt.Sprintf("%s#%d", parentPath, idx)
-				if arrayItemObjects[compositeKey] == nil {
-					arrayItemObjects[compositeKey] = make(map[string]interface{})
-				}
-				srcVal := navigateToValue(obj, path)
-				if valueOverrides != nil {
-					if override, ok := valueOverrides[path]; ok {
-						srcVal = override
-					}
-				}
-				// Navigate/create nested maps for multi-level sub-fields.
-				current := arrayItemObjects[compositeKey]
-				for si, part := range subFieldParts {
-					if si == len(subFieldParts)-1 {
-						current[part] = srcVal
-					} else {
-						if next, ok := current[part].(map[string]interface{}); ok {
-							current = next
-						} else {
-							next := make(map[string]interface{})
-							current[part] = next
-							current = next
-						}
-					}
-				}
-				continue
-			}
-
-			// Atomic array item: retrieve the full original value
-			srcVal := navigateToValue(obj, path)
-			arrayItems[parentPath] = append(arrayItems[parentPath], indexedItem{index: idx, value: srcVal})
-			continue
-		}
-
-		// Map path: use override if available, otherwise navigate to source value
-		parts := strings.Split(path, ".")
 		srcVal := navigateToValue(obj, path)
 		if valueOverrides != nil {
 			if override, ok := valueOverrides[path]; ok {
 				srcVal = override
 			}
 		}
-
-		current := result
-		for i, part := range parts {
-			if i == len(parts)-1 {
-				current[part] = srcVal
+		segments := splitPath(path)
+		cur := root
+		for i, seg := range segments {
+			var next *reconNode
+			if seg.index >= 0 {
+				if next = cur.elems[seg.index]; next == nil {
+					next = newNode()
+					cur.elems[seg.index] = next
+				}
 			} else {
-				if next, ok := current[part].(map[string]interface{}); ok {
-					current = next
-				} else {
-					next := make(map[string]interface{})
-					current[part] = next
-					current = next
+				if next = cur.children[seg.key]; next == nil {
+					next = newNode()
+					cur.children[seg.key] = next
 				}
 			}
-		}
-	}
-
-	// Merge sub-field objects into the arrayItems collection.
-	// Each composite key "parentPath#index" becomes an indexedItem with the merged object.
-	for compositeKey, fieldMap := range arrayItemObjects {
-		hashIdx := strings.LastIndex(compositeKey, "#")
-		parentPath := compositeKey[:hashIdx]
-		idx := 0
-		for _, c := range compositeKey[hashIdx+1:] {
-			idx = idx*10 + int(c-'0')
-		}
-		arrayItems[parentPath] = append(arrayItems[parentPath], indexedItem{index: idx, value: fieldMap})
-	}
-
-	// Place collected array items into the result hierarchy as dense arrays.
-	// Sort by original index first to ensure deterministic output regardless
-	// of Go map iteration order.
-	for parentPath, items := range arrayItems {
-		sort.Slice(items, func(i, j int) bool { return items[i].index < items[j].index })
-
-		// Extract values in sorted order for dense array
-		dense := make([]interface{}, len(items))
-		for i, item := range items {
-			dense[i] = item.value
-		}
-
-		parts := strings.Split(parentPath, ".")
-		current := result
-		for i, part := range parts {
-			if i == len(parts)-1 {
-				// Place the dense array
-				current[part] = dense
-			} else {
-				if next, ok := current[part].(map[string]interface{}); ok {
-					current = next
-				} else {
-					next := make(map[string]interface{})
-					current[part] = next
-					current = next
-				}
+			if i == len(segments)-1 {
+				next.leaf = true
+				next.value = srcVal
 			}
+			cur = next
 		}
 	}
 
+	// build converts a node into its JSON value: a leaf's value, a dense array (elements in
+	// ascending original-index order), or an object.
+	var build func(n *reconNode) interface{}
+	build = func(n *reconNode) interface{} {
+		if n.leaf {
+			return n.value
+		}
+		if len(n.elems) > 0 {
+			idxs := make([]int, 0, len(n.elems))
+			for idx := range n.elems {
+				idxs = append(idxs, idx)
+			}
+			sort.Ints(idxs)
+			arr := make([]interface{}, 0, len(idxs))
+			for _, idx := range idxs {
+				arr = append(arr, build(n.elems[idx]))
+			}
+			return arr
+		}
+		m := make(map[string]interface{}, len(n.children))
+		for k, child := range n.children {
+			m[k] = build(child)
+		}
+		return m
+	}
+
+	// Top-level paths always begin with a map key, so the root is an object.
+	result := make(map[string]interface{}, len(root.children))
+	for k, child := range root.children {
+		result[k] = build(child)
+	}
 	return result
 }
 

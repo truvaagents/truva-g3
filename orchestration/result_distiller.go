@@ -103,6 +103,36 @@ func (d *LLMDistiller) ProcessForPrompt(
 
 	distillStart := time.Now()
 
+	// Output target, shared by the single-call and map-reduce paths.
+	//
+	// Shrink to the per-result budget only when that budget is a MEANINGFUL smaller value.
+	// A 0/near-0 budget means the BudgetAllocator saturated and gave this (large) result
+	// nothing — but distillation still compresses it to ~TargetSize regardless, so a 0
+	// target must NOT produce a "max 0 characters" prompt (which makes the model answer
+	// "impossible / no matching entries"). Ignore a non-positive budget and floor the
+	// target so distillation always has room to emit a useful compaction.
+	// (Live evidence: orch-1781973307736373861 — 8 oversized steps got budget 0 → empty.)
+	targetSize := d.config.TargetSize
+	if maxBytes > 0 && maxBytes < targetSize {
+		targetSize = maxBytes
+	}
+	if targetSize < minDistillTargetSize {
+		targetSize = minDistillTargetSize
+	}
+
+	// Outlier path: a result too large for a single model context is chunked and
+	// map-reduced over the FULL result. This bypasses the structural pre-filter below,
+	// which would lossily trim the bulk before the LLM ever saw it.
+	if d.config.ModelContextTokens > 0 && estimateTokens(result) > d.config.ModelContextTokens {
+		telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_route",
+			attribute.String("request_id", requestID),
+			attribute.String("step_id", stepCtx.StepID),
+			attribute.Int("original_bytes", len(result)),
+			attribute.Int("estimated_tokens", estimateTokens(result)),
+		)
+		return d.mapReduceCompact(ctx, result, targetSize, stepCtx)
+	}
+
 	// Stage 1: Pre-filter
 	preFiltered := d.preFilter.ProcessForPrompt(ctx, result, d.config.PreFilterBudget, stepCtx)
 
@@ -114,10 +144,6 @@ func (d *LLMDistiller) ProcessForPrompt(
 	)
 
 	// Stage 2: LLM distill
-	targetSize := d.config.TargetSize
-	if maxBytes < targetSize {
-		targetSize = maxBytes
-	}
 	prompt := d.buildDistillationPrompt(preFiltered, targetSize, stepCtx)
 
 	// Scale MaxTokens from target size (~3-4 chars/token + headroom)
@@ -129,6 +155,15 @@ func (d *LLMDistiller) ProcessForPrompt(
 	options := mergeAIOptions(baseOptions, d.aiOptionsOverride)
 
 	callCtx := d.deferLLMRecordingIfWeWillRecord(ctx)
+	// Bound the single compaction call by the global deadline. A timeout surfaces as an
+	// err, so the existing fail-open below (structural pre-filter) applies — the synthesis
+	// hot path is never blocked past the deadline. (The map-reduce path returns partial
+	// LLM output instead; see result_mapreduce.go.)
+	if d.config.CompactionDeadline > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(callCtx, d.config.CompactionDeadline)
+		defer cancel()
+	}
 	response, err := d.aiClient.GenerateResponse(callCtx, prompt, options)
 	duration := time.Since(distillStart)
 	if err == nil {
@@ -175,6 +210,9 @@ func (d *LLMDistiller) ProcessForPrompt(
 			StepID:          stepCtx.StepID,
 			CallDescription: fmt.Sprintf("Distill %s result FAILED: %s", stepCtx.AgentName, err.Error()),
 		})
+		// This output is a structural fallback, not a successful distillation. Flag it so
+		// the cache does not store a degraded result from a transient LLM/provider failure.
+		markResultNonCacheable(ctx)
 		return d.preFilter.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
 	}
 
@@ -232,21 +270,47 @@ func (d *LLMDistiller) ProcessForPrompt(
 	return response.Content
 }
 
+// distillPromptVersion identifies the distillation prompt template. Bump it whenever
+// buildDistillationPrompt changes so the cache key (via distillKeySalt) invalidates
+// outputs produced by the old template instead of serving them for the TTL.
+const distillPromptVersion = "1"
+
+// minDistillTargetSize is the floor for a distillation output target (bytes). It guards
+// against a per-result budget of 0/near-0 (which the BudgetAllocator can hand an oversized
+// result when the total budget is saturated) producing a degenerate "max 0 characters"
+// prompt. Distillation compresses large results to ~TargetSize regardless, so it always
+// needs at least this much room to emit something useful.
+const minDistillTargetSize = 256
+
 func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext) string {
 	capabilityLine := ""
 	if stepCtx.Capability != "" {
 		capabilityLine = fmt.Sprintf(" (capability: %s)", stepCtx.Capability)
 	}
 	return fmt.Sprintf(`<identity>
-You are a data distillation assistant. Summarize data for use in a downstream task.
+You compact one upstream result so a downstream task can use it. A downstream model
+reads ONLY your output and never the original, so anything you omit becomes invisible
+to it. For evidence data you SELECT and COPY the relevant content — you are not a
+summarizer that paraphrases it away.
 </identity>
 
 <instructions>
-1. Output at most %d characters
-2. Preserve all identifier fields, primary keys, and exact numeric values
-3. Prioritize values most relevant to the downstream task instruction
-4. For JSON data, keep the same top-level structure with only essential fields
-5. For plain text, output a concise factual summary
+1. Output at most %d characters.
+2. First decide what kind of data this is:
+   - EVIDENCE (records, log lines, rows, search hits, transactions, items, events):
+     copy the matching units VERBATIM. Do not paraphrase, reword, or summarize them —
+     preserve exact text, identifiers, primary keys, timestamps, and numeric values
+     byte-for-byte. Keep whole units; never emit a fragment of a unit.
+   - NARRATIVE (prose, descriptions, explanations): write a concise factual summary
+     and still preserve identifiers, keys, and exact numeric values.
+3. Select by relevance to the downstream task — keep the units that actually answer it.
+4. If NO unit is relevant, output exactly: No matching entries found.
+   Do not fabricate a summary and do not imply the source was empty if it was not.
+5. If relevant units must be dropped to fit the limit, keep the most relevant and end
+   with: [truncated: N additional matching units omitted to fit budget — treat anything
+   not shown as UNKNOWN, not absent].
+6. Never state that something is absent unless you inspected the entire input and
+   confirmed it. Omission to fit the budget is not evidence of absence.
 </instructions>
 
 <context source="%s%s">
@@ -257,7 +321,7 @@ Downstream task: %s
 %s
 </data>
 
-Return the distilled result:`,
+Return the compacted result:`,
 		maxBytes,
 		stepCtx.AgentName, capabilityLine, stepCtx.Instruction, result)
 }

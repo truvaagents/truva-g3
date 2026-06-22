@@ -35,6 +35,14 @@ type OrchestratorDependencies struct {
 	// If nil and ResultTrim.Enabled, uses default StructuralTrimmer.
 	ResultProcessor ResultProcessor
 
+	// Optional: cache for LLM distillation results, keyed by (result + instruction +
+	// budget). When set, the distiller is wrapped so identical compactions (common in
+	// scheduled/repetitive runs) become cache hits. Nil disables caching (fail-open).
+	// Reuses the core.DigestCache contract — pass the same Redis-backed cache used for
+	// activity digests, or a dedicated one. Keys are namespaced ("distill:") so they do
+	// not collide with activity digests.
+	DistillCache core.DigestCache
+
 	// Optional: Pipeline hooks for context engineering.
 	// Hooks run at each pipeline stage (before planning, after synthesis, etc.).
 	PipelineHooks []core.PipelineHook
@@ -332,12 +340,16 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			if orchestrator.debugStore != nil {
 				distiller.SetLLMDebugStore(orchestrator.debugStore)
 			}
-			orchestrator.SetResultProcessor(distiller)
+			// Wrap with a content-addressed cache when one is provided (fail-open: a nil
+			// cache returns the bare distiller, so this is a no-op without a cache).
+			processor := NewCachingProcessor(distiller, deps.DistillCache, config.ResultDistill.CacheTTL, config.ResultDistill.DistillThreshold, distillKeySalt(config.ResultDistill, config.ResultDistillAIOptions), deps.Logger)
+			orchestrator.SetResultProcessor(processor)
 			factoryLogger.Info("Result processing: LLM distillation (two-stage)", map[string]interface{}{
 				"operation":         "result_trim_initialization",
 				"distill_threshold": config.ResultDistill.DistillThreshold,
 				"prefilter_budget":  config.ResultDistill.PreFilterBudget,
 				"target_size":       config.ResultDistill.TargetSize,
+				"cache_enabled":     deps.DistillCache != nil,
 			})
 		} else {
 			orchestrator.SetResultProcessor(NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger))
@@ -792,9 +804,11 @@ func WithResultPreserveKeys(keys []string) OrchestratorOption {
 
 // WithResultDistill configures LLM-based result distillation (two-stage pipeline).
 // When enabled (requires ResultTrim.Enabled=true and an AIClient), oversized step results
-// are first structurally pre-filtered, then summarized by an LLM.
-// distillThreshold is the minimum result size in bytes to trigger distillation.
-// Default: enabled=false, distillThreshold=32768
+// are first structurally pre-filtered, then extractively distilled by an LLM.
+// distillThreshold is the minimum result size in bytes to trigger distillation; a value
+// <= 0 leaves the configured default unchanged.
+// Defaults (DefaultConfig): enabled=true, distillThreshold=16384. Opt out with this
+// option or TRUVAG3_RESULT_DISTILL_ENABLED=false.
 func WithResultDistill(enabled bool, distillThreshold int) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.ResultDistill.Enabled = enabled
@@ -816,4 +830,26 @@ func WithResultDistillModel(model string) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.ResultDistill.Model = model
 	}
+}
+
+// BuildDistillationEnabledResultProcessor constructs the Layer-2 LLM-first result
+// processor directly: a StructuralTrimmer (pre-filter + fail-open floor) wrapped by the
+// LLMDistiller, wrapped by a fail-open content cache. Mirrors
+// BuildCompactionEnabledConversationHistoryPreparer.
+//
+// Use this when wiring a processor outside CreateOrchestrator (which auto-builds the
+// same stack from config — Layer 1). A nil ai yields the bare StructuralTrimmer floor;
+// a nil cache disables caching. For a fully custom backend, pass it via
+// deps.ResultProcessor (Layer 3) instead.
+func BuildDistillationEnabledResultProcessor(
+	cfg ResultDistillConfig, ai core.AIClient, cache core.DigestCache, logger core.Logger,
+) ResultProcessor {
+	trimmer := NewStructuralTrimmer(nil, logger)
+	if ai == nil {
+		return trimmer // fail-open: no model → structural floor only
+	}
+	distiller := NewLLMDistiller(ai, cfg, trimmer, logger)
+	// This Layer-2 helper does not apply a per-phase AI options override, so the salt has
+	// none. Callers using deps.ResultDistillAIOptions go through the factory path above.
+	return NewCachingProcessor(distiller, cache, cfg.CacheTTL, cfg.DistillThreshold, distillKeySalt(cfg, nil), logger)
 }
