@@ -907,9 +907,11 @@ func (o *AIOrchestrator) SetErrorAnalyzer(analyzer *ErrorAnalyzer) {
 	}
 }
 
-// SetResultProcessor sets the result processor for trimming step results in prompts.
-// Propagated to synthesizer (non-streaming), orchestrator (streaming), and
-// executor's MicroResolver (micro-resolution source data trimming, Phase 5).
+// SetResultProcessor sets the processor that trims step results for the SYNTHESIS prompt
+// (non-streaming synthesizer + streaming orchestrator). Resolution-source trimming and
+// agent-input transformation are configured independently via SetSourceResultProcessor and
+// SetAgentInputProcessor — three seams, three plugs (Phase 8). This keeps a (possibly distilling)
+// synthesis processor from leaking into the deterministic input/resolution paths.
 func (o *AIOrchestrator) SetResultProcessor(processor ResultProcessor) {
 	o.resultProcessor = processor
 	o.resultTrimConfig = &o.config.ResultTrim
@@ -917,29 +919,55 @@ func (o *AIOrchestrator) SetResultProcessor(processor ResultProcessor) {
 		o.synthesizer.SetResultProcessor(processor)
 		o.synthesizer.SetResultTrimConfig(&o.config.ResultTrim)
 	}
-	// Propagate to executor's MicroResolver for micro-resolution source data trimming (Phase 5)
-	if o.executor != nil && o.executor.hybridResolver != nil {
+	if o.logger != nil {
+		o.logger.Info("Synthesis ResultProcessor configured", map[string]interface{}{
+			"operation": "set_result_processor",
+			"enabled":   o.config.ResultTrim.Enabled,
+		})
+	}
+}
+
+// SetSourceResultProcessor sets the DETERMINISTIC processor used to trim resolver source data for
+// micro-resolution (Phase 5) and contextual re-resolution (semantic retry) prompts. Those prompts
+// already drive their own resolution LLM call, so this processor must never distill via an LLM.
+// Configured independently of the synthesis processor — no cliff (Phase 8).
+func (o *AIOrchestrator) SetSourceResultProcessor(processor ResultProcessor) {
+	if o.executor == nil {
+		return
+	}
+	// Micro-resolution source data trimming (Phase 5)
+	if o.executor.hybridResolver != nil {
 		o.executor.hybridResolver.SetMicroResolverResultProcessor(processor, o.config.ResultTrim.MaxMicroResolutionBytes)
-		// Propagate schema-guided mapping threshold (Phase 10)
+		// Schema-guided mapping threshold (Phase 10)
 		if o.config.ResultTrim.SchemaGuidedMappingThreshold > 0 {
 			o.executor.hybridResolver.SetMicroResolverSchemaMappingThreshold(o.config.ResultTrim.SchemaGuidedMappingThreshold)
 		}
 	}
-	// Propagate to ContextualReResolver for semantic retry source data trimming
-	if o.executor != nil && o.executor.contextualReResolver != nil {
+	// Semantic-retry source data trimming
+	if o.executor.contextualReResolver != nil {
 		o.executor.contextualReResolver.SetResultProcessor(processor, o.config.ResultTrim.MaxMicroResolutionBytes)
 	}
-	// Propagate to executor for agent input parameter trimming (Phase 8)
-	if o.executor != nil && o.config.ResultTrim.MaxAgentInputBytes > 0 {
-		o.executor.SetAgentInputTrimmer(processor, o.config.ResultTrim.MaxAgentInputBytes)
-	}
 	if o.logger != nil {
-		o.logger.Info("ResultProcessor configured", map[string]interface{}{
-			"operation":                "set_result_processor",
-			"enabled":                  o.config.ResultTrim.Enabled,
+		o.logger.Info("Source ResultProcessor configured", map[string]interface{}{
+			"operation":                "set_source_result_processor",
 			"max_micro_resolution":     o.config.ResultTrim.MaxMicroResolutionBytes,
-			"max_agent_input":          o.config.ResultTrim.MaxAgentInputBytes,
 			"schema_mapping_threshold": o.config.ResultTrim.SchemaGuidedMappingThreshold,
+		})
+	}
+}
+
+// SetAgentInputProcessor sets the transform applied to tool/agent INPUT parameters before dispatch
+// (executor). This is a data-flow seam, not a prompt trim — see AgentInputProcessor. Configured
+// independently of the synthesis and resolution-source processors (Phase 8).
+func (o *AIOrchestrator) SetAgentInputProcessor(processor AgentInputProcessor) {
+	if o.executor == nil {
+		return
+	}
+	o.executor.SetAgentInputProcessor(processor)
+	if o.logger != nil {
+		o.logger.Info("AgentInputProcessor configured", map[string]interface{}{
+			"operation":       "set_agent_input_processor",
+			"max_agent_input": o.config.ResultTrim.MaxAgentInputBytes,
 		})
 	}
 }

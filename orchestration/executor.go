@@ -124,12 +124,10 @@ type SmartExecutor struct {
 	// Uses atomic.Value for thread safety (same pattern as oauthToken).
 	propagatedHeaders atomic.Value // stores map[string]string
 
-	// Agent input trimming (Phase 8): trim large parameter values before HTTP calls.
-	// When set, complex parameter values (objects/arrays) exceeding maxAgentInputBytes
-	// are structurally trimmed using the step instruction as keyword context.
-	// This prevents downstream agent LLM failures on oversized input data.
-	agentInputProcessor ResultProcessor
-	maxAgentInputBytes  int
+	// Agent input transform (Phase 8): transform resolved parameter values before the HTTP call.
+	// Default is identity (fidelity-first); an opt-in byte-budget guard or a custom transform
+	// (redact/validate/enrich/trim) can replace it. Never an LLM distiller — see AgentInputProcessor.
+	agentInputProcessor AgentInputProcessor
 
 	// Extended timeout for orchestrator capabilities (agent-as-tool delegation).
 	// Orchestrator steps may block on HITL approval (15+ min). The standard HTTP
@@ -342,12 +340,11 @@ func (e *SmartExecutor) SetInterruptController(controller InterruptController) {
 	e.interruptController = controller
 }
 
-// SetAgentInputTrimmer configures parameter value trimming before agent/tool HTTP calls.
-// When set, complex parameter values (objects/arrays) exceeding maxBytes are structurally
-// trimmed using the step instruction as keyword context.
-func (e *SmartExecutor) SetAgentInputTrimmer(processor ResultProcessor, maxBytes int) {
+// SetAgentInputProcessor configures the transform applied to resolved tool/agent input parameters
+// before the HTTP call (Phase 8). This is a data-flow seam (redact/validate/enrich/trim), not a
+// prompt trim — see AgentInputProcessor. Pass identityAgentInputProcessor{} to disable.
+func (e *SmartExecutor) SetAgentInputProcessor(processor AgentInputProcessor) {
 	e.agentInputProcessor = processor
-	e.maxAgentInputBytes = maxBytes
 }
 
 // safeInvokeStepCallback invokes a step callback with panic protection.
@@ -3044,12 +3041,24 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	// =========================================================================
 	// PHASE 5b: Agent Input Trimming (trim large param values before HTTP call)
 	// =========================================================================
-	// After full parameter resolution, trim any large complex parameter values
-	// to prevent downstream agent/tool LLM failures (e.g., Cloudflare 400 on 251KB data).
-	// NOTE: result.Parameters retains the full resolved values (for DAG viz and HITL).
-	// Only the local `parameters` used for the HTTP call below is trimmed.
-	if e.agentInputProcessor != nil && e.maxAgentInputBytes > 0 {
-		parameters = e.trimAgentInputParams(ctx, parameters, step)
+	// After full parameter resolution, apply the agent-input transform to the dispatched copy.
+	// NOTE: result.Parameters retains the full resolved values (for DAG viz and HITL); only the
+	// local `parameters` sent over HTTP below is transformed. Default is identity (fidelity-first).
+	if e.agentInputProcessor != nil {
+		transformed, aiErr := e.agentInputProcessor.ProcessInput(ctx, parameters, ResultProcessorContext{
+			StepID:      step.StepID,
+			AgentName:   step.AgentName,
+			Instruction: step.Instruction,
+		})
+		if aiErr != nil {
+			// Fail CLOSED: a transform (e.g. a PII redactor) that errors must abort dispatch
+			// rather than send untransformed data downstream.
+			result.Success = false
+			result.Error = fmt.Sprintf("agent input processing failed: %v", aiErr)
+			result.EndTime = time.Now()
+			return result
+		}
+		parameters = transformed
 	}
 
 	// =========================================================================
@@ -4691,99 +4700,6 @@ func (e *SmartExecutor) getPropagatedHeaders() map[string]string {
 		return v.(map[string]string)
 	}
 	return nil
-}
-
-// trimAgentInputParams trims large parameter values before sending to agent/tool HTTP calls.
-// Only complex values (objects, arrays) exceeding maxAgentInputBytes are trimmed.
-// Scalar values (strings, numbers, booleans) are always preserved unchanged.
-// Uses the step instruction as keyword context for query-conditioned field selection.
-func (e *SmartExecutor) trimAgentInputParams(
-	ctx context.Context, parameters map[string]interface{}, step RoutingStep,
-) map[string]interface{} {
-	if e.agentInputProcessor == nil || e.maxAgentInputBytes <= 0 {
-		return parameters
-	}
-
-	trimmed := make(map[string]interface{}, len(parameters))
-	for key, val := range parameters {
-		// Skip scalar values — only trim complex objects/arrays
-		if isScalar(val) {
-			trimmed[key] = val
-			continue
-		}
-
-		// Serialize to check size
-		serialized, err := json.Marshal(val)
-		if err != nil || len(serialized) <= e.maxAgentInputBytes {
-			trimmed[key] = val
-			continue
-		}
-
-		// Trim using step instruction as keyword context
-		trimmedJSON := e.agentInputProcessor.ProcessForPrompt(ctx, string(serialized),
-			e.maxAgentInputBytes, ResultProcessorContext{
-				StepID:      step.StepID,
-				AgentName:   step.AgentName,
-				Instruction: step.Instruction,
-			})
-
-		// Strip trimmer annotation before re-parsing (e.g., "\n[trimmed: 5/20 fields kept, ...]")
-		cleanJSON := trimmedJSON
-		if idx := strings.LastIndex(cleanJSON, "\n[trimmed:"); idx >= 0 {
-			cleanJSON = cleanJSON[:idx]
-		}
-
-		// Re-parse to interface{} for HTTP serialization
-		var parsed interface{}
-		if json.Unmarshal([]byte(cleanJSON), &parsed) == nil {
-			trimmed[key] = parsed
-		} else {
-			// Fallback: keep original value, don't corrupt data
-			trimmed[key] = val
-			if e.logger != nil {
-				e.logger.WarnWithContext(ctx, "Failed to re-parse trimmed agent input, using original", map[string]interface{}{
-					"operation":      "result_trim_agent_input_parse_error",
-					"step_id":        step.StepID,
-					"parameter_name": key,
-				})
-			}
-			continue
-		}
-
-		// Telemetry
-		requestID := ""
-		if bag := telemetry.GetBaggage(ctx); bag != nil {
-			requestID = bag["request_id"]
-		}
-		telemetry.AddSpanEvent(ctx, "result_trim.agent_input",
-			attribute.String("request_id", requestID),
-			attribute.String("step_id", step.StepID),
-			attribute.String("agent_name", step.AgentName),
-			attribute.String("parameter_name", key),
-			attribute.Int("original_bytes", len(serialized)),
-			attribute.Int("trimmed_bytes", len(cleanJSON)),
-			attribute.Int("budget_bytes", e.maxAgentInputBytes),
-		)
-
-		if e.logger != nil {
-			e.logger.InfoWithContext(ctx, "Agent input parameter trimmed", map[string]interface{}{
-				"operation":      "result_trim_agent_input",
-				"request_id":     requestID,
-				"step_id":        step.StepID,
-				"agent_name":     step.AgentName,
-				"parameter_name": key,
-				"original_bytes": len(serialized),
-				"trimmed_bytes":  len(cleanJSON),
-				"budget_bytes":   e.maxAgentInputBytes,
-			})
-		}
-
-		if registry := core.GetGlobalMetricsRegistry(); registry != nil {
-			registry.Counter("orchestration.result_trim.agent_input", "agent_name", step.AgentName)
-		}
-	}
-
-	return trimmed
 }
 
 // SimpleExecutor is kept for backward compatibility

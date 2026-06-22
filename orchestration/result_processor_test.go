@@ -1135,21 +1135,59 @@ func (p *captureProcessor) ProcessForPrompt(ctx context.Context, result string, 
 	return result
 }
 
-// --- Phase 8: Agent Input Trimming Tests ---
+// --- Phase 8: Agent Input Processor Tests ---
 
-// TestTrimAgentInputParams_ScalarsUntouched verifies that scalar parameter values
-// are never trimmed regardless of budget.
-func TestTrimAgentInputParams_ScalarsUntouched(t *testing.T) {
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 100)
+// newAgentInputGuard builds the opt-in byte-budget agent-input processor used by most tests.
+func newAgentInputGuard(maxBytes int, logger core.Logger) AgentInputProcessor {
+	return NewByteBudgetAgentInputProcessor(NewStructuralTrimmer(nil, nil), maxBytes, logger)
+}
 
-	params := map[string]interface{}{
-		"symbol": "AMD",
-		"count":  42.0,
-		"active": true,
+// errAgentInputProcessor always errors — models a transform (e.g. a redactor) that must fail closed.
+type errAgentInputProcessor struct{}
+
+func (errAgentInputProcessor) ProcessInput(context.Context, map[string]interface{}, ResultProcessorContext) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("redaction unavailable")
+}
+
+// TestAgentInput_Identity verifies the fidelity-first default passes everything through unchanged,
+// even oversized values (the openclaw/PII regression guard).
+func TestAgentInput_Identity(t *testing.T) {
+	bigData := make(map[string]interface{})
+	for i := 0; i < 100; i++ {
+		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "analyze stock"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+	params := map[string]interface{}{"data": bigData, "symbol": "AMD"}
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+
+	result, err := identityAgentInputProcessor{}.ProcessInput(context.Background(), params, stepCtx)
+	if err != nil {
+		t.Fatalf("identity returned error: %v", err)
+	}
+	resultData, _ := json.Marshal(result["data"])
+	originalData, _ := json.Marshal(bigData)
+	if len(resultData) != len(originalData) {
+		t.Errorf("Expected identity passthrough, got %d vs %d", len(resultData), len(originalData))
+	}
+	if result["symbol"] != "AMD" {
+		t.Errorf("Expected symbol=AMD, got %v", result["symbol"])
+	}
+}
+
+// TestAgentInput_ErrorPropagates verifies a transform error is surfaced (the executor fails closed).
+func TestAgentInput_ErrorPropagates(t *testing.T) {
+	_, err := errAgentInputProcessor{}.ProcessInput(context.Background(),
+		map[string]interface{}{"a": 1}, ResultProcessorContext{})
+	if err == nil {
+		t.Fatal("expected error to propagate (fail-closed contract)")
+	}
+}
+
+// TestAgentInput_ScalarsUntouched verifies scalar values are never trimmed regardless of budget.
+func TestAgentInput_ScalarsUntouched(t *testing.T) {
+	p := newAgentInputGuard(100, nil)
+	params := map[string]interface{}{"symbol": "AMD", "count": 42.0, "active": true}
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "analyze stock"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
 	if result["symbol"] != "AMD" {
 		t.Errorf("Expected symbol=AMD, got %v", result["symbol"])
@@ -1162,17 +1200,14 @@ func TestTrimAgentInputParams_ScalarsUntouched(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_SmallObjectUntouched verifies that complex objects
-// below the budget pass through unchanged.
-func TestTrimAgentInputParams_SmallObjectUntouched(t *testing.T) {
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 10000)
-
+// TestAgentInput_SmallObjectUntouched verifies complex objects below the budget pass through.
+func TestAgentInput_SmallObjectUntouched(t *testing.T) {
+	p := newAgentInputGuard(10000, nil)
 	params := map[string]interface{}{
 		"data": map[string]interface{}{"price": 150.5, "currency": "USD"},
 	}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "get price"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "get price"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
 	data, ok := result["data"].(map[string]interface{})
 	if !ok {
@@ -1183,35 +1218,26 @@ func TestTrimAgentInputParams_SmallObjectUntouched(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_LargeObjectTrimmed verifies that complex objects
-// exceeding the budget are structurally trimmed.
-func TestTrimAgentInputParams_LargeObjectTrimmed(t *testing.T) {
+// TestAgentInput_LargeObjectTrimmed verifies complex objects exceeding the budget are trimmed.
+func TestAgentInput_LargeObjectTrimmed(t *testing.T) {
 	bigData := make(map[string]interface{})
 	for i := 0; i < 100; i++ {
 		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
 
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 4096)
+	p := newAgentInputGuard(4096, nil)
+	params := map[string]interface{}{"symbol": "AMD", "data": bigData}
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "stock-service", Instruction: "get stock financial metrics"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	params := map[string]interface{}{
-		"symbol": "AMD",
-		"data":   bigData,
-	}
-	step := RoutingStep{StepID: "step-1", AgentName: "stock-service", Instruction: "get stock financial metrics"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
-
-	// Symbol (scalar) should be untouched
 	if result["symbol"] != "AMD" {
 		t.Errorf("Expected symbol=AMD, got %v", result["symbol"])
 	}
-
-	// Data should be trimmed — re-serialize to check size
 	trimmedData, err := json.Marshal(result["data"])
 	if err != nil {
 		t.Fatalf("Failed to marshal trimmed data: %v", err)
 	}
-	if len(trimmedData) > 5000 { // budget + some tolerance for re-serialization
+	if len(trimmedData) > 5000 {
 		t.Errorf("Expected trimmed data <= ~4096 bytes, got %d", len(trimmedData))
 	}
 	originalData, _ := json.Marshal(bigData)
@@ -1220,42 +1246,17 @@ func TestTrimAgentInputParams_LargeObjectTrimmed(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_NilProcessor verifies that without a processor,
-// parameters pass through unchanged regardless of size.
-func TestTrimAgentInputParams_NilProcessor(t *testing.T) {
-	executor := NewSmartExecutor(nil)
-	// No SetAgentInputTrimmer call — processor is nil
-
-	bigData := make(map[string]interface{})
-	for i := 0; i < 100; i++ {
-		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
-	}
-	params := map[string]interface{}{"data": bigData}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
-
-	// Should return the same map (no trimming)
-	resultData, _ := json.Marshal(result["data"])
-	originalData, _ := json.Marshal(bigData)
-	if len(resultData) != len(originalData) {
-		t.Errorf("Expected unchanged data without processor, got %d vs %d", len(resultData), len(originalData))
-	}
-}
-
-// TestTrimAgentInputParams_ZeroBudget verifies early return when budget is zero.
-func TestTrimAgentInputParams_ZeroBudget(t *testing.T) {
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 0)
-
+// TestAgentInput_ZeroBudgetDisabled verifies a non-positive budget disables the guard (passthrough).
+func TestAgentInput_ZeroBudgetDisabled(t *testing.T) {
+	p := newAgentInputGuard(0, nil)
 	bigData := make(map[string]interface{})
 	for i := 0; i < 50; i++ {
 		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
 	params := map[string]interface{}{"data": bigData}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	// Zero budget → early return, original map returned unchanged
 	resultData, _ := json.Marshal(result["data"])
 	originalData, _ := json.Marshal(bigData)
 	if len(resultData) != len(originalData) {
@@ -1263,28 +1264,24 @@ func TestTrimAgentInputParams_ZeroBudget(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_MixedParams verifies that a mix of scalar, small object,
-// and large object parameters are handled correctly in a single call.
-func TestTrimAgentInputParams_MixedParams(t *testing.T) {
+// TestAgentInput_MixedParams verifies scalar, small-object, and large-object params in one call.
+func TestAgentInput_MixedParams(t *testing.T) {
 	bigData := make(map[string]interface{})
 	for i := 0; i < 100; i++ {
 		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
 
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 4096)
-
+	p := newAgentInputGuard(4096, nil)
 	params := map[string]interface{}{
-		"symbol":        "AMD",                                   // scalar — untouched
-		"active":        true,                                    // scalar — untouched
-		"price":         150.5,                                   // scalar — untouched
-		"small_context": map[string]interface{}{"note": "short"}, // small object — untouched
-		"data":          bigData,                                 // large object — trimmed
+		"symbol":        "AMD",
+		"active":        true,
+		"price":         150.5,
+		"small_context": map[string]interface{}{"note": "short"},
+		"data":          bigData,
 	}
-	step := RoutingStep{StepID: "step-2", AgentName: "research-agent", Instruction: "analyze financials"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-2", AgentName: "research-agent", Instruction: "analyze financials"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	// Scalars preserved
 	if result["symbol"] != "AMD" {
 		t.Errorf("Expected symbol=AMD, got %v", result["symbol"])
 	}
@@ -1294,8 +1291,6 @@ func TestTrimAgentInputParams_MixedParams(t *testing.T) {
 	if result["price"] != 150.5 {
 		t.Errorf("Expected price=150.5, got %v", result["price"])
 	}
-
-	// Small object preserved
 	smallCtx, ok := result["small_context"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("Expected small_context to be map, got %T", result["small_context"])
@@ -1303,8 +1298,6 @@ func TestTrimAgentInputParams_MixedParams(t *testing.T) {
 	if smallCtx["note"] != "short" {
 		t.Errorf("Expected small_context.note=short, got %v", smallCtx["note"])
 	}
-
-	// Large object trimmed
 	trimmedData, _ := json.Marshal(result["data"])
 	originalData, _ := json.Marshal(bigData)
 	if len(trimmedData) >= len(originalData) {
@@ -1312,9 +1305,8 @@ func TestTrimAgentInputParams_MixedParams(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_LargeArray verifies that array parameter values
-// (not just maps) are trimmed when they exceed the budget.
-func TestTrimAgentInputParams_LargeArray(t *testing.T) {
+// TestAgentInput_LargeArray verifies array parameter values (not just maps) are trimmed.
+func TestAgentInput_LargeArray(t *testing.T) {
 	bigArray := make([]interface{}, 100)
 	for i := 0; i < 100; i++ {
 		bigArray[i] = map[string]interface{}{
@@ -1323,16 +1315,11 @@ func TestTrimAgentInputParams_LargeArray(t *testing.T) {
 		}
 	}
 
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 4096)
+	p := newAgentInputGuard(4096, nil)
+	params := map[string]interface{}{"articles": bigArray}
+	stepCtx := ResultProcessorContext{StepID: "step-2", AgentName: "sentiment-agent", Instruction: "analyze news sentiment"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	params := map[string]interface{}{
-		"articles": bigArray,
-	}
-	step := RoutingStep{StepID: "step-2", AgentName: "sentiment-agent", Instruction: "analyze news sentiment"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
-
-	// Array should be trimmed (fewer items or smaller representation)
 	trimmedJSON, _ := json.Marshal(result["articles"])
 	originalJSON, _ := json.Marshal(bigArray)
 	if len(trimmedJSON) >= len(originalJSON) {
@@ -1340,18 +1327,12 @@ func TestTrimAgentInputParams_LargeArray(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_NilValue verifies that nil parameter values
-// (scalar) are passed through unchanged.
-func TestTrimAgentInputParams_NilValue(t *testing.T) {
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 100)
-
-	params := map[string]interface{}{
-		"optional_field": nil,
-		"name":           "test",
-	}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+// TestAgentInput_NilValue verifies nil parameter values (scalar) pass through unchanged.
+func TestAgentInput_NilValue(t *testing.T) {
+	p := newAgentInputGuard(100, nil)
+	params := map[string]interface{}{"optional_field": nil, "name": "test"}
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
 	if result["optional_field"] != nil {
 		t.Errorf("Expected nil to pass through, got %v", result["optional_field"])
@@ -1361,25 +1342,21 @@ func TestTrimAgentInputParams_NilValue(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_ParseFailureFallback verifies that when the processor
-// returns invalid JSON (even after annotation stripping), the original value is kept.
-func TestTrimAgentInputParams_ParseFailureFallback(t *testing.T) {
-	// Mock processor that returns invalid JSON
+// TestAgentInput_ParseFailureFallback verifies that when the trimmer returns invalid JSON (even
+// after annotation stripping), the original value is kept (fail open — never corrupt a tool input).
+func TestAgentInput_ParseFailureFallback(t *testing.T) {
 	processor := &captureProcessor{
 		processFunc: func(ctx context.Context, result string, maxBytes int, stepCtx ResultProcessorContext) string {
 			return "this is not valid json at all"
 		},
 	}
-
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(processor, 100)
+	p := NewByteBudgetAgentInputProcessor(processor, 100, nil)
 
 	originalData := map[string]interface{}{"important": strings.Repeat("x", 200)}
 	params := map[string]interface{}{"data": originalData}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+	result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	// Fallback: original value preserved (not corrupted)
 	data, ok := result["data"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("Expected original map preserved on parse failure, got %T", result["data"])
@@ -1389,28 +1366,20 @@ func TestTrimAgentInputParams_ParseFailureFallback(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_ParseFailureWithLogger verifies that the warn log
-// is emitted when re-parsing trimmed data fails and a logger is configured.
-func TestTrimAgentInputParams_ParseFailureWithLogger(t *testing.T) {
-	// Mock processor that returns invalid JSON
+// TestAgentInput_ParseFailureWithLogger verifies the warn log on re-parse failure.
+func TestAgentInput_ParseFailureWithLogger(t *testing.T) {
 	processor := &captureProcessor{
 		processFunc: func(ctx context.Context, result string, maxBytes int, stepCtx ResultProcessorContext) string {
 			return "not json"
 		},
 	}
-
-	logger := &mockLogger{
-		warnFunc: func(msg string, fields map[string]interface{}) {},
-	}
-
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(processor, 100)
-	executor.SetLogger(logger)
+	logger := &mockLogger{warnFunc: func(msg string, fields map[string]interface{}) {}}
+	p := NewByteBudgetAgentInputProcessor(processor, 100, logger)
 
 	originalData := map[string]interface{}{"key": strings.Repeat("x", 200)}
 	params := map[string]interface{}{"data": originalData}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+	_, _ = p.ProcessInput(context.Background(), params, stepCtx)
 
 	found := false
 	for _, msg := range logger.messages {
@@ -1424,24 +1393,18 @@ func TestTrimAgentInputParams_ParseFailureWithLogger(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_SuccessWithLogger verifies that the info log
-// is emitted when a parameter is successfully trimmed and a logger is configured.
-func TestTrimAgentInputParams_SuccessWithLogger(t *testing.T) {
-	logger := &mockLogger{
-		infoFunc: func(msg string, fields map[string]interface{}) {},
-	}
-
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(NewStructuralTrimmer(nil, nil), 4096)
-	executor.SetLogger(logger)
+// TestAgentInput_SuccessWithLogger verifies the info log on a successful trim.
+func TestAgentInput_SuccessWithLogger(t *testing.T) {
+	logger := &mockLogger{infoFunc: func(msg string, fields map[string]interface{}) {}}
+	p := NewByteBudgetAgentInputProcessor(NewStructuralTrimmer(nil, nil), 4096, logger)
 
 	bigData := make(map[string]interface{})
 	for i := 0; i < 100; i++ {
 		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
 	params := map[string]interface{}{"data": bigData}
-	step := RoutingStep{StepID: "step-1", AgentName: "stock-service", Instruction: "analyze"}
-	executor.trimAgentInputParams(context.Background(), params, step)
+	stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "stock-service", Instruction: "analyze"}
+	_, _ = p.ProcessInput(context.Background(), params, stepCtx)
 
 	found := false
 	for _, msg := range logger.messages {
@@ -1455,9 +1418,8 @@ func TestTrimAgentInputParams_SuccessWithLogger(t *testing.T) {
 	}
 }
 
-// TestTrimAgentInputParams_KeywordContext verifies that the step instruction
-// is passed to the processor as keyword context.
-func TestTrimAgentInputParams_KeywordContext(t *testing.T) {
+// TestAgentInput_KeywordContext verifies the step instruction is passed to the trimmer as context.
+func TestAgentInput_KeywordContext(t *testing.T) {
 	var capturedInstruction string
 	processor := &captureProcessor{
 		processFunc: func(ctx context.Context, result string, maxBytes int, stepCtx ResultProcessorContext) string {
@@ -1468,53 +1430,50 @@ func TestTrimAgentInputParams_KeywordContext(t *testing.T) {
 			return result
 		},
 	}
-
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(processor, 4096)
+	p := NewByteBudgetAgentInputProcessor(processor, 4096, nil)
 
 	bigData := make(map[string]interface{})
 	for i := 0; i < 100; i++ {
 		bigData[fmt.Sprintf("field_%d", i)] = strings.Repeat("x", 500)
 	}
 	params := map[string]interface{}{"data": bigData}
-	step := RoutingStep{
+	stepCtx := ResultProcessorContext{
 		StepID:      "step-2",
 		AgentName:   "research-agent",
 		Instruction: "Analyze AMD financial metrics and provide investment thesis",
 	}
-	executor.trimAgentInputParams(context.Background(), params, step)
+	_, _ = p.ProcessInput(context.Background(), params, stepCtx)
 
-	if capturedInstruction != step.Instruction {
-		t.Errorf("Expected instruction=%q, got %q", step.Instruction, capturedInstruction)
+	if capturedInstruction != stepCtx.Instruction {
+		t.Errorf("Expected instruction=%q, got %q", stepCtx.Instruction, capturedInstruction)
 	}
 }
 
-// TestTrimAgentInputParams_AnnotationStripped verifies that the trimmer's
-// "[trimmed: ...]" annotation is stripped before re-parsing for HTTP serialization.
-func TestTrimAgentInputParams_AnnotationStripped(t *testing.T) {
-	// Use a mock processor that always appends an annotation
-	processor := &captureProcessor{
-		processFunc: func(ctx context.Context, result string, maxBytes int, stepCtx ResultProcessorContext) string {
-			return `{"key":"value"}` + "\n[trimmed: 1/10 fields kept, 9 dropped]"
-		},
-	}
+// TestAgentInput_AnnotationStripped verifies every disclosure form is stripped before re-parsing.
+func TestAgentInput_AnnotationStripped(t *testing.T) {
+	for _, annotation := range []string{
+		"\n[trimmed: 1/10 fields kept, 9 dropped]",
+		"\n[severely reduced: kept 12 of ~9000 bytes (0.13%); most content omitted]",
+	} {
+		processor := &captureProcessor{
+			processFunc: func(ctx context.Context, result string, maxBytes int, stepCtx ResultProcessorContext) string {
+				return `{"key":"value"}` + annotation
+			},
+		}
+		p := NewByteBudgetAgentInputProcessor(processor, 100, nil)
 
-	executor := NewSmartExecutor(nil)
-	executor.SetAgentInputTrimmer(processor, 100)
+		bigData := map[string]interface{}{"large": strings.Repeat("x", 200)}
+		params := map[string]interface{}{"data": bigData}
+		stepCtx := ResultProcessorContext{StepID: "step-1", AgentName: "test", Instruction: "test"}
+		result, _ := p.ProcessInput(context.Background(), params, stepCtx)
 
-	// Create a param that exceeds budget to trigger trimming
-	bigData := map[string]interface{}{"large": strings.Repeat("x", 200)}
-	params := map[string]interface{}{"data": bigData}
-	step := RoutingStep{StepID: "step-1", AgentName: "test", Instruction: "test"}
-	result := executor.trimAgentInputParams(context.Background(), params, step)
-
-	// The result should be a clean parsed object, not a string with annotation
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected parsed map after annotation stripping, got %T: %v", result["data"], result["data"])
-	}
-	if data["key"] != "value" {
-		t.Errorf("Expected key=value, got %v", data["key"])
+		data, ok := result["data"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected parsed map after stripping %q, got %T: %v", annotation, result["data"], result["data"])
+		}
+		if data["key"] != "value" {
+			t.Errorf("Expected key=value after stripping %q, got %v", annotation, data["key"])
+		}
 	}
 }
 
