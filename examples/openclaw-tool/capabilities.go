@@ -31,6 +31,11 @@ type capabilitySpec struct {
 	ToolChoice    string // "" lets the agent use its tools; OpenClaw 500s on "none", so we never set it
 	build         func(raw []byte) (prompt string, timeoutSecs, inputChars int, err error)
 	parse         func(output string) interface{}
+	// postParse, if set, runs after parse with the original request bytes. It exists for
+	// capabilities whose final shaping depends on a request option the parse step can't see —
+	// e.g. detect_pii's reveal flag deciding whether to mask detected values Go-side. Optional;
+	// nil for capabilities whose output is a pure function of the model text.
+	postParse func(result interface{}, raw []byte) interface{}
 }
 
 // capabilitySpecs assembles the full structured-capability table (ANALYSIS.md §14): the validated
@@ -118,6 +123,9 @@ func (t *OpenClawTool) handleStructured(spec capabilitySpec) func(http.ResponseW
 		}
 
 		result := spec.parse(output)
+		if spec.postParse != nil {
+			result = spec.postParse(result, raw)
+		}
 		status = "success"
 
 		telemetry.AddSpanEvent(ctx, "capability_completed", attribute.String("operation", op))
