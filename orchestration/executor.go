@@ -3052,7 +3052,32 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		})
 		if aiErr != nil {
 			// Fail CLOSED: a transform (e.g. a PII redactor) that errors must abort dispatch
-			// rather than send untransformed data downstream.
+			// rather than send untransformed data downstream. Observe, then mark the step failed and
+			// skip the HTTP call (per the executor's per-step error path). Error handling order per
+			// DISTRIBUTED_TRACING_GUIDE.md Pattern 4: RecordSpanError → SpanEvent → Metrics → Log.
+			requestID := ""
+			if bag := telemetry.GetBaggage(ctx); bag != nil {
+				requestID = bag["request_id"]
+			}
+			telemetry.RecordSpanError(ctx, aiErr)
+			telemetry.AddSpanEvent(ctx, "result_trim.agent_input_failed",
+				attribute.String("request_id", requestID),
+				attribute.String("step_id", step.StepID),
+				attribute.String("agent_name", step.AgentName),
+				attribute.String("error", aiErr.Error()),
+			)
+			if registry := core.GetGlobalMetricsRegistry(); registry != nil {
+				registry.Counter("orchestration.result_trim.agent_input_failed", "agent_name", step.AgentName)
+			}
+			if e.logger != nil {
+				e.logger.ErrorWithContext(ctx, "Agent input processing failed; aborting dispatch (fail-closed)", map[string]interface{}{
+					"operation":  "result_trim_agent_input_failed",
+					"request_id": requestID,
+					"step_id":    step.StepID,
+					"agent_name": step.AgentName,
+					"error":      aiErr.Error(),
+				})
+			}
 			result.Success = false
 			result.Error = fmt.Sprintf("agent input processing failed: %v", aiErr)
 			result.EndTime = time.Now()
