@@ -7,7 +7,7 @@
 > real CNI enforces egress (confirmed — see §13 "KNOWN GAP").** See ⭐ **§13** for the design,
 > the *validated* config, and the security posture; §13 supersedes the summarizer narrowing in
 > §0/§4/§12.
-> **Capability suite ✅:** `run_task` is joined by **11 typed real-world capabilities** (data,
+> **Capability suite ✅:** `run_task` is joined by **12 typed real-world capabilities** (data,
 > code, extract/secure) — all built, conformance-reviewed against the tool guide, and verified on
 > Kind. See **§14** for the catalog, test results, and the deferred shared-filesystem step.
 > **Goal:** Run [OpenClaw](https://github.com/openclaw/openclaw) as a TruvaG3 tool so a
@@ -736,10 +736,16 @@ validates/self-corrects the output against the schema.
 **`redact_pii`** — find and mask PII in text/code/config (deterministic patterns + reasoning).
 - **In** `{ text, categories?, mask? }` → **Out** `{ redacted_text, findings[] }`
 
+**`detect_pii`** — the detection counterpart to `redact_pii`: report whether text contains PII and
+enumerate each item found (vs. returning scrubbed text). Values are masked Go-side by default;
+`reveal=true` opts into raw values. A `parsed` flag separates a verified "no PII" from unparseable
+model output (mirrors `scan_secrets`).
+- **In** `{ text, categories?, reveal?, timeout_seconds? }` → **Out** `{ pii_found, findings[] (type, value, count), parsed }`
+
 **`scan_secrets`** — detect hardcoded secrets/keys/tokens in code/config (pattern + entropy scan).
 - **In** `{ content, timeout_seconds? }` → **Out** `{ findings[] (type, location, severity, evidence) }`
-- *(`redact_pii` and `scan_secrets` are kept as distinct intents — masked-text vs. a findings list —
-  but share scaffolding; could merge into one `scan_sensitive`.)*
+- *(`redact_pii`, `detect_pii`, and `scan_secrets` are kept as distinct intents — scrubbed text vs.
+  a PII findings list vs. a secrets findings list — but share scaffolding.)*
 
 **`review_config`** — review IaC/config (Dockerfile / k8s / Terraform) for misconfigurations and
 risky defaults; can run available linters (e.g. hadolint) when present.
@@ -765,13 +771,13 @@ So `registerCapabilities` becomes a loop over a **capability spec table** —
 `{name, description, inputSummary, outputSummary, promptTemplate, toolChoice, defaultTimeout}`.
 Adding a capability = **one row + one prompt**. `run_task` stays as-is, the generic fallthrough.
 
-### Built & verified — all 11 capabilities ✅ (June 2026)
+### Built & verified — all 12 capabilities ✅ (June 2026)
 The scaffold is a data-driven `capabilitySpec` table with a generic `handleStructured` (telemetry →
 validate → `runTransaction` → parse → structured response); each capability is a `...Spec()` function
 + a prompt. `capabilities.go` holds the scaffold + the first three (the spectrum-spanning batch we
 validated first: `analyze_dataset` for verified-compute, `extract_structured` for structured output,
-`review_code` for the code path); `capabilities_more.go` holds the eight fan-out capabilities.
-`run_task` and the summarize/answer presets are unchanged. **14 endpoints registered** (11 typed
+`review_code` for the code path); `capabilities_more.go` holds the nine fan-out capabilities.
+`run_task` and the summarize/answer presets are unchanged. **15 endpoints registered** (12 typed
 capabilities + `run_task` + 2 presets).
 
 **Conformance** (reviewed against TOOL_DEVELOPMENT_GUIDE §5/§6/§10): `core.ToolResponse` wrapping;
@@ -794,6 +800,7 @@ Deployed to Kind and validated end-to-end (malformed body → 400, missing field
 | `synthesize_regex` | AB-12 / CD-34 samples | `^[A-Z]{2}-\d{2}$`, **independently re-verified** against the examples |
 | `generate_tests` | `add(a,b)` | `ran=true`, pytest tests with asserts (executed) |
 | `redact_pii` | email/phone/SSN/name | all masked; findings `{type,count}`, **no raw values leaked** |
+| `detect_pii` | name/email/phone/SSN; reveal toggle | `pii_found:true`, 4 values **masked Go-side** (`j***@acme.io`, `55***9`); `reveal=true` → raw; verified-clean negative over 276 KB of live pod logs (`parsed:true`) |
 | `scan_secrets` | API key + password | both found with line refs; **`match` masked** (`AKIA…`, `hu…`) — full secret never returned |
 | `review_config` | insecure Dockerfile | 4 findings: `latest` tag, `ADD`, **`curl\|sh` critical**, root user |
 
@@ -801,6 +808,11 @@ Deployed to Kind and validated end-to-end (malformed body → 400, missing field
 adapter **always masks** (`maskSecret` — a few leading characters + "…"), a Go-side guarantee
 independent of whether the model masked. Verified that the full secret never appears in the response
 (e.g. `AKIA…`, `hu…`).
+
+**`detect_pii` masking (✅):** detected values are masked Go-side via `maskPII` (in the spec's
+`postParse` hook) unless the caller passes `reveal=true` — the same not-trust-the-model guarantee.
+Verified: the default returns masked samples (`j***@acme.io`, `55***9`, SSN `12***9`), `reveal=true`
+returns the raw value, and unparseable output yields `parsed:false` rather than echoing the input.
 
 ### Cross-reference — `review_code` and the PR-review pipeline
 `review_code` is the **reasoning brain** for a 3-layer GitHub PR-review pipeline already partly
