@@ -18,6 +18,7 @@ func moreCapabilitySpecs() []capabilitySpec {
 		synthesizeRegexSpec(),
 		generateTestsSpec(),
 		redactPIISpec(),
+		detectPIISpec(),
 		scanSecretsSpec(),
 		reviewConfigSpec(),
 	}
@@ -541,6 +542,148 @@ func redactPIIParse(output string) interface{} {
 		return resp
 	}
 	return RedactPIIResponse{RedactedText: strings.TrimSpace(output), Findings: []PIIFinding{}}
+}
+
+// ---- detect_pii ----
+
+// detectPIISpec is the detection counterpart to redact_pii: instead of returning scrubbed text, it
+// reports whether the input contains PII and enumerates each item found. Detected values are masked
+// Go-side by default (see detectPIIPostParse) so a raw value never leaves the adapter unless the
+// caller explicitly opts in with reveal=true — the same not-trust-the-model guarantee scan_secrets
+// applies to secret matches.
+func detectPIISpec() capabilitySpec {
+	return capabilitySpec{
+		Name: "detect_pii",
+		Description: "Detect personally identifiable information (PII) in text and report both whether any was found and exactly what was found. " +
+			"Scans for identifiers such as emails, phone numbers, person names, postal addresses, government IDs, payment-card or bank numbers, and IP addresses, returning a pii_found flag plus per-item findings. " +
+			"Detected values are masked by default (for example j***@acme.io); pass reveal=true to return the raw values. " +
+			"Use to check whether data contains PII before logging, sharing, or storing it — the detection counterpart to redact_pii. " +
+			"Required: text. Optional: categories, reveal, timeout_seconds (default 300).",
+		InputSummary: &core.SchemaSummary{
+			RequiredFields: []core.FieldHint{
+				{Name: "text", Type: "string", Example: "Contact John Doe at john@acme.io or 555-0100.", Description: "The text to scan for PII"},
+			},
+			OptionalFields: []core.FieldHint{
+				{Name: "categories", Type: "array", Example: `["email","phone","ssn"]`, Description: "Restrict detection to specific PII categories"},
+				{Name: "reveal", Type: "boolean", Example: "false", Description: "Return raw PII values instead of masked samples (default false → masked)"},
+				timeoutHint(),
+			},
+		},
+		OutputSummary: &core.SchemaSummary{
+			RequiredFields: []core.FieldHint{
+				{Name: "pii_found", Type: "boolean", Description: "True if any PII was detected in the text"},
+				{Name: "findings", Type: "array", Description: "Detected PII as {type, value, count}; value is masked unless reveal=true"},
+				{Name: "parsed", Type: "boolean", Description: "True if the detection output parsed cleanly; if false, a pii_found=false result is NOT a verified-clean result"},
+			},
+		},
+		build:     detectPIIBuild,
+		parse:     detectPIIParse,
+		postParse: detectPIIPostParse,
+	}
+}
+
+// DetectPIIRequest is the input for detect_pii.
+type DetectPIIRequest struct {
+	Text        string   `json:"text"`
+	Categories  []string `json:"categories,omitempty"`
+	Reveal      bool     `json:"reveal,omitempty"` // return raw values instead of masked samples
+	TimeoutSecs int      `json:"timeout_seconds,omitempty"`
+}
+
+// PIIDetail reports one detected PII value: its category, the value (masked unless the caller
+// opted into reveal), and how many times it occurs.
+type PIIDetail struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+	Count int    `json:"count,omitempty"`
+}
+
+// DetectPIIResponse is the output of detect_pii. Parsed mirrors scan_secrets: when false the model
+// output could not be parsed, so a pii_found=false result is unverified, not a clean bill of health.
+type DetectPIIResponse struct {
+	PIIFound bool        `json:"pii_found"`
+	Findings []PIIDetail `json:"findings"`
+	Parsed   bool        `json:"parsed"`
+}
+
+func detectPIIBuild(raw []byte) (string, int, int, error) {
+	var req DetectPIIRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return "", 0, 0, errBadJSON
+	}
+	req.Text = strings.TrimSpace(req.Text)
+	if req.Text == "" {
+		return "", 0, 0, errors.New("text is required")
+	}
+
+	var b strings.Builder
+	b.WriteString("You are a PII-detection process. Scan the TEXT below for personally identifiable information: ")
+	b.WriteString("emails, phone numbers, person names, postal addresses, government IDs (e.g. SSN), payment-card or bank numbers, IP addresses, dates of birth, and similar identifiers. ")
+	if len(req.Categories) > 0 {
+		cats, _ := json.Marshal(req.Categories)
+		b.WriteString("Restrict detection to these categories: " + string(cats) + ". ")
+	}
+	b.WriteString("Respond with ONLY a JSON object of the form ")
+	b.WriteString(`{"pii_found": boolean, "findings": [{"type": string, "value": string, "count": number}]}`)
+	b.WriteString(" where pii_found is true if any PII is present, type names the category (email, phone, name, address, ssn, credit_card, ip_address, dob, ...), value is the exact detected value, and count is how many times it occurs. ")
+	b.WriteString("Return one finding per distinct value, and an empty findings array with pii_found=false if none are present. No text outside the JSON.\n\n")
+	b.WriteString("--- TEXT ---\n")
+	b.WriteString(req.Text)
+	return b.String(), req.TimeoutSecs, len(req.Text), nil
+}
+
+func detectPIIParse(output string) interface{} {
+	var resp DetectPIIResponse
+	if err := json.Unmarshal([]byte(extractJSON(output)), &resp); err == nil && resp.Findings != nil {
+		// Derive pii_found from the findings we actually parsed so the flag can't disagree with the
+		// enumerated details (an empty list always reports as no PII, not the model's bare claim).
+		resp.PIIFound = len(resp.Findings) > 0
+		resp.Parsed = true
+		return resp
+	}
+	// Unparseable model output: do NOT echo it (it may itself contain the PII). Signal not-parsed so
+	// an empty result is not mistaken for a verified-clean one (mirrors scan_secrets).
+	return DetectPIIResponse{PIIFound: false, Findings: []PIIDetail{}, Parsed: false}
+}
+
+// detectPIIPostParse enforces the privacy default Go-side: unless the caller set reveal=true, every
+// detected value is masked before it leaves the adapter — a guarantee independent of whether the
+// model honored any masking instruction. It runs after parse via the capabilitySpec.postParse hook.
+func detectPIIPostParse(result interface{}, raw []byte) interface{} {
+	resp, ok := result.(DetectPIIResponse)
+	if !ok {
+		return result
+	}
+	var req DetectPIIRequest
+	_ = json.Unmarshal(raw, &req) // on error, reveal stays false → mask (fail safe)
+	if !req.Reveal {
+		for i := range resp.Findings {
+			resp.Findings[i].Value = maskPII(resp.Findings[i].Value)
+		}
+	}
+	return resp
+}
+
+// maskPII returns a privacy-preserving sample of a detected PII value — enough to recognize it
+// without echoing the full value. Applied Go-side (see detectPIIPostParse).
+func maskPII(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return ""
+	}
+	// Email: keep the first character of the local part and the full domain (j***@acme.io).
+	if at := strings.IndexByte(s, '@'); at > 0 && strings.IndexByte(s[at:], '.') > 1 {
+		return s[:1] + "***" + s[at:]
+	}
+	r := []rune(s)
+	switch {
+	case len(r) <= 2:
+		return "**"
+	case len(r) <= 4:
+		return string(r[:1]) + strings.Repeat("*", len(r)-1)
+	default:
+		return string(r[:2]) + "***" + string(r[len(r)-1:])
+	}
 }
 
 // ---- scan_secrets ----

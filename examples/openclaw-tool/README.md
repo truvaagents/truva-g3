@@ -3,8 +3,8 @@
 Wraps **[OpenClaw](https://github.com/openclaw/openclaw)** — an autonomous, LLM-driven agent — as a
 TruvaG3 tool. Hand it a self-contained task and it solves it **end-to-end with its own tools
 (shell/exec + file I/O) inside a hardened sandbox**, returning the result. On top of the generic
-`run_task` capability, the tool exposes **11 typed, real-world capabilities** (data analysis, code
-review, extraction, security scanning, …) over the same contained engine.
+`run_task` capability, the tool exposes **12 typed, real-world capabilities** (data analysis, code
+review, extraction, PII detection, security scanning, …) over the same contained engine.
 
 The design lens (full detail in [ANALYSIS.md](ANALYSIS.md)): **treat OpenClaw as a black-box
 process, not an agent in the mesh** — request in → result out (or timeout). It never joins discovery,
@@ -91,6 +91,7 @@ All accept inline-text JSON (≤ `MAX_INPUT_CHARS`, default 1,000,000) and retur
 |---|---|---|---|
 | `extract_structured` | Unstructured text → strict JSON conforming to your schema | `text`, `schema` | `data`, `confidence`, `unmapped?` |
 | `redact_pii` | Find & mask PII; summarize by type/count (no raw values returned) | `text` | `redacted_text`, `findings` |
+| `detect_pii` | Detect PII and report what was found; values **masked** unless `reveal=true` | `text` | `pii_found`, `findings` (`type`, `value`, `count`), `parsed` |
 | `scan_secrets` | Detect hardcoded secrets; the value is **masked** in the response | `content` | `findings` (`type`, `location`, `severity`, `match` masked) |
 | `review_config` | Review Dockerfile / k8s / Terraform for misconfig & risky defaults | `content` | `findings` |
 | `review_code` | Structured review of a code snippet or unified diff | `code` **or** `diff` | `findings` (severity, path, line, claim, evidence, suggestion, confidence) |
@@ -233,7 +234,7 @@ openclaw-tool/
 ├── openclaw_tool.go      # tool struct, config, run_task + preset registration
 ├── handlers.go           # run_task / summarize / answer handlers + runTransaction + error helpers
 ├── capabilities.go       # capabilitySpec scaffold + generic handler + first 3 typed capabilities
-├── capabilities_more.go  # the 8 fan-out typed capabilities
+├── capabilities_more.go  # the 9 fan-out typed capabilities
 ├── openclaw_client.go    # traced client for OpenClaw's /v1/responses
 ├── workspace.go          # fresh per-call session id (statelessness)
 ├── config/openclaw.json  # OpenClaw gateway config (headless, responses-only, sandbox off)
