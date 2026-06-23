@@ -260,6 +260,57 @@ func TestSmartExecutor_ExecuteStep(t *testing.T) {
 	}
 }
 
+// TestSmartExecutor_ExecuteStep_AgentInputFailClosed verifies that when the agent-input transform
+// errors, the executor aborts dispatch (fail-closed), marks the step failed, and emits the
+// fail-closed observability log — rather than sending untransformed data downstream. (Phase 8)
+func TestSmartExecutor_ExecuteStep_AgentInputFailClosed(t *testing.T) {
+	catalog := &AgentCatalog{
+		agents: map[string]*AgentInfo{
+			"agent-1": {
+				Registration: &core.ServiceRegistration{ID: "agent-1", Name: "test-agent", Address: "localhost", Port: 8080},
+				Capabilities: []EnhancedCapability{{Name: "test_cap", Endpoint: "/api/test"}},
+			},
+		},
+	}
+	executor := NewSmartExecutor(catalog)
+
+	// HTTP would SUCCEED if dispatched — proves the abort happens before the HTTP call.
+	mockRT := NewMockRoundTripper()
+	mockRT.SetResponse("http://localhost:8080/api/test", http.StatusOK, `{"result":"success"}`)
+	executor.httpClient = &http.Client{Transport: mockRT}
+
+	logger := &mockLogger{}
+	executor.SetLogger(logger)
+	executor.SetAgentInputProcessor(errAgentInputProcessor{}) // always errors → fail closed
+
+	step := RoutingStep{
+		StepID:    "s1",
+		AgentName: "test-agent",
+		Metadata: map[string]interface{}{
+			"capability": "test_cap",
+			"parameters": map[string]interface{}{},
+		},
+	}
+	result := executor.executeStep(context.Background(), step)
+
+	if result.Success {
+		t.Fatal("expected fail-closed: step must not succeed when the agent-input transform errors")
+	}
+	if !containsString(result.Error, "agent input processing failed") {
+		t.Errorf("expected fail-closed error, got: %q", result.Error)
+	}
+	found := false
+	for _, m := range logger.messages {
+		if containsString(m, "aborting dispatch (fail-closed)") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected fail-closed observability log, got messages: %v", logger.messages)
+	}
+}
+
 func TestSmartExecutor_Retry(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping executor retry test in short mode (exercises real retry backoff with time.Sleep)")
