@@ -1187,7 +1187,7 @@ func DefaultConfig() *OrchestratorConfig {
 	config.ResultDistill = ResultDistillConfig{
 		Enabled:            true,
 		DistillThreshold:   16384,
-		PreFilterBudget:    32768,
+		PreFilterBudget:    defaultPreFilterBudget, // 128 KB — fits the 64K fast-tier floor; see const doc
 		TargetSize:         4096,
 		Model:              "fast",
 		CacheTTL:           5 * time.Minute,

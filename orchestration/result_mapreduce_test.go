@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 // countingAI records how many times GenerateResponse ran and returns a fixed extract.
@@ -68,6 +69,111 @@ func TestLLMDistiller_MapReduce_FansOut(t *testing.T) {
 	}
 	if meta.Method != "distill_mapreduce" {
 		t.Errorf("expected Method=distill_mapreduce, got %q", meta.Method)
+	}
+}
+
+// TestLLMDistiller_MapReduce_CollapsesEmptyChunks verifies that when every chunk finds nothing
+// (each returns the noMatchSentinel), the map-reduce output collapses to a SINGLE sentinel rather
+// than N copies. Regression for orch-1782176022971457913 (a 1.99 MB query → sentinel ×16). (Phase 12)
+func TestLLMDistiller_MapReduce_CollapsesEmptyChunks(t *testing.T) {
+	mockAI := &countingAI{out: noMatchSentinel}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	out := distiller.ProcessForPrompt(context.Background(), mapReduceTestArray(20), 2000, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "find 5xx errors",
+	})
+
+	if mockAI.count() < 2 {
+		t.Fatalf("expected map-reduce fan-out, got %d calls", mockAI.count())
+	}
+	if n := strings.Count(out, noMatchSentinel); n != 1 {
+		t.Errorf("expected the empty sentinel exactly once after consolidation, got %d in: %.200q", n, out)
+	}
+	if strings.TrimSpace(out) != noMatchSentinel {
+		t.Errorf("expected output to collapse to a single sentinel, got: %.200q", out)
+	}
+}
+
+// oneHitAI returns `hit` on the first call and the empty sentinel on every other call — models a
+// run where exactly one chunk has a relevant match and the rest find nothing.
+type oneHitAI struct {
+	mu  sync.Mutex
+	n   int
+	hit string
+}
+
+func (a *oneHitAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
+	a.mu.Lock()
+	a.n++
+	idx := a.n
+	a.mu.Unlock()
+	if idx == 1 {
+		return &core.AIResponse{Content: a.hit}, nil
+	}
+	return &core.AIResponse{Content: noMatchSentinel}, nil
+}
+
+func (a *oneHitAI) StreamResponse(ctx context.Context, p string, o *core.AIOptions, _ func(string)) (*core.AIResponse, error) {
+	return a.GenerateResponse(ctx, p, o)
+}
+
+// TestLLMDistiller_MapReduce_DropsEmptiesKeepsHit verifies consolidation drops the empty-sentinel
+// chunks but preserves the one substantive extract — the real hit is not buried among empties. (Phase 12)
+func TestLLMDistiller_MapReduce_DropsEmptiesKeepsHit(t *testing.T) {
+	mockAI := &oneHitAI{hit: "REAL_ERROR_XYZ"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	out := distiller.ProcessForPrompt(context.Background(), mapReduceTestArray(20), 2000, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "find errors",
+	})
+
+	if !strings.Contains(out, "REAL_ERROR_XYZ") {
+		t.Errorf("expected the one real hit to survive consolidation, got: %.200q", out)
+	}
+	if strings.Contains(out, noMatchSentinel) {
+		t.Errorf("expected empty-chunk sentinels to be dropped, got: %.200q", out)
+	}
+}
+
+// TestLLMDistiller_MapReduce_RecordsDebugInteractions verifies the map-reduce path records typed
+// result_distillation interactions (LLM-Debug parity with the single-call path). (Phase 12)
+func TestLLMDistiller_MapReduce_RecordsDebugInteractions(t *testing.T) {
+	mockAI := &countingAI{out: "EXTRACT"}
+	store := &mockLLMDebugStore{}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+	distiller.SetLLMDebugStore(store)
+
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "req-mr")
+	_ = distiller.ProcessForPrompt(ctx, mapReduceTestArray(20), 2000, ResultProcessorContext{
+		StepID: "s1", AgentName: "obs-agent", Instruction: "list",
+	})
+	distiller.Shutdown() // wait for async debug recordings
+
+	if len(store.interactions) < 2 {
+		t.Fatalf("expected multiple map-reduce LLM-debug interactions, got %d", len(store.interactions))
+	}
+	for _, it := range store.interactions {
+		if it.Type != "result_distillation" {
+			t.Errorf("expected type result_distillation, got %q", it.Type)
+		}
+		if !strings.Contains(it.CallDescription, "map-reduce") {
+			t.Errorf("expected a map-reduce CallDescription, got %q", it.CallDescription)
+		}
 	}
 }
 
@@ -320,5 +426,74 @@ func TestLLMDistiller_MapReduce_ReducePreservesContent(t *testing.T) {
 	}
 	if mockAI.count() < 2 {
 		t.Errorf("expected chunk extractions + a reduce call, got %d", mockAI.count())
+	}
+}
+
+// TestChunkWholeUnits_128KBReducesChunkCount verifies the 128 KB default chunk size cuts the
+// map-reduce chunk (hence LLM-call) count ~4× vs the prior 32 KB, while every chunk stays
+// within the byte bound and is whole-unit valid JSON (no mid-record split).
+func TestChunkWholeUnits_128KBReducesChunkCount(t *testing.T) {
+	payload := mapReduceTestArray(48000) // ~1.2 MB JSON array of records
+	if len(payload) < 1_000_000 {
+		t.Fatalf("test payload too small to exercise chunking: %d bytes", len(payload))
+	}
+
+	chunks32 := chunkWholeUnits(payload, 32768)
+	chunks128 := chunkWholeUnits(payload, defaultPreFilterBudget)
+	if len(chunks32) == 0 || len(chunks128) == 0 {
+		t.Fatalf("unexpected empty chunking: 32K=%d 128K=%d", len(chunks32), len(chunks128))
+	}
+
+	// ~4× fewer chunks at 128 KB (allow tolerance for record-boundary packing).
+	ratio := float64(len(chunks32)) / float64(len(chunks128))
+	if ratio < 3.0 || ratio > 5.0 {
+		t.Errorf("expected ~4x fewer chunks at 128KB; got 32K=%d 128K=%d (ratio %.2f)",
+			len(chunks32), len(chunks128), ratio)
+	}
+
+	// Every 128 KB chunk: within the byte bound AND a valid JSON array (whole-unit invariant).
+	for i, c := range chunks128 {
+		if len(c) > defaultPreFilterBudget {
+			t.Errorf("chunk %d exceeds the 128KB bound: %d bytes", i, len(c))
+		}
+		var arr []interface{}
+		if err := json.Unmarshal([]byte(c), &arr); err != nil {
+			t.Errorf("chunk %d is not a valid JSON array (mid-record split?): %v", i, err)
+		}
+	}
+}
+
+// TestDistillPrompt_128KBChunkFitsFastTierContext is the executable form of the headroom
+// argument behind the 128 KB default: the prompt template wrapping a full 128 KB chunk, plus
+// the output reserve, must fit the smallest fast-tier compaction window. We guard against
+// DeepSeek-chat's 64K-token combined endpoint (the tightest in the `fast` alias set) using a
+// PESSIMISTIC 2.5 B/tok ratio so the bound holds for dense JSON/log data, not just the
+// optimistic heuristic. If a future PreFilterBudget bump no longer fits 64K, this test fails.
+func TestDistillPrompt_128KBChunkFitsFastTierContext(t *testing.T) {
+	cfg := DefaultConfig().ResultDistill
+	d := NewLLMDistiller(nil, cfg, NewStructuralTrimmer(nil, nil), nil)
+
+	stepCtx := ResultProcessorContext{
+		StepID:        "step-1",
+		AgentName:     "devops-observability-tool",
+		Capability:    "query_logs",
+		Instruction:   "Retrieve the last 5 minutes of ERROR logs from the flight-tool pod, tail 1000 lines.",
+		OriginalQuery: "Run a full cluster health and observability check and post an SRE report to Slack.",
+	}
+
+	// (a) Template overhead alone (empty data) — the "instruction window" — must be small.
+	overheadTokens := estimateTokens(d.buildDistillationPrompt("", cfg.TargetSize, stepCtx))
+	if overheadTokens > 600 {
+		t.Errorf("prompt template overhead = %d tokens, want < 600 (it should be ~2%% of the chunk)", overheadTokens)
+	}
+
+	// (b) Worst-case: 128 KB of dense data at 2.5 B/tok + template + output reserve < 64K.
+	const fastTierFloor = 64000     // DeepSeek-chat 64K combined input+output endpoint
+	pessimisticBytesPerToken := 2.5 // dense JSON/logs tokenize worse than the 3.5 heuristic
+	chunkTokensWorstCase := int(float64(defaultPreFilterBudget) / pessimisticBytesPerToken)
+	outputReserve := cfg.TargetSize/3 + 100 // mirrors extractChunk / single-call maxTokens
+	if total := chunkTokensWorstCase + overheadTokens + outputReserve; total > fastTierFloor {
+		t.Errorf("128KB chunk does not fit the 64K fast-tier floor: chunk(%d)+template(%d)+output(%d) = %d tokens",
+			chunkTokensWorstCase, overheadTokens, outputReserve, total)
 	}
 }

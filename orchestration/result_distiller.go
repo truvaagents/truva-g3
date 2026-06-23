@@ -32,6 +32,19 @@ func NewLLMDistiller(aiClient core.AIClient, config ResultDistillConfig, preFilt
 	return &LLMDistiller{aiClient: aiClient, config: config, preFilter: preFilter, logger: logger}
 }
 
+// EffectiveSize reports the post-distill footprint of a raw result for budget allocation (Phase 9).
+// Below the threshold the result passes through structurally at ~raw size; at/above it the result is
+// distilled to ~TargetSize regardless of how large it started. Implements EffectiveSizer.
+func (d *LLMDistiller) EffectiveSize(rawSize int) int {
+	if rawSize < d.config.DistillThreshold {
+		return rawSize
+	}
+	if d.config.TargetSize > 0 && d.config.TargetSize < rawSize {
+		return d.config.TargetSize
+	}
+	return rawSize
+}
+
 // SetAIOptionsOverride sets the per-phase AI options override for result distillation calls.
 func (d *LLMDistiller) SetAIOptionsOverride(opts *AIOptionsOverride) {
 	d.aiOptionsOverride = opts
@@ -273,7 +286,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 // distillPromptVersion identifies the distillation prompt template. Bump it whenever
 // buildDistillationPrompt changes so the cache key (via distillKeySalt) invalidates
 // outputs produced by the old template instead of serving them for the TTL.
-const distillPromptVersion = "1"
+const distillPromptVersion = "2"
 
 // minDistillTargetSize is the floor for a distillation output target (bytes). It guards
 // against a per-result budget of 0/near-0 (which the BudgetAllocator can hand an oversized
@@ -282,46 +295,66 @@ const distillPromptVersion = "1"
 // needs at least this much room to emit something useful.
 const minDistillTargetSize = 256
 
+// defaultPreFilterBudget is the structural pre-filter cap (single-call path) and the
+// map-reduce chunk size (bytes) used when ResultDistillConfig.PreFilterBudget is unset.
+// 128 KB ≈ 37K tokens at ~3.5 B/tok: it fits the smallest fast-tier compaction context
+// (DeepSeek-chat's 64K endpoint, leaving ~27K for the prompt template + output) while
+// covering 128K+ context models with ample headroom, and it cuts map-reduce chunk/call
+// count ~4× vs the prior 32 KB. Raise via TRUVAG3_RESULT_DISTILL_PREFILTER on deployments
+// pinned to large-context fast models (Gemini Flash-Lite / gpt-4.1-mini at 1M).
+const defaultPreFilterBudget = 131072
+
+// noMatchSentinel is the exact string the distillation prompt (buildDistillationPrompt, instruction
+// #4) tells the model to emit when nothing in the input is relevant. The map-reduce path matches on
+// it to consolidate empty chunks (result_mapreduce.go) — keep the two in sync.
+const noMatchSentinel = "No matching entries found"
+
 func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext) string {
 	capabilityLine := ""
 	if stepCtx.Capability != "" {
 		capabilityLine = fmt.Sprintf(" (capability: %s)", stepCtx.Capability)
 	}
+	// The user's overall goal is the PRIMARY relevance signal — a downstream model selects what
+	// answers the user, not just the mechanical step. Included only when the caller has it in scope.
+	userGoalLine := ""
+	if stepCtx.OriginalQuery != "" {
+		userGoalLine = fmt.Sprintf("User goal: %s\n", stepCtx.OriginalQuery)
+	}
 	return fmt.Sprintf(`<identity>
 You compact one upstream result so a downstream task can use it. A downstream model
 reads ONLY your output and never the original, so anything you omit becomes invisible
-to it. For evidence data you SELECT and COPY the relevant content — you are not a
-summarizer that paraphrases it away.
+to it. For evidence data you SELECT and COPY the relevant content verbatim — you are a
+selector, not a paraphraser.
 </identity>
 
 <instructions>
 1. Output at most %d characters.
 2. First decide what kind of data this is:
    - EVIDENCE (records, log lines, rows, search hits, transactions, items, events):
-     copy the matching units VERBATIM. Do not paraphrase, reword, or summarize them —
-     preserve exact text, identifiers, primary keys, timestamps, and numeric values
-     byte-for-byte. Keep whole units; never emit a fragment of a unit.
-   - NARRATIVE (prose, descriptions, explanations): write a concise factual summary
-     and still preserve identifiers, keys, and exact numeric values.
-3. Select by relevance to the downstream task — keep the units that actually answer it.
-4. If NO unit is relevant, output exactly: No matching entries found.
-   Do not fabricate a summary and do not imply the source was empty if it was not.
+     copy the matching units VERBATIM — preserve exact text, identifiers, primary keys,
+     timestamps, and numeric values byte-for-byte. Keep each unit whole.
+   - NARRATIVE (prose, descriptions, explanations): write a concise factual summary and
+     still preserve identifiers, keys, and exact numeric values.
+3. Select by relevance to the user goal first, then the downstream task — keep the units
+   that actually answer them.
+4. If no unit is relevant, output exactly: No matching entries found (use this only when
+   the input genuinely contains nothing relevant).
 5. If relevant units must be dropped to fit the limit, keep the most relevant and end
    with: [truncated: N additional matching units omitted to fit budget — treat anything
    not shown as UNKNOWN, not absent].
-6. Never state that something is absent unless you inspected the entire input and
-   confirmed it. Omission to fit the budget is not evidence of absence.
+6. State that something is absent only after inspecting the entire input and confirming
+   it — omission to fit the budget is not evidence of absence.
 </instructions>
 
 <context source="%s%s">
-Downstream task: %s
+%sDownstream task: %s
 </context>
 
 <data>
 %s
 </data>
 
-Return the compacted result:`,
+Return the compacted result (at most %d characters):`,
 		maxBytes,
-		stepCtx.AgentName, capabilityLine, stepCtx.Instruction, result)
+		stepCtx.AgentName, capabilityLine, userGoalLine, stepCtx.Instruction, result, maxBytes)
 }

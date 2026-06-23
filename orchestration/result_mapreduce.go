@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
@@ -37,7 +38,7 @@ func (d *LLMDistiller) mapReduceCompact(
 ) string {
 	chunkBytes := d.config.PreFilterBudget
 	if chunkBytes <= 0 {
-		chunkBytes = 32768
+		chunkBytes = defaultPreFilterBudget
 	}
 	chunks := chunkWholeUnits(result, chunkBytes)
 	total := len(chunks)
@@ -92,7 +93,7 @@ func (d *LLMDistiller) mapReduceCompact(
 			if mrCtx.Err() != nil {
 				return
 			}
-			out, err := d.extractChunk(mrCtx, chunk, perChunkTarget, stepCtx)
+			out, err := d.extractChunk(mrCtx, chunk, perChunkTarget, stepCtx, fmt.Sprintf("map-reduce chunk %d/%d", i+1, total))
 			resCh <- chunkOut{i: i, out: out, ok: err == nil && out != ""}
 		}(i, chunk)
 	}
@@ -115,17 +116,22 @@ collect:
 		}
 	}
 
-	var b strings.Builder
+	// Consolidate completed chunks. Drop the ones that found nothing (the exact noMatchSentinel)
+	// so N empty chunks don't reach synthesis as N identical "No matching entries found" lines
+	// (live evidence: orch-1782176022971457913 — a 1.99 MB 5xx query → that sentinel ×16). Keep
+	// only substantive extracts; `completed` still counts every finished chunk for the partial
+	// disclosure below.
+	var substantive []string
 	completed := 0
 	for i := 0; i < total; i++ {
 		if !oks[i] {
 			continue
 		}
 		completed++
-		if b.Len() > 0 {
-			b.WriteByte('\n')
+		if strings.TrimSpace(outs[i]) == noMatchSentinel {
+			continue
 		}
-		b.WriteString(outs[i])
+		substantive = append(substantive, outs[i])
 	}
 
 	if completed == 0 {
@@ -140,7 +146,11 @@ collect:
 		return d.preFilter.ProcessForPrompt(ctx, result, targetSize, stepCtx)
 	}
 
-	combined := b.String()
+	combined := strings.Join(substantive, "\n")
+	if combined == "" {
+		// Every completed chunk found nothing relevant — emit ONE sentinel, not N copies.
+		combined = noMatchSentinel
+	}
 	// Reduce: the joined per-chunk extracts can exceed the caller's target (each chunk is
 	// bounded only by its own per-chunk target/MaxTokens). Distill them with one more
 	// fast-model call — the canonical map-reduce "reduce" — falling open to a VERBATIM
@@ -149,7 +159,7 @@ collect:
 	// orch-1781968441143087789 incident where 1.16 MB → "[trimmed: 0/226 sentences]").
 	if len(combined) > targetSize {
 		if estimateTokens(combined) <= d.config.ModelContextTokens {
-			if reduced, err := d.extractChunk(mrCtx, combined, targetSize, stepCtx); err == nil && reduced != "" {
+			if reduced, err := d.extractChunk(mrCtx, combined, targetSize, stepCtx, "map-reduce reduce"); err == nil && reduced != "" {
 				combined = reduced
 			} else {
 				combined = truncateResultBytes(combined, targetSize)
@@ -185,10 +195,13 @@ collect:
 	return combined
 }
 
-// extractChunk runs the extractive distillation prompt on a single chunk. It inherits
-// the caller's (shared) deadline via ctx — it does not impose its own.
+// extractChunk runs the extractive distillation prompt on a single chunk (or, for the reduce
+// step, the joined chunk extracts). It inherits the caller's (shared) deadline via ctx — it does
+// not impose its own. callDesc labels the call ("map-reduce chunk i/N" or "map-reduce reduce") for
+// the LLM-Debug record. Each call records a typed result_distillation interaction here for parity
+// with the single-call path (the generic agent_llm_call is deferred). (Phase 12)
 func (d *LLMDistiller) extractChunk(
-	ctx context.Context, chunk string, targetSize int, stepCtx ResultProcessorContext,
+	ctx context.Context, chunk string, targetSize int, stepCtx ResultProcessorContext, callDesc string,
 ) (string, error) {
 	prompt := d.buildDistillationPrompt(chunk, targetSize, stepCtx)
 	maxTokens := targetSize/3 + 100
@@ -198,11 +211,48 @@ func (d *LLMDistiller) extractChunk(
 	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model}
 	options := mergeAIOptions(baseOptions, d.aiOptionsOverride)
 
+	requestID := ""
+	if bag := telemetry.GetBaggage(ctx); bag != nil {
+		requestID = bag["request_id"]
+	}
+	start := time.Now()
 	resp, err := d.aiClient.GenerateResponse(d.deferLLMRecordingIfWeWillRecord(ctx), prompt, options)
+	durMs := time.Since(start).Milliseconds()
 	if err != nil {
+		d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			Type:            "result_distillation",
+			Timestamp:       start,
+			DurationMs:      durMs,
+			Prompt:          prompt,
+			Response:        fmt.Sprintf("[%s FAILED: %s]", callDesc, err.Error()),
+			Model:           options.Model,
+			Temperature:     float64(options.Temperature),
+			MaxTokens:       options.MaxTokens,
+			Success:         false,
+			Error:           err.Error(),
+			StepID:          stepCtx.StepID,
+			CallDescription: fmt.Sprintf("Distill %s (%s)", stepCtx.AgentName, callDesc),
+		})
 		return "", err
 	}
 	core.RecordTokenUsage(ctx, "distillation_mapreduce", resp.Usage)
+	d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		Type:             "result_distillation",
+		Timestamp:        start,
+		DurationMs:       durMs,
+		Prompt:           prompt,
+		Response:         resp.Content,
+		Model:            resp.Model,
+		Provider:         resp.Provider,
+		Temperature:      float64(options.Temperature),
+		MaxTokens:        options.MaxTokens,
+		PromptTokens:     resp.Usage.PromptTokens,
+		CompletionTokens: resp.Usage.CompletionTokens,
+		TotalTokens:      resp.Usage.TotalTokens,
+		Success:          true,
+		StepID:           stepCtx.StepID,
+		CallDescription:  fmt.Sprintf("Distill %s (%s)", stepCtx.AgentName, callDesc),
+	})
 	return resp.Content, nil
 }
 

@@ -46,10 +46,12 @@ func markResultNonCacheable(ctx context.Context) {
 // hit. The agent name is deliberately excluded so the cache can be shared across pods
 // and agents in a domain (it appears only as a context hint in the prompt, not as the
 // thing being compacted).
-func distillCacheKey(response, instruction string, maxBytes int) string {
+func distillCacheKey(response, instruction, originalQuery string, maxBytes int) string {
 	h := sha256.New()
 	h.Write([]byte(instruction))
 	h.Write([]byte{0}) // separator so ("ab","") != ("a","b")
+	h.Write([]byte(originalQuery))
+	h.Write([]byte{0}) // the user goal changes what the distiller selects, so it changes the output
 	h.Write([]byte(strconv.Itoa(maxBytes)))
 	h.Write([]byte{0})
 	h.Write([]byte(response))
@@ -116,6 +118,15 @@ func NewCachingProcessor(inner ResultProcessor, cache core.DigestCache, ttl time
 	return &cachingProcessor{inner: inner, cache: cache, ttl: ttl, minBytes: minBytes, keySalt: keySalt, logger: logger}
 }
 
+// EffectiveSize forwards to the wrapped processor so budget allocation sees the post-distill
+// footprint through the cache layer (Phase 9). Implements EffectiveSizer.
+func (c *cachingProcessor) EffectiveSize(rawSize int) int {
+	if sizer, ok := c.inner.(EffectiveSizer); ok {
+		return sizer.EffectiveSize(rawSize)
+	}
+	return rawSize
+}
+
 // ProcessForPrompt returns a cached compaction when one exists for this
 // (result, instruction, budget), otherwise runs the inner processor and stores the
 // result. Caching is skipped for passthrough-sized inputs.
@@ -131,7 +142,7 @@ func (c *cachingProcessor) ProcessForPrompt(
 		return c.inner.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
 	}
 
-	key := c.keySalt + distillCacheKey(result, stepCtx.Instruction, maxBytes)
+	key := c.keySalt + distillCacheKey(result, stepCtx.Instruction, stepCtx.OriginalQuery, maxBytes)
 
 	if data, err := c.cache.GetDigest(ctx, key); err == nil && len(data) > 0 {
 		telemetry.AddSpanEvent(ctx, "result_distill.cache_hit",

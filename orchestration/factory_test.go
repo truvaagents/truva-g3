@@ -2717,6 +2717,32 @@ func TestCreateOrchestrator_DistillationDefaultOn(t *testing.T) {
 	})
 }
 
+// TestDefaultConfig_PreFilterBudget locks the 128 KB pre-filter / map-reduce chunk default
+// and the env override. 128 KB fits the smallest fast-tier compaction context (DeepSeek-chat
+// 64K) with room for the prompt template + output; see defaultPreFilterBudget.
+func TestDefaultConfig_PreFilterBudget(t *testing.T) {
+	t.Run("default is 128 KB", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_PREFILTER", "") // ignore any ambient override
+		if got := DefaultConfig().ResultDistill.PreFilterBudget; got != defaultPreFilterBudget {
+			t.Errorf("PreFilterBudget default = %d, want %d (128 KB)", got, defaultPreFilterBudget)
+		}
+	})
+
+	t.Run("env override wins", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_PREFILTER", "262144")
+		if got := DefaultConfig().ResultDistill.PreFilterBudget; got != 262144 {
+			t.Errorf("PreFilterBudget = %d, want 262144 from env", got)
+		}
+	})
+
+	t.Run("non-positive env is ignored (keeps default)", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_PREFILTER", "0")
+		if got := DefaultConfig().ResultDistill.PreFilterBudget; got != defaultPreFilterBudget {
+			t.Errorf("PreFilterBudget = %d, want default %d when env is 0", got, defaultPreFilterBudget)
+		}
+	})
+}
+
 // TestBuildDistillationEnabledResultProcessor covers the Layer-2 constructor's wiring.
 func TestBuildDistillationEnabledResultProcessor(t *testing.T) {
 	cfg := DefaultConfig().ResultDistill

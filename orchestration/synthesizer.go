@@ -363,7 +363,7 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 
 	if useBudgetAlloc {
 		processed, bm := ProcessMultipleForBudget(ctx, s.resultProcessor, successfulSteps,
-			s.resultTrimConfig.MaxTotalPromptBytes, s.resultTrimConfig.MaxResultBytes)
+			s.resultTrimConfig.MaxTotalPromptBytes, s.resultTrimConfig.MaxResultBytes, request)
 		budgetProcessed = make(map[string]string, len(successfulSteps))
 		for i, step := range successfulSteps {
 			budgetProcessed[step.StepID] = processed[i]
@@ -385,9 +385,10 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				// Per-result trimming (single result or no total budget)
 				trimCtx, meta := WithTrimMetadataCapture(ctx)
 				response = s.resultProcessor.ProcessForPrompt(trimCtx, response, s.resultTrimConfig.MaxTotalPromptBytes, ResultProcessorContext{
-					StepID:      step.StepID,
-					AgentName:   step.AgentName,
-					Instruction: step.Instruction,
+					StepID:        step.StepID,
+					AgentName:     step.AgentName,
+					Instruction:   step.Instruction,
+					OriginalQuery: request,
 				})
 				trimMeta = meta
 			} else if s.resultTrimConfig != nil && s.resultTrimConfig.Enabled && len(response) > s.resultTrimConfig.MaxTotalPromptBytes {
