@@ -140,16 +140,17 @@ func TestCachingProcessor_FailOpenOnCacheErrors(t *testing.T) {
 }
 
 func TestDistillCacheKey_DistinguishesInputs(t *testing.T) {
-	base := distillCacheKey("result-body", "instruction", 4096)
+	base := distillCacheKey("result-body", "instruction", "query", 4096)
 
 	cases := map[string]string{
-		"different body":        distillCacheKey("other-body", "instruction", 4096),
-		"different instruction": distillCacheKey("result-body", "other", 4096),
-		"different budget":      distillCacheKey("result-body", "instruction", 2048),
+		"different body":        distillCacheKey("other-body", "instruction", "query", 4096),
+		"different instruction": distillCacheKey("result-body", "other", "query", 4096),
+		"different query":       distillCacheKey("result-body", "instruction", "other-query", 4096),
+		"different budget":      distillCacheKey("result-body", "instruction", "query", 2048),
 		// Boundary ambiguity: ("ab","") must not collide with ("a","b").
-		"shifted boundary": distillCacheKey("a", "b", 4096),
+		"shifted boundary": distillCacheKey("a", "b", "query", 4096),
 	}
-	if base == distillCacheKey("ab", "", 4096) {
+	if base == distillCacheKey("ab", "", "query", 4096) {
 		t.Error("instruction/body boundary must be unambiguous")
 	}
 	for name, k := range cases {
@@ -158,7 +159,7 @@ func TestDistillCacheKey_DistinguishesInputs(t *testing.T) {
 		}
 	}
 	// Determinism.
-	if base != distillCacheKey("result-body", "instruction", 4096) {
+	if base != distillCacheKey("result-body", "instruction", "query", 4096) {
 		t.Error("key must be deterministic for identical inputs")
 	}
 	if !strings.HasPrefix(base, "distill:") {

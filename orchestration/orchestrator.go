@@ -3554,7 +3554,7 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 
 	if useBudgetAlloc {
 		processed, bm := ProcessMultipleForBudget(ctx, o.resultProcessor, successfulSteps,
-			trimConfig.MaxTotalPromptBytes, trimConfig.MaxResultBytes)
+			trimConfig.MaxTotalPromptBytes, trimConfig.MaxResultBytes, request)
 		budgetProcessed = make(map[string]string, len(successfulSteps))
 		for i, step := range successfulSteps {
 			budgetProcessed[step.StepID] = processed[i]
@@ -3582,6 +3582,7 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			trimCtx, meta := WithTrimMetadataCapture(ctx)
 			response = o.resultProcessor.ProcessForPrompt(trimCtx, response, trimConfig.MaxTotalPromptBytes, ResultProcessorContext{
 				StepID: step.StepID, AgentName: step.AgentName, Instruction: step.Instruction,
+				OriginalQuery: request,
 			})
 			trimMeta = meta
 		} else if trimConfig.Enabled && len(response) > trimConfig.MaxTotalPromptBytes {

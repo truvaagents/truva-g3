@@ -348,9 +348,160 @@ func TestBudgetAllocator_SmallResultsExceedBudget(t *testing.T) {
 
 	budgets := ba.Allocate(sizes)
 
-	// remaining clamped to 0, oversized gets 0
+	// Phase 9: the small class (400*3 = 1200) over-subscribes the total (1000), so small budgets
+	// scale down to fit; the raw-oversized result (20000) still gets 0 — it cannot be funded when
+	// the small class already saturates the total.
 	if budgets[3] != 0 {
 		t.Errorf("Expected 0 budget for oversized when small results exceed total, got %d", budgets[3])
+	}
+	small := budgets[0] + budgets[1] + budgets[2]
+	if small > 1000 {
+		t.Errorf("Expected scaled small budgets to fit total 1000, got sum %d", small)
+	}
+	if budgets[0] <= 0 {
+		t.Errorf("Expected small budgets scaled down (never zeroed), got %v", budgets)
+	}
+}
+
+// fakeDistillProcessor is a ResultProcessor that also implements EffectiveSizer, modelling the
+// distiller's post-distill footprint (Phase 9) without any LLM.
+type fakeDistillProcessor struct {
+	threshold  int
+	targetSize int
+}
+
+func (f fakeDistillProcessor) ProcessForPrompt(_ context.Context, result string, maxBytes int, _ ResultProcessorContext) string {
+	if maxBytes <= 0 || len(result) <= maxBytes {
+		return result
+	}
+	return result[:maxBytes]
+}
+
+func (f fakeDistillProcessor) EffectiveSize(raw int) int {
+	if raw < f.threshold {
+		return raw
+	}
+	if f.targetSize > 0 && f.targetSize < raw {
+		return f.targetSize
+	}
+	return raw
+}
+
+// TestBudgetAllocator_SmallClassDownScaled verifies the Phase 9 small-class down-scaling: when the
+// small class alone over-subscribes the total, budgets scale proportionally to fit and none is zeroed.
+func TestBudgetAllocator_SmallClassDownScaled(t *testing.T) {
+	ba := NewBudgetAllocator(1000, 5000) // perResultMax high → all results are "small"
+	sizes := []int{500, 500, 500, 500}   // sum 2000 > total 1000
+
+	budgets := ba.Allocate(sizes)
+
+	total := 0
+	for i, b := range budgets {
+		if b <= 0 {
+			t.Errorf("budget[%d]=%d, expected > 0 (scaled, never zeroed)", i, b)
+		}
+		total += b
+	}
+	if total > 1000 {
+		t.Errorf("scaled total %d exceeds totalBudget 1000", total)
+	}
+	if budgets[0] != budgets[1] || budgets[1] != budgets[2] || budgets[2] != budgets[3] {
+		t.Errorf("expected equal scaled budgets for equal sizes, got %v", budgets)
+	}
+}
+
+// TestProcessMultipleForBudget_EffectiveSizeAvoidsStarvation is the Phase 9 regression test: with an
+// EffectiveSizer processor, large distill-eligible results occupy ~TargetSize and are never starved
+// to budget 0, even when smaller results would otherwise saturate the total.
+func TestProcessMultipleForBudget_EffectiveSizeAvoidsStarvation(t *testing.T) {
+	steps := []StepResult{
+		{StepID: "a", Response: strings.Repeat("x", 1900)},
+		{StepID: "b", Response: strings.Repeat("x", 1900)},
+		{StepID: "c", Response: strings.Repeat("x", 60000)},
+		{StepID: "d", Response: strings.Repeat("x", 90000)},
+	}
+	const total, perResult = 4000, 2000
+
+	dp := fakeDistillProcessor{threshold: 2000, targetSize: 500}
+	_, meta := ProcessMultipleForBudget(context.Background(), dp, steps, total, perResult, "")
+
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if meta[id] == nil || meta[id].BudgetAllocated <= 0 {
+			t.Errorf("step %s starved under effective-size allocation: %+v", id, meta[id])
+		}
+	}
+
+	// Contrast: a plain processor (no EffectiveSizer) budgets large results at raw size, so the
+	// largest is starved — the pre-Phase-9 behavior this fix addresses. EffectiveSizer must do
+	// strictly better for the largest result.
+	_, plainMeta := ProcessMultipleForBudget(context.Background(), &captureProcessor{}, steps, total, perResult, "")
+	if plainMeta["d"].BudgetAllocated >= meta["d"].BudgetAllocated {
+		t.Errorf("expected effective-size allocation to beat raw for largest result: plain d=%d, effective d=%d",
+			plainMeta["d"].BudgetAllocated, meta["d"].BudgetAllocated)
+	}
+}
+
+// TestLLMDistiller_EffectiveSize verifies the post-distill footprint formula.
+func TestLLMDistiller_EffectiveSize(t *testing.T) {
+	d := NewLLMDistiller(nil, ResultDistillConfig{DistillThreshold: 16384, TargetSize: 4096}, NewStructuralTrimmer(nil, nil), nil)
+	cases := []struct{ raw, want int }{
+		{100, 100},      // below threshold → raw
+		{16383, 16383},  // just below → raw
+		{16384, 4096},   // at threshold → TargetSize
+		{1000000, 4096}, // far above → TargetSize
+	}
+	for _, c := range cases {
+		if got := d.EffectiveSize(c.raw); got != c.want {
+			t.Errorf("EffectiveSize(%d)=%d, want %d", c.raw, got, c.want)
+		}
+	}
+	// TargetSize 0 → never shrinks.
+	d2 := NewLLMDistiller(nil, ResultDistillConfig{DistillThreshold: 16384, TargetSize: 0}, NewStructuralTrimmer(nil, nil), nil)
+	if got := d2.EffectiveSize(1000000); got != 1000000 {
+		t.Errorf("EffectiveSize with TargetSize=0 = %d, want 1000000", got)
+	}
+}
+
+// TestCachingProcessor_EffectiveSize verifies the cache wrapper forwards EffectiveSize to its inner.
+func TestCachingProcessor_EffectiveSize(t *testing.T) {
+	d := NewLLMDistiller(nil, ResultDistillConfig{DistillThreshold: 16384, TargetSize: 4096}, NewStructuralTrimmer(nil, nil), nil)
+	cp := NewCachingProcessor(d, &core.MockDigestCache{}, time.Minute, 16384, "salt", nil)
+
+	sizer, ok := cp.(EffectiveSizer)
+	if !ok {
+		t.Fatal("cachingProcessor should implement EffectiveSizer")
+	}
+	if got := sizer.EffectiveSize(1000000); got != 4096 {
+		t.Errorf("forwarded EffectiveSize = %d, want 4096", got)
+	}
+}
+
+// TestLLMDistiller_PromptIncludesUserGoal verifies the original user query is threaded into the
+// distillation prompt as the primary relevance signal, and omitted when no query is in scope.
+func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
+	d := NewLLMDistiller(nil, ResultDistillConfig{}, NewStructuralTrimmer(nil, nil), nil)
+
+	stepCtx := ResultProcessorContext{
+		AgentName:     "devops-tool",
+		Instruction:   "Retrieve the last 5 minutes of logs",
+		OriginalQuery: "tell me if there are PII present in the logs",
+	}
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+
+	if !strings.Contains(prompt, "User goal: tell me if there are PII present in the logs") {
+		t.Errorf("expected the user goal in the prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Downstream task: Retrieve the last 5 minutes of logs") {
+		t.Error("expected the downstream task (step instruction) in the prompt")
+	}
+	if !strings.Contains(prompt, "relevance to the user goal first") {
+		t.Error("expected instruction #3 to prioritize the user goal")
+	}
+
+	// When no query is in scope, the "User goal:" line is omitted (no empty label).
+	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"})
+	if strings.Contains(noQuery, "User goal:") {
+		t.Error("expected no 'User goal:' line when OriginalQuery is empty")
 	}
 }
 
@@ -552,7 +703,7 @@ func TestProcessMultipleForBudget_SmallResultsPassthrough(t *testing.T) {
 		{StepID: "step-2", AgentName: "agent-b", Instruction: "Get more", Response: `{"another": "field"}`},
 	}
 
-	results, _ := ProcessMultipleForBudget(context.Background(), trimmer, steps, 10000, 5000)
+	results, _ := ProcessMultipleForBudget(context.Background(), trimmer, steps, 10000, 5000, "")
 
 	if len(results) != 2 {
 		t.Fatalf("Expected 2 results, got %d", len(results))
@@ -580,7 +731,7 @@ func TestProcessMultipleForBudget_BudgetConstraint(t *testing.T) {
 
 	// Total budget smaller than combined result sizes forces trimming
 	totalBudget := 300
-	results, _ := ProcessMultipleForBudget(context.Background(), trimmer, steps, totalBudget, 200)
+	results, _ := ProcessMultipleForBudget(context.Background(), trimmer, steps, totalBudget, 200, "")
 
 	if len(results) != 2 {
 		t.Fatalf("Expected 2 results, got %d", len(results))
@@ -1690,7 +1841,7 @@ func TestProcessMultipleForBudget_MetadataMap_PopulatedAndKeyed(t *testing.T) {
 		{StepID: "step-2", AgentName: "agent-b", Instruction: "get name", Response: `{"name":"Widget"}`},
 	}
 
-	results, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 10000, 5000)
+	results, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 10000, 5000, "")
 
 	if len(results) != 2 {
 		t.Fatalf("Expected 2 results, got %d", len(results))
@@ -1718,7 +1869,7 @@ func TestProcessMultipleForBudget_MetadataMap_SmallResultBudgetEqualsSize(t *tes
 		{StepID: "s1", AgentName: "a", Instruction: "get x", Response: resp},
 	}
 
-	_, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 5000, 5000)
+	_, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 5000, 5000, "")
 
 	m, ok := metaMap["s1"]
 	if !ok {
@@ -1737,7 +1888,7 @@ func TestProcessMultipleForBudget_MetadataMap_MethodPopulatedOnTrim(t *testing.T
 		{StepID: "s1", AgentName: "a", Instruction: "get price", Response: large},
 	}
 
-	_, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 20, 20)
+	_, metaMap := ProcessMultipleForBudget(context.Background(), trimmer, steps, 20, 20, "")
 
 	m, ok := metaMap["s1"]
 	if !ok {

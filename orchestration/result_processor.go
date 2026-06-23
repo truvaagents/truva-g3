@@ -15,12 +15,25 @@ type ResultProcessor interface {
 	ProcessForPrompt(ctx context.Context, result string, maxBytes int, stepContext ResultProcessorContext) string
 }
 
+// EffectiveSizer lets a ResultProcessor report the size a raw result will occupy in the final prompt
+// AFTER processing. A distilling processor compresses any result >= its threshold to ~TargetSize
+// regardless of raw size, so allocating raw bytes mis-models cost (Phase 9). ProcessMultipleForBudget
+// budgets against this when the processor implements it; processors that do not (e.g. the bare
+// StructuralTrimmer) are budgeted at raw size — identical to pre-Phase-9 behaviour.
+type EffectiveSizer interface {
+	EffectiveSize(rawSize int) int
+}
+
 // ResultProcessorContext provides step metadata for context-aware trimming.
 type ResultProcessorContext struct {
 	StepID      string // "step-3"
 	AgentName   string // Agent that produced this result
 	Capability  string // Optional: not populated in default synthesis path (StepResult has no Capability field). Set by custom callers or when integrating with capability-aware executors.
-	Instruction string // Step instruction — primary signal for query-conditioned trimming
+	Instruction string // Step instruction — the immediate task this result was fetched for
+	// OriginalQuery is the end-user's request for the whole run. It is the PRIMARY relevance
+	// signal for an LLM distiller: a result is selected for what answers the user's goal, not just
+	// the mechanical step instruction. Empty when the caller has no query in scope.
+	OriginalQuery string
 }
 
 // ResultTrimConfig configures automatic result trimming for prompt construction.
@@ -294,9 +307,21 @@ func (ba *BudgetAllocator) Allocate(sizes []int) []int {
 		}
 	}
 
-	// Clamp: small results may have consumed the entire budget
+	// Phase 9: when the small class alone over-subscribes the total (common once distill-eligible
+	// results are sized at ~TargetSize via EffectiveSizer), scale every small budget down
+	// proportionally to fit — degrade fidelity uniformly rather than letting earlier results keep
+	// full size while later ones (and all oversized ones) starve to 0. The distiller floors its own
+	// targetSize (minDistillTargetSize), so a scaled-down budget is never emitted empty.
 	if remaining < 0 {
-		remaining = 0
+		smallTotal := ba.totalBudget - remaining // = Σ small sizes (> totalBudget)
+		if smallTotal > 0 && ba.totalBudget > 0 {
+			for i, size := range sizes {
+				if size <= ba.perResultMax {
+					budgets[i] = int(float64(size) / float64(smallTotal) * float64(ba.totalBudget))
+				}
+			}
+		}
+		return budgets // total exhausted; any oversized results correctly get 0
 	}
 
 	if len(oversized) > 0 && remaining > 0 {
@@ -372,11 +397,18 @@ func (ba *BudgetAllocator) Allocate(sizes []int) []int {
 // Returns processed strings and per-step trim metadata (keyed by StepID).
 func ProcessMultipleForBudget(
 	ctx context.Context, processor ResultProcessor, steps []StepResult,
-	totalBudget, perResultMax int,
+	totalBudget, perResultMax int, originalQuery string,
 ) ([]string, map[string]*ResultTrimMetadata) {
+	// Phase 9: allocate against the POST-process footprint. A result the processor will distill
+	// occupies ~TargetSize in the prompt, not its raw size. Processors without EffectiveSizer (the
+	// bare StructuralTrimmer) report raw size, so this is identical to pre-Phase-9 behaviour.
+	sizer, _ := processor.(EffectiveSizer)
 	sizes := make([]int, len(steps))
 	for i, s := range steps {
 		sizes[i] = len(s.Response)
+		if sizer != nil {
+			sizes[i] = sizer.EffectiveSize(sizes[i])
+		}
 	}
 	budgets := NewBudgetAllocator(totalBudget, perResultMax).Allocate(sizes)
 
@@ -386,6 +418,7 @@ func ProcessMultipleForBudget(
 		trimCtx, meta := WithTrimMetadataCapture(ctx)
 		results[i] = processor.ProcessForPrompt(trimCtx, step.Response, budgets[i], ResultProcessorContext{
 			StepID: step.StepID, AgentName: step.AgentName, Instruction: step.Instruction,
+			OriginalQuery: originalQuery,
 		})
 		meta.BudgetAllocated = budgets[i]
 		metaMap[step.StepID] = meta
