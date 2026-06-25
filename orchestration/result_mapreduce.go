@@ -208,7 +208,7 @@ func (d *LLMDistiller) extractChunk(
 	if maxTokens < 500 {
 		maxTokens = 500
 	}
-	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model}
+	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model, SystemPrompt: distillationSystemPrompt}
 	options := mergeAIOptions(baseOptions, d.aiOptionsOverride)
 
 	requestID := ""
@@ -224,6 +224,7 @@ func (d *LLMDistiller) extractChunk(
 			Timestamp:       start,
 			DurationMs:      durMs,
 			Prompt:          prompt,
+			SystemPrompt:    distillationSystemPrompt,
 			Response:        fmt.Sprintf("[%s FAILED: %s]", callDesc, err.Error()),
 			Model:           options.Model,
 			Temperature:     float64(options.Temperature),
@@ -241,6 +242,7 @@ func (d *LLMDistiller) extractChunk(
 		Timestamp:        start,
 		DurationMs:       durMs,
 		Prompt:           prompt,
+		SystemPrompt:     distillationSystemPrompt,
 		Response:         resp.Content,
 		Model:            resp.Model,
 		Provider:         resp.Provider,

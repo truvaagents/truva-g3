@@ -301,3 +301,46 @@ func TestDistillKeySalt_DistinguishesConfig(t *testing.T) {
 		t.Error("salt must be deterministic for identical config")
 	}
 }
+
+// errSetDigestCache misses on Get and errors on Set — exercises the cache-write fail-open path.
+type errSetDigestCache struct{ sets int }
+
+func (e *errSetDigestCache) GetDigest(_ context.Context, _ string) ([]byte, error) { return nil, nil }
+func (e *errSetDigestCache) SetDigest(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	e.sets++
+	return fmt.Errorf("redis down")
+}
+
+// TestCachingProcessor_EffectiveSize_NonSizerInner covers EffectiveSize when the wrapped
+// processor does not implement EffectiveSizer — it must report the raw size unchanged.
+func TestCachingProcessor_EffectiveSize_NonSizerInner(t *testing.T) {
+	cp := NewCachingProcessor(&countingProcessor{}, newMapDigestCache(), time.Minute, 16384, "salt", nil)
+	sizer, ok := cp.(EffectiveSizer)
+	if !ok {
+		t.Fatal("cachingProcessor must implement EffectiveSizer")
+	}
+	if got := sizer.EffectiveSize(99999); got != 99999 {
+		t.Errorf("a non-EffectiveSizer inner must report raw size; got %d, want 99999", got)
+	}
+}
+
+// TestCachingProcessor_SetDigestError_FailsOpen covers the cache-write fail-open path: a
+// SetDigest error is logged but the inner output is still returned.
+func TestCachingProcessor_SetDigestError_FailsOpen(t *testing.T) {
+	logger := &TestLogger{}
+	cache := &errSetDigestCache{}
+	cp := NewCachingProcessor(&countingProcessor{output: "DISTILLED"}, cache, time.Minute, 10, "salt", logger)
+
+	out := cp.ProcessForPrompt(context.Background(), strings.Repeat("x", 100), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "i"})
+
+	if out != "DISTILLED" {
+		t.Errorf("SetDigest error must be fail-open (return inner output); got %q", out)
+	}
+	if cache.sets != 1 {
+		t.Errorf("expected one SetDigest attempt, got %d", cache.sets)
+	}
+	if len(logger.GetLogsByOperation("result_distill.cache_set")) == 0 {
+		t.Error("expected a warn log on the cache-set failure")
+	}
+}
