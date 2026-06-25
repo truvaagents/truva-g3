@@ -21,7 +21,7 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
   - [2.3 Use Concrete Examples Instead of Rule Lists](#23-use-concrete-examples-instead-of-rule-lists)
   - [2.4 Reframe Negative Instructions as Positive Directives](#24-reframe-negative-instructions-as-positive-directives)
   - [2.5 Start Minimal, Add Complexity Based on Failures](#25-start-minimal-add-complexity-based-on-failures)
-  - [2.6 Use 2-5 Few-Shot Examples](#26-use-2-5-few-shot-examples)
+  - [2.6 Use a Few Well-Chosen Examples — More Is Not Always Better](#26-use-a-few-well-chosen-examples--more-is-not-always-better)
   - [2.7 Maintain a Single Consistent Persona](#27-maintain-a-single-consistent-persona)
   - [2.8 Follow the Industry-Converged Section Ordering](#28-follow-the-industry-converged-section-ordering)
   - [2.9 Use the System Message for Identity and Rules](#29-use-the-system-message-for-identity-and-rules)
@@ -38,10 +38,10 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
   - [4.7 Evidence: Token Reduction Results](#47-evidence-token-reduction-results)
 - [5. Cross-Provider Compatibility](#5-cross-provider-compatibility)
   - [5.1 Provider Feature Matrix](#51-provider-feature-matrix)
-  - [5.2 Universal Practices](#52-universal-practices)
+  - [5.2 Broadly Portable Practices](#52-broadly-portable-practices)
   - [5.3 Provider-Specific Caveats](#53-provider-specific-caveats)
   - [5.4 Provider Terminology Reference](#54-provider-terminology-reference)
-  - [5.5 Why This Structure Works Across All Providers](#55-why-this-structure-works-across-all-providers)
+  - [5.5 Why This Structure Works Across Providers](#55-why-this-structure-works-across-providers)
 - [6. Dynamic Tool Selection in Multi-Agent Systems](#6-dynamic-tool-selection-in-multi-agent-systems)
   - [6.1 The Problem with Static Tool Selection](#61-the-problem-with-static-tool-selection)
   - [6.2 Framework Survey](#62-framework-survey)
@@ -71,7 +71,7 @@ Prompts don't fail randomly. They fail in predictable, studied ways. Three resea
 
 ### The U-Shaped Attention Curve
 
-LLMs don't read your prompt like a human reads a document. They attend most to the **beginning and end**, with performance dropping **30%+** for content in the middle. This was demonstrated by Liu et al. (2024) in "Lost in the Middle" (TACL) and has been replicated across model families.
+LLMs don't read your prompt like a human reads a document. They attend most to the **beginning and end**, with task accuracy dropping by **up to ~30 percentage points** when the relevant content sits in the middle. This U-shaped accuracy-vs-position effect was demonstrated by Liu et al. (2024) in "Lost in the Middle" (TACL) and has been replicated across model families. (The curve measures accuracy by position, not attention weights directly — but "attention" is a useful mental model for it.)
 
 ```
 Attention
@@ -87,15 +87,15 @@ Attention
 
 If your most important instruction sits at position 5 of 10 sections, the model is statistically likely to degrade on it. This is not a model bug — it is a property of transformer attention.
 
-### The 3,000-Token Cliff
+### Reasoning Degrades Well Before the Context Limit
 
-You might think "I have 128K context, so token count doesn't matter." It does. Research by Goldberg et al. shows that reasoning performance degrades significantly at around **3,000 tokens** — well below modern context limits. Even small amounts of irrelevant information cause inconsistent predictions.
+You might think "I have 128K context, so token count doesn't matter." It does. Levy, Jacoby & Goldberg (2024), [*Same Task, More Tokens*](https://arxiv.org/abs/2402.14848) (ACL 2024), show that reasoning accuracy degrades at input lengths **far below** a model's technical maximum — the decline is progressive (noticeable well before the context fills) rather than a single hard cliff, with reported accuracy on a controlled reasoning task falling from ~0.92 to ~0.68 as inputs grow into the low thousands of tokens. Even small amounts of irrelevant information cause inconsistent predictions.
 
-Every token in your prompt must earn its place. If you can say it in 2,000 tokens instead of 4,000, do it.
+Every token in your prompt must earn its place. If you can say it in 2,000 tokens instead of 4,000, do it. The practical heuristic this guide uses — keep static instructional content under ~3,000 tokens — sits comfortably inside the range where this degradation is already measurable.
 
 ### Examples Beat Rules
 
-Anthropic's 2026 guidance on context engineering puts it bluntly: "Teams will often stuff a laundry list of edge cases into a prompt... We do not recommend this." Instead: "Curate a set of diverse, canonical examples that effectively portray expected behavior." For an LLM, **examples are the "pictures" worth a thousand words**.
+This is a cross-industry consensus, not one vendor's house style. Google is the most categorical: its official guidance is to "**always include few-shot examples**... prompts without [them] are likely to be less effective." Anthropic agrees and explains why — "Teams will often stuff a laundry list of edge cases into a prompt... We do not recommend this"; instead, "curate a set of diverse, canonical examples" — for an LLM, **examples are the "pictures" worth a thousand words**. OpenAI builds an Examples section into its recommended prompt template as well.
 
 One realistic example that demonstrates the desired output format, edge cases, and reasoning will outperform a page of rules trying to describe the same thing.
 
@@ -135,11 +135,11 @@ Place your most important instructions at the **beginning** and **end** of the p
 6. Format constraint   ← High attention (final line)
 ```
 
-This also extends to multi-turn conversations. Research on "LLMs Get Lost in Multi-Turn Conversation" (arXiv:2505.06120) shows the same U-shaped degradation across conversation turns — instructions from earlier turns lose salience.
+Multi-turn conversations face a related but distinct failure. Laban et al. (2025), ["LLMs Get Lost in Multi-Turn Conversation"](https://arxiv.org/abs/2505.06120), report an **average ~39% performance drop** across six generation tasks when a single instruction is *sharded* across turns instead of stated up front: models lock onto an early wrong assumption and fail to recover ("when LLMs take a wrong turn... they get lost and do not recover"). This is a reliability collapse, not the positional U-curve above — but it points to the same fix: state the full, critical instruction clearly and early rather than dribbling it out across turns.
 
 ### 2.2 Stay Under the Bloat Threshold (~3,000 Tokens)
 
-> **Source**: [The Impact of Prompt Bloat on LLM Output Quality](https://mlops.community/the-impact-of-prompt-bloat-on-llm-output-quality/) — Goldberg et al.
+> **Source**: [Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of LLMs](https://arxiv.org/abs/2402.14848) — Levy, Jacoby & Goldberg, ACL 2024. (Popularized in [The Impact of Prompt Bloat on LLM Output Quality](https://mlops.community/the-impact-of-prompt-bloat-on-llm-output-quality/), Chatterjee, 2025.)
 
 Keep your instructional content under ~3,000 tokens. Dynamic content (context data, user requests, capability catalogs) sits on top of this, but the rules and instructions themselves should be compact.
 
@@ -153,7 +153,7 @@ Keep your instructional content under ~3,000 tokens. Dynamic content (context da
 
 ### 2.3 Use Concrete Examples Instead of Rule Lists
 
-> **Source**: [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic, 2026
+> **Sources**: [Google Gemini Prompting Strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies) ("always include few-shot examples"); [Anthropic — Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) (2025); [OpenAI GPT-4.1 Prompting Guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide) (Examples section)
 
 One realistic example teaches more than pages of rules, especially for structured output tasks.
 
@@ -203,11 +203,9 @@ This single example teaches template syntax (`{{double-braces}}`), `depends_on` 
 
 ### 2.4 Reframe Negative Instructions as Positive Directives
 
-> **Source**: [The Pink Elephant Problem: Negative Instructions in LLMs](https://eval.16x.engineer/blog/the-pink-elephant-negative-instructions-llms-effectiveness-analysis)
+> **Sources**: [Anthropic — Prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices) ("tell Claude what to do instead of what not to do"); [Google — Gemini 3 prompting guide](https://ai.google.dev/gemini-api/docs/prompting-strategies) (negative constraints are unreliable / may be dropped); [The Pink Elephant Problem](https://eval.16x.engineer/blog/the-pink-elephant-negative-instructions-llms-effectiveness-analysis) (anecdotal mechanism)
 
-"Do NOT" phrasing is significantly less effective than positive reframing. Anthropic's official guidance: "Tell Claude what to do instead of what not to do." Negative instructions paradoxically draw the model's attention to the prohibited pattern, making it *more likely* to produce that output.
-
-This is the "Pink Elephant Problem" — tell someone "do NOT think of a pink elephant" and they immediately think of one. LLMs exhibit the same behavior.
+"Do NOT" phrasing is less reliable than positive reframing, and two providers say so independently. Anthropic is explicit: **"Tell Claude what to do instead of what not to do."** Google's Gemini guidance reaches the same conclusion from a different angle — it documents that negative constraints are unreliable and can be silently dropped (especially when they appear early in the prompt), so you can't count on them to suppress a behavior. The *why* is debated: a popular hypothesis ("Ironic Process Theory," the *Pink Elephant Problem* — tell someone "do NOT think of a pink elephant" and they immediately do) is that the prohibited pattern draws attention and becomes *more* likely. That mechanism rests on anecdotal evidence, not controlled studies — but the actionable conclusion is well-established across providers: prefer affirmative phrasing.
 
 | Negative (Avoid) | Positive (Use Instead) |
 |---|---|
@@ -217,13 +215,13 @@ This is the "Pink Elephant Problem" — tell someone "do NOT think of a pink ele
 | "NOT strings for literal values (e.g., `\"35.6897\"`)" | "Number parameters use JSON numbers: `35.6897`" |
 | "Do NOT put completed step IDs in depends_on" | "`depends_on` references only this phase's step IDs" |
 
-Anti-pattern examples (code blocks labeled "WRONG") are particularly counterproductive — they show the model exactly what it should avoid, which paradoxically increases the probability of producing that output. If you have a correct example, the incorrect form is unnecessary.
+Anti-pattern examples (code blocks labeled "WRONG") are counterproductive for the same reason — they place the exact pattern you want to avoid in front of the model. If you have a correct example, the incorrect form is unnecessary.
 
 ### 2.5 Start Minimal, Add Complexity Based on Failures
 
-> **Source**: [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic, 2026
+> **Sources**: [Anthropic — Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) (2025); mirrored by OpenAI's eval-driven prompt-engineering guidance (start simple, iterate on measured failures)
 
-"Start by testing a minimal prompt with the best model available, then add clear instructions and examples to improve performance based on failure modes found during initial testing."
+Anthropic states it most directly — "Start by testing a minimal prompt with the best model available, then add clear instructions and examples to improve performance based on failure modes found during initial testing" — but the workflow is provider-agnostic: OpenAI's prompt-engineering guidance is built around the same eval-then-iterate loop, and it applies whatever model you target.
 
 The workflow:
 
@@ -235,11 +233,11 @@ The workflow:
 
 This prevents prompt bloat. Every instruction in your final prompt exists because a specific failure required it — not because it "seems like a good idea."
 
-### 2.6 Use 2-5 Few-Shot Examples
+### 2.6 Use a Few Well-Chosen Examples — More Is Not Always Better
 
-> **Source**: [The Few-Shot Dilemma: Over-prompting LLMs](https://arxiv.org/html/2509.13196v1)
+> **Sources**: Tang et al., [The Few-shot Dilemma: Over-prompting Large Language Models](https://arxiv.org/abs/2509.13196) (the research); provider defaults from [Anthropic](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices) ("include 3-5 examples"), [Google Gemini](https://ai.google.dev/gemini-api/docs/prompting-strategies) ("always include few-shot examples"), and [OpenAI](https://developers.openai.com/api/docs/guides/reasoning-best-practices) (reasoning models "often don't need" any)
 
-Research shows that 2-5 well-selected examples outperform verbose instruction lists, but excessive examples cause over-prompting side-effects. The optimal number depends on the task:
+The research finding comes first: Tang et al. demonstrate an **over-prompting** effect — accuracy rises with examples up to a *model-specific optimum* and then **declines** as you keep adding them. More is not always better. Tellingly, the providers don't agree on a single number — Anthropic recommends **3-5**, Google says **always include some**, and OpenAI notes reasoning models **often need none** — which is itself evidence that the right count is contextual, not universal. The practical rule: start with a handful of well-chosen examples and stop once quality plateaus. (Tang et al.'s measured optima were task- and model-dependent and sometimes higher than 3-5, so treat any fixed number as a starting point and re-tune it per model.) Practical starting points for structured-output tasks:
 
 | Task Complexity | Recommended Examples | Rationale |
 |---|---|---|
@@ -247,7 +245,7 @@ Research shows that 2-5 well-selected examples outperform verbose instruction li
 | Edge case handling | 2-3 examples | Show the normal case + 1-2 edge cases |
 | Complex multi-modal tasks | 3-5 examples | Cover distinct categories of input |
 
-More is not always better. Beyond 5 examples, you risk the model over-indexing on superficial patterns in the examples rather than generalizing the underlying rule.
+The failure mode at the top end is over-indexing: with too many examples, the model latches onto superficial patterns in them instead of generalizing the underlying rule. Where that ceiling sits is model-specific — find where quality plateaus for your target model and stop there.
 
 ### 2.7 Maintain a Single Consistent Persona
 
@@ -272,20 +270,20 @@ Pick one identity that captures both the domain role and the operational behavio
 
 ### 2.8 Follow the Industry-Converged Section Ordering
 
-> **Sources**: [OpenAI Prompt Engineering Guide](https://platform.openai.com/docs/guides/prompt-engineering), [Anthropic Claude 4.x Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/claude-4-best-practices), [Google Gemini Prompting Strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies)
+> **Sources**: [Liu et al., *Lost in the Middle* (TACL 2024)](https://arxiv.org/abs/2307.03172) — the underlying mechanism. Corroborated by [OpenAI GPT-4.1 Prompting Guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide), [Anthropic Prompting Best Practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices), [Google Gemini Prompting Strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies).
 
-All major providers converge on the same recommended ordering:
+The ordering follows directly from the attention research in [Principle 2.1](#21-position-critical-information-at-the-edges): the U-shaped accuracy-vs-position curve means role and rules belong at the high-attention **start** and per-request context at the **end**. This guide expresses that as:
 
 **Identity → Instructions → Examples → Context**
 
-This is not one vendor's opinion. It is industry consensus:
+The *reason* is the attention curve, not vendor preference — but the major providers independently document the same shape, which is useful corroboration. No two publish identical templates; what each documents:
 
 | Provider | Recommended Ordering | Source |
 |---|---|---|
-| OpenAI | Identity → Instructions → Examples → Context | Prompt Engineering Guide |
-| Anthropic | Role → Constraints → Output format (system prompt) | Claude 4.x Best Practices |
-| Google Gemini | "Place behavioral constraints, role definitions, and output format at the very beginning" | Prompting Strategies |
-| DeepSeek V3 | Standard prompt structure, role at top | General compatibility |
+| OpenAI | An 8-section template starting **Role and Objective → Instructions → … → Output Format → Examples → Context → final instruction** (presented as a "good starting point... add or remove sections") | GPT-4.1 Prompting Guide |
+| Anthropic | Role → instructions/constraints → examples → output format (system prompt) | Prompting Best Practices |
+| Google Gemini | "Place behavioral constraints, role definitions, and output format... at the very beginning" (default case) | Prompting Strategies |
+| DeepSeek / open-weight | Standard system-role-first chat structure | Model cards |
 
 **Why this ordering works:**
 - **Identity** at position 1 gets peak attention (U-curve start)
@@ -297,9 +295,9 @@ This ordering also enables **prompt caching** for providers that support it (Ope
 
 ### 2.9 Use the System Message for Identity and Rules
 
-> **Sources**: [OpenAI Model Spec — Chain of Command](https://model-spec.openai.com/2025-02-12.html#chain_of_command), All major provider documentation
+> **Sources**: [OpenAI Model Spec — Chain of Command](https://model-spec.openai.com/) (always-latest URL; the spec is versioned and updated periodically), All major provider documentation
 
-The system-level message carries **higher priority** than user messages across all major providers. Persona and behavioral rules belong in this high-priority message — not embedded in the user prompt.
+The system-level message carries **higher priority** than user messages across all major providers. Persona and behavioral rules belong in this high-priority message — not embedded in the user prompt. (OpenAI's Model Spec defines a layered chain of command — Root → System → Developer → User → Guideline → No Authority — in which both `system` and `developer` instructions outrank `user`; they are distinct authority levels, not the same thing renamed. The bottom levels cover defaults that can be overridden — `Guideline` — and untrusted assistant/tool/quoted content — `No Authority`.)
 
 If you put your identity and rules in the user message, they compete with the actual user content for attention. In the system message, they are structurally elevated.
 
@@ -307,7 +305,7 @@ Different providers use different names for the same concept:
 
 | Provider | High-Priority Message | Low-Priority Message |
 |---|---|---|
-| OpenAI | `developer` (formerly `system`) | `user` |
+| OpenAI | `system` and `developer` (both outrank user) | `user` |
 | Anthropic | `system` prompt | `human` turn |
 | Google Gemini | `system_instruction` | User content |
 | OpenAI-compatible (Groq, DeepSeek, xAI, etc.) | `system` role | `user` role |
@@ -316,15 +314,17 @@ The underlying principle is universal: identity and rules go in the high-priorit
 
 ### 2.10 Use XML Tags for Section Boundaries
 
-> **Sources**: [Groundbreaking Research: Prompt Styles and LLMs for Structured Data](https://opendatanewswire.com/research-impact/2025/12/02/groundbreaking-research-compares-prompt-styles-and-llms-for-structured-data-generation-unveiling-key-trade-offs-for-real-world-ai-applications/), [Markdown vs XML in LLM Prompts](https://www.robertodiasduarte.com.br/en/markdown-vs-xml-em-prompts-para-llms-uma-analise-comparativa/)
+> **Sources**: [Anthropic — Use XML tags to structure your prompts](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/use-xml-tags), [OpenAI GPT-4.1 Prompting Guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide), [He et al., *Does Prompt Formatting Have Any Impact on LLM Performance?* (arXiv:2411.10541)](https://arxiv.org/abs/2411.10541)
 
-XML tags for section delineation are the most universally effective structural delimiter across LLM providers:
+Use **structured delimiters** — XML tags or Markdown headings — to separate prompt sections; both reliably beat unstructured prose and inline JSON for this purpose. Among delimiters, **XML has the broadest explicit endorsement across providers**, which makes it a strong, safe default. But the *optimal* delimiter is model-dependent (He et al. find formatting sensitivity varies by up to ~40% on smaller models like GPT-3.5-turbo while larger models like GPT-4 are far more robust), so treat XML as a default rather than a universal winner. What each provider actually says:
 
-- **OpenAI**: Explicitly recommends XML tags in prompts
-- **Anthropic**: XML is their signature prompting technique
-- **Google Gemini**: Endorses `<role>`, `<constraints>`, `<instructions>` tags
-- **Llama**: Research shows XML "consistently outperformed other formats for complex prompts"
-- **DeepSeek V3**: Documentation confirms "Markdown headers and XML tags significantly improve adherence"
+- **Anthropic**: XML is an explicit, documented technique — "Use XML tags to structure your prompts" — and XML appears throughout their official examples.
+- **OpenAI**: XML "performs well" for GPT-4.1, but the GPT-4.1 guide *defaults to Markdown* and notes JSON "performed particularly poorly" for sectioning long prompts. Avoid XML delimiters when your content is itself XML.
+- **Google Gemini**: Official docs present XML-style tags (`<context>`, `<task>`) and Markdown headings as co-equal — "choose one format and use it consistently."
+- **Llama / Meta**: No official Meta guidance recommends XML; community reports are mixed. (Earlier editions cited a community cookbook *question* as if it were evidence — it is not.)
+- **DeepSeek**: No official DeepSeek documentation states that XML/Markdown "improves adherence"; that wording came from third-party blogs. DeepSeek does publish a prompt library and JSON-mode guidance.
+
+The one consistent cross-provider signal is the *negative* one: **avoid raw JSON as a prompt-structuring delimiter** for long, multi-section prompts.
 
 **Before** — Plain-text all-caps labels:
 ```
@@ -356,17 +356,19 @@ ITERATIVE PLANNING:
 </available_agents>
 ```
 
-XML tags help the model parse distinct sections, reduce cross-section "bleed" (where instructions from one section contaminate another), and work reliably across all supported providers.
+XML tags help the model parse distinct sections and reduce cross-section "bleed" (where instructions from one section contaminate another). This benefit holds broadly across providers — even where, as noted above, the single best delimiter is model-dependent.
 
 ### 2.11 Standard Models Need Precision; Reasoning Models Prefer Brevity
 
-> **Sources**: OpenAI o3/o4-mini documentation, DeepSeek R1 guidance, Google Gemini thinking mode
+> **Sources**: [He et al., *Does Prompt Formatting Have Any Impact on LLM Performance?* (arXiv:2411.10541)](https://arxiv.org/abs/2411.10541) — format sensitivity scales with model size; [OpenAI Reasoning Best Practices](https://developers.openai.com/api/docs/guides/reasoning-best-practices); [DeepSeek-R1 Technical Report (arXiv:2501.12948)](https://arxiv.org/abs/2501.12948)
 
-Standard (non-reasoning) chat models — GPT-4.1, Claude Sonnet/Haiku, Gemini Flash, Llama, DeepSeek V3 — benefit from precise, detailed instructions with concrete examples.
+Specific model names churn; two **capability axes** don't. Calibrate to where a model sits on each axis, not to a version number — this keeps the guide valid as models evolve and across the full range from frontier proprietary to recent open-weight.
 
-Reasoning models — OpenAI o3, DeepSeek R1, Gemini with thinking — prefer high-level goals with minimal constraints. These models allocate internal "thinking" tokens that count against the budget. Verbose prompts directly reduce the space available for reasoning. DeepSeek's guidance states explicitly: "too much information reduces accuracy" for R1.
+**Axis 1 — reasoning vs. standard.** Standard (non-reasoning) chat models benefit from precise, detailed instructions with concrete examples. Reasoning models — those that emit internal thinking (e.g. OpenAI's o-series, DeepSeek-R1-style models, Gemini/Claude with thinking enabled) — do better with high-level goals and minimal constraints. OpenAI: "keep prompts simple and direct," and reasoning models "often don't need few-shot examples." The DeepSeek-R1 report is blunter: "few-shot prompting consistently degrades its performance," recommending a zero-shot setting. (Version-specific to original R1; later revisions such as R1-0528 relaxed this — check the model card.) Note: neither provider documents the once-common claim that a verbose *input* prompt eats into a reasoning model's internal thinking budget — treat brevity as an empirical preference these models reward, not a mechanical token trade-off.
 
-If your system supports both model types (as TruvaG3 does via configurable `smart`/`default` aliases), design prompts that sit at the intersection: **precise enough for standard models, concise enough for reasoning models**. The 31-47% token reduction achieved by applying these principles benefits both families.
+**Axis 2 — frontier vs. small/open-weight.** Independent of reasoning, *smaller* models are more sensitive to how a prompt is structured — and this is exactly the tier you hit when running open-weight models via Groq, Together, or Ollama (Llama, Qwen, Mistral, Gemma, DeepSeek-V3). He et al. measured up to a ~40% performance swing from formatting alone on a smaller model, versus near-robustness on a larger one. The pattern: the smaller or more open-weight the model, the more it rewards concrete examples and explicit structure (XML/Markdown sections), and the less it tolerates rule-dropping or buried instructions. Build for the weakest model you support, not just the frontier.
+
+Because a framework like TruvaG3 routes across the full spectrum — frontier and open-weight, standard and reasoning (via configurable `smart`/`default` aliases) — design prompts that sit at the intersection: **structured and example-rich enough for small/standard models, concise enough for reasoning models**. The 31-47% token reduction from applying these principles benefits every tier.
 
 ---
 
@@ -376,7 +378,7 @@ These are real problems found while debugging production prompt failures. Each l
 
 | # | Anti-Pattern | Quantified Impact | Fix |
 |---|---|---|---|
-| 1 | **Critical info in the attention dead zone** — Cross-step reference rules at position 5 of 10 | 30%+ attention degradation (Liu et al.) | [Principle 2.1](#21-position-critical-information-at-the-edges) |
+| 1 | **Critical info in the attention dead zone** — Cross-step reference rules at position 5 of 10 | Up to ~30pt accuracy drop (Liu et al.) | [Principle 2.1](#21-position-critical-information-at-the-edges) |
 | 2 | **Instruction redundancy** — Same concept stated 2-3 times across sections | Dilutes salience of unique instructions | [Principle 4.4](#44-deduplicate-ruthlessly) |
 | 3 | **Excessive negative instructions** — 23 "NOT"/"WRONG"/"NEVER" instances | Each draws attention to the prohibited pattern | [Principle 2.4](#24-reframe-negative-instructions-as-positive-directives) |
 | 4 | **No concrete few-shot example** — Generic template with placeholders instead of realistic data | 450 tokens of rules failed to teach what one example could | [Principle 2.3](#23-use-concrete-examples-instead-of-rule-lists) |
@@ -422,7 +424,7 @@ USER MESSAGE (per-request):
   Context → Request → Output format constraint (final line)
 ```
 
-This exploits the U-shaped attention curve (critical rules at top, output format at bottom), follows all provider recommendations, and enables prompt caching (the static prefix is identical across requests).
+This exploits the U-shaped attention curve (critical rules at top, output format at bottom), aligns with provider guidance, and enables prompt caching (the static prefix is identical across requests).
 
 ### 4.3 Eliminate Negative Instructions
 
@@ -510,49 +512,52 @@ If your system supports multiple LLM providers, prompt design must be validated 
 
 ### 5.1 Provider Feature Matrix
 
-| Provider | Alias | Model Family | System Prompt | JSON Mode | Prompt Caching |
+> **This guide targets a spectrum, not specific models.** Model names churn; the "Model Class" column describes durable categories (proprietary vs. open-weight, with/without a reasoning mode) so the matrix stays valid as models evolve. Current examples are parenthetical and as of mid-2026 — verify against provider docs.
+
+| Provider | Alias | Model Class (mid-2026 examples) | System Prompt | Guaranteed JSON | Prompt Caching |
 |---|---|---|---|---|---|
-| OpenAI | `openai` | GPT-4.1, o3, GPT-5 | Yes (`developer` msg) | Yes (API-level) | Auto, 1024+ tokens, 5-10 min TTL |
-| Anthropic | `anthropic` | Claude Sonnet/Opus/Haiku | Yes (`system` prompt) | Yes (structured outputs) | Explicit `cache_control`, 4 breakpoints, 5 min TTL |
-| Google Gemini | `gemini` | Gemini 2.5/3 | Yes (`system_instruction`) | Yes (`responseJsonSchema`) | 32,768 token min, 1 hr TTL |
-| DeepSeek | `openai.deepseek` | DeepSeek-V3, R1 | Yes (V3 + R1-0528+) | Yes (JSON mode) | No |
-| Groq | `openai.groq` | Llama 3.x | Yes (OpenAI-compat) | Yes | No |
-| xAI | `openai.xai` | Grok | Yes (OpenAI-compat) | Varies | No |
-| Qwen | `openai.qwen` | Qwen | Yes (OpenAI-compat) | Varies | No |
-| Together | `openai.together` | Various | Yes (OpenAI-compat) | Yes | No |
-| Ollama | `openai.ollama` | Llama, Mistral, etc. | Yes (OpenAI-compat) | Varies by model | No |
+| OpenAI | `openai` | Frontier proprietary; chat + reasoning (GPT-5.x, o-series) | Yes (`developer` msg) | Structured Outputs (`json_schema`, `strict`) | Auto, 1024+ tokens; 5-10 min default (up to 1 hr), or extended retention up to 24 hr on newer models |
+| Anthropic | `anthropic` | Frontier proprietary; chat + extended thinking (Claude Opus/Sonnet/Haiku, Fable) | Yes (`system` prompt) | Structured Outputs (GA) | Explicit `cache_control`, 4 breakpoints, 5 min + 1 hr TTL |
+| Google Gemini | `gemini` | Frontier proprietary; chat + thinking (Gemini 3 family) | Yes (`system_instruction`) | `responseJsonSchema` | Implicit + explicit; ~1K–4K token min per model; TTL configurable (default 1 hr) |
+| DeepSeek | `openai.deepseek` | Open-weight; chat + reasoning (DeepSeek-V3.x / V4 / R-series) | Yes | JSON mode (no schema enforcement) | No |
+| Groq | `openai.groq` | Open-weight host, fast inference (Llama, Qwen, Mixtral…) | Yes (OpenAI-compat) | Yes | No |
+| xAI | `openai.xai` | Frontier proprietary (Grok) | Yes (OpenAI-compat) | Varies | No |
+| Qwen | `openai.qwen` | Open-weight (Qwen family) | Yes (OpenAI-compat) | Varies | No |
+| Together | `openai.together` | Open-weight, multi-model host | Yes (OpenAI-compat) | Yes | No |
+| Ollama | `openai.ollama` | Local open-weight (Llama, Mistral, Gemma, Qwen, Phi…) | Yes (OpenAI-compat) | Varies by model | No |
 
-### 5.2 Universal Practices
+### 5.2 Broadly Portable Practices
 
-These recommendations are confirmed safe across all providers:
+These are portable defaults — broadly effective across providers, but validate per provider, since official guidance is thinner for some (as the table flags):
 
 | Practice | OpenAI | Anthropic | Gemini | DeepSeek V3 | Llama/Groq | Evidence |
 |---|---|---|---|---|---|---|
-| **XML tags for section boundaries** | Explicit recommendation | Signature technique | Endorses `<role>`, `<constraints>` | "XML tags improve adherence" | "Consistently outperformed other formats" | Industry convergence |
+| **Structured delimiters (XML or Markdown)** | XML "performs well"; Markdown is the GPT-4.1 default | Signature technique (XML explicit) | XML or Markdown, "choose one" | Not officially documented (blog-sourced) | Community-reported; no official Meta guidance | Best delimiter is model-dependent (arXiv:2411.10541) |
 | **Few-shot examples > verbose rules** | "Include concrete examples" | "Examples are pictures worth a thousand words" | "Always include few-shot examples" | Standard few-shot supported | Effective across Llama family | Universal |
-| **Positive instructions > negative** | Implied | "Tell Claude what to do instead of what not to do" | "Negative instructions cause over-indexing" | General best practice | General best practice | Pink Elephant research |
+| **Positive instructions > negative** | Implied | "Tell Claude what to do instead of what not to do" | "Negative instructions cause over-indexing" | General best practice | General best practice | Anthropic/Gemini docs (mechanism anecdotal) |
 | **System prompt for identity/role** | `developer` message priority | System prompt respected | "Place role definitions in System Instruction" | V3 + R1-0528+: supported | OpenAI-compatible system role | Universal |
 | **One concrete example > many rules** | Especially for structured output | Explicit recommendation | "Remove instructions if examples are clear enough" | Supported | Supported | Research-backed |
-| **Concise prompts for reasoning models** | o1/o3 prefer high-level goals | Claude adaptive thinking calibrates | Gemini thinking: clear tasks | R1: "too much info reduces accuracy" | N/A (no reasoning variants) | Reasoning model research |
+| **Concise prompts for reasoning models** | o-series prefer high-level goals | Claude adaptive thinking calibrates | Gemini thinking: clear tasks | R1 report: "few-shot prompting consistently degrades its performance" | N/A (no reasoning variants) | Provider reasoning-model docs |
 
 ### 5.3 Provider-Specific Caveats
 
-#### 1. Gemini's Dual-Anchor Requirement
+#### 1. Gemini's Final-Line Anchor
 
-Gemini 3 may silently drop constraints that appear only in the middle of the prompt. Google's guidance: "place your core request and most critical restrictions as the final line of your instruction."
+Per Google's official [Gemini 3 prompting guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/gemini-3-prompting-guide), Gemini may drop **negative, formatting, or quantitative constraints if they appear too early** in the prompt. Google's guidance: "place your core request and most critical restrictions as the final line of your instruction."
 
-**Action**: Critical constraints should be anchored at **both ends** of the prompt — in the system instruction (top) and reinforced as the final line before the request (bottom). The converged ordering in [Principle 2.8](#28-follow-the-industry-converged-section-ordering) naturally satisfies this.
+**Action**: Reinforce critical constraints at **both ends** — in the system instruction (top) and again as the final line before the request (bottom). The converged ordering in [Principle 2.8](#28-follow-the-industry-converged-section-ordering) naturally satisfies this. (Source: Google Cloud, *Gemini 3 prompting guide* — not the third-party blog earlier editions cited for this.)
 
-#### 2. Small/Local Model Robustness (Ollama)
+#### 2. Small / Open-Weight Model Robustness (Groq, Together, Ollama)
 
-Local models via Ollama (Llama 3.2, Mistral, etc.) may have weaker instruction following than frontier models. Concrete examples are especially important for these models because:
-- Examples are more robust to weak instruction following than abstract rules
-- XML tags help even low-capability models parse structure
-- Fewer rules means less chance of rule-dropping
+This is the [Axis 2](#211-standard-models-need-precision-reasoning-models-prefer-brevity) pattern in practice. Smaller and open-weight models — whether hosted (Groq, Together) or local (Ollama: Llama, Mistral, Gemma, Qwen, Phi) — follow instructions less reliably than frontier models, and He et al. (arXiv:2411.10541) show they are far more sensitive to prompt structure (up to a ~40% swing from formatting alone). Structure and examples matter *more* here, not less:
+- Concrete examples are more robust to weak instruction following than abstract rules
+- XML/Markdown section tags help even low-capability models parse structure
+- Fewer, positively-phrased rules means less chance of rule-dropping
+- Keep critical instructions at the edges — the U-curve hits weaker models harder
 
-#### 3. Reasoning Model Token Sensitivity
+#### 3. Reasoning Models Reward Brevity
 
-When your system routes to reasoning models (o3, DeepSeek R1, Gemini with thinking), verbose prompts consume the internal reasoning token budget. The 31-47% token reduction from applying these principles is particularly valuable for reasoning model users.
+When your system routes to reasoning models (o-series, DeepSeek-R1-style, Gemini/Claude with thinking), concise, high-level prompts outperform verbose, example-heavy ones — these models reward brevity and zero-shot framing (see [Principle 2.11](#211-standard-models-need-precision-reasoning-models-prefer-brevity)). The 31-47% token reduction from applying these principles is doubly valuable here: better output quality *and* lower input cost.
 
 #### 4. Structured Output API vs. Prompt-Based JSON
 
@@ -564,9 +569,9 @@ Static-prefix prompt structure benefits caching, but the mechanism varies wildly
 
 | Provider | Mechanism | Minimum Tokens | Notes |
 |---|---|---|---|
-| OpenAI | Automatic prefix matching | 1,024 | Works well with static-prefix strategy |
-| Anthropic | Explicit `cache_control` breakpoints | ~1,024 (varies) | Requires code-level integration |
-| Gemini | Context caching API | 32,768 | Too high for most instructional prompts |
+| OpenAI | Automatic prefix matching | 1,024 | Works well with static-prefix strategy; up to ~90% cached-input discount |
+| Anthropic | Explicit `cache_control` breakpoints | 1,024 / 2,048 / 4,096 (per model) | Requires code-level integration; cache reads ~90% off |
+| Gemini | Implicit (default on 2.5+) **and** explicit caching | ~1,024–4,096 (per model) | No longer 32K. Implicit: automatic, no code, but savings only on cache hits (not guaranteed). Explicit: guaranteed ~90% discount on 2.5+ |
 | Others | None | N/A | No caching benefit |
 
 **Recommendation**: Frame static-prefix ordering as benefiting the **U-shaped attention curve** (universal) with prompt caching as a **bonus for providers that support it**. The principle stays the same regardless of caching support.
@@ -575,16 +580,16 @@ Static-prefix prompt structure benefits caching, but the mechanism varies wildly
 
 See the provider message terminology table in [Principle 2.9](#29-use-the-system-message-for-identity-and-rules). Despite the naming differences (`developer`, `system`, `system_instruction`), the underlying principle is identical across all providers: identity and rules go in the high-priority message.
 
-### 5.5 Why This Structure Works Across All Providers
+### 5.5 Why This Structure Works Across Providers
 
 | Design Choice | OpenAI | Anthropic | Gemini | Llama/Groq | DeepSeek |
 |---|---|---|---|---|---|
 | Identity in system message | High priority per model spec | System prompt respected | `system_instruction` anchors reasoning | OpenAI-compat `system` role | V3 + R1-0528+: supported natively |
-| XML tags | Recommended | Signature technique | Recommended | "Consistently outperformed other formats" | "Improves adherence" |
+| Structured delimiters | XML "performs well"; Markdown default | Signature technique (XML explicit) | XML or Markdown | Community-reported; no official guidance | Not officially documented |
 | Concrete example before context | Best practice | Best practice | "Prompts without examples less effective" | Effective | Effective |
 | Dynamic context at end | "Near end of prompt" (caching) | Flexible | "Place instructions at end after context" (large ctx) | Flexible | Flexible |
 | Format constraint as final line | Good practice | Good practice | **Required** (may drop if too early) | Good practice | Good practice |
-| Concise instruction set | Supports reasoning models (o3) | Supports adaptive thinking | Supports Gemini thinking | Reduces rule-dropping for smaller models | R1: "too much info reduces accuracy" |
+| Concise instruction set | Supports reasoning models (o-series) | Supports adaptive thinking | Supports Gemini thinking | Reduces rule-dropping for smaller models | R1: zero-shot recommended; few-shot degrades it |
 
 ---
 
@@ -610,13 +615,13 @@ Every major framework supports dynamic tool re-evaluation:
 
 | Framework | Tool Selection Model | Re-evaluated Per Phase? | Results Influence Selection? |
 |---|---|---|---|
-| **LangGraph** (Aug 2025) | Dynamic (RAG-based per step) | Yes — explicit re-selection node | Yes — `reselect_tools` for self-correction |
+| **LangGraph** (Aug 2025) | Dynamic — manual tool gating + semantic retrieval (`langgraph-bigtool`) | Yes — tools gated per node; bigtool retrieves per query | Yes — retrieval can re-rank tools as state changes |
 | **AutoGen/AG2** | Dynamic (context-based) | Yes — via `ReplyResult` routing | Yes — tools determine next-agent flow |
 | **CrewAI** | Static-dynamic (per task) | Task-level only | Design-time only |
 | **OpenAI API** | Application-controlled | Supported (app changes tools between calls) | Architecturally supported |
 | **MCP** (June 2025) | Protocol-level dynamic | Yes — `notifications/tools/list_changed` | Yes — context-dependent discovery |
 
-LangGraph's announcement: "Agents don't always need the same tools at every step." MCP was designed from the ground up for dynamic tool availability.
+LangGraph's August 2025 update lets developers control which tools are available at different points in a run, and its `langgraph-bigtool` library adds embedding-based tool retrieval per query — so the toolset is not fixed at planning time. MCP was designed from the ground up for dynamic tool availability.
 
 ### 6.3 Academic Evidence
 
@@ -628,9 +633,9 @@ Every paper examined supports dynamic tool re-evaluation, with measured accuracy
 | **OctoTools** (Stanford, arXiv:2502.11271) | Feb 2025 | Planner-driven dynamic selection with tool cards | +9.3% over GPT-4o baseline |
 | **PEARL** (arXiv:2601.20439) | Jan 2026 | RL-trained planner for multi-hop tool use | SOTA 56.5% on ToolHop |
 | **Chameleon** (NeurIPS 2023) | 2023 | Dynamic tool routing based on task context | +11.37% on ScienceQA |
-| **AvaTaR** (NeurIPS 2024) | 2024 | Contrastive reasoning for tool optimization | +13-14% relative on Hit@1 |
+| **AvaTaR** (NeurIPS 2024) | 2024 | Contrastive reasoning for tool optimization | +14% (retrieval Hit@1), +13% (QA) |
 
-**Unanimous consensus**: 4.5% to 17% accuracy improvement with dynamic selection over static.
+**Consistent direction, with a caveat**: across these studies, dynamic selection improves on static baselines by roughly **4.5% to 14%**. The figures are *not* directly comparable — they span different benchmarks, metrics (accuracy vs. success rate vs. Hit@1), and baselines — so read them as a consistent positive trend, not a single aggregated number.
 
 ### 6.4 The Controller Equation
 
@@ -658,7 +663,7 @@ To enable context-aware tool selection, your Phase 2+ tool selection prompt shou
 3. **Compact result summary** — brief description of what earlier phases discovered
 4. **Phase number** — so the selection model knows it is not starting from scratch
 
-This context allows the tool selection LLM to pick different (or additional) tools based on what earlier phases discovered — exactly the pattern that research shows yields 4.5-17% accuracy improvements.
+This context allows the tool selection LLM to pick different (or additional) tools based on what earlier phases discovered — exactly the pattern that research shows yields the ~4.5-14% accuracy improvements above.
 
 ---
 
@@ -738,12 +743,12 @@ USER MESSAGE (per-request — dynamic content):
 | 3 | Examples > rules | One real example beats a page of instructions |
 | 4 | Positive instructions | "Start with `{`" not "Do NOT wrap in code fences" |
 | 5 | Start minimal | Add complexity only to fix observed failures |
-| 6 | 2-5 few-shot | More examples is not always better |
+| 6 | A few examples | 3-5 to start (Anthropic); stop adding once quality plateaus |
 | 7 | Single persona | One identity, no conflicts |
 | 8 | Converged ordering | Identity -> Instructions -> Examples -> Context |
 | 9 | System message | Persona and rules in the high-priority message |
-| 10 | XML tags | `<section>` delimiters for every major block |
-| 11 | Model-aware | Precise for standard models, concise for reasoning |
+| 10 | Structured tags | `<section>` (XML or Markdown) delimiters for every major block |
+| 11 | Model-aware | Two axes: standard↔reasoning and frontier↔small/open-weight; build for the weakest tier you support |
 
 ### 8.2 The 6 Design Principles at a Glance
 
@@ -793,7 +798,7 @@ Use this checklist to audit any prompt. Each check maps to a principle — follo
 | 5 | **No redundancy** | Each concept stated exactly once — no rule repeated across sections | [4.4](#44-deduplicate-ruthlessly) |
 | 6 | **Single persona** | Exactly 1 identity, defined in the system message — no conflicting roles | [2.7](#27-maintain-a-single-consistent-persona) |
 | 7 | **Section ordering** | Identity → Instructions → Examples → Context (static before dynamic) | [2.8](#28-follow-the-industry-converged-section-ordering) |
-| 8 | **XML boundaries** | Major sections delimited with XML tags (`<instructions>`, `<example>`, etc.) | [2.10](#210-use-xml-tags-for-section-boundaries) |
+| 8 | **Structural boundaries** | Major sections delimited with XML (or Markdown) tags (`<instructions>`, `<example>`, etc.) | [2.10](#210-use-xml-tags-for-section-boundaries) |
 | 9 | **Single CRITICAL** | "CRITICAL" label used for at most 1 rule | [4.6](#46-single-persona-single-critical) |
 | 10 | **Continuation slim** | Follow-up prompts drop repeated instructions; add only phase-specific context | [4.5](#45-slim-down-continuation-prompts) |
 
@@ -1179,42 +1184,43 @@ The audit record JSON is stable — adding a registry-viewer card that surfaces 
 
 ### Core Prompt Engineering Research
 
-- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172) — Liu et al., 2024 (TACL). U-shaped attention curve, 30%+ degradation in middle positions.
-- [The Impact of Prompt Bloat on LLM Output Quality](https://mlops.community/the-impact-of-prompt-bloat-on-llm-output-quality/) — Goldberg et al. Reasoning degrades at ~3,000 tokens.
-- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic, 2026. "Examples are the pictures worth a thousand words." Minimal-first approach.
-- [The Pink Elephant Problem: Negative Instructions in LLMs](https://eval.16x.engineer/blog/the-pink-elephant-negative-instructions-llms-effectiveness-analysis) — Negative instructions paradoxically increase prohibited output probability.
-- [The Few-Shot Dilemma: Over-prompting LLMs](https://arxiv.org/html/2509.13196v1) — 2-5 well-selected examples outperform verbose rules; excessive examples cause degradation.
-- [LLMs Get Lost in Multi-Turn Conversation](https://arxiv.org/html/2505.06120v1) — Extends "lost in the middle" to conversational settings.
+- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172) — Liu et al., 2024 (TACL). U-shaped accuracy-vs-position curve; up to ~30-percentage-point drop when relevant content is in the middle.
+- [Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of LLMs](https://arxiv.org/abs/2402.14848) — Levy, Jacoby & Goldberg, ACL 2024. Reasoning accuracy degrades progressively well below the context limit (e.g. ~0.92 → ~0.68). (Popularized by [The Impact of Prompt Bloat on LLM Output Quality](https://mlops.community/the-impact-of-prompt-bloat-on-llm-output-quality/), Chatterjee, 2025.)
+- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic, Sept 2025. "Examples are the pictures worth a thousand words." Minimal-first approach.
+- [The Pink Elephant Problem: Negative Instructions in LLMs](https://eval.16x.engineer/blog/the-pink-elephant-negative-instructions-llms-effectiveness-analysis) — Liang, 2025. Argues negative instructions are unreliable at suppressing behavior (anecdotal; the "paradoxically increases the behavior" mechanism is a hypothesis, not a controlled finding).
+- [The Few-shot Dilemma: Over-prompting Large Language Models](https://arxiv.org/abs/2509.13196) — Tang et al., 2025. Accuracy rises with examples to a model-specific optimum, then declines (over-prompting). Does not endorse a fixed "2-5" count.
+- [LLMs Get Lost in Multi-Turn Conversation](https://arxiv.org/abs/2505.06120) — Laban et al., 2025. ~39% average drop when instructions are sharded across turns; models commit to early wrong assumptions and don't recover (distinct from the positional U-curve).
+- [Does Prompt Formatting Have Any Impact on LLM Performance?](https://arxiv.org/abs/2411.10541) — He et al., 2024. Best prompt format is model-dependent (up to ~40% swing on GPT-3.5-turbo; larger models far more robust).
 
 ### Provider-Specific Guides
 
-- [Prompt Engineering — OpenAI Official Guide](https://platform.openai.com/docs/guides/prompt-engineering) — Identity → Instructions → Examples → Context ordering. Developer messages prioritized. XML tags recommended.
-- [OpenAI Model Spec — Chain of Command](https://model-spec.openai.com/2025-02-12.html#chain_of_command) — `developer` messages take priority over `user` messages.
-- [Anthropic Claude 4.x Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/claude-4-best-practices) — XML tags for structure, "tell Claude what to do instead of what not to do."
-- [Google Gemini Prompting Strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies) — "Place behavioral constraints at the beginning," "always include few-shot examples."
-- [Gemini 3 Prompting Best Practices](https://www.philschmid.de/gemini-3-prompt-practices) — Critical restrictions at final line, negative constraints may be dropped if too early.
-- [DeepSeek Prompting Techniques](https://www.datastudios.org/post/deepseek-prompting-techniques-strategies-limits-best-practices-etc) — V3 supports standard techniques; R1 prefers concise prompts.
+- [OpenAI GPT-4.1 Prompting Guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide) — An 8-section prompt template (Role and Objective → Instructions → … → Examples → Context). Markdown is the default delimiter; XML "performs well"; JSON performs poorly for structuring.
+- [OpenAI Model Spec — Chain of Command](https://model-spec.openai.com/) (always-latest URL; the spec is versioned and updated periodically — the `2025-12-18` revision was current when this guide was written) — six-level chain of command (Root → System → Developer → User → Guideline → No Authority); system and developer instructions both outrank user.
+- [Anthropic Prompting Best Practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices) — XML tags for structure, "tell Claude what to do instead of what not to do," "include 3-5 examples." (Older `docs.anthropic.com/.../claude-4-best-practices` URL 301-redirects here.)
+- [Anthropic — Use XML tags to structure your prompts](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/use-xml-tags) — The strongest official XML endorsement.
+- [Google Gemini Prompting Strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies) — "Place behavioral constraints at the beginning," "always include few-shot examples" (with a long-context exception that puts instructions last).
+- [Google Cloud — Gemini 3 prompting guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/gemini-3-prompting-guide) — "Place your core request and most critical restrictions as the final line"; negative/formatting/quantitative constraints may be dropped if they appear too early.
+- [DeepSeek-R1 Technical Report (arXiv:2501.12948)](https://arxiv.org/abs/2501.12948) — "Few-shot prompting consistently degrades [R1's] performance"; recommends zero-shot. (Version-specific to original R1; R1-0528+ relaxed some constraints.)
 
 ### Cross-Provider Comparison Studies
 
-- [Groundbreaking Research: Prompt Styles and LLMs for Structured Data](https://opendatanewswire.com/research-impact/2025/12/02/groundbreaking-research-compares-prompt-styles-and-llms-for-structured-data-generation-unveiling-key-trade-offs-for-real-world-ai-applications/) — Claude leads accuracy (85%) with hierarchical formats; GPT-4o leads token efficiency.
-- [Markdown vs XML in LLM Prompts](https://www.robertodiasduarte.com.br/en/markdown-vs-xml-em-prompts-para-llms-uma-analise-comparativa/) — XML outperforms for complex prompts across model families.
-- [Llama Cookbook: XML Tags vs Markdown](https://github.com/meta-llama/llama-cookbook/issues/450) — Llama 3.x responds well to XML structuring.
-- [Cross-Provider Prompt Format Research (2025)](https://medium.com/@isaiahdupree33/optimal-prompt-formats-for-llms-xml-vs-markdown-performance-insights-cef650b856db) — XML converges as preferred format across providers.
-- [Prompt Caching Comparison: OpenAI, Anthropic, Gemini](https://medium.com/@m_sea_bass/comparing-prompt-caching-openai-anthropic-and-gemini-0eac16541898) — Implementation differs per provider; Anthropic 90% discount, Gemini 32K minimum, OpenAI automatic.
+- [Does Prompt Formatting Have Any Impact on LLM Performance?](https://arxiv.org/abs/2411.10541) — He et al., 2024. The strongest peer-reviewed evidence that optimal prompt format is model-dependent. Use this for the format-impact claim.
+- [Efficient Structuring Methods for LLMs (Frontiers in AI, 2025)](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2025.1558938/full) — Elnashar, White & Schmidt. Compares JSON, CSV, YAML, prefix, function-calling, hybrid (note: did **not** test XML). Claude leads accuracy; GPT-4o leads token efficiency. (Cite the primary paper, not the press-release republishes earlier editions linked.)
+- Anthropic and Google Gemini official docs (linked under *Provider-Specific Guides*) are the authoritative sources for XML/structured-delimiter recommendations — preferred over the third-party blogs earlier editions cited.
+- Provider prompt-caching docs (OpenAI, Anthropic, Gemini) — implementation and minimums differ per provider and change frequently; consult the official pages rather than a static comparison (mid-2026: ~90% cached-input discount is common; per-model minimums are ~1K–4K tokens).
 
 ### Dynamic Tool Selection — Academic Papers
 
 - [AutoTool (arXiv:2512.13278)](https://arxiv.org/abs/2512.13278) — Dec 2025. Dynamic tool selection throughout reasoning trajectories. +4.5% to +7.7% over static.
 - [OctoTools (Stanford, arXiv:2502.11271)](https://arxiv.org/abs/2502.11271) — Feb 2025. Planner-driven dynamic selection with standardized tool cards. +9.3% over GPT-4o baseline.
 - [PEARL (arXiv:2601.20439)](https://arxiv.org/abs/2601.20439) — Jan 2026. RL-trained planner for multi-hop tool use. SOTA 56.5% on ToolHop.
-- **Chameleon** — Lu et al., NeurIPS 2023. Dynamic tool routing based on task context. +11.37% on ScienceQA.
-- **AvaTaR** — NeurIPS 2024. Contrastive reasoning for tool optimization. +13-14% relative on Hit@1.
+- [Chameleon (arXiv:2304.09842)](https://arxiv.org/abs/2304.09842) — Lu et al., NeurIPS 2023. Dynamic tool routing based on task context. +11.37% on ScienceQA.
+- [AvaTaR (arXiv:2406.11200)](https://arxiv.org/abs/2406.11200) — NeurIPS 2024. Contrastive reasoning for tool optimization. +14% relative on retrieval Hit@1, +13% on QA.
 - **"LLM-Based Agents for Tool Learning: A Survey"** — Xu et al., 2025, Data Science and Engineering, Vol. 10, pp. 533-563. Formalizes the controller equation for dynamic tool pool management.
 
 ### Dynamic Tool Selection — Framework Documentation
 
-- **LangGraph** (Aug 2025) — "Dynamic Tool Calling in LangGraph Agents": per-step semantic search, `reselect_tools` fallback tool.
+- **LangGraph** (Aug 2025) — [Dynamic tool calling](https://changelog.langchain.com/announcements/dynamic-tool-calling-in-langgraph-agents): per-node tool gating; [`langgraph-bigtool`](https://github.com/langchain-ai/langgraph-bigtool) adds embedding-based per-query tool retrieval.
 - **AutoGen/AG2** — Dynamic context-based tool selection via `ReplyResult` routing.
 - **MCP (Model Context Protocol)** (June 2025) — Protocol-level dynamic tool availability via `tools/list` and `notifications/tools/list_changed`.
 - **CrewAI** — Task-level static-dynamic tool selection.
