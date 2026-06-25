@@ -494,14 +494,85 @@ func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
 	if !strings.Contains(prompt, "Downstream task: Retrieve the last 5 minutes of logs") {
 		t.Error("expected the downstream task (step instruction) in the prompt")
 	}
-	if !strings.Contains(prompt, "relevance to the user goal first") {
-		t.Error("expected instruction #3 to prioritize the user goal")
+	// Instruction #3 lives in the system message (Phase 13 §2.9 split), not the per-call user prompt.
+	if !strings.Contains(distillationSystemPrompt, "Select the units relevant to the downstream task") ||
+		!strings.Contains(distillationSystemPrompt, "using the user goal as the broader") {
+		t.Error("expected system-prompt instruction #3 to be task-primary with the user goal as broader intent (Phase 13)")
 	}
 
 	// When no query is in scope, the "User goal:" line is omitted (no empty label).
 	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"})
 	if strings.Contains(noQuery, "User goal:") {
 		t.Error("expected no 'User goal:' line when OriginalQuery is empty")
+	}
+}
+
+// TestLLMDistiller_PromptTaskPrimary verifies Phase 13: the downstream task LEADS the <context>
+// block (before the user goal) and is echoed verbatim on the final dual-anchor line.
+func TestLLMDistiller_PromptTaskPrimary(t *testing.T) {
+	d := NewLLMDistiller(nil, ResultDistillConfig{}, NewStructuralTrimmer(nil, nil), nil)
+
+	stepCtx := ResultProcessorContext{
+		AgentName:     "prometheus-query-tool",
+		Instruction:   "Query container memory usage for all pods to detect OOM pressure",
+		OriginalQuery: "Perform a full cluster health check and send a Slack report",
+	}
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+
+	taskIdx := strings.Index(prompt, "Downstream task: Query container memory usage")
+	goalIdx := strings.Index(prompt, "User goal: Perform a full cluster health check")
+	if taskIdx < 0 || goalIdx < 0 {
+		t.Fatalf("expected both the task and goal lines, got:\n%s", prompt)
+	}
+	if taskIdx > goalIdx {
+		t.Error("expected the downstream task to LEAD the user goal in <context> (task-primary)")
+	}
+	// Dual-anchor: the final line echoes the task verbatim (quoted).
+	wantAnchor := `Return the compacted result for "Query container memory usage for all pods to detect OOM pressure" (at most 4096 characters):`
+	if !strings.Contains(prompt, wantAnchor) {
+		t.Errorf("expected the final line to dual-anchor the task verbatim, got:\n%s", prompt)
+	}
+}
+
+// TestLLMDistiller_PromptEmptyInstruction verifies Phase 13's empty-guard: an empty Instruction
+// emits no dangling "Downstream task:" line and the final anchor falls back to a generic phrase.
+func TestLLMDistiller_PromptEmptyInstruction(t *testing.T) {
+	d := NewLLMDistiller(nil, ResultDistillConfig{}, NewStructuralTrimmer(nil, nil), nil)
+
+	prompt := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{AgentName: "tool"})
+
+	if strings.Contains(prompt, "Downstream task:") {
+		t.Errorf("expected no 'Downstream task:' line when Instruction is empty, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Return the compacted result for the downstream task (at most 4096 characters):") {
+		t.Errorf("expected the generic anchor when Instruction is empty, got:\n%s", prompt)
+	}
+}
+
+// TestLLMDistiller_SystemPromptSplit verifies Phase 13 §2.9: identity + rules are dispatched as the
+// system message, and the per-call user prompt carries only <context>/<data> + the dual-anchored
+// final line (not the identity/instructions blocks).
+func TestLLMDistiller_SystemPromptSplit(t *testing.T) {
+	mockAI := &distillerMockAI{
+		response: &core.AIResponse{Content: "distilled", Usage: core.TokenUsage{}},
+	}
+	config := ResultDistillConfig{Enabled: true, DistillThreshold: 10, PreFilterBudget: 500, TargetSize: 200}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	largeInput := `{"field1":"value1","field2":"value2","field3":"value3"}`
+	distiller.ProcessForPrompt(context.Background(), largeInput, 500, ResultProcessorContext{
+		StepID: "step-1", AgentName: "test-agent", Instruction: "summarize",
+	})
+
+	if mockAI.opts == nil || mockAI.opts.SystemPrompt != distillationSystemPrompt {
+		t.Fatalf("expected the distillation system prompt to be dispatched as SystemPrompt")
+	}
+	// The user message carries context/data + the dual-anchor, not the identity/instructions blocks.
+	if !strings.Contains(mockAI.prompt, "<context") || !strings.Contains(mockAI.prompt, "<data>") {
+		t.Errorf("expected the user message to contain <context> and <data>, got:\n%s", mockAI.prompt)
+	}
+	if strings.Contains(mockAI.prompt, "<identity>") || strings.Contains(mockAI.prompt, "<instructions>") {
+		t.Errorf("expected identity/instructions in the system message, not the user message:\n%s", mockAI.prompt)
 	}
 }
 
@@ -1072,18 +1143,19 @@ func TestLLMDistiller_BuildDistillationPrompt_NoCapability(t *testing.T) {
 		Instruction: "test",
 	})
 
-	// Without capability, prompt should not contain "(capability:"
-	if strings.Contains(mockAI.prompt, "(capability:") {
-		t.Errorf("Expected no capability line in prompt when Capability is empty, prompt: %.300s", mockAI.prompt)
+	// Without capability, the <context> tag should carry no capability attribute.
+	if strings.Contains(mockAI.prompt, "capability=") {
+		t.Errorf("Expected no capability attribute when Capability is empty, prompt: %.300s", mockAI.prompt)
 	}
 }
 
-// TestBuildDistillationPrompt guards the fmt.Sprintf argument ordering in
-// buildDistillationPrompt. After ORCH-007 Change 6, the argument order is:
+// TestBuildDistillationPrompt guards the fmt.Sprintf argument ordering in the per-call USER
+// message built by buildDistillationPrompt. After the Phase 13 §2.9 split, identity +
+// instructions are the system message (distillationSystemPrompt) and the user-message layout is:
 //
-//	maxBytes, AgentName, capabilityLine, Instruction, result
+//	<context source/capability>(task, goal) -> <data>(result) -> final line(task anchor + maxBytes)
 //
-// The prompt layout is: <identity> -> <instructions>(maxBytes) -> <context>(Agent,Cap,Instr) -> <data>(result)
+// Arg order: AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, result, taskAnchor, maxBytes
 func TestBuildDistillationPrompt(t *testing.T) {
 	d := &LLMDistiller{}
 	stepCtx := ResultProcessorContext{
@@ -1104,7 +1176,12 @@ func TestBuildDistillationPrompt(t *testing.T) {
 			"which means arguments are in the wrong order:\n%s", prompt)
 	}
 
-	// --- 2. All values are present ---
+	// --- 2. Identity + instructions are NOT in the user message (they are the system message) ---
+	if strings.Contains(prompt, "<identity>") || strings.Contains(prompt, "<instructions>") {
+		t.Fatalf("user message must not contain identity/instructions (Phase 13 §2.9):\n%s", prompt)
+	}
+
+	// --- 3. All values are present ---
 	required := map[string]string{
 		"maxBytes":        "4096",
 		"AgentName":       "stock-agent",
@@ -1120,68 +1197,41 @@ func TestBuildDistillationPrompt(t *testing.T) {
 		}
 	}
 
-	// --- 3. Positional correctness ---
-	// New layout: <instructions>(maxBytes) -> <context>(Agent,Cap,Instr) -> <data>(result)
-	instructionsSection := strings.Index(prompt, "<instructions>")
+	// --- 4. Positional correctness: <context> -> <data> -> final line(maxBytes) ---
 	contextSection := strings.Index(prompt, "<context")
 	dataSection := strings.Index(prompt, "<data>")
-
-	if instructionsSection < 0 || contextSection < 0 || dataSection < 0 {
-		t.Fatalf("Could not locate all section headers in prompt:\n%s", prompt)
+	if contextSection < 0 || dataSection < 0 {
+		t.Fatalf("Could not locate <context>/<data> headers in prompt:\n%s", prompt)
+	}
+	if contextSection >= dataSection {
+		t.Errorf("Section ordering violated: context@%d must precede data@%d", contextSection, dataSection)
 	}
 
-	maxBytesIdx := strings.Index(prompt, "4096")
 	agentIdx := strings.Index(prompt, "stock-agent")
 	capIdx := strings.Index(prompt, "get_stock_price")
-	instrIdx := strings.Index(prompt, "Fetch latest equity price for portfolio analysis")
+	instrIdx := strings.Index(prompt, "Fetch latest equity price for portfolio analysis") // first hit: in <context>
 	resultIdx := strings.Index(prompt, "AAPL")
+	maxBytesIdx := strings.LastIndex(prompt, "4096") // the budget lives on the final line
 
-	// 3a. maxBytes must be inside <instructions> section (before <context>)
-	if maxBytesIdx < instructionsSection || maxBytesIdx > contextSection {
-		t.Errorf("maxBytes should appear between <instructions> and <context> sections\n"+
-			"  instructions@%d, maxBytes@%d, context@%d", instructionsSection, maxBytesIdx, contextSection)
-	}
-
-	// 3b. AgentName and Capability must be inside <context> section (between context and data)
+	// 4a. Source attrs (agent, capability) and the downstream task lead <context>, before <data>.
 	if agentIdx < contextSection || agentIdx > dataSection {
-		t.Errorf("AgentName should appear between <context> and <data> sections\n"+
-			"  context@%d, AgentName@%d, data@%d", contextSection, agentIdx, dataSection)
+		t.Errorf("AgentName should appear inside <context>: context@%d agent@%d data@%d", contextSection, agentIdx, dataSection)
 	}
-	if capIdx < agentIdx {
-		t.Error("Capability should appear after AgentName (it's appended as a suffix)")
+	if capIdx < agentIdx || capIdx > dataSection {
+		t.Errorf("Capability should appear after AgentName and before <data>: agent@%d cap@%d data@%d", agentIdx, capIdx, dataSection)
 	}
-	if capIdx > dataSection {
-		t.Errorf("Capability should appear before <data> section\n"+
-			"  Capability@%d, data@%d", capIdx, dataSection)
-	}
-
-	// 3c. Instruction must be inside <context> section (after capability, before data)
 	if instrIdx < capIdx || instrIdx > dataSection {
-		t.Errorf("Instruction should appear after Capability and before <data> section\n"+
-			"  Capability@%d, Instruction@%d, data@%d", capIdx, instrIdx, dataSection)
+		t.Errorf("Downstream task should lead <context> after the source attrs, before <data>: cap@%d instr@%d data@%d", capIdx, instrIdx, dataSection)
 	}
 
-	// 3d. Result data must be inside <data> section (after dataSection header)
+	// 4b. Result data sits inside <data> (after the header).
 	if resultIdx < dataSection {
-		t.Errorf("Result data should appear after <data> section header\n"+
-			"  data@%d, result@%d", dataSection, resultIdx)
+		t.Errorf("Result data should appear after <data>: data@%d result@%d", dataSection, resultIdx)
 	}
 
-	// 3e. Verify overall section ordering: Instructions < Context < Data
-	if instructionsSection >= contextSection || contextSection >= dataSection {
-		t.Errorf("Section ordering violated: instructions@%d < context@%d < data@%d",
-			instructionsSection, contextSection, dataSection)
-	}
-
-	// 3f. AgentName < Capability < Instruction (within context section)
-	if agentIdx >= capIdx || capIdx >= instrIdx {
-		t.Errorf("Within <context>, expected: AgentName < Capability < Instruction\n"+
-			"  AgentName@%d, Capability@%d, Instruction@%d", agentIdx, capIdx, instrIdx)
-	}
-
-	// 3g. Result data must come after instruction
-	if resultIdx < instrIdx {
-		t.Error("Result data should appear after Instruction — <data> section follows <context>")
+	// 4c. The byte budget is dual-anchored on the FINAL line (after <data>).
+	if maxBytesIdx < dataSection {
+		t.Errorf("maxBytes should appear on the final line after <data>: data@%d maxBytes@%d", dataSection, maxBytesIdx)
 	}
 }
 
@@ -2000,20 +2050,22 @@ func TestDegenerateTrim(t *testing.T) {
 // against false-absence inferences — while staying domain-agnostic.
 func TestBuildDistillationPrompt_Extractive(t *testing.T) {
 	d := &LLMDistiller{}
-	prompt := d.buildDistillationPrompt(`{"a":1}`, 1024, ResultProcessorContext{
+	userMsg := d.buildDistillationPrompt(`{"a":1}`, 1024, ResultProcessorContext{
 		AgentName:   "agent",
 		Instruction: "find errors",
 	})
 
+	// The extractive rules live in the system message (Phase 13 §2.9 split).
 	for _, want := range []string{"VERBATIM", "EVIDENCE", "NARRATIVE", "No matching entries found", "UNKNOWN"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("Expected extractive prompt to contain %q, got:\n%s", want, prompt)
+		if !strings.Contains(distillationSystemPrompt, want) {
+			t.Errorf("Expected the extractive system prompt to contain %q", want)
 		}
 	}
 
-	// Framework defaults must not hardcode any domain vocabulary (no logs/SRE/K8s strings).
+	// Framework defaults must not hardcode any domain vocabulary (no logs/SRE/K8s strings) — in
+	// either the static system prompt or the per-call user message.
 	for _, banned := range []string{"Kubernetes", "Loki", "SRE", "Slack"} {
-		if strings.Contains(prompt, banned) {
+		if strings.Contains(distillationSystemPrompt, banned) || strings.Contains(userMsg, banned) {
 			t.Errorf("Prompt must stay domain-agnostic, found %q", banned)
 		}
 	}

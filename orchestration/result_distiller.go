@@ -164,7 +164,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 	if maxTokens < 1000 {
 		maxTokens = 1000
 	}
-	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model}
+	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model, SystemPrompt: distillationSystemPrompt}
 	options := mergeAIOptions(baseOptions, d.aiOptionsOverride)
 
 	callCtx := d.deferLLMRecordingIfWeWillRecord(ctx)
@@ -214,6 +214,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 			Timestamp:       distillStart,
 			DurationMs:      duration.Milliseconds(),
 			Prompt:          prompt,
+			SystemPrompt:    distillationSystemPrompt,
 			Response:        fmt.Sprintf("[DISTILLATION FAILED: %s — fell back to StructuralTrimmer]", err.Error()),
 			Model:           options.Model,
 			Temperature:     float64(options.Temperature),
@@ -262,6 +263,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 		Timestamp:        distillStart,
 		DurationMs:       duration.Milliseconds(),
 		Prompt:           prompt,
+		SystemPrompt:     distillationSystemPrompt,
 		Response:         response.Content,
 		Model:            response.Model,
 		Provider:         response.Provider,
@@ -284,9 +286,44 @@ func (d *LLMDistiller) ProcessForPrompt(
 }
 
 // distillPromptVersion identifies the distillation prompt template. Bump it whenever
-// buildDistillationPrompt changes so the cache key (via distillKeySalt) invalidates
-// outputs produced by the old template instead of serving them for the TTL.
-const distillPromptVersion = "2"
+// buildDistillationPrompt OR distillationSystemPrompt changes so the cache key (via
+// distillKeySalt) invalidates outputs produced by the old template instead of serving
+// them for the TTL.
+// "3" = Phase 13 task-primary (task leads <context> + dual-anchored on the final line).
+// "4" = Phase 13 §2.9 split (identity + rules moved to the system message).
+const distillPromptVersion = "4"
+
+// distillationSystemPrompt is the STATIC policy for distillation — identity + rules. It is
+// dispatched as the system message (mirroring synthesizer.go's synthesisSystemPrompt) so the
+// rules are structurally elevated above, and not confused with, the arbitrary <data> being
+// compacted (EFFECTIVE_PROMPTS_GUIDE §2.9 / §9.1 — which lists these tags as "System msg").
+// The per-call byte budget is dynamic, so it lives in the user message (buildDistillationPrompt)
+// and is anchored on the final line.
+const distillationSystemPrompt = `<identity>
+You compact one upstream result so a downstream task can use it. A downstream model
+reads ONLY your output and never the original, so anything you omit becomes invisible
+to it. For evidence data you SELECT and COPY the relevant content verbatim — you are a
+selector, not a paraphraser.
+</identity>
+
+<instructions>
+1. Output at most the character budget stated on the final line of the request.
+2. First decide what kind of data this is:
+   - EVIDENCE (records, log lines, rows, search hits, transactions, items, events):
+     copy the matching units VERBATIM — preserve exact text, identifiers, primary keys,
+     timestamps, and numeric values byte-for-byte. Keep each unit whole.
+   - NARRATIVE (prose, descriptions, explanations): write a concise factual summary and
+     still preserve identifiers, keys, and exact numeric values.
+3. Select the units relevant to the downstream task, using the user goal as the broader
+   intent — keep the units that actually answer them.
+4. If no unit is relevant, output exactly: No matching entries found (use this only when
+   the input genuinely contains nothing relevant).
+5. If relevant units must be dropped to fit the limit, keep the most relevant and end
+   with: [truncated: N additional matching units omitted to fit budget — treat anything
+   not shown as UNKNOWN, not absent].
+6. State that something is absent only after inspecting the entire input and confirming
+   it — omission to fit the budget is not evidence of absence.
+</instructions>`
 
 // minDistillTargetSize is the floor for a distillation output target (bytes). It guards
 // against a per-result budget of 0/near-0 (which the BudgetAllocator can hand an oversized
@@ -304,57 +341,41 @@ const minDistillTargetSize = 256
 // pinned to large-context fast models (Gemini Flash-Lite / gpt-4.1-mini at 1M).
 const defaultPreFilterBudget = 131072
 
-// noMatchSentinel is the exact string the distillation prompt (buildDistillationPrompt, instruction
+// noMatchSentinel is the exact string the distillation prompt (distillationSystemPrompt, instruction
 // #4) tells the model to emit when nothing in the input is relevant. The map-reduce path matches on
 // it to consolidate empty chunks (result_mapreduce.go) — keep the two in sync.
 const noMatchSentinel = "No matching entries found"
 
 func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext) string {
-	capabilityLine := ""
+	capabilityAttr := ""
 	if stepCtx.Capability != "" {
-		capabilityLine = fmt.Sprintf(" (capability: %s)", stepCtx.Capability)
+		capabilityAttr = fmt.Sprintf(" capability=%q", stepCtx.Capability)
 	}
-	// The user's overall goal is the PRIMARY relevance signal — a downstream model selects what
-	// answers the user, not just the mechanical step. Included only when the caller has it in scope.
+	// Phase 13 — task-primary USER message. The downstream task is the PRIMARY relevance signal: it is
+	// the precise lens for THIS result, so it LEADS <context> and is echoed verbatim on the final line
+	// (dual-anchor / U-shaped attention). The user's overall goal follows as the broader intent
+	// (retained — dropping it regresses Phase 11: a thin instruction carries no selection criteria and
+	// the distiller is a one-way lossy gate). Each line is empty-guarded so an empty Instruction never
+	// emits a dangling "Downstream task:" line and the final anchor degrades to a generic phrase.
+	// Identity + rules are the system message (distillationSystemPrompt, §2.9); only the per-call
+	// context/data + the budget-bearing final line are built here.
+	downstreamTaskLine := ""
+	taskAnchor := "the downstream task"
+	if stepCtx.Instruction != "" {
+		downstreamTaskLine = fmt.Sprintf("Downstream task: %s\n", stepCtx.Instruction)
+		taskAnchor = fmt.Sprintf("%q", stepCtx.Instruction)
+	}
 	userGoalLine := ""
 	if stepCtx.OriginalQuery != "" {
 		userGoalLine = fmt.Sprintf("User goal: %s\n", stepCtx.OriginalQuery)
 	}
-	return fmt.Sprintf(`<identity>
-You compact one upstream result so a downstream task can use it. A downstream model
-reads ONLY your output and never the original, so anything you omit becomes invisible
-to it. For evidence data you SELECT and COPY the relevant content verbatim — you are a
-selector, not a paraphraser.
-</identity>
-
-<instructions>
-1. Output at most %d characters.
-2. First decide what kind of data this is:
-   - EVIDENCE (records, log lines, rows, search hits, transactions, items, events):
-     copy the matching units VERBATIM — preserve exact text, identifiers, primary keys,
-     timestamps, and numeric values byte-for-byte. Keep each unit whole.
-   - NARRATIVE (prose, descriptions, explanations): write a concise factual summary and
-     still preserve identifiers, keys, and exact numeric values.
-3. Select by relevance to the user goal first, then the downstream task — keep the units
-   that actually answer them.
-4. If no unit is relevant, output exactly: No matching entries found (use this only when
-   the input genuinely contains nothing relevant).
-5. If relevant units must be dropped to fit the limit, keep the most relevant and end
-   with: [truncated: N additional matching units omitted to fit budget — treat anything
-   not shown as UNKNOWN, not absent].
-6. State that something is absent only after inspecting the entire input and confirming
-   it — omission to fit the budget is not evidence of absence.
-</instructions>
-
-<context source="%s%s">
-%sDownstream task: %s
-</context>
+	return fmt.Sprintf(`<context source=%q%s>
+%s%s</context>
 
 <data>
 %s
 </data>
 
-Return the compacted result (at most %d characters):`,
-		maxBytes,
-		stepCtx.AgentName, capabilityLine, userGoalLine, stepCtx.Instruction, result, maxBytes)
+Return the compacted result for %s (at most %d characters):`,
+		stepCtx.AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, result, taskAnchor, maxBytes)
 }

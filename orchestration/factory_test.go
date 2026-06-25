@@ -2723,8 +2723,11 @@ func TestCreateOrchestrator_DistillationDefaultOn(t *testing.T) {
 func TestDefaultConfig_PreFilterBudget(t *testing.T) {
 	t.Run("default is 128 KB", func(t *testing.T) {
 		t.Setenv("TRUVAG3_RESULT_DISTILL_PREFILTER", "") // ignore any ambient override
-		if got := DefaultConfig().ResultDistill.PreFilterBudget; got != defaultPreFilterBudget {
-			t.Errorf("PreFilterBudget default = %d, want %d (128 KB)", got, defaultPreFilterBudget)
+		// Assert the literal, not defaultPreFilterBudget: DefaultConfig assigns that same const, so
+		// comparing against it is tautological and would not catch an unintended change to the value.
+		const want128KB = 131072
+		if got := DefaultConfig().ResultDistill.PreFilterBudget; got != want128KB {
+			t.Errorf("PreFilterBudget default = %d, want %d (128 KB)", got, want128KB)
 		}
 	})
 
