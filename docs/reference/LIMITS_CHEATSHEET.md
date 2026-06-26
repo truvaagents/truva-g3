@@ -18,10 +18,12 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 | Synthesis temperature | 0.5 | `TRUVAG3_SYNTHESIS_TEMPERATURE` | `WithSynthesisAIOptions(&AIOptionsOverride{Temperature: Float32Ptr(t)})` |
 | Plan model override | — | `TRUVAG3_PLAN_MODEL` | `WithPlanAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Synthesis model override | — | `TRUVAG3_SYNTHESIS_MODEL` | `WithSynthesisAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
-| Micro-resolution model override | — | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `WithMicroResolutionAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
-| Micro-resolution output | 2000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
+| Micro-resolution & semantic-retry model override | — | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `WithMicroResolutionAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
+| Micro-resolution & semantic-retry output | 2000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
 | Tiered selection output | 2000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
 | Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` | — |
+
+> The micro-resolution token/model knobs are shared: `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` and `TRUVAG3_MICRO_RESOLUTION_MODEL` govern **both** micro-resolution **and** Layer 4 semantic retry (contextual re-resolution). There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS` — raise the micro-resolution token limit if a semantic-retry response is being truncated (e.g. when the corrected parameters contain a large text payload). `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
 
 ## Conversation History Preparation
 
@@ -66,11 +68,20 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 
 ## Continuation Prompt Limits
 
+> **Phase 14:** completed-step results in continuation planning prompts are rendered as **structure-complete JSON digests** (skeletons) under a per-section aggregate budget. Non-JSON blobs get a floor preview; a few may escalate to a fast-model summary. All knobs are top-level `OrchestratorConfig` fields (no `With*` option), env-tunable.
+
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
-| Per-step result chars | 10000 (~2500 tokens) | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | — |
+| Non-JSON floor preview (per-step) | 10000 (~2500 tokens) | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | — |
+| Aggregate digest budget (whole `<completed_steps>`) | 32768 (32 KB) | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | — |
+| Max non-JSON → distiller escalations / phase | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | — |
+| Digest array head-sample size | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | — |
+| Digest inline-string cap (elision threshold) | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | — |
+| Digest per-object key cap | 50 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | — |
 
-> Orchestrator delegation responses can be 20-30KB. The default 10000 ensures child agent sub-steps are visible to the continuation planner. Values below 4000 risk hiding delegation context.
+> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` bounds the whole section: digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
+
+> **Migration (upgrading from pre-Phase-14):** `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` previously truncated **every** completed-step result (raw, per-step). It now governs **only the non-JSON floor preview** — valid-JSON steps are digested and no longer honor it. The env var name and its default (`10000`) are unchanged, so **no action is required**; JSON steps simply render as structure-complete digests instead of raw 10 KB truncations. If a deployment relied on the old raw-truncation behavior for JSON results, there is no equivalent toggle — the digest path supersedes it.
 
 ## Remediation Failure-Pattern Analyzer
 
@@ -95,19 +106,31 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Per-result max | 16384 (16 KB) | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `WithResultTrimming(bool, n)` |
 | Total synthesis results | 32768 (32 KB) | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | — |
 | Micro-resolution source | 65536 (64 KB) | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | — |
-| Agent input per-param | 65536 (64 KB) | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | — |
+| Agent input per-param | 0 (disabled) | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | — |
 | Schema mapping threshold | 16384 (16 KB) | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | — |
 | Preserve keys | — | — | `WithResultPreserveKeys(keys)` |
 
-## Result Distillation (Opt-In LLM Summarization)
+> Agent input per-param defaults to `0` (no cap) — tool→tool data flows raw so downstream steps receive the full upstream output (fidelity-first). Set it `> 0` to cap each parameter value, or supply `deps.AgentInputProcessor` for custom input shaping.
+
+## Result Distillation (Default-On LLM Summarization)
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
-| Enabled | false | `TRUVAG3_RESULT_DISTILL_ENABLED` | `WithResultDistill(bool, n)` |
-| Min size to trigger | 32768 (32 KB) | `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `WithResultDistill(bool, n)` |
-| Pre-filter budget | 32768 (32 KB) | `TRUVAG3_RESULT_DISTILL_PREFILTER` | — |
+| Enabled | true | `TRUVAG3_RESULT_DISTILL_ENABLED` | `WithResultDistill(bool, n)` |
+| Min size to trigger | 16384 (16 KB) | `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `WithResultDistill(bool, n)` |
+| Pre-filter budget | 131072 (128 KB) | `TRUVAG3_RESULT_DISTILL_PREFILTER` | — |
 | Target output size | 4096 (4 KB) | `TRUVAG3_RESULT_DISTILL_TARGET` | — |
-| Model override | — | `TRUVAG3_RESULT_DISTILL_MODEL` | `WithResultDistillModel(m)` |
+| Model override | fast | `TRUVAG3_RESULT_DISTILL_MODEL` | `WithResultDistillModel(m)` |
+| Cache TTL | 5m | `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | — |
+| Compaction deadline | 45s | `TRUVAG3_RESULT_DISTILL_DEADLINE` | — |
+| Map-reduce trigger (model context) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | — |
+| Map-reduce concurrency | 8 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | — |
+
+> Default-on (opt-out): distillation is the primary compaction path for oversized results when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default). Without an `AIClient` it falls back to the structural floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`.
+
+> **Migration (upgrading from pre-default-on):** result distillation was previously **off by default** (`Enabled: false`, threshold `32768`, pre-filter `32768`). It is now **on by default** (threshold `16384`, pre-filter `131072`), so a deployment with an `AIClient` configured will begin making fast-model distillation calls for oversized results — added cost/latency on the **cheap** (`fast`) tier; the structural-trim floor was the prior behavior. No code change is required; set `TRUVAG3_RESULT_DISTILL_ENABLED=false` to restore the structural-only path.
+
+> Units are mixed in this section: byte budgets (`THRESHOLD`, `PREFILTER`, `TARGET`) are integers in bytes; `CACHE_TTL` / `DEADLINE` are Go durations (e.g. `5m`, `45s`) and accept only positive values via env — disable the deadline with the programmatic `CompactionDeadline: 0`; `CONTEXT_TOKENS` is in tokens (results estimated above it — ~525 KB at the default `150000`, using the framework's ≈3.5 bytes/token counter — are chunked → map-reduced); `MAP_CONCURRENCY` is a count.
 
 ## Tiered Capability Resolution
 
@@ -281,7 +304,7 @@ export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=3000
 export TRUVAG3_SYNTHESIS_MAX_TOKENS=10000
 ```
 
-**Micro-resolution truncation (unresolved templates in long text fields):**
+**Micro-resolution / semantic-retry truncation (unresolved templates in long text fields, or a semantic-retry correction whose parameters include a large text payload):**
 ```bash
 export TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS=4000
 ```
