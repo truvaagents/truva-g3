@@ -1624,17 +1624,30 @@ function initCytoscape() {
                     })
                 });
                 if (idx === 0) {
-                    leafSteps.forEach(step => {
-                        const result = stepResults[step.step_id];
-                        const isFailed = result && !result.success;
-                        edges.push({
-                            data: {
-                                source: step.step_id,
-                                target: nodeId,
-                                edgeType: isFailed ? 'failed' : 'memory_llm'
-                            }
+                    if (leafSteps.length > 0) {
+                        leafSteps.forEach(step => {
+                            const result = stepResults[step.step_id];
+                            const isFailed = result && !result.success;
+                            edges.push({
+                                data: {
+                                    source: step.step_id,
+                                    target: nodeId,
+                                    edgeType: isFailed ? 'failed' : 'memory_llm'
+                                }
+                            });
                         });
-                    });
+                    } else {
+                        // Synthesis-only final phase: the last phase emitted zero
+                        // steps (the planner's continuation decided no further work,
+                        // just synthesize), so there are no leaf steps to feed this
+                        // post-execution memory hook. Without a fallback edge the
+                        // event-summarization node — and the synthesis + response
+                        // chain that hangs off it — float away as an orphaned
+                        // component ("disconnect from the event summary box onwards").
+                        // Anchor it to the last upstream node, mirroring the ORCH-018
+                        // synthesis fallback below, so the tail stays connected.
+                        edges.push({ data: { source: lastPlanningNodeId, target: nodeId, edgeType: 'memory_llm' } });
+                    }
                 } else {
                     edges.push({ data: { source: `llm_evtsum_${idx - 1}`, target: nodeId, edgeType: 'memory_llm' } });
                 }
