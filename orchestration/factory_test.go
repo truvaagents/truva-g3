@@ -377,6 +377,58 @@ func TestCreateOrchestrator_AgentInputSeam_IndependentOfTrimToggle(t *testing.T)
 	}
 }
 
+func TestCreateOrchestrator_ContinuationDistillerSeam(t *testing.T) {
+	// Seam 4 (Phase 14): a custom deps.ContinuationDistiller must be honored — even with
+	// ResultDistill disabled — so the behavioural plug is replaceable through the documented DI
+	// seam, consistent with the Phase 8 processor seams (FDP §3/§4: presets replaceable, no cliffs).
+	t.Run("custom override honored even when distillation disabled", func(t *testing.T) {
+		config := DefaultConfig()
+		config.ResultDistill.Enabled = false // factory would NOT build a default
+		custom := &stubContinuationDistiller{out: "X"}
+		orch, err := CreateOrchestrator(config, OrchestratorDependencies{
+			Discovery:             NewMockDiscovery(),
+			AIClient:              NewMockAIClient(),
+			ContinuationDistiller: custom,
+		})
+		if err != nil {
+			t.Fatalf("CreateOrchestrator failed: %v", err)
+		}
+		if orch.continuationDistiller != custom {
+			t.Errorf("custom deps.ContinuationDistiller dropped; got %T", orch.continuationDistiller)
+		}
+	})
+
+	t.Run("no override + distillation disabled leaves C unset", func(t *testing.T) {
+		config := DefaultConfig()
+		config.ResultDistill.Enabled = false
+		orch, err := CreateOrchestrator(config, OrchestratorDependencies{
+			Discovery: NewMockDiscovery(),
+			AIClient:  NewMockAIClient(),
+		})
+		if err != nil {
+			t.Fatalf("CreateOrchestrator failed: %v", err)
+		}
+		if orch.continuationDistiller != nil {
+			t.Errorf("expected no continuation distiller when disabled + no override; got %T", orch.continuationDistiller)
+		}
+	})
+
+	t.Run("no override + distillation enabled builds the default LLM distiller", func(t *testing.T) {
+		config := DefaultConfig()
+		config.ResultDistill.Enabled = true
+		orch, err := CreateOrchestrator(config, OrchestratorDependencies{
+			Discovery: NewMockDiscovery(),
+			AIClient:  NewMockAIClient(),
+		})
+		if err != nil {
+			t.Fatalf("CreateOrchestrator failed: %v", err)
+		}
+		if _, ok := orch.continuationDistiller.(*LLMDistiller); !ok {
+			t.Errorf("expected default *LLMDistiller, got %T", orch.continuationDistiller)
+		}
+	})
+}
+
 func TestCreateOrchestrator_WiresPerPhaseAIOptions(t *testing.T) {
 	config := DefaultConfig()
 	config.EnableTieredResolution = true

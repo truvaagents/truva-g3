@@ -563,6 +563,12 @@ type AIOrchestrator struct {
 	resultProcessor  ResultProcessor
 	resultTrimConfig *ResultTrimConfig
 
+	// continuationDistiller is the Phase-14 continuation-scoped distiller (C). It distills a non-JSON
+	// step blob into a relevant summary for the planner. Kept SEPARATE from resultProcessor (the
+	// synthesis chain) so the planning path is not coupled to the synthesis processor (Phase 8). Nil
+	// when no AI client is available — C is then a no-op (the structural-floor body stands).
+	continuationDistiller ResultProcessor
+
 	// LLM Debug Store for full payload visibility
 	// When enabled, stores complete prompts/responses for debugging
 	debugStore LLMDebugStore
@@ -925,6 +931,13 @@ func (o *AIOrchestrator) SetResultProcessor(processor ResultProcessor) {
 			"enabled":   o.config.ResultTrim.Enabled,
 		})
 	}
+}
+
+// SetContinuationDistiller sets the Phase-14 continuation-scoped distiller (C): used to summarize a
+// non-JSON step blob for the planner. Deliberately separate from the synthesis ResultProcessor so the
+// planning path is not coupled to the synthesis chain (Phase 8). A nil processor disables C.
+func (o *AIOrchestrator) SetContinuationDistiller(processor ResultProcessor) {
+	o.continuationDistiller = processor
 }
 
 // SetSourceResultProcessor sets the DETERMINISTIC processor used to trim resolver source data for
@@ -5206,6 +5219,77 @@ func renderContinuationStepResult(result *StepResult, response string) string {
 	return fmt.Sprintf("[FAILED: %s]", errMsg)
 }
 
+// orderedStepResults returns completed steps in chronological (plan) order — by the numeric suffix of
+// the step ID (step-1, step-2, … assigned in order across phases), falling back to lexical for
+// non-standard IDs. Phase 14: replaces sort.Strings, which ordered step-10 before step-2 and so broke
+// recency. nil entries are dropped.
+func orderedStepResults(completed map[string]*StepResult) []StepResult {
+	out := make([]StepResult, 0, len(completed))
+	for _, r := range completed {
+		if r != nil {
+			out = append(out, *r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		si, sj := stepSeq(out[i].StepID), stepSeq(out[j].StepID)
+		if si != sj {
+			return si < sj
+		}
+		return out[i].StepID < out[j].StepID
+	})
+	return out
+}
+
+// stepSeq extracts the trailing integer of a "step-N" ID for chronological ordering; IDs without a
+// numeric suffix sort last but deterministically (by ID).
+func stepSeq(id string) int {
+	if i := strings.LastIndexByte(id, '-'); i >= 0 && i+1 < len(id) {
+		if n, err := strconv.Atoi(id[i+1:]); err == nil {
+			return n
+		}
+	}
+	return 1 << 30
+}
+
+// continuationStepOverhead approximates the fixed per-step framing in <completed_steps>
+// ("Step <id> (<agent>):\n  Task: …\n  Result: …\n\n") for the Phase-14 budget fill.
+const continuationStepOverhead = 96
+
+// intOrDefault returns v when positive, else d — used to fall back to a default when a config knob is
+// unset (zero) on a literally-constructed OrchestratorConfig.
+func intOrDefault(v, d int) int {
+	if v <= 0 {
+		return d
+	}
+	return v
+}
+
+// stepRenderCost estimates the rendered size of one step in <completed_steps> for the greedy
+// recency-fill: a failed step renders its [FAILED: <error>] marker (response ignored); a successful
+// step renders its digest/floor body.
+func stepRenderCost(s *StepResult, body string) int {
+	cost := continuationStepOverhead + len(s.Instruction)
+	if s.Success {
+		return cost + len(body)
+	}
+	// renderContinuationStepResult caps the failed marker's error at 200 runes — mirror that here so the
+	// estimate isn't biased high for verbose errors.
+	return cost + min(len(firstLine(s.Error)), 200)
+}
+
+// emitNOfMNote writes the Phase-14 "showing N of M completed steps" marker — emitted ALWAYS (even when
+// N == M), with the eviction/addressability note only when steps were dropped for budget.
+func emitNOfMNote(sb *strings.Builder, shown, total int) {
+	if total <= 0 {
+		return
+	}
+	fmt.Fprintf(sb, "[showing %d of %d completed steps", shown, total)
+	if shown < total {
+		sb.WriteString(" — older steps omitted for budget; their results remain referenceable by step-ID at execution")
+	}
+	sb.WriteString("]\n")
+}
+
 func (o *AIOrchestrator) buildContinuationPrompt(
 	ctx context.Context,
 	request string,
@@ -5251,44 +5335,122 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	// 2. Get shared planning infrastructure (with phase context for tiered selection)
 	planCtx, err := o.buildplanningContext(ctx, request, phaseContext)
 	if err != nil {
+		// Pattern 4 (DISTRIBUTED_TRACING_GUIDE §11 / Complete Error Handling): record the failure on
+		// the continuation builder span so it surfaces as error=true in Jaeger, then log with operation
+		// + request_id + error_type before returning the wrapped error.
+		telemetry.RecordSpanError(ctx, err)
+		if o.logger != nil {
+			o.logger.ErrorWithContext(ctx, "Failed to build continuation planning context", map[string]interface{}{
+				"operation":    "continuation_prompt_build",
+				"request_id":   GetRequestID(ctx),
+				"phase_number": phaseNumber,
+				"error":        err.Error(),
+				"error_type":   "preparation",
+			})
+		}
 		return nil, fmt.Errorf("failed to build planning context: %w", err)
 	}
 
-	// 3. Build completed results section
+	// 3. Build completed results section (Phase 14: chronological digests, greedy recency-fill, C escalate)
 	var resultsSb strings.Builder
-	// Sort step IDs for deterministic prompt ordering
-	stepIDs := make([]string, 0, len(completedResults))
-	for id := range completedResults {
-		stepIDs = append(stepIDs, id)
-	}
-	sort.Strings(stepIDs)
+	requestID := GetRequestID(ctx)
 
-	maxChars := o.config.ContinuationResultMaxChars
-	if maxChars <= 0 {
-		maxChars = 10000 // safety fallback
+	// Chronological order (oldest→newest); replaces the old lexical sort.Strings (step-10 < step-2).
+	steps := orderedStepResults(completedResults)
+
+	totalBudget := o.config.ContinuationResultMaxTotalChars
+	if totalBudget <= 0 {
+		totalBudget = 32768 // safety fallback (matches DefaultConfig)
 	}
 
-	for _, stepID := range stepIDs {
-		result := completedResults[stepID]
-		if result == nil {
+	// B: per-step decision digests (valid-JSON skeletons; non-JSON → structural-floor body + C mark).
+	// Knobs resolve from config (env-tunable, Phase 14), falling back to the digest defaults.
+	digestOpts := continuationDigestOpts{
+		floorChars: intOrDefault(o.config.ContinuationResultMaxChars, 10000),
+		sampleN:    intOrDefault(o.config.ContinuationDigestArraySample, defaultDigestSampleN),
+		scalarMax:  intOrDefault(o.config.ContinuationDigestScalarMax, defaultDigestScalarMax),
+		maxKeys:    intOrDefault(o.config.ContinuationDigestMaxKeys, defaultDigestMaxKeys),
+	}
+	bodies, digestMeta := renderContinuationDigests(steps, digestOpts)
+
+	// A: greedy recency-fill. Failed steps are always kept (high-signal, small); successful steps fill
+	// newest-first until the aggregate budget is spent (recency = eviction order). The newest successful
+	// step is always kept so the section is never empty.
+	keep := make([]bool, len(steps))
+	spent := 0
+	for i := range steps {
+		if !steps[i].Success {
+			keep[i] = true
+			spent += stepRenderCost(&steps[i], bodies[i])
+		}
+	}
+	keptSuccess := false
+	for i := len(steps) - 1; i >= 0; i-- {
+		if !steps[i].Success {
 			continue
 		}
-		response := result.Response
+		cost := stepRenderCost(&steps[i], bodies[i])
+		if keptSuccess && spent+cost > totalBudget {
+			break // budget spent; older successful steps are evicted (see N-of-M note)
+		}
+		keep[i] = true
+		keptSuccess = true
+		spent += cost
+	}
 
-		// ORCH-015: Extract child sub-steps from orchestrator delegation responses
-		// before truncation, so the continuation planner knows what was already handled.
-		childSummary := extractOrchestratorChildSummary(result)
+	// Decide which kept non-JSON steps escalate to C — NEWEST-first, capped — so the budget is spent on
+	// the steps most relevant to the next phase (consistent with the recency principle), not the oldest.
+	// ContinuationMaxEscalations is used as-is (no default fallback): 0 legitimately disables C.
+	escalate := make([]bool, len(steps))
+	if o.continuationDistiller != nil {
+		budget := o.config.ContinuationMaxEscalations
+		for i := len(steps) - 1; i >= 0 && budget > 0; i-- {
+			if keep[i] && steps[i].Success && isStructurallyDegenerate(digestMeta[i]) {
+				escalate[i] = true
+				budget--
+			}
+		}
+	}
 
-		// Skip the response-truncation work for failed steps —
-		// renderContinuationStepResult emits a [FAILED: <error>] marker for
-		// them and ignores the response argument.
-		if result.Success && len(response) > maxChars {
-			response = response[:maxChars] + "\n[truncated]"
+	// C: escalate the selected non-JSON steps to the continuation distiller, then render in chronological
+	// order so the newest lands at the high-attention end of the section.
+	cSummaryBudget := intOrDefault(o.config.ResultDistill.TargetSize, 4096) // distiller's own output cap
+	escalated, shown := 0, 0
+	for i := range steps {
+		if !keep[i] {
+			continue // evicted past budget — covered by the N-of-M note
+		}
+		result := &steps[i]
+		body := bodies[i]
+
+		// C — escalate the steps selected above (newest-first, capped). Fail-open: an empty distiller
+		// result leaves the structural-floor body untouched.
+		if escalate[i] {
+			stepCtx := ResultProcessorContext{
+				StepID:        result.StepID,
+				AgentName:     result.AgentName,
+				Instruction:   result.Instruction,
+				OriginalQuery: request,
+			}
+			// C's summary is sized by the distiller's own TargetSize knob (TRUVAG3_RESULT_DISTILL_TARGET).
+			// For a non-JSON step it REPLACES the floor preview (the gist supersedes a raw truncation;
+			// JSON skeletons are never escalated, so nothing parseable is lost). It runs AFTER the fill,
+			// which already counted this step's floor body (≤ ContinuationResultMaxChars). The distiller
+			// bounds the summary to ≤ cSummaryBudget, so whenever the floor exceeds the summary budget
+			// (the default: 10000 > 4096) escalation SHRINKS the step below its already-counted cost —
+			// the only possible overshoot is the "[summary] " prefix (~10 chars/step).
+			if summary := o.continuationDistiller.ProcessForPrompt(ctx, result.Response, cSummaryBudget, stepCtx); summary != "" {
+				body = "[summary] " + summary
+				escalated++
+			}
 		}
 
+		// ORCH-015: surface orchestrator delegation sub-steps so the planner doesn't re-issue them.
+		childSummary := extractOrchestratorChildSummary(result)
+
 		fmt.Fprintf(&resultsSb, "Step %s (%s):\n  Task: %s\n  Result: %s\n",
-			stepID, result.AgentName, result.Instruction,
-			renderContinuationStepResult(result, response))
+			result.StepID, result.AgentName, result.Instruction,
+			renderContinuationStepResult(result, body))
 
 		if childSummary != "" {
 			fmt.Fprintf(&resultsSb,
@@ -5310,12 +5472,11 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 			}
 			childCapabilities := strings.Join(caps, ",")
 
-			requestID := GetRequestID(ctx)
 			if o.logger != nil {
 				o.logger.InfoWithContext(ctx, "Orchestrator child steps extracted for continuation prompt", map[string]interface{}{
 					"operation":          "continuation_child_extraction",
 					"request_id":         requestID,
-					"step_id":            stepID,
+					"step_id":            result.StepID,
 					"child_steps_count":  childStepCount,
 					"child_capabilities": childCapabilities,
 					"agent_name":         result.AgentName,
@@ -5327,12 +5488,27 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 				attribute.Bool("child_steps_found", true),
 				attribute.Int("child_steps_count", childStepCount),
 				attribute.String("child_capabilities", childCapabilities),
-				attribute.String("step_id", stepID),
+				attribute.String("step_id", result.StepID),
 				attribute.String("agent_name", result.AgentName),
 			)
 		}
 		resultsSb.WriteString("\n")
+		shown++
 	}
+
+	// Phase 14: "showing N of M completed steps" — always emitted (even N == M).
+	emitNOfMNote(&resultsSb, shown, len(steps))
+
+	// Observability (Phase 12): record the continuation budget outcome as a per-request span event,
+	// and (Phase 14) as module-owned aggregate metrics for dashboards/alerts (telemetry §4).
+	telemetry.AddSpanEvent(ctx, "orchestrator.continuation_budget",
+		attribute.String("request_id", requestID),
+		attribute.Int("steps_total", len(steps)),
+		attribute.Int("steps_shown", shown),
+		attribute.Int("c_escalations", escalated),
+		attribute.Int("budget_chars", totalBudget),
+	)
+	emitContinuationBudgetMetrics(len(steps), shown, escalated, resultsSb.Len())
 
 	// 4. Build executed step IDs list
 	executedIDsList := strings.Join(executedStepIDs, ", ")
@@ -5442,6 +5618,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("<planning_instructions>\n")
 	sb.WriteString("Plan the NEXT phase to fulfill remaining parts of the user's request.\n")
 	sb.WriteString("- Reference completed step outputs using \"{{step-N.response.data.field}}\" syntax (always quoted)\n")
+	sb.WriteString("- Each Result above is a structure-preserving digest (object keys, array sizes, sample values); sample values are illustrative — reference any field shown with the same {{step-N...}} syntax and the full value resolves at execution\n")
 	sb.WriteString("- \"depends_on\" may ONLY reference step IDs within THIS phase's steps array\n")
 	sb.WriteString("- For step IDs from PRIOR phases referenced via templates, list them in \"implicit_deps\"\n")
 	sb.WriteString("- Set \"terminal\": true if this phase completes the user's request\n")
@@ -5499,7 +5676,9 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	// Continuation prompt observability
 	durationMs := float64(time.Since(startTime).Milliseconds())
 
-	requestID := ""
+	// requestID is declared earlier in this function (Phase 14 continuation builder); re-derive from
+	// baggage here for the built-event span (baggage is the authoritative source at this point).
+	requestID = ""
 	if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 		requestID = baggage["request_id"]
 	}
