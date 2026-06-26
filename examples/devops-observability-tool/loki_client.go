@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,28 @@ type LokiClient struct {
 	httpClient *http.Client
 }
 
+// defaultLokiHTTPTimeout bounds a single Loki HTTP request. Namespace-wide
+// scans (a broad stream selector × a multi-hour window) routinely run for tens
+// of seconds on a single-binary Loki under concurrent load, so the previous 30s
+// cut them off mid-query and surfaced as "context deadline exceeded" 502s. 90s
+// gives those scans room to finish while staying under the orchestrator's 120s
+// per-step deadline, so the agent still gets a clean error instead of the step
+// itself timing out. Override per-deployment with LOKI_HTTP_TIMEOUT.
+const defaultLokiHTTPTimeout = 90 * time.Second
+
+// lokiHTTPTimeout returns the Loki client timeout, honoring LOKI_HTTP_TIMEOUT
+// when set to a positive Go duration (e.g. "60s", "2m"); otherwise it falls back
+// to defaultLokiHTTPTimeout. An unset, empty, unparseable, or non-positive value
+// uses the default.
+func lokiHTTPTimeout() time.Duration {
+	if v := os.Getenv("LOKI_HTTP_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultLokiHTTPTimeout
+}
+
 // NewLokiClient creates a Loki client with traced HTTP transport for Jaeger visibility.
 func NewLokiClient(baseURL string) *LokiClient {
 	tracedClient := telemetry.NewTracedHTTPClientWithTransport(&http.Transport{
@@ -30,7 +53,7 @@ func NewLokiClient(baseURL string) *LokiClient {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	})
-	tracedClient.Timeout = 30 * time.Second
+	tracedClient.Timeout = lokiHTTPTimeout()
 
 	return &LokiClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),

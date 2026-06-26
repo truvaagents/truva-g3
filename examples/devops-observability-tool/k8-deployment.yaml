@@ -60,6 +60,12 @@ spec:
           value: "redis://redis.truvag3-examples:6379"
         - name: LOKI_URL
           value: "http://loki.truvag3-examples:3100"
+        # Per-request timeout for the tool's outbound Loki HTTP client.
+        # Namespace-wide log scans over multi-hour windows can run for tens of
+        # seconds under load; keep this under the orchestrator's 120s per-step
+        # deadline so the agent receives a clean error rather than a step timeout.
+        - name: LOKI_HTTP_TIMEOUT
+          value: "90s"
         - name: JAEGER_URL
           value: "http://jaeger-query.truvag3-examples:80"
         - name: DEV_MODE
