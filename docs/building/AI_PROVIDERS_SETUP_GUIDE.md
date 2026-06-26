@@ -1270,7 +1270,7 @@ can be routed to a different model for cost/latency optimization:
 | Micro-resolution | `MicroResolutionAIOptions.Model` | `WithMicroResolutionAIOptions()` | `TRUVAG3_MICRO_RESOLUTION_MODEL` | AIClient default |
 | Tiered selection | `TieredSelectionAIOptions.Model` | `WithTieredSelectionAIOptions()` | _(code only today)_ | AIClient default |
 | Error analysis | `ErrorAnalysisAIOptions.Model` | `WithErrorAnalysisAIOptions()` | _(code only today)_ | AIClient default |
-| Result distillation | `ResultDistillAIOptions.Model` | `WithResultDistillAIOptions()` | `TRUVAG3_RESULT_DISTILL_MODEL` | AIClient default |
+| Result distillation | `ResultDistillAIOptions.Model` | `WithResultDistillAIOptions()` | `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` alias |
 
 **Important: Use portable aliases with ChainClient.**
 

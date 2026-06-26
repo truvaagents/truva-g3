@@ -3271,7 +3271,7 @@ export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s
 
 ### ContinuationResultMaxChars
 
-Controls the maximum characters per completed step result included in continuation planning prompts. When an agent delegates to another agent (orchestrator-as-tool pattern), the delegation response can be 20-30KB of JSON. The continuation planner truncates each step result to this limit before including it in the prompt for the next phase.
+Floor-preview size (in chars) for a **non-JSON** completed-step result in continuation planning prompts (Phase 14). JSON step results are rendered as a structure-complete digest (skeleton) instead — this knob governs only the fallback preview for non-JSON blobs (logs, markdown, CSV) that the planner reads when the continuation distiller does not summarize the step.
 
 ```go
 type OrchestratorConfig struct {
@@ -3281,9 +3281,28 @@ type OrchestratorConfig struct {
 }
 ```
 
-**Default:** `10000` (~2500 tokens). Ensures the child agent's `steps[]` array (typically starting ~4KB into the response) is visible to the continuation planner.
+**Default:** `10000`. **Related:** When an orchestrator step's response contains a `steps[]` array, the continuation builder extracts a structured child-sub-step summary (from the full response, before any trimming) and appends a "Do NOT duplicate" directive — so child-step visibility holds regardless of this knob.
 
-**Related:** When an orchestrator step's response contains a `steps[]` array, the continuation prompt builder also extracts a structured summary of child sub-steps and appends it with a "Do NOT duplicate" directive. This extraction runs on the full response before truncation, so child step visibility is guaranteed regardless of this limit.
+### Continuation Digest Budgeting (Phase 14)
+
+The continuation prompt's `<completed_steps>` section renders each completed step as a decision digest under an aggregate budget. These top-level `OrchestratorConfig` fields tune it (all env-overridable; no `With*` options):
+
+```go
+type OrchestratorConfig struct {
+    // ...
+    ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"` // Default: 32768 | Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS
+    ContinuationMaxEscalations      int `json:"continuation_max_escalations,omitempty"`        // Default: 8     | Env: TRUVAG3_CONTINUATION_MAX_ESCALATIONS
+    ContinuationDigestArraySample   int `json:"continuation_digest_array_sample,omitempty"`    // Default: 3     | Env: TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE
+    ContinuationDigestScalarMax     int `json:"continuation_digest_scalar_max,omitempty"`      // Default: 200   | Env: TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX
+    ContinuationDigestMaxKeys       int `json:"continuation_digest_max_keys,omitempty"`        // Default: 50    | Env: TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS
+}
+```
+
+- **`ContinuationResultMaxTotalChars`** — aggregate budget (chars) for all step digests; bounds the whole section. Digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB).
+- **`ContinuationMaxEscalations`** — max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, **newest-first**. Sequential fast-model calls on the phase-gating path; `0` disables. Fires ~never on all-JSON workloads.
+- **`ContinuationDigestArraySample`** — per-array head-sample size (arrays render as the first N elements + a length sentinel).
+- **`ContinuationDigestScalarMax`** — max length of a string value kept inline before elision; raise it to surface longer salient values (status/error strings) at plan time.
+- **`ContinuationDigestMaxKeys`** — per-object key cap; schema objects are kept whole, map-shaped objects (many dynamic-ID keys) are sampled to N sorted keys + a sentinel.
 
 ### RemediationFailurePattern
 
@@ -3348,7 +3367,10 @@ type ResultTrimConfig struct {
     // MaxAgentInputBytes is the maximum bytes per parameter value for
     // agent/tool HTTP calls. Trims large data values before they are sent
     // as input parameters to downstream agents or tools.
-    // Default: 65536 (64 KB, ~26K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES
+    // Default: 0 (no cap — fidelity-first: tool→tool data flows raw so
+    // downstream steps receive the full upstream output). Set > 0 (or supply
+    // deps.AgentInputProcessor) to enable the byte-budget guard.
+    // Env: TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES
     MaxAgentInputBytes int `json:"max_agent_input_bytes"`
 
     // SchemaGuidedMappingThreshold is the result size (bytes) above which
@@ -3368,7 +3390,7 @@ type ResultTrimConfig struct {
 config := orchestration.DefaultConfig()
 // ResultTrim is already configured with sensible defaults:
 // Enabled: true, MaxResultBytes: 16384, MaxTotalPromptBytes: 32768,
-// MaxMicroResolutionBytes: 65536, MaxAgentInputBytes: 65536,
+// MaxMicroResolutionBytes: 65536, MaxAgentInputBytes: 0 (no cap, fidelity-first),
 // SchemaGuidedMappingThreshold: 16384
 ```
 
@@ -3397,7 +3419,7 @@ export TRUVAG3_RESULT_TRIM_ENABLED=true
 export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384
 export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536
-export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=65536
+export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0   # default 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384
 ```
 
@@ -3435,22 +3457,22 @@ for _, step := range response.Steps {
 
 ### ResultDistillConfig
 
-Configures opt-in LLM-based result distillation for extremely large or domain-specific results that structural trimming cannot adequately compress. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2). Disabled by default because each distillation adds an LLM call.
+Configures **default-on** LLM-based result distillation — the primary compaction path for over-budget results. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2); results whose estimated token count exceeds `ModelContextTokens` are chunked and map-reduced. Active when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default); without an `AIClient` it falls back to the `StructuralTrimmer` floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. Every distillation is bounded by `CompactionDeadline` and cached for `CacheTTL`, both fail-open.
 
 ```go
 type ResultDistillConfig struct {
     // Enabled controls whether LLM distillation is active.
-    // Default: false | Env: TRUVAG3_RESULT_DISTILL_ENABLED
+    // Default: true | Env: TRUVAG3_RESULT_DISTILL_ENABLED
     Enabled bool `json:"enabled"`
 
     // DistillThreshold is the minimum result size (bytes) to trigger distillation.
     // Results below this threshold use structural trimming only.
-    // Default: 32768 (32 KB) | Env: TRUVAG3_RESULT_DISTILL_THRESHOLD
+    // Default: 16384 (16 KB) | Env: TRUVAG3_RESULT_DISTILL_THRESHOLD
     DistillThreshold int `json:"distill_threshold"`
 
     // PreFilterBudget is the StructuralTrimmer byte budget applied before
     // LLM distillation (Stage 1 pre-filter). Reduces LLM input size.
-    // Default: 32768 (32 KB) | Env: TRUVAG3_RESULT_DISTILL_PREFILTER
+    // Default: 131072 (128 KB — fits the 64K fast-tier context floor) | Env: TRUVAG3_RESULT_DISTILL_PREFILTER
     PreFilterBudget int `json:"prefilter_budget"`
 
     // TargetSize is the target output size for LLM distillation (Stage 2).
@@ -3458,36 +3480,74 @@ type ResultDistillConfig struct {
     // Default: 4096 (4 KB) | Env: TRUVAG3_RESULT_DISTILL_TARGET
     TargetSize int `json:"target_size"`
 
-    // Model overrides the default AI model for distillation calls.
-    // Default: "" (uses AIClient default) | Env: TRUVAG3_RESULT_DISTILL_MODEL
+    // Model overrides the default AI model for distillation calls. Defaults to
+    // the portable "fast" alias (ChainClient-safe; resolves to Haiku /
+    // gpt-4.1-mini / gemini-flash-lite per provider). Empty string = use the
+    // AIClient's default model.
+    // Default: "fast" | Env: TRUVAG3_RESULT_DISTILL_MODEL
     Model string `json:"model,omitempty"`
+
+    // CacheTTL is how long a distillation result stays cached (keyed by result
+    // content + instruction + query + budget). Fail-open: a nil cache disables
+    // it with no overhead. Go duration; env accepts positive values only.
+    // Default: 5m | Env: TRUVAG3_RESULT_DISTILL_CACHE_TTL
+    CacheTTL time.Duration `json:"cache_ttl,omitempty"`
+
+    // CompactionDeadline bounds the wall-clock time a single compaction may
+    // spend in the synthesis hot path. On timeout it fails open (single-call →
+    // structural floor; map-reduce → completed chunks + a "partial" disclosure).
+    // The programmatic zero value disables the deadline; the env var accepts
+    // positive durations only. Keep it under the HTTP gateway timeout.
+    // Default: 45s | Env: TRUVAG3_RESULT_DISTILL_DEADLINE
+    CompactionDeadline time.Duration `json:"compaction_deadline,omitempty"`
+
+    // ModelContextTokens is the usable context (tokens) of the compaction model.
+    // Results estimated above this are chunked and map-reduced instead of sent
+    // in one call (~525 KB at the default, using the ≈3.5 bytes/token counter).
+    // Default: 150000 | Env: TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS
+    ModelContextTokens int `json:"model_context_tokens,omitempty"`
+
+    // MapConcurrency caps how many chunks are compacted concurrently in the
+    // map-reduce path. <= 0 falls back to the default.
+    // Default: 8 | Env: TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY
+    MapConcurrency int `json:"map_concurrency,omitempty"`
 }
 ```
 
-**Example - Enable distillation for large results:**
+**Example - Tune distillation (default-on; adjust individual fields):**
 ```go
 config := orchestration.DefaultConfig()
-config.ResultDistill = orchestration.ResultDistillConfig{
-    Enabled:          true,
-    DistillThreshold: 65536, // Only distill results > 64 KB
-    PreFilterBudget:  65536, // Allow larger pre-filter for better LLM context
-    TargetSize:       4096,  // ~4 KB output from LLM
-}
+// Distillation is already enabled with sensible defaults — mutate individual
+// fields rather than reassigning the whole struct, which would zero the fields
+// you omit: CacheTTL=0 disables caching, CompactionDeadline=0 disables the
+// hot-path deadline, ModelContextTokens=0 disables map-reduce routing.
+// (MapConcurrency=0 is the one exception — it self-heals to the default.)
+config.ResultDistill.DistillThreshold = 65536 // only distill results > 64 KB
+config.ResultDistill.TargetSize = 2048        // tighter ~2 KB summaries
+config.ResultDistill.Model = "fast"           // portable alias (ChainClient-safe)
+// To opt out entirely:
+// config.ResultDistill.Enabled = false
 ```
 
-**Environment variable overrides:**
+**Environment variable overrides (values shown are the defaults):**
 ```bash
-export TRUVAG3_RESULT_DISTILL_ENABLED=true
-export TRUVAG3_RESULT_DISTILL_THRESHOLD=65536
-export TRUVAG3_RESULT_DISTILL_PREFILTER=65536
-export TRUVAG3_RESULT_DISTILL_TARGET=4096
-export TRUVAG3_RESULT_DISTILL_MODEL=fast
+export TRUVAG3_RESULT_DISTILL_ENABLED=true            # default-on; =false to opt out
+export TRUVAG3_RESULT_DISTILL_THRESHOLD=16384         # min bytes to trigger (default 16 KB)
+export TRUVAG3_RESULT_DISTILL_PREFILTER=131072        # Stage-1 pre-filter budget (default 128 KB)
+export TRUVAG3_RESULT_DISTILL_TARGET=4096             # Stage-2 LLM output target (default 4 KB)
+export TRUVAG3_RESULT_DISTILL_MODEL=fast              # portable alias (ChainClient-safe)
+export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m            # distillation cache TTL
+export TRUVAG3_RESULT_DISTILL_DEADLINE=45s            # hot-path compaction bound (positive durations only)
+export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000   # above this, chunk → map-reduce
+export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8       # concurrent chunk distillations
 ```
 
-**How the two-stage pipeline works:**
+**How the pipeline works:**
 1. **Stage 1 — Structural Pre-Filter**: The `StructuralTrimmer` reduces the large result to `PreFilterBudget` bytes, preserving JSON structure and key data points.
 2. **Stage 2 — LLM Distillation**: An LLM call summarizes the pre-filtered result to approximately `TargetSize` bytes, preserving the most relevant information for the user's query.
-3. **Fallback**: If the LLM call fails, the Stage 1 pre-filtered result is used directly.
+3. **Very large results — map-reduce**: when the result is estimated above `ModelContextTokens`, it is chunked and the chunks are compacted concurrently (`MapConcurrency` at a time), then reduced — instead of being sent in a single call.
+4. **Bounded & cached**: each compaction is bounded by `CompactionDeadline` and cached for `CacheTTL`. Both are fail-open.
+5. **Fallback**: if the LLM call fails (or the deadline trips), the Stage 1 pre-filtered structural result is used directly.
 
 ### ProcessRequestStreaming
 
