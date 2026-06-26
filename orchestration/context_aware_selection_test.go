@@ -996,9 +996,9 @@ func TestBuildContinuationPrompt_LongResponseTruncation(t *testing.T) {
 		capabilityProvider: mockProvider,
 	}
 
-	// Create a step result with response > ContinuationResultMaxChars.
-	// Success: true so the renderer emits the truncated Response (failed
-	// steps render a [FAILED: ...] marker instead — Cause 2a / Layer 1).
+	// Create a step result with a long NON-JSON response. Phase 14 bounds it to a structural-floor
+	// preview sized by ContinuationResultMaxChars (2000 here) instead of the old raw-slice "[truncated]"
+	// marker. Success: true so the renderer emits the body (failed steps render a [FAILED: ...] marker).
 	longResponse := strings.Repeat("x", 3000)
 	completedResults := map[string]*StepResult{
 		"step-1": {
@@ -1022,13 +1022,17 @@ func TestBuildContinuationPrompt_LongResponseTruncation(t *testing.T) {
 		t.Fatalf("buildContinuationPrompt failed: %v", err)
 	}
 
-	// The prompt should contain truncated response (2000 chars + [truncated])
-	if !strings.Contains(result.Prompt, "[truncated]") {
-		t.Error("expected [truncated] marker for long response")
-	}
-	// Should NOT contain the full 3000-char response
+	// Phase 14: the full 3000-char response must not appear...
 	if strings.Contains(result.Prompt, longResponse) {
 		t.Error("full 3000-char response should not appear in prompt")
+	}
+	// ...it is bounded to the ContinuationResultMaxChars floor preview (no run beyond it survives)...
+	if strings.Contains(result.Prompt, strings.Repeat("x", orch.config.ContinuationResultMaxChars+1)) {
+		t.Errorf("long non-JSON response must be bounded to the ~%d-char floor preview", orch.config.ContinuationResultMaxChars)
+	}
+	// ...but the preview itself is present.
+	if !strings.Contains(result.Prompt, strings.Repeat("x", 500)) {
+		t.Error("the floor preview of the long response should still be present")
 	}
 	// Verify phaseContext was still propagated correctly
 	if capturedMetadata == nil {

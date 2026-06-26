@@ -48,6 +48,13 @@ type OrchestratorDependencies struct {
 	// built-in byte-budget guard is opt-in (set ResultTrim.MaxAgentInputBytes > 0). (Phase 8)
 	AgentInputProcessor AgentInputProcessor
 
+	// Optional: Custom CONTINUATION distiller (Layer 3, Phase 14). Summarizes a non-JSON completed-step
+	// blob for the continuation (next-phase) planning prompt — distinct from the SYNTHESIS ResultProcessor
+	// (Seam 1) and the resolution-source processor (Seam 2). A custom override is always honored; if nil,
+	// the factory builds the default LLM distiller when ResultDistill.Enabled and an AIClient is present,
+	// otherwise C is disabled and the continuation builder's deterministic digest/floor path is used.
+	ContinuationDistiller ResultProcessor
+
 	// Optional: cache for LLM distillation results, keyed by (result + instruction +
 	// budget). When set, the distiller is wrapped so identical compactions (common in
 	// scheduled/repetitive runs) become cache hits. Nil disables caching (fail-open).
@@ -375,6 +382,29 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 				"preserve_keys":          len(config.ResultTrim.PreserveKeys),
 			})
 		}
+	}
+
+	// Seam 4 (Phase 14) — CONTINUATION distiller (C): summarizes a non-JSON step blob for the continuation
+	// planner, kept OFF the synthesis chain (no Phase-8 coupling). A custom override is ALWAYS honored
+	// (consistent with Seams 1-3 — never silently dropped, independent of ResultTrim/ResultDistill toggles);
+	// otherwise the built-in LLM distiller default is installed only when distillation is enabled with an AI
+	// client. No cache wrapper — C fires ~never, so a cache would mostly miss.
+	if deps.ContinuationDistiller != nil {
+		orchestrator.SetContinuationDistiller(deps.ContinuationDistiller)
+		factoryLogger.Info("Continuation distiller (C) enabled with custom processor", map[string]interface{}{
+			"operation": "continuation_distiller_initialization",
+		})
+	} else if config.ResultDistill.Enabled && deps.AIClient != nil {
+		contDistiller := NewLLMDistiller(deps.AIClient, config.ResultDistill,
+			NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger), deps.Logger)
+		contDistiller.SetAIOptionsOverride(config.ResultDistillAIOptions)
+		if orchestrator.debugStore != nil {
+			contDistiller.SetLLMDebugStore(orchestrator.debugStore)
+		}
+		orchestrator.SetContinuationDistiller(contDistiller)
+		factoryLogger.Info("Continuation distiller (C) enabled", map[string]interface{}{
+			"operation": "continuation_distiller_initialization",
+		})
 	}
 
 	// Seams 2 & 3 (Phase 8) are INDEPENDENT data-flow concerns, wired REGARDLESS of

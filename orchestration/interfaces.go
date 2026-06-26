@@ -552,12 +552,48 @@ type OrchestratorConfig struct {
 	// Enable via TRUVAG3_HITL_ENABLED=true or config.HITL.Enabled=true.
 	HITL HITLConfig `json:"hitl,omitempty"`
 
-	// ContinuationResultMaxChars controls the maximum characters per completed step
-	// result included in continuation planning prompts. Orchestrator delegation responses
-	// can be 20-30KB; the default ensures the child agent's steps[] array (which starts
-	// ~4KB into the response) is visible to the continuation planner.
+	// ContinuationResultMaxChars caps the chars of a NON-JSON step result shown in a continuation
+	// planning prompt (Phase 14). JSON results are rendered as a structure-complete digest instead;
+	// this knob is the floor-preview size for non-JSON blobs (logs, markdown, CSV) — the fallback the
+	// planner reads when the continuation distiller (C) does not summarize the step. Orchestrator JSON
+	// delegation responses are digested + child-summary-extracted, so child sub-steps stay visible
+	// regardless of this value.
 	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_CHARS (default: 10000)
 	ContinuationResultMaxChars int `json:"continuation_result_max_chars,omitempty"`
+
+	// ContinuationResultMaxTotalChars caps the TOTAL characters of all completed-step digests in a
+	// continuation planning prompt (Phase 14). Unlike ContinuationResultMaxChars (the per-step non-JSON
+	// floor preview), this bounds the whole <completed_steps> section: step digests are filled
+	// newest-first until this budget is spent, and older steps that don't fit are evicted (an N-of-M
+	// note is emitted). ~32 KB is a starting ceiling to tune on measurement; a typical run fits well
+	// under it (measured ~268 B/digest -> ~122 steps in 32 KB).
+	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS (default: 32768)
+	ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"`
+
+	// ContinuationMaxEscalations caps how many non-JSON step results may escalate to the continuation
+	// distiller (C) in a single continuation phase (Phase 14). Each escalation is a fast-model LLM call
+	// on the phase-gating path (sequential), so the cap bounds worst-case latency/cost; the NEWEST
+	// non-JSON steps are escalated first. 0 disables C entirely. Fires ~never on structured (all-JSON)
+	// workloads.
+	// Env: TRUVAG3_CONTINUATION_MAX_ESCALATIONS (default: 8)
+	ContinuationMaxEscalations int `json:"continuation_max_escalations,omitempty"`
+
+	// ContinuationDigestArraySample is the per-array head-sample size in a continuation decision digest
+	// (Phase 14): arrays render as the first N elements + a "…M more of K" length sentinel.
+	// Env: TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE (default: 3)
+	ContinuationDigestArraySample int `json:"continuation_digest_array_sample,omitempty"`
+
+	// ContinuationDigestScalarMax is the max length of a string value kept inline in a continuation
+	// digest before it is elided to a "…<N chars>" sentinel (Phase 14). Raise it so the planner sees
+	// longer salient values (e.g. status/error strings) at plan time.
+	// Env: TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX (default: 200)
+	ContinuationDigestScalarMax int `json:"continuation_digest_scalar_max,omitempty"`
+
+	// ContinuationDigestMaxKeys caps the keys kept per object in a continuation digest (Phase 14).
+	// Schema objects (a few fields) are kept whole; map-shaped objects keyed by many dynamic IDs are
+	// sampled to this many sorted keys + a "N more keys" sentinel so one wide object can't dominate.
+	// Env: TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS (default: 50)
+	ContinuationDigestMaxKeys int `json:"continuation_digest_max_keys,omitempty"`
 
 	// ORCH-020 RC9: Upstream-failure-pattern tunables. When RC8 triggers
 	// a remediation replan, the pattern analyzer decides whether to embed
@@ -1150,6 +1186,40 @@ func DefaultConfig() *OrchestratorConfig {
 	if maxChars := os.Getenv("TRUVAG3_CONTINUATION_RESULT_MAX_CHARS"); maxChars != "" {
 		if val, err := strconv.Atoi(maxChars); err == nil && val > 0 {
 			config.ContinuationResultMaxChars = val
+		}
+	}
+
+	// Phase 14: continuation digest total budget + non-JSON escalation (C) cap.
+	config.ContinuationResultMaxTotalChars = 32768
+	if v := os.Getenv("TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil && val > 0 {
+			config.ContinuationResultMaxTotalChars = val
+		}
+	}
+	config.ContinuationMaxEscalations = 8
+	if v := os.Getenv("TRUVAG3_CONTINUATION_MAX_ESCALATIONS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil && val >= 0 {
+			config.ContinuationMaxEscalations = val
+		}
+	}
+
+	// Phase 14: continuation decision-digest shaping knobs (defaults from the digest consts).
+	config.ContinuationDigestArraySample = defaultDigestSampleN
+	if v := os.Getenv("TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil && val > 0 {
+			config.ContinuationDigestArraySample = val
+		}
+	}
+	config.ContinuationDigestScalarMax = defaultDigestScalarMax
+	if v := os.Getenv("TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil && val > 0 {
+			config.ContinuationDigestScalarMax = val
+		}
+	}
+	config.ContinuationDigestMaxKeys = defaultDigestMaxKeys
+	if v := os.Getenv("TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil && val > 0 {
+			config.ContinuationDigestMaxKeys = val
 		}
 	}
 

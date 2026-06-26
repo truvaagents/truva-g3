@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -50,12 +51,13 @@ type ResultTrimConfig struct {
 // ResultDistillConfig configures opt-in LLM-based result distillation.
 // Two-stage pipeline: structural pre-filter → LLM distill.
 type ResultDistillConfig struct {
-	Enabled          bool `json:"enabled"`           // Default: false
-	DistillThreshold int  `json:"distill_threshold"` // Min bytes to trigger distillation. Default: 32768
-	PreFilterBudget  int  `json:"prefilter_budget"`  // StructuralTrimmer budget before LLM. Default: 32768
-	TargetSize       int  `json:"target_size"`       // LLM output target size. Default: 4096
-	// Model overrides the LLM model for distillation calls.
-	// Empty string = use the AIClient's default model.
+	Enabled          bool `json:"enabled"`           // DefaultConfig: true (default-on, opt-out)
+	DistillThreshold int  `json:"distill_threshold"` // Min bytes to trigger distillation. DefaultConfig: 16384
+	PreFilterBudget  int  `json:"prefilter_budget"`  // StructuralTrimmer budget before LLM. DefaultConfig: 131072 (128 KB)
+	TargetSize       int  `json:"target_size"`       // LLM output target size. DefaultConfig: 4096
+	// Model overrides the LLM model for distillation calls. DefaultConfig sets
+	// this to the portable "fast" alias; an empty string = use the AIClient's
+	// default model.
 	//
 	// When using a ChainClient (multi-provider failover), use a portable
 	// alias ("fast", "default", "smart") instead of a concrete model name.
@@ -66,9 +68,11 @@ type ResultDistillConfig struct {
 	// Env: TRUVAG3_RESULT_DISTILL_MODEL
 	Model string `json:"model,omitempty"`
 	// CacheTTL is how long a distillation result stays cached. The cache is keyed by
-	// (result content + instruction + budget) and is fail-open (a nil cache disables it
-	// with no overhead). Reuses the shared-memory digest cache pattern so scheduled and
-	// repetitive runs — the worst offenders for redundant LLM cost — become cache hits.
+	// (result content + instruction + query + budget) plus a config salt (prompt
+	// version, model, target size, pre-filter budget, AI-options override) and is
+	// fail-open (a nil cache disables it with no overhead). Reuses the shared-memory
+	// digest cache pattern so scheduled and repetitive runs — the worst offenders for
+	// redundant LLM cost — become cache hits.
 	//
 	// Env: TRUVAG3_RESULT_DISTILL_CACHE_TTL
 	CacheTTL time.Duration `json:"cache_ttl,omitempty"`
@@ -424,4 +428,140 @@ func ProcessMultipleForBudget(
 		metaMap[step.StepID] = meta
 	}
 	return results, metaMap
+}
+
+// --- Phase 14: continuation decision digest -------------------------------------------------------
+//
+// The continuation planner needs the STRUCTURE of each completed step (so it can write
+// {{step-X.field}} templates) far more than the raw values (which resolve from full memory at
+// execution). buildDecisionDigest renders a structure-complete skeleton: every object key/path is
+// kept (objects beyond a per-object cap are key-sampled), arrays are trimmed to a head sample plus a
+// length sentinel (staying arrays), and long string values are elided. The output is always valid JSON.
+// This is distinct from StructuralTrimmer, which
+// relevance-ranks and DROPS whole fields to fit a byte budget.
+
+const (
+	// defaultDigestSampleN is the per-array head-sample size in a decision digest.
+	defaultDigestSampleN = 3
+	// defaultDigestScalarMax is the max length of a string value kept inline before it is elided.
+	defaultDigestScalarMax = 200
+	// defaultDigestMaxKeys caps the keys kept per object. Schema objects (a handful of fields) are kept
+	// whole; map-shaped objects keyed by many dynamic IDs (metrics-by-instance, services-by-name) are
+	// sampled to this many sorted keys plus a sentinel, so one wide object can't dominate the digest.
+	defaultDigestMaxKeys = 50
+)
+
+// buildDecisionDigest renders the structure-complete skeleton described above. degenerate is true only
+// for a non-JSON blob (no structure to digest): the caller substitutes the structural floor for the
+// body and C escalates to distill it. Valid JSON is never degenerate — the skeleton keeps the structure
+// (every key, up to the per-object cap), so the planner can address values via {{step-X.field}} (they
+// resolve from full memory at execution); a narrative-heavy value merely being elided does NOT warrant a
+// fast-model C call (measured: that over-triggered on 8/30 steps of a real run whose data flowed to
+// synthesis, not plan templates).
+func buildDecisionDigest(response string, sampleN, scalarMax, maxKeys int) (digest string, degenerate bool) {
+	// Decode with UseNumber so large integers (snowflake IDs, nanosecond timestamps, request IDs beyond
+	// float64's 2^53 exact range) survive verbatim instead of being mangled into scientific notation.
+	dec := json.NewDecoder(strings.NewReader(response))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return "", true // non-JSON / incomplete → caller substitutes the structural floor; C escalates.
+	}
+	if dec.More() {
+		return "", true // trailing content after the JSON value → treat as a blob (not clean JSON).
+	}
+	out, err := json.Marshal(digestValue(v, sampleN, scalarMax, maxKeys))
+	if err != nil {
+		return "", true // unreachable in practice (digestValue yields only marshalable types); errcheck guard.
+	}
+	return string(out), false
+}
+
+// digestValue recurses producing the skeleton. Objects keep all keys up to maxKeys, then sample (sorted)
+// + a sentinel; arrays stay arrays (head sample + length sentinel) so the planner's {{step-X.field[i]}}
+// model holds; long strings elide to a sentinel.
+func digestValue(v interface{}, sampleN, scalarMax, maxKeys int) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if len(t) > maxKeys {
+			// Map-shaped object (many dynamic-ID keys): keep maxKeys sorted keys + a sentinel, mirroring
+			// array sampling, so one wide object can't dominate the digest or crowd out other steps.
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			m := make(map[string]interface{}, maxKeys+1)
+			for _, k := range keys[:maxKeys] {
+				m[k] = digestValue(t[k], sampleN, scalarMax, maxKeys)
+			}
+			m["__truncated_keys__"] = fmt.Sprintf("%d more of %d keys", len(t)-maxKeys, len(t))
+			return m
+		}
+		m := make(map[string]interface{}, len(t))
+		for k, child := range t {
+			m[k] = digestValue(child, sampleN, scalarMax, maxKeys)
+		}
+		return m
+	case []interface{}:
+		n := sampleN
+		if n > len(t) {
+			n = len(t)
+		}
+		sample := make([]interface{}, 0, n+1)
+		for i := 0; i < n; i++ {
+			sample = append(sample, digestValue(t[i], sampleN, scalarMax, maxKeys))
+		}
+		if len(t) > n {
+			sample = append(sample, fmt.Sprintf("…%d more of %d", len(t)-n, len(t)))
+		}
+		return sample
+	case string:
+		if len(t) > scalarMax {
+			// Parens, not <…>: json.Marshal HTML-escapes < and > to </>, which would make the
+			// planner-facing sentinel noisy.
+			return fmt.Sprintf("…(%d chars)", len(t))
+		}
+		return t
+	default:
+		return t // numbers, bools, null — salient scalars kept as-is
+	}
+}
+
+// isStructurallyDegenerate reports whether a digested step should escalate to the continuation
+// distiller (C). C fires for a non-JSON blob only — the digest path records that as Method "truncate"
+// (the structural-floor body). Valid-JSON steps keep their structure, so they never escalate.
+func isStructurallyDegenerate(meta *ResultTrimMetadata) bool {
+	return meta != nil && meta.Method == "truncate"
+}
+
+// continuationDigestOpts bundles the env-tunable knobs for rendering continuation digests (Phase 14).
+// The builder resolves these from OrchestratorConfig (falling back to the digest defaults) and passes
+// concrete values, keeping these functions pure and unit-testable.
+type continuationDigestOpts struct {
+	floorChars int // non-JSON floor-preview cap (ContinuationResultMaxChars)
+	sampleN    int // array head-sample size (ContinuationDigestArraySample)
+	scalarMax  int // string-elision threshold (ContinuationDigestScalarMax)
+	maxKeys    int // per-object key cap (ContinuationDigestMaxKeys)
+}
+
+// renderContinuationDigests builds a decision digest for each completed step (Phase 14), index-aligned
+// with steps. A valid-JSON step gets its structure-complete skeleton (Method "digest"). A non-JSON blob
+// has no structure to digest, so it gets a structural-floor preview as the body (fail-open, never the
+// empty string) and is marked Method "truncate" so isStructurallyDegenerate routes it to C.
+func renderContinuationDigests(steps []StepResult, opts continuationDigestOpts) (bodies []string, meta []*ResultTrimMetadata) {
+	bodies = make([]string, len(steps))
+	meta = make([]*ResultTrimMetadata, len(steps))
+	for i := range steps {
+		resp := steps[i].Response
+		digest, degenerate := buildDecisionDigest(resp, opts.sampleN, opts.scalarMax, opts.maxKeys)
+		method := "digest"
+		if degenerate {
+			digest = truncateRunes(resp, opts.floorChars) // non-JSON floor preview (fail-open body)
+			method = "truncate"
+		}
+		bodies[i] = digest
+		meta[i] = &ResultTrimMetadata{Method: method, OriginalBytes: len(resp), TrimmedBytes: len(digest)}
+	}
+	return bodies, meta
 }
