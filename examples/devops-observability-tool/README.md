@@ -336,6 +336,7 @@ App traces → OTEL SDK → OTEL Collector → Jaeger Collector (gRPC)
 |----------|-------------|---------|----------|
 | `REDIS_URL` | Redis connection URL | - | Yes |
 | `LOKI_URL` | Loki query endpoint | `http://loki.truvag3-examples:3100` | No |
+| `LOKI_HTTP_TIMEOUT` | Per-request timeout for the outbound Loki HTTP client (Go duration, e.g. `60s`, `2m`). Keep below the orchestrator's 120s per-step deadline so the agent gets a clean error rather than a step timeout. | `90s` | No |
 | `JAEGER_URL` | Jaeger query endpoint | `http://jaeger-query.truvag3-examples:80` | No |
 | `PORT` | HTTP server port | `8378` | No |
 
