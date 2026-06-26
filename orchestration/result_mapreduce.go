@@ -139,6 +139,7 @@ collect:
 		if d.logger != nil {
 			d.logger.WarnWithContext(ctx, "map-reduce compaction produced no chunks, falling back to structural", map[string]interface{}{
 				"operation": "result_distill.mapreduce", "step_id": stepCtx.StepID, "chunks": total,
+				"error_type": "compaction",
 			})
 		}
 		// Transient: all chunks failed/timed out — don't cache the degraded fallback.

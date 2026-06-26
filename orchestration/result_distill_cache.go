@@ -173,9 +173,10 @@ func (c *cachingProcessor) ProcessForPrompt(
 		// Fail-open: a cache write failure must never affect the returned compaction.
 		if c.logger != nil {
 			c.logger.WarnWithContext(ctx, "Failed to cache distillation result", map[string]interface{}{
-				"operation": "result_distill.cache_set",
-				"step_id":   stepCtx.StepID,
-				"error":     err.Error(),
+				"operation":  "result_distill.cache_set",
+				"step_id":    stepCtx.StepID,
+				"error":      err.Error(),
+				"error_type": "cache_write",
 			})
 		}
 	}

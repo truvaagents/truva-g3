@@ -85,9 +85,11 @@ func (d *LLMDistiller) recordDebugInteraction(ctx context.Context, requestID str
 		if err := d.debugStore.RecordInteraction(recordCtx, requestID, interaction); err != nil {
 			if d.logger != nil {
 				d.logger.Warn("Failed to record distillation debug interaction", map[string]interface{}{
+					"operation":  "result_distill",
 					"request_id": requestID,
 					"step_id":    interaction.StepID,
 					"error":      err.Error(),
+					"error_type": "debug_recording",
 				})
 			}
 		}
@@ -204,6 +206,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 				"step_id":     stepCtx.StepID,
 				"agent_name":  stepCtx.AgentName,
 				"error":       err.Error(),
+				"error_type":  "compaction",
 				"duration_ms": duration.Milliseconds(),
 			})
 		}
