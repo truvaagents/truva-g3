@@ -12,8 +12,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
-	github.com/truvaagents/truva-g3/core v0.8.2
-	github.com/truvaagents/truva-g3/telemetry v0.8.2
+	github.com/truvaagents/truva-g3/core v0.2.0
+	github.com/truvaagents/truva-g3/telemetry v0.2.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
