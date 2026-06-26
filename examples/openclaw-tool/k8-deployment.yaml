@@ -1,0 +1,256 @@
+# openclaw-tool — two-container sidecar (adapter + REAL OpenClaw), per ANALYSIS.md §3/§6/§8/§12.
+#
+# Topology: the Go adapter is the ONLY TruvaG3 component and the ONLY thing on the Service.
+# OpenClaw (ghcr.io/openclaw/openclaw, runs as `node`/uid 1000) is a sidecar bound to loopback
+# (127.0.0.1:18789), reachable only by the adapter inside the shared pod netns — never exposed.
+#
+# Secrets and ConfigMaps are created by setup.sh from .env / config/. Run ./setup.sh deploy.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-tool-service
+  namespace: truvag3-examples
+  labels:
+    app: openclaw-tool
+    component: tool
+    truvag3.framework/type: tool
+spec:
+  type: ClusterIP
+  selector:
+    app: openclaw-tool
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8393 # adapter only — OpenClaw's :18789 is intentionally NOT exposed
+      protocol: TCP
+---
+# Dedicated ServiceAccount with ZERO RBAC (ANALYSIS.md §6 Layer 2).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openclaw-tool-sa
+  namespace: truvag3-examples
+  labels:
+    app: openclaw-tool
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-tool
+  namespace: truvag3-examples
+  labels:
+    app: openclaw-tool
+    component: tool
+    truvag3.framework/type: tool
+spec:
+  # Scale knob: max concurrency = replica count (ANALYSIS.md §7); each replica carries ~1Gi OpenClaw.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-tool
+  template:
+    metadata:
+      labels:
+        app: openclaw-tool
+        component: tool
+        truvag3.framework/type: tool
+    spec:
+      serviceAccountName: openclaw-tool-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001 # adapter default; the OpenClaw container overrides to 1000 (its `node` user)
+        runAsGroup: 10001
+        fsGroup: 10001 # added as a supplementary group on BOTH containers → shared volumes writable
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Copy openclaw.json into the writable home, then provision the exec-approval policy:
+        # `exec-policy preset yolo` writes tools.exec {security:full, ask:off} + the host
+        # ~/.openclaw/exec-approvals.json, so the agent runs commands headlessly (§13).
+        # Uses the OpenClaw image (needs node); the gateway reads both files at startup.
+        - name: seed-config
+          image: openclaw:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - mkdir -p /home/node/.openclaw && cp /config-src/openclaw.json /home/node/.openclaw/openclaw.json && node /app/openclaw.mjs exec-policy preset yolo
+          env:
+            - name: HOME
+              value: "/home/node"
+            - name: OPENCLAW_CONFIG_PATH
+              value: "/home/node/.openclaw/openclaw.json"
+          envFrom:
+            - secretRef:
+                name: openclaw-tool-secrets
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: oc-home
+              mountPath: /home/node
+            - name: oc-tmp
+              mountPath: /tmp
+            - name: openclaw-config
+              mountPath: /config-src
+              readOnly: true
+      containers:
+        # ---- Container 1: the Go adapter (the membrane / only TruvaG3 component) ----
+        - name: openclaw-tool
+          image: openclaw-tool:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8393
+              name: http
+          envFrom:
+            - configMapRef:
+                name: openclaw-tool-env-config
+                optional: true
+          env:
+            - name: PORT
+              value: "8393"
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: REDIS_URL
+              value: "redis://redis.truvag3-examples:6379"
+            - name: TRUVAG3_REDIS_URL
+              value: "redis://redis.truvag3-examples:6379"
+            - name: TRUVAG3_DISCOVERY_RETRY
+              value: "true"
+            - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL
+              value: "30s"
+            - name: TRUVAG3_K8S_SERVICE_NAME
+              value: "openclaw-tool-service"
+            # The namespace used to build the service FQDN (address_resolver.go → PodNamespace).
+            # Without this it defaults to "default", so agents resolve
+            # openclaw-tool-service.default.svc.cluster.local → "no such host". Mirrors news-tool.
+            - name: TRUVAG3_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TRUVAG3_K8S_SERVICE_PORT
+              value: "80"
+            - name: TRUVAG3_K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TRUVAG3_K8S_POD_APP_LABEL
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app']
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.truvag3-examples:4318"
+            # ---- OpenClaw transaction settings ----
+            - name: OPENCLAW_URL
+              value: "http://127.0.0.1:18789" # sidecar over loopback
+            - name: OPENCLAW_AGENT_ID
+              value: "main" # OpenClaw's built-in default agent (id "main")
+            - name: MAX_INPUT_CHARS
+              value: "1000000"
+            - name: DEFAULT_TIMEOUT_SECONDS
+              value: "300"
+            - name: MAX_TIMEOUT_SECONDS
+              value: "900"
+            - name: SEM_ACQUIRE_TIMEOUT_SECONDS
+              value: "5"
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-tool-secrets
+                  key: OPENCLAW_GATEWAY_TOKEN
+          volumeMounts:
+            - name: workspace
+              mountPath: /home/node/.openclaw/workspace # shared with OpenClaw (no per-task reset; §13)
+            - name: adapter-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8393
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/capabilities
+              port: 8393
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsUser: 1000 # match OpenClaw (node/uid 1000) so the adapter can reset the agent's workspace (§13)
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+        # ---- Container 2: the real OpenClaw gateway (untrusted; the cocoon, §5/§6/§12) ----
+        - name: openclaw
+          image: openclaw:local # ghcr.io/openclaw/openclaw tagged locally; pin >= 2026.1.29 for real use
+          imagePullPolicy: IfNotPresent
+          # Image entrypoint/cmd already runs the gateway: tini -s -- node openclaw.mjs gateway.
+          # All secret keys -> env: gateway token + whichever provider key(s) you set
+          # (OPENAI_API_KEY…). openclaw.json references ${OPENAI_API_KEY} / ${OPENCLAW_GATEWAY_TOKEN}.
+          envFrom:
+            - secretRef:
+                name: openclaw-tool-secrets
+          env:
+            - name: OPENCLAW_CONFIG_PATH
+              value: "/home/node/.openclaw/openclaw.json"
+            - name: NODE_ENV
+              value: "production"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.truvag3-examples:4318"
+          ports:
+            - containerPort: 18789
+              name: gateway # documentation only; never added to the Service
+          volumeMounts:
+            - name: oc-home
+              mountPath: /home/node # writable home: .openclaw (state/config), .config, .cache
+            - name: workspace
+              mountPath: /home/node/.openclaw/workspace # shared with the adapter
+            - name: oc-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi" # Node heap crashes near 1Gi under load (§9); coupled to MAX_INPUT_CHARS
+          securityContext:
+            runAsUser: 1000 # the image's `node` user
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # NOTE: never mount the Docker socket — sandbox is "none" in openclaw.json; the pod is the sandbox.
+      volumes:
+        # Shared workspace: DISK-backed emptyDir (default medium). Do NOT set medium: Memory (§9).
+        - name: workspace
+          emptyDir: {}
+        - name: oc-home
+          emptyDir: {}
+        - name: oc-tmp
+          emptyDir: {}
+        - name: adapter-tmp
+          emptyDir: {}
+        - name: openclaw-config
+          configMap:
+            name: openclaw-tool-config # openclaw.json (§6 Layer 1 / §12), copied into home by initContainer
