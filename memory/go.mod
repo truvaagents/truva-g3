@@ -12,8 +12,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/qdrant/go-client v1.18.2
 	github.com/stretchr/testify v1.11.1
-	github.com/truvaagents/truva-g3/core v0.8.2
-	github.com/truvaagents/truva-g3/telemetry v0.0.0-00010101000000-000000000000
+	github.com/truvaagents/truva-g3/core v0.2.0
+	github.com/truvaagents/truva-g3/telemetry v0.2.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0

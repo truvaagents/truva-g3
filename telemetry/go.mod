@@ -7,7 +7,7 @@ replace github.com/truvaagents/truva-g3/core => ../core
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/truvaagents/truva-g3/core v0.8.2
+	github.com/truvaagents/truva-g3/core v0.2.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0

@@ -5,11 +5,11 @@ go 1.26.4
 require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
-	github.com/truvaagents/truva-g3/ai v0.9.1
-	github.com/truvaagents/truva-g3/core v0.9.1
-	github.com/truvaagents/truva-g3/memory v0.9.1
-	github.com/truvaagents/truva-g3/orchestration v0.9.1
-	github.com/truvaagents/truva-g3/telemetry v0.9.1
+	github.com/truvaagents/truva-g3/ai v0.2.0
+	github.com/truvaagents/truva-g3/core v0.2.0
+	github.com/truvaagents/truva-g3/memory v0.2.0
+	github.com/truvaagents/truva-g3/orchestration v0.2.0
+	github.com/truvaagents/truva-g3/telemetry v0.2.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 )
