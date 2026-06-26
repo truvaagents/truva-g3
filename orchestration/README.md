@@ -2057,7 +2057,8 @@ export TRUVAG3_RESULT_TRIM_ENABLED=true                    # Enable/disable (def
 export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384                 # Per-result max (default: 16KB)
 export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768           # Total synthesis prompt max (default: 32KB)
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536           # Micro-resolution source data max (default: 64KB)
-export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=65536     # Agent HTTP parameter max (default: 64KB)
+export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0         # Agent HTTP parameter max (default: 0 = no cap, fidelity-first)
+export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384  # Schema-mapping threshold (default: 16KB; 0 disables)
 ```
 
 > For struct details and metadata reference, see [API_REFERENCE.md](../docs/reference/API_REFERENCE.md#resulttrimconfig).

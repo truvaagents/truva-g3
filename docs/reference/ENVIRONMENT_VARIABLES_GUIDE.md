@@ -746,7 +746,12 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Maximum duration for a single phase (plan generation + execution). Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Max plan regenerations after the first validation failure before the phase fails explicitly (total validations = 1 + N). Prevents an infinite regenerate↔reject loop. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Maximum chars per completed step result in continuation planning prompts (~2500 tokens). Orchestrator delegation responses can be 20-30KB; the default ensures child agent sub-steps are visible. Values below 4000 risk hiding delegation context. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Phase 14: floor-preview size (chars) for a **non-JSON** completed-step result in continuation prompts. JSON results are rendered as a structure-complete digest instead; orchestrator JSON delegation responses are also child-summary-extracted, so child sub-steps stay visible regardless. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | Phase 14: aggregate budget (chars) for ALL completed-step digests — bounds the whole `<completed_steps>` section. Digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest → ~122 steps fit 32 KB). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Phase 14: max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, newest-first. Sequential fast-model calls on the phase-gating path, so the cap bounds latency. `0` disables; fires ~never on all-JSON workloads. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Phase 14: per-array head-sample size in a continuation digest (arrays render as the first N elements + a length sentinel). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Phase 14: max length of a string value kept inline in a digest before elision. Raise it so the planner sees longer salient values (status/error strings) at plan time. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | `50` | **Implemented** | Phase 14: per-object key cap in a digest. Schema objects kept whole; map-shaped objects (many dynamic-ID keys) sampled to this many sorted keys + a sentinel. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_FAILURE_PATTERN_MIN_FAILURES` | `2` | **Implemented** | Minimum distinct failed upstream steps required for the remediation continuation prompt to embed a shared-error pattern summary. `1` would make every skip emit a summary (noisy); raise to make the analyzer more conservative. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_FAILURE_PATTERN_SIGNATURE_LEN` | `120` | **Implemented** | Max chars of error text used to bucket failures into a shared signature for classification. Wider than the display cap to reduce false-positive collisions between distinct errors that share a common prefix. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_FAILURE_PATTERN_DISPLAY_LEN` | `80` | **Implemented** | Max chars of the shared error rendered into the remediation prompt (trailing `…` on truncation). Kept short so the continuation prompt stays slim per EFFECTIVE_PROMPTS_GUIDE §4.5. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -754,13 +759,17 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `16384` | **Implemented** | Maximum bytes per individual step result (~4K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `32768` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~8K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | `65536` | **Implemented** | Maximum bytes for source data in micro-resolution and semantic retry prompts (~26K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `65536` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls (~26K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `0` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls. Default `0` = no cap (fidelity-first): tool→tool data flows raw so downstream steps receive the full upstream output. Set `> 0` (or supply `deps.AgentInputProcessor`) to enable the byte-budget guard. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | `16384` | **Implemented** | Result size threshold above which schema-guided mapping replaces direct value extraction. Set to 0 to disable. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_ENABLED` | `false` | **Implemented** | Enable opt-in LLM-based result distillation (two-stage: structural pre-filter → LLM distill). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `32768` | **Implemented** | Minimum result size (bytes) to trigger LLM distillation. Below this, structural trimming only. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_PREFILTER` | `32768` | **Implemented** | StructuralTrimmer budget applied before LLM distillation (Stage 1 pre-filter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_ENABLED` | `true` | **Implemented** | Default-on LLM-based result distillation (two-stage: structural pre-filter → LLM distill). Active when an AIClient is configured and `TRUVAG3_RESULT_TRIM_ENABLED` is true; otherwise the structural floor is used. Set `=false` to opt out. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `16384` | **Implemented** | Minimum result size (bytes) to trigger LLM distillation. Below this, structural trimming only. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_PREFILTER` | `131072` | **Implemented** | StructuralTrimmer budget (bytes) applied before LLM distillation (Stage 1 pre-filter). 128 KB — fits the 64K fast-tier context floor. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_TARGET` | `4096` | **Implemented** | Target output size for LLM distillation (Stage 2). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_MODEL` | `""` | **Implemented** | Portable alias or model name for LLM distillation calls | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for LLM distillation calls. Default `fast` (a ChainClient-safe alias); empty string = use the AIClient's default model. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | `5m` | **Implemented** | How long a distillation result stays cached (keyed by result content + instruction + query + budget). Fail-open. Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call) or returns completed chunks + a "partial" disclosure (map-reduce). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | `8` | **Implemented** | Max chunks compacted concurrently in the map-reduce path. `≤ 0` falls back to the default. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 ### Tiered Capability Resolution
 
@@ -984,12 +993,17 @@ When tool/agent responses are large (e.g., full web pages, large API payloads), 
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Max chars per step result in continuation prompts (~2500 tokens). Increase for cross-agent delegation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Non-JSON floor-preview size in continuation prompts (JSON is digested). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | Aggregate budget for all step digests in the continuation prompt (newest-first; N-of-M eviction). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Max non-JSON→fast-model-summary escalations per continuation phase (`0` disables). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Digest array head-sample size. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Digest inline-string elision threshold. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | `50` | **Implemented** | Digest per-object key cap. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_ENABLED` | `true` | **Implemented** | Enable structural trimming of large step results before prompt construction. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `16384` | **Implemented** | Maximum bytes per individual step result (~4K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `32768` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~8K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | `65536` | **Implemented** | Maximum bytes for source data in micro-resolution and semantic retry prompts (~26K tokens). Controls how much of the original step result is included when the LLM resolves missing parameters or retries failed steps. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `65536` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls (~26K tokens). Trims large data values before they are sent as input parameters to downstream agents or tools. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `0` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls. Default `0` = no cap (fidelity-first): tool→tool data flows raw so downstream steps receive the full upstream output. Set `> 0` (or supply `deps.AgentInputProcessor`) to enable the byte-budget guard that trims large parameter values before they are sent to downstream agents or tools. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | `16384` | **Implemented** | Result size threshold (bytes) above which schema-guided mapping is used instead of direct value extraction for micro-resolution. Set to `0` to disable schema-guided mapping entirely. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 **How it works:**
@@ -997,7 +1011,7 @@ When tool/agent responses are large (e.g., full web pages, large API payloads), 
 1. **Per-result trimming**: Each step result is individually limited to `MaxResultBytes`. The `StructuralTrimmer` preserves JSON structure while dropping array elements beyond the first few and truncating deeply nested objects.
 2. **Total budget enforcement**: After individual trimming, if the combined results still exceed `MaxTotalPromptBytes`, results are proportionally reduced.
 3. **Micro-resolution budgets**: When the LLM needs to resolve missing parameters from prior step results, `MaxMicroResolutionBytes` controls how much source data is included in the prompt. For very large results, schema-guided mapping (triggered above `SchemaGuidedMappingThreshold`) uses JSON schema analysis instead of passing raw data.
-4. **Agent input trimming**: Before sending data to downstream agents/tools via HTTP, `MaxAgentInputBytes` trims individual parameter values to prevent oversized request payloads.
+4. **Agent input trimming (opt-in)**: `MaxAgentInputBytes` defaults to `0` (no cap) — tool→tool data flows raw so downstream steps receive the full upstream output (fidelity-first). Set it `> 0` to trim individual parameter values before they are sent to downstream agents/tools via HTTP, or supply `deps.AgentInputProcessor` for custom input shaping.
 5. **Fallback**: Non-JSON results are truncated with a `... [trimmed]` suffix.
 
 **Configuration:**
@@ -1029,9 +1043,9 @@ config := orchestration.DefaultConfig()
 config.ResultTrim = orchestration.ResultTrimConfig{
     Enabled:                      true,
     MaxResultBytes:               16384, // 16 KB per result
-    MaxTotalPromptBytes:          65536, // 64 KB total
+    MaxTotalPromptBytes:          32768, // 32 KB total
     MaxMicroResolutionBytes:      65536, // 64 KB for micro-resolution source data
-    MaxAgentInputBytes:           65536, // 64 KB per agent/tool parameter value
+    MaxAgentInputBytes:           0,     // 0 = no cap (fidelity-first); set > 0 to enable the guard
     SchemaGuidedMappingThreshold: 16384, // 16 KB — use schema mapping above this
 }
 ```
@@ -1041,39 +1055,57 @@ config.ResultTrim = orchestration.ResultTrimConfig{
 - **Decrease limits**: When hitting token limits or getting slow synthesis responses
 - **Disable**: Only for debugging — production deployments should always have trimming enabled
 
-### Result Distillation (Opt-In LLM Summarization)
+### Result Distillation (Default-On LLM Summarization)
 
-For results that are extremely large or contain domain-specific content that structural trimming cannot adequately compress, opt-in LLM distillation provides a two-stage pipeline: structural pre-filtering followed by LLM-based summarization.
+For results that are extremely large or contain domain-specific content that structural trimming cannot adequately compress, LLM distillation provides a two-stage pipeline: structural pre-filtering followed by LLM-based summarization. It is **on by default** (opt-out) and serves as the primary compaction path for oversized results when the orchestrator has an AIClient and Result Trimming is enabled; without an AIClient the framework falls back to the structural floor.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_RESULT_DISTILL_ENABLED` | `false` | **Implemented** | Enable LLM-based result distillation. Opt-in because it adds an LLM call per large result. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `32768` | **Implemented** | Minimum result size (bytes) to trigger distillation. Below this threshold, structural trimming is used instead. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_PREFILTER` | `32768` | **Implemented** | StructuralTrimmer budget for Stage 1 pre-filtering. Reduces input to LLM before distillation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_ENABLED` | `true` | **Implemented** | Default-on LLM-based result distillation. Active when an AIClient is configured and `TRUVAG3_RESULT_TRIM_ENABLED` is true; otherwise the structural floor is used. Set `=false` to opt out (e.g. for cost- or latency-sensitive deployments). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `16384` | **Implemented** | Minimum result size (bytes) to trigger distillation. Below this threshold, structural trimming is used instead. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_PREFILTER` | `131072` | **Implemented** | StructuralTrimmer budget (bytes) for Stage 1 pre-filtering. Reduces input to the LLM before distillation. 128 KB — fits the 64K fast-tier context floor. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_TARGET` | `4096` | **Implemented** | Target output size for the LLM distillation (Stage 2). The LLM summarizes the pre-filtered result to approximately this size. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_MODEL` | `""` | **Implemented** | Portable alias or model name for distillation LLM calls. Use `"fast"` for cost savings | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for distillation LLM calls. Default `fast` (a ChainClient-safe alias resolving to Haiku / gpt-4.1-mini / gemini-flash-lite per provider); empty string = use the AIClient's default model. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | `5m` | **Implemented** | How long a distillation result stays cached (keyed by result content + instruction + query + budget). Fail-open — a nil cache disables it with no overhead. Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call path) or returns the chunks that completed plus a "partial" disclosure (map-reduce path). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | `8` | **Implemented** | Max chunks compacted concurrently in the map-reduce path. `≤ 0` falls back to the default. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 **How the two-stage pipeline works:**
 
 1. **Stage 1 — Structural Pre-Filter**: The `StructuralTrimmer` reduces the large result to `PreFilterBudget` bytes, preserving JSON structure and key data points.
 2. **Stage 2 — LLM Distillation**: An LLM call summarizes the pre-filtered result to approximately `TargetSize` bytes, preserving the most relevant information for the user's query.
-3. **Fallback**: If the LLM call fails, the Stage 1 pre-filtered result is used directly.
+3. **Map-reduce (very large results)**: When a result is estimated above the model's usable context (`ModelContextTokens`), it is chunked and each chunk is distilled concurrently (capped by `MapConcurrency`), then the chunk outputs are reduced into a final distillation.
+4. **Caching**: Identical (result + instruction + query + budget) inputs reuse a prior distillation for `CacheTTL`, so scheduled and repetitive runs become cache hits instead of repeat LLM calls.
+5. **Deadline & fallback**: Each compaction is bounded by `CompactionDeadline`. On timeout or LLM error, the call fails open — the single-call path uses the Stage 1 pre-filtered result directly; the map-reduce path returns the chunks that completed plus an honest "partial" disclosure.
 
 **Configuration:**
 
 ```bash
-# Enable distillation for extremely large results
+# Distillation is on by default — set =false to opt out
 export TRUVAG3_RESULT_DISTILL_ENABLED=true
 
-# Only distill results larger than 64 KB
+# Only distill results larger than 64 KB (default 16384 / 16 KB)
 export TRUVAG3_RESULT_DISTILL_THRESHOLD=65536
 
-# Allow larger pre-filter budget for better LLM context
-export TRUVAG3_RESULT_DISTILL_PREFILTER=65536
+# Pre-filter budget fed into the LLM (default 131072 / 128 KB)
+export TRUVAG3_RESULT_DISTILL_PREFILTER=131072
 
 # Target smaller output from LLM
 export TRUVAG3_RESULT_DISTILL_TARGET=2048
 export TRUVAG3_RESULT_DISTILL_MODEL=fast
+
+# Cache identical distillations for longer (default 5m)
+export TRUVAG3_RESULT_DISTILL_CACHE_TTL=10m
+
+# Bound a single compaction in the synthesis hot path (default 45s; env accepts positive durations only)
+export TRUVAG3_RESULT_DISTILL_DEADLINE=30s
+
+# Above this model context (tokens), chunk → map-reduce (default 150000)
+export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000
+
+# Concurrent chunk distillations in the map-reduce path (default 8)
+export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8
 ```
 
 **Programmatic configuration:**
@@ -1081,22 +1113,27 @@ export TRUVAG3_RESULT_DISTILL_MODEL=fast
 ```go
 config := orchestration.DefaultConfig()
 config.ResultDistill = orchestration.ResultDistillConfig{
-    Enabled:          true,
-    DistillThreshold: 65536, // Only distill results > 64 KB
-    PreFilterBudget:  65536, // 64 KB pre-filter budget
-    TargetSize:       2048,  // 2 KB target output
+    Enabled:            true,
+    DistillThreshold:   65536,             // Only distill results > 64 KB
+    PreFilterBudget:    131072,            // 128 KB pre-filter budget (default)
+    TargetSize:         2048,              // 2 KB target output
+    Model:              "fast",            // Portable alias (ChainClient-safe)
+    CacheTTL:           5 * time.Minute,   // Reuse identical distillations (default 5m)
+    CompactionDeadline: 45 * time.Second,  // Hot-path bound; 0 disables (default 45s)
+    ModelContextTokens: 150000,            // Above this, chunk → map-reduce (default)
+    MapConcurrency:     8,                 // Concurrent chunk distillations (default)
 }
 ```
 
-**When to enable:**
+**Why it's on by default:**
 - **Large API responses**: When tools return full web pages, large JSON payloads, or document content
-- **Quality over cost**: When you need better synthesis quality and are willing to pay the additional LLM call cost
+- **Quality over structural trimming**: An LLM preserves semantically relevant content that structural trimming would drop
 - **Domain-specific content**: When structural trimming loses important semantic content that only an LLM can preserve
 
-**When NOT to enable:**
-- **Cost-sensitive deployments**: Each large result adds an LLM distillation call
+**When to opt out (`=false`):**
+- **Cost-sensitive deployments**: Each oversized result adds an LLM distillation call
 - **Low-latency requirements**: The extra LLM call adds latency
-- **Small results**: If your tools already return concise results, structural trimming is sufficient
+- **No AIClient configured**: Distillation needs an AIClient; without one the framework already falls back to the structural floor, so nothing extra is needed
 
 ### Example
 
@@ -1139,22 +1176,32 @@ export TRUVAG3_ITERATIVE_MAX_PHASES=5
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200
 export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s
 
-# Continuation prompt result visibility (cross-agent delegation)
-export TRUVAG3_CONTINUATION_RESULT_MAX_CHARS=10000   # 10K chars (~2500 tokens) per step result
+# Continuation prompt budgeting (Phase 14: JSON results are digested; non-JSON gets a floor preview)
+export TRUVAG3_CONTINUATION_RESULT_MAX_CHARS=10000        # non-JSON floor-preview size
+export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=32768  # aggregate digest budget (~32 KB); newest-first, N-of-M eviction
+export TRUVAG3_CONTINUATION_MAX_ESCALATIONS=8            # max non-JSON→fast-model-summary escalations/phase (0 disables)
+export TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE=3        # digest array head-sample size
+export TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX=200        # digest inline-string elision threshold
+export TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS=50           # digest per-object key cap
 
 # For result trimming (enabled by default)
 export TRUVAG3_RESULT_TRIM_ENABLED=true
 export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384
 export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536
-export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=65536
+export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0       # 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384
 
-# For result distillation (opt-in, disabled by default)
-export TRUVAG3_RESULT_DISTILL_ENABLED=false
-export TRUVAG3_RESULT_DISTILL_THRESHOLD=32768
-export TRUVAG3_RESULT_DISTILL_PREFILTER=32768
+# For result distillation (on by default; opt out with =false)
+export TRUVAG3_RESULT_DISTILL_ENABLED=true
+export TRUVAG3_RESULT_DISTILL_THRESHOLD=16384
+export TRUVAG3_RESULT_DISTILL_PREFILTER=131072
 export TRUVAG3_RESULT_DISTILL_TARGET=4096
+export TRUVAG3_RESULT_DISTILL_MODEL=fast
+export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m
+export TRUVAG3_RESULT_DISTILL_DEADLINE=45s
+export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000
+export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8
 ```
 
 ---
@@ -1640,15 +1687,19 @@ export TRUVAG3_RESULT_TRIM_ENABLED=true
 export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384                # 16 KB per result (~4K tokens)
 export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768          # 32 KB total (~8K tokens)
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536          # 64 KB for micro-resolution prompts
-export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=65536    # 64 KB per agent/tool parameter
+export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0        # 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384 # 16 KB — schema mapping above this
 
-# Result distillation (opt-in — adds LLM call per large result)
-export TRUVAG3_RESULT_DISTILL_ENABLED=false
-export TRUVAG3_RESULT_DISTILL_THRESHOLD=32768     # Min bytes to trigger
-export TRUVAG3_RESULT_DISTILL_PREFILTER=32768     # Pre-filter budget
-export TRUVAG3_RESULT_DISTILL_TARGET=4096         # LLM output target
-export TRUVAG3_RESULT_DISTILL_MODEL=fast         # Model override (portable alias)
+# Result distillation (on by default — adds LLM call per large result)
+export TRUVAG3_RESULT_DISTILL_ENABLED=true
+export TRUVAG3_RESULT_DISTILL_THRESHOLD=16384       # Min bytes to trigger
+export TRUVAG3_RESULT_DISTILL_PREFILTER=131072      # Pre-filter budget (128 KB)
+export TRUVAG3_RESULT_DISTILL_TARGET=4096           # LLM output target
+export TRUVAG3_RESULT_DISTILL_MODEL=fast            # Model override (portable alias)
+export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m          # Distillation cache TTL
+export TRUVAG3_RESULT_DISTILL_DEADLINE=45s          # Hot-path compaction bound (positive durations only)
+export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000 # Above this, chunk → map-reduce
+export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8     # Concurrent chunk distillations
 ```
 
 ### Shared Memory Variables (for Cross-Agent Coordination)

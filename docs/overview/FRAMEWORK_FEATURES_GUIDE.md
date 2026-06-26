@@ -528,10 +528,10 @@ Built-in controls include:
 - preservation of JSON structure, key names, and representative samples
 - trim metadata on step results and `result_trim.completed` span events
 
-For extremely large or domain-specific outputs, opt-in result distillation adds a two-stage pipeline:
+For extremely large or domain-specific outputs, default-on result distillation (opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`) adds a two-stage pipeline:
 
 1. structural pre-filtering reduces the source result
-2. an LLM summarizes the pre-filtered content to a target size
+2. an LLM summarizes the pre-filtered content to a target size (results above the model's usable context are chunked and map-reduced)
 
 The trimming contract is pluggable through the `ResultProcessor` interface, so teams can replace the default `StructuralTrimmer` with a domain-specific implementation.
 
