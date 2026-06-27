@@ -19,11 +19,11 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 | Plan model override | — | `TRUVAG3_PLAN_MODEL` | `WithPlanAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Synthesis model override | — | `TRUVAG3_SYNTHESIS_MODEL` | `WithSynthesisAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Micro-resolution & semantic-retry model override | — | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `WithMicroResolutionAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
-| Micro-resolution & semantic-retry output | 2000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
+| Micro-resolution & semantic-retry output | 2000 / 1000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
 | Tiered selection output | 2000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
 | Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` | — |
 
-> The micro-resolution token/model knobs are shared: `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` and `TRUVAG3_MICRO_RESOLUTION_MODEL` govern **both** micro-resolution **and** Layer 4 semantic retry (contextual re-resolution). There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS` — raise the micro-resolution token limit if a semantic-retry response is being truncated (e.g. when the corrected parameters contain a large text payload). `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
+> `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` / `TRUVAG3_MICRO_RESOLUTION_MODEL` are **shared**: they govern both micro-resolution and Layer 4 semantic retry (contextual re-resolution). The base **defaults differ** — micro-resolution is 2000 tokens, semantic retry is 1000 — but setting either env var (or `WithMicroResolutionAIOptions`) overrides **both**. There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS`; raise the micro-resolution token limit if a semantic-retry response is being truncated. `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
 
 ## Conversation History Preparation
 
@@ -79,7 +79,7 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 | Digest inline-string cap (elision threshold) | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | — |
 | Digest per-object key cap | 50 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | — |
 
-> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` bounds the whole section: digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
+> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
 
 > **Migration (upgrading from pre-Phase-14):** `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` previously truncated **every** completed-step result (raw, per-step). It now governs **only the non-JSON floor preview** — valid-JSON steps are digested and no longer honor it. The env var name and its default (`10000`) are unchanged, so **no action is required**; JSON steps simply render as structure-complete digests instead of raw 10 KB truncations. If a deployment relied on the old raw-truncation behavior for JSON results, there is no equivalent toggle — the digest path supersedes it.
 
@@ -126,7 +126,7 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Map-reduce trigger (model context) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | — |
 | Map-reduce concurrency | 8 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | — |
 
-> Default-on (opt-out): distillation is the primary compaction path for oversized results when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default). Without an `AIClient` it falls back to the structural floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`.
+> Default-on (opt-out): distillation is the primary compaction path for oversized results when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default). Without an `AIClient` it falls back to the structural floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. **Caching is opt-in:** distillation results are cached only when a `DigestCache` is supplied via `deps.DistillCache` (no cache by default); `CacheTTL=0` does not reliably disable it (a Redis-backed cache treats 0 as "no expiration") — to disable, don't supply a cache.
 
 > **Migration (upgrading from pre-default-on):** result distillation was previously **off by default** (`Enabled: false`, threshold `32768`, pre-filter `32768`). It is now **on by default** (threshold `16384`, pre-filter `131072`), so a deployment with an `AIClient` configured will begin making fast-model distillation calls for oversized results — added cost/latency on the **cheap** (`fast`) tier; the structural-trim floor was the prior behavior. No code change is required; set `TRUVAG3_RESULT_DISTILL_ENABLED=false` to restore the structural-only path.
 
