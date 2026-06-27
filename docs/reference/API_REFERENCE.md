@@ -2914,11 +2914,17 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithTieredSelectionAIOptions(opts)` - Per-phase overrides for tiered capability selection
 - `WithErrorAnalysisAIOptions(opts)` - Per-phase overrides for error analysis calls
 - `WithResultDistillAIOptions(opts)` - Per-phase overrides for result distillation calls
+- `WithResultTrimming(enabled, maxResultBytes)` - Enable/configure structural result trimming (Layer 1)
+- `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer always keeps
+- `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
+- `WithResultDistillModel(model)` - Model or portable alias for distillation calls (use `fast`/`default`/`smart`, not a concrete name, for ChainClient failover)
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
 - `WithStepTimeout(d)` - Per-step execution timeout (default: 120s)
 - `WithTotalTimeout(d)` - Total HTTP client timeout for tool/agent calls (default: 600s)
 
 **Iterative planning** is configured via `DefaultConfig()` struct fields or environment variables (no `With*` option function). See [IterativePlanConfig](#iterativeplanconfig) for details.
+
+To build the Layer-2 distillation result processor **outside** `CreateOrchestrator` (e.g. in a custom runner), use `BuildDistillationEnabledResultProcessor(cfg ResultDistillConfig, ai core.AIClient, cache core.DigestCache, logger core.Logger) ResultProcessor` — a `StructuralTrimmer` wrapped by the `LLMDistiller` wrapped by a fail-open cache (nil `ai` → bare structural floor; nil `cache` → no caching).
 
 **`OrchestratorDependencies` fields:**
 
@@ -2931,7 +2937,11 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 | `Telemetry` | `core.Telemetry` | No | Metrics and tracing |
 | `PromptBuilder` | `PromptBuilder` | No | Custom prompt building (default: `DefaultPromptBuilder`) |
 | `EnableErrorAnalyzer` | `bool` | No | LLM-based error analysis (Layer 3) |
-| `ResultProcessor` | `ResultProcessor` | No | Custom result trimming |
+| `ResultProcessor` | `ResultProcessor` | No | Custom synthesis-prompt result compactor (default: `StructuralTrimmer`, or the LLM distiller when distillation is enabled) |
+| `SourceResultProcessor` | `ResultProcessor` | No | Deterministic trimmer for micro-/semantic-retry **source** data. A custom override is always honored; the built-in `StructuralTrimmer` default is installed only when result trimming is enabled |
+| `AgentInputProcessor` | `AgentInputProcessor` | No | Transform/redact/trim tool→tool input parameters before dispatch (default: identity; built-in byte guard when `MaxAgentInputBytes > 0`) |
+| `ContinuationDistiller` | `ResultProcessor` | No | Summarizer for non-JSON continuation escalations (default: built-in LLM distiller when distillation is enabled and an `AIClient` is present) |
+| `DistillCache` | `core.DigestCache` | No | Content-addressed cache for distillation results (nil = no caching) |
 | `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
 | `ConversationHistoryPreparer` | `ConversationHistoryPreparer` | No | Shared conversation-history preparer for the metadata and hook ingress paths. If nil, the factory auto-builds the default Tier 1 processor from config. |
 | `ActivityCoordinator` | `core.ActivityCoordinator` | No | Real-time agent coordination signals — typically the second return value of `orchestration.BuildMemoryHooks` |
@@ -3298,7 +3308,7 @@ type OrchestratorConfig struct {
 }
 ```
 
-- **`ContinuationResultMaxTotalChars`** — aggregate budget (chars) for all step digests; bounds the whole section. Digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB).
+- **`ContinuationResultMaxTotalChars`** — a **soft target** (chars) for the whole completed-steps section; drives newest-first eviction (older steps evict with a "showing N of M" note, ~268 B/digest measured → ~122 steps fit 32 KB). **Not a hard cap:** failed steps are always kept, the newest successful step is always kept even if it alone exceeds the budget, and the N-of-M note plus any orchestrator child-summaries are appended after the budget decision — so the rendered section can modestly exceed it.
 - **`ContinuationMaxEscalations`** — max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, **newest-first**. Sequential fast-model calls on the phase-gating path; `0` disables. Fires ~never on all-JSON workloads.
 - **`ContinuationDigestArraySample`** — per-array head-sample size (arrays render as the first N elements + a length sentinel).
 - **`ContinuationDigestScalarMax`** — max length of a string value kept inline before elision; raise it to surface longer salient values (status/error strings) at plan time.
@@ -3354,7 +3364,10 @@ type ResultTrimConfig struct {
     // in a synthesis prompt. When combined results exceed this limit,
     // BudgetAllocator distributes budget proportionally by result size,
     // then redistributes savings from results clamped by MaxResultBytes
-    // to other eligible results.
+    // to other eligible results. Allocation is distillation-aware: a result the
+    // processor will distill is sized at its post-distill footprint (~TargetSize,
+    // via EffectiveSizer), not its raw bytes, so a large distillable result
+    // doesn't crowd out the others.
     // Default: 32768 (32 KB, ~8K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES
     MaxTotalPromptBytes int `json:"max_total_prompt_bytes"`
 
@@ -3431,7 +3444,7 @@ Captures metadata about each result trimming operation. Populated by the `Result
 type ResultTrimMetadata struct {
     OriginalBytes    int      `json:"original_bytes"`              // Pre-trim size in bytes
     TrimmedBytes     int      `json:"trimmed_bytes"`               // Post-trim size in bytes
-    Method           string   `json:"method"`                      // "structural", "structural_array", "structural_text", "truncate", "distill"
+    Method           string   `json:"method"`                      // "structural", "structural_array", "structural_text", "truncate", "distill", "distill_mapreduce"
     FieldsKept       int      `json:"fields_kept,omitempty"`       // Number of fields/items retained
     FieldsDropped    int      `json:"fields_dropped,omitempty"`    // Number of fields/items dropped
     BackfilledCount  int      `json:"backfilled_count,omitempty"`  // Fields recovered via multi-field backfill
@@ -3439,6 +3452,8 @@ type ResultTrimMetadata struct {
     Keywords         []string `json:"keywords,omitempty"`          // Extracted query keywords from step instruction
     MatchedPaths     []string `json:"matched_paths,omitempty"`     // Field paths selected by keyword match
     BudgetAllocated  int      `json:"budget_allocated,omitempty"`  // Per-result budget from BudgetAllocator (multi-result only)
+    Degenerate       bool     `json:"degenerate,omitempty"`        // Structural trim kept a non-representative fraction (< 5%); triggers the "severely reduced … treat as UNKNOWN" disclosure
+    KeptRatio        float64  `json:"kept_ratio,omitempty"`        // trimmed_bytes / original_bytes
 }
 ```
 
@@ -3457,7 +3472,7 @@ for _, step := range response.Steps {
 
 ### ResultDistillConfig
 
-Configures **default-on** LLM-based result distillation — the primary compaction path for over-budget results. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2); results whose estimated token count exceeds `ModelContextTokens` are chunked and map-reduced. Active when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default); without an `AIClient` it falls back to the `StructuralTrimmer` floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. Every distillation is bounded by `CompactionDeadline` and cached for `CacheTTL`, both fail-open.
+Configures **default-on** LLM-based result distillation — the primary compaction path for over-budget results. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2); results whose estimated token count exceeds `ModelContextTokens` are chunked and map-reduced. Active when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default); without an `AIClient` it falls back to the `StructuralTrimmer` floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. Every distillation is bounded by `CompactionDeadline` (fail-open). Distillation results are **cached only when a `DigestCache` is supplied** via `deps.DistillCache` — there is no cache by default — and `CacheTTL` applies only then.
 
 ```go
 type ResultDistillConfig struct {
@@ -3488,8 +3503,12 @@ type ResultDistillConfig struct {
     Model string `json:"model,omitempty"`
 
     // CacheTTL is how long a distillation result stays cached (keyed by result
-    // content + instruction + query + budget). Fail-open: a nil cache disables
-    // it with no overhead. Go duration; env accepts positive values only.
+    // content + instruction + query + budget) — but only when a DigestCache is
+    // supplied via deps.DistillCache; there is no cache by default (a nil cache is
+    // a fail-open no-op). CacheTTL=0 does NOT reliably disable caching: a
+    // Redis-backed cache treats 0 as "no expiration" (cached indefinitely). To
+    // disable caching, don't supply a cache.
+    // Go duration; env accepts positive values only.
     // Default: 5m | Env: TRUVAG3_RESULT_DISTILL_CACHE_TTL
     CacheTTL time.Duration `json:"cache_ttl,omitempty"`
 
@@ -3519,9 +3538,10 @@ type ResultDistillConfig struct {
 config := orchestration.DefaultConfig()
 // Distillation is already enabled with sensible defaults — mutate individual
 // fields rather than reassigning the whole struct, which would zero the fields
-// you omit: CacheTTL=0 disables caching, CompactionDeadline=0 disables the
-// hot-path deadline, ModelContextTokens=0 disables map-reduce routing.
-// (MapConcurrency=0 is the one exception — it self-heals to the default.)
+// you omit: CompactionDeadline=0 disables the hot-path deadline, and
+// ModelContextTokens=0 disables map-reduce routing. (CacheTTL=0 does NOT cleanly
+// disable caching — see the CacheTTL note above; MapConcurrency=0 self-heals to
+// the default.)
 config.ResultDistill.DistillThreshold = 65536 // only distill results > 64 KB
 config.ResultDistill.TargetSize = 2048        // tighter ~2 KB summaries
 config.ResultDistill.Model = "fast"           // portable alias (ChainClient-safe)
@@ -3546,7 +3566,7 @@ export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8       # concurrent chunk distill
 1. **Stage 1 — Structural Pre-Filter**: The `StructuralTrimmer` reduces the large result to `PreFilterBudget` bytes, preserving JSON structure and key data points.
 2. **Stage 2 — LLM Distillation**: An LLM call summarizes the pre-filtered result to approximately `TargetSize` bytes, preserving the most relevant information for the user's query.
 3. **Very large results — map-reduce**: when the result is estimated above `ModelContextTokens`, it is chunked and the chunks are compacted concurrently (`MapConcurrency` at a time), then reduced — instead of being sent in a single call.
-4. **Bounded & cached**: each compaction is bounded by `CompactionDeadline` and cached for `CacheTTL`. Both are fail-open.
+4. **Bounded & (optionally) cached**: each compaction is bounded by `CompactionDeadline` (fail-open). Results are cached for `CacheTTL` **only when a `DigestCache` is supplied** via `deps.DistillCache` — there is no cache by default.
 5. **Fallback**: if the LLM call fails (or the deadline trips), the Stage 1 pre-filtered structural result is used directly.
 
 ### ProcessRequestStreaming
