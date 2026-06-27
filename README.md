@@ -599,6 +599,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [Orchestration Modes Guide](docs/orchestration/ORCHESTRATION_MODES_GUIDE.md) — dynamic, predefined, and custom modes
 - [LLM Planning Prompt Guide](docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md) — prompt customization
 - [Error Handling Guide](docs/orchestration/ERROR_HANDLING_GUIDE.md) — structured errors, retry layers, recovery
+- [Result Compaction Guide](docs/orchestration/RESULT_COMPACTION_GUIDE.md) — trimming, LLM distillation, map-reduce, continuation digests
 - [Async Orchestration Guide](docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md) — HTTP 202 + polling pattern
 - [Scheduled Tasks Guide](docs/orchestration/SCHEDULED_TASKS_GUIDE.md) — one-shot, delayed, and cron scheduling
 - [Human-in-the-Loop User Guide](docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) — plan and step approval checkpoints

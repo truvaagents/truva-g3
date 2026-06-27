@@ -535,7 +535,7 @@ For extremely large or domain-specific outputs, default-on result distillation (
 
 The trimming contract is pluggable through the `ResultProcessor` interface, so teams can replace the default `StructuralTrimmer` with a domain-specific implementation.
 
-See [API Reference](../reference/API_REFERENCE.md#resulttrimconfig), [API Reference](../reference/API_REFERENCE.md#resultdistillconfig), [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management), and [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#result-trimming-large-data).
+See the **[Result Compaction Guide](../orchestration/RESULT_COMPACTION_GUIDE.md)** for the full walkthrough (trimming, distillation, map-reduce, and continuation digests), plus [`ResultTrimConfig`](../reference/API_REFERENCE.md#resulttrimconfig) / [`ResultDistillConfig`](../reference/API_REFERENCE.md#resultdistillconfig) in the API Reference, the [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#result-trimming-large-result-data-management), and the [Limits Cheatsheet](../reference/LIMITS_CHEATSHEET.md#result-trimming-large-data).
 
 #### Schema-Guided Mapping For Large Results
 
