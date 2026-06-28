@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,14 +15,21 @@ import (
 // Pure unit tests — uses mock LLMDebugStore (no Redis)
 // =============================================================================
 
-// mockLLMDebugStore implements LLMDebugStore for testing
+// mockLLMDebugStore implements LLMDebugStore for testing.
+// RecordInteraction is called concurrently by the distiller's async recording goroutines
+// (one per LLM call — and map-reduce fans those out across chunks), so the appends are
+// mutex-guarded. Tests that read the slices do so after distiller.Shutdown() (which waits
+// on the recording WaitGroup), establishing a happens-before edge for race-free reads.
 type mockLLMDebugStore struct {
+	mu           sync.Mutex
 	interactions []LLMInteraction
 	requestIDs   []string
 	err          error // injected error for failure testing
 }
 
 func (m *mockLLMDebugStore) RecordInteraction(_ context.Context, requestID string, interaction LLMInteraction) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return m.err
 	}
