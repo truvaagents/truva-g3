@@ -149,6 +149,59 @@ func degenerateNote(originalBytes, trimmedBytes int) string {
 		trimmedBytes, originalBytes, ratio*100)
 }
 
+// cutToBytes returns s shortened to at most n bytes without splitting a multi-byte
+// UTF-8 rune (and without adding any annotation of its own).
+func cutToBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && s[cut] >= 0x80 && s[cut] < 0xC0 {
+		cut--
+	}
+	return s[:cut]
+}
+
+// floorWithDisclosure appends the honest degenerate-trim disclosure to a deterministic
+// floor body while keeping the whole string within maxBytes. The disclosure is
+// load-bearing — it tells the synthesizer to treat omitted content as UNKNOWN rather
+// than infer absence — so when the body already fills the budget the body is shortened
+// to make room for the note, instead of the note being dropped (which would let a
+// degenerate floor reach synthesis behind a coverage-implying silence). A non-degenerate
+// body is returned unchanged.
+//
+// reshrink (when non-nil) re-derives a smaller body that stays STRUCTURALLY VALID for the
+// requested byte room — e.g. re-trimming a JSON array to fewer whole items — so re-parsing
+// consumers (the agent-input guard) are never handed corrupted JSON. When nil, a UTF-8-safe
+// byte cut is used, which suffices for plain-text / already-truncated floors consumed as text.
+func floorWithDisclosure(body string, originalBytes, maxBytes int, reshrink func(room int) string) string {
+	note := degenerateNote(originalBytes, len(body))
+	if note == "" {
+		return body
+	}
+	if len(body)+len(note) <= maxBytes {
+		return body + note
+	}
+	// Make room for the note, then recompute it against the shortened body so the reported
+	// byte count/ratio stay accurate; the recomputed note is never longer (fewer kept bytes →
+	// fewer digits, smaller ratio), so the result stays within maxBytes. If the budget is too
+	// small for even the note (pathological), the disclosure still wins — losing the UNKNOWN
+	// signal is worse than a tiny overshoot.
+	room := maxBytes - len(note)
+	if room < 0 {
+		room = 0
+	}
+	if reshrink != nil {
+		body = reshrink(room)
+	} else {
+		body = cutToBytes(body, room)
+	}
+	return body + degenerateNote(originalBytes, len(body))
+}
+
 // trimMetadataKey is the context key for passing trim metadata out of ProcessForPrompt.
 type trimMetadataKey struct{}
 

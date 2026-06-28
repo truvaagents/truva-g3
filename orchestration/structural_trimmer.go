@@ -109,7 +109,8 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 			KeptRatio:     keptRatio,
 		})
 		// Honest disclosure when the floor kept a non-representative fraction (no-op otherwise).
-		return result + degenerateNote(len(response), len(result))
+		// Plain text: a byte cut to make room for the note is fine (not re-parsed as JSON).
+		return floorWithDisclosure(result, len(response), maxBytes, nil)
 	}
 
 	// Phase 5 Fix 2: Unwrap JSON-valued strings before inventory building so
@@ -190,7 +191,13 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 				"trimmed_bytes":  len(result),
 			})
 		}
-		return result + degenerateNote(len(response), len(result))
+		return floorWithDisclosure(result, len(response), maxBytes, func(room int) string {
+			// Re-trim to fewer WHOLE items so the body stays valid JSON for re-parsing
+			// consumers (the agent-input guard), then drop trimArray's own "[trimmed: …]"
+			// annotation so only the disclosure remains.
+			b, _, _ := t.trimArray(arr, room)
+			return stripResultAnnotation(b)
+		})
 	}
 
 	fallback := truncateResultBytes(response, maxBytes)
@@ -202,7 +209,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 		Degenerate:    degenerate,
 		KeptRatio:     keptRatio,
 	})
-	return fallback + degenerateNote(len(response), len(fallback))
+	return floorWithDisclosure(fallback, len(response), maxBytes, nil)
 }
 
 func (t *StructuralTrimmer) buildFieldInventory(obj map[string]interface{}, prefix string, depth int) []fieldEntry {
