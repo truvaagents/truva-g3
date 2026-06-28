@@ -3796,3 +3796,34 @@ func TestProcessForPrompt_PlainTextDegenerateDisclosure(t *testing.T) {
 		t.Errorf("expected honest disclosure on a degenerate plain-text floor trim, got tail: %s", tail)
 	}
 }
+
+// TestProcessForPrompt_DegenerateFloorWithinBudget guards that the load-bearing
+// "severely reduced … UNKNOWN" disclosure is preserved on EVERY deterministic floor path
+// without pushing the returned string past maxBytes. Regression: the note used to be
+// appended unconditionally after a body already trimmed to maxBytes, overshooting the
+// budget (the sibling "[trimmed: …]" annotations were guarded, the disclosure was not).
+// floorWithDisclosure now reserves room for the note instead of dropping it.
+func TestProcessForPrompt_DegenerateFloorWithinBudget(t *testing.T) {
+	trimmer := NewStructuralTrimmer(nil, nil)
+	const maxBytes = 300
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"plain_text", strings.Repeat("alpha beta gamma delta epsilon. ", 4000)},              // ~128 KB, non-JSON
+		{"json_array", "[" + strings.Repeat(`"item-value-padding-xxxxxxxx",`, 4000) + `"z"]`}, // large JSON array
+		{"json_scalar", `"` + strings.Repeat("z", 200000) + `"`},                              // huge JSON string scalar → truncate fallback
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := trimmer.ProcessForPrompt(context.Background(), tc.input, maxBytes,
+				ResultProcessorContext{StepID: "s", AgentName: "a", Instruction: "find errors"})
+			if len(out) > maxBytes {
+				t.Fatalf("floor output %d bytes exceeds maxBytes %d", len(out), maxBytes)
+			}
+			if !strings.Contains(out, "severely reduced") || !strings.Contains(out, "UNKNOWN") {
+				t.Fatalf("expected preserved degenerate disclosure within budget, got: %q", out)
+			}
+		})
+	}
+}
