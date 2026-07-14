@@ -2,8 +2,6 @@ module github.com/truvaagents/truva-g3/telemetry
 
 go 1.26.4
 
-replace github.com/truvaagents/truva-g3/core => ../core
-
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/go-redis/redis/v8 v8.11.5
