@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -40,12 +41,17 @@ func (d *LLMDistiller) mapReduceCompact(
 	if chunkBytes <= 0 {
 		chunkBytes = defaultPreFilterBudget
 	}
-	chunks := chunkWholeUnits(result, chunkBytes)
+	chunks, wrapperDropped, wrapperCov := chunkWholeUnits(result, chunkBytes)
 	total := len(chunks)
 	if total <= 1 {
 		// Nothing to fan out — treat as a single call's input via the floor.
 		return d.preFilter.ProcessForPrompt(ctx, result, targetSize, stepCtx)
 	}
+
+	// Phase 16 — total bytes SENT across LLM calls (map chunks + the reduce call). Incremented with an
+	// atomic immediately BEFORE each dispatch: the collector breaks at the deadline, so channel-carried
+	// counts would miss in-flight/late-completing calls, and a plain shared int would race.
+	var llmInputBytes atomic.Int64
 
 	// One shared deadline across all chunks (the global wall-clock bound), so the whole
 	// map-reduce — not each chunk — is bounded.
@@ -93,6 +99,7 @@ func (d *LLMDistiller) mapReduceCompact(
 			if mrCtx.Err() != nil {
 				return
 			}
+			llmInputBytes.Add(int64(len(chunk))) // bytes sent, counted pre-dispatch (Phase 16)
 			out, err := d.extractChunk(mrCtx, chunk, perChunkTarget, stepCtx, fmt.Sprintf("map-reduce chunk %d/%d", i+1, total))
 			resCh <- chunkOut{i: i, out: out, ok: err == nil && out != ""}
 		}(i, chunk)
@@ -156,33 +163,75 @@ collect:
 	// bounded only by its own per-chunk target/MaxTokens). Distill them with one more
 	// fast-model call — the canonical map-reduce "reduce" — falling open to a VERBATIM
 	// head-truncation. Never the structural sentence floor: on joined log/record extracts
-	// it keeps zero sentences and silently discards everything (see notes §5; the live
-	// orch-1781968441143087789 incident where 1.16 MB → "[trimmed: 0/226 sentences]").
+	// it keeps zero sentences and silently discards everything (the live
+	// orch-1781968441143087789 incident: 1.16 MB → "[trimmed: 0/226 sentences]").
+	combineTruncated := false
 	if len(combined) > targetSize {
 		if estimateTokens(combined) <= d.config.ModelContextTokens {
+			llmInputBytes.Add(int64(len(combined))) // reduce-call input is LLM volume too (Phase 16)
 			if reduced, err := d.extractChunk(mrCtx, combined, targetSize, stepCtx, "map-reduce reduce"); err == nil && reduced != "" {
 				combined = reduced
 			} else {
+				// Transient reduce failure (provider 429/timeout/empty): the truncation is a
+				// degraded fallback — recompute next time rather than serve it from cache for
+				// the TTL. The deterministic over-context truncation below stays cacheable.
 				combined = truncateResultBytes(combined, targetSize)
+				combineTruncated = true
+				markResultNonCacheable(ctx)
 			}
 		} else {
 			combined = truncateResultBytes(combined, targetSize)
+			combineTruncated = true
 		}
 	}
-	if completed < total {
-		// Honest partial disclosure — uses completed LLM output, never a deterministic cut.
-		combined += fmt.Sprintf(
-			"\n%s %d of %d segments analyzed within the time budget; treat the rest as UNKNOWN, not absent]",
-			partialDisclosureMarker, completed, total)
+
+	// Phase 16 — compose ALL applicable disclosures and append ONCE: a wrapper drop lost SOURCE
+	// fields, combine-truncation dropped extracted FINDINGS, partial-on-timeout dropped whole
+	// SEGMENTS — distinct losses, each carrying UNKNOWN. The targetSize re-bound applies ONLY
+	// when the body was already deterministically truncated; LLM-analyzed output always gets a
+	// plain append (bounded overshoot) — never cut analyzed output to fit a note.
+	partial := completed < total
+	// Coverage basis: segment-count by default (byte-weighting is confounded once the hardened
+	// chunker replicates wrappers — see Phase 17). On a wrapper drop, dominantArray served only
+	// the record array, so the segment ratio would read 1.0 while wrapper keys, sibling arrays,
+	// and scalar metadata never reached any LLM — the chunker reports the compact-basis served
+	// ratio for exactly that loss. The DISCLOSURE states the pure byte figure (its wording says
+	// "by bytes"; segment losses get their own note below), while the metadata records the
+	// byte×segment product as the total-source-seen estimate — so a consumer reading
+	// SourceCoverageRatio alone is never told "full" about a partial source.
+	coverageRatio := float64(completed) / float64(total)
+	var notes string
+	if wrapperDropped {
+		notes += partialSourceDisclosure(wrapperCov)
+		coverageRatio = wrapperCov * coverageRatio
+	}
+	if combineTruncated {
+		notes += combineTruncationDisclosure()
+	}
+	if partial {
+		notes += partialSegmentsDisclosure(completed, total)
 		// Incomplete — recompute next time rather than serve a partial result from cache.
 		markResultNonCacheable(ctx)
 	}
+	if notes != "" {
+		if combineTruncated {
+			// The body was already deterministically truncated (a loss the combine note itself
+			// discloses), so re-bounding body+notes within targetSize is safe.
+			combined = appendDisclosure(combined, notes, targetSize)
+		} else {
+			// LLM-analyzed content: never silently cut it to fit a note — plain append, bounded
+			// overshoot by the notes' length (same policy as the single-call disclosure).
+			combined += notes
+		}
+	}
 
 	telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_complete",
+		attribute.String("request_id", requestIDFromBaggage(ctx)),
 		attribute.String("step_id", stepCtx.StepID),
 		attribute.Int("chunks_total", total),
 		attribute.Int("chunks_completed", completed),
 		attribute.Int("combined_bytes", len(combined)),
+		attribute.Int("llm_input_bytes", int(llmInputBytes.Load())),
 	)
 	if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 		registry.Counter("orchestration.result_distill.mapreduce", "agent_name", stepCtx.AgentName)
@@ -192,6 +241,15 @@ collect:
 		OriginalBytes: len(result),
 		TrimmedBytes:  len(combined),
 		Method:        "distill_mapreduce",
+		// coverageRatio: segment-count, or the byte-scaled figure on a wrapper drop — the same
+		// number the appended disclosure states (composed above).
+		SourceCoverageRatio: coverageRatio,
+		LLMInputBytes:       int(llmInputBytes.Load()),
+		SegmentsAnalyzed:    completed,
+		SegmentsTotal:       total,
+		PartialCoverage:     partial || wrapperDropped,
+		CombineTruncated:    combineTruncated,
+		ContentLost:         partial || combineTruncated || wrapperDropped,
 	})
 	return combined
 }
@@ -204,7 +262,9 @@ collect:
 func (d *LLMDistiller) extractChunk(
 	ctx context.Context, chunk string, targetSize int, stepCtx ResultProcessorContext, callDesc string,
 ) (string, error) {
-	prompt := d.buildDistillationPrompt(chunk, targetSize, stepCtx)
+	// coverage=1.0: each chunk is shown to the LLM in full, so no partial-source note (map-reduce
+	// segment coverage is tracked separately via SegmentsAnalyzed/SegmentsTotal metadata). (Phase 16)
+	prompt := d.buildDistillationPrompt(chunk, targetSize, stepCtx, 1.0)
 	maxTokens := targetSize/3 + 100
 	if maxTokens < 500 {
 		maxTokens = 500
@@ -263,9 +323,17 @@ func (d *LLMDistiller) extractChunk(
 // record. It prefers structural boundaries — top-level JSON array elements, then the
 // elements of the dominant array inside a JSON object, then newline-delimited records —
 // and only as a last resort does a hard byte split (bounded, may split a record).
-func chunkWholeUnits(result string, chunkBytes int) []string {
+// The second return reports whether chunking DISCARDED source content: the dominant-array
+// path serves only the array, so wrapper keys, sibling arrays, and scalar metadata never
+// reach any LLM — a real loss the caller must disclose until the Phase 17 hardened chunker
+// replicates wrappers per chunk. Byte/line splits keep all content across chunks (false).
+// The third return is the served-content coverage ratio for that loss (1 when nothing was
+// discarded), measured COMPACT-vs-COMPACT: dividing re-marshaled chunk bytes by the raw
+// (possibly indented/escape-heavy) source would understate coverage by the formatting
+// overhead, not by lost content — a near-complete analysis must never read as "~9% seen".
+func chunkWholeUnits(result string, chunkBytes int) ([]string, bool, float64) {
 	if chunkBytes <= 0 || len(result) <= chunkBytes {
-		return []string{result}
+		return []string{result}, false, 1
 	}
 
 	var v interface{}
@@ -275,15 +343,25 @@ func chunkWholeUnits(result string, chunkBytes int) []string {
 			return chunkJSONElements(t, chunkBytes)
 		case map[string]interface{}:
 			if arr := dominantArray(t); arr != nil {
-				return chunkJSONElements(arr, chunkBytes)
+				chunks, _, subCov := chunkJSONElements(arr, chunkBytes)
+				cov := 0.99
+				arrBytes, arrErr := json.Marshal(arr)
+				objBytes, objErr := json.Marshal(t)
+				if arrErr == nil && objErr == nil {
+					cov = lossyByteCoverage(len(arrBytes), len(objBytes))
+				}
+				if subCov < cov {
+					cov = subCov // a nested drop compounds; min is the conservative bound
+				}
+				return chunks, true, cov
 			}
 		}
 	}
 
 	if strings.Contains(result, "\n") {
-		return chunkByLines(result, chunkBytes)
+		return chunkByLines(result, chunkBytes), false, 1
 	}
-	return chunkByBytes(result, chunkBytes)
+	return chunkByBytes(result, chunkBytes), false, 1
 }
 
 // dominantArray returns the array value that holds the bulk of an object's bytes, or nil
@@ -315,10 +393,12 @@ func dominantArray(obj map[string]interface{}) []interface{} {
 // split) so no chunk exceeds chunkBytes — which keeps every chunk well under the model
 // context and ensures a single huge record still reaches the LLM path. Each element is
 // marshaled exactly once: the bytes from the size check are reused to assemble the chunk.
-func chunkJSONElements(arr []interface{}, chunkBytes int) []string {
+func chunkJSONElements(arr []interface{}, chunkBytes int) ([]string, bool, float64) {
 	var chunks []string
-	var group [][]byte // pre-marshaled element bytes for the current chunk
-	groupSize := 2     // "[]"
+	wrapperDropped := false // set when an oversized element's recursive split discards ITS wrapper
+	wrapperCov := 1.0       // min served-coverage across recursive splits (conservative)
+	var group [][]byte      // pre-marshaled element bytes for the current chunk
+	groupSize := 2          // "[]"
 	flush := func() {
 		if len(group) == 0 {
 			return
@@ -346,7 +426,12 @@ func chunkJSONElements(arr []interface{}, chunkBytes int) []string {
 		// left as one over-context chunk, nor collapsed to total==1 in the caller).
 		if len(b) > chunkBytes {
 			flush()
-			chunks = append(chunks, chunkWholeUnits(string(b), chunkBytes)...)
+			sub, subDropped, subCov := chunkWholeUnits(string(b), chunkBytes)
+			chunks = append(chunks, sub...)
+			wrapperDropped = wrapperDropped || subDropped
+			if subCov < wrapperCov {
+				wrapperCov = subCov
+			}
 			continue
 		}
 		sz := len(b) + 1 // element bytes + comma separator
@@ -358,9 +443,9 @@ func chunkJSONElements(arr []interface{}, chunkBytes int) []string {
 	}
 	flush()
 	if len(chunks) == 0 {
-		return []string{"[]"}
+		return []string{"[]"}, wrapperDropped, wrapperCov
 	}
-	return chunks
+	return chunks, wrapperDropped, wrapperCov
 }
 
 // chunkByLines groups newline-delimited records into chunks of at most chunkBytes. A

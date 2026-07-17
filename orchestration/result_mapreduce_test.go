@@ -238,7 +238,7 @@ func TestLLMDistiller_MapReduce_PartialOnTimeout(t *testing.T) {
 
 func TestChunkWholeUnits(t *testing.T) {
 	t.Run("small input returns single chunk", func(t *testing.T) {
-		got := chunkWholeUnits("hello", 100)
+		got, _, _ := chunkWholeUnits("hello", 100)
 		if len(got) != 1 || got[0] != "hello" {
 			t.Errorf("expected single chunk, got %v", got)
 		}
@@ -246,7 +246,7 @@ func TestChunkWholeUnits(t *testing.T) {
 
 	t.Run("json array splits at element boundaries into valid arrays", func(t *testing.T) {
 		raw := mapReduceTestArray(20)
-		chunks := chunkWholeUnits(raw, 100)
+		chunks, _, _ := chunkWholeUnits(raw, 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected multiple chunks, got %d", len(chunks))
 		}
@@ -264,7 +264,7 @@ func TestChunkWholeUnits(t *testing.T) {
 			recs[i] = map[string]interface{}{"line": fmt.Sprintf("entry-%02d-with-some-content", i)}
 		}
 		raw, _ := json.Marshal(map[string]interface{}{"streams": recs})
-		chunks := chunkWholeUnits(string(raw), 100)
+		chunks, _, _ := chunkWholeUnits(string(raw), 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected the dominant array to be chunked, got %d chunks", len(chunks))
 		}
@@ -276,7 +276,7 @@ func TestChunkWholeUnits(t *testing.T) {
 			lines = append(lines, fmt.Sprintf("log line number %d with content", i))
 		}
 		raw := strings.Join(lines, "\n")
-		chunks := chunkWholeUnits(raw, 100)
+		chunks, _, _ := chunkWholeUnits(raw, 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected multiple line chunks, got %d", len(chunks))
 		}
@@ -355,7 +355,7 @@ func TestLLMDistiller_MapReduce_HardDeadline(t *testing.T) {
 func TestChunkWholeUnits_SplitsOversizedElement(t *testing.T) {
 	huge := map[string]interface{}{"blob": strings.Repeat("x", 500)}
 	raw, _ := json.Marshal([]interface{}{huge}) // one element ~510B > chunkBytes
-	chunks := chunkWholeUnits(string(raw), 100)
+	chunks, _, _ := chunkWholeUnits(string(raw), 100)
 	if len(chunks) < 2 {
 		t.Fatalf("expected an oversized single element to split into multiple chunks, got %d", len(chunks))
 	}
@@ -392,7 +392,7 @@ func TestLLMDistiller_MapReduce_SingleHugeRecordReachesLLM(t *testing.T) {
 func TestChunkByLines_SplitsOversizedLine(t *testing.T) {
 	// One giant line (no JSON), plus a trailing newline.
 	raw := strings.Repeat("L", 500) + "\n"
-	chunks := chunkWholeUnits(raw, 100) // routes to chunkByLines (non-JSON, has '\n')
+	chunks, _, _ := chunkWholeUnits(raw, 100) // routes to chunkByLines (non-JSON, has '\n')
 	if len(chunks) < 2 {
 		t.Fatalf("expected the oversized line to be split, got %d chunk(s)", len(chunks))
 	}
@@ -443,8 +443,8 @@ func TestChunkWholeUnits_128KBReducesChunkCount(t *testing.T) {
 		t.Fatalf("test payload too small to exercise chunking: %d bytes", len(payload))
 	}
 
-	chunks32 := chunkWholeUnits(payload, 32768)
-	chunks128 := chunkWholeUnits(payload, defaultPreFilterBudget)
+	chunks32, _, _ := chunkWholeUnits(payload, 32768)
+	chunks128, _, _ := chunkWholeUnits(payload, defaultPreFilterBudget)
 	if len(chunks32) == 0 || len(chunks128) == 0 {
 		t.Fatalf("unexpected empty chunking: 32K=%d 128K=%d", len(chunks32), len(chunks128))
 	}
@@ -487,7 +487,7 @@ func TestDistillPrompt_128KBChunkFitsFastTierContext(t *testing.T) {
 	}
 
 	// (a) Template overhead alone (empty data) — the "instruction window" — must be small.
-	overheadTokens := estimateTokens(d.buildDistillationPrompt("", cfg.TargetSize, stepCtx))
+	overheadTokens := estimateTokens(d.buildDistillationPrompt("", cfg.TargetSize, stepCtx, 1.0))
 	if overheadTokens > 600 {
 		t.Errorf("prompt template overhead = %d tokens, want < 600 (it should be ~2%% of the chunk)", overheadTokens)
 	}
@@ -677,7 +677,8 @@ func TestMapReduce_ReduceCallErrorTruncates(t *testing.T) {
 	// result so it routes to map-reduce, above the combined extracts so the reduce is
 	// attempted (not the too-big truncate). Large payload + small per-chunk output gives that.
 	payload := mapReduceTestArray(80) // ~1.8 KB (~527 tok) → routes to map-reduce at ctx=300
-	total := len(chunkWholeUnits(payload, 100))
+	allChunks, _, _ := chunkWholeUnits(payload, 100)
+	total := len(allChunks)
 	mockAI := &failAfterAI{succeedUntil: total, out: strings.Repeat("E", 20)}
 	config := ResultDistillConfig{
 		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100,
@@ -708,7 +709,7 @@ func TestChunkWholeUnits_NestedDominantArray(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]interface{}{"wrapper": map[string]interface{}{"data": inner}})
 
-	chunks := chunkWholeUnits(string(raw), 100)
+	chunks, _, _ := chunkWholeUnits(string(raw), 100)
 	if len(chunks) < 2 {
 		t.Fatalf("expected the nested dominant array to be chunked, got %d", len(chunks))
 	}

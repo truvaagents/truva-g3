@@ -11,6 +11,17 @@ import (
 	"testing"
 )
 
+// stripAnno returns the result body with any trailing Phase 16 disclosure/annotation removed.
+// Phase 16 always appends the annotation (never dropped, to preserve the UNKNOWN safeguard), so the
+// BODY respects maxBytes while the full result may overshoot by the annotation length; tests assert
+// the body against the budget.
+func stripAnno(s string) string {
+	if idx := strings.Index(s, "\n["); idx >= 0 {
+		return s[:idx]
+	}
+	return s
+}
+
 // --- TestStructuralTrimmer_SmallResult ---
 
 func TestStructuralTrimmer_SmallResult(t *testing.T) {
@@ -43,17 +54,17 @@ func TestStructuralTrimmer_LargeJSON(t *testing.T) {
 		StepID: "step-1", AgentName: "big-agent", Instruction: "analyze data",
 	})
 
-	if len(result) > 2000 {
-		t.Errorf("Expected result <= 2000 bytes, got %d", len(result))
+	// Phase 16: the disclosure is always appended (never dropped), so the full result may exceed
+	// maxBytes by the annotation length. The JSON BODY (before the annotation) still respects the budget.
+	jsonPart := result
+	if idx := strings.Index(result, "\n["); idx >= 0 {
+		jsonPart = result[:idx]
+	}
+	if len(jsonPart) > 2000 {
+		t.Errorf("Expected JSON body <= 2000 bytes, got %d", len(jsonPart))
 	}
 	if len(result) == 0 {
 		t.Error("Expected non-empty result")
-	}
-
-	// Should be valid JSON (possibly with annotation suffix)
-	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
-		jsonPart = result[:idx]
 	}
 	var parsed interface{}
 	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
@@ -110,8 +121,16 @@ func TestStructuralTrimmer_NoKeywordMatches(t *testing.T) {
 	if len(result) == 0 {
 		t.Error("Expected non-empty result from selection")
 	}
-	if len(result) > 50 {
-		t.Errorf("Expected result <= 50 bytes, got %d", len(result))
+	// Phase 16: JSON body respects the budget; the UNKNOWN disclosure is appended on top.
+	body := result
+	if idx := strings.Index(result, "\n["); idx >= 0 {
+		body = result[:idx]
+	}
+	if len(body) > 50 {
+		t.Errorf("Expected JSON body <= 50 bytes, got %d", len(body))
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected Phase 16 UNKNOWN disclosure, got: %s", result)
 	}
 }
 
@@ -127,9 +146,18 @@ func TestStructuralTrimmer_NoFieldFitsBudget(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "do it",
 	})
 
-	// Budget is 10 bytes. No field fits (smallest is >100 bytes). Output is "{}".
-	if result != "{}" {
-		t.Errorf("Expected empty JSON object when no fields fit, got: %q", result)
+	// Budget is 10 bytes. No field fits (smallest is >100 bytes). Body is "{}"; Phase 16 appends the
+	// honest disclosure even when nothing fits (pathological tiny budget — the note itself exceeds the
+	// budget, so the disclosure wins over silence).
+	body := result
+	if idx := strings.Index(result, "\n["); idx >= 0 {
+		body = result[:idx]
+	}
+	if body != "{}" {
+		t.Errorf("Expected empty JSON object body when no fields fit, got: %q", body)
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected Phase 16 UNKNOWN disclosure, got: %q", result)
 	}
 }
 
@@ -166,12 +194,18 @@ func TestStructuralTrimmer_AnnotationExceedsBudget(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "check",
 	})
 
-	// Should produce valid JSON output without annotation
-	if strings.Contains(result, "[trimmed:") {
-		t.Errorf("Expected no annotation when budget is tight, got: %s", result)
+	// Phase 16 reverses the old "drop the annotation when tight" behavior: the disclosure is
+	// GUARANTEED (bounded overshoot), so a partial result can never reach synthesis behind silence.
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected the Phase 16 disclosure appended even when budget is tight, got: %s", result)
 	}
-	if len(result) > 20 {
-		t.Errorf("Expected result <= 20 bytes, got %d", len(result))
+	body := result
+	if idx := strings.Index(result, "\n["); idx >= 0 {
+		body = result[:idx]
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		t.Errorf("Expected valid JSON body, got error: %v (body: %q)", err, body)
 	}
 }
 
@@ -188,8 +222,9 @@ func TestStructuralTrimmer_PlainText(t *testing.T) {
 		StepID: "step-1", AgentName: "text-agent", Instruction: "Get the stock price",
 	})
 
-	if len(result) > 120 {
-		t.Errorf("Expected result <= 120 bytes, got %d", len(result))
+	// Phase 16 review: the body respects the budget; the UNKNOWN note rides on top.
+	if len(stripAnno(result)) > 100 {
+		t.Errorf("Expected body <= 100 bytes, got %d", len(stripAnno(result)))
 	}
 	// Should prefer sentences mentioning "stock" or "price"
 	lower := strings.ToLower(result)
@@ -214,8 +249,8 @@ func TestStructuralTrimmer_PlainText_NoKeywords(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "do it",
 	})
 
-	if len(result) > 40 {
-		t.Errorf("Expected result <= 40 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 40 {
+		t.Errorf("Expected JSON body <= 40 bytes, got %d", len(stripAnno(result)))
 	}
 	if len(result) == 0 {
 		t.Error("Expected non-empty result")
@@ -234,8 +269,14 @@ func TestStructuralTrimmer_PlainText_NoSentences(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "analyze content",
 	})
 
-	if len(result) > 20 {
-		t.Errorf("Expected result <= 20 bytes, got %d", len(result))
+	// Even this fallback cut carries the UNKNOWN disclosure; on a pathological 20 B budget
+	// the note is larger than the budget itself and wins over silence. The body still
+	// respects the budget.
+	if len(stripAnno(result)) > 20 {
+		t.Errorf("Expected body <= 20 bytes, got %d", len(stripAnno(result)))
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected the UNKNOWN disclosure, got: %q", result)
 	}
 }
 
@@ -248,8 +289,8 @@ func TestStructuralTrimmer_PlainText_EmptySegmentAndMultiSentence(t *testing.T) 
 
 	trimmer := NewStructuralTrimmer(nil, nil)
 
-	// maxBytes=110 < len(input)=112 → triggers trimming.
-	// trimPlainText budget for sentences = 110-50 = 60, fits 2 sentences.
+	// maxBytes=110 < len(input)=112 → triggers trimming. Sentences are selected against the
+	// full budget; the UNKNOWN note is appended as a bounded overshoot (Phase 16 review).
 	result := trimmer.ProcessForPrompt(context.Background(), input, 110, ResultProcessorContext{
 		StepID: "step-1", AgentName: "agent", Instruction: "Get the stock and bond analysis",
 	})
@@ -272,13 +313,18 @@ func TestStructuralTrimmer_Array(t *testing.T) {
 
 	trimmer := NewStructuralTrimmer(nil, nil)
 
-	// Budget 95: fits 3/4 items (output=74 bytes) + annotation (21 bytes) = 95 ≤ 95
+	// Budget 95: fits 3/4 items (~74 byte body); Phase 16 appends the disclosure on top.
 	result := trimmer.ProcessForPrompt(context.Background(), input, 95, ResultProcessorContext{
 		StepID: "step-1", AgentName: "agent", Instruction: "list items",
 	})
 
-	if len(result) > 95 {
-		t.Errorf("Expected result <= 95 bytes, got %d", len(result))
+	// Phase 16: array body respects the budget; the disclosure is appended (bounded overshoot).
+	body := result
+	if idx := strings.Index(result, "\n["); idx >= 0 {
+		body = result[:idx]
+	}
+	if len(body) > 95 {
+		t.Errorf("Expected array body <= 95 bytes, got %d", len(body))
 	}
 
 	// Should contain at least the first item
@@ -286,9 +332,9 @@ func TestStructuralTrimmer_Array(t *testing.T) {
 		t.Errorf("Expected first array item preserved, got: %s", result)
 	}
 
-	// Should have trimmed annotation
-	if !strings.Contains(result, "[trimmed:") {
-		t.Errorf("Expected trimmed annotation for array, got: %s", result)
+	// Should have the trimmed annotation with the UNKNOWN safeguard
+	if !strings.Contains(result, "[trimmed:") || !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected trimmed annotation with UNKNOWN for array, got: %s", result)
 	}
 }
 
@@ -304,13 +350,16 @@ func TestStructuralTrimmer_ArrayAnnotationExceedsBudget(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "list",
 	})
 
-	if len(result) > 55 {
-		t.Errorf("Expected result <= 55 bytes, got %d", len(result))
-	}
-	// Should still be valid JSON array
+	// Phase 16: array body respects the budget; the disclosure is appended (bounded overshoot).
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
+	}
+	if len(jsonPart) > 55 {
+		t.Errorf("Expected array body <= 55 bytes, got %d", len(jsonPart))
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected Phase 16 UNKNOWN disclosure, got: %s", result)
 	}
 	var parsed interface{}
 	if err := json.Unmarshal([]byte(jsonPart), &parsed); err != nil {
@@ -329,8 +378,10 @@ func TestStructuralTrimmer_InvalidJSON(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "analyze text",
 	})
 
-	if len(result) > 40 {
-		t.Errorf("Expected result <= 40 bytes for invalid JSON, got %d", len(result))
+	// Phase 16: for plain text the honest note can exceed a tiny budget (pathological case — the
+	// disclosure wins). The text body is cut to fit; the UNKNOWN safeguard is guaranteed present.
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected Phase 16 UNKNOWN disclosure for trimmed text, got: %s", result)
 	}
 }
 
@@ -346,8 +397,13 @@ func TestStructuralTrimmer_ScalarJSON(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "analyze",
 	})
 
-	if len(result) > 40 {
-		t.Errorf("Expected result <= 40 bytes for scalar JSON, got %d", len(result))
+	// The scalar cut carries the UNKNOWN disclosure (on this pathological 40 B budget the
+	// note exceeds the budget and wins over silence); the body still respects the budget.
+	if len(stripAnno(result)) > 40 {
+		t.Errorf("Expected body <= 40 bytes for scalar JSON, got %d", len(stripAnno(result)))
+	}
+	if !strings.Contains(result, "UNKNOWN") {
+		t.Errorf("Expected the UNKNOWN disclosure, got: %q", result)
 	}
 	if len(result) == 0 {
 		t.Error("Expected non-empty result")
@@ -567,13 +623,13 @@ func TestSelectFields_NestedFieldSelection(t *testing.T) {
 		Instruction: "Retrieve comprehensive financial metrics for Nvidia (NVDA) to enable a detailed analysis.",
 	})
 
-	if len(result) > 2048 {
-		t.Errorf("Expected result <= 2048 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 2048 {
+		t.Errorf("Expected JSON body <= 2048 bytes, got %d", len(stripAnno(result)))
 	}
 
 	// Strip annotation for JSON validation
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -621,12 +677,12 @@ func TestSelectFields_ProductionReplay(t *testing.T) {
 		Instruction: "Retrieve comprehensive financial metrics for Nvidia (NVDA) to enable a detailed analysis.",
 	})
 
-	if len(result) > 8192 {
-		t.Errorf("Expected result <= 8192 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 8192 {
+		t.Errorf("Expected JSON body <= 8192 bytes, got %d", len(stripAnno(result)))
 	}
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -705,7 +761,7 @@ func TestSelectFields_HierarchyReconstruction(t *testing.T) {
 	})
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -724,8 +780,8 @@ func TestSelectFields_HierarchyReconstruction(t *testing.T) {
 		t.Errorf("Expected 'wrapper.target' in output (keyword match), got wrapper keys: %v", mapKeys(wrapper))
 	}
 
-	if len(result) > budget {
-		t.Errorf("Expected result <= %d bytes, got %d", budget, len(result))
+	if len(stripAnno(result)) > budget {
+		t.Errorf("Expected JSON body <= %d bytes, got %d", budget, len(stripAnno(result)))
 	}
 }
 
@@ -844,12 +900,12 @@ func TestSelectFields_FlatResponseUnchanged(t *testing.T) {
 		StepID: "step-1", AgentName: "agent", Instruction: "check values",
 	})
 
-	if len(result) > 40 {
-		t.Errorf("Expected result <= 40 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 40 {
+		t.Errorf("Expected JSON body <= 40 bytes, got %d", len(stripAnno(result)))
 	}
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -1143,13 +1199,13 @@ func TestSelectFields_ArraySubsetSelection(t *testing.T) {
 		Instruction: "Analyze the search results for relevance",
 	})
 
-	if len(result) > 4096 {
-		t.Errorf("Expected result <= 4096 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 4096 {
+		t.Errorf("Expected JSON body <= 4096 bytes, got %d", len(stripAnno(result)))
 	}
 
 	// Strip annotation
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -1208,12 +1264,12 @@ func TestSelectFields_MixedMapAndArray(t *testing.T) {
 		Instruction: "Analyze the statistics and entries",
 	})
 
-	if len(result) > 2048 {
-		t.Errorf("Expected result <= 2048 bytes, got %d", len(result))
+	if len(stripAnno(result)) > 2048 {
+		t.Errorf("Expected JSON body <= 2048 bytes, got %d", len(stripAnno(result)))
 	}
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 	var parsed map[string]interface{}
@@ -1369,12 +1425,12 @@ func TestSelectFields_ProductionReplay_CompanyNews(t *testing.T) {
 		Instruction: "Perform sentiment analysis on the news articles for GOOGL",
 	})
 
-	if len(result) > budget {
-		t.Errorf("Expected result <= %d bytes, got %d", budget, len(result))
+	if len(stripAnno(result)) > budget {
+		t.Errorf("Expected JSON body <= %d bytes, got %d", budget, len(stripAnno(result)))
 	}
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -1772,7 +1828,7 @@ func TestSelectFields_AncestorSkipsArrayChildren(t *testing.T) {
 	trimmer := NewStructuralTrimmer([]string{"items"}, nil)
 
 	// Budget large enough to fit the entire parent
-	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
+	result, _, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
 
 	// The parent "items" should be selected as a whole, children skipped
 	jsonPart, _ := splitAnnotation(result)
@@ -1820,10 +1876,10 @@ func TestSelectFields_SafetyCheckOvershoot(t *testing.T) {
 	// The tight budget combined with deep nesting increases the chance
 	// that estimated overhead diverges from actual json.Marshal output.
 	budget := len(serialized) - 20
-	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, budget, 0, []string{"x", "y", "z"})
+	result, _, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, budget, 0, []string{"x", "y", "z"})
 
 	jsonPart := result
-	if idx := strings.Index(result, "\n[trimmed:"); idx >= 0 {
+	if idx := strings.Index(result, "\n["); idx >= 0 {
 		jsonPart = result[:idx]
 	}
 
@@ -1861,7 +1917,7 @@ func TestSelectFields_AnnotationArrayFormat(t *testing.T) {
 	trimmer := NewStructuralTrimmer(nil, nil)
 	// Budget below the whole "data" object (~12KB) but above a single item (~1.1KB),
 	// so individual array items are selected and the annotation fits.
-	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"item", "content"})
+	result, _, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"item", "content"})
 
 	// Should use array annotation format
 	if !strings.Contains(result, "array items") {
@@ -1887,8 +1943,9 @@ func TestSelectFields_AnnotationNonArrayFormat(t *testing.T) {
 	}
 
 	trimmer := NewStructuralTrimmer(nil, nil)
-	// Enough budget to fit JSON + annotation
-	result, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 400, 0, []string{"gamma"})
+	// Budget fits two of the three fields, so a drop occurs and the annotation is emitted
+	// (a complete, nothing-dropped result carries no annotation at all).
+	result, _, _, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 100, 0, []string{"gamma"})
 
 	if strings.Contains(result, "array items") {
 		t.Error("Non-array annotation should NOT contain 'array items'")
@@ -1922,8 +1979,10 @@ func TestProcessForPrompt_CapturesMetadata_PlainText(t *testing.T) {
 	if meta.OriginalBytes != len(input) {
 		t.Errorf("Expected OriginalBytes=%d, got %d", len(input), meta.OriginalBytes)
 	}
-	if meta.TrimmedBytes > 30 {
-		t.Errorf("Expected TrimmedBytes <= 30, got %d", meta.TrimmedBytes)
+	// Phase 16: TrimmedBytes now includes the always-appended disclosure, so assert the BODY
+	// (excluding the annotation) respects the budget instead of the raw metadata byte count.
+	if len(stripAnno(result)) > 30 {
+		t.Errorf("Expected JSON body <= 30 bytes, got %d", len(stripAnno(result)))
 	}
 	if len(meta.Keywords) == 0 {
 		t.Error("Expected Keywords to be extracted from instruction")
@@ -2017,7 +2076,7 @@ func TestSelectFieldsWithMeta_FieldCounts_FlatObject(t *testing.T) {
 	// Budget 15: wrapper(2) + price(11) = 13 ≤ 15 → selected; +name = 29 > 15 → dropped.
 	obj := map[string]interface{}{"price": 42.0, "name": "Widget"}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	_, kept, dropped, _, _, matchedPaths, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 15, 0, []string{})
+	_, kept, dropped, _, _, matchedPaths, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 15, 0, []string{})
 
 	if kept != 1 {
 		t.Errorf("Expected fieldsKept=1, got %d", kept)
@@ -2037,7 +2096,7 @@ func TestSelectFieldsWithMeta_MatchedPathsInOutput(t *testing.T) {
 		"beta":  strings.Repeat("b", 50),
 	}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	result, kept, _, _, _, matchedPaths, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"alpha"})
+	result, kept, _, _, _, matchedPaths, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{"alpha"})
 
 	if kept == 0 {
 		t.Fatal("Expected at least one field selected")
@@ -2057,7 +2116,7 @@ func TestSelectFieldsWithMeta_LargeBudgetKeepsAllFields(t *testing.T) {
 		"c": "gamma",
 	}
 	trimmer := NewStructuralTrimmer(nil, nil)
-	_, kept, dropped, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
+	_, kept, dropped, _, _, _, _, _, _ := trimmer.selectFieldsWithMeta(context.Background(), obj, 8192, 0, []string{})
 
 	if kept != 3 {
 		t.Errorf("Expected all 3 fields kept with large budget, got %d", kept)
@@ -2820,7 +2879,7 @@ func TestSelectFieldsWithMeta_BackfilledCountReturned(t *testing.T) {
 		},
 	}
 
-	_, _, _, backfilledCount, _, _, _, _ := trimmer.selectFieldsWithMeta(
+	_, _, _, backfilledCount, _, _, _, _, _ := trimmer.selectFieldsWithMeta(
 		context.Background(), obj, 32768, 0, []string{"pod"},
 	)
 
@@ -2845,7 +2904,7 @@ func TestSelectFieldsWithMeta_ThresholdSkippedReturned(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, thresholdSkipped, _, _, _ := trimmer.selectFieldsWithMeta(
+	_, _, _, _, thresholdSkipped, _, _, _, _ := trimmer.selectFieldsWithMeta(
 		context.Background(), obj, 32768, 0, []string{"pod"},
 	)
 
@@ -3081,8 +3140,8 @@ func TestJSONInString_InvalidJSON(t *testing.T) {
 	if len(result) == 0 {
 		t.Error("Expected non-empty result")
 	}
-	if len(result) > 1024 {
-		t.Errorf("Result %d exceeds budget 1024", len(result))
+	if len(stripAnno(result)) > 1024 {
+		t.Errorf("JSON body %d exceeds budget 1024", len(stripAnno(result)))
 	}
 }
 

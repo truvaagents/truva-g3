@@ -88,7 +88,11 @@ type fieldEntry struct {
 	arrayTotal int // total items in parent array (for positional scoring)
 }
 
-// ProcessForPrompt trims a result to fit within maxBytes using query-conditioned field selection.
+// ProcessForPrompt trims a result using query-conditioned field selection. Contract: the
+// content BODY fits within maxBytes; the returned string may exceed maxBytes by one trailing
+// disclosure annotation (~110 B fixed text, up to ~310 B worst case with matched paths) —
+// the annotation is load-bearing (UNKNOWN safeguard) and is never dropped to satisfy a strict
+// byte cap. Callers with hard limits must budget for the overshoot.
 func (t *StructuralTrimmer) ProcessForPrompt(
 	ctx context.Context, response string, maxBytes int, stepCtx ResultProcessorContext,
 ) string {
@@ -98,19 +102,24 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 
 	var data interface{}
 	if err := json.Unmarshal([]byte(response), &data); err != nil {
-		result := t.trimPlainText(response, maxBytes, stepCtx.Instruction)
-		degenerate, keptRatio := degenerateTrim(len(response), len(result))
-		captureTrimMetadata(ctx, ResultTrimMetadata{
-			OriginalBytes: len(response),
-			TrimmedBytes:  len(result),
-			Method:        "structural_text",
-			Keywords:      extractKeywords(stepCtx.Instruction),
-			Degenerate:    degenerate,
-			KeptRatio:     keptRatio,
-		})
+		result, lost := t.trimPlainText(response, maxBytes, stepCtx.Instruction)
 		// Honest disclosure when the floor kept a non-representative fraction (no-op otherwise).
 		// Plain text: a byte cut to make room for the note is fine (not re-parsed as JSON).
-		return floorWithDisclosure(result, len(response), maxBytes, nil)
+		// Compose the final output FIRST, then record metadata against it — degeneracy is
+		// measured on the bare body so the appended note never counts as kept content, and
+		// TrimmedBytes describes what is actually returned.
+		final := floorWithDisclosure(result, len(response), maxBytes, lost, nil)
+		degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
+		captureTrimMetadata(ctx, ResultTrimMetadata{
+			OriginalBytes: len(response),
+			TrimmedBytes:  len(final),
+			Method:        "structural_text",
+			Keywords:      extractKeywords(stepCtx.Instruction),
+			Degenerate:    degenerate && lost, // Degenerate means severe LOSS, never a bare byte ratio
+			KeptRatio:     keptRatio,
+			ContentLost:   lost,
+		})
+		return final
 	}
 
 	// Phase 5 Fix 2: Unwrap JSON-valued strings before inventory building so
@@ -136,7 +145,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 	)
 
 	if obj, ok := data.(map[string]interface{}); ok {
-		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths, degenerate, keptRatio := t.selectFieldsWithMeta(ctx, obj, maxBytes, len(response), keywords)
+		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths, degenerate, keptRatio, contentLost := t.selectFieldsWithMeta(ctx, obj, maxBytes, len(response), keywords)
 		captureTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes:    len(response),
 			TrimmedBytes:     len(result),
@@ -149,6 +158,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 			MatchedPaths:     matchedPaths,
 			Degenerate:       degenerate,
 			KeptRatio:        keptRatio,
+			ContentLost:      contentLost,
 		})
 		if t.logger != nil {
 			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON object)", map[string]interface{}{
@@ -171,15 +181,27 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 
 	if arr, ok := data.([]interface{}); ok {
 		result, keptCount, totalCount := t.trimArray(arr, maxBytes)
-		degenerate, keptRatio := degenerateTrim(len(response), len(result))
+		final := floorWithDisclosure(result, len(response), maxBytes, keptCount < totalCount, func(room int) string {
+			// Re-trim to fewer WHOLE items so the body stays valid JSON for re-parsing
+			// consumers (the agent-input guard), then drop trimArray's own "[trimmed: …]"
+			// annotation so only the disclosure remains. The counts are re-recorded so the
+			// metadata describes the RETURNED output, not the pre-reshrink one.
+			b, k, tot := t.trimArray(arr, room)
+			keptCount, totalCount = k, tot
+			return stripResultAnnotation(b)
+		})
+		// Degeneracy on the bare body (the annotation must not count as kept content) and
+		// TrimmedBytes on the returned output — both measured AFTER composition.
+		degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
 		captureTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes: len(response),
-			TrimmedBytes:  len(result),
+			TrimmedBytes:  len(final),
 			Method:        "structural_array",
 			FieldsKept:    keptCount,
 			FieldsDropped: totalCount - keptCount,
-			Degenerate:    degenerate,
+			Degenerate:    degenerate && keptCount < totalCount, // severe LOSS, never a bare byte ratio
 			KeptRatio:     keptRatio,
+			ContentLost:   keptCount < totalCount,
 		})
 		if t.logger != nil {
 			t.logger.DebugWithContext(ctx, "Structural trim completed (JSON array)", map[string]interface{}{
@@ -188,28 +210,27 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 				"step_id":        stepCtx.StepID,
 				"agent_name":     stepCtx.AgentName,
 				"original_bytes": len(response),
-				"trimmed_bytes":  len(result),
+				"trimmed_bytes":  len(final),
 			})
 		}
-		return floorWithDisclosure(result, len(response), maxBytes, func(room int) string {
-			// Re-trim to fewer WHOLE items so the body stays valid JSON for re-parsing
-			// consumers (the agent-input guard), then drop trimArray's own "[trimmed: …]"
-			// annotation so only the disclosure remains.
-			b, _, _ := t.trimArray(arr, room)
-			return stripResultAnnotation(b)
-		})
+		return final
 	}
 
-	fallback := truncateResultBytes(response, maxBytes)
-	degenerate, keptRatio := degenerateTrim(len(response), len(fallback))
+	// Top-level JSON scalar (string/number/bool): a head byte-cut is the final word on this
+	// result, so the note must carry the UNKNOWN safeguard; metadata is recorded against the
+	// composed output with body-based degeneracy. The entry guard means content was cut.
+	fallback := truncateBytesWithUnknown(response, maxBytes)
+	final := floorWithDisclosure(fallback, len(response), maxBytes, true, nil)
+	degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
 	captureTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: len(response),
-		TrimmedBytes:  len(fallback),
+		TrimmedBytes:  len(final),
 		Method:        "truncate",
 		Degenerate:    degenerate,
 		KeptRatio:     keptRatio,
+		ContentLost:   true,
 	})
-	return floorWithDisclosure(fallback, len(response), maxBytes, nil)
+	return final
 }
 
 func (t *StructuralTrimmer) buildFieldInventory(obj map[string]interface{}, prefix string, depth int) []fieldEntry {
@@ -394,10 +415,13 @@ func scoreObjectContent(obj map[string]interface{}, keywords []string) float64 {
 }
 
 // selectFieldsWithMeta returns the trimmed output plus selection counters, the matched
-// paths, and the degenerate decision (degenerate, keptRatio) computed on the CONTENT
-// length — the same basis used for the in-prompt "severely reduced" annotation — so the
-// caller stamps metadata that agrees with what the synthesizing LLM is told.
-func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[string]interface{}, maxBytes, originalBytes int, keywords []string) (string, int, int, int, int, []string, bool, float64) {
+// paths, the degenerate decision (degenerate, keptRatio) computed on the CONTENT
+// length — the same basis used for the in-prompt "severely reduced" annotation — and
+// contentLost, true when ANY content was lost (field drops, threshold skips, or a
+// backfilled value truncated in place: the case unit counts cannot see, since the lossy
+// backfill decrements droppedCount back to zero). The caller stamps metadata that agrees
+// with what the synthesizing LLM is told.
+func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[string]interface{}, maxBytes, originalBytes int, keywords []string) (string, int, int, int, int, []string, bool, float64, bool) {
 	inventory := t.buildFieldInventory(obj, "", 0)
 	for i := range inventory {
 		inventory[i].relevance = t.scoreField(inventory[i], keywords)
@@ -516,6 +540,9 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 	thresholdSkipped := 0
 	valueOverrides := make(map[string]interface{})
 	remainingBudget := maxBytes - budgetUsed
+	// Set when a backfilled field's VALUE is truncated in place — a loss the unit counts
+	// cannot see (the backfill decrements droppedCount back to zero).
+	valueTruncated := false
 	if remainingBudget > minBackfillBudget && droppedCount > 0 {
 		// Collect all dropped string candidates
 		type backfillCandidate struct {
@@ -620,6 +647,10 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 				valueOverrides[cand.entry.path] = truncatedVal
 				selectedSet[cand.entry.path] = true
 				selectedPaths = append(selectedPaths, cand.entry.path)
+				// This branch keeps the FIELD but cuts its VALUE — droppedCount goes back to
+				// zero below, so the loss is invisible to unit counts; record it explicitly
+				// or the zero-drop annotation gate would ship this cut undisclosed.
+				valueTruncated = true
 
 				serializedVal, _ := json.Marshal(truncatedVal)
 				actualCost := len(serializedVal) + overhead + keyOverhead
@@ -657,7 +688,12 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 
 	output, err := marshalOrdered(reconstructHierarchy(obj, selectedSet, valueOverrides), fieldRelevance)
 	if err != nil {
-		return truncateResultBytes(fmt.Sprintf("%v", obj), maxBytes), 0, 0, 0, 0, nil, false, 1
+		// Marshal failure is a final-word deterministic cut: honest UNKNOWN note plus a real
+		// degeneracy measurement — the previous hardcoded keptRatio=1 recorded a severe cut
+		// as full coverage, so neither the Degenerate flag nor any disclosure could fire.
+		fb := truncateBytesWithUnknown(fmt.Sprintf("%v", obj), maxBytes)
+		deg, ratio := degenerateTrim(originalBytes, len(stripResultAnnotation(fb)))
+		return fb, 0, 0, 0, 0, nil, deg, ratio, true
 	}
 
 	// Safety check: if wrapper overhead estimation was slightly off, batch-remove
@@ -724,31 +760,43 @@ func (t *StructuralTrimmer) selectFieldsWithMeta(ctx context.Context, obj map[st
 	if backfilledCount > 0 {
 		backfillNote = fmt.Sprintf(" (%d backfilled)", backfilledCount)
 	}
-	// Degenerate trim: so little of the source survived that the kept fields are
-	// non-representative. Computed on the content length (output, excluding this
-	// annotation) and returned so the caller's metadata flag matches this decision.
-	// The honest disclosure replaces the neutral "[trimmed: …]" note, which implies
-	// coverage and invites a false-negative inference (e.g. "no ERROR entries found")
-	// about content that was never actually examined.
+	// Any loss-claiming annotation is gated on ACTUAL loss, never the byte ratio alone: a
+	// complete dataset that merely re-serialized below the byte cliff (pretty→compact,
+	// escape unwrapping) must carry no note, and Degenerate means "severe LOSS" — a false
+	// "most content omitted" on complete data would instruct synthesis to hedge about
+	// nothing. A truncated-backfill value counts as loss even though droppedCount reads zero.
+	contentLost := droppedCount > 0 || thresholdSkipped > 0 || valueTruncated
 	degenerate, keptRatio := degenerateTrim(originalBytes, len(output))
-	if degenerate {
+	degenerate = degenerate && contentLost
+	if !contentLost {
+		annotation = ""
+	} else if degenerate {
 		annotation = fmt.Sprintf(
 			"\n[severely reduced: kept %d of ~%d bytes (%d/%d items%s); most content omitted — "+
 				"treat anything NOT shown as UNKNOWN, do not infer it is absent]",
 			len(output), originalBytes, len(selectedPaths), candidateCount, backfillNote)
 	} else if arrayItemCount > 0 {
-		annotation = fmt.Sprintf("\n[trimmed: %d/%d entries kept%s (%d array items), %d dropped]",
+		annotation = fmt.Sprintf(
+			"\n[trimmed: %d/%d entries kept%s (%d array items), %d dropped; "+
+				"omitted content is UNKNOWN — do not infer it is absent]",
 			len(selectedPaths), candidateCount, backfillNote, arrayItemCount, droppedCount)
 	} else {
-		annotation = fmt.Sprintf("\n[trimmed: %d/%d fields kept%s, %d dropped, matched: %s]",
+		annotation = fmt.Sprintf(
+			"\n[trimmed: %d/%d fields kept%s, %d dropped, matched: %s; "+
+				"omitted content is UNKNOWN — do not infer it is absent]",
 			len(selectedPaths), candidateCount, backfillNote, droppedCount,
-			truncateString(strings.Join(selectedPaths, ", "), 200))
+			sanitizeAnnotationText(strings.Join(selectedPaths, ", ")))
 	}
 
-	if len(output)+len(annotation) <= maxBytes {
-		return string(output) + annotation, len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths, degenerate, keptRatio
-	}
-	return string(output), len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths, degenerate, keptRatio
+	// The annotation carries the load-bearing UNKNOWN safeguard, so it is ALWAYS appended when a
+	// drop occurred — never dropped when the body fills the budget (the pre-Phase-16 behavior let
+	// a partial result reach synthesis behind silence). Reshrinking to make room is rejected:
+	// removing whole fields can drop the very keyword-matched / preserved / backfilled fields the
+	// selection kept, and cutting the JSON body would corrupt the agent-input re-parse. So the
+	// BODY respects maxBytes and the result may exceed it by up to the annotation length —
+	// ~110 B fixed text plus up to 200 B of matched paths (~310 B worst case) — a bounded, safe
+	// overshoot on the KB–MB soft budgets in play; content integrity beats a strict byte cap.
+	return string(output) + annotation, len(selectedPaths), droppedCount, backfilledCount, thresholdSkipped, selectedPaths, degenerate, keptRatio, contentLost
 }
 
 func (t *StructuralTrimmer) trimArray(arr []interface{}, maxBytes int) (string, int, int) {
@@ -762,22 +810,40 @@ func (t *StructuralTrimmer) trimArray(arr []interface{}, maxBytes int) (string, 
 		result = append(result, item)
 		budgetUsed += len(serialized) + 1
 	}
-	output, _ := json.Marshal(result)
-	annotation := fmt.Sprintf("\n[trimmed: %d/%d items]", len(result), len(arr))
-	if len(output)+len(annotation) <= maxBytes {
-		return string(output) + annotation, len(result), len(arr)
+	if result == nil {
+		// json.Marshal(nil slice) renders "null" — a TYPED value the agent-input guard's
+		// re-parse accepts, silently turning an array param into null downstream. An empty
+		// array is the truthful shape when not even one item fit.
+		result = []interface{}{}
 	}
-	return string(output), len(result), len(arr)
+	output, _ := json.Marshal(result)
+	if len(result) == len(arr) {
+		// Nothing dropped (the source only exceeded the budget via serialization overhead) — a
+		// complete dataset carries no partiality note; a false "omitted content is UNKNOWN"
+		// would instruct synthesis to hedge about nothing.
+		return string(output), len(result), len(arr)
+	}
+	// Neutral prefix + UNKNOWN safeguard; appended even on a bounded overshoot so the disclosure
+	// is never dropped, and the JSON array stays whole (agent-input re-parse safe). (Phase 16)
+	annotation := fmt.Sprintf(
+		"\n[trimmed: %d/%d items; omitted content is UNKNOWN — do not infer it is absent]",
+		len(result), len(arr))
+	return string(output) + annotation, len(result), len(arr)
 }
 
-func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction string) string {
+// trimPlainText trims non-JSON text by keyword-scored sentence selection; the second return
+// reports whether any content was lost (false only when every scoreable sentence survived).
+func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction string) (string, bool) {
 	keywords := extractKeywords(instruction)
 	if len(keywords) == 0 {
-		return truncateResultBytes(text, maxBytes)
+		// No keywords to score by — a head byte-cut is the final word on this result, so the
+		// note must carry the UNKNOWN safeguard (a neutral truncateResultBytes here would let
+		// an above-cliff cut reach synthesis with no disclosure at all).
+		return truncateBytesWithUnknown(text, maxBytes), true
 	}
 	sentences := strings.FieldsFunc(text, func(r rune) bool { return r == '.' || r == '!' || r == '?' })
 	if len(sentences) == 0 {
-		return truncateResultBytes(text, maxBytes)
+		return truncateBytesWithUnknown(text, maxBytes), true
 	}
 
 	type scored struct {
@@ -808,10 +874,18 @@ func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction
 		return items[i].idx < items[j].idx
 	})
 
+	// Select against the FULL budget, then append the note as a bounded overshoot — the same
+	// policy as the JSON paths: the body respects maxBytes, selected sentences stay whole, and
+	// the UNKNOWN note (~85 B) rides on top. The alternatives both failed review: a fixed
+	// under-sized reservation (the old constant 50) let the note re-cut the last selected
+	// sentence mid-word, and reserving the full note length starves small budgets of any
+	// sentence at all.
+	const noteFmt = "\n[trimmed: %d/%d sentences; omitted content is UNKNOWN — do not infer it is absent]"
+
 	var selected []scored
 	budgetUsed := 0
 	for _, s := range items {
-		if budgetUsed+len(s.text)+2 > maxBytes-50 {
+		if budgetUsed+len(s.text)+2 > maxBytes {
 			break
 		}
 		selected = append(selected, s)
@@ -825,8 +899,11 @@ func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction
 		sb.WriteString(s.text)
 		sb.WriteString(". ")
 	}
-	fmt.Fprintf(&sb, "\n[trimmed: %d/%d sentences]", len(selected), len(sentences))
-	return sb.String()
+	if len(selected) == len(items) {
+		// Every sentence survived — complete content carries no partiality note.
+		return sb.String(), false
+	}
+	return sb.String() + fmt.Sprintf(noteFmt, len(selected), len(items)), true
 }
 
 func isScalar(v interface{}) bool {

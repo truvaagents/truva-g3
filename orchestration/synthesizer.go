@@ -392,10 +392,12 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				})
 				trimMeta = meta
 			} else if s.resultTrimConfig != nil && s.resultTrimConfig.Enabled && len(response) > s.resultTrimConfig.MaxTotalPromptBytes {
-				// Byte truncation fallback
-				response = truncateResultBytes(response, s.resultTrimConfig.MaxTotalPromptBytes)
+				// Byte truncation fallback (no result processor ran → no model analyzed the dropped
+				// tail). appendDisclosure cuts + discloses within the budget in one step. (Phase 16)
+				response = appendDisclosure(response, truncationDisclosure(), s.resultTrimConfig.MaxTotalPromptBytes)
 				trimMeta = &ResultTrimMetadata{
 					OriginalBytes: originalSize, TrimmedBytes: len(response), Method: "truncate",
+					PartialCoverage: true, ContentLost: true,
 				}
 			}
 
@@ -409,13 +411,17 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 
 			trimmedSize := len(response)
 
-			// Emit span event for result trim decisions (visible in Jaeger)
-			if trimMeta != nil && trimmedSize != originalSize {
+			// Emit span event for result trim decisions (visible in Jaeger) — see
+			// lossyTrimEvent for why the gate is not byte inequality alone.
+			if lossyTrimEvent(trimMeta, originalSize, trimmedSize) {
 				attrs := []attribute.KeyValue{
 					attribute.String("request_id", promptRequestID),
 					attribute.String("step_id", step.StepID),
 					attribute.String("agent_name", step.AgentName),
 					attribute.String("method", trimMeta.Method),
+					// Unconditional: explicit false = verified lossless, distinct from a
+					// legacy span with no signal — the same tri-state the JSON field carries.
+					attribute.Bool("content_lost", trimMeta.ContentLost),
 					attribute.Int("original_bytes", trimMeta.OriginalBytes),
 					attribute.Int("trimmed_bytes", trimMeta.TrimmedBytes),
 					attribute.Int("fields_kept", trimMeta.FieldsKept),
@@ -436,10 +442,29 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				if len(trimMeta.MatchedPaths) > 0 {
 					attrs = append(attrs, attribute.String("matched_paths", strings.Join(trimMeta.MatchedPaths, ",")))
 				}
+				// Phase 16 coverage fields — surfaced so Jaeger can distinguish a 28%-seen
+				// distill from a 100%-seen one without digging into step metadata.
+				if trimMeta.SourceCoverageRatio > 0 {
+					attrs = append(attrs, attribute.Float64("source_coverage_ratio", trimMeta.SourceCoverageRatio))
+				}
+				if trimMeta.LLMInputBytes > 0 {
+					attrs = append(attrs, attribute.Int("llm_input_bytes", trimMeta.LLMInputBytes))
+				}
+				if trimMeta.SegmentsTotal > 0 {
+					attrs = append(attrs,
+						attribute.Int("segments_analyzed", trimMeta.SegmentsAnalyzed),
+						attribute.Int("segments_total", trimMeta.SegmentsTotal))
+				}
+				if trimMeta.PartialCoverage {
+					attrs = append(attrs, attribute.Bool("partial_coverage", true))
+				}
+				if trimMeta.CombineTruncated {
+					attrs = append(attrs, attribute.Bool("combine_truncated", true))
+				}
 				telemetry.AddSpanEvent(ctx, "result_trim.completed", attrs...)
 			}
 
-			if s.logger != nil && trimmedSize != originalSize {
+			if s.logger != nil && lossyTrimEvent(trimMeta, originalSize, trimmedSize) {
 				s.logger.DebugWithContext(ctx, "Result trimmed for synthesis prompt", map[string]interface{}{
 					"operation":        "result_trim",
 					"request_id":       promptRequestID,

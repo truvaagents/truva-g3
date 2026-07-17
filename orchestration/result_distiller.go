@@ -28,6 +28,10 @@ type LLMDistiller struct {
 }
 
 // NewLLMDistiller creates a two-stage distiller with structural pre-filtering.
+// preFilter MUST honor the ResultProcessor contract (see the interface doc): report any
+// content loss via captureTrimMetadata's ContentLost and emit only registered single-line
+// annotations. The partial-source disclosure and coverage accounting key on that signal — a
+// pre-filter that trims silently disables every Phase 16 disclosure for its results.
 func NewLLMDistiller(aiClient core.AIClient, config ResultDistillConfig, preFilter ResultProcessor, logger core.Logger) *LLMDistiller {
 	return &LLMDistiller{aiClient: aiClient, config: config, preFilter: preFilter, logger: logger}
 }
@@ -148,8 +152,21 @@ func (d *LLMDistiller) ProcessForPrompt(
 		return d.mapReduceCompact(ctx, result, targetSize, stepCtx)
 	}
 
-	// Stage 1: Pre-filter
-	preFiltered := d.preFilter.ProcessForPrompt(ctx, result, d.config.PreFilterBudget, stepCtx)
+	// Stage 1: Pre-filter. Nested capture so the pre-filter's stage-1 metadata (exact unit counts)
+	// survives — the final distill metadata below overwrites the ctx slot (last-write-wins). (Phase 16)
+	preCtx, preMeta := WithTrimMetadataCapture(ctx)
+	preFiltered := d.preFilter.ProcessForPrompt(preCtx, result, d.config.PreFilterBudget, stepCtx)
+
+	// Whether stage-1 lost content is decided by the trimmer's explicit ContentLost signal,
+	// never inferred from bytes: pure re-serialization (pretty→compact) shrinks bytes without
+	// losing content, escape/annotation inflation grows bytes while content WAS dropped, and a
+	// passthrough source that happens to end in an annotation-shaped line would strip to a
+	// false sub-1 ratio. The stripped-body byte ratio serves only as the magnitude estimate
+	// once loss is known; 0.99 floors the inflation case so real loss never reads as full.
+	coverage := 1.0
+	if preMeta.ContentLost {
+		coverage = lossyByteCoverage(len(stripResultAnnotation(preFiltered)), len(result))
+	}
 
 	telemetry.AddSpanEvent(ctx, "result_distill.stage1_complete",
 		attribute.String("request_id", requestID),
@@ -159,7 +176,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 	)
 
 	// Stage 2: LLM distill
-	prompt := d.buildDistillationPrompt(preFiltered, targetSize, stepCtx)
+	prompt := d.buildDistillationPrompt(preFiltered, targetSize, stepCtx, coverage)
 
 	// Scale MaxTokens from target size (~3-4 chars/token + headroom)
 	maxTokens := targetSize/3 + 100
@@ -280,12 +297,32 @@ func (d *LLMDistiller) ProcessForPrompt(
 		CallDescription:  fmt.Sprintf("Distill %s result: %d→%d bytes (stage1: %d bytes)", stepCtx.AgentName, len(result), len(response.Content), len(preFiltered)),
 	})
 
+	// Phase 16 — deterministically append the partial-source disclosure to the OUTPUT (what reaches
+	// synthesis) when stage-1 dropped content. Framework-guaranteed; never relies on the model obeying
+	// the secondary prompt signal above. Plain append (bounded overshoot of the note's ~111 B), NOT
+	// appendDisclosure: reserving the note inside targetSize would silently cut the tail of the
+	// model's own analyzed output whenever it lands within the note's length of targetSize — an
+	// undisclosed deterministic cut, the exact class this phase eliminates.
+	out := response.Content
+	if coverage < 1 {
+		out += partialSourceDisclosure(coverage)
+	}
+
 	captureTrimMetadata(ctx, ResultTrimMetadata{
-		OriginalBytes: len(result),
-		TrimmedBytes:  len(response.Content),
-		Method:        "distill",
+		OriginalBytes:       len(result),
+		TrimmedBytes:        len(out),
+		Method:              "distill",
+		FieldsKept:          preMeta.FieldsKept, // stage-1 exact counts survive the distill record
+		FieldsDropped:       preMeta.FieldsDropped,
+		KeptRatio:           preMeta.KeptRatio,
+		SourceCoverageRatio: coverage, // approximate — see the ResultTrimMetadata field docs
+		LLMInputBytes:       len(preFiltered),
+		SegmentsAnalyzed:    1,
+		SegmentsTotal:       1,
+		PartialCoverage:     coverage < 1,
+		ContentLost:         preMeta.ContentLost, // the authoritative bit must survive into the cached envelope
 	})
-	return response.Content
+	return out
 }
 
 // distillPromptVersion identifies the distillation prompt template. Bump it whenever
@@ -294,7 +331,13 @@ func (d *LLMDistiller) ProcessForPrompt(
 // them for the TTL.
 // "3" = Phase 13 task-primary (task leads <context> + dual-anchored on the final line).
 // "4" = Phase 13 §2.9 split (identity + rules moved to the system message).
-const distillPromptVersion = "4"
+// "5" = Phase 16 partial-source coverage note added to <context> (invalidates cached outputs).
+// "6" = Phase 16 ContentLost-gated disclosure + plain-appended partial-source note (output
+// composition changed, so cached "5"-era outputs must not be replayed).
+// "7" = Phase 16 wrapper-drop disclosure on map-reduce outputs + tri-state ContentLost
+// envelope semantics (explicit false = verified lossless); stale envelopes would otherwise
+// replay an affirmative lossless claim for a lossy result, so they must be unreachable.
+const distillPromptVersion = "7"
 
 // distillationSystemPrompt is the STATIC policy for distillation — identity + rules. It is
 // dispatched as the system message (mirroring synthesizer.go's synthesisSystemPrompt) so the
@@ -349,7 +392,7 @@ const defaultPreFilterBudget = 131072
 // it to consolidate empty chunks (result_mapreduce.go) — keep the two in sync.
 const noMatchSentinel = "No matching entries found"
 
-func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext) string {
+func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext, coverage float64) string {
 	capabilityAttr := ""
 	if stepCtx.Capability != "" {
 		capabilityAttr = fmt.Sprintf(" capability=%q", stepCtx.Capability)
@@ -372,13 +415,21 @@ func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, step
 	if stepCtx.OriginalQuery != "" {
 		userGoalLine = fmt.Sprintf("User goal: %s\n", stepCtx.OriginalQuery)
 	}
+	// Phase 16 — secondary (non-guaranteeing) signal that stage-1 showed the model only part of the
+	// source. Lives in <context> at the TOP high-attention edge (EFFECTIVE_PROMPTS_GUIDE §2.1) and uses
+	// positive phrasing (§2.4). The GUARANTEE is the framework-appended output disclosure
+	// (partialSourceDisclosure); this line only nudges the model to self-qualify.
+	coverageLine := ""
+	if coverage < 1 {
+		coverageLine = fmt.Sprintf("Note: you received ~%d%% of the source by bytes; report any absence as absence WITHIN THE PROVIDED SAMPLE.\n", coveragePct(coverage))
+	}
 	return fmt.Sprintf(`<context source=%q%s>
-%s%s</context>
+%s%s%s</context>
 
 <data>
 %s
 </data>
 
 Return the compacted result for %s (at most %d characters):`,
-		stepCtx.AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, result, taskAnchor, maxBytes)
+		stepCtx.AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, coverageLine, result, taskAnchor, maxBytes)
 }

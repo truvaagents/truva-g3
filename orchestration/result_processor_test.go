@@ -486,7 +486,7 @@ func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
 		Instruction:   "Retrieve the last 5 minutes of logs",
 		OriginalQuery: "tell me if there are PII present in the logs",
 	}
-	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx, 1.0)
 
 	if !strings.Contains(prompt, "User goal: tell me if there are PII present in the logs") {
 		t.Errorf("expected the user goal in the prompt, got:\n%s", prompt)
@@ -501,7 +501,7 @@ func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
 	}
 
 	// When no query is in scope, the "User goal:" line is omitted (no empty label).
-	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"})
+	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"}, 1.0)
 	if strings.Contains(noQuery, "User goal:") {
 		t.Error("expected no 'User goal:' line when OriginalQuery is empty")
 	}
@@ -517,7 +517,7 @@ func TestLLMDistiller_PromptTaskPrimary(t *testing.T) {
 		Instruction:   "Query container memory usage for all pods to detect OOM pressure",
 		OriginalQuery: "Perform a full cluster health check and send a Slack report",
 	}
-	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx, 1.0)
 
 	taskIdx := strings.Index(prompt, "Downstream task: Query container memory usage")
 	goalIdx := strings.Index(prompt, "User goal: Perform a full cluster health check")
@@ -539,7 +539,7 @@ func TestLLMDistiller_PromptTaskPrimary(t *testing.T) {
 func TestLLMDistiller_PromptEmptyInstruction(t *testing.T) {
 	d := NewLLMDistiller(nil, ResultDistillConfig{}, NewStructuralTrimmer(nil, nil), nil)
 
-	prompt := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{AgentName: "tool"})
+	prompt := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{AgentName: "tool"}, 1.0)
 
 	if strings.Contains(prompt, "Downstream task:") {
 		t.Errorf("expected no 'Downstream task:' line when Instruction is empty, got:\n%s", prompt)
@@ -1168,7 +1168,7 @@ func TestBuildDistillationPrompt(t *testing.T) {
 	result := `{"symbol":"AAPL","price":185.42,"exchange":"NASDAQ"}`
 	maxBytes := 4096
 
-	prompt := d.buildDistillationPrompt(result, maxBytes, stepCtx)
+	prompt := d.buildDistillationPrompt(result, maxBytes, stepCtx, 1.0)
 
 	// --- 1. No fmt.Sprintf type-mismatch garbage ---
 	if strings.Contains(prompt, "%!") {
@@ -2053,7 +2053,7 @@ func TestBuildDistillationPrompt_Extractive(t *testing.T) {
 	userMsg := d.buildDistillationPrompt(`{"a":1}`, 1024, ResultProcessorContext{
 		AgentName:   "agent",
 		Instruction: "find errors",
-	})
+	}, 1.0)
 
 	// The extractive rules live in the system message (Phase 13 §2.9 split).
 	for _, want := range []string{"VERBATIM", "EVIDENCE", "NARRATIVE", "No matching entries found", "UNKNOWN"} {
@@ -2142,7 +2142,12 @@ func TestLLMDistiller_ZeroBudgetDoesNotZeroTarget(t *testing.T) {
 	if !strings.Contains(mockAI.prompt, "at most 4096 characters") {
 		t.Errorf("expected the target to fall back to TargetSize=4096, prompt head: %.200s", mockAI.prompt)
 	}
-	if out != "DISTILLED-LOG-LINES" {
-		t.Errorf("expected the real distilled output, got %q", out)
+	// Phase 16 — the input pre-filters to a partial sample (~21%), so the framework appends the
+	// partial-source disclosure to the distilled OUTPUT. The real distilled content is still present.
+	if !strings.Contains(out, "DISTILLED-LOG-LINES") {
+		t.Errorf("expected the real distilled output to be present, got %q", out)
+	}
+	if !strings.Contains(out, "partial source") {
+		t.Errorf("expected the partial-source disclosure to be appended, got %q", out)
 	}
 }

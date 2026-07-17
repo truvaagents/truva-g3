@@ -11,7 +11,7 @@ import (
 // --- B: buildDecisionDigest / digestValue ---------------------------------------------------------
 
 func TestBuildDecisionDigest_KeepsAllKeysValidJSON(t *testing.T) {
-	digest, degenerate := buildDecisionDigest(`{"a":1,"b":{"c":"short"},"d":true}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest(`{"a":1,"b":{"c":"short"},"d":true}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if degenerate {
 		t.Fatal("valid JSON must not be degenerate")
 	}
@@ -26,7 +26,7 @@ func TestBuildDecisionDigest_KeepsAllKeysValidJSON(t *testing.T) {
 }
 
 func TestBuildDecisionDigest_ArraySampleAndSentinel(t *testing.T) {
-	digest, _ := buildDecisionDigest(`{"arr":[1,2,3,4,5,6,7,8,9,10]}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, _, _ := buildDecisionDigest(`{"arr":[1,2,3,4,5,6,7,8,9,10]}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if !json.Valid([]byte(digest)) {
 		t.Fatalf("digest must stay valid JSON, got %q", digest)
 	}
@@ -41,7 +41,7 @@ func TestBuildDecisionDigest_ArraySampleAndSentinel(t *testing.T) {
 
 func TestBuildDecisionDigest_ElidesLongScalar(t *testing.T) {
 	in := fmt.Sprintf(`{"big":%q,"small":"keep"}`, strings.Repeat("x", 300))
-	digest, degenerate := buildDecisionDigest(in, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest(in, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if degenerate {
 		t.Fatal("valid JSON must not be degenerate even when a value is elided")
 	}
@@ -68,7 +68,7 @@ func TestBuildDecisionDigest_WideObjectKeySampling(t *testing.T) {
 		fmt.Fprintf(&b, `"instance-%d":{"cpu":%d}`, i, i)
 	}
 	b.WriteString("}")
-	digest, degenerate := buildDecisionDigest(b.String(), defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest(b.String(), defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if degenerate {
 		t.Fatal("valid JSON must not be degenerate")
 	}
@@ -89,7 +89,7 @@ func TestBuildDecisionDigest_WideObjectKeySampling(t *testing.T) {
 
 func TestBuildDecisionDigest_SchemaObjectKeptWhole(t *testing.T) {
 	// A normal schema object (<= maxKeys fields) keeps every key — no sampling.
-	digest, _ := buildDecisionDigest(`{"a":1,"b":2,"c":3,"d":4}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, _, _ := buildDecisionDigest(`{"a":1,"b":2,"c":3,"d":4}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if strings.Contains(digest, "__truncated_keys__") {
 		t.Errorf("a small schema object must not be key-sampled; got %q", digest)
 	}
@@ -103,7 +103,7 @@ func TestBuildDecisionDigest_SchemaObjectKeptWhole(t *testing.T) {
 func TestBuildDecisionDigest_PreservesLargeIntegers(t *testing.T) {
 	// 19-digit snowflake-style IDs exceed float64's exact-integer range (2^53); a float64 round-trip
 	// would mangle them to scientific notation. UseNumber must keep them verbatim.
-	digest, degenerate := buildDecisionDigest(`{"id":1782297941780804184,"ts":1700000000000000000}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest(`{"id":1782297941780804184,"ts":1700000000000000000}`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if degenerate {
 		t.Fatal("valid JSON must not be degenerate")
 	}
@@ -117,13 +117,13 @@ func TestBuildDecisionDigest_PreservesLargeIntegers(t *testing.T) {
 func TestBuildDecisionDigest_TrailingGarbageIsDegenerate(t *testing.T) {
 	// Valid JSON followed by trailing junk is not clean JSON — treat as a blob (→ C), matching the
 	// prior json.Unmarshal strictness.
-	if _, degenerate := buildDecisionDigest(`{"a":1} then some log text`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys); !degenerate {
+	if _, degenerate, _ := buildDecisionDigest(`{"a":1} then some log text`, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys); !degenerate {
 		t.Error("JSON with trailing garbage must be degenerate")
 	}
 }
 
 func TestBuildDecisionDigest_NonJSONDegenerate(t *testing.T) {
-	digest, degenerate := buildDecisionDigest("this is a plain-text log line, not JSON", defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest("this is a plain-text log line, not JSON", defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if !degenerate {
 		t.Error("a non-JSON blob must be degenerate (escalates to C)")
 	}
@@ -136,7 +136,7 @@ func TestBuildDecisionDigest_ValidJSONNeverDegenerate(t *testing.T) {
 	// Narrative-dominated but still valid JSON: per the owner decision (C = non-JSON only) this must
 	// NOT be degenerate — the skeleton keeps the key and the value resolves via template at execution.
 	in := fmt.Sprintf(`{"text":%q}`, strings.Repeat("y", 50000))
-	digest, degenerate := buildDecisionDigest(in, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
+	digest, degenerate, _ := buildDecisionDigest(in, defaultDigestSampleN, defaultDigestScalarMax, defaultDigestMaxKeys)
 	if degenerate {
 		t.Error("narrative-dominated valid JSON must NOT be degenerate (C is non-JSON only)")
 	}
