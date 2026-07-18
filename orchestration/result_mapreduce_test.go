@@ -15,16 +15,17 @@ import (
 
 // countingAI records how many times GenerateResponse ran and returns a fixed extract.
 type countingAI struct {
-	mu  sync.Mutex
-	n   int
-	out string
+	mu    sync.Mutex
+	n     int
+	out   string
+	usage core.TokenUsage // zero unless a test asserts usage accounting
 }
 
 func (c *countingAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
 	c.mu.Lock()
 	c.n++
 	c.mu.Unlock()
-	return &core.AIResponse{Content: c.out, Usage: core.TokenUsage{}}, nil
+	return &core.AIResponse{Content: c.out, Usage: c.usage}, nil
 }
 
 func (c *countingAI) StreamResponse(ctx context.Context, p string, o *core.AIOptions, _ func(string)) (*core.AIResponse, error) {

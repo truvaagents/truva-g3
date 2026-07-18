@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -41,6 +42,21 @@ func (l *warnCapturingLogger) normalizationWarnings() int {
 	n := 0
 	for _, f := range l.warns {
 		if f["operation"] == "result_distill.config_normalization" {
+			n++
+		}
+	}
+	return n
+}
+
+// advisoryWarnings counts the deadline-opt-out advisories, which carry a DISTINCT operation
+// from genuine normalization warnings so misconfiguration alerting is not paged by a
+// documented opt-out (review finding).
+func (l *warnCapturingLogger) advisoryWarnings() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, f := range l.warns {
+		if f["operation"] == "result_distill.config_advisory" {
 			n++
 		}
 	}
@@ -224,7 +240,7 @@ func TestNormalizeThreshold_BelowPreFilterDisabledWithWarning(t *testing.T) {
 	// Direct NewLLMDistiller construction path.
 	direct := &warnCapturingLogger{}
 	NewLLMDistiller(&countingAI{}, ResultDistillConfig{
-		PreFilterBudget: 131072, MapReduceThresholdBytes: 1000, // 1000 < 128 KB → normalized to 0
+		PreFilterBudget: 131072, MapReduceThresholdBytes: 1000, CompactionDeadline: 45 * time.Second, // 1000 < 128 KB → normalized to 0
 	}, NewStructuralTrimmer(nil, nil), direct)
 	if direct.normalizationWarnings() != 1 {
 		t.Errorf("direct NewLLMDistiller: expected one normalization warning, got %d", direct.normalizationWarnings())
@@ -233,7 +249,7 @@ func TestNormalizeThreshold_BelowPreFilterDisabledWithWarning(t *testing.T) {
 	// Layer-2 helper construction path.
 	helper := &warnCapturingLogger{}
 	BuildDistillationEnabledResultProcessor(ResultDistillConfig{
-		PreFilterBudget: 131072, MapReduceThresholdBytes: 1000,
+		PreFilterBudget: 131072, MapReduceThresholdBytes: 1000, CompactionDeadline: 45 * time.Second,
 	}, &countingAI{}, nil, helper)
 	if helper.normalizationWarnings() != 1 {
 		t.Errorf("Layer-2 helper: expected one normalization warning, got %d", helper.normalizationWarnings())
@@ -242,7 +258,7 @@ func TestNormalizeThreshold_BelowPreFilterDisabledWithWarning(t *testing.T) {
 	// A valid threshold (>= PreFilterBudget) must NOT warn.
 	valid := &warnCapturingLogger{}
 	NewLLMDistiller(&countingAI{}, ResultDistillConfig{
-		PreFilterBudget: 131072, MapReduceThresholdBytes: 262144, // 256 KB >= 128 KB
+		PreFilterBudget: 131072, MapReduceThresholdBytes: 262144, CompactionDeadline: 45 * time.Second, // 256 KB >= 128 KB
 	}, NewStructuralTrimmer(nil, nil), valid)
 	if valid.normalizationWarnings() != 0 {
 		t.Errorf("valid threshold must not warn, got %d", valid.normalizationWarnings())
@@ -256,7 +272,7 @@ func TestNormalizeThreshold_UnsetPreFilterResolvedBeforeCompare(t *testing.T) {
 	log := &warnCapturingLogger{}
 	// PreFilterBudget 0 resolves to defaultPreFilterBudget (128 KB); threshold 1000 < that → warn.
 	NewLLMDistiller(&countingAI{}, ResultDistillConfig{
-		PreFilterBudget: 0, MapReduceThresholdBytes: 1000,
+		PreFilterBudget: 0, MapReduceThresholdBytes: 1000, CompactionDeadline: 45 * time.Second,
 	}, NewStructuralTrimmer(nil, nil), log)
 	if log.normalizationWarnings() != 1 {
 		t.Errorf("unset PreFilterBudget must resolve to the default before the threshold compare; expected 1 warning, got %d", log.normalizationWarnings())
@@ -273,14 +289,14 @@ func TestDistillKeySalt_KeysRoutingKnobs(t *testing.T) {
 	thrChanged := base
 	thrChanged.MapReduceThresholdBytes = 262144
 
-	baseSalt := distillKeySalt(base, nil)
-	if distillKeySalt(base, nil) != baseSalt {
+	baseSalt := distillKeySalt(base, nil, nil)
+	if distillKeySalt(base, nil, nil) != baseSalt {
 		t.Error("salt must be stable for an identical config")
 	}
-	if distillKeySalt(ctxChanged, nil) == baseSalt {
+	if distillKeySalt(ctxChanged, nil, nil) == baseSalt {
 		t.Error("a ModelContextTokens change must change the salt (routing/reduce-gate behavior changed)")
 	}
-	if distillKeySalt(thrChanged, nil) == baseSalt {
+	if distillKeySalt(thrChanged, nil, nil) == baseSalt {
 		t.Error("a MapReduceThresholdBytes change must change the salt (routing behavior changed)")
 	}
 }
@@ -489,12 +505,12 @@ func TestChunkStrategy_Stamped(t *testing.T) {
 func TestDistillKeySalt_SelfNormalizes(t *testing.T) {
 	raw := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, MapReduceThresholdBytes: 1000} // 1000 < prefilter → runs as 0
 	normalized := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, MapReduceThresholdBytes: 0}
-	if distillKeySalt(raw, nil) != distillKeySalt(normalized, nil) {
+	if distillKeySalt(raw, nil, nil) != distillKeySalt(normalized, nil, nil) {
 		t.Error("a raw config must salt identically to its normalized form (same runtime behavior → same key)")
 	}
 	unsetCtx := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072}
 	explicitDefault := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, ModelContextTokens: defaultModelContextTokens}
-	if distillKeySalt(unsetCtx, nil) != distillKeySalt(explicitDefault, nil) {
+	if distillKeySalt(unsetCtx, nil, nil) != distillKeySalt(explicitDefault, nil, nil) {
 		t.Error("an unset ModelContextTokens must salt as its backfilled default")
 	}
 }
@@ -899,5 +915,398 @@ func TestChunkStrategy_LinesStamped(t *testing.T) {
 
 	if meta.ChunkStrategy != "lines" {
 		t.Errorf("expected chunk_strategy=lines for newline-delimited non-JSON, got %q", meta.ChunkStrategy)
+	}
+}
+
+// --- Tier-1 review fixes (repro tests written BEFORE the fixes; 2026-07-18) ---
+
+// TestSingleCall_EmptyLLMResponseFallsOpenNotCached: a 200-with-empty-content provider response
+// on the SINGLE-CALL path must behave like an error — structural fallback + non-cacheable — as
+// every map-reduce call already does. Pre-fix it was returned as a "successful" empty distill,
+// stamped lossless, and cached for the TTL.
+func TestSingleCall_EmptyLLMResponseFallsOpenNotCached(t *testing.T) {
+	// Table-driven over exactly-empty AND whitespace-only (review pin: TrimSpace is
+	// load-bearing — a "\n"-only 200 previously shipped as a successful lossless distill).
+	for _, empty := range []string{"", " \n\t "} {
+		mockAI := &countingAI{out: empty, usage: core.TokenUsage{PromptTokens: 42}}
+		config := ResultDistillConfig{
+			Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+			Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+			CompactionDeadline: 5 * time.Second,
+		}
+		d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+		ctx, nonCacheable := withNonCacheableCapture(context.Background())
+		ctx, acc := core.WithTokenUsageAccumulator(ctx)
+		out := d.ProcessForPrompt(ctx, mapReduceTestArray(30), 300, // > maxBytes → distill path
+			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+		if strings.TrimSpace(out) == "" {
+			t.Errorf("out=%q: an empty LLM response must fall open to the structural floor, not ship empty", empty)
+		}
+		if !*nonCacheable {
+			t.Errorf("out=%q: an empty LLM response must be non-cacheable (transient provider edge)", empty)
+		}
+		// The empty call still BILLED its prompt tokens — usage is recorded before the guard
+		// (review pin: moving RecordTokenUsage back below the guard hides a content-filter
+		// burst from cost telemetry).
+		_, byPhase := acc.Snapshot()
+		if byPhase["distillation"].PromptTokens != 42 {
+			t.Errorf("out=%q: expected the billed empty call in usage accounting, got %+v", empty, byPhase)
+		}
+	}
+}
+
+// TestSingleCall_FailureFallbackUsesFlooredTarget: the single-call LLM-failure fallback must
+// floor at targetSize (>= minDistillTargetSize) like every map-reduce fallback — not the raw
+// per-result maxBytes, which can be tiny (or zero) and re-create the budget-0 near-empty output
+// the floor exists to prevent, on exactly the runs that also lost their LLM pass.
+func TestSingleCall_FailureFallbackUsesFlooredTarget(t *testing.T) {
+	mockAI := &failAfterAI{succeedUntil: 0} // every call errors
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	out := d.ProcessForPrompt(context.Background(), mapReduceTestArray(40), 50, // tiny budget
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	// The floored fallback must deliver substantive content (~minDistillTargetSize), not a
+	// ~50-byte sliver that is mostly annotation.
+	if len(stripResultAnnotation(out)) < 100 {
+		t.Errorf("failure fallback must floor at targetSize, got %d body bytes: %q",
+			len(stripResultAnnotation(out)), out)
+	}
+}
+
+// TestNormalize_BackfillsDistillThreshold: a minimal config (Enabled+Model only) previously had
+// threshold 0 → EVERY result, however tiny, took a paid LLM distill call. Same rationale as the
+// ModelContextTokens backfill.
+func TestNormalize_BackfillsDistillThreshold(t *testing.T) {
+	got := normalizeResultDistillConfig(ResultDistillConfig{}, nil)
+	if got.DistillThreshold != defaultDistillThreshold {
+		t.Errorf("expected DistillThreshold backfill to %d, got %d", defaultDistillThreshold, got.DistillThreshold)
+	}
+	kept := normalizeResultDistillConfig(ResultDistillConfig{DistillThreshold: 42}, nil)
+	if kept.DistillThreshold != 42 {
+		t.Errorf("an explicit threshold must be preserved, got %d", kept.DistillThreshold)
+	}
+}
+
+// TestDeadlineDisabledWarnsOncePerStack: CompactionDeadline==0 is a DOCUMENTED opt-out ("0
+// disables the deadline"), so it is never backfilled — but an unbounded distill config can fan
+// out with no wall-clock cap, so the STACK assemblers (factory / Layer-2 helper) warn exactly
+// once. The warn deliberately does NOT live in normalizeResultDistillConfig, which runs per
+// distiller construction (a factory builds two: synthesis + continuation → double warns).
+func TestDeadlineDisabledWarnsOncePerStack(t *testing.T) {
+	// Normalization itself must stay silent about the deadline and must not backfill it.
+	log := &warnCapturingLogger{}
+	got := normalizeResultDistillConfig(ResultDistillConfig{}, log)
+	if got.CompactionDeadline != 0 {
+		t.Errorf("the documented 0=disabled semantic must be preserved (no backfill), got %v", got.CompactionDeadline)
+	}
+	if log.normalizationWarnings() != 0 {
+		t.Errorf("normalize must not warn about the deadline (stack assemblers do), got %d", log.normalizationWarnings())
+	}
+	// The Layer-2 helper warns once for a deadline-less config (distinct advisory operation,
+	// never conflated with normalization warnings)…
+	helper := &warnCapturingLogger{}
+	BuildDistillationEnabledResultProcessor(ResultDistillConfig{Enabled: true, Model: "fast"},
+		&countingAI{}, nil, helper)
+	if helper.advisoryWarnings() != 1 {
+		t.Errorf("Layer-2 helper: expected one advisory deadline warning, got %d", helper.advisoryWarnings())
+	}
+	if helper.normalizationWarnings() != 0 {
+		t.Errorf("the advisory must not use the normalization operation, got %d normalization warns", helper.normalizationWarnings())
+	}
+	// …and stays quiet when a deadline is set.
+	quiet := &warnCapturingLogger{}
+	BuildDistillationEnabledResultProcessor(ResultDistillConfig{Enabled: true, Model: "fast", CompactionDeadline: 45 * time.Second},
+		&countingAI{}, nil, quiet)
+	if quiet.advisoryWarnings() != 0 {
+		t.Errorf("a set deadline must not warn, got %d", quiet.advisoryWarnings())
+	}
+}
+
+// TestLayer2Helper_EffectiveMinBytes pins the raw-vs-effective threshold alignment: a minimal
+// config's zero DistillThreshold must yield a cache wrapper gating at the BACKFILLED 16 KB, not
+// minBytes=0 (which would cache every sub-threshold passthrough).
+func TestLayer2Helper_EffectiveMinBytes(t *testing.T) {
+	p := BuildDistillationEnabledResultProcessor(ResultDistillConfig{Enabled: true, Model: "fast", CompactionDeadline: 45 * time.Second},
+		&countingAI{}, newMapDigestCache(), nil)
+	cp, ok := p.(*cachingProcessor)
+	if !ok {
+		t.Fatalf("expected *cachingProcessor, got %T", p)
+	}
+	if cp.minBytes != defaultDistillThreshold {
+		t.Errorf("cache minBytes = %d, want the effective backfilled threshold %d", cp.minBytes, defaultDistillThreshold)
+	}
+}
+
+// TestDistillKeySalt_KeysPreserveKeys: the stage-1 pre-filter's PreserveKeys change what the LLM
+// sees on the cacheable single-call path, so they must be in the salt — two orchestrators
+// sharing a Redis cache with different PreserveKeys previously computed identical keys and could
+// serve each other's differently-filtered outputs for the TTL.
+func TestDistillKeySalt_KeysPreserveKeys(t *testing.T) {
+	cfg := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, ModelContextTokens: 150000}
+	none := distillKeySalt(cfg, nil, nil)
+	withKeys := distillKeySalt(cfg, nil, []string{"account_id"})
+	if none == withKeys {
+		t.Error("PreserveKeys must change the salt (they change what the LLM sees)")
+	}
+	// Order-insensitive: same set → same behavior → same key (no cache fragmentation).
+	ab := distillKeySalt(cfg, nil, []string{"a", "b"})
+	ba := distillKeySalt(cfg, nil, []string{"b", "a"})
+	if ab != ba {
+		t.Error("PreserveKeys order must not fragment the cache (same set, same salt)")
+	}
+}
+
+// TestModelTruncationNoteNotPeeled pins a DELIBERATE exemption (review-reversed): the
+// model-emitted "[truncated: …]" form (system prompt instruction #5) is NOT in
+// annotationPrefixes, because real tools emit their own "[truncated: …]" trailers and the
+// registry peel runs on tool-derived text — peeling would silently delete a TOOL's truncation
+// signal and present visibly-truncated source as complete. The cost is latent-only (a distiller
+// wired as an agent-input processor fails open with a warn). See the registry doc.
+func TestModelTruncationNoteNotPeeled(t *testing.T) {
+	body := "connection log line one"
+	toolTrailer := "\n[truncated: output exceeded 4096 bytes]"
+	if got := stripResultAnnotation(body + toolTrailer); got != body+toolTrailer {
+		t.Errorf("a tool's own [truncated: trailer must survive the peel, got %q", got)
+	}
+}
+
+// TestPartialNote_NeutralWording: completed<total is also reached on provider failures with the
+// deadline never firing, so the note must not claim a cause ("within the time budget") it cannot
+// know — disclosures state only what happened.
+func TestPartialNote_NeutralWording(t *testing.T) {
+	note := partialSegmentsDisclosure(3, 16)
+	if strings.Contains(note, "time budget") {
+		t.Errorf("the partial note must not attribute a cause it cannot know: %q", note)
+	}
+	if !strings.Contains(note, "3 of 16 segments analyzed") || !strings.Contains(note, "UNKNOWN") {
+		t.Errorf("the partial note must keep the factual N-of-M + UNKNOWN safeguard: %q", note)
+	}
+	if strings.Count(note, "\n") != 1 || !strings.HasSuffix(note, "]") {
+		t.Errorf("shape contract (one line, ends ']') violated: %q", note)
+	}
+}
+
+// TestCombineTruncatedReason_SpanAttribute: transient reduce failure and deterministic
+// context-overflow both end as CombineTruncated; the canary's reduce-fallback measurement needs
+// them distinguishable in telemetry.
+func TestCombineTruncatedReason_SpanAttribute(t *testing.T) {
+	cases := []struct {
+		name          string
+		contextTokens int
+		wantReason    string
+	}{
+		// MCT 1500: the reduce gate is satisfiable, the reduce call is attempted and fails
+		// (failAfterAI) → transient.
+		{"transient reduce failure", 1500, "reduce_failed"},
+		// MCT 100: the gate is unsatisfiable → deterministic truncation without an attempt.
+		{"deterministic over-context", 100, "over_context"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := setupExecutorTestTracer(t)
+			payload := mapReduceTestArray(40)
+			pre, _, _, _ := chunkWholeUnits(payload, 100)
+			mockAI := &failAfterAI{succeedUntil: len(pre), out: "FINDING " + strings.Repeat("x", 60)}
+			config := ResultDistillConfig{
+				Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100,
+				Model: "fast", ModelContextTokens: tc.contextTokens, MapConcurrency: 1,
+				MapReduceThresholdBytes: 100,
+				CompactionDeadline:      5 * time.Second,
+			}
+			d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+			tracer := otel.Tracer("phase17-test")
+			ctx, span := tracer.Start(context.Background(), "combine-reason")
+			d.ProcessForPrompt(ctx, payload, 2000,
+				ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"})
+			span.End()
+
+			var got string
+			for _, s := range recorder.Ended() {
+				for _, ev := range s.Events() {
+					if ev.Name == "result_distill.mapreduce_complete" {
+						for _, kv := range ev.Attributes {
+							if string(kv.Key) == "combine_truncated_reason" {
+								got = kv.Value.AsString()
+							}
+						}
+					}
+				}
+			}
+			if got != tc.wantReason {
+				t.Errorf("combine_truncated_reason = %q, want %q", got, tc.wantReason)
+			}
+		})
+	}
+}
+
+// nilRespAI models the provider edge both guards defend against: a nil *AIResponse with a nil
+// error (middleware/stop-token edge). No other mock in the package can produce it.
+type nilRespAI struct{}
+
+func (nilRespAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
+	return nil, nil
+}
+func (nilRespAI) StreamResponse(_ context.Context, _ string, _ *core.AIOptions, _ func(string)) (*core.AIResponse, error) {
+	return nil, nil
+}
+
+// TestExtractChunk_NilAndWhitespaceGuard pins extractChunk's empty/whitespace/nil-response guard
+// (review mutation check: disabling it left the whole suite green):
+//   - a nil response with nil error must become an error, never a worker-goroutine panic;
+//   - whitespace-only chunk extracts count as FAILED segments → the partial note fires and raw
+//     "\n" never ships to synthesis (the validated pre-fix pathology).
+func TestExtractChunk_NilAndWhitespaceGuard(t *testing.T) {
+	t.Run("nil response with nil error becomes an error, not a panic", func(t *testing.T) {
+		config := ResultDistillConfig{
+			Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+			Model: "fast", ModelContextTokens: 50, MapConcurrency: 2, CompactionDeadline: 5 * time.Second,
+		}
+		d := NewLLMDistiller(nilRespAI{}, config, NewStructuralTrimmer(nil, nil), nil)
+		out, err := d.extractChunk(context.Background(), "chunk data", 256,
+			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"}, "test call")
+		if err == nil || out != "" {
+			t.Errorf("nil response must convert to an error, got out=%q err=%v", out, err)
+		}
+		// And through the single-call path: structural fallback + non-cacheable, no panic.
+		ctx, nonCacheable := withNonCacheableCapture(context.Background())
+		single := NewLLMDistiller(nilRespAI{}, ResultDistillConfig{
+			Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+			Model: "fast", ModelContextTokens: 1_000_000, CompactionDeadline: 5 * time.Second,
+		}, NewStructuralTrimmer(nil, nil), nil)
+		if out := single.ProcessForPrompt(ctx, mapReduceTestArray(30), 300,
+			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"}); strings.TrimSpace(out) == "" {
+			t.Error("single-call nil response must fall open to the structural floor")
+		}
+		if !*nonCacheable {
+			t.Error("single-call nil response must be non-cacheable")
+		}
+	})
+	t.Run("whitespace-only chunk extracts count as failed segments", func(t *testing.T) {
+		payload := mapReduceTestArray(16)
+		pre, _, _, _ := chunkWholeUnits(payload, 100)
+		if len(pre) < 3 {
+			t.Fatalf("fixture needs >=3 chunks, got %d", len(pre))
+		}
+		// First two chunks succeed with substance; the rest return "\n" — previously counted
+		// as successful segments joining raw whitespace into the body.
+		mockAI := &failAfterAI{succeedUntil: 2, out: "FINDING " + strings.Repeat("x", 60), afterOut: "\n"}
+		config := ResultDistillConfig{
+			Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+			Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 1,
+			MapReduceThresholdBytes: 100, CompactionDeadline: 5 * time.Second,
+		}
+		d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+		ctx, meta := WithTrimMetadataCapture(context.Background())
+		out := d.ProcessForPrompt(ctx, payload, 2000,
+			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"})
+		if !strings.Contains(out, partialDisclosureMarker) {
+			t.Errorf("whitespace segments must surface as a partial run, got: %q", out)
+		}
+		if want := fmt.Sprintf("2 of %d segments analyzed", len(pre)); !strings.Contains(out, want) {
+			t.Errorf("expected %q in the partial note, got: %q", want, out)
+		}
+		if meta.SegmentsAnalyzed != 2 || !meta.PartialCoverage {
+			t.Errorf("metadata must count whitespace extracts as failed: %+v", *meta)
+		}
+	})
+}
+
+// TestSingleChunk_EmptyExtractRecordsUsage pins usage-before-guard on the MAP-REDUCE side: an
+// empty single-chunk extract still bills its prompt tokens, and that must reach the
+// distillation_mapreduce phase accounting before the guard converts it to a failure.
+func TestSingleChunk_EmptyExtractRecordsUsage(t *testing.T) {
+	mockAI := &countingAI{out: "", usage: core.TokenUsage{PromptTokens: 17}}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	ctx, acc := core.WithTokenUsageAccumulator(context.Background())
+	d.ProcessForPrompt(ctx, mapReduceTestArray(4), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	_, byPhase := acc.Snapshot()
+	if byPhase["distillation_mapreduce"].PromptTokens != 17 {
+		t.Errorf("expected the billed empty extract in usage accounting, got %+v", byPhase)
+	}
+}
+
+// TestFactory_EffectiveMinBytesAndAdvisoryOnce pins the CreateOrchestrator-path twins of the
+// Layer-2 assertions (review mutation checks: both factory arms were revert-green):
+//   - the cache wrapper's minBytes is the EFFECTIVE backfilled threshold for a zero-threshold
+//     config, and
+//   - the deadline-opt-out advisory fires exactly ONCE per orchestrator (not twice, despite two
+//     distiller constructions), with the distinct advisory operation.
+func TestFactory_EffectiveMinBytesAndAdvisoryOnce(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ResultDistill.DistillThreshold = 0   // hand-built-config shape: unset threshold
+	cfg.ResultDistill.CompactionDeadline = 0 // documented opt-out
+	log := &warnCapturingLogger{}
+	deps := OrchestratorDependencies{
+		Discovery:    NewMockDiscovery(),
+		AIClient:     NewMockAIClient(),
+		DistillCache: &core.MockDigestCache{},
+		Logger:       log,
+	}
+	orch, err := CreateOrchestrator(cfg, deps)
+	if err != nil {
+		t.Fatalf("CreateOrchestrator: %v", err)
+	}
+	cp, ok := orch.resultProcessor.(*cachingProcessor)
+	if !ok {
+		t.Fatalf("expected *cachingProcessor, got %T", orch.resultProcessor)
+	}
+	if cp.minBytes != defaultDistillThreshold {
+		t.Errorf("factory cache minBytes = %d, want effective %d", cp.minBytes, defaultDistillThreshold)
+	}
+	if got := log.advisoryWarnings(); got != 1 {
+		t.Errorf("deadline advisory must fire exactly once per orchestrator, got %d", got)
+	}
+
+	// With a deadline set: no advisory at all.
+	cfg2 := DefaultConfig()
+	log2 := &warnCapturingLogger{}
+	deps2 := OrchestratorDependencies{
+		Discovery: NewMockDiscovery(), AIClient: NewMockAIClient(), Logger: log2,
+	}
+	if _, err := CreateOrchestrator(cfg2, deps2); err != nil {
+		t.Fatalf("CreateOrchestrator: %v", err)
+	}
+	if got := log2.advisoryWarnings(); got != 0 {
+		t.Errorf("a set deadline must not produce the advisory, got %d", got)
+	}
+}
+
+// TestSingleCall_FailureFallbackKeepsGenerousBudget pins the other direction of the fallback
+// budget rule (review-caught regression: flooring ALONE capped a 16 KB allocation at
+// ~TargetSize, quadrupling content loss on failure bursts): with maxBytes > targetSize the
+// fallback must use the full maxBytes, not the floor.
+func TestSingleCall_FailureFallbackKeepsGenerousBudget(t *testing.T) {
+	mockAI := &failAfterAI{succeedUntil: 0} // every call errors
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	// ~19 KB payload, generous 16 KB budget: the fallback must deliver well beyond the
+	// 2000-byte targetSize cap the regression imposed.
+	payload := mapReduceTestArray(800)
+	out := d.ProcessForPrompt(context.Background(), payload, 16384,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	if body := len(stripResultAnnotation(out)); body <= 3000 {
+		t.Errorf("generous-budget fallback must not be capped at targetSize, got %d body bytes", body)
 	}
 }

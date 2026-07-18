@@ -242,6 +242,7 @@ collect:
 	// it keeps zero sentences and silently discards everything (the live
 	// orch-1781968441143087789 incident: 1.16 MB → "[trimmed: 0/226 sentences]").
 	combineTruncated := false
+	combineReason := "" // "reduce_failed" (transient) vs "over_context" (deterministic) — the canary's reduce-fallback measurement needs them distinguishable
 	if len(combined) > targetSize {
 		// P17.7 — budget the REAL reduce call (data + prompt wrapper + system prompt + output
 		// reserve), not the data alone: a `combined` near the limit would otherwise overflow the
@@ -258,11 +259,13 @@ collect:
 				// the TTL. The deterministic over-context truncation below stays cacheable.
 				combined = truncateResultBytes(combined, targetSize)
 				combineTruncated = true
+				combineReason = "reduce_failed"
 				markResultNonCacheable(ctx)
 			}
 		} else {
 			combined = truncateResultBytes(combined, targetSize)
 			combineTruncated = true
+			combineReason = "over_context"
 		}
 	}
 
@@ -305,7 +308,7 @@ collect:
 		}
 	}
 
-	telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_complete",
+	completeAttrs := []attribute.KeyValue{
 		attribute.String("request_id", requestIDFromBaggage(ctx)),
 		attribute.String("step_id", stepCtx.StepID),
 		attribute.Int("chunks_total", total),
@@ -313,7 +316,11 @@ collect:
 		attribute.Int("combined_bytes", len(combined)),
 		attribute.Int("llm_input_bytes", int(llmInputBytes.Load())),
 		attribute.String("chunk_strategy", chunkStrategy),
-	)
+	}
+	if combineReason != "" {
+		completeAttrs = append(completeAttrs, attribute.String("combine_truncated_reason", combineReason))
+	}
+	telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_complete", completeAttrs...)
 	if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 		registry.Counter("orchestration.result_distill.mapreduce", "agent_name", stepCtx.AgentName)
 	}
@@ -379,6 +386,17 @@ func (d *LLMDistiller) extractChunk(
 	start := time.Now()
 	resp, err := d.aiClient.GenerateResponse(d.deferLLMRecordingIfWeWillRecord(ctx), prompt, options)
 	durMs := time.Since(start).Milliseconds()
+	if err == nil && resp != nil {
+		// Usage first (the call billed its prompt tokens even when content is unusable),
+		// mirroring the single-call path's ordering.
+		core.RecordTokenUsage(ctx, "distillation_mapreduce", resp.Usage)
+	}
+	if err == nil && (resp == nil || strings.TrimSpace(resp.Content) == "") {
+		// nil-response and whitespace-only 200s are the same transient class as an error:
+		// the nil deref below would otherwise PANIC a worker goroutine, and a "\n" extract
+		// previously passed the callers' out != "" checks as a successful chunk.
+		err = fmt.Errorf("empty extraction result")
+	}
 	if err != nil {
 		d.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:            "result_distillation",
@@ -397,7 +415,6 @@ func (d *LLMDistiller) extractChunk(
 		})
 		return "", err
 	}
-	core.RecordTokenUsage(ctx, "distillation_mapreduce", resp.Usage)
 	d.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "result_distillation",
 		Timestamp:        start,

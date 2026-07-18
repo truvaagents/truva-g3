@@ -1273,7 +1273,7 @@ func DefaultConfig() *OrchestratorConfig {
 	// (see AI_PROVIDERS_SETUP_GUIDE.md Issue 7).
 	config.ResultDistill = ResultDistillConfig{
 		Enabled:                 true,
-		DistillThreshold:        16384,
+		DistillThreshold:        defaultDistillThreshold,
 		PreFilterBudget:         defaultPreFilterBudget, // 128 KB — fits the 64K fast-tier floor; see const doc
 		TargetSize:              4096,
 		Model:                   "fast",

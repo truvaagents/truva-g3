@@ -259,8 +259,8 @@ func TestCachingProcessor_KeySaltSeparatesConfigs(t *testing.T) {
 	cache := newMapDigestCache() // shared backing store (e.g. same Redis instance)
 	innerA := &countingProcessor{output: "FROM-MODEL-A"}
 	innerB := &countingProcessor{output: "FROM-MODEL-B"}
-	pA := NewCachingProcessor(innerA, cache, time.Minute, 10, distillKeySalt(ResultDistillConfig{Model: "modelA", TargetSize: 4096}, nil), nil)
-	pB := NewCachingProcessor(innerB, cache, time.Minute, 10, distillKeySalt(ResultDistillConfig{Model: "modelB", TargetSize: 4096}, nil), nil)
+	pA := NewCachingProcessor(innerA, cache, time.Minute, 10, distillKeySalt(ResultDistillConfig{Model: "modelA", TargetSize: 4096}, nil, nil), nil)
+	pB := NewCachingProcessor(innerB, cache, time.Minute, 10, distillKeySalt(ResultDistillConfig{Model: "modelB", TargetSize: 4096}, nil, nil), nil)
 
 	big := strings.Repeat("x", 100)
 	sc := ResultProcessorContext{Instruction: "same"}
@@ -278,26 +278,26 @@ func TestCachingProcessor_KeySaltSeparatesConfigs(t *testing.T) {
 }
 
 func TestDistillKeySalt_DistinguishesConfig(t *testing.T) {
-	base := distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 32768}, nil)
-	if base == distillKeySalt(ResultDistillConfig{Model: "smart", TargetSize: 4096, PreFilterBudget: 32768}, nil) {
+	base := distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 32768}, nil, nil)
+	if base == distillKeySalt(ResultDistillConfig{Model: "smart", TargetSize: 4096, PreFilterBudget: 32768}, nil, nil) {
 		t.Error("different model must produce a different salt")
 	}
-	if base == distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 2048, PreFilterBudget: 32768}, nil) {
+	if base == distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 2048, PreFilterBudget: 32768}, nil, nil) {
 		t.Error("different target size must produce a different salt")
 	}
-	if base == distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 65536}, nil) {
+	if base == distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 65536}, nil, nil) {
 		t.Error("different pre-filter budget must produce a different salt")
 	}
 	cfg := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 32768}
-	if distillKeySalt(cfg, nil) == distillKeySalt(cfg, &AIOptionsOverride{Model: StringPtr("override-model")}) {
+	if distillKeySalt(cfg, nil, nil) == distillKeySalt(cfg, &AIOptionsOverride{Model: StringPtr("override-model")}, nil) {
 		t.Error("an AI options override must produce a different salt")
 	}
-	if distillKeySalt(cfg, &AIOptionsOverride{Temperature: Float32Ptr(0.1)}) ==
-		distillKeySalt(cfg, &AIOptionsOverride{Temperature: Float32Ptr(0.9)}) {
+	if distillKeySalt(cfg, &AIOptionsOverride{Temperature: Float32Ptr(0.1)}, nil) ==
+		distillKeySalt(cfg, &AIOptionsOverride{Temperature: Float32Ptr(0.9)}, nil) {
 		t.Error("a different override temperature must produce a different salt")
 	}
 	// Determinism.
-	if base != distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 32768}, nil) {
+	if base != distillKeySalt(ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 32768}, nil, nil) {
 		t.Error("salt must be deterministic for identical config")
 	}
 }

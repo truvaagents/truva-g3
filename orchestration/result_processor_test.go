@@ -1991,8 +1991,9 @@ func TestLLMDistiller_CapturesMetadataOnSuccess(t *testing.T) {
 func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 	// On LLM failure the structural preFilter is invoked as fallback.
 	// Metadata must NOT have Method="distill".
-	// Use maxBytes=20 so the fallback trimmer actually trims (37 bytes > 20), which
-	// means captureTrimMetadata is called with the structural method.
+	// The fallback floors its budget at targetSize (min 256 — Tier-1 review fix: a tiny
+	// maxBytes must not re-create the near-empty floor output), so the input must exceed
+	// that floor for the fallback trimmer to actually trim and capture structural metadata.
 	mockAI := &distillerMockAI{err: fmt.Errorf("api error")}
 	trimmer := NewStructuralTrimmer(nil, nil)
 	config := ResultDistillConfig{
@@ -2000,7 +2001,11 @@ func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 	}
 	distiller := NewLLMDistiller(mockAI, config, trimmer, nil)
 
-	largeInput := `{"field1":"value1","field2":"value2"}`
+	largeInput := `{"fields":[` // ~600 bytes: above the 256-byte floored fallback budget
+	for i := 0; i < 20; i++ {
+		largeInput += fmt.Sprintf(`{"k%02d":"value-with-some-content-%02d"},`, i, i)
+	}
+	largeInput = strings.TrimSuffix(largeInput, ",") + `]}`
 	ctx, meta := WithTrimMetadataCapture(context.Background())
 	distiller.ProcessForPrompt(ctx, largeInput, 20, ResultProcessorContext{
 		StepID: "s1", AgentName: "test", Instruction: "summarize",
@@ -2010,7 +2015,7 @@ func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 		t.Error("Fallback path must not use Method='distill'")
 	}
 	if meta.Method == "" {
-		t.Error("Expected metadata to be populated by structural fallback (input 37b > budget 20b)")
+		t.Error("Expected metadata to be populated by structural fallback (input ~770b > floored 256b fallback budget)")
 	}
 }
 

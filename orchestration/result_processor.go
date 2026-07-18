@@ -283,6 +283,14 @@ var annotationPrefixes = []string{
 	"\n[findings truncated:",
 }
 
+// The MODEL-emitted "[truncated: …]" form (distillation system prompt, instruction #5) is
+// DELIBERATELY not registered: real tools emit their own "[truncated: …]" trailers, and the
+// registry peel runs on tool-derived text (the trimmer floor, degeneracy accounting, the
+// agent-input re-parse) — peeling would silently delete a TOOL's truncation signal and present
+// visibly-truncated source as complete, the exact false-negative this system exists to block.
+// The cost of the exemption is latent-only: a distiller wired as an agent-input processor
+// (non-default) fails open with a warn when distilled output ends with the model's note.
+
 // sanitizeAnnotationText makes free text (e.g. JSON key names) safe to embed in a
 // single-line annotation: a raw newline would break the registry's shape contract — the
 // stripper peels only single-line notes, so a multi-line note defeats the re-parse and the
@@ -349,11 +357,15 @@ func truncateBytesWithUnknown(s string, maxBytes int) string {
 }
 
 // partialSegmentsDisclosure discloses that only completed of total map-reduce segments were
-// analyzed within the time budget. A named emitter (not an inline Sprintf at the call site) so
-// the registry round-trip test renders the exact production form.
+// analyzed (deadline, provider failure, or any other per-chunk loss — deliberately no causal
+// claim; see the body comment) and that the remainder is UNKNOWN. A named emitter (not an
+// inline Sprintf at the call site) so the registry round-trip test renders the exact
+// production form.
 func partialSegmentsDisclosure(completed, total int) string {
+	// No causal claim ("within the time budget"): completed<total is also reached on provider
+	// failures with the deadline never firing — disclosures state only what happened.
 	return fmt.Sprintf(
-		"\n%s %d of %d segments analyzed within the time budget; treat the rest as UNKNOWN, not absent]",
+		"\n%s %d of %d segments analyzed; treat the rest as UNKNOWN, not absent]",
 		partialDisclosureMarker, completed, total)
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"time"
 
@@ -79,7 +80,7 @@ func distillCacheKey(response, instruction, originalQuery string, maxBytes int) 
 // Per-call context (agent, capability) is intentionally excluded: the cached value is the
 // distilled CONTENT, driven by the result + instruction, not by those prompt hints — so the
 // cache stays shareable across agents and pods.
-func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
+func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride, preserveKeys []string) string {
 	cfg = normalizeResultDistillConfig(cfg, nil)
 	h := sha256.New()
 	h.Write([]byte(distillPromptVersion))
@@ -94,6 +95,20 @@ func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
 	h.Write([]byte{0})
 	h.Write([]byte(strconv.Itoa(cfg.MapReduceThresholdBytes)))
 	h.Write([]byte{0})
+	// Stage-1 pre-filter identity: PreserveKeys change which fields survive the lossy stage-1
+	// trim — i.e. what the LLM sees — on the cacheable single-call path, so two orchestrators
+	// sharing a cache with different keys must not serve each other's outputs. Sorted so key
+	// ORDER (behaviorally irrelevant) cannot fragment the cache; nil/empty writes nothing, so
+	// existing no-keys salts are unchanged (no needless invalidation).
+	if len(preserveKeys) > 0 {
+		sorted := append([]string(nil), preserveKeys...)
+		sort.Strings(sorted)
+		h.Write([]byte("pk:"))
+		for _, k := range sorted {
+			h.Write([]byte(k))
+			h.Write([]byte{0})
+		}
+	}
 	if opts != nil {
 		// AIOptionsOverride is JSON-tagged; json.Marshal sorts map keys, so this is stable.
 		if b, err := json.Marshal(opts); err == nil {

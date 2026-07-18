@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,17 @@ func normalizeResultDistillConfig(cfg ResultDistillConfig, logger core.Logger) R
 	if cfg.ModelContextTokens <= 0 {
 		cfg.ModelContextTokens = defaultModelContextTokens
 	}
+	// A zero threshold sends EVERY result — however tiny — through a paid LLM distill call on
+	// the hot path (and the caching wrapper caches each one). A minimal Layer-2/Layer-3 config
+	// means "defaults please", not "distill everything"; backfill like the two fields above.
+	if cfg.DistillThreshold <= 0 {
+		cfg.DistillThreshold = defaultDistillThreshold
+	}
+	// CompactionDeadline is deliberately NOT backfilled: 0 = disabled is a documented
+	// programmatic opt-out (see the config field doc + LIMITS_CHEATSHEET). The advisory
+	// unbounded-fan-out warn lives in the factory and the Layer-2 helper — NOT here — so it
+	// fires once per assembled stack instead of once per distiller construction (a factory
+	// builds two: synthesis + continuation).
 	if cfg.MapReduceThresholdBytes > 0 && cfg.MapReduceThresholdBytes < cfg.PreFilterBudget {
 		if logger != nil {
 			logger.Warn("MapReduceThresholdBytes below PreFilterBudget; ignoring (map-reduce routing stays disabled)",
@@ -255,8 +267,18 @@ func (d *LLMDistiller) ProcessForPrompt(
 	}
 	response, err := d.aiClient.GenerateResponse(callCtx, prompt, options)
 	duration := time.Since(distillStart)
-	if err == nil {
+	// Record usage BEFORE the empty-content guard below: an empty 200 response still billed
+	// its prompt tokens, and hiding it from cost telemetry would make a content-filter burst
+	// read as near-zero spend (the map-reduce path records usage the same way).
+	if err == nil && response != nil {
 		core.RecordTokenUsage(ctx, "distillation", response.Usage)
+	}
+	if err == nil && (response == nil || strings.TrimSpace(response.Content) == "") {
+		// A 200-with-empty/whitespace-only content (content filter, stop-token edge) is the
+		// same transient class as an error: without this guard the empty string ships as a
+		// "successful" distillation — stamped lossless and CACHED for the TTL — while every
+		// map-reduce call already converts the identical condition to a failure.
+		err = fmt.Errorf("empty distillation response")
 	}
 
 	if err != nil {
@@ -303,8 +325,17 @@ func (d *LLMDistiller) ProcessForPrompt(
 		})
 		// This output is a structural fallback, not a successful distillation. Flag it so
 		// the cache does not store a degraded result from a transient LLM/provider failure.
+		// Budget = max(maxBytes, targetSize): the targetSize FLOOR protects tiny/zero budgets
+		// from the near-empty output the floor exists to prevent, while a GENEROUS per-result
+		// budget is kept in full — flooring alone would cap a 16 KB allocation at ~TargetSize
+		// and quadruple content loss on exactly the runs that also lost their LLM pass
+		// (review-caught regression of the first floor fix).
+		fallbackBudget := maxBytes
+		if fallbackBudget < targetSize {
+			fallbackBudget = targetSize
+		}
 		markResultNonCacheable(ctx)
-		return d.preFilter.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
+		return d.preFilter.ProcessForPrompt(ctx, result, fallbackBudget, stepCtx)
 	}
 
 	telemetry.AddSpanEvent(ctx, "result_distill.stage2_complete",
@@ -449,6 +480,11 @@ const minDistillTargetSize = 256
 // count ~4× vs the prior 32 KB. Raise via TRUVAG3_RESULT_DISTILL_PREFILTER on deployments
 // pinned to large-context fast models (Gemini Flash-Lite / gpt-4.1-mini at 1M).
 const defaultPreFilterBudget = 131072
+
+// defaultDistillThreshold is the minimum result size (bytes) that triggers an LLM distillation
+// call, used when ResultDistillConfig.DistillThreshold is unset. Backfilled at normalization: a
+// zero threshold makes EVERY result — however tiny — take a paid LLM call on the hot path.
+const defaultDistillThreshold = 16384
 
 // defaultModelContextTokens is the usable compaction-model context (tokens) used when
 // ResultDistillConfig.ModelContextTokens is unset. Backfilled at normalization: a zero value
