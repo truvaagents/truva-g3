@@ -396,6 +396,11 @@ func toBool(val interface{}) bool {
 		return v != 0
 	case float64:
 		return v != 0
+	case json.Number:
+		// Numbers decoded via unmarshalPreservingNumbers (P17.5) arrive as json.Number;
+		// without this case a numeric truthy flag (enabled:1) silently coerces to false.
+		f, err := v.Float64()
+		return err == nil && f != 0
 	default:
 		return false
 	}

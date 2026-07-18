@@ -82,8 +82,9 @@ func (p *byteBudgetAgentInputProcessor) ProcessInput(ctx context.Context, params
 		// annotationPrefixes form, possibly stacked — so the JSON re-parses.
 		cleanJSON := stripResultAnnotation(trimmedJSON)
 
-		var parsed interface{}
-		if json.Unmarshal([]byte(cleanJSON), &parsed) != nil {
+		// UseNumber so large IDs in the trimmed tool input survive the re-parse verbatim.
+		parsed, perr := unmarshalPreservingNumbers([]byte(cleanJSON))
+		if perr != nil {
 			// Fail open: keep the original value rather than corrupt the tool input.
 			trimmed[key] = val
 			if p.logger != nil {

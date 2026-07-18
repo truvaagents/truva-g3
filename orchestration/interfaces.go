@@ -1255,15 +1255,16 @@ func DefaultConfig() *OrchestratorConfig {
 	// provider) and is ChainClient-safe — a concrete model name would break failover
 	// (see AI_PROVIDERS_SETUP_GUIDE.md Issue 7).
 	config.ResultDistill = ResultDistillConfig{
-		Enabled:            true,
-		DistillThreshold:   16384,
-		PreFilterBudget:    defaultPreFilterBudget, // 128 KB — fits the 64K fast-tier floor; see const doc
-		TargetSize:         4096,
-		Model:              "fast",
-		CacheTTL:           5 * time.Minute,
-		CompactionDeadline: 45 * time.Second,
-		ModelContextTokens: 150000, // ~600 KB; above this, chunk → map-reduce
-		MapConcurrency:     8,
+		Enabled:                 true,
+		DistillThreshold:        16384,
+		PreFilterBudget:         defaultPreFilterBudget, // 128 KB — fits the 64K fast-tier floor; see const doc
+		TargetSize:              4096,
+		Model:                   "fast",
+		CacheTTL:                5 * time.Minute,
+		CompactionDeadline:      45 * time.Second,
+		ModelContextTokens:      defaultModelContextTokens, // ~525 KB; above this, chunk → map-reduce
+		MapConcurrency:          8,
+		MapReduceThresholdBytes: 0, // disabled: context-only routing (P17 canary target ~256 KB)
 	}
 	if enabled := os.Getenv("TRUVAG3_RESULT_DISTILL_ENABLED"); enabled != "" {
 		config.ResultDistill.Enabled = strings.ToLower(enabled) == "true"
@@ -1304,6 +1305,15 @@ func DefaultConfig() *OrchestratorConfig {
 	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			config.ResultDistill.MapConcurrency = n
+		}
+	}
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD"); v != "" {
+		// >= 0 (not > 0): an explicit "0" must be able to DISABLE a future nonzero default
+		// (post-canary flip) — the sentinel is a value, not merely the absence of one. A positive
+		// value below PreFilterBudget is normalized to disabled by NewLLMDistiller (single-chunk
+		// footgun), which has a logger to warn; env parsing stays silent.
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			config.ResultDistill.MapReduceThresholdBytes = n
 		}
 	}
 

@@ -30,8 +30,10 @@ func TestDeserializeStringValues_NestedJSONStrings(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected data to be deserialized to map, got %T", m["data"])
 	}
-	if dataVal["price"] != 150.5 {
-		t.Errorf("Expected price=150.5, got %v", dataVal["price"])
+	// Numbers inside re-parsed JSON strings decode via unmarshalPreservingNumbers (UseNumber),
+	// so they are json.Number (large-ID preservation), not float64.
+	if dataVal["price"] != json.Number("150.5") {
+		t.Errorf("Expected price=json.Number(150.5), got %v (%T)", dataVal["price"], dataVal["price"])
 	}
 	if dataVal["currency"] != "USD" {
 		t.Errorf("Expected currency=USD, got %v", dataVal["currency"])
@@ -115,8 +117,9 @@ func TestDeserializeStringValues_ShortStringsSkipped(t *testing.T) {
 	// "[1]" has len=3 which IS > 2 and starts with '[', so it gets deserialized
 	if arr, ok := m["three"].([]interface{}); !ok {
 		t.Errorf("Expected '[1]' (len=3) to be deserialized to array, got %T", m["three"])
-	} else if len(arr) != 1 || arr[0] != 1.0 {
-		t.Errorf("Expected deserialized [1], got %v", arr)
+	} else if len(arr) != 1 || arr[0] != json.Number("1") {
+		// json.Number, not float64: re-parsed via unmarshalPreservingNumbers (UseNumber).
+		t.Errorf("Expected deserialized [1] as json.Number, got %v", arr)
 	}
 }
 

@@ -1,9 +1,11 @@
 package orchestration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -101,6 +103,20 @@ type ResultDistillConfig struct {
 	//
 	// Env: TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS
 	ModelContextTokens int `json:"model_context_tokens,omitempty"`
+	// MapReduceThresholdBytes routes results larger than this (bytes) to map-reduce even when
+	// they fit the model context — so the whole result is represented to an LLM instead of only
+	// the pre-filtered head (P17). It is INDEPENDENT of ModelContextTokens (which also gates the
+	// reduce-fits-context step; lowering that to change routing would back-fire on the combine).
+	//
+	// 0 = DISABLED: context-only routing (today's behavior). A positive value below the effective
+	// PreFilterBudget is ignored with a factory warning and treated as disabled — a result there
+	// would route to map-reduce but yield a single chunk that skips the LLM (result_mapreduce.go
+	// single-chunk floor). NewLLMDistiller normalizes this at construction for every wiring path.
+	// The canary target is ~1.5–2× PreFilterBudget (~192–256 KB), promoted to the default only
+	// after measurement.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD
+	MapReduceThresholdBytes int `json:"mapreduce_threshold_bytes,omitempty"`
 	// MapConcurrency caps how many chunks are compacted concurrently in the map-reduce
 	// path. <= 0 falls back to the default.
 	//
@@ -134,6 +150,7 @@ type ResultTrimMetadata struct {
 	SegmentsTotal       int     `json:"segments_total,omitempty"`        // map-reduce M (single-call: 1)
 	PartialCoverage     bool    `json:"partial_coverage,omitempty"`      // a deterministic pre-LLM drop occurred
 	CombineTruncated    bool    `json:"combine_truncated,omitempty"`     // reduce output was deterministically truncated
+	ChunkStrategy       string  `json:"chunk_strategy,omitempty"`        // map-reduce chunking mode: array|wrapper|lines|bytes — lines/bytes are byte-lossless but may tear records mid-JSON (degraded extraction quality)
 
 	// ContentLost is the AUTHORITATIVE loss signal, set by every lossy trim operation
 	// (field/item/sentence drops, threshold skips, value truncation, byte cuts). Byte ratios
@@ -419,8 +436,9 @@ func deserializeStringValues(data interface{}) interface{} {
 		return v
 	case string:
 		if len(v) > 2 && (v[0] == '{' || v[0] == '[') {
-			var parsed interface{}
-			if json.Unmarshal([]byte(v), &parsed) == nil {
+			// UseNumber so large IDs inside JSON-encoded string fields (the incident's Loki
+			// log-line shape: JSON carried in a string) survive the re-parse verbatim.
+			if parsed, err := unmarshalPreservingNumbers([]byte(v)); err == nil {
 				return parsed
 			}
 		}
@@ -685,6 +703,31 @@ const (
 	defaultDigestMaxKeys = 50
 )
 
+// unmarshalPreservingNumbers decodes JSON with UseNumber so large integers (snowflake IDs,
+// nanosecond timestamps, request IDs beyond float64's 2^53 exact range) survive verbatim as
+// json.Number instead of being mangled into scientific notation on re-serialization. It is a
+// drop-in for json.Unmarshal into an interface{} across the trim pipeline (structural trimmer,
+// map-reduce chunker, embedded JSON-in-string unwrap) AND the final synthesis re-parses — an ID
+// that survives chunking can still be float64-mangled at the last re-parse before the prompt.
+//
+// Strictness matches json.Unmarshal: invalid JSON errors, and trailing content after the
+// top-level value errors. dec.More() is NOT equivalent — it peeks for a next VALUE and returns
+// false on a trailing ']' or '}', so `{"a":1}]` would pass More() while json.Unmarshal rejects
+// it; require io.EOF on a second Decode instead.
+func unmarshalPreservingNumbers(data []byte) (interface{}, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	var trailing interface{}
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("trailing content after top-level JSON value")
+	}
+	return v, nil
+}
+
 // buildDecisionDigest renders the structure-complete skeleton described above. degenerate is true only
 // for a non-JSON blob (no structure to digest): the caller substitutes the structural floor for the
 // body and C escalates to distill it. Valid JSON is never degenerate — the skeleton keeps the structure
@@ -696,16 +739,12 @@ const (
 // signal ContentLost keys on. A byte-length comparison cannot stand in for it: omission
 // sentinels ("…N more of M") can make a lossy digest LONGER than a small original.
 func buildDecisionDigest(response string, sampleN, scalarMax, maxKeys int) (digest string, degenerate, elided bool) {
-	// Decode with UseNumber so large integers (snowflake IDs, nanosecond timestamps, request IDs beyond
-	// float64's 2^53 exact range) survive verbatim instead of being mangled into scientific notation.
-	dec := json.NewDecoder(strings.NewReader(response))
-	dec.UseNumber()
-	var v interface{}
-	if err := dec.Decode(&v); err != nil {
-		return "", true, false // non-JSON / incomplete → caller substitutes the structural floor; C escalates.
-	}
-	if dec.More() {
-		return "", true, false // trailing content after the JSON value → treat as a blob (not clean JSON).
+	// UseNumber decode (large IDs survive verbatim) with the strict trailing-content check:
+	// non-JSON, incomplete, or trailing-garbage input → treat as a blob; the caller substitutes
+	// the structural floor and C escalates. (The old dec.More() guard passed `{"a":1}]` as clean.)
+	v, err := unmarshalPreservingNumbers([]byte(response))
+	if err != nil {
+		return "", true, false
 	}
 	var el bool
 	out, err := json.Marshal(digestValue(v, sampleN, scalarMax, maxKeys, &el))

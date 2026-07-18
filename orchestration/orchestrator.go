@@ -3671,9 +3671,9 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			telemetry.AddSpanEvent(ctx, "result_trim.completed", attrs...)
 		}
 
-		// Format response: pretty-print JSON, or use plain text as-is
-		var parsed interface{}
-		if json.Unmarshal([]byte(response), &parsed) == nil {
+		// Format response: pretty-print JSON, or use plain text as-is.
+		// UseNumber so large IDs survive this last re-parse before the streaming synthesis prompt.
+		if parsed, perr := unmarshalPreservingNumbers([]byte(response)); perr == nil {
 			parsed = deserializeStringValues(parsed)
 			if formatted, err := json.MarshalIndent(parsed, "", "  "); err == nil {
 				response = string(formatted)

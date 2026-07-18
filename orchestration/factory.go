@@ -356,6 +356,8 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			})
 		} else if config.ResultDistill.Enabled && deps.AIClient != nil {
 			trimmer := NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger)
+			// NewLLMDistiller normalizes the config at construction and distillKeySalt normalizes
+			// identically before hashing, so cache keys can never diverge from routing behavior.
 			distiller := NewLLMDistiller(deps.AIClient, config.ResultDistill, trimmer, deps.Logger)
 			distiller.SetAIOptionsOverride(config.ResultDistillAIOptions)
 			// Propagate debugStore so distillation LLM calls appear in the LLM Debug tab.
@@ -366,12 +368,18 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			// cache returns the bare distiller, so this is a no-op without a cache).
 			processor := NewCachingProcessor(distiller, deps.DistillCache, config.ResultDistill.CacheTTL, config.ResultDistill.DistillThreshold, distillKeySalt(config.ResultDistill, config.ResultDistillAIOptions), deps.Logger)
 			orchestrator.SetResultProcessor(processor)
+			// Log the EFFECTIVE (normalized) knob values the distiller actually runs — raw values
+			// can read prefilter_budget=0 or a threshold normalization disabled, sending an
+			// operator chasing a phantom misconfiguration. (nil logger: the advisory warn already
+			// fired once inside NewLLMDistiller.)
+			effDistill := normalizeResultDistillConfig(config.ResultDistill, nil)
 			factoryLogger.Info("Result processing: LLM distillation (two-stage)", map[string]interface{}{
-				"operation":         "result_trim_initialization",
-				"distill_threshold": config.ResultDistill.DistillThreshold,
-				"prefilter_budget":  config.ResultDistill.PreFilterBudget,
-				"target_size":       config.ResultDistill.TargetSize,
-				"cache_enabled":     deps.DistillCache != nil,
+				"operation":                 "result_trim_initialization",
+				"distill_threshold":         effDistill.DistillThreshold,
+				"prefilter_budget":          effDistill.PreFilterBudget,
+				"target_size":               effDistill.TargetSize,
+				"mapreduce_threshold_bytes": effDistill.MapReduceThresholdBytes,
+				"cache_enabled":             deps.DistillCache != nil,
 			})
 		} else {
 			orchestrator.SetResultProcessor(NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger))
@@ -920,6 +928,8 @@ func BuildDistillationEnabledResultProcessor(
 	if ai == nil {
 		return trimmer // fail-open: no model → structural floor only
 	}
+	// NewLLMDistiller normalizes the config at construction and distillKeySalt normalizes
+	// identically before hashing, so cache keys can never diverge from routing behavior.
 	distiller := NewLLMDistiller(ai, cfg, trimmer, logger)
 	// This Layer-2 helper does not apply a per-phase AI options override, so the salt has
 	// none. Callers using deps.ResultDistillAIOptions go through the factory path above.

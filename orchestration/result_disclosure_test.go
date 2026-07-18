@@ -693,12 +693,17 @@ func TestTransientReduceFailureNotCached(t *testing.T) {
 	// Deterministic fail-the-reduce: every map chunk succeeds, the (chunks+1)th call — the
 	// reduce — errors. Extract lines are long enough that the joined chunk outputs exceed the
 	// floored targetSize (minDistillTargetSize = 256), so the reduce call actually fires.
-	pre, _, _ := chunkWholeUnits(mapReduceTestArray(30), 100)
+	pre, _, _, _ := chunkWholeUnits(mapReduceTestArray(30), 100)
 	mockAI := &failAfterAI{succeedUntil: len(pre), out: "WARN " + strings.Repeat("x", 60)}
 	config := ResultDistillConfig{
 		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100,
-		Model: "fast", ModelContextTokens: 200, MapConcurrency: 4,
-		CompactionDeadline: 5 * time.Second,
+		Model: "fast", ModelContextTokens: 1500, MapConcurrency: 4,
+		// Route by BYTES (threshold == PreFilterBudget: survives normalization and always yields
+		// >1 chunk), decoupled from ModelContextTokens — which is now sized above
+		// tokens(combined)+reduce-overhead (~973 for the 500-token output reserve, P17.7) so the
+		// reduce call actually fires instead of the too-big deterministic truncation.
+		MapReduceThresholdBytes: 100,
+		CompactionDeadline:      5 * time.Second,
 	}
 	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
@@ -715,11 +720,12 @@ func TestTransientReduceFailureNotCached(t *testing.T) {
 	}
 }
 
-// TestWrapperDropDisclosed verifies the map-reduce path discloses that dominantArray
-// served only the record array: wrapper/sibling fields never reach any LLM, so the result must
-// carry the partial-source note and record ContentLost until the Phase 17 chunker preserves
-// wrappers.
-func TestWrapperDropDisclosed(t *testing.T) {
+// TestWrapperPreservedNoDisclosure verifies the P17.6 wrapper-preserving chunker: a wrapped
+// object ({status, stats, data:{result:[...]}}) routed through map-reduce keeps every wrapper /
+// sibling field in every chunk, so the result carries NO partial-source note and records no loss.
+// This is the inverse of the old dominant-array drop — the drop-disclosure wiring is now a
+// dead-man's switch that must stay silent on a wrapped fixture.
+func TestWrapperPreservedNoDisclosure(t *testing.T) {
 	records := make([]interface{}, 30)
 	for i := range records {
 		records[i] = map[string]interface{}{"line": fmt.Sprintf("log entry %02d", i)}
@@ -732,8 +738,11 @@ func TestWrapperDropDisclosed(t *testing.T) {
 	raw, _ := json.Marshal(wrapped)
 
 	mockAI := &countingAI{out: "EXTRACT"}
+	// PreFilterBudget 200 keeps the ~68-byte wrapper well under maxWrapperShare (0.5×200=100), so
+	// the preserving path engages rather than the byte-split fallback; ModelContextTokens 50 forces
+	// the map-reduce route.
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
 		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4,
 		CompactionDeadline: 5 * time.Second,
 	}
@@ -744,16 +753,14 @@ func TestWrapperDropDisclosed(t *testing.T) {
 		StepID: "s1", AgentName: "a", Instruction: "summarize logs",
 	})
 
-	if !strings.Contains(out, "partial source") {
-		t.Errorf("wrapper drop must be disclosed, got: %q", out)
+	if strings.Contains(out, "partial source") {
+		t.Errorf("wrapper-preserving chunker must NOT disclose a wrapper drop, got: %q", out)
 	}
-	if !meta.ContentLost || !meta.PartialCoverage {
-		t.Errorf("wrapper drop must record ContentLost + PartialCoverage, got %+v", *meta)
+	if meta.ContentLost || meta.PartialCoverage {
+		t.Errorf("wrapper preserved: expected ContentLost=false, PartialCoverage=false, got %+v", *meta)
 	}
-	// The recorded ratio must match the disclosure's byte-based figure — never the segment
-	// ratio, which reads 1.0 here (all segments complete) and would contradict PartialCoverage.
-	if meta.SourceCoverageRatio <= 0 || meta.SourceCoverageRatio >= 1 {
-		t.Errorf("wrapper drop must record a sub-1 byte-based coverage ratio, got %v", meta.SourceCoverageRatio)
+	if meta.SourceCoverageRatio != 1 {
+		t.Errorf("wrapper preserved: expected full coverage 1.0, got %v", meta.SourceCoverageRatio)
 	}
 }
 
@@ -1017,28 +1024,27 @@ func TestSanitizeAnnotationText(t *testing.T) {
 	}
 }
 
-// TestNestedWrapperDropCompoundsCoverage exercises the conservative min-composition: a
-// dominant-array element that is itself an oversized wrapper object gets its own wrapper
-// dropped in recursion, and the reported coverage takes the smaller (compounded) loss.
-func TestNestedWrapperDropCompoundsCoverage(t *testing.T) {
-	inner := map[string]interface{}{
-		"meta": strings.Repeat("m", 300), // sibling wrapper, dropped when this element recurses
-		"rows": []interface{}{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
-	}
+// TestWrapperTooLargeFallsBackToByteSplit exercises the maxWrapperShare guard: when the wrapper
+// would occupy more than half a chunk (a heavy sibling / scalar wrapper), the preserving chunker
+// declines and the raw serialization is byte-split instead — lossless byte-wise (no dropped
+// field), so wrapperDropped stays false and coverage stays 1.
+func TestWrapperTooLargeFallsBackToByteSplit(t *testing.T) {
 	outer := map[string]interface{}{
-		"hdr":  strings.Repeat("h", 40),
-		"data": []interface{}{inner}, // dominant array; its lone element exceeds the chunk size
+		"hdr":  strings.Repeat("h", 300), // heavy wrapper: exceeds maxWrapperShare of a 100-byte chunk
+		"data": []interface{}{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
 	}
 	raw, _ := json.Marshal(outer)
 
-	chunks, dropped, cov := chunkWholeUnits(string(raw), 100)
-	if !dropped {
-		t.Fatal("expected wrapperDropped=true for a nested wrapper object")
+	chunks, dropped, cov, _ := chunkWholeUnits(string(raw), 100)
+	if dropped || cov != 1 {
+		t.Errorf("byte-split fallback is byte-lossless: expected dropped=false, cov=1, got dropped=%v cov=%v", dropped, cov)
 	}
-	if !(cov > 0 && cov < 1) {
-		t.Errorf("expected 0 < coverage < 1 from a compounded wrapper drop, got %v", cov)
+	if len(chunks) < 2 {
+		t.Fatalf("expected the oversized payload to be split, got %d chunk(s)", len(chunks))
 	}
-	if len(chunks) == 0 {
-		t.Error("expected at least one chunk")
+	// Byte-split reassembles exactly (chunkByBytes slices without separators; raw is single-line),
+	// so no content is lost even though chunk boundaries land mid-structure.
+	if strings.Join(chunks, "") != string(raw) {
+		t.Error("byte-split chunks must reassemble to the original bytes (no content lost)")
 	}
 }

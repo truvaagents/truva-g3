@@ -100,8 +100,8 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 		return response
 	}
 
-	var data interface{}
-	if err := json.Unmarshal([]byte(response), &data); err != nil {
+	data, err := unmarshalPreservingNumbers([]byte(response))
+	if err != nil {
 		result, lost := t.trimPlainText(response, maxBytes, stepCtx.Instruction)
 		// Honest disclosure when the floor kept a non-representative fraction (no-op otherwise).
 		// Plain text: a byte cut to make room for the note is fine (not re-parsed as JSON).
@@ -908,7 +908,9 @@ func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction
 
 func isScalar(v interface{}) bool {
 	switch v.(type) {
-	case string, float64, bool, nil:
+	// json.Number: numbers decoded via unmarshalPreservingNumbers (large-ID preservation)
+	// are scalars; without this case they would misroute through the non-scalar/complex path.
+	case string, float64, bool, nil, json.Number:
 		return true
 	}
 	return false

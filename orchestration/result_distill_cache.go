@@ -65,13 +65,22 @@ func distillCacheKey(response, instruction, originalQuery string, maxBytes int) 
 //   - model (different models distill differently);
 //   - target size (bounds output when below the per-result budget, so not otherwise keyed);
 //   - pre-filter budget (sets how much input the LLM actually sees, see result_distiller.go);
+//   - the routing knobs — model-context tokens and the map-reduce byte threshold (P17): both
+//     decide single-call-vs-map-reduce, i.e. WHETHER the LLM sees the whole result or only the
+//     pre-filtered head, so a change to either produces different output and must not serve stale;
 //   - the per-phase AI options override (model / max tokens / temperature / system prompt …),
 //     which can change the model and sampling out from under cfg.Model.
+//
+// The config is normalized HERE (normalizeResultDistillConfig is pure; the nil logger only
+// suppresses the advisory warn), so the salt always hashes the exact values the distiller runs —
+// NewLLMDistiller normalizes identically at construction. Callers pass raw or normalized configs
+// interchangeably; the key can never diverge from behavior.
 //
 // Per-call context (agent, capability) is intentionally excluded: the cached value is the
 // distilled CONTENT, driven by the result + instruction, not by those prompt hints — so the
 // cache stays shareable across agents and pods.
 func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
+	cfg = normalizeResultDistillConfig(cfg, nil)
 	h := sha256.New()
 	h.Write([]byte(distillPromptVersion))
 	h.Write([]byte{0})
@@ -80,6 +89,10 @@ func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
 	h.Write([]byte(strconv.Itoa(cfg.TargetSize)))
 	h.Write([]byte{0})
 	h.Write([]byte(strconv.Itoa(cfg.PreFilterBudget)))
+	h.Write([]byte{0})
+	h.Write([]byte(strconv.Itoa(cfg.ModelContextTokens)))
+	h.Write([]byte{0})
+	h.Write([]byte(strconv.Itoa(cfg.MapReduceThresholdBytes)))
 	h.Write([]byte{0})
 	if opts != nil {
 		// AIOptionsOverride is JSON-tagged; json.Marshal sorts map keys, so this is stable.

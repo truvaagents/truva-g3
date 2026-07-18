@@ -27,12 +27,56 @@ type LLMDistiller struct {
 	debugWg    sync.WaitGroup
 }
 
+// normalizeResultDistillConfig applies construction-time invariants to a distill config and
+// returns the normalized copy (the input is a value, so this never mutates the caller's config):
+//
+//   - resolve an unset PreFilterBudget to its default, so the threshold check below compares
+//     against the value the map-reduce chunker will actually use,
+//   - resolve an unset ModelContextTokens to its default, so the reduce-fits-context gate is
+//     satisfiable on threshold-routed map-reduces (a zero context would permanently truncate
+//     the reduce step), and
+//   - disable a MapReduceThresholdBytes that sits below the effective PreFilterBudget (a
+//     threshold under the chunk size routes results whose single chunk carries no fan-out value).
+//
+// Salt coherence is structural, not contractual: distillKeySalt calls this function itself (with a
+// nil logger) before hashing, so cache keys are always computed from the same normalized values the
+// distiller runs — no caller has to remember to normalize before salting.
+func normalizeResultDistillConfig(cfg ResultDistillConfig, logger core.Logger) ResultDistillConfig {
+	if cfg.PreFilterBudget <= 0 {
+		cfg.PreFilterBudget = defaultPreFilterBudget
+	}
+	// A zero context makes the reduce gate (data+overhead <= ModelContextTokens) unsatisfiable —
+	// the reduce LLM would never fire and every over-target combine would be head-truncated —
+	// and P17 threshold routing makes map-reduce reachable without DefaultConfig. The compaction
+	// model always has a real context size; backfill it.
+	if cfg.ModelContextTokens <= 0 {
+		cfg.ModelContextTokens = defaultModelContextTokens
+	}
+	if cfg.MapReduceThresholdBytes > 0 && cfg.MapReduceThresholdBytes < cfg.PreFilterBudget {
+		if logger != nil {
+			logger.Warn("MapReduceThresholdBytes below PreFilterBudget; ignoring (map-reduce routing stays disabled)",
+				map[string]interface{}{
+					"operation":        "result_distill.config_normalization", // REQUIRED field (DISTRIBUTED_TRACING_GUIDE Pattern 2)
+					"threshold":        cfg.MapReduceThresholdBytes,
+					"prefilter_budget": cfg.PreFilterBudget,
+				})
+		}
+		cfg.MapReduceThresholdBytes = 0
+	}
+	return cfg
+}
+
 // NewLLMDistiller creates a two-stage distiller with structural pre-filtering.
 // preFilter MUST honor the ResultProcessor contract (see the interface doc): report any
 // content loss via captureTrimMetadata's ContentLost and emit only registered single-line
 // annotations. The partial-source disclosure and coverage accounting key on that signal — a
 // pre-filter that trims silently disables every Phase 16 disclosure for its results.
+//
+// The config is normalized here (normalizeResultDistillConfig), so EVERY construction path — the
+// factory, the Layer-2 BuildDistillationEnabledResultProcessor helper, and direct Layer-3
+// construction — gets the single-chunk-footgun guard. A factory-only check would miss the other two.
 func NewLLMDistiller(aiClient core.AIClient, config ResultDistillConfig, preFilter ResultProcessor, logger core.Logger) *LLMDistiller {
+	config = normalizeResultDistillConfig(config, logger)
 	return &LLMDistiller{aiClient: aiClient, config: config, preFilter: preFilter, logger: logger}
 }
 
@@ -139,15 +183,28 @@ func (d *LLMDistiller) ProcessForPrompt(
 		targetSize = minDistillTargetSize
 	}
 
-	// Outlier path: a result too large for a single model context is chunked and
-	// map-reduced over the FULL result. This bypasses the structural pre-filter below,
-	// which would lossily trim the bulk before the LLM ever saw it.
-	if d.config.ModelContextTokens > 0 && estimateTokens(result) > d.config.ModelContextTokens {
+	// Outlier path: a result too large for a single model context is chunked and map-reduced over
+	// the FULL result, bypassing the structural pre-filter below (which would lossily trim the bulk
+	// before the LLM saw it). Two independent triggers (P17):
+	//   - over-context: doesn't fit one model context (token estimate) — always map-reduce;
+	//   - over-threshold: larger than MapReduceThresholdBytes (bytes) even though it FITS the
+	//     context — routes the mid-band through map-reduce so the whole result reaches an LLM
+	//     instead of only the pre-filtered head. 0 = disabled (context-only routing). A result
+	//     whose compact form fits one chunk (raw-vs-compact shrink) still gets an LLM: the
+	//     single-chunk case runs one extract call, never the bare structural floor.
+	overContext := d.config.ModelContextTokens > 0 && estimateTokens(result) > d.config.ModelContextTokens
+	overThreshold := d.config.MapReduceThresholdBytes > 0 && len(result) > d.config.MapReduceThresholdBytes
+	if overContext || overThreshold {
+		reason := "threshold"
+		if overContext {
+			reason = "context"
+		}
 		telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_route",
 			attribute.String("request_id", requestID),
 			attribute.String("step_id", stepCtx.StepID),
 			attribute.Int("original_bytes", len(result)),
 			attribute.Int("estimated_tokens", estimateTokens(result)),
+			attribute.String("reason", reason),
 		)
 		return d.mapReduceCompact(ctx, result, targetSize, stepCtx)
 	}
@@ -337,7 +394,13 @@ func (d *LLMDistiller) ProcessForPrompt(
 // "7" = Phase 16 wrapper-drop disclosure on map-reduce outputs + tri-state ContentLost
 // envelope semantics (explicit false = verified lossless); stale envelopes would otherwise
 // replay an affirmative lossless claim for a lossy result, so they must be unreachable.
-const distillPromptVersion = "7"
+// "8" = Phase 17 chunker/trimmer hardening: the map-reduce object path now REPLICATES the
+// wrapper into every chunk (chunkJSONObjectPreservingWrapper — P17.6) and the whole trim
+// pipeline decodes JSON with UseNumber (P17.5), so what the LLM sees per chunk — and the
+// preserved large IDs — changed; stale "7"-era outputs must not be replayed. (This is now a
+// general PIPELINE version, not just the prompt template — bump it for any change to what the
+// chunker/trimmer feeds the model, not only buildDistillationPrompt/distillationSystemPrompt.)
+const distillPromptVersion = "8"
 
 // distillationSystemPrompt is the STATIC policy for distillation — identity + rules. It is
 // dispatched as the system message (mirroring synthesizer.go's synthesisSystemPrompt) so the
@@ -386,6 +449,12 @@ const minDistillTargetSize = 256
 // count ~4× vs the prior 32 KB. Raise via TRUVAG3_RESULT_DISTILL_PREFILTER on deployments
 // pinned to large-context fast models (Gemini Flash-Lite / gpt-4.1-mini at 1M).
 const defaultPreFilterBudget = 131072
+
+// defaultModelContextTokens is the usable compaction-model context (tokens) used when
+// ResultDistillConfig.ModelContextTokens is unset. Backfilled at normalization: a zero value
+// would make the reduce-fits-context gate (data + overhead <= 0) unsatisfiable, permanently
+// truncating the reduce step for Layer-2/Layer-3 configs that set only the byte threshold.
+const defaultModelContextTokens = 150000
 
 // noMatchSentinel is the exact string the distillation prompt (distillationSystemPrompt, instruction
 // #4) tells the model to emit when nothing in the input is relevant. The map-reduce path matches on

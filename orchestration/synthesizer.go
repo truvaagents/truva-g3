@@ -476,9 +476,9 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				})
 			}
 
-			// Format response: pretty-print JSON, or use plain text as-is
-			var parsed interface{}
-			if json.Unmarshal([]byte(response), &parsed) == nil {
+			// Format response: pretty-print JSON, or use plain text as-is.
+			// UseNumber so large IDs survive this last re-parse before the synthesis prompt.
+			if parsed, perr := unmarshalPreservingNumbers([]byte(response)); perr == nil {
 				parsed = deserializeStringValues(parsed) // Fix double-escaping
 				if formatted, err := json.MarshalIndent(parsed, "", "  "); err == nil {
 					response = string(formatted)
@@ -544,9 +544,8 @@ func (s *AISynthesizer) synthesizeWithTemplate(request string, results *Executio
 		for _, step := range successful {
 			fmt.Fprintf(&builder, "\n%s:\n", step.AgentName)
 
-			// Try to parse and present JSON nicely
-			var data interface{}
-			if err := json.Unmarshal([]byte(step.Response), &data); err == nil {
+			// Try to parse and present JSON nicely (UseNumber preserves large IDs)
+			if data, err := unmarshalPreservingNumbers([]byte(step.Response)); err == nil {
 				formatted, _ := json.MarshalIndent(data, "  ", "  ")
 				builder.WriteString(string(formatted))
 			} else {

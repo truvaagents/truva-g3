@@ -2365,8 +2365,8 @@ func (e *SmartExecutor) substituteTemplates(
 
 		// Validate that the resolved value is a primitive type suitable for HTTP parameters
 		switch v := value.(type) {
-		case float64, int, int64, string, bool:
-			return value // Safe primitive types
+		case float64, int, int64, string, bool, json.Number:
+			return value // Safe primitive types (json.Number preserves large-ID digits verbatim)
 		case map[string]interface{}, []interface{}:
 			// Complex types - convert to JSON string for safety
 			if e.logger != nil {
