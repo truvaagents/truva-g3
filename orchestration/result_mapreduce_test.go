@@ -70,6 +70,9 @@ func TestLLMDistiller_MapReduce_FansOut(t *testing.T) {
 	if meta.Method != "distill_mapreduce" {
 		t.Errorf("expected Method=distill_mapreduce, got %q", meta.Method)
 	}
+	if meta.ChunkStrategy != "array" {
+		t.Errorf("expected chunk_strategy=array for a top-level JSON array, got %q", meta.ChunkStrategy)
+	}
 }
 
 // TestLLMDistiller_MapReduce_CollapsesEmptyChunks verifies that when every chunk finds nothing
@@ -520,13 +523,15 @@ func (a *alwaysErrAI) StreamResponse(ctx context.Context, p string, o *core.AIOp
 	return a.GenerateResponse(ctx, p, o)
 }
 
-// failAfterAI succeeds for the first succeedUntil calls then errors — to make the chunk
-// extractions succeed but the final reduce call fail.
+// failAfterAI returns out for the first succeedUntil calls, then errors — or, when afterOut is
+// set, succeeds with afterOut instead (distinguishing the reduce call from the map calls without
+// another single-purpose mock type).
 type failAfterAI struct {
 	mu           sync.Mutex
 	n            int
 	succeedUntil int
 	out          string
+	afterOut     string
 }
 
 func (a *failAfterAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
@@ -536,6 +541,9 @@ func (a *failAfterAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOp
 	a.mu.Unlock()
 	if idx <= a.succeedUntil {
 		return &core.AIResponse{Content: a.out}, nil
+	}
+	if a.afterOut != "" {
+		return &core.AIResponse{Content: a.afterOut}, nil
 	}
 	return nil, fmt.Errorf("reduce failed")
 }
@@ -603,6 +611,9 @@ func TestMapReduce_SingleChunkRunsOneExtract(t *testing.T) {
 	}
 	if meta.ContentLost {
 		t.Errorf("the lone chunk carries the full compact content — expected ContentLost=false, got %+v", *meta)
+	}
+	if meta.ChunkStrategy != "single" {
+		t.Errorf("expected chunk_strategy=single on the lone-chunk path, got %q", meta.ChunkStrategy)
 	}
 }
 

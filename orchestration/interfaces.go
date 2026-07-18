@@ -777,6 +777,23 @@ type TieredCapabilityConfig struct {
 	MaxRetries int `json:"max_retries,omitempty"`
 }
 
+// applyMapReduceThresholdEnv returns the TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD override, or
+// current when the variable is unset/invalid. Parsed with >= 0 — a deliberate deviation from the
+// repo-wide > 0 guard convention: an explicit "0" must be able to DISABLE a future nonzero default
+// (the post-canary kill switch) — the sentinel is a value, not merely the absence of one. A
+// positive value below PreFilterBudget is normalized to disabled by NewLLMDistiller (single-chunk
+// footgun), which has a logger to warn; env parsing stays silent. Factored out so the kill-switch
+// guard is testable against a NONZERO base — with a zero default, accepted-0 and ignored-0 are
+// observationally identical and a `> 0` regression would pass every DefaultConfig-based test.
+func applyMapReduceThresholdEnv(current int) int {
+	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return current
+}
+
 // DefaultConfig returns default orchestrator configuration with intelligent defaults
 func DefaultConfig() *OrchestratorConfig {
 	planMaxTokens := 15000
@@ -1307,15 +1324,7 @@ func DefaultConfig() *OrchestratorConfig {
 			config.ResultDistill.MapConcurrency = n
 		}
 	}
-	if v := os.Getenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD"); v != "" {
-		// >= 0 (not > 0): an explicit "0" must be able to DISABLE a future nonzero default
-		// (post-canary flip) — the sentinel is a value, not merely the absence of one. A positive
-		// value below PreFilterBudget is normalized to disabled by NewLLMDistiller (single-chunk
-		// footgun), which has a logger to warn; env parsing stays silent.
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			config.ResultDistill.MapReduceThresholdBytes = n
-		}
-	}
+	config.ResultDistill.MapReduceThresholdBytes = applyMapReduceThresholdEnv(config.ResultDistill.MapReduceThresholdBytes)
 
 	// Execution Debug Store configuration from environment
 	// Note: Storage-specific settings (Redis URL, DB, etc.) are NOT here.

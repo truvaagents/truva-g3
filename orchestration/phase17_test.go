@@ -3,12 +3,14 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
+	"go.opentelemetry.io/otel"
 )
 
 // Phase 17 — result-compaction hardening and routing: number-preserving JSON decode (P17.5),
@@ -494,5 +496,408 @@ func TestDistillKeySalt_SelfNormalizes(t *testing.T) {
 	explicitDefault := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, ModelContextTokens: defaultModelContextTokens}
 	if distillKeySalt(unsetCtx, nil) != distillKeySalt(explicitDefault, nil) {
 		t.Error("an unset ModelContextTokens must salt as its backfilled default")
+	}
+}
+
+// --- Coverage-gap tests (pre-fix-batch regression net, 2026-07-18) ---
+//
+// These pin CURRENT correct behavior in the spots the coverage profile showed thin:
+// metrics emissions (no prior test installed a global registry, leaving every counter
+// unasserted — a working-tree metrics regression was once caught only in code review because
+// the suite could not see counters), the single-chunk failure observability block, disclosure
+// composition, the routing reason attribute, the new env knob, envelope replay breadth,
+// strategy stamps, and the reduce-success path.
+
+// captureMetricsRegistry is a test double for core.MetricsRegistry that records counter
+// increments, so tests can assert the metric emissions the nil-registry default silently skips.
+type captureMetricsRegistry struct {
+	mu       sync.Mutex
+	counters map[string]int
+}
+
+func newCaptureMetricsRegistry() *captureMetricsRegistry {
+	return &captureMetricsRegistry{counters: map[string]int{}}
+}
+
+func (r *captureMetricsRegistry) Counter(name string, _ ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counters[name]++
+}
+func (r *captureMetricsRegistry) EmitWithContext(_ context.Context, _ string, _ float64, _ ...string) {
+}
+func (r *captureMetricsRegistry) GetBaggage(_ context.Context) map[string]string { return nil }
+func (r *captureMetricsRegistry) Gauge(_ string, _ float64, _ ...string)         {}
+func (r *captureMetricsRegistry) Histogram(_ string, _ float64, _ ...string)     {}
+
+func (r *captureMetricsRegistry) count(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.counters[name]
+}
+
+// installTestMetricsRegistry installs a capturing global metrics registry and restores the
+// previous one on cleanup.
+func installTestMetricsRegistry(t *testing.T) *captureMetricsRegistry {
+	t.Helper()
+	prev := core.GetGlobalMetricsRegistry()
+	reg := newCaptureMetricsRegistry()
+	core.SetMetricsRegistry(reg)
+	t.Cleanup(func() { core.SetMetricsRegistry(prev) })
+	return reg
+}
+
+// TestSingleChunk_SuccessIncrementsMapreduceCounter: the single-chunk success path must count
+// toward orchestration.result_distill.mapreduce like the fan-out path — the canary's volume
+// measurement reads this counter.
+func TestSingleChunk_SuccessIncrementsMapreduceCounter(t *testing.T) {
+	reg := installTestMetricsRegistry(t)
+	mockAI := &countingAI{out: "EXTRACT"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	d.ProcessForPrompt(context.Background(), mapReduceTestArray(4), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	if got := reg.count("orchestration.result_distill.mapreduce"); got != 1 {
+		t.Errorf("single-chunk success must increment the mapreduce counter once, got %d", got)
+	}
+}
+
+// TestMultiChunk_IncrementsMapreduceCounter pins the fan-out path's counter emission (previously
+// unasserted: no test installed a registry).
+func TestMultiChunk_IncrementsMapreduceCounter(t *testing.T) {
+	reg := installTestMetricsRegistry(t)
+	mockAI := &countingAI{out: "EXTRACT"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	d.ProcessForPrompt(context.Background(), mapReduceTestArray(20), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	if got := reg.count("orchestration.result_distill.mapreduce"); got != 1 {
+		t.Errorf("fan-out must increment the mapreduce counter once, got %d", got)
+	}
+}
+
+// TestSingleChunk_FailureFullObservability: a failed single-chunk extract must emit the full
+// Pattern-4 sequence — llm_failed span event, failed counter, warn log — a paid-but-failed LLM
+// call must never be metrics-silent (the canary's failure-rate readout depends on it).
+func TestSingleChunk_FailureFullObservability(t *testing.T) {
+	recorder := setupExecutorTestTracer(t)
+	reg := installTestMetricsRegistry(t)
+	logger := &TestLogger{}
+	mockAI := &failAfterAI{succeedUntil: 0, out: "unused"} // every call errors
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), logger)
+
+	tracer := otel.Tracer("phase17-test")
+	ctx, span := tracer.Start(context.Background(), "single-chunk-failure")
+	d.ProcessForPrompt(ctx, mapReduceTestArray(4), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+	span.End()
+
+	if got := reg.count("orchestration.result_distill.failed"); got != 1 {
+		t.Errorf("failed counter = %d, want 1", got)
+	}
+	warns := logger.GetLogsByLevel("WARN")
+	found := false
+	for _, w := range warns {
+		if w.Fields["operation"] == "result_distill.mapreduce" && w.Fields["error"] != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a WARN with operation=result_distill.mapreduce and an error field, got %v", warns)
+	}
+	eventSeen := false
+	for _, s := range recorder.Ended() {
+		for _, ev := range s.Events() {
+			if ev.Name == "result_distill.llm_failed" {
+				eventSeen = true
+			}
+		}
+	}
+	if !eventSeen {
+		t.Error("expected the result_distill.llm_failed span event on the single-chunk failure path")
+	}
+}
+
+// TestDisclosureComposition_PartialAndCombineTruncated: when a run is BOTH partial (failed
+// chunks) and combine-truncated, both notes must appear exactly once — the
+// compose-all-notes-append-ONCE contract, previously tested only one note at a time.
+// Deterministic by construction: the first map call succeeds with a long extract and every later
+// call errors IMMEDIATELY (failAfterAI), so completed(1) < total without any deadline dependence
+// — no scheduling-timing flake window, and the test doesn't burn wall-clock waiting.
+func TestDisclosureComposition_PartialAndCombineTruncated(t *testing.T) {
+	mockAI := &failAfterAI{succeedUntil: 1, out: "FINDING " + strings.Repeat("x", 300)}
+	// ModelContextTokens 100 both ROUTES the ~275-token payload to map-reduce (over-context) and
+	// makes the over-target combine take the deterministic truncation arm (gate unsatisfiable),
+	// so the partial and combine-truncation notes must compose on one output.
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100, // floors to 256
+		Model: "fast", ModelContextTokens: 100, MapConcurrency: 1,
+		CompactionDeadline: 5 * time.Second, // never fires; partial comes from the failed chunks
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	ctx, nonCacheable := withNonCacheableCapture(context.Background())
+	mctx, meta := WithTrimMetadataCapture(ctx)
+	out := d.ProcessForPrompt(mctx, mapReduceTestArray(40), 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"})
+
+	if got := strings.Count(out, "[partial:"); got != 1 {
+		t.Errorf("expected the partial note exactly once, got %d in: %q", got, out)
+	}
+	if got := strings.Count(out, "[findings truncated:"); got != 1 {
+		t.Errorf("expected the combine-truncation note exactly once, got %d in: %q", got, out)
+	}
+	if !*nonCacheable {
+		t.Error("a partial + transient-truncated run must be non-cacheable")
+	}
+	if !meta.PartialCoverage || !meta.CombineTruncated || !meta.ContentLost {
+		t.Errorf("metadata must record both losses: %+v", *meta)
+	}
+}
+
+// TestMapreduceRoute_ReasonAttribute: the routing span event's reason attribute is the canary's
+// cohort discriminator (threshold-routed vs pre-existing over-context) — assert both values.
+func TestMapreduceRoute_ReasonAttribute(t *testing.T) {
+	cases := []struct {
+		name          string
+		contextTokens int
+		threshold     int
+		wantReason    string
+	}{
+		{"threshold routing", 1_000_000, 100, "threshold"},
+		{"context routing", 50, 0, "context"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := setupExecutorTestTracer(t)
+			mockAI := &countingAI{out: "EXTRACT"}
+			config := ResultDistillConfig{
+				Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+				Model: "fast", ModelContextTokens: tc.contextTokens, MapConcurrency: 4,
+				MapReduceThresholdBytes: tc.threshold,
+				CompactionDeadline:      5 * time.Second,
+			}
+			d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+			tracer := otel.Tracer("phase17-test")
+			ctx, span := tracer.Start(context.Background(), "route")
+			d.ProcessForPrompt(ctx, mapReduceTestArray(80), 2000,
+				ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"})
+			span.End()
+
+			var gotReason string
+			for _, s := range recorder.Ended() {
+				for _, ev := range s.Events() {
+					if ev.Name == "result_distill.mapreduce_route" {
+						for _, kv := range ev.Attributes {
+							if string(kv.Key) == "reason" {
+								gotReason = kv.Value.AsString()
+							}
+						}
+					}
+				}
+			}
+			if gotReason != tc.wantReason {
+				t.Errorf("mapreduce_route reason = %q, want %q", gotReason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestMapReduceThresholdEnvParse pins the >= 0 parse of TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD.
+// The explicit-"0" case is the post-canary kill switch: when the default flips to a nonzero value,
+// an operator must still be able to disable routing with "0" — a consistency-minded change to the
+// repo-wide `> 0` guard convention would silently break it.
+func TestMapReduceThresholdEnvParse(t *testing.T) {
+	t.Run("default is 0 (disabled)", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "") // ignore any ambient override (the canary tells operators to export this)
+		if got := DefaultConfig().ResultDistill.MapReduceThresholdBytes; got != 0 {
+			t.Errorf("default = %d, want 0", got)
+		}
+	})
+	t.Run("env override wins", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "262144")
+		if got := DefaultConfig().ResultDistill.MapReduceThresholdBytes; got != 262144 {
+			t.Errorf("threshold = %d, want 262144 from env", got)
+		}
+	})
+	// The kill-switch subtests run the parse helper against a NONZERO base: with the current
+	// zero default, accepted-0 and ignored-0 are observationally identical through
+	// DefaultConfig(), so a `> 0` regression of the deliberate `>= 0` guard would pass a
+	// DefaultConfig-based assertion — mutation-verified during review.
+	t.Run("explicit 0 overrides a nonzero base (kill switch, >= 0 parse)", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "0")
+		if got := applyMapReduceThresholdEnv(262144); got != 0 {
+			t.Errorf("explicit \"0\" must override a nonzero base (post-canary kill switch), got %d", got)
+		}
+	})
+	t.Run("negative keeps the base", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "-5")
+		if got := applyMapReduceThresholdEnv(262144); got != 262144 {
+			t.Errorf("negative env must keep the base, got %d", got)
+		}
+	})
+	t.Run("garbage keeps the base", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "not-a-number")
+		if got := applyMapReduceThresholdEnv(262144); got != 262144 {
+			t.Errorf("garbage env must keep the base, got %d", got)
+		}
+	})
+	t.Run("unset keeps the base", func(t *testing.T) {
+		t.Setenv("TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD", "")
+		if got := applyMapReduceThresholdEnv(262144); got != 262144 {
+			t.Errorf("unset env must keep the base, got %d", got)
+		}
+	})
+}
+
+// TestCacheEnvelopeReplaysAllMetadataFields: a cache hit must replay EVERY metadata field, not a
+// spot-checked subset — a slimmed envelope would silently zero ChunkStrategy/CombineTruncated/
+// coverage on exactly the most repetitive (cached) traffic.
+func TestCacheEnvelopeReplaysAllMetadataFields(t *testing.T) {
+	full := ResultTrimMetadata{
+		OriginalBytes: 458000, TrimmedBytes: 4096, Method: "distill_mapreduce",
+		FieldsKept: 12, FieldsDropped: 34, BackfilledCount: 2, ThresholdSkipped: 3,
+		Keywords: []string{"error", "timeout"}, MatchedPaths: []string{"streams[0].line"},
+		BudgetAllocated: 16384, Degenerate: false, KeptRatio: 0.41,
+		SourceCoverageRatio: 0.3, LLMInputBytes: 131072, SegmentsAnalyzed: 3, SegmentsTotal: 16,
+		PartialCoverage: true, CombineTruncated: true, ChunkStrategy: "bytes", ContentLost: true,
+	}
+	cache := newMapDigestCache()
+	inner := &metaProcessor{out: "DISTILLED", meta: full}
+	p := NewCachingProcessor(inner, cache, time.Minute, 10, "salt", nil)
+	sc := ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find errors"}
+	input := strings.Repeat("a", 50)
+
+	ctx1, m1 := WithTrimMetadataCapture(context.Background())
+	p.ProcessForPrompt(ctx1, input, 4096, sc)
+	ctx2, m2 := WithTrimMetadataCapture(context.Background())
+	p.ProcessForPrompt(ctx2, input, 4096, sc)
+
+	if inner.calls != 1 {
+		t.Fatalf("second call must be a cache hit, inner.calls=%d", inner.calls)
+	}
+	if !reflect.DeepEqual(*m1, *m2) {
+		t.Errorf("cache hit must replay ALL metadata fields:\n miss: %+v\n hit:  %+v", *m1, *m2)
+	}
+
+	// ContentLost must survive the envelope ON ITS OWN: with any sibling loss flag set,
+	// captureTrimMetadata's superset normalization re-derives it on the hit path and masks a
+	// dropped field (mutation-verified during review). This fixture is the single-call
+	// lossy-stage-1 shape — ContentLost true, Degenerate/PartialCoverage/CombineTruncated all
+	// false — where only the stored field itself can carry the signal.
+	lossOnly := ResultTrimMetadata{
+		OriginalBytes: 50000, TrimmedBytes: 4096, Method: "distill",
+		SourceCoverageRatio: 0.9, SegmentsAnalyzed: 1, SegmentsTotal: 1,
+		ContentLost: true, // no sibling flags — the envelope must carry this bit verbatim
+	}
+	cache2 := newMapDigestCache()
+	inner2 := &metaProcessor{out: "DISTILLED2", meta: lossOnly}
+	p2 := NewCachingProcessor(inner2, cache2, time.Minute, 10, "salt", nil)
+	ctx3, _ := WithTrimMetadataCapture(context.Background())
+	p2.ProcessForPrompt(ctx3, input, 4096, sc)
+	ctx4, m4 := WithTrimMetadataCapture(context.Background())
+	p2.ProcessForPrompt(ctx4, input, 4096, sc)
+	if inner2.calls != 1 {
+		t.Fatalf("second call must be a cache hit, inner2.calls=%d", inner2.calls)
+	}
+	if !m4.ContentLost {
+		t.Error("a cache hit must replay ContentLost=true even when no sibling loss flag can re-derive it")
+	}
+}
+
+// TestMapReduce_ReduceSuccessReplacesCombined: the coverage profile showed the SUCCESSFUL reduce
+// arm (combined = reduced) had never executed in any test — only reduce-failure and
+// reduce-too-big. Pin it: the reduce output replaces the joined extracts, nothing is truncated,
+// and the result stays cacheable. failAfterAI's afterOut makes the reduce call (len(pre)+1, with
+// MapConcurrency=1) distinguishable from the map calls.
+func TestMapReduce_ReduceSuccessReplacesCombined(t *testing.T) {
+	payload := mapReduceTestArray(80)
+	pre, _, _, _ := chunkWholeUnits(payload, 100)
+	mockAI := &failAfterAI{succeedUntil: len(pre), out: "FINDING " + strings.Repeat("y", 60), afterOut: "REDUCED_SUMMARY"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100, // floors to 256
+		Model: "fast", ModelContextTokens: 2500, MapConcurrency: 1, // sequential: reduce is call len(pre)+1
+		MapReduceThresholdBytes: 100,
+		CompactionDeadline:      5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	ctx, nonCacheable := withNonCacheableCapture(context.Background())
+	mctx, meta := WithTrimMetadataCapture(ctx)
+	out := d.ProcessForPrompt(mctx, payload, 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"})
+
+	if !strings.Contains(out, "REDUCED_SUMMARY") {
+		t.Errorf("expected the reduce output to replace the combined extracts, got: %.200q", out)
+	}
+	if strings.Contains(out, "[findings truncated:") {
+		t.Errorf("a successful reduce must not carry the combine-truncation note: %.200q", out)
+	}
+	if *nonCacheable {
+		t.Error("a fully-successful map-reduce with a successful reduce must remain cacheable")
+	}
+	if meta.CombineTruncated {
+		t.Errorf("CombineTruncated must be false on a successful reduce: %+v", *meta)
+	}
+}
+
+// TestWorstChunkStrategy_Table covers the tie/a-wins arms the profile showed unexercised.
+func TestWorstChunkStrategy_Table(t *testing.T) {
+	cases := []struct{ a, b, want string }{
+		{"wrapper", "bytes", "bytes"},  // b more degraded
+		{"bytes", "wrapper", "bytes"},  // a more degraded (a wins)
+		{"array", "wrapper", "array"},  // structural tie → a
+		{"lines", "bytes", "bytes"},    // b worse
+		{"bytes", "lines", "bytes"},    // a worse
+		{"single", "single", "single"}, // identical
+		{"array", "", "array"},         // unknown ranks 0 → a
+	}
+	for _, c := range cases {
+		if got := worstChunkStrategy(c.a, c.b); got != c.want {
+			t.Errorf("worstChunkStrategy(%q,%q) = %q, want %q", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestChunkStrategy_LinesStamped: a newline-delimited non-JSON payload routed to map-reduce
+// stamps chunk_strategy="lines". The other strategies are pinned elsewhere: "bytes"/"wrapper" in
+// TestChunkStrategy_Stamped, "single" in TestMapReduce_SingleChunkRunsOneExtract, "array" in
+// TestLLMDistiller_MapReduce_FansOut.
+func TestChunkStrategy_LinesStamped(t *testing.T) {
+	var lines []string
+	for i := 0; i < 60; i++ {
+		lines = append(lines, "log line with some content number "+strings.Repeat("x", 10))
+	}
+	payload := strings.Join(lines, "\n")
+
+	mockAI := &countingAI{out: "EXTRACT"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 50, MapConcurrency: 4,
+		CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+	d.ProcessForPrompt(ctx, payload, 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"})
+
+	if meta.ChunkStrategy != "lines" {
+		t.Errorf("expected chunk_strategy=lines for newline-delimited non-JSON, got %q", meta.ChunkStrategy)
 	}
 }
