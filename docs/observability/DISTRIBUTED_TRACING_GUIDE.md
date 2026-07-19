@@ -1639,11 +1639,17 @@ The orchestration module emits span events for every LLM interaction:
 | `contextual_re_resolution.error` | Layer 4 LLM call failed | `error`, `duration_ms` |
 | `semantic_retry_applied` | Executor applies corrected parameters | `step_id`, `capability`, `analysis`, `corrected_params` |
 | `result_trim.structural` | Structural trimming analysis begins | `request_id`, `step_id`, `agent_name`, `original_bytes`, `budget_bytes`, `keyword_count` |
-| `result_trim.completed` | Per-step trimming outcome | `request_id`, `step_id`, `agent_name`, `method`, `original_bytes`, `trimmed_bytes`, `fields_kept`, `fields_dropped`, `backfilled_count`\*, `threshold_skipped`\*, `budget_allocated`\*, `keywords`\*, `matched_paths`\* |
+| `result_trim.completed` | Per-step trimming outcome (emitted only on a **lossy** trim) | `request_id`, `step_id`, `agent_name`, `method`, `content_lost`, `original_bytes`, `trimmed_bytes`, `fields_kept`, `fields_dropped`, `backfilled_count`\*, `threshold_skipped`\*, `budget_allocated`\*, `keywords`\*, `matched_paths`\*, `source_coverage_ratio`\*, `llm_input_bytes`\*, `segments_analyzed`\*, `segments_total`\*, `partial_coverage`\*, `combine_truncated`\* |
 | `result_trim.synthesis` | Total bytes at synthesis start | `request_id`, `original_total_bytes`, `prompt_length`, `step_count` |
 | `result_trim.micro_resolution` | Source data trimmed for parameter binding | `request_id`, `step_id`, `capability`, `original_bytes`, `trimmed_bytes`, `configured_budget_bytes`, `effective_budget_bytes` |
 | `result_trim.agent_input` | Parameter trimmed before agent HTTP call | `request_id`, `step_id`, `agent_name`, `parameter_name`, `original_bytes`, `trimmed_bytes`, `budget_bytes` |
 | `result_trim.semantic_retry` | Source data trimmed for Layer 4 retry | `request_id`, `step_id`, `capability`, `original_bytes`, `trimmed_bytes`, `configured_budget_bytes`, `effective_budget_bytes` |
+| `result_distill.mapreduce_route` | A result was routed to map-reduce (vs the single call) | `request_id`, `step_id`, `original_bytes`, `estimated_tokens`, `reason` (`context` = over the token estimate / `threshold` = over `MapReduceThresholdBytes`) |
+| `result_distill.stage1_complete` | Stage-1 structural pre-filter done | `request_id`, `step_id`, `original_bytes`, `prefiltered_bytes` |
+| `result_distill.stage2_complete` | Stage-2 LLM distillation returned | `request_id`, `step_id`, `distilled_bytes`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `duration_ms` |
+| `result_distill.mapreduce_complete` | A map-reduce distillation finished | `request_id`, `step_id`, `chunks_total`, `chunks_completed`, `combined_bytes`, `llm_input_bytes`, `chunk_strategy` (`array`/`wrapper`/`lines`/`bytes`), `combine_truncated_reason`\* (`reduce_failed`/`over_context`) |
+| `result_distill.cache_hit` | A supplied `DigestCache` served a prior distillation | `request_id`, `step_id`, `cached_bytes` |
+| `result_distill.llm_failed` | A distill call failed and fell open to the structural floor | `request_id`, `step_id`, `error`, `duration_ms` |
 | `llm.event_summarization.request` | Batched LLM call for step summaries | `request_id`, `step_count`, `prompt_length`, `model`¹ |
 | `llm.event_summarization.response` | Summarization result | `request_id`, `response_length`, `model`¹ |
 | `llm.activity_compaction.request` | Full activity compaction LLM call | `request_id`, `event_count`, `prompt_length` |
@@ -1886,7 +1892,7 @@ This telemetry is **built into the orchestration framework** at:
 | Error recovery debugging | Follow `error_analyzer.*` events for the full recovery chain |
 | Semantic retry debugging | Follow `contextual_re_resolution.*` and `semantic_retry_applied` events |
 | Prompt engineering | Export prompts from traces to analyze and improve |
-| Result data loss debugging | Follow `result_trim.*` events — check `result_trim.completed` for `fields_dropped > 0` or large `original_bytes` vs small `trimmed_bytes`. Use `result_trim.structural` to inspect keyword extraction. |
+| Result data loss debugging | Read `content_lost` on `result_trim.completed` — it is the **authoritative** loss signal (`true` = content was dropped; an explicit `false` = verified lossless). Do **not** infer loss from `original_bytes` vs `trimmed_bytes`: re-serialization (pretty→compact, annotations) shrinks bytes without losing content, so a byte drop is not proof of loss and equal bytes is not proof of none. For distillation coverage, check `source_coverage_ratio`, `partial_coverage`, and `segments_analyzed` vs `segments_total`, and follow the `result_distill.*` events (`mapreduce_route` → `stage1_complete`/`mapreduce_complete`). Use `result_trim.structural` to inspect keyword extraction. |
 
 ### Example: Debugging LLM Error Recovery
 
