@@ -11,15 +11,14 @@ import (
 	"testing"
 )
 
-// stripAnno returns the result body with any trailing Phase 16 disclosure/annotation removed.
-// Phase 16 always appends the annotation (never dropped, to preserve the UNKNOWN safeguard), so the
-// BODY respects maxBytes while the full result may overshoot by the annotation length; tests assert
-// the body against the budget.
+// stripAnno returns the result body with any trailing disclosure/annotation removed, so tests can
+// assert the trimmed BODY against maxBytes: a trim appends a disclosure, so the full result may
+// overshoot the budget by the annotation length. Delegates to the production, registry-aware
+// stripResultAnnotation so it peels exactly the trailing forms production emits (trailing-only, and
+// tolerant of stacked disclosures) — and would fail loudly if a test ever produced an unregistered
+// annotation instead of silently cutting from an interior "\n[".
 func stripAnno(s string) string {
-	if idx := strings.Index(s, "\n["); idx >= 0 {
-		return s[:idx]
-	}
-	return s
+	return stripResultAnnotation(s)
 }
 
 // --- TestStructuralTrimmer_SmallResult ---
