@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -92,10 +93,36 @@ func (b *BaseClient) StartSpan(ctx context.Context, name string) (context.Contex
 	return ctx, &core.NoOpSpan{}
 }
 
+func requestForAttempt(ctx context.Context, request *http.Request) (*http.Request, error) {
+	clone := request.Clone(ctx)
+	if request.Body == nil || request.Body == http.NoBody {
+		return clone, nil
+	}
+	if request.GetBody == nil {
+		return nil, errors.New("AI request body is not replayable")
+	}
+
+	body, err := request.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("recreate AI request body: %w", err)
+	}
+	clone.Body = body
+	return clone, nil
+}
+
 // ExecuteWithRetry performs an HTTP request with exponential backoff retry.
 // Each retry attempt creates a child span visible in Jaeger for debugging.
+// Requests with a body must provide GetBody so every attempt can use a fresh
+// copy; non-replayable bodies are rejected before the first network call, even
+// when MaxRetries is zero. http.NewRequestWithContext sets GetBody automatically
+// for *bytes.Buffer, *bytes.Reader, and *strings.Reader bodies.
 func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
 	var lastErr error
+	if req.Body != nil && req.Body != http.NoBody {
+		defer func() {
+			_ = req.Body.Close()
+		}()
+	}
 
 	for attempt := 0; attempt <= b.MaxRetries; attempt++ {
 		// Create a span for each attempt (visible in Jaeger as child spans)
@@ -120,13 +147,26 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 			})
 		}
 
-		// Clone request for retry
-		reqClone := req.Clone(attemptCtx)
+		attemptRequest, err := requestForAttempt(attemptCtx, req)
+		if err != nil {
+			attemptSpan.RecordError(err)
+			attemptSpan.SetAttribute("ai.attempt_status", "request_error")
+			attemptSpan.SetAttribute("ai.retryable", false)
+			attemptSpan.End()
+			if b.Logger != nil {
+				b.Logger.ErrorWithContext(attemptCtx, "AI request cannot be executed", map[string]interface{}{
+					"operation":  "ai_request_error",
+					"error_type": "request_body_replay",
+					"retryable":  false,
+				})
+			}
+			return nil, err
+		}
 
 		// Execute request
 		attemptStart := time.Now()
 		// #nosec G704 -- provider clients build these requests from explicit provider config.
-		resp, err := b.HTTPClient.Do(reqClone)
+		resp, err := b.HTTPClient.Do(attemptRequest)
 		attemptDuration := time.Since(attemptStart)
 
 		attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())

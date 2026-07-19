@@ -1338,6 +1338,13 @@ import _ "mycompany/providers/custom_llm"  // Auto-registers!
 client, _ := ai.NewClient(ai.WithProvider("custom-llm"))
 ```
 
+If a custom provider uses `providers.BaseClient.ExecuteWithRetry`, every request
+with a body must be replayable, even when the retry count is zero. Constructing
+the request with `http.NewRequestWithContext` and a `bytes.Reader`,
+`bytes.Buffer`, or `strings.Reader` body sets `GetBody` automatically. For other
+body sources, set `GetBody` explicitly so it returns a fresh `io.ReadCloser`.
+`ExecuteWithRetry` rejects a non-replayable body before making a network call.
+
 ### Adding New OpenAI-Compatible Services
 
 Any new OpenAI-compatible service works immediately without code changes:

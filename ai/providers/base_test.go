@@ -1,8 +1,10 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,22 @@ import (
 
 	"github.com/truvaagents/truva-g3/core"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (b *trackingReadCloser) Close() error {
+	b.closed = true
+	return nil
+}
 
 // mockLogger for testing
 type mockLogger struct {
@@ -342,6 +360,188 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 	}
 }
 
+func TestBaseClient_ExecuteWithRetry_ReplaysCompleteBodyForEveryAttempt(t *testing.T) {
+	payload := []byte(`{"model":"test-model","prompt":"non-empty"}`)
+	var capturedBodies [][]byte
+	var attemptBodies []*trackingReadCloser
+	callCount := 0
+
+	client := NewBaseClient(180*time.Second, nil)
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		callCount++
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read attempt body: %v", err)
+		}
+		if err := request.Body.Close(); err != nil {
+			t.Fatalf("close attempt body: %v", err)
+		}
+		capturedBodies = append(capturedBodies, append([]byte(nil), body...))
+
+		status := http.StatusInternalServerError
+		if callCount == 2 {
+			status = http.StatusOK
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(http.StatusText(status))),
+			Request:    request,
+		}, nil
+	})}
+
+	originalBody := &trackingReadCloser{Reader: bytes.NewReader(payload)}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	request.GetBody = func() (io.ReadCloser, error) {
+		body := &trackingReadCloser{Reader: bytes.NewReader(payload)}
+		attemptBodies = append(attemptBodies, body)
+		return body, nil
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if err != nil {
+		t.Fatalf("ExecuteWithRetry returned error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if callCount != 2 {
+		t.Fatalf("expected two network attempts, got %d", callCount)
+	}
+	if len(capturedBodies) != 2 {
+		t.Fatalf("expected two captured bodies, got %d", len(capturedBodies))
+	}
+	for attempt, body := range capturedBodies {
+		if !bytes.Equal(body, payload) {
+			t.Errorf("attempt %d body = %q, want %q", attempt+1, body, payload)
+		}
+	}
+	if len(attemptBodies) != 2 || attemptBodies[0] == attemptBodies[1] {
+		t.Fatalf("expected a distinct body for each attempt, got %#v", attemptBodies)
+	}
+	for attempt, body := range attemptBodies {
+		if !body.closed {
+			t.Errorf("attempt %d body was not closed", attempt+1)
+		}
+	}
+	if !originalBody.closed {
+		t.Error("original request body was not closed")
+	}
+}
+
+func TestBaseClient_ExecuteWithRetry_RejectsNonReplayableBodyBeforeNetwork(t *testing.T) {
+	networkCalls := 0
+	logger := &mockLogger{}
+	client := NewBaseClient(180*time.Second, logger)
+	client.MaxRetries = 3
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		networkCalls++
+		return nil, errors.New("network should not be called")
+	})}
+	tracing := &mockTelemetry{}
+	client.SetTelemetry(tracing)
+
+	originalBody := &trackingReadCloser{Reader: strings.NewReader("non-replayable")}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if request.GetBody != nil {
+		t.Fatal("test request unexpectedly has GetBody")
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if response != nil {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if err == nil || !strings.Contains(err.Error(), "AI request body is not replayable") {
+		t.Fatalf("expected non-replayable body error, got %v", err)
+	}
+	if networkCalls != 0 {
+		t.Fatalf("network called %d times", networkCalls)
+	}
+	if !originalBody.closed {
+		t.Error("rejected request body was not closed")
+	}
+	if tracing.lastSpan == nil || !tracing.lastSpan.ended {
+		t.Fatal("attempt span was not ended")
+	}
+	if len(tracing.lastSpan.errors) != 1 || tracing.lastSpan.errors[0] != err {
+		t.Fatalf("attempt span did not record the replay error: %#v", tracing.lastSpan.errors)
+	}
+	if got := tracing.lastSpan.attributes["ai.attempt_status"]; got != "request_error" {
+		t.Fatalf("attempt status = %v, want request_error", got)
+	}
+	if got := tracing.lastSpan.attributes["ai.retryable"]; got != false {
+		t.Fatalf("retryable attribute = %v, want false", got)
+	}
+	if len(logger.errorCalls) != 1 {
+		t.Fatalf("error log count = %d, want 1", len(logger.errorCalls))
+	}
+	fields := logger.errorCalls[0]
+	if got := fields["operation"]; got != "ai_request_error" {
+		t.Fatalf("log operation = %v, want ai_request_error", got)
+	}
+	if got := fields["error_type"]; got != "request_body_replay" {
+		t.Fatalf("log error_type = %v, want request_body_replay", got)
+	}
+	if got := fields["retryable"]; got != false {
+		t.Fatalf("log retryable = %v, want false", got)
+	}
+}
+
+func TestBaseClient_ExecuteWithRetry_PropagatesGetBodyErrorBeforeNetwork(t *testing.T) {
+	networkCalls := 0
+	client := NewBaseClient(180*time.Second, nil)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		networkCalls++
+		return nil, errors.New("network should not be called")
+	})}
+
+	recreateErr := errors.New("body source unavailable")
+	originalBody := &trackingReadCloser{Reader: strings.NewReader("replayable")}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	request.GetBody = func() (io.ReadCloser, error) {
+		return nil, recreateErr
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if response != nil {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if !errors.Is(err, recreateErr) || !strings.Contains(err.Error(), "recreate AI request body") {
+		t.Fatalf("expected wrapped GetBody error, got %v", err)
+	}
+	if networkCalls != 0 {
+		t.Fatalf("network called %d times", networkCalls)
+	}
+	if !originalBody.closed {
+		t.Error("request body was not closed after GetBody failure")
+	}
+}
+
 func TestBaseClient_HandleError(t *testing.T) {
 	client := NewBaseClient(180*time.Second, nil)
 
@@ -501,12 +701,14 @@ func TestBaseClient_ContextCancellation(t *testing.T) {
 type mockTelemetry struct {
 	spanStarted bool
 	spanName    string
+	lastSpan    *mockSpan
 }
 
 func (m *mockTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
 	m.spanStarted = true
 	m.spanName = name
-	return ctx, &mockSpan{}
+	m.lastSpan = &mockSpan{}
+	return ctx, m.lastSpan
 }
 
 func (m *mockTelemetry) RecordMetric(name string, value float64, labels map[string]string) {}
