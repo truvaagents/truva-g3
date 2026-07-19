@@ -5,7 +5,12 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/core/conformance"
 )
+
+func TestCloneAIOptions_Conformance(t *testing.T) {
+	conformance.RunLegacyAIOptionsCloneConformance(t, CloneAIOptions)
+}
 
 func TestCloneAIOptions_IsolatesNestedLegacyValues(t *testing.T) {
 	cycle := map[string]interface{}{}

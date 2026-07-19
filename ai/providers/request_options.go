@@ -14,59 +14,80 @@ type cloneVisit struct {
 }
 
 // CloneAIOptions returns a request-local copy of legacy AI options.
-// JSON-shaped maps and slices are copied recursively; opaque leaf values are
-// retained by reference for backward compatibility.
+// JSON-compatible maps, slices, arrays, and named scalar shapes are copied
+// recursively. Opaque leaf values are retained by reference for backward
+// compatibility and are never mutated by the framework.
 func CloneAIOptions(options *core.AIOptions) (*core.AIOptions, error) {
 	if options == nil {
 		return nil, nil
 	}
 
 	clone := *options
-	clone.Headers = MergeStringMaps(nil, options.Headers)
-	clone.Extra = cloneLegacyMap(options.Extra, make(map[cloneVisit]interface{}))
+	clone.Headers = cloneStringMap(options.Headers)
+	if options.Extra != nil {
+		clone.Extra = cloneLegacyReflect(
+			reflect.ValueOf(options.Extra),
+			make(map[cloneVisit]reflect.Value),
+		).Interface().(map[string]interface{})
+	}
 	return &clone, nil
 }
 
-func cloneLegacyMap(source map[string]interface{}, seen map[cloneVisit]interface{}) map[string]interface{} {
+func cloneStringMap(source map[string]string) map[string]string {
 	if source == nil {
 		return nil
 	}
-
-	visit := cloneVisit{kind: reflect.Map, ptr: reflect.ValueOf(source).Pointer()}
-	if existing, ok := seen[visit]; ok {
-		return existing.(map[string]interface{})
-	}
-
-	clone := make(map[string]interface{}, len(source))
-	seen[visit] = clone
+	clone := make(map[string]string, len(source))
 	for key, value := range source {
-		clone[key] = cloneLegacyValue(value, seen)
+		clone[key] = value
 	}
 	return clone
 }
 
-func cloneLegacyValue(value interface{}, seen map[cloneVisit]interface{}) interface{} {
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		return cloneLegacyMap(typed, seen)
-	case []interface{}:
-		if typed == nil {
-			return []interface{}(nil)
+func cloneLegacyReflect(value reflect.Value, seen map[cloneVisit]reflect.Value) reflect.Value {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
 		}
-		visit := cloneVisit{kind: reflect.Slice, ptr: reflect.ValueOf(typed).Pointer()}
+		clone := reflect.New(value.Type()).Elem()
+		clone.Set(cloneLegacyReflect(value.Elem(), seen))
+		return clone
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := cloneVisit{kind: reflect.Map, ptr: value.Pointer()}
 		if existing, ok := seen[visit]; ok {
-			return existing.([]interface{})
+			return existing
 		}
-		clone := make([]interface{}, len(typed))
+		clone := reflect.MakeMapWithSize(value.Type(), value.Len())
 		seen[visit] = clone
-		for index, item := range typed {
-			clone[index] = cloneLegacyValue(item, seen)
+		iterator := value.MapRange()
+		for iterator.Next() {
+			clone.SetMapIndex(iterator.Key(), cloneLegacyReflect(iterator.Value(), seen))
 		}
 		return clone
-	case map[string]string:
-		return MergeStringMaps(nil, typed)
-	case []string:
-		return append([]string(nil), typed...)
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := cloneVisit{kind: reflect.Slice, ptr: value.Pointer()}
+		if existing, ok := seen[visit]; ok {
+			return existing
+		}
+		clone := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		seen[visit] = clone
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneLegacyReflect(value.Index(index), seen))
+		}
+		return clone
+	case reflect.Array:
+		clone := reflect.New(value.Type()).Elem()
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneLegacyReflect(value.Index(index), seen))
+		}
+		return clone
 	default:
 		return value
 	}

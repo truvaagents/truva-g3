@@ -178,8 +178,10 @@ func NewAIRequest(prompt, purpose string) *AIRequest {
 }
 
 // NewAIRequestFromLegacy constructs a request with an isolated snapshot of
-// legacy options. The snapshot is available only to provider and fallback
-// adapters.
+// legacy options. Map, slice, and array containers in Extra are copied
+// recursively; opaque leaves are retained by reference for backward
+// compatibility and are never mutated by the framework. The snapshot is
+// available only to provider and fallback adapters.
 func NewAIRequestFromLegacy(prompt, purpose string, options *AIOptions) *AIRequest {
 	return &AIRequest{
 		Prompt:        prompt,
@@ -189,7 +191,9 @@ func NewAIRequestFromLegacy(prompt, purpose string, options *AIOptions) *AIReque
 }
 
 // LegacyOptions returns an isolated copy of the request's legacy option
-// snapshot. It is not an application mutation surface.
+// snapshot. Container values are recursively copied, while opaque leaves retain
+// the backward-compatible shared-reference behavior described by
+// NewAIRequestFromLegacy. It is not an application mutation surface.
 func (r *AIRequest) LegacyOptions() *AIOptions {
 	if r == nil {
 		return nil
