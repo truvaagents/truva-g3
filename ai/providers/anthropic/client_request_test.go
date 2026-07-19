@@ -188,7 +188,7 @@ func TestClient_StreamResponse_SetsProtectedStreamingHeaders(t *testing.T) {
 	if got := capturedHeaders.Get("Accept"); got != "text/event-stream" {
 		t.Fatalf("expected Accept header to be text/event-stream, got %q", got)
 	}
-	if got := capturedHeaders.Get("x-default"); got != "" {
-		t.Fatalf("expected stream path to not apply default/request headers yet, got %q", got)
+	if got := capturedHeaders.Get("x-default"); got != "request" {
+		t.Fatalf("expected request header to override the streaming default header, got %q", got)
 	}
 }

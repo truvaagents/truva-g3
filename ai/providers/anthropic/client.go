@@ -74,44 +74,10 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 		return nil, fmt.Errorf("anthropic API key not configured")
 	}
 
-	// Apply defaults
-	options = c.ApplyDefaults(options)
-
-	// Resolve model alias (e.g., "smart" -> "claude-3-5-sonnet-20241022")
-	options.Model = resolveModel(options.Model)
-
-	// Add model to span attributes after defaults are applied
-	span.SetAttribute("ai.model", options.Model)
-
-	// Log request
-	c.LogRequest("anthropic", options.Model, prompt)
-	startTime := time.Now()
-
-	// Build messages in Anthropic format
-	messages := []Message{
-		{
-			Role:    "user",
-			Content: prompt,
-		},
-	}
-
-	// Build request body using native Anthropic format
-	reqBody := AnthropicRequest{
-		Model:       options.Model,
-		Messages:    messages,
-		MaxTokens:   options.MaxTokens,
-		Temperature: options.Temperature,
-	}
-
-	// Add system prompt if provided
-	if options.SystemPrompt != "" {
-		reqBody.System = options.SystemPrompt
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+	prepared, err := c.prepareRequest(prompt, options, false)
 	if err != nil {
 		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - marshal error", map[string]interface{}{
+			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - preparation error", map[string]interface{}{
 				"operation": "ai_request_error",
 				"provider":  "anthropic",
 				"error":     err.Error(),
@@ -119,33 +85,19 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
+	c.recordRequestPreparation(ctx, span, prepared)
 
-	if options.ResponseFormat != "" || len(c.defaultExtra) > 0 || len(options.Extra) > 0 {
-		reqBodyMap := map[string]interface{}{}
-		if err := json.Unmarshal(jsonData, &reqBodyMap); err != nil {
-			span.RecordError(err)
-			return nil, fmt.Errorf("failed to prepare anthropic request body: %w", err)
-		}
-		for k, v := range providers.MergeAnyMaps(c.defaultExtra, options.Extra) {
-			if _, exists := reqBodyMap[k]; exists {
-				continue
-			}
-			reqBodyMap[k] = v
-		}
-		if options.ResponseFormat != "" {
-			reqBodyMap["response_format"] = options.ResponseFormat
-		}
-		jsonData, err = json.Marshal(reqBodyMap)
-		if err != nil {
-			span.RecordError(err)
-			return nil, fmt.Errorf("failed to marshal anthropic request extras: %w", err)
-		}
-	}
+	// Add model to span attributes after defaults are applied
+	span.SetAttribute("ai.model", prepared.Model)
+
+	// Log request
+	c.LogRequest("anthropic", prepared.Model, prompt)
+	startTime := time.Now()
 
 	// Create HTTP request to native Messages API endpoint
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/messages", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(prepared.Body))
 	if err != nil {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - create request error", map[string]interface{}{
@@ -159,15 +111,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set Anthropic-specific headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", APIVersion)
-	providers.ApplyHeaders(req, map[string]struct{}{
-		"content-type":      {},
-		"x-api-key":         {},
-		"anthropic-version": {},
-	}, c.defaultHeaders, options.Headers)
+	req.Header = prepared.Headers.Clone()
 
 	// Execute with retry
 	resp, err := c.ExecuteWithRetry(ctx, req)
@@ -212,7 +156,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 				"phase":       "api_response",
 			})
 		}
-		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", options.Model)
+		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.RecordError(apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return nil, apiErr
@@ -302,33 +246,10 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 		return nil, fmt.Errorf("anthropic API key not configured")
 	}
 
-	// Apply defaults
-	options = c.ApplyDefaults(options)
-
-	// Resolve model alias
-	options.Model = resolveModel(options.Model)
-
-	// Add model to span attributes
-	span.SetAttribute("ai.model", options.Model)
-
-	// Log request
-	c.LogRequest("anthropic", options.Model, prompt)
-	startTime := time.Now()
-
-	// Build request with streaming enabled
-	reqBody := AnthropicRequest{
-		Model:       options.Model,
-		Messages:    []Message{{Role: "user", Content: prompt}},
-		MaxTokens:   options.MaxTokens,
-		Temperature: options.Temperature,
-		System:      options.SystemPrompt,
-		Stream:      true,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+	prepared, err := c.prepareRequest(prompt, options, true)
 	if err != nil {
 		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - marshal error", map[string]interface{}{
+			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - preparation error", map[string]interface{}{
 				"operation": "ai_stream_error",
 				"provider":  "anthropic",
 				"error":     err.Error(),
@@ -336,11 +257,19 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
+	c.recordRequestPreparation(ctx, span, prepared)
+
+	// Add model to span attributes
+	span.SetAttribute("ai.model", prepared.Model)
+
+	// Log request
+	c.LogRequest("anthropic", prepared.Model, prompt)
+	startTime := time.Now()
 
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/messages", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(prepared.Body))
 	if err != nil {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - create request error", map[string]interface{}{
@@ -354,10 +283,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", APIVersion)
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header = prepared.Headers.Clone()
 
 	// Execute request
 	resp, err := c.HTTPClient.Do(req)
@@ -388,7 +314,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 				"phase":       "api_response",
 			})
 		}
-		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", options.Model)
+		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.RecordError(apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return nil, apiErr

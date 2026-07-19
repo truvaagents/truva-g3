@@ -3,7 +3,50 @@ package providers
 import (
 	"net/http"
 	"testing"
+
+	"github.com/truvaagents/truva-g3/core"
 )
+
+func TestCloneAIOptions_IsolatesNestedLegacyValues(t *testing.T) {
+	cycle := map[string]interface{}{}
+	cycle["self"] = cycle
+	original := &core.AIOptions{
+		Model:   "model",
+		Headers: map[string]string{"X-Test": "original"},
+		Extra: map[string]interface{}{
+			"nested": map[string]interface{}{
+				"items": []interface{}{map[string]interface{}{"value": "original"}},
+			},
+			"cycle": cycle,
+		},
+	}
+
+	clone, err := CloneAIOptions(original)
+	if err != nil {
+		t.Fatalf("CloneAIOptions returned error: %v", err)
+	}
+	clone.Headers["X-Test"] = "clone"
+	cloneNested := clone.Extra["nested"].(map[string]interface{})
+	cloneItems := cloneNested["items"].([]interface{})
+	cloneItems[0].(map[string]interface{})["value"] = "clone"
+	cloneCycle := clone.Extra["cycle"].(map[string]interface{})
+	cloneCycle["clone-only"] = true
+
+	if got := original.Headers["X-Test"]; got != "original" {
+		t.Fatalf("original header was mutated: %q", got)
+	}
+	originalNested := original.Extra["nested"].(map[string]interface{})
+	originalItems := originalNested["items"].([]interface{})
+	if got := originalItems[0].(map[string]interface{})["value"]; got != "original" {
+		t.Fatalf("original nested extra was mutated: %#v", got)
+	}
+	if _, exists := cycle["clone-only"]; exists {
+		t.Fatal("original cyclic extra was mutated")
+	}
+	if _, exists := cloneCycle["self"].(map[string]interface{})["clone-only"]; !exists {
+		t.Fatal("cloned cycle does not point to the cloned map")
+	}
+}
 
 func TestMergeAnyMaps_RequestOverridesDefault(t *testing.T) {
 	merged := MergeAnyMaps(
