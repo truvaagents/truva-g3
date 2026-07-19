@@ -888,7 +888,7 @@ func WithResultTrimming(enabled bool, maxResultBytes int) OrchestratorOption {
 	}
 }
 
-// WithResultPreserveKeys sets keys that should always be preserved during trimming.
+// WithResultPreserveKeys sets keys the trimmer should favor keeping during trimming (a scoring preference, not a guarantee).
 func WithResultPreserveKeys(keys []string) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.ResultTrim.PreserveKeys = keys

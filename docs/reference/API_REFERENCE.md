@@ -2915,7 +2915,7 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithErrorAnalysisAIOptions(opts)` - Per-phase overrides for error analysis calls
 - `WithResultDistillAIOptions(opts)` - Per-phase overrides for result distillation calls
 - `WithResultTrimming(enabled, maxResultBytes)` - Enable/configure structural result trimming (Layer 1)
-- `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer always keeps
+- `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer prioritizes keeping (a strong preference in its scoring, not a guarantee)
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
 - `WithResultDistillModel(model)` - Model or portable alias for distillation calls (use `fast`/`default`/`smart`, not a concrete name, for ChainClient failover)
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
@@ -3393,7 +3393,7 @@ type ResultTrimConfig struct {
     // Default: 16384 (16 KB) | Env: TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD
     SchemaGuidedMappingThreshold int `json:"schema_guided_mapping_threshold"`
 
-    // PreserveKeys lists JSON keys that should never be trimmed.
+    // PreserveKeys lists JSON keys the trimmer favors keeping (prioritized, not guaranteed).
     PreserveKeys []string `json:"preserve_keys,omitempty"`
 }
 ```
