@@ -2055,7 +2055,7 @@ func TestProcessForPrompt_CapturesMetadata_Truncate(t *testing.T) {
 
 func TestProcessForPrompt_NoBudgetExceeded_NoMetadataWritten(t *testing.T) {
 	// When response fits within budget, ProcessForPrompt returns early without calling
-	// captureTrimMetadata. The metadata pointer must remain zero-valued.
+	// CaptureResultTrimMetadata. The metadata pointer must remain zero-valued.
 	trimmer := NewStructuralTrimmer(nil, nil)
 	input := `{"x":"y"}`
 	ctx, meta := WithTrimMetadataCapture(context.Background())

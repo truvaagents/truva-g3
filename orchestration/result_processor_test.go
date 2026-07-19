@@ -1833,8 +1833,8 @@ func TestLLMDistiller_DebugStore_SkipsWhenRequestIDEmpty(t *testing.T) {
 // --- TestWithTrimMetadataCapture ---
 
 func TestWithTrimMetadataCapture_NoOp(t *testing.T) {
-	// captureTrimMetadata on a plain context must not panic and must not write anywhere.
-	captureTrimMetadata(context.Background(), ResultTrimMetadata{
+	// CaptureResultTrimMetadata on a plain context must not panic and must not write anywhere.
+	CaptureResultTrimMetadata(context.Background(), ResultTrimMetadata{
 		OriginalBytes: 100, TrimmedBytes: 50, Method: "structural",
 	})
 	// Reaching here without panic is the assertion.
@@ -1842,7 +1842,7 @@ func TestWithTrimMetadataCapture_NoOp(t *testing.T) {
 
 func TestWithTrimMetadataCapture_RoundTrip(t *testing.T) {
 	ctx, meta := WithTrimMetadataCapture(context.Background())
-	captureTrimMetadata(ctx, ResultTrimMetadata{
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: 1024,
 		TrimmedBytes:  512,
 		Method:        "structural",
@@ -1872,10 +1872,10 @@ func TestWithTrimMetadataCapture_RoundTrip(t *testing.T) {
 }
 
 func TestWithTrimMetadataCapture_SecondWriteWins(t *testing.T) {
-	// Second captureTrimMetadata call overwrites the first.
+	// Second CaptureResultTrimMetadata call overwrites the first.
 	ctx, meta := WithTrimMetadataCapture(context.Background())
-	captureTrimMetadata(ctx, ResultTrimMetadata{Method: "structural", OriginalBytes: 100})
-	captureTrimMetadata(ctx, ResultTrimMetadata{Method: "truncate", OriginalBytes: 200})
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{Method: "structural", OriginalBytes: 100})
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{Method: "truncate", OriginalBytes: 200})
 
 	if meta.Method != "truncate" {
 		t.Errorf("Expected second capture to win, got Method=%q", meta.Method)

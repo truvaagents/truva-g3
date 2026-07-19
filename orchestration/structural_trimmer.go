@@ -110,7 +110,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 		// TrimmedBytes describes what is actually returned.
 		final := floorWithDisclosure(result, len(response), maxBytes, lost, nil)
 		degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
-		captureTrimMetadata(ctx, ResultTrimMetadata{
+		CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes: len(response),
 			TrimmedBytes:  len(final),
 			Method:        "structural_text",
@@ -146,7 +146,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 
 	if obj, ok := data.(map[string]interface{}); ok {
 		result, fieldsKept, fieldsDropped, backfilledCount, thresholdSkipped, matchedPaths, degenerate, keptRatio, contentLost := t.selectFieldsWithMeta(ctx, obj, maxBytes, len(response), keywords)
-		captureTrimMetadata(ctx, ResultTrimMetadata{
+		CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes:    len(response),
 			TrimmedBytes:     len(result),
 			Method:           "structural",
@@ -193,7 +193,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 		// Degeneracy on the bare body (the annotation must not count as kept content) and
 		// TrimmedBytes on the returned output — both measured AFTER composition.
 		degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
-		captureTrimMetadata(ctx, ResultTrimMetadata{
+		CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 			OriginalBytes: len(response),
 			TrimmedBytes:  len(final),
 			Method:        "structural_array",
@@ -222,7 +222,7 @@ func (t *StructuralTrimmer) ProcessForPrompt(
 	fallback := truncateBytesWithUnknown(response, maxBytes)
 	final := floorWithDisclosure(fallback, len(response), maxBytes, true, nil)
 	degenerate, keptRatio := degenerateTrim(len(response), len(stripResultAnnotation(final)))
-	captureTrimMetadata(ctx, ResultTrimMetadata{
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: len(response),
 		TrimmedBytes:  len(final),
 		Method:        "truncate",
@@ -841,30 +841,31 @@ func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction
 		// an above-cliff cut reach synthesis with no disclosure at all).
 		return truncateBytesWithUnknown(text, maxBytes), true
 	}
-	sentences := strings.FieldsFunc(text, func(r rune) bool { return r == '.' || r == '!' || r == '?' })
+	sentences := splitSentencesPreserving(text)
 	if len(sentences) == 0 {
 		return truncateBytesWithUnknown(text, maxBytes), true
 	}
 
 	type scored struct {
-		text  string
-		score float64
-		idx   int
+		text    string // FULL original span (terminator + trailing whitespace) — reconstructed verbatim
+		coreLen int    // content bytes = len(TrimSpace(span)); budget on this so trailing whitespace is free
+		score   float64
+		idx     int
 	}
 	items := make([]scored, 0, len(sentences))
-	for i, s := range sentences {
-		s = strings.TrimSpace(s)
-		if len(s) == 0 {
-			continue
+	for i, span := range sentences {
+		core := strings.TrimSpace(span) // score/budget on the content; reconstruct from the full span
+		if len(core) == 0 {
+			continue // all-whitespace span (e.g. a trailing gap) carries no content
 		}
 		sc := 0.0
-		lower := strings.ToLower(s)
+		lower := strings.ToLower(core)
 		for _, kw := range keywords {
 			if strings.Contains(lower, kw) {
 				sc += 1.0
 			}
 		}
-		items = append(items, scored{text: s, score: sc, idx: i})
+		items = append(items, scored{text: span, coreLen: len(core), score: sc, idx: i})
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -882,28 +883,92 @@ func (t *StructuralTrimmer) trimPlainText(text string, maxBytes int, instruction
 	// sentence at all.
 	const noteFmt = "\n[trimmed: %d/%d sentences; omitted content is UNKNOWN — do not infer it is absent]"
 
+	// No scoreable content (e.g. a whitespace-only body larger than maxBytes): a byte cut with
+	// the UNKNOWN safeguard is the honest floor — never an empty body claimed lossless.
+	if len(items) == 0 {
+		return truncateBytesWithUnknown(text, maxBytes), true
+	}
+
 	var selected []scored
 	budgetUsed := 0
 	for _, s := range items {
-		if budgetUsed+len(s.text)+2 > maxBytes {
-			break
+		// CONTINUE, not break: items are score-descending, so a single over-budget sentence
+		// (e.g. a giant delimiter-free blob that matched a keyword) must not abandon the
+		// smaller relevant sentences after it — that starved selection to zero and produced a
+		// severe "0/N sentences" floor (T2d). Skip what doesn't fit; keep filling. Budget on
+		// CORE content only: a sentence's own trailing whitespace rides free (it is stripped at
+		// the edges below), so a small sentence followed by heavy padding is not blocked.
+		if budgetUsed+s.coreLen > maxBytes {
+			continue
 		}
 		selected = append(selected, s)
-		budgetUsed += len(s.text) + 2
+		budgetUsed += s.coreLen
+	}
+
+	// Nothing fit — not even the smallest sentence's content (a single spaceless blob larger than
+	// the budget). A byte cut with the UNKNOWN note gives the LLM partial content honestly,
+	// instead of an empty <data> falsely labelled "0/1 sentences" (T2c: default-reachable
+	// regression).
+	if len(selected) == 0 {
+		return truncateBytesWithUnknown(text, maxBytes), true
 	}
 
 	sort.Slice(selected, func(i, j int) bool { return selected[i].idx < selected[j].idx })
 
+	// Concatenate the ORIGINAL spans (each includes its terminator AND its trailing whitespace),
+	// then trim the edges. This preserves values, version strings, ?/!, AND inter-sentence
+	// newlines / indentation verbatim — splitSentencesPreserving partitions the text, so when
+	// EVERY sentence is kept this reproduces the input (modulo edge whitespace) and lost=false is
+	// genuinely honest (T2c). The loss signal is then precisely "a sentence was dropped", never a
+	// false verified-lossless over mangled values or flattened line structure (the old FieldsFunc
+	// rejoin did both). Inter-sentence whitespace between KEPT sentences rides as bounded overshoot
+	// (small in real text); trailing whitespace of the last span is stripped here.
 	var sb strings.Builder
 	for _, s := range selected {
 		sb.WriteString(s.text)
-		sb.WriteString(". ")
 	}
+	body := strings.TrimSpace(sb.String())
 	if len(selected) == len(items) {
-		// Every sentence survived — complete content carries no partiality note.
-		return sb.String(), false
+		// Every sentence survived intact — complete content carries no partiality note.
+		return body, false
 	}
-	return sb.String() + fmt.Sprintf(noteFmt, len(selected), len(items)), true
+	return body + fmt.Sprintf(noteFmt, len(selected), len(items)), true
+}
+
+// splitSentencesPreserving PARTITIONS text into sentences at terminating punctuation (. ! ?) that
+// is followed by whitespace or end-of-text. Each returned span is the ORIGINAL substring from the
+// previous boundary through the terminator AND its trailing inter-sentence whitespace, so
+// concatenating all spans reproduces the input byte-for-byte. Because a terminator only ends a
+// sentence when the next byte is whitespace/EOT, decimals ("1.23") and versions ("v2.5.1") —
+// whose dots are followed by a digit — are never torn, and ? / ! are kept rather than flattened
+// to '.'. Terminators are ASCII (single-byte), so i+1 and every slice bound land on rune
+// boundaries — a byte scan is UTF-8-safe.
+func splitSentencesPreserving(text string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c != '.' && c != '!' && c != '?' {
+			continue
+		}
+		if i+1 < len(text) && !isASCIISpace(text[i+1]) {
+			continue // terminator glued to a non-space (e.g. a decimal digit) — not a boundary
+		}
+		j := i + 1
+		for j < len(text) && isASCIISpace(text[j]) {
+			j++ // absorb the inter-sentence whitespace run into THIS span (so concat is faithful)
+		}
+		out = append(out, text[start:j])
+		start = j
+		i = j - 1
+	}
+	if start < len(text) {
+		out = append(out, text[start:]) // trailing text with no terminator
+	}
+	return out
+}
+
+func isASCIISpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
 }
 
 func isScalar(v interface{}) bool {

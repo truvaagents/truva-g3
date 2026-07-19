@@ -43,6 +43,20 @@ func mapReduceTestArray(n int) string {
 	return string(raw)
 }
 
+// prettyMapReduceArray returns an INDENTED JSON array whose raw form is much larger than its
+// compact re-serialization — so a byte-threshold routes it to map-reduce while its compact single
+// chunk still fits the model context. The realistic "mid-band single chunk" shape (raw > compact)
+// the P17 single-chunk path handles; used by tests that must exercise the single-chunk LLM extract
+// with a fitting context (ModelContextTokens huge), not force routing via an impossibly small one.
+func prettyMapReduceArray(n int) string {
+	recs := make([]interface{}, n)
+	for i := range recs {
+		recs[i] = map[string]interface{}{"id": fmt.Sprintf("r%02d", i), "v": "data"}
+	}
+	raw, _ := json.MarshalIndent(recs, "", "        ")
+	return string(raw)
+}
+
 // TestLLMDistiller_MapReduce_FansOut verifies an over-context result is chunked and
 // each chunk extracted (multiple LLM calls), with the extracts combined.
 func TestLLMDistiller_MapReduce_FansOut(t *testing.T) {
@@ -589,12 +603,13 @@ func TestMapReduce_ChunkBytesFallback(t *testing.T) {
 func TestMapReduce_SingleChunkRunsOneExtract(t *testing.T) {
 	mockAI := &countingAI{out: "EXTRACT"}
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
-	raw := mapReduceTestArray(4) // ~88B: routes to map-reduce (tokens>10) but is one chunk at 100KB
+	raw := prettyMapReduceArray(4) // pretty ~314B > 200 threshold → map-reduce; compact ~97B → ONE chunk that fits the huge context
 
 	ctx, meta := WithTrimMetadataCapture(context.Background())
 	out := distiller.ProcessForPrompt(ctx, raw, 2000, ResultProcessorContext{
@@ -613,8 +628,12 @@ func TestMapReduce_SingleChunkRunsOneExtract(t *testing.T) {
 	if meta.ContentLost {
 		t.Errorf("the lone chunk carries the full compact content — expected ContentLost=false, got %+v", *meta)
 	}
-	if meta.ChunkStrategy != "single" {
-		t.Errorf("expected chunk_strategy=single on the lone-chunk path, got %q", meta.ChunkStrategy)
+	// "array" (not "single"): a threshold-routed single chunk has len(result) > chunkBytes, so
+	// it is chunked via the array path. Post-T2a, "single" (result <= chunkBytes) can only reach
+	// the FLOOR, never the LLM extract — a "single"-strategy result that routed via over-context
+	// cannot fit the context, so chunkFitsContext floors it.
+	if meta.ChunkStrategy != "array" {
+		t.Errorf("expected chunk_strategy=array on the threshold-routed lone chunk, got %q", meta.ChunkStrategy)
 	}
 }
 
@@ -624,13 +643,14 @@ func TestMapReduce_SingleChunkRunsOneExtract(t *testing.T) {
 func TestMapReduce_SingleChunkFailOpen(t *testing.T) {
 	mockAI := &failAfterAI{succeedUntil: 0, out: "unused"} // every call errors
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
 	ctx, nonCacheable := withNonCacheableCapture(context.Background())
-	out := distiller.ProcessForPrompt(ctx, mapReduceTestArray(4), 2000, ResultProcessorContext{
+	out := distiller.ProcessForPrompt(ctx, prettyMapReduceArray(4), 2000, ResultProcessorContext{
 		StepID: "s1", AgentName: "a", Instruction: "list",
 	})
 

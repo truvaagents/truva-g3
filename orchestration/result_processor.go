@@ -17,7 +17,7 @@ import (
 //
 // Contract for custom implementations (Phase 16 honesty pipeline):
 //   - Whenever processing LOSES content (drops, truncation, sampling), call
-//     captureTrimMetadata with ContentLost: true — downstream disclosure gating (the
+//     CaptureResultTrimMetadata with ContentLost: true — downstream disclosure gating (the
 //     distiller's partial-source note, coverage accounting, cache-envelope auditing) keys
 //     exclusively on that signal; an implementation that skips it makes real loss read as
 //     full coverage with no disclosure anywhere.
@@ -109,9 +109,10 @@ type ResultDistillConfig struct {
 	// reduce-fits-context step; lowering that to change routing would back-fire on the combine).
 	//
 	// 0 = DISABLED: context-only routing (today's behavior). A positive value below the effective
-	// PreFilterBudget is ignored with a factory warning and treated as disabled — a result there
-	// would route to map-reduce but yield a single chunk that skips the LLM (result_mapreduce.go
-	// single-chunk floor). NewLLMDistiller normalizes this at construction for every wiring path.
+	// PreFilterBudget is ignored with a factory warning and treated as disabled — a result that
+	// small is a single chunk, so routing it to map-reduce adds no fan-out over the single-call
+	// path (that lone chunk still runs an LLM extract call when it fits context — result_mapreduce.go
+	// single-chunk gate). NewLLMDistiller normalizes this at construction for every wiring path.
 	// The canary target is ~1.5–2× PreFilterBudget (~192–256 KB), promoted to the default only
 	// after measurement.
 	//
@@ -148,7 +149,7 @@ type ResultTrimMetadata struct {
 	LLMInputBytes       int     `json:"llm_input_bytes,omitempty"`       // total data bytes sent across LLM calls; can exceed OriginalBytes once map-reduce wrappers replicate per chunk
 	SegmentsAnalyzed    int     `json:"segments_analyzed,omitempty"`     // map-reduce N (single-call: 1)
 	SegmentsTotal       int     `json:"segments_total,omitempty"`        // map-reduce M (single-call: 1)
-	PartialCoverage     bool    `json:"partial_coverage,omitempty"`      // a deterministic pre-LLM drop occurred
+	PartialCoverage     bool    `json:"partial_coverage,omitempty"`      // the LLM did not see the full source: a pre-LLM structural drop (single-call pre-filter) OR incomplete map-reduce coverage (failed/timed-out chunks)
 	CombineTruncated    bool    `json:"combine_truncated,omitempty"`     // reduce output was deterministically truncated
 	ChunkStrategy       string  `json:"chunk_strategy,omitempty"`        // map-reduce chunking mode: array|wrapper|lines|bytes — lines/bytes are byte-lossless but may tear records mid-JSON (degraded extraction quality)
 
@@ -384,16 +385,27 @@ func appendDisclosure(out, note string, maxBytes int) string {
 type trimMetadataKey struct{}
 
 // WithTrimMetadataCapture returns a derived context and a pointer to a ResultTrimMetadata
-// that will be populated by captureTrimMetadata when ProcessForPrompt runs.
+// that will be populated by CaptureResultTrimMetadata when ProcessForPrompt runs.
 // The pointer is safe to read after ProcessForPrompt returns.
 func WithTrimMetadataCapture(ctx context.Context) (context.Context, *ResultTrimMetadata) {
 	meta := &ResultTrimMetadata{}
 	return context.WithValue(ctx, trimMetadataKey{}, meta), meta
 }
 
-// captureTrimMetadata writes metadata into the context slot created by WithTrimMetadataCapture.
-// No-op if the context was not prepared with WithTrimMetadataCapture.
-func captureTrimMetadata(ctx context.Context, meta ResultTrimMetadata) {
+// CaptureResultTrimMetadata is the supported reporting hook a ResultProcessor calls to
+// record what it trimmed. It is the producer side of the metadata contract; the framework
+// prepares the per-step slot (via WithTrimMetadataCapture) before invoking ProcessForPrompt,
+// so a custom processor only needs to call this with the outcome. The record surfaces on the
+// step's Metadata["result_trim"] and the result_trim.completed span.
+//
+// Custom ResultProcessor implementations that drop, truncate, or sample content MUST call this
+// with ContentLost: true (see the ResultProcessor interface contract) — downstream disclosure
+// gating keys exclusively on that signal. This function enforces the invariant defensively:
+// any specific loss flag (Degenerate / PartialCoverage / CombineTruncated) is folded into
+// ContentLost, so a report can never claim "verified lossless" while also flagging a loss.
+//
+// No-op (safe) if the context was not prepared with WithTrimMetadataCapture.
+func CaptureResultTrimMetadata(ctx context.Context, meta ResultTrimMetadata) {
 	// Enforce the ContentLost superset invariant structurally: every specific loss flag
 	// implies the authoritative bit. Without this, a forgetful emitter (in-tree or a custom
 	// ResultProcessor) could record "partial coverage" beside an explicit "verified lossless"

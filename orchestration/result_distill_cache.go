@@ -198,7 +198,7 @@ func (c *cachingProcessor) ProcessForPrompt(
 			if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 				registry.Counter("orchestration.result_distill.cache_hit", "agent_name", stepCtx.AgentName)
 			}
-			captureTrimMetadata(ctx, env.Meta) // cached workloads stay auditable for coverage (Phase 16)
+			CaptureResultTrimMetadata(ctx, env.Meta) // cached workloads stay auditable for coverage (Phase 16)
 			return env.Out
 		}
 		// Undecodable entry — after the Phase 16 distillPromptVersion salt bump made legacy bare-string
@@ -221,7 +221,7 @@ func (c *cachingProcessor) ProcessForPrompt(
 	innerCtx, nonCacheable := withNonCacheableCapture(ctx)
 	innerCtx, meta := WithTrimMetadataCapture(innerCtx)
 	out := c.inner.ProcessForPrompt(innerCtx, result, maxBytes, stepCtx)
-	captureTrimMetadata(ctx, *meta)
+	CaptureResultTrimMetadata(ctx, *meta)
 
 	if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 		registry.Counter("orchestration.result_distill.cache_miss", "agent_name", stepCtx.AgentName)

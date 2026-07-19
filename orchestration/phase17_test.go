@@ -570,12 +570,13 @@ func TestSingleChunk_SuccessIncrementsMapreduceCounter(t *testing.T) {
 	reg := installTestMetricsRegistry(t)
 	mockAI := &countingAI{out: "EXTRACT"}
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
-	d.ProcessForPrompt(context.Background(), mapReduceTestArray(4), 2000,
+	d.ProcessForPrompt(context.Background(), prettyMapReduceArray(4), 2000,
 		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
 
 	if got := reg.count("orchestration.result_distill.mapreduce"); got != 1 {
@@ -611,14 +612,15 @@ func TestSingleChunk_FailureFullObservability(t *testing.T) {
 	logger := &TestLogger{}
 	mockAI := &failAfterAI{succeedUntil: 0, out: "unused"} // every call errors
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), logger)
 
 	tracer := otel.Tracer("phase17-test")
 	ctx, span := tracer.Start(context.Background(), "single-chunk-failure")
-	d.ProcessForPrompt(ctx, mapReduceTestArray(4), 2000,
+	d.ProcessForPrompt(ctx, prettyMapReduceArray(4), 2000,
 		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
 	span.End()
 
@@ -812,7 +814,7 @@ func TestCacheEnvelopeReplaysAllMetadataFields(t *testing.T) {
 	}
 
 	// ContentLost must survive the envelope ON ITS OWN: with any sibling loss flag set,
-	// captureTrimMetadata's superset normalization re-derives it on the hit path and masks a
+	// CaptureResultTrimMetadata's superset normalization re-derives it on the hit path and masks a
 	// dropped field (mutation-verified during review). This fixture is the single-call
 	// lossy-stage-1 shape — ContentLost true, Degenerate/PartialCoverage/CombineTruncated all
 	// false — where only the stored field itself can carry the signal.
@@ -892,7 +894,8 @@ func TestWorstChunkStrategy_Table(t *testing.T) {
 
 // TestChunkStrategy_LinesStamped: a newline-delimited non-JSON payload routed to map-reduce
 // stamps chunk_strategy="lines". The other strategies are pinned elsewhere: "bytes"/"wrapper" in
-// TestChunkStrategy_Stamped, "single" in TestMapReduce_SingleChunkRunsOneExtract, "array" in
+// TestChunkStrategy_Stamped, "array" in TestMapReduce_SingleChunkRunsOneExtract (a
+// threshold-routed lone chunk; "single" reaches only the floor post-T2a, never the LLM path), and in
 // TestLLMDistiller_MapReduce_FansOut.
 func TestChunkStrategy_LinesStamped(t *testing.T) {
 	var lines []string
@@ -1172,7 +1175,7 @@ func TestExtractChunk_NilAndWhitespaceGuard(t *testing.T) {
 		}
 		d := NewLLMDistiller(nilRespAI{}, config, NewStructuralTrimmer(nil, nil), nil)
 		out, err := d.extractChunk(context.Background(), "chunk data", 256,
-			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"}, "test call")
+			ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"}, "test call", 1.0)
 		if err == nil || out != "" {
 			t.Errorf("nil response must convert to an error, got out=%q err=%v", out, err)
 		}
@@ -1226,13 +1229,14 @@ func TestExtractChunk_NilAndWhitespaceGuard(t *testing.T) {
 func TestSingleChunk_EmptyExtractRecordsUsage(t *testing.T) {
 	mockAI := &countingAI{out: "", usage: core.TokenUsage{PromptTokens: 17}}
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
 	ctx, acc := core.WithTokenUsageAccumulator(context.Background())
-	d.ProcessForPrompt(ctx, mapReduceTestArray(4), 2000,
+	d.ProcessForPrompt(ctx, prettyMapReduceArray(4), 2000,
 		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
 
 	_, byPhase := acc.Snapshot()
@@ -1308,5 +1312,269 @@ func TestSingleCall_FailureFallbackKeepsGenerousBudget(t *testing.T) {
 
 	if body := len(stripResultAnnotation(out)); body <= 3000 {
 		t.Errorf("generous-budget fallback must not be capped at targetSize, got %d body bytes", body)
+	}
+}
+
+// --- Tier-2 review fixes (repro-first; behavior-changing) ---
+
+// captureReduceAI records every prompt and fails exactly one chunk call (to force completed<total)
+// while letting the reduce call succeed. Prompts[len-1] is the reduce prompt (MapConcurrency=1).
+type captureReduceAI struct {
+	mu       sync.Mutex
+	n        int
+	failCall int    // 1-based call index to fail (a map chunk)
+	out      string // substantive chunk/reduce output
+	prompts  []string
+}
+
+func (a *captureReduceAI) GenerateResponse(_ context.Context, prompt string, _ *core.AIOptions) (*core.AIResponse, error) {
+	a.mu.Lock()
+	a.n++
+	idx := a.n
+	a.prompts = append(a.prompts, prompt)
+	a.mu.Unlock()
+	if idx == a.failCall {
+		return nil, fmt.Errorf("chunk %d failed", idx)
+	}
+	return &core.AIResponse{Content: a.out}, nil
+}
+func (a *captureReduceAI) StreamResponse(ctx context.Context, p string, o *core.AIOptions, _ func(string)) (*core.AIResponse, error) {
+	return a.GenerateResponse(ctx, p, o)
+}
+func (a *captureReduceAI) reducePrompt() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.prompts) == 0 {
+		return ""
+	}
+	return a.prompts[len(a.prompts)-1]
+}
+
+// TestT2a_SingleChunkGateFitsContextNotBytes: a payload routed over-context whose lone chunk fits
+// chunkBytes but NOT the model context must FLOOR (no doomed extract call), not dispatch a call
+// that would overflow the provider. Pre-fix the gate checked bytes-vs-chunkBytes and dispatched.
+func TestT2a_SingleChunkGateFitsContextNotBytes(t *testing.T) {
+	ai := &countingAI{out: "EXTRACT"}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 131072, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 20000, MapConcurrency: 4, // ~70 KB context
+		CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(ai, config, NewStructuralTrimmer(nil, nil), nil)
+
+	// ~100 KB result: over-context (≈28.5K tok > 20000) → routed to map-reduce; its compact form
+	// is ONE chunk ≤ 131072 chunkBytes, so the byte gate would dispatch a ~28.5K-token call at a
+	// 20K-token model. The fits-context gate must floor instead.
+	payload := mapReduceTestArray(4200) // ~100 KB
+	out := d.ProcessForPrompt(context.Background(), payload, 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
+
+	if ai.count() != 0 {
+		t.Errorf("a lone chunk that does not fit the model context must floor without a doomed extract call, got %d calls", ai.count())
+	}
+	if out == "" {
+		t.Error("expected the structural floor output")
+	}
+}
+
+// TestT2b_ReducePromptCarriesCoverageOnPartial: on a PARTIAL map run (a failed chunk), the reduce
+// call's prompt must carry the coverage caveat so the reduce model does not make confident
+// absence claims over segments it never saw. Pre-fix the reduce used coverage=1.0 (no caveat).
+func TestT2b_ReducePromptCarriesCoverageOnPartial(t *testing.T) {
+	payload := mapReduceTestArray(60)
+	pre, _, _, _ := chunkWholeUnits(payload, 100)
+	if len(pre) < 3 {
+		t.Fatalf("fixture needs >=3 chunks, got %d", len(pre))
+	}
+	// Chunk 2 fails → completed = total-1 < total → partial; every other call (incl. the reduce)
+	// succeeds with a long extract so combined > targetSize and the reduce fires.
+	ai := &captureReduceAI{failCall: 2, out: "FINDING " + strings.Repeat("x", 300)}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 200,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 1, // sequential + huge ctx → reduce fires
+		MapReduceThresholdBytes: 100, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(ai, config, NewStructuralTrimmer(nil, nil), nil)
+	d.ProcessForPrompt(context.Background(), payload, 2000,
+		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find errors"})
+
+	rp := ai.reducePrompt()
+	if !strings.Contains(rp, "WITHIN THE PROVIDED SAMPLE") {
+		t.Errorf("the reduce prompt on a partial run must carry the coverage caveat, got:\n%s", rp)
+	}
+}
+
+// TestT2c_TrimPlainTextPreservesDecimals: the plain-text trimmer must not tear decimals/versions
+// into separate "sentences" (splitting "1.23s" → "1. 23s"), and must not claim verified-lossless
+// while doing so.
+func TestT2c_TrimPlainTextPreservesDecimals(t *testing.T) {
+	tr := NewStructuralTrimmer(nil, nil)
+	// A metrics-report shape whose whitespace pushes it over maxBytes; the values must survive.
+	var b strings.Builder
+	b.WriteString("Latency report. ")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&b, "service%02d p99=1.23s error rate v2.5.1 within budget.\n    ", i)
+	}
+	text := b.String()
+	out, _ := tr.trimPlainText(text, 600, "latency error")
+
+	if strings.Contains(out, "1. 23") || strings.Contains(out, "2. 5. 1") {
+		t.Errorf("decimals/versions were torn by sentence splitting: %q", out)
+	}
+	if !strings.Contains(out, "1.23s") {
+		t.Errorf("expected the intact latency value 1.23s in the output, got: %q", out)
+	}
+}
+
+// TestT2d_TrimPlainTextNoStarvationOnGiantSentence: a huge top-scored sentence that cannot fit the
+// budget must not abandon the smaller relevant sentences after it (greedy break→continue).
+func TestT2d_TrimPlainTextNoStarvationOnGiantSentence(t *testing.T) {
+	tr := NewStructuralTrimmer(nil, nil)
+	giant := "error " + strings.Repeat("x", 4000) // top score (matches keyword), far over budget
+	var b strings.Builder
+	b.WriteString(giant + ". ")
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&b, "error detail number %02d here. ", i) // small, relevant, should be kept
+	}
+	out, _ := tr.trimPlainText(b.String(), 500, "error")
+
+	if strings.Contains(out, "[trimmed: 0/") {
+		t.Errorf("greedy break starved selection to zero sentences: %q", out)
+	}
+	if !strings.Contains(out, "error detail number") {
+		t.Errorf("small relevant sentences after a giant one must still be selected, got: %q", out)
+	}
+}
+
+// TestT2b_ReduceOverheadGateCountsCaveat pins the OTHER half of T2b (mutation-uncaught): the
+// reduce-context gate must budget the caveat line's tokens, so a partial run's overhead exceeds a
+// full run's. Reverting the gate's coverage arg to 1.0 makes these equal.
+func TestT2b_ReduceOverheadGateCountsCaveat(t *testing.T) {
+	d := NewLLMDistiller(&countingAI{}, ResultDistillConfig{Model: "fast"}, NewStructuralTrimmer(nil, nil), nil)
+	sc := ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"}
+	full := d.extractCallOverheadTokens(256, sc, 1.0)    // no caveat line
+	partial := d.extractCallOverheadTokens(256, sc, 0.5) // adds the coverage caveat
+	if partial <= full {
+		t.Errorf("a <1.0 coverage must add caveat tokens to the overhead estimate: full=%d partial=%d", full, partial)
+	}
+}
+
+// TestT2c_LosslessClaimIsHonest pins the honesty invariant T2c restores: when every sentence
+// fits, trimPlainText returns lost=FALSE only if the output truly preserved the content —
+// values, versions, ?/!, and inter-sentence newlines. The old FieldsFunc rejoin returned
+// lost=false while flattening !/? to '.' and tearing "1.23"→"1. 23"; this fixture fails on that.
+func TestT2c_LosslessClaimIsHonest(t *testing.T) {
+	tr := NewStructuralTrimmer(nil, nil)
+	// Every sentence fits the generous budget → all kept. But the input exceeds a SMALL budget
+	// via padding so trimPlainText actually runs; give it room so nothing is dropped.
+	input := "Alert! Latency 1.23s? Check v2.5.1 now.\n    more error context here."
+	out, lost := tr.trimPlainText(input, 10000, "latency alert error")
+
+	if lost {
+		t.Errorf("all sentences kept must be lost=false, got lost=true: %q", out)
+	}
+	for _, want := range []string{"!", "?", "1.23s", "v2.5.1", "\n    "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("honest-lossless output must preserve %q, got: %q", want, out)
+		}
+	}
+	// And a genuine drop is disclosed: a tiny budget forces omission → lost=true + the note.
+	_, lost2 := tr.trimPlainText(input+" "+strings.Repeat("x", 200)+" tail sentence here.", 40, "error tail")
+	if !lost2 {
+		t.Error("dropping a sentence must report lost=true")
+	}
+}
+
+// TestT2c_GiantSpacelessSentenceNotEmpty pins the review-caught regression: a whitespace-free
+// blob (URL/domain list, spaceless log) that is one giant sentence must not yield an empty body
+// falsely labelled "0/1 sentences" — it floors to truncateBytesWithUnknown (partial content +
+// honest UNKNOWN note).
+func TestT2c_GiantSpacelessSentenceNotEmpty(t *testing.T) {
+	tr := NewStructuralTrimmer(nil, nil)
+	blob := strings.Repeat("error.host.example.com,", 300) // ~6900B, no whitespace, one "sentence"
+	out, lost := tr.trimPlainText(blob, 500, "error")
+
+	if strings.TrimSpace(stripResultAnnotation(out)) == "" {
+		t.Errorf("a giant spaceless sentence must not collapse to an empty body, got: %q", out)
+	}
+	if !lost {
+		t.Error("a byte-truncated giant sentence is lossy → lost=true")
+	}
+	if !strings.Contains(out, "UNKNOWN") {
+		t.Errorf("the floor must carry the UNKNOWN safeguard, got: %q", out)
+	}
+}
+
+// TestT2c_WhitespaceOnlyNotEmptyLossless pins the whitespace-only edge: a huge all-whitespace body
+// must floor with disclosure, not return an empty body claimed lossless.
+func TestT2c_WhitespaceOnlyNotEmptyLossless(t *testing.T) {
+	tr := NewStructuralTrimmer(nil, nil)
+	out, lost := tr.trimPlainText(strings.Repeat(" \n\t", 300), 50, "error")
+	if !lost {
+		t.Errorf("a whitespace-only over-budget body must report lost=true, got: %q", out)
+	}
+}
+
+// TestDistillPromptVersionIsNine pins the pipeline-version intent: T2b/T2c changed what the LLM
+// sees on cacheable paths, so the version (hashed into the cache salt) must have bumped.
+func TestDistillPromptVersionIsNine(t *testing.T) {
+	if distillPromptVersion != "9" {
+		t.Errorf("distillPromptVersion = %q, want \"9\" (T2b reduce caveat + T2c trimPlainText changed LLM-visible cacheable output)", distillPromptVersion)
+	}
+}
+
+// TestT2b_ReduceGateUsesReduceCoverage pins that the reduce-CONTEXT GATE (not just the prompt)
+// uses the partial-run coverage: the boundary MCT is computed at RUNTIME from the actual
+// overheads (robust to prompt-wording changes), placed strictly between combined+overhead(1.0)
+// and combined+overhead(reduceCoverage). The correct gate truncates deterministically (reduce
+// gated out); a gate reverted to 1.0 would pass and dispatch the reduce. Mutation-verified.
+func TestT2b_ReduceGateUsesReduceCoverage(t *testing.T) {
+	sc := ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"}
+	const targetSize = 256
+	out := strings.Repeat("x", 150)
+
+	payload := mapReduceTestArray(12)
+	pre, _, _, _ := chunkWholeUnits(payload, 100)
+	total := len(pre)
+	if total < 2 {
+		t.Fatalf("fixture needs >=2 chunks, got %d", total)
+	}
+	completed := total - 1 // captureReduceAI fails exactly one chunk
+	reduceCoverage := float64(completed) / float64(total)
+
+	// combined mirrors mapReduceCompact's strings.Join(substantive, "\n") of the surviving chunks.
+	parts := make([]string, completed)
+	for i := range parts {
+		parts[i] = out
+	}
+	combined := strings.Join(parts, "\n")
+	if len(combined) <= targetSize {
+		t.Fatalf("combined (%d) must exceed targetSize (%d) to reach the reduce block", len(combined), targetSize)
+	}
+
+	// Overhead window, computed at runtime.
+	probe := NewLLMDistiller(&countingAI{}, ResultDistillConfig{Model: "fast"}, NewStructuralTrimmer(nil, nil), nil)
+	o10 := probe.extractCallOverheadTokens(targetSize, sc, 1.0)
+	oReduce := probe.extractCallOverheadTokens(targetSize, sc, reduceCoverage)
+	if oReduce <= o10 {
+		t.Fatalf("the caveat must add overhead: o10=%d oReduce=%d", o10, oReduce)
+	}
+	mct := estimateTokens(combined) + o10 + (oReduce-o10)/2 // strictly inside the window
+
+	ai := &captureReduceAI{failCall: 1, out: out}
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: targetSize,
+		Model: "fast", ModelContextTokens: mct, MapConcurrency: 1,
+		MapReduceThresholdBytes: 100, CompactionDeadline: 5 * time.Second,
+	}
+	d := NewLLMDistiller(ai, config, NewStructuralTrimmer(nil, nil), nil)
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+	d.ProcessForPrompt(ctx, payload, 2000, sc)
+
+	if ai.n != total {
+		t.Errorf("gate must budget the reduce coverage's caveat: expected %d calls (chunks only, reduce gated out), got %d — a gate using 1.0 would dispatch the reduce (%d)", total, ai.n, total+1)
+	}
+	if !meta.CombineTruncated {
+		t.Errorf("the over-context gate must deterministically truncate the combine, got %+v", *meta)
 	}
 }

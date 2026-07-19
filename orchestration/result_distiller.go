@@ -80,7 +80,7 @@ func normalizeResultDistillConfig(cfg ResultDistillConfig, logger core.Logger) R
 
 // NewLLMDistiller creates a two-stage distiller with structural pre-filtering.
 // preFilter MUST honor the ResultProcessor contract (see the interface doc): report any
-// content loss via captureTrimMetadata's ContentLost and emit only registered single-line
+// content loss via CaptureResultTrimMetadata's ContentLost and emit only registered single-line
 // annotations. The partial-source disclosure and coverage accounting key on that signal — a
 // pre-filter that trims silently disables every Phase 16 disclosure for its results.
 //
@@ -396,7 +396,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 		out += partialSourceDisclosure(coverage)
 	}
 
-	captureTrimMetadata(ctx, ResultTrimMetadata{
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes:       len(result),
 		TrimmedBytes:        len(out),
 		Method:              "distill",
@@ -431,7 +431,10 @@ func (d *LLMDistiller) ProcessForPrompt(
 // preserved large IDs — changed; stale "7"-era outputs must not be replayed. (This is now a
 // general PIPELINE version, not just the prompt template — bump it for any change to what the
 // chunker/trimmer feeds the model, not only buildDistillationPrompt/distillationSystemPrompt.)
-const distillPromptVersion = "8"
+// "9" = Phase 17 Tier-2: the map-reduce REDUCE call carries a coverage caveat on partial runs
+// (T2b), and the plain-text pre-filter (trimPlainText) now splits sentences boundary-aware so
+// decimals/versions survive intact (T2c/T2d) — both change what the LLM sees on cacheable paths.
+const distillPromptVersion = "9"
 
 // distillationSystemPrompt is the STATIC policy for distillation — identity + rules. It is
 // dispatched as the system message (mirroring synthesizer.go's synthesisSystemPrompt) so the
@@ -526,7 +529,10 @@ func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, step
 	// (partialSourceDisclosure); this line only nudges the model to self-qualify.
 	coverageLine := ""
 	if coverage < 1 {
-		coverageLine = fmt.Sprintf("Note: you received ~%d%% of the source by bytes; report any absence as absence WITHIN THE PROVIDED SAMPLE.\n", coveragePct(coverage))
+		// "of the source" (no "by bytes"): the single-call path's coverage is a byte fraction,
+		// but the map-reduce REDUCE call passes a SEGMENT fraction (completed/total) — a shared
+		// "by bytes" wording would mislabel the reduce (T2b). The actionable clause is unit-free.
+		coverageLine = fmt.Sprintf("Note: you received ~%d%% of the source; report any absence as absence WITHIN THE PROVIDED SAMPLE.\n", coveragePct(coverage))
 	}
 	return fmt.Sprintf(`<context source=%q%s>
 %s%s%s</context>

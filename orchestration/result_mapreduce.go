@@ -45,10 +45,13 @@ func (d *LLMDistiller) mapReduceCompact(
 	total := len(chunks)
 	if total <= 1 {
 		// Zero chunks (a degenerate payload the chunkers dropped entirely — e.g. only blank
-		// lines) or a lone chunk still over the chunk budget cannot fit one extract call:
-		// dispatching it would be a doomed over-context request (the routing precondition put
-		// the raw result over the context/threshold). Deterministic floor, cacheable (stable).
-		if total == 0 || len(chunks[0]) > chunkBytes {
+		// lines) or a lone chunk that does not fit the model CONTEXT cannot fit one extract
+		// call: dispatching it would be a doomed over-context request (the routing precondition
+		// put the raw result over the context/threshold, and its compact single chunk can still
+		// exceed the context). Gate on the same fits-context token math the reduce uses — NOT
+		// bytes-vs-chunkBytes, which a token-routed payload passes while overflowing the model
+		// (T2a). Deterministic floor, cacheable (stable).
+		if total == 0 || !d.chunkFitsContext(chunks[0], targetSize, stepCtx) {
 			return d.preFilter.ProcessForPrompt(ctx, result, targetSize, stepCtx)
 		}
 		// One chunk means the whole result — typically its COMPACT re-serialization, which can
@@ -64,7 +67,7 @@ func (d *LLMDistiller) mapReduceCompact(
 			defer cancel()
 		}
 		scStart := time.Now()
-		extracted, exErr := d.extractChunk(scCtx, chunk, targetSize, stepCtx, "map-reduce single chunk")
+		extracted, exErr := d.extractChunk(scCtx, chunk, targetSize, stepCtx, "map-reduce single chunk", 1.0)
 		if exErr == nil && extracted != "" {
 			telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_complete",
 				attribute.String("request_id", requestIDFromBaggage(ctx)),
@@ -78,7 +81,7 @@ func (d *LLMDistiller) mapReduceCompact(
 			if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 				registry.Counter("orchestration.result_distill.mapreduce", "agent_name", stepCtx.AgentName)
 			}
-			captureTrimMetadata(ctx, ResultTrimMetadata{
+			CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 				OriginalBytes:       len(result),
 				TrimmedBytes:        len(extracted),
 				Method:              "distill_mapreduce",
@@ -175,8 +178,8 @@ func (d *LLMDistiller) mapReduceCompact(
 			if mrCtx.Err() != nil {
 				return
 			}
-			llmInputBytes.Add(int64(len(chunk))) // bytes sent, counted pre-dispatch (Phase 16)
-			out, err := d.extractChunk(mrCtx, chunk, perChunkTarget, stepCtx, fmt.Sprintf("map-reduce chunk %d/%d", i+1, total))
+			llmInputBytes.Add(int64(len(chunk)))                                                                                      // bytes sent, counted pre-dispatch (Phase 16)
+			out, err := d.extractChunk(mrCtx, chunk, perChunkTarget, stepCtx, fmt.Sprintf("map-reduce chunk %d/%d", i+1, total), 1.0) // each chunk shown in full
 			resCh <- chunkOut{i: i, out: out, ok: err == nil && out != ""}
 		}(i, chunk)
 	}
@@ -244,14 +247,19 @@ collect:
 	combineTruncated := false
 	combineReason := "" // "reduce_failed" (transient) vs "over_context" (deterministic) — the canary's reduce-fallback measurement needs them distinguishable
 	if len(combined) > targetSize {
+		// The reduce sees only the completed segments' extracts — on a PARTIAL run its coverage
+		// is < 1.0, adding the caveat line so the reduce model does not claim absence over
+		// segments it never saw (T2b). completed/total is <= 1.0 (== 1.0 on a full run → no
+		// caveat, identical to before).
+		reduceCoverage := float64(completed) / float64(total)
 		// P17.7 — budget the REAL reduce call (data + prompt wrapper + system prompt + output
 		// reserve), not the data alone: a `combined` near the limit would otherwise overflow the
-		// actual request. reduceCallOverheadTokens derives the overhead from the same builder the
-		// call uses, so this gate can't drift from it.
-		reduceOverhead := d.reduceCallOverheadTokens(targetSize, stepCtx)
+		// actual request. extractCallOverheadTokens derives the overhead from the same builder the
+		// call uses (same coverage → the caveat line is counted), so this gate can't drift from it.
+		reduceOverhead := d.extractCallOverheadTokens(targetSize, stepCtx, reduceCoverage)
 		if estimateTokens(combined)+reduceOverhead <= d.config.ModelContextTokens {
 			llmInputBytes.Add(int64(len(combined))) // reduce-call input is LLM volume too (Phase 16)
-			if reduced, err := d.extractChunk(mrCtx, combined, targetSize, stepCtx, "map-reduce reduce"); err == nil && reduced != "" {
+			if reduced, err := d.extractChunk(mrCtx, combined, targetSize, stepCtx, "map-reduce reduce", reduceCoverage); err == nil && reduced != "" {
 				combined = reduced
 			} else {
 				// Transient reduce failure (provider 429/timeout/empty): the truncation is a
@@ -325,7 +333,7 @@ collect:
 		registry.Counter("orchestration.result_distill.mapreduce", "agent_name", stepCtx.AgentName)
 	}
 
-	captureTrimMetadata(ctx, ResultTrimMetadata{
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: len(result),
 		TrimmedBytes:  len(combined),
 		Method:        "distill_mapreduce",
@@ -344,13 +352,15 @@ collect:
 }
 
 // buildExtractCall constructs the (prompt, options) for one extract/reduce LLM call. It is the
-// single source of truth for how the map/reduce calls are shaped, so both extractChunk and the
-// reduce-context gate (reduceCallOverheadTokens) stay in sync — the gate must not re-derive the
-// prompt/options formula independently (P17.7). coverage=1.0: each chunk is shown to the LLM in
-// full, so no partial-source note (segment coverage is tracked via SegmentsAnalyzed/Total). MaxTokens
-// and SystemPrompt are post-override — mergeAIOptions may raise MaxTokens or swap the system prompt.
-func (d *LLMDistiller) buildExtractCall(content string, targetSize int, stepCtx ResultProcessorContext) (string, *core.AIOptions) {
-	prompt := d.buildDistillationPrompt(content, targetSize, stepCtx, 1.0)
+// single source of truth for how the map/reduce calls are shaped, so extractChunk, the context
+// gates, and extractCallOverheadTokens stay in sync — no site may re-derive the prompt/options
+// formula independently (P17.7). coverage: 1.0 for a map chunk or a lone/single chunk (shown to
+// the LLM in full, no partial-source note); < 1.0 for the REDUCE call on a PARTIAL run, where the
+// joined extracts cover only completed-of-total segments — the note stops the reduce model making
+// confident absence claims over segments it never saw (T2b). MaxTokens and SystemPrompt are
+// post-override — mergeAIOptions may raise MaxTokens or swap the system prompt.
+func (d *LLMDistiller) buildExtractCall(content string, targetSize int, stepCtx ResultProcessorContext, coverage float64) (string, *core.AIOptions) {
+	prompt := d.buildDistillationPrompt(content, targetSize, stepCtx, coverage)
 	maxTokens := targetSize/3 + 100
 	if maxTokens < 500 {
 		maxTokens = 500
@@ -359,25 +369,39 @@ func (d *LLMDistiller) buildExtractCall(content string, targetSize int, stepCtx 
 	return prompt, mergeAIOptions(baseOptions, d.aiOptionsOverride)
 }
 
-// reduceCallOverheadTokens estimates the NON-data token cost of one reduce call — the prompt
-// wrapper (everything but the data), the system prompt, and the output reserve (MaxTokens) — via
-// the same builder the real call uses, so the reduce-context gate accounts for the full request,
-// not the data alone (P17.7). The caller adds the data (combined) tokens. The empty-data wrapper is
-// the widest, so this is a conservative (never-under) overhead estimate.
-func (d *LLMDistiller) reduceCallOverheadTokens(targetSize int, stepCtx ResultProcessorContext) int {
-	wrapperPrompt, options := d.buildExtractCall("", targetSize, stepCtx)
+// extractCallOverheadTokens estimates the NON-data token cost of one extract/reduce call — the
+// prompt wrapper (everything but the data), the system prompt, and the output reserve (MaxTokens)
+// — via the same builder the real call uses, so the context gates account for the full request,
+// not the data alone (P17.7). The caller adds the data tokens. coverage must match the call being
+// gated: a < 1.0 coverage adds the caveat line, so passing the same value keeps the estimate
+// conservative (never-under) for that call.
+func (d *LLMDistiller) extractCallOverheadTokens(targetSize int, stepCtx ResultProcessorContext, coverage float64) int {
+	wrapperPrompt, options := d.buildExtractCall("", targetSize, stepCtx, coverage)
 	return estimateTokens(wrapperPrompt) + estimateTokens(options.SystemPrompt) + options.MaxTokens
+}
+
+// chunkFitsContext reports whether a single chunk (shown in full, coverage 1.0) plus the extract
+// call's overhead fits the model context — the same fits-context math the reduce gate uses. Used
+// by the single-chunk path to floor deterministically instead of dispatching a doomed
+// over-context extract (T2a). ModelContextTokens is backfilled at normalization, so it is > 0;
+// the guard is defensive.
+func (d *LLMDistiller) chunkFitsContext(chunk string, targetSize int, stepCtx ResultProcessorContext) bool {
+	if d.config.ModelContextTokens <= 0 {
+		return true
+	}
+	return estimateTokens(chunk)+d.extractCallOverheadTokens(targetSize, stepCtx, 1.0) <= d.config.ModelContextTokens
 }
 
 // extractChunk runs the extractive distillation prompt on a single chunk (or, for the reduce
 // step, the joined chunk extracts). It inherits the caller's (shared) deadline via ctx — it does
 // not impose its own. callDesc labels the call ("map-reduce chunk i/N" or "map-reduce reduce") for
-// the LLM-Debug record. Each call records a typed result_distillation interaction here for parity
+// the LLM-Debug record. coverage is 1.0 for a chunk shown in full and < 1.0 for the reduce on a
+// partial run (T2b). Each call records a typed result_distillation interaction here for parity
 // with the single-call path (the generic agent_llm_call is deferred). (Phase 12)
 func (d *LLMDistiller) extractChunk(
-	ctx context.Context, chunk string, targetSize int, stepCtx ResultProcessorContext, callDesc string,
+	ctx context.Context, chunk string, targetSize int, stepCtx ResultProcessorContext, callDesc string, coverage float64,
 ) (string, error) {
-	prompt, options := d.buildExtractCall(chunk, targetSize, stepCtx)
+	prompt, options := d.buildExtractCall(chunk, targetSize, stepCtx, coverage)
 
 	requestID := ""
 	if bag := telemetry.GetBaggage(ctx); bag != nil {

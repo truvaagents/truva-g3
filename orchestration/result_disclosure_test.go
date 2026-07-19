@@ -138,7 +138,7 @@ type metaProcessor struct {
 
 func (f *metaProcessor) ProcessForPrompt(ctx context.Context, _ string, _ int, _ ResultProcessorContext) string {
 	f.calls++
-	captureTrimMetadata(ctx, f.meta)
+	CaptureResultTrimMetadata(ctx, f.meta)
 	return f.out
 }
 
@@ -901,7 +901,7 @@ func TestCaptureNormalizesContentLost(t *testing.T) {
 		{"no flags stays lossless", ResultTrimMetadata{Method: "structural"}, false},
 	} {
 		ctx, meta := WithTrimMetadataCapture(context.Background())
-		captureTrimMetadata(ctx, tc.in)
+		CaptureResultTrimMetadata(ctx, tc.in)
 		if meta.ContentLost != tc.want {
 			t.Errorf("%s: ContentLost = %v, want %v", tc.name, meta.ContentLost, tc.want)
 		}
