@@ -11,10 +11,10 @@ applications adapt to provider changes without waiting for a framework release,
 while preserving safety, portability, retries, streaming, failover, and
 observability.
 
-**Implementation status:** In progress. Phase 0B is implemented and locally
-verified as of 2026-07-18, pending review and commit; Section 19 contains the
-remaining code-level implementation blueprint. Public names remain proposed
-until final API review.
+**Implementation status:** In progress. Phase 0B was committed as `676da81` on
+2026-07-19. Phase 1 is implemented and locally verified as of 2026-07-19,
+pending review and commit; Section 19 contains the remaining code-level
+implementation blueprint. Public names remain proposed until final API review.
 
 ---
 
@@ -1763,8 +1763,8 @@ than sending an empty request.
 
 ### 19.3 Phase 0B — converge Anthropic sync and stream preparation
 
-**Status:** Implemented and locally verified (2026-07-18); pending review and
-commit.
+**Status:** Implemented, locally verified, and committed as `676da81`
+(2026-07-19).
 
 The immediate compatibility table is provider-owned and applies after concrete
 model resolution. A tri-state result prevents an unknown future model from
@@ -1952,6 +1952,9 @@ credential options use the checked path and fail on protected conflicts.
 
 ### 19.4 Phase 1 — add the core request/result capability
 
+**Status:** Implemented and locally verified (2026-07-19); pending review and
+commit.
+
 Add new contracts without changing `AIClient`, `AIOptions`, `AIResponse`, or
 `StreamingAIClient`. Evolving structs use keyed literals only.
 
@@ -2132,10 +2135,11 @@ func GenerateAI(
 }
 ~~~
 
-`firstUnsupportedLegacyFeature` detects `Omit`, `TopP`, `TopK`, and provider
-patches because a legacy-only client cannot prove that it honored them.
-`toLegacyOptions` then overlays representable presence-aware set values on the
-cloned legacy options. This prevents a capability fallback from silently
+`firstUnsupportedLegacyFeature` detects `Omit`, `TopP`, `TopK`, provider
+patches, and explicit zero or empty `Set` values whose legacy meaning is
+inherit, because a legacy-only client cannot prove that it honored them.
+`toLegacyOptions` then overlays only representable presence-aware set values on
+the cloned legacy options. This prevents a capability fallback from silently
 discarding new semantics. The limited fallback report is deliberately unstable
 because a legacy client cannot fingerprint the effective provider request.
 
@@ -2159,6 +2163,13 @@ func (c *Client) GenerateResponse(
 ~~~
 
 ### 19.5 Phase 2 — implement one request-policy engine
+
+**Entry gate:** Before adding the policy engine's third clone routine, align
+`ai/providers.CloneAIOptions` with the Core clone for every supported acyclic
+JSON-compatible map, slice, array, and named scalar shape, then add shared
+conformance fixtures covering both routines. Extend the same fixtures to the
+policy clone as it is introduced. Opaque legacy leaves may remain shared only
+where the documented backward-compatibility contract permits it.
 
 Create `ai/requestpolicy` with no dependency on the root `ai` package. Providers
 adapt their logical requests to this interface:
@@ -3044,10 +3055,12 @@ func invokeAI(
 ~~~
 
 The helper is also the single place to preserve existing LLM Debug
-deferral/deduplication and to attach the report to telemetry. A corresponding
-stream helper prefers `core.StreamingAIRequestClient`, falls back to
-`core.StreamingAIClient` only when the request can be represented faithfully,
-and returns `ErrAIRequestFeatureUnsupported` otherwise.
+deferral/deduplication and to attach the report to telemetry. Add the
+corresponding provider-neutral dispatcher as `core.StreamAI`; the orchestration
+stream helper calls it rather than duplicating capability checks. `StreamAI`
+prefers `core.StreamingAIRequestClient`, falls back to `core.StreamingAIClient`
+only when the request can be represented faithfully, and returns
+`ErrAIRequestFeatureUnsupported` otherwise.
 
 Assign the stable purposes listed in Section 17 at each call site. After
 migration, this check should find direct calls only inside the helper:
