@@ -124,13 +124,15 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Cache TTL | 5m | `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | — |
 | Compaction deadline | 45s | `TRUVAG3_RESULT_DISTILL_DEADLINE` | — |
 | Map-reduce trigger (model context) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | — |
+| Map-reduce trigger (bytes) | 0 = disabled | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` | — |
 | Map-reduce concurrency | 8 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | — |
+| Max wrapper share (hardcoded const) | 0.5 | — (`maxWrapperShare`, not an env knob) | — |
 
 > Default-on (opt-out): distillation is the primary compaction path for oversized results when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default). Without an `AIClient` it falls back to the structural floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. **Caching is opt-in:** distillation results are cached only when a `DigestCache` is supplied via `deps.DistillCache` (no cache by default); `CacheTTL=0` does not reliably disable it (a Redis-backed cache treats 0 as "no expiration") — to disable, don't supply a cache.
 
 > **Migration (upgrading from pre-default-on):** result distillation was previously **off by default** (`Enabled: false`, threshold `32768`, pre-filter `32768`). It is now **on by default** (threshold `16384`, pre-filter `131072`), so a deployment with an `AIClient` configured will begin making fast-model distillation calls for oversized results — added cost/latency on the **cheap** (`fast`) tier; the structural-trim floor was the prior behavior. No code change is required; set `TRUVAG3_RESULT_DISTILL_ENABLED=false` to restore the structural-only path.
 
-> Units are mixed in this section: byte budgets (`THRESHOLD`, `PREFILTER`, `TARGET`) are integers in bytes; `CACHE_TTL` / `DEADLINE` are Go durations (e.g. `5m`, `45s`) and accept only positive values via env — disable the deadline with the programmatic `CompactionDeadline: 0`; `CONTEXT_TOKENS` is in tokens (results estimated above it — ~525 KB at the default `150000`, using the framework's ≈3.5 bytes/token counter — are chunked → map-reduced); `MAP_CONCURRENCY` is a count.
+> Units are mixed in this section: byte budgets (`THRESHOLD`, `PREFILTER`, `TARGET`) are integers in bytes; `CACHE_TTL` / `DEADLINE` are Go durations (e.g. `5m`, `45s`) and accept only positive values via env — disable the deadline with the programmatic `CompactionDeadline: 0`; `CONTEXT_TOKENS` is in tokens (results estimated above it — ~525 KB at the default `150000`, using the framework's ≈3.5 bytes/token counter — are chunked → map-reduced); `MAPREDUCE_THRESHOLD` is in **bytes** and routes results larger than it to map-reduce *independently* of `CONTEXT_TOKENS`, with `0` meaning disabled and a value below `PREFILTER` ignored (a result that small is one chunk — no fan-out benefit); `MAP_CONCURRENCY` is a count. `maxWrapperShare` (0.5) is a hardcoded internal ratio (not an env knob, cf. `degenerateKeptRatio`): when a map-reduce object's non-array wrapper exceeds half a chunk, the chunker byte-splits the raw serialization (lossless byte-wise) instead of replicating the heavy wrapper into every chunk.
 
 ## Tiered Capability Resolution
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"time"
 
@@ -65,13 +66,22 @@ func distillCacheKey(response, instruction, originalQuery string, maxBytes int) 
 //   - model (different models distill differently);
 //   - target size (bounds output when below the per-result budget, so not otherwise keyed);
 //   - pre-filter budget (sets how much input the LLM actually sees, see result_distiller.go);
+//   - the routing knobs — model-context tokens and the map-reduce byte threshold (P17): both
+//     decide single-call-vs-map-reduce, i.e. WHETHER the LLM sees the whole result or only the
+//     pre-filtered head, so a change to either produces different output and must not serve stale;
 //   - the per-phase AI options override (model / max tokens / temperature / system prompt …),
 //     which can change the model and sampling out from under cfg.Model.
+//
+// The config is normalized HERE (normalizeResultDistillConfig is pure; the nil logger only
+// suppresses the advisory warn), so the salt always hashes the exact values the distiller runs —
+// NewLLMDistiller normalizes identically at construction. Callers pass raw or normalized configs
+// interchangeably; the key can never diverge from behavior.
 //
 // Per-call context (agent, capability) is intentionally excluded: the cached value is the
 // distilled CONTENT, driven by the result + instruction, not by those prompt hints — so the
 // cache stays shareable across agents and pods.
-func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
+func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride, preserveKeys []string) string {
+	cfg = normalizeResultDistillConfig(cfg, nil)
 	h := sha256.New()
 	h.Write([]byte(distillPromptVersion))
 	h.Write([]byte{0})
@@ -81,6 +91,24 @@ func distillKeySalt(cfg ResultDistillConfig, opts *AIOptionsOverride) string {
 	h.Write([]byte{0})
 	h.Write([]byte(strconv.Itoa(cfg.PreFilterBudget)))
 	h.Write([]byte{0})
+	h.Write([]byte(strconv.Itoa(cfg.ModelContextTokens)))
+	h.Write([]byte{0})
+	h.Write([]byte(strconv.Itoa(cfg.MapReduceThresholdBytes)))
+	h.Write([]byte{0})
+	// Stage-1 pre-filter identity: PreserveKeys change which fields survive the lossy stage-1
+	// trim — i.e. what the LLM sees — on the cacheable single-call path, so two orchestrators
+	// sharing a cache with different keys must not serve each other's outputs. Sorted so key
+	// ORDER (behaviorally irrelevant) cannot fragment the cache; nil/empty writes nothing, so
+	// existing no-keys salts are unchanged (no needless invalidation).
+	if len(preserveKeys) > 0 {
+		sorted := append([]string(nil), preserveKeys...)
+		sort.Strings(sorted)
+		h.Write([]byte("pk:"))
+		for _, k := range sorted {
+			h.Write([]byte(k))
+			h.Write([]byte{0})
+		}
+	}
 	if opts != nil {
 		// AIOptionsOverride is JSON-tagged; json.Marshal sorts map keys, so this is stable.
 		if b, err := json.Marshal(opts); err == nil {
@@ -127,6 +155,21 @@ func (c *cachingProcessor) EffectiveSize(rawSize int) int {
 	return rawSize
 }
 
+// distillEnvelopeVersion is the on-disk format version of distillCacheEnvelope. Bump it if the
+// stored shape changes; a decode mismatch is treated as a cache miss (fail-open).
+const distillEnvelopeVersion = 1
+
+// distillCacheEnvelope is what the cache stores: the distilled OUTPUT plus its trim METADATA, so a
+// cache hit can replay coverage metadata (a bare string cannot — the most repetitive, cached
+// workloads would otherwise be unauditable for sampling). Legacy bare-string entries become
+// unreachable via the Phase 16 distillPromptVersion salt bump, so no dual-format reader is needed.
+// (Phase 16)
+type distillCacheEnvelope struct {
+	V    int                `json:"v"`
+	Out  string             `json:"out"`
+	Meta ResultTrimMetadata `json:"meta"`
+}
+
 // ProcessForPrompt returns a cached compaction when one exists for this
 // (result, instruction, budget), otherwise runs the inner processor and stores the
 // result. Caching is skipped for passthrough-sized inputs.
@@ -145,21 +188,40 @@ func (c *cachingProcessor) ProcessForPrompt(
 	key := c.keySalt + distillCacheKey(result, stepCtx.Instruction, stepCtx.OriginalQuery, maxBytes)
 
 	if data, err := c.cache.GetDigest(ctx, key); err == nil && len(data) > 0 {
-		telemetry.AddSpanEvent(ctx, "result_distill.cache_hit",
-			attribute.String("step_id", stepCtx.StepID),
-			attribute.Int("cached_bytes", len(data)),
-		)
-		if registry := core.GetGlobalMetricsRegistry(); registry != nil {
-			registry.Counter("orchestration.result_distill.cache_hit", "agent_name", stepCtx.AgentName)
+		var env distillCacheEnvelope
+		if json.Unmarshal(data, &env) == nil && env.V == distillEnvelopeVersion {
+			telemetry.AddSpanEvent(ctx, "result_distill.cache_hit",
+				attribute.String("request_id", requestIDFromBaggage(ctx)),
+				attribute.String("step_id", stepCtx.StepID),
+				attribute.Int("cached_bytes", len(env.Out)), // output size, NOT the serialized envelope
+			)
+			if registry := core.GetGlobalMetricsRegistry(); registry != nil {
+				registry.Counter("orchestration.result_distill.cache_hit", "agent_name", stepCtx.AgentName)
+			}
+			CaptureResultTrimMetadata(ctx, env.Meta) // cached workloads stay auditable for coverage (Phase 16)
+			return env.Out
 		}
-		return string(data)
+		// Undecodable entry — after the Phase 16 distillPromptVersion salt bump made legacy bare-string
+		// entries unreachable, a decode failure is real corruption, not a migration artifact. Recompute.
+		if c.logger != nil {
+			c.logger.WarnWithContext(ctx, "Discarding undecodable distillation cache entry, recomputing", map[string]interface{}{
+				"operation":  "result_distill.cache_envelope",
+				"request_id": requestIDFromBaggage(ctx),
+				"step_id":    stepCtx.StepID,
+				"error_type": "cache_decode",
+			})
+		}
 	}
 
 	// Capture whether the inner processor produced a non-cacheable result (a fallback
 	// after LLM failure/timeout, or a partial/incomplete map-reduce). Such results must
-	// not be cached, or a transient hiccup would be served for the full TTL.
+	// not be cached, or a transient hiccup would be served for the full TTL. Also nest a trim-metadata
+	// capture so the inner's coverage metadata can be stored in the envelope, then re-propagate it to
+	// the caller's slot (the nested capture shadowed it). (Phase 16)
 	innerCtx, nonCacheable := withNonCacheableCapture(ctx)
+	innerCtx, meta := WithTrimMetadataCapture(innerCtx)
 	out := c.inner.ProcessForPrompt(innerCtx, result, maxBytes, stepCtx)
+	CaptureResultTrimMetadata(ctx, *meta)
 
 	if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 		registry.Counter("orchestration.result_distill.cache_miss", "agent_name", stepCtx.AgentName)
@@ -169,11 +231,16 @@ func (c *cachingProcessor) ProcessForPrompt(
 		return out
 	}
 
-	if err := c.cache.SetDigest(ctx, key, []byte(out), c.ttl); err != nil {
+	blob, mErr := json.Marshal(distillCacheEnvelope{V: distillEnvelopeVersion, Out: out, Meta: *meta})
+	if mErr != nil {
+		return out // fail-open: serve the result uncached rather than cache garbage
+	}
+	if err := c.cache.SetDigest(ctx, key, blob, c.ttl); err != nil {
 		// Fail-open: a cache write failure must never affect the returned compaction.
 		if c.logger != nil {
 			c.logger.WarnWithContext(ctx, "Failed to cache distillation result", map[string]interface{}{
 				"operation":  "result_distill.cache_set",
+				"request_id": requestIDFromBaggage(ctx),
 				"step_id":    stepCtx.StepID,
 				"error":      err.Error(),
 				"error_type": "cache_write",

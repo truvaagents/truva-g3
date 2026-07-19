@@ -1274,8 +1274,8 @@ function initCytoscape() {
                     const resInfoFull = getResolutionInfo(result);
                     const baseLabelFull = step.agent_name || stepCapability;
                     const trimMetaFull = result?.metadata?.result_trim;
-                    const wasTrimmedFull = trimMetaFull && trimMetaFull.original_bytes > 0 && trimMetaFull.original_bytes !== trimMetaFull.trimmed_bytes;
-                    const trimLabelFull = wasTrimmedFull ? `\n✂ ${formatBytes(trimMetaFull.original_bytes)}→${formatBytes(trimMetaFull.trimmed_bytes)}` : '';
+                    const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                    const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                     nodes.push({
                         data: {
                             id: step.step_id,
@@ -1402,8 +1402,8 @@ function initCytoscape() {
                 const resInfoFull = getResolutionInfo(result);
                 const baseLabelFull = step.agent_name || stepCapability;
                 const trimMetaFull = result?.metadata?.result_trim;
-                const wasTrimmedFull = trimMetaFull && trimMetaFull.original_bytes > 0 && trimMetaFull.original_bytes !== trimMetaFull.trimmed_bytes;
-                const trimLabelFull = wasTrimmedFull ? `\n✂ ${formatBytes(trimMetaFull.original_bytes)}→${formatBytes(trimMetaFull.trimmed_bytes)}` : '';
+                const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                 nodes.push({
                     data: {
                         id: step.step_id,
@@ -3247,23 +3247,67 @@ function toggleStepSection(elementId) {
     }
 }
 
+// isLossyTrim: did this trim LOSE content? content_lost carries the authoritative tri-state:
+// true = lossy (even at equal/growing byte counts — the disclosure annotation rides on top of
+// the body); EXPLICIT false = verified lossless (never labeled lossy, whatever the byte
+// delta); absent (legacy records predating the field) = fall back to size inequality.
+function isLossyTrim(trim) {
+    if (!trim || !(trim.original_bytes > 0)) return false;
+    if (trim.content_lost === true) return true;
+    return trim.content_lost === undefined && trim.original_bytes !== trim.trimmed_bytes;
+}
+
+// hasTrimDisplay: should the trim panel/summary be surfaced at all? Lossy trims, plus
+// verified-lossless re-serialization shrinks — the byte accounting is worth showing, with the
+// green "no content lost" chip as the disambiguator.
+function hasTrimDisplay(trim) {
+    return !!(trim && trim.original_bytes > 0 && (isLossyTrim(trim) || trim.original_bytes !== trim.trimmed_bytes));
+}
+
+// trimNodeLabel renders the node's scissors marker for a lossy trim; ' lossy' disambiguates
+// when the byte pair alone would read as a no-op or growth.
+function trimNodeLabel(trim) {
+    const marker = trim.content_lost === true && trim.trimmed_bytes >= trim.original_bytes ? ' lossy' : '';
+    return `\n✂ ${formatBytes(trim.original_bytes)}→${formatBytes(trim.trimmed_bytes)}${marker}`;
+}
+
+// trimCoverageText renders the approximate share of the source an LLM actually saw, or ''
+// when full/absent. The basis varies by method: byte-based for single-call distill;
+// SEGMENT-based for distill_mapreduce — except on a wrapper drop, where the Go side records
+// the byte×segment composition (so the ratio here can legitimately disagree with the N/M
+// segments line). Display is capped at 99% so a lossy near-full trim never renders "~100%".
+function trimCoverageText(trim) {
+    const r = trim.source_coverage_ratio;
+    if (!(r > 0 && r < 1)) return '';
+    return `~${Math.min(99, Math.round(r * 100))}% of source seen`;
+}
+
 function renderTrimSummary(trim) {
     if (!trim || !trim.original_bytes) return '';
-    const pct = ((1 - trim.trimmed_bytes / trim.original_bytes) * 100).toFixed(0);
-    const parts = [`${formatBytes(trim.original_bytes)} → ${formatBytes(trim.trimmed_bytes)} (${pct}% reduced)`];
+    // Sign-aware: a lossy trim can GROW past the original (disclosure annotation overhead);
+    // "0% reduced" next to growing byte figures would be affirmatively false.
+    const delta = 1 - trim.trimmed_bytes / trim.original_bytes;
+    const sizeText = delta >= 0 ? `(${(delta * 100).toFixed(0)}% reduced)` : `(grew ${(-delta * 100).toFixed(0)}%)`;
+    const parts = [`${formatBytes(trim.original_bytes)} → ${formatBytes(trim.trimmed_bytes)} ${sizeText}`];
     if (trim.method) parts.push(trim.method);
+    const cov = trimCoverageText(trim);
+    if (cov) parts.push(cov);
+    // A sub-100% coverage figure already implies loss — the generic token only adds
+    // information when no coverage text rendered (same dedup policy as the flag chips).
+    if (trim.content_lost && !cov) parts.push('content lost');
     return parts.join(' · ');
 }
 
 function renderTrimDetails(trim) {
     if (!trim || !trim.original_bytes) return '';
-    const ratio = trim.trimmed_bytes / trim.original_bytes;
+    const ratio = Math.min(1, trim.trimmed_bytes / trim.original_bytes); // bar never exceeds 100%
     const methodColors = {
         'structural':      { bg: 'rgba(100,210,255,0.15)', border: 'rgba(100,210,255,0.4)', text: '#64d2ff' },
         'structural_array':{ bg: 'rgba(100,210,255,0.15)', border: 'rgba(100,210,255,0.4)', text: '#64d2ff' },
         'structural_text': { bg: 'rgba(100,210,255,0.15)', border: 'rgba(100,210,255,0.4)', text: '#64d2ff' },
         'truncate':        { bg: 'rgba(255,179,64,0.15)',  border: 'rgba(255,179,64,0.4)',  text: '#ffb340' },
-        'distill':         { bg: 'rgba(130,90,220,0.15)',  border: 'rgba(130,90,220,0.4)',  text: '#825adc' }
+        'distill':         { bg: 'rgba(130,90,220,0.15)',  border: 'rgba(130,90,220,0.4)',  text: '#825adc' },
+        'distill_mapreduce':{ bg: 'rgba(130,90,220,0.15)', border: 'rgba(130,90,220,0.4)',  text: '#825adc' }
     };
     const mc = methodColors[trim.method] || { bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.1)', text: 'var(--text-secondary)' };
 
@@ -3285,6 +3329,44 @@ function renderTrimDetails(trim) {
         <span style="background: ${mc.bg}; border: 1px solid ${mc.border}; color: ${mc.text}; padding: 2px 8px; border-radius: 4px; font-size: 11px;">Method: ${escapeHtml(trim.method)}</span>
         ${trim.budget_allocated ? `<span style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 4px;">Budget: ${formatBytes(trim.budget_allocated)}</span>` : ''}
     </div>`;
+
+    // Phase 16 coverage: how much of the source an LLM actually saw (basis varies by method —
+    // see trimCoverageText), and the map-reduce N-of-M segment count.
+    const covParts = [];
+    const covText = trimCoverageText(trim);
+    if (covText) {
+        covParts.push(covText);
+    }
+    if (trim.segments_total > 1) {
+        covParts.push(`${trim.segments_analyzed ?? 0}/${trim.segments_total} segments`);
+    }
+    if (trim.llm_input_bytes > 0) {
+        covParts.push(`LLM input: ${formatBytes(trim.llm_input_bytes)}`);
+    }
+    if (covParts.length > 0) {
+        html += `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+            Coverage: ${covParts.join(' · ')}
+        </div>`;
+    }
+    const flagChip = (label, rgb) => `<span style="background: rgba(${rgb},0.12); border: 1px solid rgba(${rgb},0.35); color: rgba(${rgb},0.9); padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px;">${label}</span>`;
+    const flags = [];
+    if (trim.partial_coverage) flags.push(flagChip('partial coverage', '255,179,64'));
+    if (trim.combine_truncated) flags.push(flagChip('findings truncated', '255,107,107'));
+    if (trim.degenerate) flags.push(flagChip('degenerate (severe loss)', '255,107,107'));
+    // content_lost is a superset of every specific flag (guaranteed by the Go emitters), so
+    // the generic chip only adds information when no specific flag rendered. An EXPLICIT
+    // false (the field is not omitempty) means verified lossless — distinct from legacy
+    // records where the key is absent and nothing can be claimed either way.
+    if (trim.content_lost && flags.length === 0) flags.push(flagChip('content lost', '255,179,64'));
+    // The green chip only renders when NOTHING claims loss: a stale cached record can carry
+    // an explicit false beside loss flags, and a contradictory pair would erode trust in the
+    // honesty pipeline this panel surfaces.
+    if (trim.content_lost === false && flags.length === 0) flags.push(flagChip('no content lost', '50,215,75'));
+    if (flags.length > 0) {
+        html += `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+            ${flags.join('')}
+        </div>`;
+    }
 
     // Fields kept / dropped (structural methods)
     if (trim.fields_kept || trim.fields_dropped) {
@@ -3611,7 +3693,7 @@ function renderStepDetails(container) {
                                     </div>
                                 </div>
                             ` : ''}
-                            ${result?.metadata?.result_trim && result.metadata.result_trim.original_bytes > 0 && result.metadata.result_trim.original_bytes !== result.metadata.result_trim.trimmed_bytes ? `
+                            ${hasTrimDisplay(result?.metadata?.result_trim) ? `
                                 <div class="dag-step-response">
                                     <div class="dag-step-response-header" data-toggle-section="step-trim-${step.step_id}">
                                         <span><span class="expand-arrow" id="step-trim-${step.step_id}-arrow">▶</span> Result Trim</span>

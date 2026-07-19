@@ -51,7 +51,7 @@ data:
         backends:
           mem_store:
             memory:
-              max_traces: 1000
+              max_traces: 15000
 
       healthcheckv2:
         use_v2: true

@@ -1107,7 +1107,7 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 
 | Tag | Location | Purpose |
 |-----|----------|---------|
-| `<identity>` | System msg | "You are a data distillation assistant" |
+| `<identity>` | System msg | "You compact one upstream result so a downstream task can use it … you are a selector, not a paraphraser" |
 | `<instructions>` | System msg | Distillation rules with byte limit |
 | `<context>` | User msg | Downstream task context (attrs: `source`, `capability`) |
 | `<data>` | User msg | Data to distill |

@@ -102,7 +102,8 @@ Defaults that matter most (full tables in the [Limits Cheatsheet](../reference/L
 | Distill trigger size | 16 KB | `TRUVAG3_RESULT_DISTILL_THRESHOLD` |
 | Distill target output | 4 KB | `TRUVAG3_RESULT_DISTILL_TARGET` |
 | Distill model | `fast` alias | `TRUVAG3_RESULT_DISTILL_MODEL` |
-| Map-reduce trigger | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` |
+| Map-reduce trigger (tokens) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` |
+| Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` |
 | Continuation aggregate budget | 32 KB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` |
 | Continuation non-JSON floor | 10000 chars | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
 
@@ -141,6 +142,8 @@ Distillation is **On by default** (opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=
 1. **Stage 1 — structural pre-filter.** The `StructuralTrimmer` reduces the raw result to `PreFilterBudget` (128 KB) so the LLM isn't handed the entire payload.
 2. **Stage 2 — LLM distill.** A **fast** model (Haiku / gpt-4.1-mini / gemini-flash-lite per provider, via the portable `fast` alias) summarizes the pre-filtered content to ~`TargetSize` (4 KB), *conditioned on the user's query and the step's task* so it keeps what's relevant.
 
+> **Identifier fidelity.** The JSON round-trips on the **compaction and synthesis** path — the Stage-1 pre-filter, map-reduce chunking, and the final synthesis re-parse — decode numbers with full precision preserved (`UseNumber`), so large integer identifiers (snowflake IDs, 64-bit keys, anything above 2⁵³) survive **verbatim** rather than being silently rounded to a float or rewritten in scientific notation. The distill prompt also instructs the model to copy identifiers, keys, timestamps, and numeric values byte-for-byte; on evidence-style data (records, log lines, rows) it selects and copies matching units rather than paraphrasing them. (This covers what the *LLM* sees; the tool→tool template-resolution path — `{{step-N.field}}` binding — still decodes with standard JSON and can round a large number to a float, so don't rely on it to carry a 64-bit ID between tools.)
+
 Without an `AIClient` (or with `TRUVAG3_RESULT_DISTILL_ENABLED=false`), distillation is skipped: the factory installs a plain `StructuralTrimmer` that runs at the **synthesis budgets** (16 KB per-result / 32 KB total) — *not* the 128 KB Stage-1 pre-filter, which exists only inside the distiller. You always get a safe, trimmed result, never a failure.
 
 When several results share one synthesis prompt, the budget allocator is **distillation-aware**: a result that *will* be distilled is sized at its post-distill footprint (~`TargetSize`), not its raw bytes, so one huge result doesn't starve the others' budgets.
@@ -155,18 +158,20 @@ A 128 KB pre-filter would throw away most of a 1 MB result before the LLM ever s
 
 This is what lets a multi-MB batch of logs surface a finding buried at byte ~500 K — a positional truncation would miss it entirely.
 
+**Routing by bytes (opt-in).** There are **two** independent triggers into map-reduce: the token estimate above (`TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS`), and an optional **byte threshold**, `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD`. The byte threshold is **`0` (disabled) by default** — out of the box, routing is context-only. Set it to a byte size and any result larger than that map-reduces *even when it comfortably fits the model context*, so the **whole** result is represented to an LLM instead of only its pre-filtered head. That's the knob for the 128 KB–525 KB band (see the caveat below). It's independent of `CONTEXT_TOKENS`; a value below `PreFilterBudget` (128 KB) is ignored with a factory warning, because a result that small is a single chunk — routing it to map-reduce adds no fan-out benefit over the ordinary single-call distill (that lone chunk still runs an LLM extract call when it fits the context).
+
 Here's a real map-reduce distillation in the registry-viewer's execution diagram — a single oversized result fans out into concurrent `map-reduce chunk i/N` calls that reduce into one summary:
 
 ![Map-reduce distillation execution: an oversized result split into concurrent chunk distillations that reduce into a single summary](https://assets.truvag3.dev/images/truvag3-distill-map-reduce-execution.png)
 
-> **Single-call caveat.** Map-reduce only engages above the context threshold (~525 KB). A result in the **128 KB–525 KB** band takes the single-call path, where Stage 1 pre-filters to `PreFilterBudget` (128 KB) *before* the LLM — so the model sees the structural pre-filter, not the whole result, and that drop isn't currently disclosed in the summary. If results in that band carry important detail in the tail, lower `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` (so they map-reduce) or raise `TRUVAG3_RESULT_DISTILL_PREFILTER`. (Results below 128 KB are pre-filtered without loss.)
+> **Single-call caveat.** By default map-reduce engages only above the context threshold (~525 KB). A result in the **128 KB–525 KB** band takes the single-call path, where Stage 1 pre-filters to `PreFilterBudget` (128 KB) *before* the LLM — so the model sees the structural pre-filter, not the whole result. **That drop is disclosed:** the distilled output carries a `[partial source: the model received ~N% of the source by bytes …]` note and the trim metadata sets `content_lost` and `partial_coverage`, so a downstream reader is never told the sample is the whole. If you'd rather the *entire* result in that band reach the LLM, set `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` to a byte size (per "Routing by bytes" above) so it map-reduces regardless of the token estimate; alternatively lower `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` or raise `TRUVAG3_RESULT_DISTILL_PREFILTER`. (Results below 128 KB are pre-filtered without loss.)
 >
 > **Upper boundary.** Compaction targets results up to roughly the model's context window. **GB-class** outputs don't belong in a prompt at all — reduce them at the source (have the tool return less) or use an extract-then-reference workflow (artifact / code-exec backend). Don't try to compact a gigabyte in-prompt.
 
 ### 5.3 Caching and deadlines (both fail-open)
 
-- **Cache (opt-in).** Caching is **off unless you supply a `core.DigestCache`** via `deps.DistillCache` — it's nil by default, so out of the box every distillation recomputes. When a cache *is* supplied, identical `(result + instruction + query + budget)` inputs (plus a config salt: prompt version, model, target size, pre-filter budget, and any per-call `AIOptionsOverride` — so overriding the model / max tokens / temperature / system prompt invalidates stale entries) reuse a prior distillation for `TRUVAG3_RESULT_DISTILL_CACHE_TTL` (5m), turning scheduled/repetitive runs into cache hits. Failed or partial (deadline-truncated) outputs are deliberately **not** cached, so a transient error can't be served for the whole TTL. A nil/erroring cache simply recomputes — never fails. (The continuation distiller has no cache wrapper — it fires rarely, so a cache would mostly miss.)
-- **Deadline** — each compaction is bounded by `TRUVAG3_RESULT_DISTILL_DEADLINE` (45s). On timeout the single-call path falls back to the structural floor; the map-reduce path returns the chunks that finished plus an honest "partial" disclosure. Keep this under your HTTP gateway timeout.
+- **Cache (opt-in).** Caching is **off unless you supply a `core.DigestCache`** via `deps.DistillCache` — it's nil by default, so out of the box every distillation recomputes. When a cache *is* supplied, identical `(result + instruction + query + budget)` inputs (plus a config salt: prompt version, model, target size, pre-filter budget, model context tokens, the map-reduce byte threshold, any `PreserveKeys`, and any per-call `AIOptionsOverride` — so changing the routing knobs, the Stage-1 preserve set, or overriding the model / max tokens / temperature / system prompt all invalidate stale entries) reuse a prior distillation for `TRUVAG3_RESULT_DISTILL_CACHE_TTL` (5m), turning scheduled/repetitive runs into cache hits. Failed or partial outputs — a deadline cut **or** a map-reduce run where some chunk calls failed — are deliberately **not** cached, so a transient error can't be served for the whole TTL. A nil/erroring cache simply recomputes — never fails. (The continuation distiller has no cache wrapper — it fires rarely, so a cache would mostly miss.)
+- **Deadline** — each compaction is bounded by `TRUVAG3_RESULT_DISTILL_DEADLINE` (45s). On timeout the single-call path falls back to the structural floor; the map-reduce path returns the chunks that finished plus an honest "partial" disclosure. (That same `[partial: …]` disclosure also covers chunks lost to a *failed* model call, not only the deadline — see §5.6.) Keep this under your HTTP gateway timeout.
 
 ### 5.4 Scope
 
@@ -183,10 +188,26 @@ The **synthesis result distiller** is scoped to the synthesis path. Parameter re
 | Model | `fast` | `TRUVAG3_RESULT_DISTILL_MODEL` | model/alias for distill calls (see the alias note below) |
 | Cache TTL | 5m | `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | how long an identical distillation is reused (**only when a `deps.DistillCache` is supplied** — no caching by default) |
 | Compaction deadline | 45s | `TRUVAG3_RESULT_DISTILL_DEADLINE` | wall-clock bound per compaction (fail-open on timeout) |
-| Map-reduce trigger | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | estimated token count above which a result is chunked + map-reduced |
+| Map-reduce trigger (tokens) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | estimated token count above which a result is chunked + map-reduced |
+| Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` | byte size above which a result map-reduces *regardless* of the token estimate (whole result → LLM, not just the pre-filtered head); `0` keeps routing context-only; a value below `PREFILTER` (128 KB) is ignored with a warning |
 | Map concurrency | 8 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | parallel chunk distillations in the map-reduce path |
 
 > **Use a portable model alias, not a concrete name.** With a `ChainClient` (multi-provider failover), set `TRUVAG3_RESULT_DISTILL_MODEL` to `fast` / `default` / `smart` — a concrete model name is provider-specific and breaks failover (the chain classifies a 404 as a non-retryable client error and stops instead of trying the next provider). The `fast` alias resolves to each provider's cheap tier (Haiku / gpt-4.1-mini / gemini-flash-lite). Per-call AI options (model, max tokens, temperature, system prompt) can be overridden programmatically with `WithResultDistillAIOptions(...)`.
+
+### 5.6 Disclosure notes: how a compacted result flags what it dropped
+
+Compaction is **honest about loss.** Whenever any layer *deterministically* drops content, it appends a single-line note to the result and sets `content_lost` in the trim metadata (see [`ResultTrimMetadata`](../reference/API_REFERENCE.md#resulttrimmetadata)). Each note starts on its own line with a `[` prefix (so it's machine-parseable and can be stripped) and tells the downstream model to treat omitted content as **UNKNOWN, not absent** — the invariant that keeps lossy compaction safe: the model is never allowed to read a trimmed result as complete. You may see any of these in a step result or the synthesis prompt:
+
+| Note (prefix) | Emitted by | What it means |
+|---|---|---|
+| `[trimmed: …]` | Structural trim (Layer 1) | Whole fields, array items, or sentences were dropped to fit the budget — `[trimmed: N/M … kept …]` with exact unit counts. A plain byte truncation instead reads `[trimmed: original → kept bytes …]`. |
+| `[severely reduced: kept N of ~M bytes (P%) …]` | Structural trim (Layer 1) | The trim kept **under 5%** of the source (the `degenerateKeptRatio` floor) — too little to be representative. Metadata sets `degenerate=true` with `kept_ratio`. |
+| `[partial source: the model received ~N% of the source by bytes …]` | Distillation (Layer 2) | A single-call distill's Stage-1 **pre-filter** dropped content before the LLM (the 128 KB–525 KB band, §5.2), so the model saw only part of the source. Metadata sets `partial_coverage=true`. |
+| `[partial: N of M segments analyzed …]` | Map-reduce (Layer 2) | Only `N` of `M` chunks completed — the `CompactionDeadline` was hit, or a chunk's model call failed and was skipped. The unanalyzed segments are UNKNOWN. |
+| `[findings truncated: …]` | Map-reduce *reduce* (Layer 2) | The combined extracts (from the segments that completed) were truncated to fit the budget. This does **not** imply every segment was analyzed — a `[partial: …]` note can accompany it, so check `chunks_completed`/`chunks_total`. The `combine_truncated_reason` span attribute says which: `reduce_failed` (a transient reduce-call failure) or `over_context` (too large to reduce). |
+| `[reduced without model analysis: …]` | Synthesis floor | No result processor was configured (e.g. a fallback seam), so the prompt byte-truncated the result and **no LLM analyzed** the dropped tail. |
+
+> **One note is advisory, not framework-guaranteed.** The distill system prompt asks the model to end an over-budget distillation with `[truncated: N additional matching units omitted to fit budget …]`. Unlike the six framework notes above — which are appended deterministically and are recognized by the framework's annotation stripper — this model-emitted `[truncated: …]` form is best-effort (it depends on the model obeying the instruction) and is **deliberately not** registered with the stripper: real tools emit their own `[truncated: …]` trailers, and peeling them would silently delete a *tool's* own truncation signal. When Stage-1 actually drops content, the authoritative, framework-guaranteed signal is the `[partial source: …]` note, not the model's `[truncated: …]`.
 
 ---
 
@@ -275,7 +296,7 @@ Full tables with every variable, default, and description: [Environment Variable
 
 **Precedence** (highest wins): a programmatic `With*` option or explicit config field → the `TRUVAG3_*` variable → the built-in default. (These compaction knobs have no "standard" env-var aliases — only the `TRUVAG3_*` names are parsed into `DefaultConfig`. Standard vars like `OPENAI_API_KEY` / `REDIS_URL` configure other subsystems, not these budgets.)
 
-**Parsing semantics.** Byte budgets are plain integers *in bytes* (`16 KB` = `16384`); durations (`CACHE_TTL`, `DEADLINE`) are Go duration strings (`5m`, `45s`). For numeric budgets, an empty or non-positive value is ignored and the default stands — a typo can't silently zero a budget. Two numerics treat `0` as a deliberate *disable*: `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` (disables continuation escalation) and `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` (disables schema-guided mapping). **Booleans are stricter:** `TRUVAG3_RESULT_TRIM_ENABLED` and `TRUVAG3_RESULT_DISTILL_ENABLED` count as enabled only for the literal `true` (case-insensitive) — any *other* non-empty value (`1`, `yes`, `on`) parses as `false`, so always set them to exactly `true` or `false`. (The compaction deadline and cache TTL can be set to `0` to disable only programmatically; an env value of `0` is ignored and the default stands.)
+**Parsing semantics.** Byte budgets are plain integers *in bytes* (`16 KB` = `16384`); durations (`CACHE_TTL`, `DEADLINE`) are Go duration strings (`5m`, `45s`). For numeric budgets, an empty or non-positive value is ignored and the default stands — a typo can't silently zero a budget. Three numerics instead treat `0` as a deliberate, accepted value (not "ignore, use default"): `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` (`0` disables continuation escalation), `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` (`0` disables schema-guided mapping), and `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` (`0` = disabled, which is also its default — parsed with `>= 0` so an explicit `0` pins it off against a future nonzero default). **Booleans are stricter:** `TRUVAG3_RESULT_TRIM_ENABLED` and `TRUVAG3_RESULT_DISTILL_ENABLED` count as enabled only for the literal `true` (case-insensitive) — any *other* non-empty value (`1`, `yes`, `on`) parses as `false`, so always set them to exactly `true` or `false`. (The compaction deadline and cache TTL can be set to `0` to disable only programmatically; an env value of `0` is ignored and the default stands.)
 
 ### 8.2 Programmatic options
 
@@ -322,6 +343,8 @@ type ResultProcessor interface {
 }
 ```
 
+> **Honesty contract for custom processors.** If your processor drops, truncates, or samples content, report it by calling the exported `CaptureResultTrimMetadata(ctx, ResultTrimMetadata{... ContentLost: true})` from inside `ProcessForPrompt`. The framework prepares the per-step metadata slot before invoking you, so this surfaces on the step's `Metadata["result_trim"]` and the `result_trim.completed` span, and — crucially — feeds the same disclosure gating the built-in processors use (§5.6). Downstream honesty keys **only** on `ContentLost`; a lossy processor that skips this call makes real loss read as full coverage with no disclosure. The call is a safe no-op outside the framework's capture context.
+
 Swap in your own implementation through the relevant `deps.*` seam. Common reasons:
 
 - **Domain-specific compaction** — you know your payloads (e.g. keep the `error` and `stack` fields verbatim, drop everything else).
@@ -338,8 +361,17 @@ The framework stays domain-agnostic: the defaults preserve structure generically
 
 Compaction is visible in all three telemetry channels:
 
-- **Traces** — `result_distill.mapreduce_route` / `result_distill.stage1_complete` span events on the distillation path; `orchestrator.continuation_budget` (with `steps_total`, `steps_shown`, `c_escalations`) on the planning path. Search by `request_id` in Jaeger (see [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)).
-- **Metrics** — `orchestration.continuation.{section_chars,steps_shown,steps_evicted,c_escalations}` (Histograms/Counters, labeled `module=orchestration`) for dashboards and alerts on eviction pressure and escalation rate.
+- **Traces** — span events on the distillation path, all correlated by `request_id`/`step_id`:
+  - `result_distill.mapreduce_route` — emitted when a result is routed to map-reduce, with `reason` (`context` = over the token estimate, or `threshold` = over `MapReduceThresholdBytes`), `original_bytes`, and `estimated_tokens`.
+  - `result_distill.stage1_complete` — pre-filter done (`original_bytes` → pre-filtered size).
+  - `result_distill.stage2_complete` — the LLM distill returned (`distilled_bytes`, token usage).
+  - `result_distill.mapreduce_complete` — a map-reduce finished, with `chunks_total`, `chunks_completed`, `combined_bytes`, `llm_input_bytes`, `chunk_strategy` (`array`/`wrapper`/`lines`/`bytes`), and — only when the reduce truncated — `combine_truncated_reason` (`reduce_failed`/`over_context`).
+  - `result_distill.cache_hit` — a supplied `DigestCache` served a prior distillation (`cached_bytes`); a miss recomputes silently.
+  - `result_distill.llm_failed` — a distill call failed and fell open to the structural floor (`error`, `duration_ms`).
+
+  On the planning path, `orchestrator.continuation_budget` (with `steps_total`, `steps_shown`, `c_escalations`). Search by `request_id` in Jaeger (see [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)).
+- **Metrics** — `orchestration.result_distill.{triggered,duration_ms,failed,mapreduce,cache_hit,cache_miss}` (labeled by `agent_name`) on the distillation path, and `orchestration.continuation.{section_chars,steps_shown,steps_evicted,c_escalations}` on the planning path (Histograms/Counters, labeled `module=orchestration`) for dashboards and alerts on distill volume/failures, cache hit-rate, eviction pressure, and escalation rate.
+- **Trim metadata** — a processed step carries a [`ResultTrimMetadata`](../reference/API_REFERENCE.md#resulttrimmetadata) record on `StepResult.Metadata["result_trim"]` with the authoritative `content_lost` flag plus the coverage fields (`source_coverage_ratio`, `llm_input_bytes`, `segments_analyzed`/`segments_total`, `partial_coverage`, `combine_truncated`, `chunk_strategy`). Whenever a trim changed the result (content lost **or** the serialized size changed) the loss/coverage bits are also mirrored onto a `result_trim.completed` span (`content_lost` — always — plus `source_coverage_ratio`, `llm_input_bytes`, `segments_*`, `partial_coverage`, `combine_truncated`; `chunk_strategy` stays on the record and the `mapreduce_complete` span) so Jaeger can tell a 28%-seen distill from a 100%-seen one. Detect loss programmatically from `content_lost` — never by comparing byte counts (§5.6).
 - **LLM-debug** — **when LLM-debug is enabled** (`TRUVAG3_LLM_DEBUG_ENABLED=true` or `WithLLMDebug(true)` — it's off by default), every distillation LLM call is recorded as a `result_distillation` interaction (with `call_description` like `map-reduce chunk 4/7`), viewable in the registry-viewer's LLM-debug tab alongside planning/synthesis calls. Without a debug store the recording is a no-op — the distillation itself still runs.
 
 ---
@@ -392,7 +424,12 @@ export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=65536   # larger aggregate bu
 
 **Synthesis distillation isn't running.** The *synthesis* distiller requires (a) `TRUVAG3_RESULT_DISTILL_ENABLED=true` (default), (b) `TRUVAG3_RESULT_TRIM_ENABLED=true` (default — the synthesis distiller is gated on trimming), and (c) an `AIClient` on the orchestrator. Without an AIClient you get the structural floor by design. (The *continuation* distiller is wired independently of `RESULT_TRIM_ENABLED` — it needs only `RESULT_DISTILL_ENABLED=true`, an `AIClient`, and `CONTINUATION_MAX_ESCALATIONS > 0`.)
 
-**I see a "partial" disclosure in a distilled result.** A map-reduce compaction reached its `CompactionDeadline`; it returned the chunks that finished. Raise the deadline (under your gateway timeout) or the result is genuinely too large for the time budget.
+**I see a "partial"/"trimmed"/"reduced" note in a result.** Those are honest disclosure notes, not errors — §5.6 catalogs every one and what it means. Two of them signal an *incomplete* compaction (versus an ordinary budget trim), both on the map-reduce path:
+
+- `[partial: N of M segments analyzed …]` — not every chunk completed: the `CompactionDeadline` was hit (it returned the chunks that finished), or a chunk's fast-model call failed and was skipped.
+- `[findings truncated: …]` — the combined extracts (from the segments that completed) were truncated to fit the budget; it does **not** by itself mean every segment was analyzed (a `[partial: …]` note may accompany it).
+
+Diagnose from the `result_distill.mapreduce_complete` span: compare `chunks_completed` vs `chunks_total`, and read `combine_truncated_reason` — `reduce_failed` (a transient reduce-call failure; the result isn't cached, so a later compaction recomputes — the reduce is not retried within this one) vs `over_context` (the extracts were too big to reduce). The LLM-debug view shows any failed `map-reduce chunk i/N` calls. **Remedy:** for a deadline cause, raise `TRUVAG3_RESULT_DISTILL_DEADLINE` (keep it under your gateway timeout); for `over_context`, lower `TRUVAG3_RESULT_DISTILL_TARGET` so the extracts reduce, or shrink the data at the source. A `[partial source: ~N% …]` note is the *expected* disclosure that a **single-call** distill pre-filtered the source (§5.2) — if you want the whole result in that band analyzed, route it through map-reduce with `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD`.
 
 **Continuation prompt shows `[showing N of M completed steps]` with N < M.** Steps were evicted for budget — expected on large fan-outs. The evicted steps are still referenceable by step-ID at execution; raise `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` if you want more shown.
 

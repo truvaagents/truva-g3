@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,8 +28,67 @@ type LLMDistiller struct {
 	debugWg    sync.WaitGroup
 }
 
+// normalizeResultDistillConfig applies construction-time invariants to a distill config and
+// returns the normalized copy (the input is a value, so this never mutates the caller's config):
+//
+//   - resolve an unset PreFilterBudget to its default, so the threshold check below compares
+//     against the value the map-reduce chunker will actually use,
+//   - resolve an unset ModelContextTokens to its default, so the reduce-fits-context gate is
+//     satisfiable on threshold-routed map-reduces (a zero context would permanently truncate
+//     the reduce step), and
+//   - disable a MapReduceThresholdBytes that sits below the effective PreFilterBudget (a
+//     threshold under the chunk size routes results whose single chunk carries no fan-out value).
+//
+// Salt coherence is structural, not contractual: distillKeySalt calls this function itself (with a
+// nil logger) before hashing, so cache keys are always computed from the same normalized values the
+// distiller runs — no caller has to remember to normalize before salting.
+func normalizeResultDistillConfig(cfg ResultDistillConfig, logger core.Logger) ResultDistillConfig {
+	if cfg.PreFilterBudget <= 0 {
+		cfg.PreFilterBudget = defaultPreFilterBudget
+	}
+	// A zero context makes the reduce gate (data+overhead <= ModelContextTokens) unsatisfiable —
+	// the reduce LLM would never fire and every over-target combine would be head-truncated —
+	// and P17 threshold routing makes map-reduce reachable without DefaultConfig. The compaction
+	// model always has a real context size; backfill it.
+	if cfg.ModelContextTokens <= 0 {
+		cfg.ModelContextTokens = defaultModelContextTokens
+	}
+	// A zero threshold sends EVERY result — however tiny — through a paid LLM distill call on
+	// the hot path (and the caching wrapper caches each one). A minimal Layer-2/Layer-3 config
+	// means "defaults please", not "distill everything"; backfill like the two fields above.
+	if cfg.DistillThreshold <= 0 {
+		cfg.DistillThreshold = defaultDistillThreshold
+	}
+	// CompactionDeadline is deliberately NOT backfilled: 0 = disabled is a documented
+	// programmatic opt-out (see the config field doc + LIMITS_CHEATSHEET). The advisory
+	// unbounded-fan-out warn lives in the factory and the Layer-2 helper — NOT here — so it
+	// fires once per assembled stack instead of once per distiller construction (a factory
+	// builds two: synthesis + continuation).
+	if cfg.MapReduceThresholdBytes > 0 && cfg.MapReduceThresholdBytes < cfg.PreFilterBudget {
+		if logger != nil {
+			logger.Warn("MapReduceThresholdBytes below PreFilterBudget; ignoring (map-reduce routing stays disabled)",
+				map[string]interface{}{
+					"operation":        "result_distill.config_normalization", // REQUIRED field (DISTRIBUTED_TRACING_GUIDE Pattern 2)
+					"threshold":        cfg.MapReduceThresholdBytes,
+					"prefilter_budget": cfg.PreFilterBudget,
+				})
+		}
+		cfg.MapReduceThresholdBytes = 0
+	}
+	return cfg
+}
+
 // NewLLMDistiller creates a two-stage distiller with structural pre-filtering.
+// preFilter MUST honor the ResultProcessor contract (see the interface doc): report any
+// content loss via CaptureResultTrimMetadata's ContentLost and emit only registered single-line
+// annotations. The partial-source disclosure and coverage accounting key on that signal — a
+// pre-filter that trims silently disables every Phase 16 disclosure for its results.
+//
+// The config is normalized here (normalizeResultDistillConfig), so EVERY construction path — the
+// factory, the Layer-2 BuildDistillationEnabledResultProcessor helper, and direct Layer-3
+// construction — gets the single-chunk-footgun guard. A factory-only check would miss the other two.
 func NewLLMDistiller(aiClient core.AIClient, config ResultDistillConfig, preFilter ResultProcessor, logger core.Logger) *LLMDistiller {
+	config = normalizeResultDistillConfig(config, logger)
 	return &LLMDistiller{aiClient: aiClient, config: config, preFilter: preFilter, logger: logger}
 }
 
@@ -135,21 +195,47 @@ func (d *LLMDistiller) ProcessForPrompt(
 		targetSize = minDistillTargetSize
 	}
 
-	// Outlier path: a result too large for a single model context is chunked and
-	// map-reduced over the FULL result. This bypasses the structural pre-filter below,
-	// which would lossily trim the bulk before the LLM ever saw it.
-	if d.config.ModelContextTokens > 0 && estimateTokens(result) > d.config.ModelContextTokens {
+	// Outlier path: a result too large for a single model context is chunked and map-reduced over
+	// the FULL result, bypassing the structural pre-filter below (which would lossily trim the bulk
+	// before the LLM saw it). Two independent triggers (P17):
+	//   - over-context: doesn't fit one model context (token estimate) — always map-reduce;
+	//   - over-threshold: larger than MapReduceThresholdBytes (bytes) even though it FITS the
+	//     context — routes the mid-band through map-reduce so the whole result reaches an LLM
+	//     instead of only the pre-filtered head. 0 = disabled (context-only routing). A result
+	//     whose compact form fits one chunk (raw-vs-compact shrink) still gets an LLM: the
+	//     single-chunk case runs one extract call, never the bare structural floor.
+	overContext := d.config.ModelContextTokens > 0 && estimateTokens(result) > d.config.ModelContextTokens
+	overThreshold := d.config.MapReduceThresholdBytes > 0 && len(result) > d.config.MapReduceThresholdBytes
+	if overContext || overThreshold {
+		reason := "threshold"
+		if overContext {
+			reason = "context"
+		}
 		telemetry.AddSpanEvent(ctx, "result_distill.mapreduce_route",
 			attribute.String("request_id", requestID),
 			attribute.String("step_id", stepCtx.StepID),
 			attribute.Int("original_bytes", len(result)),
 			attribute.Int("estimated_tokens", estimateTokens(result)),
+			attribute.String("reason", reason),
 		)
 		return d.mapReduceCompact(ctx, result, targetSize, stepCtx)
 	}
 
-	// Stage 1: Pre-filter
-	preFiltered := d.preFilter.ProcessForPrompt(ctx, result, d.config.PreFilterBudget, stepCtx)
+	// Stage 1: Pre-filter. Nested capture so the pre-filter's stage-1 metadata (exact unit counts)
+	// survives — the final distill metadata below overwrites the ctx slot (last-write-wins). (Phase 16)
+	preCtx, preMeta := WithTrimMetadataCapture(ctx)
+	preFiltered := d.preFilter.ProcessForPrompt(preCtx, result, d.config.PreFilterBudget, stepCtx)
+
+	// Whether stage-1 lost content is decided by the trimmer's explicit ContentLost signal,
+	// never inferred from bytes: pure re-serialization (pretty→compact) shrinks bytes without
+	// losing content, escape/annotation inflation grows bytes while content WAS dropped, and a
+	// passthrough source that happens to end in an annotation-shaped line would strip to a
+	// false sub-1 ratio. The stripped-body byte ratio serves only as the magnitude estimate
+	// once loss is known; 0.99 floors the inflation case so real loss never reads as full.
+	coverage := 1.0
+	if preMeta.ContentLost {
+		coverage = lossyByteCoverage(len(stripResultAnnotation(preFiltered)), len(result))
+	}
 
 	telemetry.AddSpanEvent(ctx, "result_distill.stage1_complete",
 		attribute.String("request_id", requestID),
@@ -159,7 +245,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 	)
 
 	// Stage 2: LLM distill
-	prompt := d.buildDistillationPrompt(preFiltered, targetSize, stepCtx)
+	prompt := d.buildDistillationPrompt(preFiltered, targetSize, stepCtx, coverage)
 
 	// Scale MaxTokens from target size (~3-4 chars/token + headroom)
 	maxTokens := targetSize/3 + 100
@@ -181,8 +267,18 @@ func (d *LLMDistiller) ProcessForPrompt(
 	}
 	response, err := d.aiClient.GenerateResponse(callCtx, prompt, options)
 	duration := time.Since(distillStart)
-	if err == nil {
+	// Record usage BEFORE the empty-content guard below: an empty 200 response still billed
+	// its prompt tokens, and hiding it from cost telemetry would make a content-filter burst
+	// read as near-zero spend (the map-reduce path records usage the same way).
+	if err == nil && response != nil {
 		core.RecordTokenUsage(ctx, "distillation", response.Usage)
+	}
+	if err == nil && (response == nil || strings.TrimSpace(response.Content) == "") {
+		// A 200-with-empty/whitespace-only content (content filter, stop-token edge) is the
+		// same transient class as an error: without this guard the empty string ships as a
+		// "successful" distillation — stamped lossless and CACHED for the TTL — while every
+		// map-reduce call already converts the identical condition to a failure.
+		err = fmt.Errorf("empty distillation response")
 	}
 
 	if err != nil {
@@ -229,8 +325,17 @@ func (d *LLMDistiller) ProcessForPrompt(
 		})
 		// This output is a structural fallback, not a successful distillation. Flag it so
 		// the cache does not store a degraded result from a transient LLM/provider failure.
+		// Budget = max(maxBytes, targetSize): the targetSize FLOOR protects tiny/zero budgets
+		// from the near-empty output the floor exists to prevent, while a GENEROUS per-result
+		// budget is kept in full — flooring alone would cap a 16 KB allocation at ~TargetSize
+		// and quadruple content loss on exactly the runs that also lost their LLM pass
+		// (review-caught regression of the first floor fix).
+		fallbackBudget := maxBytes
+		if fallbackBudget < targetSize {
+			fallbackBudget = targetSize
+		}
 		markResultNonCacheable(ctx)
-		return d.preFilter.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
+		return d.preFilter.ProcessForPrompt(ctx, result, fallbackBudget, stepCtx)
 	}
 
 	telemetry.AddSpanEvent(ctx, "result_distill.stage2_complete",
@@ -280,12 +385,32 @@ func (d *LLMDistiller) ProcessForPrompt(
 		CallDescription:  fmt.Sprintf("Distill %s result: %d→%d bytes (stage1: %d bytes)", stepCtx.AgentName, len(result), len(response.Content), len(preFiltered)),
 	})
 
-	captureTrimMetadata(ctx, ResultTrimMetadata{
-		OriginalBytes: len(result),
-		TrimmedBytes:  len(response.Content),
-		Method:        "distill",
+	// Phase 16 — deterministically append the partial-source disclosure to the OUTPUT (what reaches
+	// synthesis) when stage-1 dropped content. Framework-guaranteed; never relies on the model obeying
+	// the secondary prompt signal above. Plain append (bounded overshoot of the note's ~111 B), NOT
+	// appendDisclosure: reserving the note inside targetSize would silently cut the tail of the
+	// model's own analyzed output whenever it lands within the note's length of targetSize — an
+	// undisclosed deterministic cut, the exact class this phase eliminates.
+	out := response.Content
+	if coverage < 1 {
+		out += partialSourceDisclosure(coverage)
+	}
+
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
+		OriginalBytes:       len(result),
+		TrimmedBytes:        len(out),
+		Method:              "distill",
+		FieldsKept:          preMeta.FieldsKept, // stage-1 exact counts survive the distill record
+		FieldsDropped:       preMeta.FieldsDropped,
+		KeptRatio:           preMeta.KeptRatio,
+		SourceCoverageRatio: coverage, // approximate — see the ResultTrimMetadata field docs
+		LLMInputBytes:       len(preFiltered),
+		SegmentsAnalyzed:    1,
+		SegmentsTotal:       1,
+		PartialCoverage:     coverage < 1,
+		ContentLost:         preMeta.ContentLost, // the authoritative bit must survive into the cached envelope
 	})
-	return response.Content
+	return out
 }
 
 // distillPromptVersion identifies the distillation prompt template. Bump it whenever
@@ -294,7 +419,22 @@ func (d *LLMDistiller) ProcessForPrompt(
 // them for the TTL.
 // "3" = Phase 13 task-primary (task leads <context> + dual-anchored on the final line).
 // "4" = Phase 13 §2.9 split (identity + rules moved to the system message).
-const distillPromptVersion = "4"
+// "5" = Phase 16 partial-source coverage note added to <context> (invalidates cached outputs).
+// "6" = Phase 16 ContentLost-gated disclosure + plain-appended partial-source note (output
+// composition changed, so cached "5"-era outputs must not be replayed).
+// "7" = Phase 16 wrapper-drop disclosure on map-reduce outputs + tri-state ContentLost
+// envelope semantics (explicit false = verified lossless); stale envelopes would otherwise
+// replay an affirmative lossless claim for a lossy result, so they must be unreachable.
+// "8" = Phase 17 chunker/trimmer hardening: the map-reduce object path now REPLICATES the
+// wrapper into every chunk (chunkJSONObjectPreservingWrapper — P17.6) and the whole trim
+// pipeline decodes JSON with UseNumber (P17.5), so what the LLM sees per chunk — and the
+// preserved large IDs — changed; stale "7"-era outputs must not be replayed. (This is now a
+// general PIPELINE version, not just the prompt template — bump it for any change to what the
+// chunker/trimmer feeds the model, not only buildDistillationPrompt/distillationSystemPrompt.)
+// "9" = Phase 17 Tier-2: the map-reduce REDUCE call carries a coverage caveat on partial runs
+// (T2b), and the plain-text pre-filter (trimPlainText) now splits sentences boundary-aware so
+// decimals/versions survive intact (T2c/T2d) — both change what the LLM sees on cacheable paths.
+const distillPromptVersion = "9"
 
 // distillationSystemPrompt is the STATIC policy for distillation — identity + rules. It is
 // dispatched as the system message (mirroring synthesizer.go's synthesisSystemPrompt) so the
@@ -344,12 +484,23 @@ const minDistillTargetSize = 256
 // pinned to large-context fast models (Gemini Flash-Lite / gpt-4.1-mini at 1M).
 const defaultPreFilterBudget = 131072
 
+// defaultDistillThreshold is the minimum result size (bytes) that triggers an LLM distillation
+// call, used when ResultDistillConfig.DistillThreshold is unset. Backfilled at normalization: a
+// zero threshold makes EVERY result — however tiny — take a paid LLM call on the hot path.
+const defaultDistillThreshold = 16384
+
+// defaultModelContextTokens is the usable compaction-model context (tokens) used when
+// ResultDistillConfig.ModelContextTokens is unset. Backfilled at normalization: a zero value
+// would make the reduce-fits-context gate (data + overhead <= 0) unsatisfiable, permanently
+// truncating the reduce step for Layer-2/Layer-3 configs that set only the byte threshold.
+const defaultModelContextTokens = 150000
+
 // noMatchSentinel is the exact string the distillation prompt (distillationSystemPrompt, instruction
 // #4) tells the model to emit when nothing in the input is relevant. The map-reduce path matches on
 // it to consolidate empty chunks (result_mapreduce.go) — keep the two in sync.
 const noMatchSentinel = "No matching entries found"
 
-func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext) string {
+func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, stepCtx ResultProcessorContext, coverage float64) string {
 	capabilityAttr := ""
 	if stepCtx.Capability != "" {
 		capabilityAttr = fmt.Sprintf(" capability=%q", stepCtx.Capability)
@@ -372,13 +523,24 @@ func (d *LLMDistiller) buildDistillationPrompt(result string, maxBytes int, step
 	if stepCtx.OriginalQuery != "" {
 		userGoalLine = fmt.Sprintf("User goal: %s\n", stepCtx.OriginalQuery)
 	}
+	// Phase 16 — secondary (non-guaranteeing) signal that stage-1 showed the model only part of the
+	// source. Lives in <context> at the TOP high-attention edge (EFFECTIVE_PROMPTS_GUIDE §2.1) and uses
+	// positive phrasing (§2.4). The GUARANTEE is the framework-appended output disclosure
+	// (partialSourceDisclosure); this line only nudges the model to self-qualify.
+	coverageLine := ""
+	if coverage < 1 {
+		// "of the source" (no "by bytes"): the single-call path's coverage is a byte fraction,
+		// but the map-reduce REDUCE call passes a SEGMENT fraction (completed/total) — a shared
+		// "by bytes" wording would mislabel the reduce (T2b). The actionable clause is unit-free.
+		coverageLine = fmt.Sprintf("Note: you received ~%d%% of the source; report any absence as absence WITHIN THE PROVIDED SAMPLE.\n", coveragePct(coverage))
+	}
 	return fmt.Sprintf(`<context source=%q%s>
-%s%s</context>
+%s%s%s</context>
 
 <data>
 %s
 </data>
 
 Return the compacted result for %s (at most %d characters):`,
-		stepCtx.AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, result, taskAnchor, maxBytes)
+		stepCtx.AgentName, capabilityAttr, downstreamTaskLine, userGoalLine, coverageLine, result, taskAnchor, maxBytes)
 }
