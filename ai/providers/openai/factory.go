@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	urlpkg "net/url"
@@ -42,16 +43,66 @@ var subProviders = []subProviderConfig{
 // Factory implements ai.ProviderFactory for OpenAI
 type Factory struct{}
 
+var _ ai.ValidatedProviderFactory = (*Factory)(nil)
+var _ ai.RequestProviderFactory = (*Factory)(nil)
+
 // Create creates a new OpenAI client instance
 // UPDATED: Now uses resolveCredentials() to properly handle multiple OpenAI-compatible providers
 // without mutating environment variables. This maintains backward compatibility while fixing
 // the critical configuration corruption bug.
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
+	client, err := f.createClient(config)
+	if err != nil {
+		panic(fmt.Sprintf("create OpenAI client: %v", err))
+	}
+	return client
+}
+
+// CreateValidated creates a legacy client with error-capable configuration
+// validation.
+func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
+	return f.createClient(config)
+}
+
+// CreateRequestClient creates a request-capable OpenAI-compatible client with
+// application request policy and enterprise integration seams.
+func (f *Factory) CreateRequestClient(
+	config *ai.AIConfig,
+	integration ai.ProviderIntegrationConfig,
+) (core.AIRequestClient, error) {
+	client, err := f.createClient(config)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := newRequestPolicyEngineWithIntegration(
+		integration.RequestRules,
+		integration.RequestMiddleware,
+		integration.CompatibilityMode,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configure OpenAI request policy: %w", err)
+	}
+	client.requestPolicy = engine
+	client.credentialSource = integration.CredentialSource
+	client.endpointResolver = integration.EndpointResolver
+	if integration.HTTPClient != nil {
+		client.HTTPClient = providerHTTPClient(integration.HTTPClient)
+	}
+	return client, nil
+}
+
+func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
+	if config == nil {
+		return nil, fmt.Errorf("OpenAI AI config is nil")
+	}
 	// Resolve credentials using the three-tier configuration hierarchy:
 	// 1. Explicit config (highest priority)
 	// 2. Environment variables with provider-specific overrides
 	// 3. Hardcoded defaults (lowest priority)
 	apiKey, baseURL := f.resolveCredentials(config)
+	if err := validateOpenAIBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 
 	logger := config.Logger
 	if logger == nil {
@@ -85,6 +136,7 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 	// Apply timeout if specified
 	if config.Timeout > 0 {
 		client.HTTPClient.Timeout = config.Timeout
+		client.requestTimeout = config.Timeout
 	}
 
 	// Apply retry configuration. Honors 0 ("no retries") as a valid setting —
@@ -142,21 +194,16 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 
 	if len(config.Headers) > 0 {
 		client.defaultHeaders = providers.MergeStringMaps(nil, config.Headers)
-		transport := &headerTransport{
-			headers: config.Headers,
-			protected: map[string]struct{}{
-				"authorization": {},
-				"content-type":  {},
-			},
-			base: http.DefaultTransport,
-		}
-		client.HTTPClient.Transport = transport
 	}
 	if len(config.Extra) > 0 {
-		client.defaultExtra = providers.MergeAnyMaps(nil, config.Extra)
+		cloned, err := providers.CloneAIOptions(&core.AIOptions{Extra: config.Extra})
+		if err != nil {
+			return nil, fmt.Errorf("clone OpenAI default request extras: %w", err)
+		}
+		client.defaultExtra = cloned.Extra
 	}
 
-	return client
+	return client, nil
 }
 
 // resolveCredentials determines which OpenAI-compatible service to use and resolves credentials.
@@ -236,24 +283,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// headerTransport adds custom headers to requests
-type headerTransport struct {
-	headers   map[string]string
-	protected map[string]struct{}
-	base      http.RoundTripper
-}
-
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Add custom headers
-	for k, v := range t.headers {
-		if _, ok := t.protected[strings.ToLower(k)]; ok {
-			continue
-		}
-		req.Header.Set(k, v)
-	}
-	return t.base.RoundTrip(req)
 }
 
 // DetectEnvironment checks if any OpenAI-compatible service is available.

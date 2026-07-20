@@ -37,12 +37,19 @@ jobs:
             (cd "$mod" && go build ./... && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
             echo "::endgroup::"
           done
+      - name: Build & test optional Bedrock provider
+        working-directory: ai
+        run: |
+          go build -tags bedrock ./...
+          go test -race -tags bedrock -coverprofile=coverage-bedrock.out -covermode=atomic ./...
       - name: Upload coverage profiles
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: '**/coverage.out'
+          path: |
+            **/coverage.out
+            **/coverage-bedrock.out
           if-no-files-found: ignore
 
   lint:
@@ -65,6 +72,9 @@ jobs:
             (cd "$mod" && golangci-lint run ./...)
             echo "::endgroup::"
           done
+      - name: Lint optional Bedrock provider
+        working-directory: ai
+        run: golangci-lint run --build-tags bedrock ./providers/bedrock
 
   vuln:
     name: vuln
@@ -84,6 +94,9 @@ jobs:
             (cd "$mod" && govulncheck ./...)
             echo "::endgroup::"
           done
+      - name: Run govulncheck on optional Bedrock provider
+        working-directory: ai
+        run: govulncheck -tags bedrock ./providers/bedrock
 
   examples:
     name: examples (build only)

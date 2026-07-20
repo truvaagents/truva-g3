@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.0
+**Version**: 1.1
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -82,6 +82,8 @@
 | `AIConfig` | Configuration options for clients | `provider.go` |
 | `BaseClient` | Shared functionality (retry, logging) | `providers/base.go` |
 | `ChainClient` | Multi-provider failover | `chain_client.go` |
+| `requestpolicy.Engine` | Deterministic provider-request policy evaluation | `requestpolicy/` |
+| `openaiwire.Codec` | Reusable OpenAI-compatible request/response translation | `providerkit/openaiwire/` |
 | `AIAgent` | Agent with AI + discovery capabilities | `ai_agent.go` |
 | `AITool` | Tool with AI capabilities (no discovery) | `ai_tool.go` |
 
@@ -277,7 +279,7 @@ Valid Dependencies:
 
 **Why `ai` needs `telemetry`**:
 1. **External API calls**: AI providers make external HTTP calls that need latency/error tracking
-2. **Cost visibility**: Token usage directly translates to costs
+2. **Usage visibility**: Normalized token counts support capacity and efficiency analysis
 3. **Failover tracking**: Chain client failovers need metrics
 4. **Consistency**: Matches `resilience` and `orchestration` modules
 
@@ -584,8 +586,10 @@ result, err := chain.Generate(ctx, request)
 
 Provider entries are framework-managed and are constructed through
 `NewRequestClient`; therefore the selected factory must support request-aware
-construction. Anthropic is currently the built-in provider with that support,
-and later provider phases add the remaining built-ins. `ClientEntry` accepts any
+construction. OpenAI and Anthropic support it directly. Bedrock supports it when
+the application is compiled with the `bedrock` build tag. Providers without a
+request-aware factory, currently including Gemini, can still be supplied through
+`ClientEntry` as legacy or application-local clients. `ClientEntry` accepts any
 `core.AIClient`, including application-local request-aware or native adapters.
 Injected clients remain caller-owned: the chain invokes them but does not call
 optional logger, telemetry, or lifecycle setters on them.
@@ -910,9 +914,10 @@ stable semantics.
 
 `NewRequestClient` never silently discards integration behavior. A legacy
 factory may be used only when no integration options are supplied and its
-client already implements `core.AIRequestClient`. Anthropic is the first
-built-in provider wired to this construction path; providers without a request
-adapter return `core.ErrAIRequestFeatureUnsupported`.
+client already implements `core.AIRequestClient`. OpenAI and Anthropic have
+built-in request adapters, and Bedrock provides one behind its build tag.
+Providers without a request adapter return
+`core.ErrAIRequestFeatureUnsupported`.
 
 Provider authors can add error-capable construction without breaking the
 legacy `ProviderFactory` contract:
@@ -959,11 +964,12 @@ excluded from request reports, fingerprints, spans, and framework logs.
 For simple dynamic headers, `WithAuthHeader(name, callback)` adapts a
 concurrency-safe callback into a credential source. Applications that need to
 invalidate cached credentials after early revocation should implement
-`CredentialRejectionObserver`; Anthropic notifies it on HTTP 401 and 403 before
-returning the original provider error. Observer failures are diagnostic and do
-not replace that error. Phase 4 does not perform an immediate authentication
-retry because generation acceptance cannot generally be proven from an auth
-response; ordinary provider retry and chain failover semantics remain intact.
+`CredentialRejectionObserver`; Anthropic and OpenAI notify it on HTTP 401 and
+403 before returning the original provider error. Observer failures are
+diagnostic and do not replace that error. The providers do not perform an
+immediate authentication retry because generation acceptance cannot generally
+be proven from an auth response; ordinary provider retry and chain failover
+semantics remain intact.
 
 `EndpointResolver` runs once per logical call after concrete model resolution
 and semantic policy. Its `ResolvedEndpoint.URL` is the complete HTTP endpoint,
@@ -980,10 +986,48 @@ timeout. The configured transport sees the final serialized body, route,
 eligible application headers, and credential header, so mTLS and signing
 transports compose normally.
 
-Anthropic is currently the only built-in request-capable provider supporting
-these integrations. Other built-in providers fail construction with
-`core.ErrAIRequestFeatureUnsupported` until their request adapters are migrated
-in later phases.
+Anthropic and OpenAI support these HTTP integrations. Bedrock accepts request
+rules and middleware but deliberately rejects credential sources, endpoint
+resolvers, injected HTTP clients, and request headers: AWS credentials, routing,
+and transport remain owned by `aws.Config` and the AWS SDK.
+
+### Reusable Codecs and Native SDK Drafts
+
+Provider policy operates on a logical `requestpolicy.Draft`; it does not require
+every provider to use the same transport or wire format. The draft is prepared
+once per logical call, policy is applied once, and sync and stream execution are
+derived from the resulting semantics.
+
+`ai/providerkit/openaiwire` is the public extension package for OpenAI-compatible
+Chat Completions adapters. Its codec owns:
+
+- construction and validation of the policy-editable request draft;
+- encoding the finalized request body;
+- decoding synchronous responses and streaming events; and
+- normalization of content, finish reasons, and token-usage details.
+
+The codec does not own endpoint selection, credentials, retries, provider
+identity, logging, or telemetry. The stock OpenAI provider composes those
+concerns around the codec. Application-local and third-party enterprise adapters
+may reuse the codec with their own routing and authentication without registering
+as, or masquerading as, the stock OpenAI provider. To preserve the module
+dependency direction, `providerkit/openaiwire` imports `core` and
+`ai/requestpolicy` but never the root `ai` package.
+
+Bedrock demonstrates the non-HTTP form of the same contract. Its logical
+`bedrock.Draft` is evaluated by the shared policy engine and then translated
+directly into `bedrockruntime.ConverseInput` or
+`bedrockruntime.ConverseStreamInput`. It does not serialize an artificial HTTP
+JSON request merely to reuse request policy. The provider and its tests are
+compiled only with the `bedrock` build tag; CI has a dedicated tagged build,
+race-test, lint, and vulnerability-check path.
+
+| Built-in provider | Policy surface | Request rules/middleware | HTTP integration seams |
+|-------------------|----------------|--------------------------|------------------------|
+| Anthropic | Messages | Yes | Yes |
+| OpenAI and compatible aliases | Chat Completions via `openaiwire` | Yes | Yes |
+| Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | No; AWS SDK owns them |
+| Gemini | Legacy client | No | No |
 
 ### Common Logical Instrumentation
 
@@ -1280,6 +1324,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1 | 2026-07-20 | Added request-aware provider status, reusable OpenAI wire codecs, and native Bedrock policy drafts |
 | 1.0 | 2025-12-14 | Initial architecture documentation |
 
 ---
