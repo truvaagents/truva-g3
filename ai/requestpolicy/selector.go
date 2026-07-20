@@ -172,6 +172,23 @@ func cloneAndValidatePatches(patches []core.AIProviderPatch) ([]compiledPatch, e
 	return cloned, nil
 }
 
+// ClonePatches validates patches and returns an isolated snapshot suitable for
+// retaining in application or provider configuration.
+func ClonePatches(patches []core.AIProviderPatch) ([]core.AIProviderPatch, error) {
+	compiled, err := cloneAndValidatePatches(patches)
+	if err != nil {
+		return nil, err
+	}
+	if compiled == nil {
+		return nil, nil
+	}
+	cloned := make([]core.AIProviderPatch, len(compiled))
+	for index := range compiled {
+		cloned[index] = compiled[index].patch
+	}
+	return cloned, nil
+}
+
 func cloneStringMap(source map[string]string) map[string]string {
 	if source == nil {
 		return nil

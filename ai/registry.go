@@ -26,6 +26,20 @@ type ProviderFactory interface {
 	Description() string
 }
 
+// ValidatedProviderFactory optionally adds error-capable legacy client
+// construction without breaking existing ProviderFactory implementations.
+type ValidatedProviderFactory interface {
+	ProviderFactory
+	CreateValidated(*AIConfig) (core.AIClient, error)
+}
+
+// RequestProviderFactory constructs a request-capable provider client and
+// accepts the validated request-policy integration snapshot.
+type RequestProviderFactory interface {
+	ProviderFactory
+	CreateRequestClient(*AIConfig, ProviderIntegrationConfig) (core.AIRequestClient, error)
+}
+
 // ProviderRegistry manages registered AI providers
 type ProviderRegistry struct {
 	mu        sync.RWMutex

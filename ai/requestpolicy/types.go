@@ -67,6 +67,11 @@ const (
 	CompatibilityStrict
 )
 
+// Valid reports whether mode is a supported compatibility mode.
+func (mode CompatibilityMode) Valid() bool {
+	return mode == CompatibilityCompatible || mode == CompatibilityStrict
+}
+
 // Config is defensively snapshotted by NewEngine.
 type Config struct {
 	BuiltIns   []core.AIProviderPatch

@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/truvaagents/truva-g3/ai"
@@ -14,6 +15,9 @@ func init() {
 
 // Factory creates Anthropic AI clients
 type Factory struct{}
+
+var _ ai.ValidatedProviderFactory = (*Factory)(nil)
+var _ ai.RequestProviderFactory = (*Factory)(nil)
 
 // Name returns the provider name
 func (f *Factory) Name() string {
@@ -32,6 +36,45 @@ func (f *Factory) Priority() int {
 
 // Create creates a new Anthropic client
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
+	client, err := f.createClient(config)
+	if err != nil {
+		panic(fmt.Sprintf("create Anthropic client: %v", err))
+	}
+	return client
+}
+
+// CreateValidated creates a legacy Anthropic client with error-capable
+// configuration validation.
+func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
+	return f.createClient(config)
+}
+
+// CreateRequestClient creates an Anthropic request client with application
+// policy rules, middleware, and compatibility behavior.
+func (f *Factory) CreateRequestClient(
+	config *ai.AIConfig,
+	integration ai.ProviderIntegrationConfig,
+) (core.AIRequestClient, error) {
+	client, err := f.createClient(config)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := newRequestPolicyEngineWithIntegration(
+		integration.RequestRules,
+		integration.RequestMiddleware,
+		integration.CompatibilityMode,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configure Anthropic request policy: %w", err)
+	}
+	client.requestPolicy = engine
+	return client, nil
+}
+
+func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
+	if config == nil {
+		return nil, fmt.Errorf("anthropic AI config is nil")
+	}
 	// Get API key from config or environment
 	apiKey := config.APIKey
 	if apiKey == "" {
@@ -109,12 +152,12 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 	if len(config.Extra) > 0 {
 		cloned, err := providers.CloneAIOptions(&core.AIOptions{Extra: config.Extra})
 		if err != nil {
-			panic("clone Anthropic default request extras: " + err.Error())
+			return nil, fmt.Errorf("clone Anthropic default request extras: %w", err)
 		}
 		client.defaultExtra = cloned.Extra
 	}
 
-	return client
+	return client, nil
 }
 
 // DetectEnvironment checks if Anthropic is configured and returns priority

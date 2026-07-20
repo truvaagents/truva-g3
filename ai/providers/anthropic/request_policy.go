@@ -26,6 +26,18 @@ var omitSamplingPrefixes = []string{
 }
 
 func newRequestPolicyEngine() *requestpolicy.Engine {
+	engine, err := newRequestPolicyEngineWithIntegration(nil, nil, requestpolicy.CompatibilityCompatible)
+	if err != nil {
+		panic(fmt.Sprintf("invalid built-in Anthropic request policy: %v", err))
+	}
+	return engine
+}
+
+func newRequestPolicyEngineWithIntegration(
+	appRules []core.AIProviderPatch,
+	middleware []requestpolicy.RequestMiddleware,
+	mode requestpolicy.CompatibilityMode,
+) (*requestpolicy.Engine, error) {
 	rules := make([]core.AIProviderPatch, 0, len(omitSamplingPrefixes)*2)
 	for _, family := range omitSamplingPrefixes {
 		for _, modelSelector := range []string{family, family + "-*"} {
@@ -41,11 +53,12 @@ func newRequestPolicyEngine() *requestpolicy.Engine {
 			})
 		}
 	}
-	engine, err := requestpolicy.NewEngine(requestpolicy.Config{BuiltIns: rules})
-	if err != nil {
-		panic(fmt.Sprintf("invalid built-in Anthropic request policy: %v", err))
-	}
-	return engine
+	return requestpolicy.NewEngine(requestpolicy.Config{
+		BuiltIns:   rules,
+		AppRules:   appRules,
+		Middleware: middleware,
+		Mode:       mode,
+	})
 }
 
 func samplingPolicyForModel(model string) samplingPolicy {

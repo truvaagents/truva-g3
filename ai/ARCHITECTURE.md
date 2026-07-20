@@ -811,6 +811,73 @@ client, err := ai.NewClient(
 )
 ```
 
+### Request-Capable Construction
+
+`NewRequestClient` is the additive construction path for presence-aware
+`core.AIRequest` calls and provider request policies. Every existing
+`AIOption` also satisfies `ClientOption`, so provider, model, retry, logging,
+and telemetry configuration is shared with `NewClient`:
+
+```go
+requestClient, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithModel("default"),
+    ai.WithRequestRules(core.AIProviderPatch{
+        Name:    "application-anthropic-sampling-policy",
+        Version: "1",
+        Selector: core.AIProviderSelector{
+            Provider: "anthropic",
+            Surface:  "messages",
+            Model:    "claude-sonnet-5-*",
+        },
+        Remove: []string{"/temperature", "/top_p", "/top_k"},
+    }),
+    ai.WithCompatibilityMode(requestpolicy.CompatibilityStrict),
+)
+if err != nil {
+    return err
+}
+
+request := core.NewAIRequest(prompt, "planning")
+request.Generation.MaxTokens = core.SetAIParameter(4000)
+result, err := requestClient.Generate(ctx, request)
+```
+
+Application rules must have stable `Name` and `Version` identities. Patch
+`Set` values are JSON-native, and body paths use RFC 6901 JSON Pointer syntax.
+`WithRequestMiddleware` accepts constrained middleware that may edit only the
+provider draft exposed through `requestpolicy.RequestEditor`. Middleware must
+be concurrency-safe; it produces a reusable policy fingerprint only when it
+implements `requestpolicy.StableRequestMiddleware` and explicitly declares
+stable semantics.
+
+`NewRequestClient` never silently discards integration behavior. A legacy
+factory may be used only when no integration options are supplied and its
+client already implements `core.AIRequestClient`. Anthropic is the first
+built-in provider wired to this construction path; providers without a request
+adapter return `core.ErrAIRequestFeatureUnsupported`.
+
+Provider authors can add error-capable construction without breaking the
+legacy `ProviderFactory` contract:
+
+```go
+type ValidatedProviderFactory interface {
+    ProviderFactory
+    CreateValidated(*AIConfig) (core.AIClient, error)
+}
+
+type RequestProviderFactory interface {
+    ProviderFactory
+    CreateRequestClient(
+        *AIConfig,
+        ProviderIntegrationConfig,
+    ) (core.AIRequestClient, error)
+}
+```
+
+Factories validate and wire configuration only. They do not invoke middleware
+or take ownership of application-supplied lifecycle components.
+
 ### Environment Variable Reference
 
 | Variable | Provider | Description |

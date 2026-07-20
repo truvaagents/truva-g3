@@ -24,7 +24,7 @@ type Engine struct {
 // NewEngine validates and snapshots request rules before they can be used by
 // concurrent provider calls.
 func NewEngine(config Config) (*Engine, error) {
-	if config.Mode != CompatibilityCompatible && config.Mode != CompatibilityStrict {
+	if !config.Mode.Valid() {
 		return nil, fmt.Errorf("unsupported compatibility mode %d", config.Mode)
 	}
 	builtIns, err := cloneAndValidatePatches(config.BuiltIns)
