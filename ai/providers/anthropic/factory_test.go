@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,17 @@ func (m *phase3AnthropicMiddleware) Apply(_ context.Context, editor requestpolic
 }
 
 func TestNewRequestClient_WiresAnthropicApplicationPolicy(t *testing.T) {
+	var capturedBody []byte
+	var capturedHeaders http.Header
+	transport := phase4RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var err error
+		capturedBody, err = io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		capturedHeaders = request.Header.Clone()
+		return phase4Response(request, http.StatusOK, phase4SuccessBody), nil
+	})
 	client, err := ai.NewRequestClient(
 		ai.WithProvider("anthropic"),
 		ai.WithAPIKey("anthropic-key"),
@@ -40,41 +53,37 @@ func TestNewRequestClient_WiresAnthropicApplicationPolicy(t *testing.T) {
 		}),
 		ai.WithRequestMiddleware(&phase3AnthropicMiddleware{}),
 		ai.WithCompatibilityMode(requestpolicy.CompatibilityStrict),
+		ai.WithHTTPClient(&http.Client{Transport: transport}),
 	)
 	if err != nil {
 		t.Fatalf("NewRequestClient returned error: %v", err)
 	}
-	anthropicClient, ok := client.(*Client)
-	if !ok {
-		t.Fatalf("NewRequestClient returned %T, want *anthropic.Client", client)
-	}
-
 	request := core.NewAIRequest("hello", "phase-3-test")
 	request.Generation.Temperature = core.SetAIParameter(float32(0.1))
-	prepared, err := anthropicClient.prepareAIRequest(t.Context(), request, false)
+	result, err := client.Generate(t.Context(), request)
 	if err != nil {
-		t.Fatalf("prepareAIRequest returned error: %v", err)
+		t.Fatalf("Generate returned error: %v", err)
 	}
 	var body map[string]interface{}
-	if err := json.Unmarshal(prepared.Body, &body); err != nil {
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
 		t.Fatalf("decode prepared request: %v", err)
 	}
 	if body["temperature"] != 0.3 {
 		t.Fatalf("application rule temperature = %#v, want 0.3", body["temperature"])
 	}
-	if prepared.Headers.Get("X-Policy-Middleware") != "enabled" {
-		t.Fatalf("middleware header = %q", prepared.Headers.Get("X-Policy-Middleware"))
+	if capturedHeaders.Get("X-Policy-Middleware") != "enabled" {
+		t.Fatalf("middleware header = %q", capturedHeaders.Get("X-Policy-Middleware"))
 	}
-	if prepared.Report == nil || !prepared.Report.Stable || len(prepared.Report.Fingerprint) != 64 {
-		t.Fatalf("request report = %#v", prepared.Report)
+	if result.RequestReport == nil || !result.RequestReport.Stable || len(result.RequestReport.Fingerprint) != 64 {
+		t.Fatalf("request report = %#v", result.RequestReport)
 	}
 	wantSources := []string{"built-in-rule", "app-rule", "middleware"}
-	if len(prepared.Report.Adjustments) != len(wantSources) {
-		t.Fatalf("adjustments = %#v", prepared.Report.Adjustments)
+	if len(result.RequestReport.Adjustments) != len(wantSources) {
+		t.Fatalf("adjustments = %#v", result.RequestReport.Adjustments)
 	}
 	for index, source := range wantSources {
-		if prepared.Report.Adjustments[index].Source != source {
-			t.Fatalf("adjustment %d source = %q, want %q", index, prepared.Report.Adjustments[index].Source, source)
+		if result.RequestReport.Adjustments[index].Source != source {
+			t.Fatalf("adjustment %d source = %q, want %q", index, result.RequestReport.Adjustments[index].Source, source)
 		}
 	}
 }

@@ -108,8 +108,9 @@ func NewClient(opts ...AIOption) (core.AIClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	logClientCreated(legacy, client)
-	return client, nil
+	instrumented := instrumentProviderClient(client, legacy)
+	logClientCreated(legacy, instrumented)
+	return instrumented, nil
 }
 
 // NewRequestClient creates a request-capable AI client. Existing AIOption
@@ -143,8 +144,9 @@ func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error) {
 		if client == nil {
 			return nil, errors.New("provider factory returned a nil request client")
 		}
-		logClientCreated(legacy, client)
-		return client, nil
+		instrumented := instrumentProviderClient(client, legacy)
+		logClientCreated(legacy, instrumented)
+		return instrumented, nil
 	}
 
 	if !integrationIsZero(integration) {
@@ -166,8 +168,22 @@ func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error) {
 			legacyClient,
 		)
 	}
-	logClientCreated(legacy, requestClient)
-	return requestClient, nil
+	instrumented := instrumentProviderClient(requestClient, legacy)
+	logClientCreated(legacy, instrumented)
+	return instrumented, nil
+}
+
+func instrumentProviderClient(
+	client core.AIClient,
+	config *AIConfig,
+) *InstrumentedAIClient {
+	return NewInstrumentedClient(
+		client,
+		nil,
+		WithInstrumentedLogger(config.Logger),
+		WithInstrumentedTelemetry(config.Telemetry),
+		withFactoryInstrumentation(),
+	)
 }
 
 func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {

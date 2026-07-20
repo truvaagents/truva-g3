@@ -224,18 +224,18 @@ func TestNewRequestClient_Phase4TransportIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestClient returned error: %v", err)
 	}
-	client := requestClient.(*Client)
-	client.RetryDelay = 0
-	if client.HTTPClient == callerClient {
-		t.Fatal("Anthropic retained the caller-owned HTTP client instead of cloning it")
-	}
 	originalTransport := reflect.ValueOf(transport).Pointer()
-	if reflect.ValueOf(client.HTTPClient.Transport).Pointer() != originalTransport || client.HTTPClient.Timeout != callerClient.Timeout || client.HTTPClient.CheckRedirect == nil {
-		t.Fatalf("cloned HTTP client lost caller policy: %#v", client.HTTPClient)
-	}
 	if callerClient.Timeout != 11*time.Second || reflect.ValueOf(callerClient.Transport).Pointer() != originalTransport || callerClient.CheckRedirect == nil {
 		t.Fatalf("caller HTTP client was mutated: %#v", callerClient)
 	}
+	// Mutating the caller-owned client after construction must not affect the
+	// provider snapshot. The generated request below must continue to use the
+	// original transport and timeout policy.
+	callerClient.Transport = phase4RoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("mutated caller transport was used")
+	})
+	callerClient.Timeout = time.Nanosecond
+	callerClient.CheckRedirect = nil
 
 	request := core.NewAIRequest("hello", "phase-4-routing")
 	ctx := context.WithValue(t.Context(), phase4ContextKey{}, "trace-context")
@@ -510,13 +510,12 @@ func TestNewRequestClient_Phase4FrameworkTimeoutDoesNotMutateHTTPClient(t *testi
 
 func TestNewRequestClient_Phase4NilTransportUsesDefaultWithoutMutatingCaller(t *testing.T) {
 	callerClient := &http.Client{Timeout: 3 * time.Second}
-	requestClient, err := ai.NewRequestClient(
-		ai.WithProvider("anthropic"),
-		ai.WithAPIKey("static-key"),
-		ai.WithHTTPClient(callerClient),
+	requestClient, err := (&Factory{}).CreateRequestClient(
+		&ai.AIConfig{APIKey: "static-key", Timeout: 180 * time.Second},
+		ai.ProviderIntegrationConfig{HTTPClient: callerClient},
 	)
 	if err != nil {
-		t.Fatalf("NewRequestClient returned error: %v", err)
+		t.Fatalf("CreateRequestClient returned error: %v", err)
 	}
 	client := requestClient.(*Client)
 	if callerClient.Transport != nil {

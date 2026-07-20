@@ -404,9 +404,6 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 		span.SetAttribute("ai.finish_reason", openAIResp.Choices[0].FinishReason)
 	}
 	span.SetAttribute("ai.duration_ms", time.Since(startTime).Milliseconds())
-	if cost, known := providers.EstimateCostUSD(result.Model, result.Usage.PromptTokens, result.Usage.CompletionTokens); known {
-		span.SetAttribute("ai.cost_usd", cost)
-	}
 
 	// Log response
 	c.LogResponse(ctx, "openai", result.Model, result.Usage, time.Since(startTime))
@@ -757,9 +754,6 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 		span.SetAttribute("ai.finish_reason", finishReason)
 	}
 	span.SetAttribute("ai.duration_ms", time.Since(startTime).Milliseconds())
-	if cost, known := providers.EstimateCostUSD(result.Model, result.Usage.PromptTokens, result.Usage.CompletionTokens); known {
-		span.SetAttribute("ai.cost_usd", cost)
-	}
 
 	// Log response
 	c.LogResponse(ctx, "openai", result.Model, result.Usage, time.Since(startTime))

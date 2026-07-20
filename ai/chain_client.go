@@ -234,10 +234,17 @@ func (c *ChainClient) StreamResponse(ctx context.Context, prompt string, options
 // SupportsStreaming returns true if at least one provider supports streaming
 func (c *ChainClient) SupportsStreaming() bool {
 	for _, entry := range c.runtimeEntries() {
-		if _, ok := entry.client.(core.StreamingAIRequestClient); ok {
-			return true
+		// Decorators such as InstrumentedAIClient expose the request-streaming
+		// interface uniformly and use SupportsStreaming to report the wrapped
+		// client's actual capability. Honor that dynamic answer before treating
+		// a request-only streaming interface as unconditional support.
+		if streamingProvider, ok := entry.client.(core.StreamingAIClient); ok {
+			if streamingProvider.SupportsStreaming() {
+				return true
+			}
+			continue
 		}
-		if streamingProvider, ok := entry.client.(core.StreamingAIClient); ok && streamingProvider.SupportsStreaming() {
+		if _, ok := entry.client.(core.StreamingAIRequestClient); ok {
 			return true
 		}
 	}

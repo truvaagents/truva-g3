@@ -69,5 +69,4 @@ func TestAIRequestPublicTypesSupportKeyedLiterals(t *testing.T) {
 
 	_ = core.AIRequestReport{Adjustments: []core.AIRequestAdjustment{{Action: "set"}}}
 	_ = core.AIUsageDetails{Counters: map[string]int64{"tokens": 1}}
-	_ = core.AICost{Amount: 1, Currency: "USD", Source: "test"}
 }

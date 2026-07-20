@@ -2162,7 +2162,9 @@ When properly configured, the AI module emits these spans:
 
 | Span Name | Description | Key Attributes |
 |-----------|-------------|----------------|
-| `ai.generate_response` | Overall AI request | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`, `ai.total_tokens`, `ai.prompt_length`, `ai.response_length` |
+| `ai.generate` | Logical normalized generation | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
+| `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
+| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider-specific execution attributes |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
 ### Enabling AI Telemetry in Your Agent
@@ -2197,18 +2199,19 @@ When you expand a trace containing AI operations, you'll see:
 travel-research-orchestration: HTTP POST /orchestrate/natural (15.87s)
 └── orchestrator.process_request (15.87s)
     ├── orchestrator.build_prompt (1.4ms)
-    ├── ai.generate_response (2.34s)                    ← AI module span
-    │   └── ai.http_attempt (2.33s)                     ← HTTP-level span
-    │       └── [attributes: ai.provider=openai, ai.model=gpt-4.1-mini, ...]
+    ├── ai.generate (2.34s)                             ← logical normalized call
+    │   └── ai.generate_response (2.34s)                ← provider execution
+    │       └── ai.http_attempt (2.33s)                 ← HTTP attempt/retry
     ├── HTTP POST → geocoding-tool (594ms)
     ├── HTTP POST → weather-tool-v2 (610ms)
-    └── ai.generate_response (1.89s)                    ← Another AI call
-        └── ai.http_attempt (1.88s)
+    └── ai.generate (1.89s)
+        └── ai.generate_response (1.89s)
+            └── ai.http_attempt (1.88s)
 ```
 
 ### Troubleshooting: AI Spans Not Appearing
 
-If you don't see `ai.generate_response` or `ai.http_attempt` spans:
+If you don't see `ai.generate`, provider execution, or `ai.http_attempt` spans:
 
 1. **Check initialization order**: Telemetry MUST be initialized before creating the AI client
 2. **Verify telemetry is enabled**: Check your logs for "Telemetry initialized successfully"

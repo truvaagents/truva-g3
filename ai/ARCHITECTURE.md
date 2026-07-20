@@ -985,6 +985,29 @@ these integrations. Other built-in providers fail construction with
 `core.ErrAIRequestFeatureUnsupported` until their request adapters are migrated
 in later phases.
 
+### Common Logical Instrumentation
+
+Clients returned by `NewClient` and `NewRequestClient` are decorated by the
+common `InstrumentedAIClient`. The decorator preserves the stable
+`core.AIClient` surface, exposes the additive request capability, and creates
+one logical parent span for each call:
+
+```text
+ai.generate or ai.stream
+    └── provider-local preparation / execution span
+        └── ai.http_attempt (one per transport attempt)
+```
+
+The logical span owns normalized duration, provider/model/surface identity,
+token usage, and policy adjustment paths. It does not record
+prompts, system prompts, provider request bodies, credentials, or complete
+endpoint URLs. Provider transports continue to own network-attempt spans.
+
+Because the registered-provider constructors return the common decorator,
+code that needs a concrete provider type should construct that provider
+directly. Ordinary framework code should depend on `core.AIClient` or
+`core.AIRequestClient`.
+
 ### Environment Variable Reference
 
 | Variable | Provider | Description |

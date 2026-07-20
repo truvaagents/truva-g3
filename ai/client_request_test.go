@@ -107,6 +107,18 @@ func installPhase3Factory(t *testing.T, factory ProviderFactory) {
 	t.Cleanup(func() { registry = original })
 }
 
+func requireFactoryInstrumentedClient(t *testing.T, client core.AIClient, wrapped core.AIClient) *InstrumentedAIClient {
+	t.Helper()
+	instrumented, ok := client.(*InstrumentedAIClient)
+	if !ok {
+		t.Fatalf("factory client type = %T, want *InstrumentedAIClient", client)
+	}
+	if instrumented.wrapped != wrapped || !instrumented.factoryManaged {
+		t.Fatalf("factory instrumentation = wrapped %T, managed %v", instrumented.wrapped, instrumented.factoryManaged)
+	}
+	return instrumented
+}
+
 func TestNewClient_PrefersValidatedFactory(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		factory := &phase3ValidatedFactory{
@@ -119,7 +131,8 @@ func TestNewClient_PrefersValidatedFactory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient returned error: %v", err)
 		}
-		if client != factory.client || factory.validatedCalls != 1 || factory.createCalls != 0 {
+		requireFactoryInstrumentedClient(t, client, factory.client)
+		if factory.validatedCalls != 1 || factory.createCalls != 0 {
 			t.Fatalf("validated factory dispatch = client %T, validated calls %d, legacy calls %d", client, factory.validatedCalls, factory.createCalls)
 		}
 	})
@@ -188,7 +201,8 @@ func TestNewRequestClient_RequestFactoryReceivesSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestClient returned error: %v", err)
 	}
-	if client != factory.client || factory.requestCalls != 1 || factory.createCalls != 0 {
+	requireFactoryInstrumentedClient(t, client, factory.client)
+	if factory.requestCalls != 1 || factory.createCalls != 0 {
 		t.Fatalf("request factory dispatch = client %T, request calls %d, legacy calls %d", client, factory.requestCalls, factory.createCalls)
 	}
 	extraNested["value"] = "caller-mutated-after-construction"
@@ -227,7 +241,8 @@ func TestNewRequestClient_LegacyFactoryFallback(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRequestClient returned error: %v", err)
 		}
-		if client != factory.client || factory.calls != 1 {
+		requireFactoryInstrumentedClient(t, client, factory.client)
+		if factory.calls != 1 {
 			t.Fatalf("legacy fallback = client %T, calls %d", client, factory.calls)
 		}
 	})
@@ -319,6 +334,67 @@ func TestNewRequestClient_ValidationAndFactoryFailures(t *testing.T) {
 		installPhase3Factory(t, factory)
 		if _, err := NewRequestClient(WithProvider(factory.name)); err == nil || !strings.Contains(err.Error(), "nil client") {
 			t.Fatalf("NewRequestClient error = %v, want nil-client error", err)
+		}
+	})
+}
+
+func TestProviderConstructors_Phase6InstrumentationComposition(t *testing.T) {
+	t.Run("NewClient installs logical instrumentation", func(t *testing.T) {
+		raw := &mockAIClientForInstr{generateResp: &core.AIResponse{
+			Content:  "legacy",
+			Model:    "gpt-4o-mini",
+			Provider: "openai",
+			Usage:    core.TokenUsage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000},
+		}}
+		factory := &phase3LegacyFactory{name: "phase6-logical-instrumentation", client: raw}
+		installPhase3Factory(t, factory)
+		tracing := &phase6InstrumentedTelemetry{}
+
+		client, err := NewClient(WithProvider(factory.name), WithTelemetry(tracing))
+		if err != nil {
+			t.Fatalf("NewClient() error = %v", err)
+		}
+		result, err := core.GenerateAI(t.Context(), client, core.NewAIRequest("prompt", "instrumentation"))
+		if err != nil {
+			t.Fatalf("GenerateAI() error = %v", err)
+		}
+		if result.Response != raw.generateResp {
+			t.Fatalf("normalized response = %#v", result.Response)
+		}
+		if len(tracing.names) != 1 || tracing.names[0] != "ai.generate" || len(tracing.spans) != 1 {
+			t.Fatalf("common telemetry = names %#v, spans %d", tracing.names, len(tracing.spans))
+		}
+		if tracing.spans[0].attributes["ai.prompt_tokens"] != 1_000_000 ||
+			tracing.spans[0].attributes["ai.completion_tokens"] != 1_000_000 {
+			t.Fatalf("common usage attributes = %#v", tracing.spans[0].attributes)
+		}
+	})
+
+	t.Run("explicit instrumentation collapses factory layer", func(t *testing.T) {
+		raw := &mockAIClientForInstr{generateResp: &core.AIResponse{
+			Model: "gpt-4.1",
+			Usage: core.TokenUsage{PromptTokens: 1_000_000},
+		}}
+		factory := &phase3LegacyFactory{name: "phase6-collapse", client: raw}
+		installPhase3Factory(t, factory)
+		tracing := &phase6InstrumentedTelemetry{}
+		managed, err := NewClient(WithProvider(factory.name), WithTelemetry(tracing))
+		if err != nil {
+			t.Fatalf("NewClient() error = %v", err)
+		}
+		instrumented := NewInstrumentedClient(managed, nil)
+		if instrumented.wrapped != raw {
+			t.Fatalf("nested factory instrumentation was not collapsed: %T", instrumented.wrapped)
+		}
+		result, err := instrumented.Generate(t.Context(), core.NewAIRequest("prompt", "instrumentation"))
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+		if result == nil || result.Response != raw.generateResp || raw.callCount != 1 {
+			t.Fatalf("collapsed result = %#v, provider calls %d", result, raw.callCount)
+		}
+		if len(tracing.names) != 1 || tracing.names[0] != "ai.generate" {
+			t.Fatalf("collapsed logical spans = %#v", tracing.names)
 		}
 	})
 }

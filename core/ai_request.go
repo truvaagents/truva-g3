@@ -96,8 +96,10 @@ type AIProviderPatch struct {
 // AIRequest is the provider-neutral request envelope for request-capable AI
 // clients.
 type AIRequest struct {
-	_          noUnkeyedLiterals
-	Prompt     string
+	_      noUnkeyedLiterals
+	Prompt string
+	// Purpose is a stable, provider-neutral, non-secret operation label. It
+	// may appear in sanitized request reports, policy selectors, and traces.
 	Purpose    string
 	Generation AIGenerationOptions
 	Patches    []AIProviderPatch
@@ -105,14 +107,13 @@ type AIRequest struct {
 	legacyOptions *AIOptions
 }
 
-// AIResult contains the legacy normalized response and optional request,
-// usage, and cost details.
+// AIResult contains the legacy normalized response and optional request and
+// usage details.
 type AIResult struct {
 	_             noUnkeyedLiterals
 	Response      *AIResponse
 	RequestReport *AIRequestReport
 	UsageDetails  *AIUsageDetails
-	Cost          *AICost
 }
 
 // AIRequestClient adds the provider-neutral request/result capability to an
@@ -162,14 +163,6 @@ type AIUsageDetails struct {
 	AudioInputTokens  int64
 	AudioOutputTokens int64
 	Counters          map[string]int64
-}
-
-// AICost contains an optional normalized cost estimate.
-type AICost struct {
-	_        noUnkeyedLiterals
-	Amount   float64
-	Currency string
-	Source   string
 }
 
 // NewAIRequest constructs a provider-neutral AI request.

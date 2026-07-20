@@ -866,8 +866,6 @@ type Discovery interface {
 
 <p>The trace view of a failover looks like this: a parent <code>ai.chain.generate_response</code> span containing one or more <code>ai.chain.provider_attempt</code> spans, each carrying <code>ai.chain.provider</code>, <code>ai.chain.provider_alias</code>, <code>ai.chain.provider_index</code>, <code>ai.chain.attempt_status</code>, and <code>ai.chain.attempt_duration_ms</code>. The reason a request took two seconds is visible without reading logs.</p>
 
-<p><strong>Per-request cost annotation.</strong> Every <code>ai.generate_response</code> and <code>ai.stream_response</code> span carries an <code>ai.cost_usd</code> attribute computed from prompt and completion token counts at the model's list price. The pricing table covers about 20 model families (current OpenAI, Anthropic, Gemini, Groq's gpt-oss) and is treated as an estimate rather than a billing source of truth. The point is per-trace cost visibility in Jaeger or any tracing backend — clicking on a slow trace also tells you what that request cost.</p>
-
 <p><strong>Standard AI metrics across all providers.</strong></p>
 
 <ul>

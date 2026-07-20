@@ -810,6 +810,26 @@ func TestChainClient_Phase5ConcurrentUse(t *testing.T) {
 	}
 }
 
+func TestChainClient_SupportsStreaming_HonorsRequestAwareDecoratorCapability(t *testing.T) {
+	nonStreaming := NewInstrumentedClient(&phase5LegacyClient{}, nil)
+	chain, err := NewChain(ClientEntry("decorated", nonStreaming))
+	if err != nil {
+		t.Fatalf("NewChain returned error: %v", err)
+	}
+	if chain.SupportsStreaming() {
+		t.Fatal("request-aware decorator over a non-streaming client reported streaming support")
+	}
+
+	streaming := NewInstrumentedClient(&phase5LegacyStreamingClient{}, nil)
+	chain, err = NewChain(ClientEntry("decorated", streaming))
+	if err != nil {
+		t.Fatalf("NewChain returned error: %v", err)
+	}
+	if !chain.SupportsStreaming() {
+		t.Fatal("request-aware decorator over a streaming client hid streaming support")
+	}
+}
+
 var (
 	_ core.AIRequestClient          = (*phase5RequestClient)(nil)
 	_ core.StreamingAIRequestClient = (*phase5RequestClient)(nil)

@@ -45,9 +45,7 @@ func TestNewRequestClient_Phase4IntegrationOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestClient returned error: %v", err)
 	}
-	if client != factory.client {
-		t.Fatalf("NewRequestClient returned %T, want factory client", client)
-	}
+	requireFactoryInstrumentedClient(t, client, factory.client)
 	if factory.integration.CredentialSource != source {
 		t.Fatal("credential source was not passed to request factory")
 	}
