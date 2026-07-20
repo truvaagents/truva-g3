@@ -878,6 +878,56 @@ type RequestProviderFactory interface {
 Factories validate and wire configuration only. They do not invoke middleware
 or take ownership of application-supplied lifecycle components.
 
+### Enterprise Credentials, Routing, and HTTP Transport
+
+Request-capable providers may also accept application-owned credential,
+endpoint, and HTTP transport integrations:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithCredentialSource(credentials),
+    ai.WithEndpointResolver(routes),
+    ai.WithHTTPClient(httpClient),
+)
+```
+
+`CredentialSource` receives only sanitized request identity plus trusted route
+metadata and returns one complete authentication header. It is called after
+semantic request policy for every transport attempt, allowing token rotation
+without rebuilding the client. An injected credential source takes precedence
+over the static provider API key. Credential values and credential scopes are
+excluded from request reports, fingerprints, spans, and framework logs.
+
+For simple dynamic headers, `WithAuthHeader(name, callback)` adapts a
+concurrency-safe callback into a credential source. Applications that need to
+invalidate cached credentials after early revocation should implement
+`CredentialRejectionObserver`; Anthropic notifies it on HTTP 401 and 403 before
+returning the original provider error. Observer failures are diagnostic and do
+not replace that error. Phase 4 does not perform an immediate authentication
+retry because generation acceptance cannot generally be proven from an auth
+response; ordinary provider retry and chain failover semantics remain intact.
+
+`EndpointResolver` runs once per logical call after concrete model resolution
+and semantic policy. Its `ResolvedEndpoint.URL` is the complete HTTP endpoint,
+and `RouteIdentity` must be a stable, non-secret identifier suitable for a
+sanitized report and fingerprint. Resolver-owned URLs and query maps are
+cloned before use. Query values, deployment names, and credential scopes are
+available to transport/credential integration but are not reported.
+
+An injected `*http.Client` remains caller-owned. The provider shallow-copies
+it, preserves its transport, redirect, cookie-jar, and timeout policies, and
+uses `http.DefaultTransport` when its transport is nil. The framework request
+timeout is a context deadline and does not overwrite the injected client's
+timeout. The configured transport sees the final serialized body, route,
+eligible application headers, and credential header, so mTLS and signing
+transports compose normally.
+
+Anthropic is currently the only built-in request-capable provider supporting
+these integrations. Other built-in providers fail construction with
+`core.ErrAIRequestFeatureUnsupported` until their request adapters are migrated
+in later phases.
+
 ### Environment Variable Reference
 
 | Variable | Provider | Description |

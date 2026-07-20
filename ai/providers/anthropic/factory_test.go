@@ -134,3 +134,28 @@ func TestAnthropicFactory_ValidatedConstructionErrors(t *testing.T) {
 		t.Fatalf("invalid integration error = %v", err)
 	}
 }
+
+func TestAnthropicFactory_Phase4StaticEndpointValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{name: "unsupported scheme", baseURL: "ftp://gateway.example/v1", want: "unsupported"},
+		{name: "missing host", baseURL: "https:///v1", want: "host is empty"},
+		{name: "user information", baseURL: "https://user:secret@gateway.example/v1", want: "user information"},
+		{name: "query", baseURL: "https://gateway.example/v1?credential=secret", want: "query parameters"},
+		{name: "fragment", baseURL: "https://gateway.example/v1#secret", want: "fragment"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := (&Factory{}).CreateValidated(&ai.AIConfig{BaseURL: test.baseURL})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CreateValidated error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), "credential=secret") || strings.Contains(err.Error(), "user:secret") {
+				t.Fatalf("endpoint validation error exposed URL credentials: %v", err)
+			}
+		})
+	}
+}

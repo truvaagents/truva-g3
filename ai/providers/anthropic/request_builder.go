@@ -145,7 +145,9 @@ func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest,
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	headers.Set("x-api-key", c.apiKey)
+	if c.credentialSource == nil && c.apiKey != "" {
+		headers.Set("x-api-key", c.apiKey)
+	}
 	headers.Set("anthropic-version", APIVersion)
 	if stream {
 		headers.Set("Accept", "text/event-stream")

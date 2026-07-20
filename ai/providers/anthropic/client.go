@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
@@ -27,12 +28,15 @@ const (
 // Client implements core.AIClient for Anthropic
 type Client struct {
 	*providers.BaseClient
-	apiKey         string
-	baseURL        string
-	providerAlias  string
-	defaultHeaders map[string]string
-	defaultExtra   map[string]interface{}
-	requestPolicy  *requestpolicy.Engine
+	apiKey           string
+	baseURL          string
+	providerAlias    string
+	defaultHeaders   map[string]string
+	defaultExtra     map[string]interface{}
+	requestPolicy    *requestpolicy.Engine
+	credentialSource ai.CredentialSource
+	endpointResolver ai.EndpointResolver
+	requestTimeout   time.Duration
 }
 
 // NewClient creates a new Anthropic client with configuration
@@ -50,11 +54,12 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 	base.DefaultMaxTokens = 1000
 
 	return &Client{
-		BaseClient:    base,
-		apiKey:        apiKey,
-		baseURL:       baseURL,
-		providerAlias: "anthropic",
-		requestPolicy: newRequestPolicyEngine(),
+		BaseClient:     base,
+		apiKey:         apiKey,
+		baseURL:        baseURL,
+		providerAlias:  "anthropic",
+		requestPolicy:  newRequestPolicyEngine(),
+		requestTimeout: 180 * time.Second,
 	}
 }
 
@@ -73,6 +78,8 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	if request == nil {
 		return nil, errors.New("anthropic AI request is nil")
 	}
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	prompt := request.Prompt
 	// Start distributed tracing span
 	ctx, span := c.StartSpan(ctx, "ai.generate_response")
@@ -99,11 +106,20 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 		span.RecordError(err)
 		return resultWithReport(prepared, nil), err
 	}
+	route, err := c.resolveEndpoint(ctx, prepared)
+	if err != nil {
+		c.recordRequestPreparation(ctx, span, prepared)
+		span.SetAttribute("ai.model", prepared.Model)
+		span.RecordError(err)
+		return resultWithReport(prepared, nil), err
+	}
+	c.bindRoute(prepared, route)
 	c.recordRequestPreparation(ctx, span, prepared)
 
-	// Add model to span attributes after defaults are applied
+	// Add sanitized route and model identities after semantic preparation.
 	span.SetAttribute("ai.model", prepared.Model)
-	if c.apiKey == "" {
+	span.SetAttribute("ai.request.route_identity", route.identity)
+	if c.credentialSource == nil && c.apiKey == "" {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - API key not configured", map[string]interface{}{
 				"operation": "ai_request_error",
@@ -121,7 +137,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	startTime := time.Now()
 
 	// Create HTTP request to native Messages API endpoint
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(prepared.Body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route.url.String(), bytes.NewReader(prepared.Body))
 	if err != nil {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - create request error", map[string]interface{}{
@@ -137,8 +153,10 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 
 	req.Header = prepared.Headers.Clone()
 
-	// Execute with retry
-	resp, err := c.ExecuteWithRetry(ctx, req)
+	credentialRequest := c.credentialRequest(prepared, route)
+	// Execute with retry. Dynamic credentials are acquired after semantic
+	// preparation for each fresh transport attempt.
+	resp, err := c.executeWithCredential(ctx, req, credentialRequest)
 	if err != nil {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - send error", map[string]interface{}{
@@ -154,6 +172,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	defer func() {
 		_ = resp.Body.Close() // Error can be safely ignored as we've read the body
 	}()
+	c.observeCredentialRejection(ctx, credentialRequest, resp.StatusCode)
 
 	// Read response
 	body, err := io.ReadAll(resp.Body)
@@ -265,6 +284,8 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	if callback == nil {
 		return nil, errors.New("anthropic stream callback is nil")
 	}
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	prompt := request.Prompt
 	// Start distributed tracing span
 	ctx, span := c.StartSpan(ctx, "ai.stream_response")
@@ -292,11 +313,20 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 		span.RecordError(err)
 		return resultWithReport(prepared, nil), err
 	}
+	route, err := c.resolveEndpoint(ctx, prepared)
+	if err != nil {
+		c.recordRequestPreparation(ctx, span, prepared)
+		span.SetAttribute("ai.model", prepared.Model)
+		span.RecordError(err)
+		return resultWithReport(prepared, nil), err
+	}
+	c.bindRoute(prepared, route)
 	c.recordRequestPreparation(ctx, span, prepared)
 
-	// Add model to span attributes
+	// Add sanitized route and model identities after semantic preparation.
 	span.SetAttribute("ai.model", prepared.Model)
-	if c.apiKey == "" {
+	span.SetAttribute("ai.request.route_identity", route.identity)
+	if c.credentialSource == nil && c.apiKey == "" {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - API key not configured", map[string]interface{}{
 				"operation": "ai_stream_error",
@@ -314,7 +344,7 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	startTime := time.Now()
 
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(prepared.Body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route.url.String(), bytes.NewReader(prepared.Body))
 	if err != nil {
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - create request error", map[string]interface{}{
@@ -330,9 +360,16 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 
 	req.Header = prepared.Headers.Clone()
 
+	credentialRequest := c.credentialRequest(prepared, route)
+	if err := c.prepareCredential(ctx, req, credentialRequest); err != nil {
+		span.RecordError(err)
+		return resultWithReport(prepared, nil), err
+	}
+
 	// Execute request
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		err = &integrationInvocationError{stage: "transport request", cause: err}
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - send error", map[string]interface{}{
 				"operation": "ai_stream_error",
@@ -347,6 +384,7 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+	c.observeCredentialRejection(ctx, credentialRequest, resp.StatusCode)
 
 	// Handle error responses
 	if resp.StatusCode != http.StatusOK {

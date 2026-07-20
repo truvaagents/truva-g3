@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -128,7 +129,7 @@ func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	integration, err := validateAndSnapshotIntegration(config.integration)
+	integration, err := validateAndSnapshotIntegration(config)
 	if err != nil {
 		return nil, err
 	}
@@ -251,33 +252,65 @@ func createFromFactory(factory ProviderFactory, config *AIConfig) (core.AIClient
 	return client, nil
 }
 
-func validateAndSnapshotIntegration(config ProviderIntegrationConfig) (ProviderIntegrationConfig, error) {
-	if !config.CompatibilityMode.Valid() {
-		return ProviderIntegrationConfig{}, fmt.Errorf("invalid AI compatibility mode %d", config.CompatibilityMode)
+func validateAndSnapshotIntegration(config *clientConfig) (ProviderIntegrationConfig, error) {
+	if config == nil {
+		return ProviderIntegrationConfig{}, errors.New("AI client configuration is nil")
 	}
-	rules, err := requestpolicy.ClonePatches(config.RequestRules)
+	integration := config.integration
+	if !integration.CompatibilityMode.Valid() {
+		return ProviderIntegrationConfig{}, fmt.Errorf("invalid AI compatibility mode %d", integration.CompatibilityMode)
+	}
+	if config.credentialSourceSet && isNilIntegrationValue(integration.CredentialSource) {
+		return ProviderIntegrationConfig{}, errors.New("AI credential source is nil")
+	}
+	if config.endpointResolverSet && isNilIntegrationValue(integration.EndpointResolver) {
+		return ProviderIntegrationConfig{}, errors.New("AI endpoint resolver is nil")
+	}
+	if config.httpClientSet && integration.HTTPClient == nil {
+		return ProviderIntegrationConfig{}, errors.New("AI HTTP client is nil")
+	}
+	rules, err := requestpolicy.ClonePatches(integration.RequestRules)
 	if err != nil {
 		return ProviderIntegrationConfig{}, fmt.Errorf("validate AI request rules: %w", err)
 	}
-	middleware := append([]requestpolicy.RequestMiddleware(nil), config.RequestMiddleware...)
+	middleware := append([]requestpolicy.RequestMiddleware(nil), integration.RequestMiddleware...)
 	if _, err := requestpolicy.NewEngine(requestpolicy.Config{
 		AppRules:   rules,
 		Middleware: middleware,
-		Mode:       config.CompatibilityMode,
+		Mode:       integration.CompatibilityMode,
 	}); err != nil {
 		return ProviderIntegrationConfig{}, fmt.Errorf("validate AI request integration: %w", err)
 	}
 	return ProviderIntegrationConfig{
 		RequestRules:      rules,
 		RequestMiddleware: middleware,
-		CompatibilityMode: config.CompatibilityMode,
+		CompatibilityMode: integration.CompatibilityMode,
+		CredentialSource:  integration.CredentialSource,
+		EndpointResolver:  integration.EndpointResolver,
+		HTTPClient:        integration.HTTPClient,
 	}, nil
+}
+
+func isNilIntegrationValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func integrationIsZero(config ProviderIntegrationConfig) bool {
 	return len(config.RequestRules) == 0 &&
 		len(config.RequestMiddleware) == 0 &&
-		config.CompatibilityMode == requestpolicy.CompatibilityCompatible
+		config.CompatibilityMode == requestpolicy.CompatibilityCompatible &&
+		config.CredentialSource == nil &&
+		config.EndpointResolver == nil &&
+		config.HTTPClient == nil
 }
 
 func snapshotAIConfig(config *AIConfig) *AIConfig {

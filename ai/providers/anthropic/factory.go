@@ -68,6 +68,11 @@ func (f *Factory) CreateRequestClient(
 		return nil, fmt.Errorf("configure Anthropic request policy: %w", err)
 	}
 	client.requestPolicy = engine
+	client.credentialSource = integration.CredentialSource
+	client.endpointResolver = integration.EndpointResolver
+	if integration.HTTPClient != nil {
+		client.HTTPClient = providerHTTPClient(integration.HTTPClient)
+	}
 	return client, nil
 }
 
@@ -89,6 +94,9 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 			baseURL = DefaultBaseURL
 		}
 	}
+	if err := validateAnthropicBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 
 	logger := config.Logger
 	if logger == nil {
@@ -98,17 +106,20 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	}
 
 	logger.Info("Anthropic provider initialized", map[string]interface{}{
-		"operation":   "ai_provider_init",
-		"provider":    "anthropic",
-		"base_url":    baseURL,
-		"has_api_key": apiKey != "",
-		"timeout":     config.Timeout.String(),
-		"max_retries": config.MaxRetries,
-		"model":       config.Model,
+		"operation":       "ai_provider_init",
+		"provider":        "anthropic",
+		"custom_endpoint": baseURL != DefaultBaseURL,
+		"has_api_key":     apiKey != "",
+		"timeout":         config.Timeout.String(),
+		"max_retries":     config.MaxRetries,
+		"model":           config.Model,
 	})
 
 	// Create the client with full configuration
 	client := NewClient(apiKey, baseURL, logger)
+	if config.Timeout > 0 {
+		client.requestTimeout = config.Timeout
+	}
 	if config.ProviderAlias != "" {
 		client.providerAlias = config.ProviderAlias
 	}

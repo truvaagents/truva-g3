@@ -110,6 +110,19 @@ func requestForAttempt(ctx context.Context, request *http.Request) (*http.Reques
 	return clone, nil
 }
 
+// RequestAttemptPreparer applies per-attempt transport state, such as a
+// rotating credential, to a fresh replayable request. Implementations must not
+// retain or mutate the original logical request.
+type RequestAttemptPreparer func(context.Context, *http.Request) error
+
+type transportRequestError struct {
+	cause error
+}
+
+func (e *transportRequestError) Error() string { return "AI HTTP transport request failed" }
+
+func (e *transportRequestError) Unwrap() error { return e.cause }
+
 // ExecuteWithRetry performs an HTTP request with exponential backoff retry.
 // Each retry attempt creates a child span visible in Jaeger for debugging.
 // Requests with a body must provide GetBody so every attempt can use a fresh
@@ -117,6 +130,28 @@ func requestForAttempt(ctx context.Context, request *http.Request) (*http.Reques
 // when MaxRetries is zero. http.NewRequestWithContext sets GetBody automatically
 // for *bytes.Buffer, *bytes.Reader, and *strings.Reader bodies.
 func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return b.executeWithRetry(ctx, req, nil)
+}
+
+// ExecuteWithRetryPrepared behaves like ExecuteWithRetry and invokes prepare
+// exactly once for every transport attempt after the request body has been
+// recreated and before the configured RoundTripper sees it.
+func (b *BaseClient) ExecuteWithRetryPrepared(
+	ctx context.Context,
+	req *http.Request,
+	prepare RequestAttemptPreparer,
+) (*http.Response, error) {
+	if prepare == nil {
+		return nil, errors.New("AI request attempt preparer is nil")
+	}
+	return b.executeWithRetry(ctx, req, prepare)
+}
+
+func (b *BaseClient) executeWithRetry(
+	ctx context.Context,
+	req *http.Request,
+	prepare RequestAttemptPreparer,
+) (*http.Response, error) {
 	var lastErr error
 	if req.Body != nil && req.Body != http.NoBody {
 		defer func() {
@@ -162,11 +197,36 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 			}
 			return nil, err
 		}
+		if prepare != nil {
+			if err := prepare(attemptCtx, attemptRequest); err != nil {
+				if attemptRequest.Body != nil {
+					_ = attemptRequest.Body.Close()
+				}
+				attemptSpan.RecordError(err)
+				attemptSpan.SetAttribute("ai.attempt_status", "request_error")
+				attemptSpan.SetAttribute("ai.retryable", false)
+				attemptSpan.End()
+				if b.Logger != nil {
+					b.Logger.ErrorWithContext(attemptCtx, "AI request attempt preparation failed", map[string]interface{}{
+						"operation":  "ai_request_error",
+						"error_type": "request_attempt_preparation",
+						"retryable":  false,
+					})
+				}
+				return nil, err
+			}
+		}
 
 		// Execute request
 		attemptStart := time.Now()
 		// #nosec G704 -- provider clients build these requests from explicit provider config.
 		resp, err := b.HTTPClient.Do(attemptRequest)
+		if err != nil {
+			// net/http errors can embed the complete request URL, including trusted
+			// resolver query values. Preserve the cause for errors.Is/errors.As but
+			// expose only a sanitized message to spans and framework logs.
+			err = &transportRequestError{cause: err}
+		}
 		attemptDuration := time.Since(attemptStart)
 
 		attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())

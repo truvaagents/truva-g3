@@ -3,6 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -79,6 +80,9 @@ type ProviderIntegrationConfig struct {
 	RequestRules      []core.AIProviderPatch
 	RequestMiddleware []requestpolicy.RequestMiddleware
 	CompatibilityMode requestpolicy.CompatibilityMode
+	CredentialSource  CredentialSource
+	EndpointResolver  EndpointResolver
+	HTTPClient        *http.Client
 }
 
 type noUnkeyedLiterals struct{}
@@ -86,6 +90,10 @@ type noUnkeyedLiterals struct{}
 type clientConfig struct {
 	legacy      AIConfig
 	integration ProviderIntegrationConfig
+
+	credentialSourceSet bool
+	endpointResolverSet bool
+	httpClientSet       bool
 }
 
 // ClientOption is the sealed option contract accepted by NewRequestClient.

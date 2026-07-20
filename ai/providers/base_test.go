@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -435,6 +437,77 @@ func TestBaseClient_ExecuteWithRetry_ReplaysCompleteBodyForEveryAttempt(t *testi
 	}
 	if !originalBody.closed {
 		t.Error("original request body was not closed")
+	}
+}
+
+func TestBaseClient_ExecuteWithRetryPrepared_PreparesEveryFreshAttempt(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+
+	var bodies []string
+	var credentials []string
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read attempt body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		credentials = append(credentials, request.Header.Get("X-Attempt-Credential"))
+		status := http.StatusInternalServerError
+		if len(bodies) == 2 {
+			status = http.StatusOK
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("response")),
+			Request:    request,
+		}, nil
+	})}
+
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		bytes.NewReader([]byte("complete-body")),
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	prepareCalls := 0
+	response, err := client.ExecuteWithRetryPrepared(context.Background(), request, func(_ context.Context, attempt *http.Request) error {
+		prepareCalls++
+		attempt.Header.Set("X-Attempt-Credential", fmt.Sprintf("credential-%d", prepareCalls))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ExecuteWithRetryPrepared returned error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if prepareCalls != 2 {
+		t.Fatalf("preparer calls = %d, want 2", prepareCalls)
+	}
+	if !reflect.DeepEqual(bodies, []string{"complete-body", "complete-body"}) {
+		t.Fatalf("attempt bodies = %#v", bodies)
+	}
+	if !reflect.DeepEqual(credentials, []string{"credential-1", "credential-2"}) {
+		t.Fatalf("attempt credentials = %#v", credentials)
+	}
+	if request.Header.Get("X-Attempt-Credential") != "" {
+		t.Fatalf("logical request was mutated: %#v", request.Header)
+	}
+}
+
+func TestBaseClient_ExecuteWithRetryPrepared_RejectsNilPreparer(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if _, err := client.ExecuteWithRetryPrepared(context.Background(), request, nil); err == nil || !strings.Contains(err.Error(), "preparer is nil") {
+		t.Fatalf("nil preparer error = %v", err)
 	}
 }
 
