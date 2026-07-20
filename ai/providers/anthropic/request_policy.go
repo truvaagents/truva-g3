@@ -1,6 +1,12 @@
 package anthropic
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
+	"github.com/truvaagents/truva-g3/core"
+)
 
 type samplingPolicy uint8
 
@@ -17,6 +23,29 @@ var omitSamplingPrefixes = []string{
 	"claude-fable-5",
 	"claude-mythos-5",
 	"claude-mythos-preview",
+}
+
+func newRequestPolicyEngine() *requestpolicy.Engine {
+	rules := make([]core.AIProviderPatch, 0, len(omitSamplingPrefixes)*2)
+	for _, family := range omitSamplingPrefixes {
+		for _, modelSelector := range []string{family, family + "-*"} {
+			rules = append(rules, core.AIProviderPatch{
+				Name:    samplingAdjustmentRule,
+				Version: "1",
+				Selector: core.AIProviderSelector{
+					Provider: "anthropic",
+					Surface:  "messages",
+					Model:    modelSelector,
+				},
+				Remove: []string{"/temperature", "/top_p", "/top_k"},
+			})
+		}
+	}
+	engine, err := requestpolicy.NewEngine(requestpolicy.Config{BuiltIns: rules})
+	if err != nil {
+		panic(fmt.Sprintf("invalid built-in Anthropic request policy: %v", err))
+	}
+	return engine
 }
 
 func samplingPolicyForModel(model string) samplingPolicy {
@@ -36,23 +65,6 @@ func samplingPolicyForModel(model string) samplingPolicy {
 func modelInFamily(normalizedModel, normalizedFamily string) bool {
 	return normalizedModel == normalizedFamily ||
 		strings.HasPrefix(normalizedModel, normalizedFamily+"-")
-}
-
-func deleteKeyFold(body map[string]interface{}, names ...string) []string {
-	removed := make([]string, 0, len(names))
-	for _, name := range names {
-		found := false
-		for key := range body {
-			if strings.EqualFold(key, name) {
-				delete(body, key)
-				found = true
-			}
-		}
-		if found {
-			removed = append(removed, "/"+name)
-		}
-	}
-	return removed
 }
 
 func (policy samplingPolicy) String() string {

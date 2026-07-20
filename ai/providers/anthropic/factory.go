@@ -66,6 +66,9 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 
 	// Create the client with full configuration
 	client := NewClient(apiKey, baseURL, logger)
+	if config.ProviderAlias != "" {
+		client.providerAlias = config.ProviderAlias
+	}
 
 	// Set telemetry for distributed tracing
 	if config.Telemetry != nil {
@@ -104,7 +107,11 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 		client.defaultHeaders = providers.MergeStringMaps(nil, config.Headers)
 	}
 	if len(config.Extra) > 0 {
-		client.defaultExtra = providers.MergeAnyMaps(nil, config.Extra)
+		cloned, err := providers.CloneAIOptions(&core.AIOptions{Extra: config.Extra})
+		if err != nil {
+			panic("clone Anthropic default request extras: " + err.Error())
+		}
+		client.defaultExtra = cloned.Extra
 	}
 
 	return client

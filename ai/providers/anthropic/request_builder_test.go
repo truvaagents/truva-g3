@@ -214,8 +214,9 @@ func TestClientRecordRequestPreparation_ReportsEffectiveSampling(t *testing.T) {
 		Model:                "claude-sonnet-5",
 		SamplingPolicy:       samplingOmitted,
 		RequestedTemperature: 0.3,
-		Adjustments: []requestAdjustment{{
-			Rule: samplingAdjustmentRule, Path: "/temperature", Action: "remove",
+		TemperatureSent:      false,
+		Adjustments: []core.AIRequestAdjustment{{
+			Source: "built-in-rule", Rule: samplingAdjustmentRule + "@1", Path: "/temperature", Action: "remove",
 		}},
 	}
 

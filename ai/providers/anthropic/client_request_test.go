@@ -96,7 +96,12 @@ func TestFactory_Create_CopiesHeadersAndExtra(t *testing.T) {
 	factory := &Factory{}
 	config := &ai.AIConfig{
 		Headers: map[string]string{"x-test": "1"},
-		Extra:   map[string]interface{}{"top_p": 0.9},
+		Extra: map[string]interface{}{
+			"top_p": 0.9,
+			"metadata": map[string]interface{}{
+				"source": "original",
+			},
+		},
 	}
 
 	clientAny := factory.Create(config)
@@ -107,12 +112,16 @@ func TestFactory_Create_CopiesHeadersAndExtra(t *testing.T) {
 
 	config.Headers["x-test"] = "mutated"
 	config.Extra["top_p"] = 0.1
+	config.Extra["metadata"].(map[string]interface{})["source"] = "mutated"
 
 	if got := client.defaultHeaders["x-test"]; got != "1" {
 		t.Fatalf("expected factory to copy default headers, got %q", got)
 	}
 	if got := client.defaultExtra["top_p"]; got != 0.9 {
 		t.Fatalf("expected factory to copy default extra, got %#v", got)
+	}
+	if got := client.defaultExtra["metadata"].(map[string]interface{})["source"]; got != "original" {
+		t.Fatalf("expected factory to deep-copy default extra, got %#v", got)
 	}
 }
 

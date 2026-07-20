@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/truvaagents/truva-g3/ai/providers"
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -27,8 +29,10 @@ type Client struct {
 	*providers.BaseClient
 	apiKey         string
 	baseURL        string
+	providerAlias  string
 	defaultHeaders map[string]string
 	defaultExtra   map[string]interface{}
+	requestPolicy  *requestpolicy.Engine
 }
 
 // NewClient creates a new Anthropic client with configuration
@@ -46,14 +50,30 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 	base.DefaultMaxTokens = 1000
 
 	return &Client{
-		BaseClient: base,
-		apiKey:     apiKey,
-		baseURL:    baseURL,
+		BaseClient:    base,
+		apiKey:        apiKey,
+		baseURL:       baseURL,
+		providerAlias: "anthropic",
+		requestPolicy: newRequestPolicyEngine(),
 	}
 }
 
-// GenerateResponse generates a response using Anthropic's native Messages API
+// GenerateResponse preserves the legacy AIClient surface by adapting it to the
+// request-aware path.
 func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
+	result, err := c.Generate(ctx, core.NewAIRequestFromLegacy(prompt, "", options))
+	if result != nil && result.Response != nil {
+		return result.Response, err
+	}
+	return nil, err
+}
+
+// Generate generates a response using Anthropic's native Messages API.
+func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.AIResult, error) {
+	if request == nil {
+		return nil, errors.New("anthropic AI request is nil")
+	}
+	prompt := request.Prompt
 	// Start distributed tracing span
 	ctx, span := c.StartSpan(ctx, "ai.generate_response")
 	defer span.End()
@@ -62,20 +82,12 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 	span.SetAttribute("ai.provider", "anthropic")
 	span.SetAttribute("ai.prompt_length", len(prompt))
 
-	if c.apiKey == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - API key not configured", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     "api_key_missing",
-			})
-		}
-		span.RecordError(fmt.Errorf("API key not configured"))
-		return nil, fmt.Errorf("anthropic API key not configured")
-	}
-
-	prepared, err := c.prepareRequest(prompt, options, false)
+	prepared, err := c.prepareAIRequest(ctx, request, false)
 	if err != nil {
+		if prepared != nil {
+			c.recordRequestPreparation(ctx, span, prepared)
+			span.SetAttribute("ai.model", prepared.Model)
+		}
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - preparation error", map[string]interface{}{
 				"operation": "ai_request_error",
@@ -85,12 +97,24 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, err
+		return resultWithReport(prepared, nil), err
 	}
 	c.recordRequestPreparation(ctx, span, prepared)
 
 	// Add model to span attributes after defaults are applied
 	span.SetAttribute("ai.model", prepared.Model)
+	if c.apiKey == "" {
+		if c.Logger != nil {
+			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - API key not configured", map[string]interface{}{
+				"operation": "ai_request_error",
+				"provider":  "anthropic",
+				"error":     "api_key_missing",
+			})
+		}
+		missingKey := errors.New("anthropic API key not configured")
+		span.RecordError(missingKey)
+		return resultWithReport(prepared, nil), missingKey
+	}
 
 	// Log request
 	c.LogRequest("anthropic", prepared.Model, prompt)
@@ -108,7 +132,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header = prepared.Headers.Clone()
@@ -125,7 +149,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close() // Error can be safely ignored as we've read the body
@@ -143,7 +167,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Handle errors
@@ -159,7 +183,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.RecordError(apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
-		return nil, apiErr
+		return resultWithReport(prepared, nil), apiErr
 	}
 
 	// Parse response
@@ -174,7 +198,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Extract text content from response
@@ -196,7 +220,7 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 		}
 		emptyErr := fmt.Errorf("no text content in Anthropic response")
 		span.RecordError(emptyErr)
-		return nil, emptyErr
+		return resultWithReport(prepared, nil), emptyErr
 	}
 
 	result := &core.AIResponse{
@@ -220,11 +244,28 @@ func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *c
 	c.LogResponse(ctx, "anthropic", result.Model, result.Usage, time.Since(startTime))
 	c.LogResponseContent("anthropic", result.Model, result.Content)
 
-	return result, nil
+	return resultWithReport(prepared, result), nil
 }
 
-// StreamResponse implements streaming for Anthropic's Messages API using Server-Sent Events
+// StreamResponse preserves the legacy StreamingAIClient surface by adapting it
+// to the request-aware path.
 func (c *Client) StreamResponse(ctx context.Context, prompt string, options *core.AIOptions, callback core.StreamCallback) (*core.AIResponse, error) {
+	result, err := c.Stream(ctx, core.NewAIRequestFromLegacy(prompt, "", options), callback)
+	if result != nil && result.Response != nil {
+		return result.Response, err
+	}
+	return nil, err
+}
+
+// Stream implements request-aware streaming for Anthropic's Messages API.
+func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback core.StreamCallback) (*core.AIResult, error) {
+	if request == nil {
+		return nil, errors.New("anthropic AI request is nil")
+	}
+	if callback == nil {
+		return nil, errors.New("anthropic stream callback is nil")
+	}
+	prompt := request.Prompt
 	// Start distributed tracing span
 	ctx, span := c.StartSpan(ctx, "ai.stream_response")
 	defer span.End()
@@ -234,20 +275,12 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 	span.SetAttribute("ai.streaming", true)
 	span.SetAttribute("ai.prompt_length", len(prompt))
 
-	if c.apiKey == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - API key not configured", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "anthropic",
-				"error":     "api_key_missing",
-			})
-		}
-		span.RecordError(fmt.Errorf("API key not configured"))
-		return nil, fmt.Errorf("anthropic API key not configured")
-	}
-
-	prepared, err := c.prepareRequest(prompt, options, true)
+	prepared, err := c.prepareAIRequest(ctx, request, true)
 	if err != nil {
+		if prepared != nil {
+			c.recordRequestPreparation(ctx, span, prepared)
+			span.SetAttribute("ai.model", prepared.Model)
+		}
 		if c.Logger != nil {
 			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - preparation error", map[string]interface{}{
 				"operation": "ai_stream_error",
@@ -257,12 +290,24 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 			})
 		}
 		span.RecordError(err)
-		return nil, err
+		return resultWithReport(prepared, nil), err
 	}
 	c.recordRequestPreparation(ctx, span, prepared)
 
 	// Add model to span attributes
 	span.SetAttribute("ai.model", prepared.Model)
+	if c.apiKey == "" {
+		if c.Logger != nil {
+			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - API key not configured", map[string]interface{}{
+				"operation": "ai_stream_error",
+				"provider":  "anthropic",
+				"error":     "api_key_missing",
+			})
+		}
+		missingKey := errors.New("anthropic API key not configured")
+		span.RecordError(missingKey)
+		return resultWithReport(prepared, nil), missingKey
+	}
 
 	// Log request
 	c.LogRequest("anthropic", prepared.Model, prompt)
@@ -280,7 +325,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header = prepared.Headers.Clone()
@@ -297,7 +342,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 			})
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -317,7 +362,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.RecordError(apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
-		return nil, apiErr
+		return resultWithReport(prepared, nil), apiErr
 	}
 
 	// Parse SSE stream
@@ -333,7 +378,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 		select {
 		case <-ctx.Done():
 			if fullContent.Len() > 0 {
-				return &core.AIResponse{
+				return resultWithReport(prepared, &core.AIResponse{
 					Content:  fullContent.String(),
 					Model:    model,
 					Provider: "anthropic",
@@ -342,9 +387,9 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 						CompletionTokens: outputTokens,
 						TotalTokens:      inputTokens + outputTokens,
 					},
-				}, core.ErrStreamPartiallyCompleted
+				}), core.ErrStreamPartiallyCompleted
 			}
-			return nil, ctx.Err()
+			return resultWithReport(prepared, nil), ctx.Err()
 		default:
 		}
 
@@ -355,7 +400,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 			}
 			if fullContent.Len() > 0 {
 				span.SetAttribute("ai.stream_partial", true)
-				return &core.AIResponse{
+				return resultWithReport(prepared, &core.AIResponse{
 					Content:  fullContent.String(),
 					Model:    model,
 					Provider: "anthropic",
@@ -364,10 +409,10 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 						CompletionTokens: outputTokens,
 						TotalTokens:      inputTokens + outputTokens,
 					},
-				}, core.ErrStreamPartiallyCompleted
+				}), core.ErrStreamPartiallyCompleted
 			}
 			span.RecordError(err)
-			return nil, fmt.Errorf("error reading stream: %w", err)
+			return resultWithReport(prepared, nil), fmt.Errorf("error reading stream: %w", err)
 		}
 
 		line = strings.TrimSpace(line)
@@ -425,7 +470,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 
 				if err := callback(chunk); err != nil {
 					span.SetAttribute("ai.stream_stopped_by_callback", true)
-					return &core.AIResponse{
+					return resultWithReport(prepared, &core.AIResponse{
 						Content:  fullContent.String(),
 						Model:    model,
 						Provider: "anthropic",
@@ -434,7 +479,7 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 							CompletionTokens: outputTokens,
 							TotalTokens:      inputTokens + outputTokens,
 						},
-					}, nil
+					}), nil
 				}
 			}
 
@@ -490,10 +535,24 @@ func (c *Client) StreamResponse(ctx context.Context, prompt string, options *cor
 	c.LogResponse(ctx, "anthropic", result.Model, result.Usage, time.Since(startTime))
 	c.LogResponseContent("anthropic", result.Model, result.Content)
 
-	return result, nil
+	return resultWithReport(prepared, result), nil
 }
 
 // SupportsStreaming returns true as Anthropic supports native streaming
 func (c *Client) SupportsStreaming() bool {
 	return true
 }
+
+func resultWithReport(prepared *preparedRequest, response *core.AIResponse) *core.AIResult {
+	if response == nil && (prepared == nil || prepared.Report == nil) {
+		return nil
+	}
+	result := &core.AIResult{Response: response}
+	if prepared != nil {
+		result.RequestReport = prepared.Report
+	}
+	return result
+}
+
+var _ core.AIRequestClient = (*Client)(nil)
+var _ core.StreamingAIRequestClient = (*Client)(nil)
