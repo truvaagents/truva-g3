@@ -41,6 +41,56 @@ func (c *advancedRequestClient) Generate(ctx context.Context, request *AIRequest
 	return c.result, c.err
 }
 
+type legacyStreamingRequestClient struct {
+	legacyRequestClient
+	streamResponse *AIResponse
+	streamErr      error
+	streamCalls    int
+	streamCtx      context.Context
+	streamPrompt   string
+	streamOptions  *AIOptions
+	callback       StreamCallback
+	supported      bool
+}
+
+func (c *legacyStreamingRequestClient) StreamResponse(
+	ctx context.Context,
+	prompt string,
+	options *AIOptions,
+	callback StreamCallback,
+) (*AIResponse, error) {
+	c.streamCalls++
+	c.streamCtx = ctx
+	c.streamPrompt = prompt
+	c.streamOptions = options
+	c.callback = callback
+	return c.streamResponse, c.streamErr
+}
+
+func (c *legacyStreamingRequestClient) SupportsStreaming() bool { return c.supported }
+
+type advancedStreamingRequestClient struct {
+	advancedRequestClient
+	streamResult  *AIResult
+	streamErr     error
+	streamCalls   int
+	streamCtx     context.Context
+	streamRequest *AIRequest
+	callback      StreamCallback
+}
+
+func (c *advancedStreamingRequestClient) Stream(
+	ctx context.Context,
+	request *AIRequest,
+	callback StreamCallback,
+) (*AIResult, error) {
+	c.streamCalls++
+	c.streamCtx = ctx
+	c.streamRequest = request
+	c.callback = callback
+	return c.streamResult, c.streamErr
+}
+
 func TestAIParameterConstructors(t *testing.T) {
 	inherit := InheritAIParameter[int]()
 	if inherit.Mode != AIParameterInherit || inherit.Value != 0 {
@@ -476,6 +526,157 @@ func TestGenerateAI_ValidatesInputsAndLegacyResults(t *testing.T) {
 	client.err = nil
 	if _, err := GenerateAI(context.Background(), client, request); err == nil || err.Error() != "AI client returned a nil response without error" {
 		t.Fatalf("unexpected nil response error: %v", err)
+	}
+}
+
+func TestStreamAI_UsesAdvancedCapability(t *testing.T) {
+	wantResult := &AIResult{Response: &AIResponse{Content: "advanced stream"}}
+	wantErr := errors.New("advanced stream error")
+	client := &advancedStreamingRequestClient{streamResult: wantResult, streamErr: wantErr}
+	request := NewAIRequest("prompt", "streaming")
+	ctx := context.WithValue(context.Background(), requestContextKey{}, "trace-value")
+	callback := func(StreamChunk) error { return nil }
+
+	result, err := StreamAI(ctx, client, request, callback)
+	if result != wantResult || !errors.Is(err, wantErr) {
+		t.Fatalf("unexpected advanced stream result: result=%#v err=%v", result, err)
+	}
+	if client.streamCalls != 1 || client.streamRequest != request || client.callback == nil {
+		t.Fatalf("advanced stream invocation was not preserved: %#v", client)
+	}
+	if got := client.streamCtx.Value(requestContextKey{}); got != "trace-value" {
+		t.Fatalf("advanced stream client did not receive propagated context: %v", got)
+	}
+	if client.calls != 0 {
+		t.Fatal("legacy generation method was called for streaming request client")
+	}
+}
+
+func TestStreamAI_LegacyFallback(t *testing.T) {
+	client := &legacyStreamingRequestClient{
+		supported: true,
+		streamResponse: &AIResponse{
+			Content:  "response",
+			Model:    "resolved-model",
+			Provider: "provider",
+		},
+	}
+	request := NewAIRequestFromLegacy("prompt", "streaming", &AIOptions{
+		Model:   "legacy-model",
+		Extra:   map[string]interface{}{"legacy": true},
+		Headers: map[string]string{"X-Legacy": "yes"},
+	})
+	request.Generation = AIGenerationOptions{
+		Model:           "new-model",
+		Temperature:     SetAIParameter(float32(0.2)),
+		MaxTokens:       SetAIParameter(2048),
+		SystemPrompt:    SetAIParameter("system"),
+		ReasoningEffort: SetAIParameter("high"),
+		ResponseFormat:  SetAIParameter("json"),
+	}
+	ctx := context.WithValue(context.Background(), requestContextKey{}, "trace-value")
+	callback := func(StreamChunk) error { return nil }
+
+	result, err := StreamAI(ctx, client, request, callback)
+	if err != nil {
+		t.Fatalf("StreamAI returned error: %v", err)
+	}
+	if client.streamCalls != 1 || client.streamPrompt != "prompt" || client.callback == nil {
+		t.Fatalf("unexpected legacy stream call: %#v", client)
+	}
+	if got := client.streamCtx.Value(requestContextKey{}); got != "trace-value" {
+		t.Fatalf("legacy stream client did not receive propagated context: %v", got)
+	}
+	wantOptions := &AIOptions{
+		Model:           "new-model",
+		Temperature:     0.2,
+		MaxTokens:       2048,
+		SystemPrompt:    "system",
+		ReasoningEffort: "high",
+		ResponseFormat:  "json",
+		Extra:           map[string]interface{}{"legacy": true},
+		Headers:         map[string]string{"X-Legacy": "yes"},
+	}
+	if !reflect.DeepEqual(client.streamOptions, wantOptions) {
+		t.Fatalf("legacy stream options mismatch:\n got: %#v\nwant: %#v", client.streamOptions, wantOptions)
+	}
+	wantReport := &AIRequestReport{
+		Provider:      "provider",
+		Operation:     "stream",
+		Purpose:       "streaming",
+		ResolvedModel: "resolved-model",
+		Stable:        false,
+	}
+	if result == nil || result.Response != client.streamResponse || !reflect.DeepEqual(result.RequestReport, wantReport) {
+		t.Fatalf("legacy stream result = %#v, want report %#v", result, wantReport)
+	}
+
+	client.streamOptions.Extra["legacy"] = false
+	client.streamOptions.Headers["X-Legacy"] = "changed"
+	legacy := request.LegacyOptions()
+	if legacy.Extra["legacy"] != true || legacy.Headers["X-Legacy"] != "yes" {
+		t.Fatal("legacy streaming client mutated the request snapshot")
+	}
+}
+
+func TestStreamAI_RejectsUnsupportedLegacyRequestBeforeCall(t *testing.T) {
+	client := &legacyStreamingRequestClient{supported: true, streamResponse: &AIResponse{Content: "response"}}
+	request := NewAIRequest("prompt", "streaming")
+	request.Generation.TopP = SetAIParameter(float32(0.9))
+
+	result, err := StreamAI(context.Background(), client, request, func(StreamChunk) error { return nil })
+	if result != nil || !errors.Is(err, ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("unsupported legacy stream result=%#v err=%v", result, err)
+	}
+	var featureErr *AIRequestFeatureError
+	if !errors.As(err, &featureErr) || featureErr.Feature != "generation.top_p" {
+		t.Fatalf("unexpected stream feature error: %#v", featureErr)
+	}
+	if client.streamCalls != 0 {
+		t.Fatalf("legacy streaming client called %d times", client.streamCalls)
+	}
+}
+
+func TestStreamAI_ValidatesCapabilityInputsAndLegacyResults(t *testing.T) {
+	request := NewAIRequest("prompt", "streaming")
+	callback := func(StreamChunk) error { return nil }
+	if _, err := StreamAI(context.Background(), nil, request, callback); err == nil || err.Error() != "AI client is nil" {
+		t.Fatalf("unexpected nil client error: %v", err)
+	}
+
+	legacy := &legacyRequestClient{}
+	if _, err := StreamAI(context.Background(), legacy, nil, callback); err == nil || err.Error() != "AI request is nil" {
+		t.Fatalf("unexpected nil request error: %v", err)
+	}
+	if _, err := StreamAI(context.Background(), legacy, request, nil); err == nil || err.Error() != "AI stream callback is nil" {
+		t.Fatalf("unexpected nil callback error: %v", err)
+	}
+	if _, err := StreamAI(context.Background(), legacy, request, callback); !errors.Is(err, ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("unexpected non-streaming client error: %v", err)
+	}
+
+	streaming := &legacyStreamingRequestClient{supported: false}
+	if _, err := StreamAI(context.Background(), streaming, request, callback); !errors.Is(err, ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("unexpected disabled streaming error: %v", err)
+	}
+
+	wantErr := errors.New("legacy stream failure")
+	streaming.supported = true
+	streaming.streamErr = wantErr
+	if result, err := StreamAI(context.Background(), streaming, request, callback); result != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("legacy stream error result=%#v err=%v", result, err)
+	}
+
+	streaming.streamErr = nil
+	if _, err := StreamAI(context.Background(), streaming, request, callback); err == nil || err.Error() != "AI client returned a nil streaming response without error" {
+		t.Fatalf("unexpected nil streaming response error: %v", err)
+	}
+
+	streaming.streamResponse = &AIResponse{Content: "partial"}
+	streaming.streamErr = wantErr
+	result, err := StreamAI(context.Background(), streaming, request, callback)
+	if result == nil || result.Response != streaming.streamResponse || !errors.Is(err, wantErr) {
+		t.Fatalf("partial legacy stream result=%#v err=%v", result, err)
 	}
 }
 

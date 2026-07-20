@@ -57,6 +57,15 @@ func TestAIRequestPublicTypesSupportKeyedLiterals(t *testing.T) {
 	if result.Response == nil || result.Response.Content != "request" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	streamResult, err := core.StreamAI(
+		context.Background(),
+		externalStreamingRequestClient{},
+		request,
+		func(core.StreamChunk) error { return nil },
+	)
+	if err != nil || streamResult.Response == nil || streamResult.Response.Content != "stream" {
+		t.Fatalf("unexpected stream result: result=%#v err=%v", streamResult, err)
+	}
 
 	_ = core.AIRequestReport{Adjustments: []core.AIRequestAdjustment{{Action: "set"}}}
 	_ = core.AIUsageDetails{Counters: map[string]int64{"tokens": 1}}

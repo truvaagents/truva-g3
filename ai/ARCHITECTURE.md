@@ -554,6 +554,63 @@ chain, err := ai.NewChainClient(
 response, err := chain.GenerateResponse(ctx, prompt, opts)
 ```
 
+### Explicit Heterogeneous Entries
+
+`NewChain` is the request-aware construction path for independently configured
+provider instances and application-local clients:
+
+```go
+chain, err := ai.NewChain(
+    ai.ProviderEntry(
+        "anthropic-primary",
+        "anthropic",
+        ai.WithModel("premium"),
+        ai.WithCredentialSource(primaryCredentials),
+        ai.WithEndpointResolver(primaryRoute),
+        ai.WithRequestRules(primaryRules...),
+    ),
+    ai.ProviderEntry(
+        "anthropic-backup",
+        "anthropic",
+        ai.WithModel("fast"),
+        ai.WithCredentialSource(backupCredentials),
+        ai.WithEndpointResolver(backupRoute),
+    ),
+    ai.ClientEntry("local-native-adapter", nativeClient),
+)
+
+result, err := chain.Generate(ctx, request)
+```
+
+Provider entries are framework-managed and are constructed through
+`NewRequestClient`; therefore the selected factory must support request-aware
+construction. Anthropic is currently the built-in provider with that support,
+and later provider phases add the remaining built-ins. `ClientEntry` accepts any
+`core.AIClient`, including application-local request-aware or native adapters.
+Injected clients remain caller-owned: the chain invokes them but does not call
+optional logger, telemetry, or lifecycle setters on them.
+
+Entry names must be unique, stable, non-secret operator labels. They appear in
+sanitized chain report adjustments, logs, metrics, and spans. Every attempt
+receives a recursive `core.CloneAIRequest` snapshot, so failed providers cannot
+mutate the request, legacy options, or provider patches observed by a later
+entry. A provider report returned with either success or failure is preserved
+and receives a chain adjustment containing the entry name and attempt number.
+
+`GenerateResponse` and `StreamResponse` remain compatible legacy adapters. For
+chains built through `NewChain` or `NewChainClient`, they compile the legacy
+prompt/options into a provider-neutral request and use the same request-aware
+failover loop. A legacy-only entry is called only when it can represent the
+request without dropping advanced semantics; otherwise the entry produces an
+unsupported-capability failure and the chain may continue.
+
+Request-aware streaming follows the same entry order. Failover is allowed only
+before the application callback receives a chunk. Once any chunk is visible,
+the chain returns that entry's partial result and error instead of switching
+providers and corrupting stream semantics. Each attempt delegates request-aware
+versus legacy capability adaptation to `core.StreamAI`, which is the single
+owner of the same lossless representability rules used by `core.GenerateAI`.
+
 ### Auto-Detect Mode
 
 When no `WithProviderChain` is specified, the chain client auto-detects available providers from the environment and orders them by priority:

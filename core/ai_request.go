@@ -257,6 +257,61 @@ func GenerateAI(ctx context.Context, client AIClient, request *AIRequest) (*AIRe
 	}, nil
 }
 
+// StreamAI dispatches to the request-aware streaming capability when present.
+// A legacy streaming client is used only when it can represent the request
+// without discarding provider-neutral semantics.
+func StreamAI(
+	ctx context.Context,
+	client AIClient,
+	request *AIRequest,
+	callback StreamCallback,
+) (*AIResult, error) {
+	if client == nil {
+		return nil, errors.New("AI client is nil")
+	}
+	if request == nil {
+		return nil, errors.New("AI request is nil")
+	}
+	if callback == nil {
+		return nil, errors.New("AI stream callback is nil")
+	}
+	if advanced, ok := client.(StreamingAIRequestClient); ok {
+		return advanced.Stream(ctx, request, callback)
+	}
+
+	legacy, ok := client.(StreamingAIClient)
+	if !ok || !legacy.SupportsStreaming() {
+		return nil, &AIRequestFeatureError{
+			ClientType: fmt.Sprintf("%T", client),
+			Feature:    "streaming",
+		}
+	}
+	if feature := request.firstUnsupportedLegacyFeature(); feature != "" {
+		return nil, &AIRequestFeatureError{
+			ClientType: fmt.Sprintf("%T", client),
+			Feature:    feature,
+		}
+	}
+
+	response, err := legacy.StreamResponse(ctx, request.Prompt, request.toLegacyOptions(), callback)
+	if response == nil {
+		if err == nil {
+			return nil, errors.New("AI client returned a nil streaming response without error")
+		}
+		return nil, err
+	}
+	return &AIResult{
+		Response: response,
+		RequestReport: &AIRequestReport{
+			Provider:      response.Provider,
+			Operation:     "stream",
+			Purpose:       request.Purpose,
+			ResolvedModel: response.Model,
+			Stable:        false,
+		},
+	}, err
+}
+
 func (r *AIRequest) firstUnsupportedLegacyFeature() string {
 	if len(r.Patches) > 0 {
 		return "provider_patches"
