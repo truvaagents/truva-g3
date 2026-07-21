@@ -444,6 +444,25 @@ func TestGenerateAI_LegacyFallbackAllocatesOptionsForPortableModel(t *testing.T)
 	}
 }
 
+func TestAIRequestLegacyRepresentableUsesCanonicalFallbackRules(t *testing.T) {
+	var nilRequest *AIRequest
+	if nilRequest.LegacyRepresentable() {
+		t.Fatal("nil request must not be legacy-representable")
+	}
+	request := NewAIRequest("prompt", "planning")
+	request.Generation.Model = "model"
+	request.Generation.Temperature = SetAIParameter(float32(0.2))
+	request.Generation.MaxTokens = SetAIParameter(100)
+	request.Generation.SystemPrompt = SetAIParameter("system")
+	if !request.LegacyRepresentable() {
+		t.Fatal("non-zero portable values representable by AIOptions were rejected")
+	}
+	request.Generation.TopP = SetAIParameter(float32(0.9))
+	if request.LegacyRepresentable() {
+		t.Fatal("top_p cannot be represented by legacy AIOptions")
+	}
+}
+
 func TestGenerateAI_RejectsUnsupportedLegacyFeaturesBeforeCall(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -11,6 +11,7 @@ type SummaryState struct {
 	LastTurnFingerprint string
 	LastTurnOrdinal     int
 	LastCompactedCount  int
+	PolicyFingerprint   string
 }
 
 type summaryCacheEntry struct {

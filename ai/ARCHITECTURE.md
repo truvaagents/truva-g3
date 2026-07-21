@@ -912,6 +912,17 @@ be concurrency-safe; it produces a reusable policy fingerprint only when it
 implements `requestpolicy.StableRequestMiddleware` and explicitly declares
 stable semantics.
 
+Built-in request-capable clients also implement
+`core.AIRequestFingerprinter`. The capability prepares an isolated request and
+returns the same secret-free policy/route identity carried by a successful
+request report, without acquiring credentials or invoking provider transport.
+An unstable middleware, invalid request, unresolved route, or unavailable
+fingerprint returns `stable=false`; AI-output caches must bypass rather than
+reuse an incomplete namespace. The common instrumentation wrapper delegates
+this capability and supplies a stable adapter namespace for faithfully
+representable legacy clients. A chain fingerprint covers every ordered
+failover entry.
+
 `NewRequestClient` never silently discards integration behavior. A legacy
 factory may be used only when no integration options are supplied and its
 client already implements `core.AIRequestClient`. OpenAI and Anthropic have
@@ -971,8 +982,11 @@ immediate authentication retry because generation acceptance cannot generally
 be proven from an auth response; ordinary provider retry and chain failover
 semantics remain intact.
 
-`EndpointResolver` runs once per logical call after concrete model resolution
-and semantic policy. Its `ResolvedEndpoint.URL` is the complete HTTP endpoint,
+`EndpointResolver` runs after concrete model resolution and semantic policy.
+AI-output caches may evaluate it during fingerprint preflight and again when a
+cache miss proceeds to provider execution, so resolver implementations must be
+concurrency-safe, side-effect-free, and return a stable route identity for the
+same semantic request. Its `ResolvedEndpoint.URL` is the complete HTTP endpoint,
 and `RouteIdentity` must be a stable, non-secret identifier suitable for a
 sanitized report and fingerprint. Resolver-owned URLs and query maps are
 cloned before use. Query values, deployment names, and credential scopes are
@@ -1046,6 +1060,11 @@ The logical span owns normalized duration, provider/model/surface identity,
 token usage, and policy adjustment paths. It does not record
 prompts, system prompts, provider request bodies, credentials, or complete
 endpoint URLs. Provider transports continue to own network-attempt spans.
+
+Orchestration emits an `ai.request.prepared` event on its active phase span
+when a sanitized report is available. The event contains provider/surface,
+purpose, model identities, adjustment count, stability, and the fingerprint
+only when stable. It never contains prompt, body, endpoint, or credential data.
 
 Because the registered-provider constructors return the common decorator,
 code that needs a concrete provider type should construct that provider
@@ -1324,6 +1343,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-07-20 | Added request fingerprint delegation, chain composition, and orchestration cache-safety guidance |
 | 1.1 | 2026-07-20 | Added request-aware provider status, reusable OpenAI wire codecs, and native Bedrock policy drafts |
 | 1.0 | 2025-12-14 | Initial architecture documentation |
 

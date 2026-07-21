@@ -182,6 +182,17 @@ func (c *Client) prepareAIRequest(
 	return prepared, nil
 }
 
+// RequestFingerprint returns the stable policy identity used by AI-output
+// caches. Bedrock routing is captured by the versioned Converse adapter
+// identity; no credentials or SDK calls are made here.
+func (c *Client) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
+	prepared, err := c.prepareAIRequest(ctx, request, false)
+	if err != nil || prepared == nil || prepared.Report == nil {
+		return "", false
+	}
+	return prepared.Report.Fingerprint, prepared.Report.Stable && prepared.Report.Fingerprint != ""
+}
+
 // GenerateResponse adapts the legacy client interface to the request-aware path.
 func (c *Client) GenerateResponse(
 	ctx context.Context,

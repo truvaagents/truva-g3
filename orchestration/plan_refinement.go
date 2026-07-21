@@ -102,20 +102,6 @@ func (r *PlanRefiner) SetLogger(logger core.Logger) {
 	}
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when PlanRefiner will emit a typed
-// plan_refinement record itself. Gated on debugStore presence so that when
-// refinement is unable to record (nil store), the wrapper remains the
-// recorder — preserving the graceful-fallback invariant in
-// orchestration/ARCHITECTURE.md (§ "Never fails orchestration if debug
-// store fails"). See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (r *PlanRefiner) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if r.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
-}
-
 // Refine takes orchestrator step results and held steps, returns a decision for each.
 func (r *PlanRefiner) Refine(
 	ctx context.Context,
@@ -147,8 +133,13 @@ func (r *PlanRefiner) Refine(
 		attribute.Int("max_tokens", r.maxTokens),
 	)
 
-	callCtx := r.deferLLMRecordingIfWeWillRecord(ctx)
-	resp, err := r.aiClient.GenerateResponse(callCtx, prompt, opts)
+	invocation := aiInvocation{
+		Purpose:        "plan-refinement",
+		Prompt:         prompt,
+		Options:        opts,
+		DeferRecording: r.debugStore != nil,
+	}
+	resp, _, err := invokeAI(ctx, r.aiClient, invocation)
 	llmDuration := time.Since(llmStart)
 
 	if err == nil {
@@ -183,7 +174,7 @@ func (r *PlanRefiner) Refine(
 			attribute.String("parse_error", parseErr.Error()),
 		)
 		attempt = 2 // Record that a retry was attempted regardless of outcome
-		retryResp, retryErr := r.aiClient.GenerateResponse(callCtx, prompt, opts)
+		retryResp, _, retryErr := invokeAI(ctx, r.aiClient, invocation)
 		if retryErr == nil {
 			decisions, parseErr = r.parseResponse(retryResp.Content, heldSteps)
 			resp = retryResp                   // Use retry response for debug store

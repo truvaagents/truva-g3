@@ -25,6 +25,16 @@ type phase5RequestClient struct {
 	setTelemCalls  atomic.Int64
 }
 
+type phase8FingerprintClient struct {
+	phase5RequestClient
+	fingerprint string
+	stable      bool
+}
+
+func (client *phase8FingerprintClient) RequestFingerprint(context.Context, *core.AIRequest) (string, bool) {
+	return client.fingerprint, client.stable
+}
+
 func (client *phase5RequestClient) GenerateResponse(
 	context.Context,
 	string,
@@ -32,6 +42,128 @@ func (client *phase5RequestClient) GenerateResponse(
 ) (*core.AIResponse, error) {
 	client.legacyCalls.Add(1)
 	return &core.AIResponse{Content: "legacy"}, nil
+}
+
+func TestChainRequestFingerprintRequiresEveryOrderedEntry(t *testing.T) {
+	first := &phase8FingerprintClient{fingerprint: "first-v1", stable: true}
+	second := &phase8FingerprintClient{fingerprint: "second-v1", stable: true}
+	chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := core.NewAIRequest("prompt", "planning")
+
+	fingerprint, stable := chain.RequestFingerprint(t.Context(), request)
+	if !stable || len(fingerprint) != 64 {
+		t.Fatalf("chain fingerprint = %q, stable = %t", fingerprint, stable)
+	}
+	second.fingerprint = "second-v2"
+	changed, stable := chain.RequestFingerprint(t.Context(), request)
+	if !stable || changed == fingerprint {
+		t.Fatalf("entry change did not alter chain fingerprint: first=%q changed=%q", fingerprint, changed)
+	}
+	second.stable = false
+	if _, stable := chain.RequestFingerprint(t.Context(), request); stable {
+		t.Fatal("unstable failover entry must make the chain fingerprint unstable")
+	}
+
+	legacyChain, err := NewChain(ClientEntry("request", first), ClientEntry("legacy", &phase5LegacyClient{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stable := legacyChain.RequestFingerprint(t.Context(), request); stable {
+		t.Fatal("entry without fingerprint capability must make the chain fingerprint unstable")
+	}
+	if _, stable := chain.RequestFingerprint(t.Context(), nil); stable {
+		t.Fatal("nil chain request must be unstable")
+	}
+	if _, stable := (&ChainClient{}).RequestFingerprint(t.Context(), request); stable {
+		t.Fatal("empty chain must be unstable")
+	}
+	invalid := core.NewAIRequest("prompt", "planning")
+	invalid.Patches = []core.AIProviderPatch{{
+		Name:     "invalid",
+		Version:  "1",
+		Selector: core.AIProviderSelector{AllProviders: true},
+		Set:      map[string]interface{}{`/value`: new(int)},
+	}}
+	if _, stable := chain.RequestFingerprint(t.Context(), invalid); stable {
+		t.Fatal("uncloneable chain request must be unstable")
+	}
+	first.fingerprint = ""
+	if _, stable := chain.RequestFingerprint(t.Context(), request); stable {
+		t.Fatal("empty entry fingerprint must make the chain fingerprint unstable")
+	}
+}
+
+func TestChainRequestFingerprintMatchesSuccessfulExecutionReport(t *testing.T) {
+	firstErr := errors.New("primary unavailable")
+	first := &phase8FingerprintClient{fingerprint: "first-v1", stable: true}
+	first.generate = func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+		return nil, firstErr
+	}
+	first.stream = func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+		return nil, firstErr
+	}
+	second := &phase8FingerprintClient{fingerprint: "second-v1", stable: true}
+	second.generate = func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+		return &core.AIResult{
+			Response: &core.AIResponse{Content: "backup"},
+			RequestReport: &core.AIRequestReport{
+				Provider: "backup", Fingerprint: "second-v1", Stable: true,
+			},
+		}, nil
+	}
+	second.stream = func(_ context.Context, _ *core.AIRequest, callback core.StreamCallback) (*core.AIResult, error) {
+		if err := callback(core.StreamChunk{Content: "backup", Delta: true}); err != nil {
+			return nil, err
+		}
+		return &core.AIResult{
+			Response: &core.AIResponse{Content: "backup"},
+			RequestReport: &core.AIRequestReport{
+				Provider: "backup", Fingerprint: "second-v1", Stable: true,
+			},
+		}, nil
+	}
+	chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := core.NewAIRequest("prompt", "planning")
+	want, stable := chain.RequestFingerprint(t.Context(), request)
+	if !stable || want == "" {
+		t.Fatalf("preflight fingerprint = %q, stable = %t", want, stable)
+	}
+
+	result, err := chain.Generate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestReport == nil || !result.RequestReport.Stable || result.RequestReport.Fingerprint != want {
+		t.Fatalf("generate report = %#v, want chain fingerprint %q", result.RequestReport, want)
+	}
+
+	result, err = chain.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestReport == nil || !result.RequestReport.Stable || result.RequestReport.Fingerprint != want {
+		t.Fatalf("stream report = %#v, want chain fingerprint %q", result.RequestReport, want)
+	}
+
+	second.generate = func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+		return &core.AIResult{
+			Response:      &core.AIResponse{Content: "drifted"},
+			RequestReport: &core.AIRequestReport{Fingerprint: "second-v2", Stable: true},
+		}, nil
+	}
+	result, err = chain.Generate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestReport == nil || result.RequestReport.Stable || result.RequestReport.Fingerprint != "" {
+		t.Fatalf("drifted provider report must make the chain unstable: %#v", result.RequestReport)
+	}
 }
 
 func (client *phase5RequestClient) Generate(
@@ -332,8 +464,8 @@ func TestNewChain_Phase5MaterializesIndependentProviderEntries(t *testing.T) {
 		len(factory.integrations[0].RequestRules) != 1 || len(factory.integrations[1].RequestRules) != 0 {
 		t.Fatalf("entry integrations = %#v", factory.integrations)
 	}
-	if result.RequestReport.Provider != factory.name || result.RequestReport.Fingerprint != "provider-fingerprint" || !result.RequestReport.Stable {
-		t.Fatalf("provider report was not preserved: %#v", result.RequestReport)
+	if result.RequestReport.Provider != factory.name || result.RequestReport.Fingerprint != "" || result.RequestReport.Stable {
+		t.Fatalf("chain without stable entry fingerprints exposed a cache-safe report: %#v", result.RequestReport)
 	}
 	adjustments := result.RequestReport.Adjustments
 	if len(adjustments) != 2 || adjustments[0].Source != "provider" || adjustments[1].Source != "chain" ||

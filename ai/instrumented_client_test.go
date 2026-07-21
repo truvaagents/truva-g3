@@ -49,10 +49,54 @@ type mockRequestAIClientForInstr struct {
 	receivedRequest *core.AIRequest
 }
 
+type mockFingerprintAIClientForInstr struct {
+	mockRequestAIClientForInstr
+	fingerprint string
+	stable      bool
+	request     *core.AIRequest
+}
+
+func (m *mockFingerprintAIClientForInstr) RequestFingerprint(_ context.Context, request *core.AIRequest) (string, bool) {
+	m.request = request
+	return m.fingerprint, m.stable
+}
+
 func (m *mockRequestAIClientForInstr) Generate(_ context.Context, request *core.AIRequest) (*core.AIResult, error) {
 	m.requestCalls++
 	m.receivedRequest = request
 	return m.generateResult, m.requestErr
+}
+
+func TestInstrumentedClientDelegatesRequestFingerprint(t *testing.T) {
+	wrapped := &mockFingerprintAIClientForInstr{fingerprint: "policy-v1", stable: true}
+	client := NewInstrumentedClient(wrapped, nil)
+	request := core.NewAIRequest("prompt", "planning")
+
+	fingerprint, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || fingerprint != "policy-v1" || wrapped.request != request {
+		t.Fatalf("fingerprint delegation = %q, %t, request %p", fingerprint, stable, wrapped.request)
+	}
+
+	unsupported := NewInstrumentedClient(&mockRequestAIClientForInstr{}, nil)
+	if fingerprint, stable := unsupported.RequestFingerprint(t.Context(), request); stable || fingerprint != "" {
+		t.Fatalf("unsupported fingerprint = %q, %t", fingerprint, stable)
+	}
+
+	legacy := NewInstrumentedClient(&mockAIClientForInstr{}, nil)
+	legacyRequest := core.NewAIRequestFromLegacy("prompt", "planning", &core.AIOptions{Model: "legacy-model"})
+	legacyFingerprint, stable := legacy.RequestFingerprint(t.Context(), legacyRequest)
+	if !stable || len(legacyFingerprint) != 64 {
+		t.Fatalf("legacy fingerprint = %q, %t", legacyFingerprint, stable)
+	}
+	legacyRequest.Purpose = "synthesis"
+	changed, stable := legacy.RequestFingerprint(t.Context(), legacyRequest)
+	if !stable || changed == legacyFingerprint {
+		t.Fatalf("legacy purpose did not change fingerprint: %q, %q", legacyFingerprint, changed)
+	}
+	legacyRequest.Generation.TopP = core.SetAIParameter(float32(0.9))
+	if fingerprint, stable := legacy.RequestFingerprint(t.Context(), legacyRequest); stable || fingerprint != "" {
+		t.Fatalf("unrepresentable legacy fingerprint = %q, %t", fingerprint, stable)
+	}
 }
 
 type mockStreamingRequestAIClientForInstr struct {
@@ -1084,12 +1128,19 @@ func TestInstrumentedClient_Generate_LegacyRepresentability(t *testing.T) {
 
 	request := core.NewAIRequest("prompt", "legacy-compatible")
 	request.Generation.Temperature = core.SetAIParameter(float32(0.25))
+	wantFingerprint, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable {
+		t.Fatal("legacy preflight fingerprint is unstable")
+	}
 	result, err := client.Generate(t.Context(), request)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	if result == nil || result.Response != response || wrapped.callCount != 1 {
 		t.Fatalf("legacy result = %#v, calls %d", result, wrapped.callCount)
+	}
+	if result.RequestReport == nil || !result.RequestReport.Stable || result.RequestReport.Fingerprint != wantFingerprint {
+		t.Fatalf("legacy request report fingerprint = %#v", result.RequestReport)
 	}
 
 	advanced := core.NewAIRequest("prompt", "advanced")

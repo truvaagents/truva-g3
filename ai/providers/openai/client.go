@@ -112,6 +112,22 @@ func (c *Client) GenerateResponse(
 	return nil, err
 }
 
+// RequestFingerprint returns the stable policy-and-route identity used by
+// AI-output caches. Preparation is call-local and does not acquire credentials
+// or perform transport I/O.
+func (c *Client) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
+	prepared, err := c.prepareAIRequest(ctx, request, false)
+	if err != nil || prepared == nil || prepared.Report == nil {
+		return "", false
+	}
+	route, err := c.resolveEndpoint(ctx, prepared)
+	if err != nil {
+		return "", false
+	}
+	c.bindRoute(prepared, route)
+	return prepared.Report.Fingerprint, prepared.Report.Stable && prepared.Report.Fingerprint != ""
+}
+
 // Generate executes an OpenAI-compatible chat completion.
 func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.AIResult, error) {
 	if request == nil {

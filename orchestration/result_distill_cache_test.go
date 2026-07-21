@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // mapDigestCache is a minimal in-memory core.DigestCache for tests.
@@ -41,6 +43,31 @@ type countingProcessor struct {
 	calls        int
 	output       string
 	nonCacheable bool
+}
+
+type semanticCountingProcessor struct {
+	countingProcessor
+	fingerprint       string
+	actualFingerprint string
+	stable            bool
+}
+
+func (p *semanticCountingProcessor) aiSemanticFingerprint(context.Context) (string, bool) {
+	return p.fingerprint, p.stable
+}
+
+func (p *semanticCountingProcessor) ProcessForPrompt(
+	ctx context.Context,
+	result string,
+	maxBytes int,
+	stepCtx ResultProcessorContext,
+) string {
+	actual := p.actualFingerprint
+	if actual == "" {
+		actual = p.fingerprint
+	}
+	captureAIRequestFingerprint(ctx, &core.AIRequestReport{Fingerprint: actual, Stable: p.stable})
+	return p.countingProcessor.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
 }
 
 func (c *countingProcessor) ProcessForPrompt(ctx context.Context, result string, _ int, _ ResultProcessorContext) string {
@@ -84,6 +111,59 @@ func TestCachingProcessor_HitRunsInnerOnce(t *testing.T) {
 	}
 	if cache.sets != 1 {
 		t.Errorf("expected exactly one cache write, got %d", cache.sets)
+	}
+}
+
+func TestCachingProcessorUsesStableAIFingerprintAndBypassesUnstable(t *testing.T) {
+	cache := newMapDigestCache()
+	input := strings.Repeat("x", 100)
+	stepCtx := ResultProcessorContext{StepID: "s1", Instruction: "find errors"}
+
+	first := &semanticCountingProcessor{
+		countingProcessor: countingProcessor{output: "policy-v1-output"},
+		fingerprint:       "policy-v1",
+		stable:            true,
+	}
+	p1 := NewCachingProcessor(first, cache, time.Minute, 10, "", nil)
+	if got := p1.ProcessForPrompt(t.Context(), input, 10, stepCtx); got != "policy-v1-output" {
+		t.Fatalf("first output = %q", got)
+	}
+	if got := p1.ProcessForPrompt(t.Context(), input, 10, stepCtx); got != "policy-v1-output" || first.calls != 1 {
+		t.Fatalf("stable fingerprint did not hit cache: output=%q calls=%d", got, first.calls)
+	}
+
+	second := &semanticCountingProcessor{
+		countingProcessor: countingProcessor{output: "policy-v2-output"},
+		fingerprint:       "policy-v2",
+		stable:            true,
+	}
+	p2 := NewCachingProcessor(second, cache, time.Minute, 10, "", nil)
+	if got := p2.ProcessForPrompt(t.Context(), input, 10, stepCtx); got != "policy-v2-output" || second.calls != 1 {
+		t.Fatalf("changed fingerprint reused stale output: output=%q calls=%d", got, second.calls)
+	}
+
+	unstable := &semanticCountingProcessor{
+		countingProcessor: countingProcessor{output: "uncached"},
+		stable:            false,
+	}
+	p3 := NewCachingProcessor(unstable, cache, time.Minute, 10, "", nil)
+	p3.ProcessForPrompt(t.Context(), input, 10, stepCtx)
+	p3.ProcessForPrompt(t.Context(), input, 10, stepCtx)
+	if unstable.calls != 2 {
+		t.Fatalf("unstable request used cache; calls = %d, want 2", unstable.calls)
+	}
+
+	drifting := &semanticCountingProcessor{
+		countingProcessor: countingProcessor{output: "route-dependent"},
+		fingerprint:       "route-v1",
+		actualFingerprint: "route-v2",
+		stable:            true,
+	}
+	p4 := NewCachingProcessor(drifting, newMapDigestCache(), time.Minute, 10, "", nil)
+	p4.ProcessForPrompt(t.Context(), input, 10, stepCtx)
+	p4.ProcessForPrompt(t.Context(), input, 10, stepCtx)
+	if drifting.calls != 2 {
+		t.Fatalf("preflight/execution fingerprint drift was cached; calls = %d, want 2", drifting.calls)
 	}
 }
 

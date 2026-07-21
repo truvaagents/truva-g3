@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -124,6 +125,7 @@ func (c *InstrumentedAIClient) Generate(
 	}()
 
 	result, err = core.GenerateAI(ctx, c.wrapped, request)
+	c.attachLegacyFingerprint(ctx, request, result)
 	c.recordResult(ctx, started, request, result, err)
 	return result, err
 }
@@ -245,6 +247,7 @@ func (c *InstrumentedAIClient) Stream(
 	}()
 
 	result, err = core.StreamAI(ctx, c.wrapped, request, callback)
+	c.attachLegacyFingerprint(ctx, request, result)
 	c.recordResult(ctx, started, request, result, err)
 	return result, err
 }
@@ -258,6 +261,58 @@ func (c *InstrumentedAIClient) SupportsStreaming() bool {
 		return streamer.SupportsStreaming()
 	}
 	return false
+}
+
+// RequestFingerprint delegates cache-safety fingerprinting to the wrapped
+// client. Instrumentation does not change request semantics and therefore does
+// not contribute its own identity.
+func (c *InstrumentedAIClient) RequestFingerprint(
+	ctx context.Context,
+	request *core.AIRequest,
+) (string, bool) {
+	fingerprinter, ok := c.wrapped.(core.AIRequestFingerprinter)
+	if !ok {
+		if request == nil || !request.LegacyRepresentable() {
+			return "", false
+		}
+		if _, requestAware := c.wrapped.(core.AIRequestClient); requestAware {
+			return "", false
+		}
+		// The legacy client has no policy or route report. Preserve its existing
+		// cache behavior under a stable adapter namespace while distinguishing
+		// different concrete client implementations and portable call purposes.
+		model := request.Generation.Model
+		if options := request.LegacyOptions(); model == "" && options != nil {
+			model = options.Model
+		}
+		sum := sha256.Sum256([]byte(fmt.Sprintf(
+			"legacy-instrumented-v1\nclient=%T\npurpose=%s\nmodel=%s",
+			c.wrapped,
+			request.Purpose,
+			model,
+		)))
+		return fmt.Sprintf("%x", sum[:]), true
+	}
+	return fingerprinter.RequestFingerprint(ctx, request)
+}
+
+func (c *InstrumentedAIClient) attachLegacyFingerprint(
+	ctx context.Context,
+	request *core.AIRequest,
+	result *core.AIResult,
+) {
+	if result == nil || result.RequestReport == nil || result.RequestReport.Stable {
+		return
+	}
+	if _, requestAware := c.wrapped.(core.AIRequestClient); requestAware {
+		return
+	}
+	fingerprint, stable := c.RequestFingerprint(ctx, request)
+	if !stable || fingerprint == "" {
+		return
+	}
+	result.RequestReport.Fingerprint = fingerprint
+	result.RequestReport.Stable = true
 }
 
 func (c *InstrumentedAIClient) startLogicalSpan(

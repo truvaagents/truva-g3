@@ -42,8 +42,26 @@ type AIRequestClient interface {
     Generate(context.Context, *AIRequest) (*AIResult, error)
 }
 
-// GenerateAI is the canonical dispatcher. It prefers AIRequestClient and uses
-// a legacy AIClient only when the request can be represented without loss.
+// StreamingAIRequestClient and the canonical StreamAI dispatcher provide the
+// same lossless capability selection for streaming calls.
+type StreamingAIRequestClient interface {
+    AIRequestClient
+    Stream(context.Context, *AIRequest, StreamCallback) (*AIResult, error)
+}
+
+// AIRequestFingerprinter is optional. AI-output caches use only stable,
+// secret-free policy and route fingerprints; stable=false means bypass.
+type AIRequestFingerprinter interface {
+    RequestFingerprint(context.Context, *AIRequest) (string, bool)
+}
+
+// LegacyRepresentable centralizes the lossless-fallback decision so wrappers
+// and cache adapters do not duplicate parameter representability rules.
+func (r *AIRequest) LegacyRepresentable() bool
+
+// GenerateAI and StreamAI are the canonical dispatchers. They prefer the
+// request-aware capabilities and use legacy clients only when the request can
+// be represented without loss.
 func generate(ctx context.Context, client AIClient, request *AIRequest) (*AIResult, error) {
     return GenerateAI(ctx, client, request)
 }

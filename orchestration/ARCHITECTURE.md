@@ -1168,6 +1168,27 @@ orchestrator, _ := orchestration.CreateOrchestrator(config, deps)
 
 Tier 1 conversation-history protection is factory-default behavior. Tier 2 recursive compaction is enabled only when the application explicitly injects a preparer configured with both a `SummaryCache` and a `ConversationCompactor`. `BuildCompactionEnabledConversationHistoryPreparer(...)` is the ergonomic Layer 2 path: it creates the default cache and LLM compactor for you, then applies any caller-supplied overrides last so you can swap one concern without dropping to full direct construction.
 
+### Provider-neutral AI invocation and cache safety
+
+All production orchestration LLM calls pass through the internal
+`invokeAI`/`streamAI` boundary. The helper constructs `core.AIRequest`, assigns
+a stable provider-neutral purpose, delegates capability selection to
+`core.GenerateAI` or `core.StreamAI`, preserves typed LLM-debug recording
+deferral, and attaches the sanitized request report to the active trace. No
+orchestration call site imports provider packages or branches on provider or
+model names.
+
+The result-distillation, conversation-summary, and activity-digest caches hold
+AI-derived output. Before lookup they ask the optional
+`core.AIRequestFingerprinter` capability for a secret-free policy and route
+identity. A stable fingerprint joins the cache namespace; an unstable or
+unavailable fingerprint bypasses only that cache. Legacy-only clients using
+legacy-representable options remain cacheable under either their existing
+direct-client namespace or the common wrapper's stable adapter namespace. On
+a miss, the cache records output only when the executed request report matches
+the preflight fingerprint, preventing dynamic route or middleware drift from
+poisoning an entry. Purely structural caches are unchanged.
+
 #### Pattern 4: Service Mesh (Kubernetes)
 ```yaml
 # Let Istio handle circuit breaking at network level

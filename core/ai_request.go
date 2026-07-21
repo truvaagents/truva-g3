@@ -129,6 +129,14 @@ type StreamingAIRequestClient interface {
 	Stream(context.Context, *AIRequest, StreamCallback) (*AIResult, error)
 }
 
+// AIRequestFingerprinter optionally exposes the stable, secret-free identity
+// of the effective provider policy and route for an AI request. Callers that
+// cache AI-derived output must bypass that cache when stable is false.
+// Fingerprinting must not perform network I/O or acquire credentials.
+type AIRequestFingerprinter interface {
+	RequestFingerprint(context.Context, *AIRequest) (fingerprint string, stable bool)
+}
+
 // AIRequestReport contains sanitized, reproducible request preparation facts.
 // It must not contain prompts, credentials, raw bodies, or secret field values.
 type AIRequestReport struct {
@@ -192,6 +200,12 @@ func (r *AIRequest) LegacyOptions() *AIOptions {
 		return nil
 	}
 	return cloneLegacyAIOptions(r.legacyOptions)
+}
+
+// LegacyRepresentable reports whether a legacy AIClient can receive the
+// request without silently discarding provider-neutral semantics.
+func (r *AIRequest) LegacyRepresentable() bool {
+	return r != nil && r.firstUnsupportedLegacyFeature() == ""
 }
 
 // CloneAIRequest returns a request-local copy. Provider patch values must be

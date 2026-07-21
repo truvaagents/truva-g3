@@ -105,6 +105,10 @@ type cachingProcessor struct {
 	logger   core.Logger
 }
 
+type aiSemanticCacheFingerprinter interface {
+	aiSemanticFingerprint(context.Context) (string, bool)
+}
+
 // NewCachingProcessor wraps inner with a distillation cache. A nil cache returns inner
 // unchanged (fail-open — no wrapper overhead when caching is disabled). minBytes is the
 // input size at/above which the inner does expensive work worth caching (the distiller's
@@ -142,7 +146,26 @@ func (c *cachingProcessor) ProcessForPrompt(
 		return c.inner.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
 	}
 
-	key := c.keySalt + distillCacheKey(result, stepCtx.Instruction, stepCtx.OriginalQuery, maxBytes)
+	fingerprint := ""
+	verifyFingerprint := false
+	if semantic, ok := c.inner.(aiSemanticCacheFingerprinter); ok {
+		var stable bool
+		fingerprint, stable = semantic.aiSemanticFingerprint(ctx)
+		if !stable {
+			telemetry.AddSpanEvent(ctx, "result_distill.cache_bypass",
+				attribute.String("step_id", stepCtx.StepID),
+				attribute.String("reason", "unstable_ai_request_fingerprint"),
+			)
+			return c.inner.ProcessForPrompt(ctx, result, maxBytes, stepCtx)
+		}
+		verifyFingerprint = fingerprint != ""
+	}
+
+	policySalt := ""
+	if fingerprint != "" {
+		policySalt = "policy:" + fingerprint + "|"
+	}
+	key := c.keySalt + policySalt + distillCacheKey(result, stepCtx.Instruction, stepCtx.OriginalQuery, maxBytes)
 
 	if data, err := c.cache.GetDigest(ctx, key); err == nil && len(data) > 0 {
 		telemetry.AddSpanEvent(ctx, "result_distill.cache_hit",
@@ -159,13 +182,17 @@ func (c *cachingProcessor) ProcessForPrompt(
 	// after LLM failure/timeout, or a partial/incomplete map-reduce). Such results must
 	// not be cached, or a transient hiccup would be served for the full TTL.
 	innerCtx, nonCacheable := withNonCacheableCapture(ctx)
+	var producedFingerprint *aiFingerprintCapture
+	if verifyFingerprint {
+		innerCtx, producedFingerprint = withAIFingerprintCapture(innerCtx)
+	}
 	out := c.inner.ProcessForPrompt(innerCtx, result, maxBytes, stepCtx)
 
 	if registry := core.GetGlobalMetricsRegistry(); registry != nil {
 		registry.Counter("orchestration.result_distill.cache_miss", "agent_name", stepCtx.AgentName)
 	}
 
-	if *nonCacheable {
+	if *nonCacheable || !producedFingerprint.matches(fingerprint) {
 		return out
 	}
 

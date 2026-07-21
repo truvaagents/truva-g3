@@ -237,8 +237,12 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 		Temperature: 0.0, // Deterministic for analysis
 		MaxTokens:   500,
 	}, e.aiOptionsOverride)
-	callCtx := e.deferLLMRecordingIfWeWillRecord(ctx)
-	resp, err := e.aiClient.GenerateResponse(callCtx, prompt, opts)
+	resp, _, err := invokeAI(ctx, e.aiClient, aiInvocation{
+		Purpose:        "error-analysis",
+		Prompt:         prompt,
+		Options:        opts,
+		DeferRecording: e.debugStore != nil,
+	})
 	if err == nil {
 		core.RecordTokenUsage(ctx, "error_analysis", resp.Usage)
 	}
@@ -528,18 +532,6 @@ func (e *ErrorAnalyzer) logWarn(msg string, fields map[string]interface{}) {
 // SetLLMDebugStore sets the LLM debug store for full payload visibility.
 func (e *ErrorAnalyzer) SetLLMDebugStore(store LLMDebugStore) {
 	e.debugStore = store
-}
-
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when ErrorAnalyzer will emit a typed
-// error_analysis record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (e *ErrorAnalyzer) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if e.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
 }
 
 // recordDebugInteraction stores an LLM interaction for debugging.

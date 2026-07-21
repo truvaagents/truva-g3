@@ -301,7 +301,19 @@ func (p *ConversationHistoryProcessor) tryRecursiveCompaction(
 	}
 
 	boundary := len(turns) - p.recentTurnsPreserved
-	state, ok := p.summaryCache.Get(sessionKey)
+	policyFingerprint := ""
+	cacheSafe := true
+	if semantic, hasAI := p.compactor.(aiSemanticCacheFingerprinter); hasAI {
+		policyFingerprint, cacheSafe = semantic.aiSemanticFingerprint(ctx)
+	}
+	state, ok := SummaryState{}, false
+	if cacheSafe {
+		state, ok = p.summaryCache.Get(sessionKey)
+		if ok && state.PolicyFingerprint != policyFingerprint {
+			p.summaryCache.Delete(sessionKey)
+			state, ok = SummaryState{}, false
+		}
+	}
 	if ok && !watermarkMatches(state, turns) {
 		err := fmt.Errorf("conversation watermark mismatch for session %s", sessionKey)
 		telemetry.RecordSpanError(ctx, err)
@@ -326,7 +338,12 @@ func (p *ConversationHistoryProcessor) tryRecursiveCompaction(
 
 	if !ok {
 		compactionStart := time.Now()
-		summary, compacted, success := p.compactTurns(ctx, "", turns[:boundary])
+		compactionCtx := ctx
+		var producedFingerprint *aiFingerprintCapture
+		if policyFingerprint != "" {
+			compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
+		}
+		summary, compacted, success := p.compactTurns(compactionCtx, "", turns[:boundary])
 		result.CompactionDurationMs += time.Since(compactionStart).Milliseconds()
 		if !success {
 			return "", cloneConversationTurns(turns), result, "error", false
@@ -339,8 +356,11 @@ func (p *ConversationHistoryProcessor) tryRecursiveCompaction(
 			LastTurnFingerprint: fingerprintTurn(turns[boundary-1]),
 			LastTurnOrdinal:     boundary,
 			LastCompactedCount:  boundary,
+			PolicyFingerprint:   policyFingerprint,
 		}
-		p.summaryCache.Set(sessionKey, state)
+		if cacheSafe && producedFingerprint.matches(policyFingerprint) {
+			p.summaryCache.Set(sessionKey, state)
+		}
 		result.Compacted = true
 		result.TurnsCompacted = boundary
 		return state.Summary, cloneConversationTurns(turns[boundary:]), result, "success", true
@@ -353,7 +373,12 @@ func (p *ConversationHistoryProcessor) tryRecursiveCompaction(
 	}
 
 	compactionStart := time.Now()
-	summary, compacted, success := p.compactTurns(ctx, state.Summary, turns[state.LastCompactedCount:boundary])
+	compactionCtx := ctx
+	var producedFingerprint *aiFingerprintCapture
+	if policyFingerprint != "" {
+		compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
+	}
+	summary, compacted, success := p.compactTurns(compactionCtx, state.Summary, turns[state.LastCompactedCount:boundary])
 	result.CompactionDurationMs += time.Since(compactionStart).Milliseconds()
 	if !success {
 		return "", cloneConversationTurns(turns), result, "error", false
@@ -367,8 +392,11 @@ func (p *ConversationHistoryProcessor) tryRecursiveCompaction(
 		LastTurnFingerprint: fingerprintTurn(turns[boundary-1]),
 		LastTurnOrdinal:     boundary,
 		LastCompactedCount:  boundary,
+		PolicyFingerprint:   policyFingerprint,
 	}
-	p.summaryCache.Set(sessionKey, state)
+	if cacheSafe && producedFingerprint.matches(policyFingerprint) {
+		p.summaryCache.Set(sessionKey, state)
+	}
 	result.Compacted = true
 	result.TurnsCompacted = boundary
 	return state.Summary, cloneConversationTurns(turns[boundary:]), result, "success", true

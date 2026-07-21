@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,78 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+// RequestFingerprint combines the ordered semantic identities of every chain
+// entry. A cache entry is safe only when every possible failover target can
+// provide a stable fingerprint for the same request. Chain entries are assumed
+// to be semantically interchangeable: a cache hit may return output originally
+// produced by any entry, even when a different entry would currently succeed.
+func (c *ChainClient) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
+	if request == nil {
+		return "", false
+	}
+	entries := c.runtimeEntries()
+	if len(entries) == 0 {
+		return "", false
+	}
+	snapshot := chainRequestFingerprint(ctx, request, entries)
+	return snapshot.fingerprint, snapshot.stable
+}
+
+type chainFingerprintSnapshot struct {
+	fingerprint string
+	entries     []string
+	stable      bool
+}
+
+func chainRequestFingerprint(
+	ctx context.Context,
+	request *core.AIRequest,
+	entries []ChainEntry,
+) chainFingerprintSnapshot {
+	if request == nil || len(entries) == 0 {
+		return chainFingerprintSnapshot{}
+	}
+	components := make([]string, 0, len(entries))
+	entryFingerprints := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		fingerprinter, ok := entry.client.(core.AIRequestFingerprinter)
+		if !ok {
+			return chainFingerprintSnapshot{}
+		}
+		entryRequest, err := core.CloneAIRequest(request)
+		if err != nil {
+			return chainFingerprintSnapshot{}
+		}
+		fingerprint, stable := fingerprinter.RequestFingerprint(ctx, entryRequest)
+		if !stable || fingerprint == "" {
+			return chainFingerprintSnapshot{}
+		}
+		components = append(components, entry.name+"="+fingerprint)
+		entryFingerprints = append(entryFingerprints, fingerprint)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(components, "\n")))
+	return chainFingerprintSnapshot{
+		fingerprint: fmt.Sprintf("%x", sum[:]),
+		entries:     entryFingerprints,
+		stable:      true,
+	}
+}
+
+func attachChainFingerprint(result *core.AIResult, snapshot chainFingerprintSnapshot, entryIndex int) {
+	if result == nil || result.RequestReport == nil {
+		return
+	}
+	report := result.RequestReport
+	if !snapshot.stable || entryIndex < 0 || entryIndex >= len(snapshot.entries) ||
+		!report.Stable || report.Fingerprint != snapshot.entries[entryIndex] {
+		report.Fingerprint = ""
+		report.Stable = false
+		return
+	}
+	report.Fingerprint = snapshot.fingerprint
+	report.Stable = true
+}
 
 // Generate executes a provider-neutral request against each chain entry using
 // an independent request snapshot. Request-capable clients receive the full
@@ -24,6 +97,7 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 	if len(entries) == 0 {
 		return nil, errors.New("AI chain has no entries")
 	}
+	fingerprint := chainRequestFingerprint(ctx, request, entries)
 
 	started := time.Now()
 	var span core.Span = &core.NoOpSpan{}
@@ -84,6 +158,7 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 		attemptDuration := time.Since(attemptStarted)
 
 		if callErr == nil {
+			attachChainFingerprint(result, fingerprint, index)
 			attemptSpan.SetAttribute("ai.chain.attempt_status", "success")
 			attemptSpan.SetAttribute("ai.chain.attempt_duration_ms", attemptDuration.Milliseconds())
 			attemptSpan.End()
@@ -197,6 +272,7 @@ func (c *ChainClient) Stream(
 	if len(entries) == 0 {
 		return nil, errors.New("AI chain has no entries")
 	}
+	fingerprint := chainRequestFingerprint(ctx, request, entries)
 
 	started := time.Now()
 	var span core.Span = &core.NoOpSpan{}
@@ -242,6 +318,7 @@ func (c *ChainClient) Stream(
 		result = annotateChainResult(result, entry.name, attempt, "stream", request.Purpose)
 
 		if callErr == nil {
+			attachChainFingerprint(result, fingerprint, index)
 			attemptSpan.SetAttribute("ai.chain.attempt_status", "success")
 			attemptSpan.SetAttribute("ai.chain.attempt_duration_ms", time.Since(attemptStarted).Milliseconds())
 			attemptSpan.End()

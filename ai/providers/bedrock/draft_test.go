@@ -222,6 +222,26 @@ func TestClientGenerateUsesPolicyTranslatedSDKInput(t *testing.T) {
 	}
 }
 
+func TestClientRequestFingerprintUsesPreparedConversePolicy(t *testing.T) {
+	client := newClientWithRuntime(&fakeRuntimeClient{}, "us-test-1", &core.NoOpLogger{})
+	client.DefaultModel = "model"
+	client.DefaultMaxTokens = 100
+	request := core.NewAIRequest("secret prompt", "planning")
+
+	fingerprint, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || len(fingerprint) != 64 {
+		t.Fatalf("fingerprint = %q, stable = %t", fingerprint, stable)
+	}
+	request.Purpose = "synthesis"
+	changed, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || changed == fingerprint {
+		t.Fatalf("purpose did not change fingerprint: first=%q changed=%q stable=%t", fingerprint, changed, stable)
+	}
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), nil); stable || fingerprint != "" {
+		t.Fatalf("nil request fingerprint = %q, %t", fingerprint, stable)
+	}
+}
+
 func TestClientStreamUsesPolicyTranslatedSDKInput(t *testing.T) {
 	stream := newFakeEventStream(
 		&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{

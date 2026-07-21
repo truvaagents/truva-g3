@@ -110,6 +110,31 @@ func TestClientPrepareAIRequest_AppliesPresenceAwareIntentAndRequestPatch(t *tes
 	}
 }
 
+func TestClientRequestFingerprintIsStableAndSecretFree(t *testing.T) {
+	client := NewClient("anthropic-secret-key", "", &core.NoOpLogger{})
+	request := core.NewAIRequestFromLegacy("secret prompt", "planning", &core.AIOptions{Model: "claude-sonnet-4-6"})
+
+	fingerprint, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || len(fingerprint) != 64 {
+		t.Fatalf("fingerprint = %q, stable = %t", fingerprint, stable)
+	}
+	if strings.Contains(fingerprint, "secret") || strings.Contains(fingerprint, request.Prompt) {
+		t.Fatalf("fingerprint contains request secret material: %q", fingerprint)
+	}
+	request.Purpose = "synthesis"
+	changed, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || changed == fingerprint {
+		t.Fatalf("purpose did not change fingerprint: first=%q changed=%q stable=%t", fingerprint, changed, stable)
+	}
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), nil); stable || fingerprint != "" {
+		t.Fatalf("nil request fingerprint = %q, %t", fingerprint, stable)
+	}
+	client.endpointResolver = &phase4Resolver{err: errors.New("route unavailable")}
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), request); stable || fingerprint != "" {
+		t.Fatalf("resolver failure fingerprint = %q, %t", fingerprint, stable)
+	}
+}
+
 func TestClientPrepareAIRequest_PortableOmitAndSyncStreamParity(t *testing.T) {
 	client := NewClient("anthropic-key", "", &core.NoOpLogger{})
 	request := core.NewAIRequestFromLegacy("hello", "chat", &core.AIOptions{

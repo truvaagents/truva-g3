@@ -209,9 +209,13 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 
 	// Call LLM for synthesis
 	ctx = telemetry.WithBaggage(ctx, "ai.purpose", "synthesis")
-	callCtx := s.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
-	aiResponse, err := s.aiClient.GenerateResponse(callCtx, prompt, synthesisOpts)
+	aiResponse, _, err := invokeAI(ctx, s.aiClient, aiInvocation{
+		Purpose:        "synthesis",
+		Prompt:         prompt,
+		Options:        synthesisOpts,
+		DeferRecording: s.debugStore != nil,
+	})
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "synthesis", aiResponse.Usage)
@@ -584,18 +588,6 @@ func (s *AISynthesizer) SetLogger(logger core.Logger) {
 // SetLLMDebugStore sets the LLM debug store for full payload visibility.
 func (s *AISynthesizer) SetLLMDebugStore(store LLMDebugStore) {
 	s.debugStore = store
-}
-
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when AISynthesizer will emit a typed
-// synthesis record itself. Gated on debugStore presence to preserve the
-// graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (s *AISynthesizer) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if s.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
 }
 
 // SetResultProcessor sets the result processor for trimming step results.

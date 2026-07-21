@@ -2165,6 +2165,7 @@ When properly configured, the AI module emits these spans:
 | `ai.generate` | Logical normalized generation | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
 | `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
 | `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider-specific execution attributes |
+| `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
 ### Enabling AI Telemetry in Your Agent

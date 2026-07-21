@@ -64,7 +64,9 @@ type EndpointRequest struct {
 
 // EndpointResolver resolves a concrete provider destination after model
 // resolution. An implementation retained by a client must be safe for
-// concurrent use.
+// concurrent use. AI-output caches may evaluate it during fingerprint
+// preflight and again on a cache miss, so implementations must return a stable
+// RouteIdentity for the same semantic request and avoid side effects.
 type EndpointResolver interface {
 	ResolveEndpoint(context.Context, EndpointRequest) (ResolvedEndpoint, error)
 }

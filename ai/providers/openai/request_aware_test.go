@@ -162,6 +162,40 @@ func TestClientGenerateRejectsUnsupportedPortableFeatureBeforeNetwork(t *testing
 	}
 }
 
+func TestClientRequestFingerprintIncludesPurposeAndRouteIdentity(t *testing.T) {
+	endpoint, err := url.Parse("https://gateway.example.test/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient("key", "", "openai", &core.NoOpLogger{})
+	resolver := &fingerprintEndpointResolver{endpoint: endpoint, identity: "route-v1"}
+	client.endpointResolver = resolver
+
+	request := core.NewAIRequestFromLegacy("secret prompt", "planning", &core.AIOptions{Model: "gpt-4.1"})
+	first, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || len(first) != 64 {
+		t.Fatalf("fingerprint = %q, stable = %t", first, stable)
+	}
+	request.Purpose = "synthesis"
+	second, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || first == second {
+		t.Fatalf("purpose did not change fingerprint: first=%q second=%q stable=%t", first, second, stable)
+	}
+	request.Purpose = "planning"
+	resolver.identity = "route-v2"
+	third, stable := client.RequestFingerprint(t.Context(), request)
+	if !stable || first == third {
+		t.Fatalf("route did not change fingerprint: first=%q third=%q stable=%t", first, third, stable)
+	}
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), nil); stable || fingerprint != "" {
+		t.Fatalf("nil request fingerprint = %q, %t", fingerprint, stable)
+	}
+	client.endpointResolver = &fingerprintEndpointResolver{err: errors.New("route unavailable")}
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), request); stable || fingerprint != "" {
+		t.Fatalf("resolver failure fingerprint = %q, %t", fingerprint, stable)
+	}
+}
+
 func TestFactorySnapshotsNestedDefaultExtras(t *testing.T) {
 	var captured map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -225,6 +259,19 @@ func TestClientPrepareAIRequestUsesCaseInsensitiveRequestHeaderPrecedence(t *tes
 type capturingEndpointResolver struct {
 	endpoint *url.URL
 	request  ai.EndpointRequest
+}
+
+type fingerprintEndpointResolver struct {
+	endpoint *url.URL
+	identity string
+	err      error
+}
+
+func (resolver *fingerprintEndpointResolver) ResolveEndpoint(context.Context, ai.EndpointRequest) (ai.ResolvedEndpoint, error) {
+	if resolver.err != nil {
+		return ai.ResolvedEndpoint{}, resolver.err
+	}
+	return ai.ResolvedEndpoint{URL: resolver.endpoint, RouteIdentity: resolver.identity}, nil
 }
 
 func (resolver *capturingEndpointResolver) ResolveEndpoint(

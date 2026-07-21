@@ -168,8 +168,12 @@ func (r *ContextualReResolver) ReResolve(
 	startTime := time.Now()
 
 	// LLM generates corrected parameters with reasoning
-	callCtx := r.deferLLMRecordingIfWeWillRecord(ctx)
-	response, err := r.aiClient.GenerateResponse(callCtx, prompt, reResolveOpts)
+	response, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+		Purpose:        "semantic-retry",
+		Prompt:         prompt,
+		Options:        reResolveOpts,
+		DeferRecording: r.debugStore != nil,
+	})
 	if err == nil {
 		core.RecordTokenUsage(ctx, "semantic_retry", response.Usage)
 	}
@@ -463,18 +467,6 @@ func (r *ContextualReResolver) logWarn(msg string, fields map[string]interface{}
 // SetLLMDebugStore sets the LLM debug store for full payload visibility.
 func (r *ContextualReResolver) SetLLMDebugStore(store LLMDebugStore) {
 	r.debugStore = store
-}
-
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when ContextualReResolver will emit a typed
-// semantic_retry record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (r *ContextualReResolver) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if r.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
 }
 
 // recordDebugInteraction stores an LLM interaction for debugging.
