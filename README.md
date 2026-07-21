@@ -591,6 +591,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [Tool Development Guide](docs/building/TOOL_DEVELOPMENT_GUIDE.md) — building a Tool from scratch
 - [Agent Development Guide](docs/building/AGENT_DEVELOPMENT_GUIDE.md) — building an Agent
 - [AI Providers Setup Guide](docs/building/AI_PROVIDERS_SETUP_GUIDE.md) — provider aliases, model aliases, env-based configuration
+- [Custom AI Providers and Enterprise Integration](docs/building/CUSTOM_AI_PROVIDER_GUIDE.md) — request-aware APIs, policy, dynamic credentials and routing, custom factories, and reusable codecs
 - [Effective Prompts Guide](docs/building/EFFECTIVE_PROMPTS_GUIDE.md) — capability descriptions and prompt quality
 - [Tool Schema Discovery Guide](docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) — three-phase payload generation
 - [Adding Context to Your Agent](docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — pipeline hooks, RAG, guardrails

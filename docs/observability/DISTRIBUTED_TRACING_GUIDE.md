@@ -2168,6 +2168,12 @@ When properly configured, the AI module emits these spans:
 | `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
+The AI layer reports provider token usage but does not derive or emit an
+`ai.cost_usd` value. Provider prices, discounts, cached-token rules, and billing
+semantics change independently of the framework, so an inferred currency value
+would not be authoritative. Join token usage with the provider's billing export
+when accurate cost reporting is required.
+
 ### Enabling AI Telemetry in Your Agent
 
 When creating an AI client, pass the telemetry provider:
@@ -2191,6 +2197,18 @@ func NewMyAgent() (*MyAgent, error) {
     return &MyAgent{aiClient: aiClient}, nil
 }
 ```
+
+`ai.NewClient` and `ai.NewRequestClient` always return the common instrumented
+wrapper, even when telemetry is nil. Depend on `core.AIClient` and optional
+capability interfaces rather than asserting the result to a concrete provider
+client type. If an application wraps that factory-managed client with
+`ai.NewInstrumentedClient` to add debug recording, the constructor collapses
+the internal wrapper so one call does not create duplicate common spans.
+
+Failover chains may still show nested logical AI spans because the chain and
+each attempted entry are independently observable. That is intentional: the
+outer operation represents the logical call, while child operations show which
+entries were attempted.
 
 ### What You'll See in Jaeger
 

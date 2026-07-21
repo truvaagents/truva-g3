@@ -359,11 +359,23 @@ See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#model-ali
 
 #### Provider Registry And Custom Providers
 
-The AI module has a provider registry. Providers register themselves through package initialization, and teams can add custom providers or OpenAI-compatible services behind the same `AIClient` interface.
+The AI module has a provider registry. Providers register themselves through package initialization, and teams can add custom providers or OpenAI-compatible services behind the same `AIClient` interface. Optional factory contracts add error-capable validation and request-aware construction without breaking legacy factories.
 
 This matters when evaluating the framework for private endpoints, internal gateways, new provider integrations, or self-hosted models.
 
-See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#the-provider-registry---plugin-architecture), [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#creating-custom-providers), and [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#adding-new-openai-compatible-services).
+Request-aware providers can reuse the shared request-policy engine. OpenAI-compatible enterprise adapters can also reuse the `openaiwire` codec without inheriting the stock OpenAI endpoint, credentials, retry, or telemetry behavior. SDK-native providers translate a provider-local logical draft instead; the build-tagged Bedrock adapter is the reference implementation.
+
+See the [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md), [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#the-provider-registry---plugin-architecture), and [AI Architecture](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md).
+
+#### Request-Aware Policy And Enterprise Integration
+
+`ai.NewRequestClient` adds presence-aware portable parameters, sanitized request reports, provider patches, versioned middleware, and explicit refusal when a provider cannot represent an option. `core.GenerateAI` and `core.StreamAI` keep the dispatch contract in Core and fall back to legacy clients only when no semantics would be lost.
+
+Enterprise integrations can supply concurrency-safe dynamic credentials, per-request endpoint resolution with stable non-secret route identities, and caller-owned HTTP clients. Credentials are attached at the transport boundary and excluded from reports, fingerprints, logs, and traces.
+
+`ai.NewChain` builds heterogeneous failover chains from independently configured provider entries and injected clients. This supports different credentials, regional routes, or custom providers per entry while preserving the same provider-neutral orchestration API.
+
+See the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-clients-and-policy), [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
 
 #### Embeddings And Vector Integration
 
@@ -375,11 +387,11 @@ See [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.m
 
 #### Reasoning Controls And Request Options
 
-AI requests support common portable options such as temperature, max tokens, and system prompts. The documented provider setup also supports reasoning-model controls, request timeouts, token multipliers for reasoning models, and provider-specific escape hatches.
+AI requests support common portable options such as temperature, max tokens, and system prompts. The request-aware API can separately express inherit, explicit set (including zero), and omit for temperature, top-p, top-k, max tokens, system prompt, reasoning effort, and response format. The documented provider setup also supports reasoning-model controls, request timeouts, token multipliers for reasoning models, and provider-specific escape hatches.
 
 Orchestration can override AI options per phase, including planning, synthesis, micro-resolution, error analysis, tiered selection, and result distillation.
 
-See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](../reference/API_REFERENCE.md#createorchestratorwithoptions).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-clients-and-policy), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
 
 #### Streaming And AI Telemetry
 

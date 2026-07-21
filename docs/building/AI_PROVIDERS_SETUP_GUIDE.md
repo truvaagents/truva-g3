@@ -50,6 +50,8 @@ Welcome to the TruvaG3 AI providers guide! This document explains how to configu
   - [Tracing AI Requests in Jaeger](#tracing-ai-requests-in-jaeger)
 - [Advanced Configuration](#advanced-configuration)
   - [Portable Fields vs Provider-Specific Escape Hatches](#portable-fields-vs-provider-specific-escape-hatches)
+  - [Request-Aware Clients and Policy](#request-aware-clients-and-policy)
+  - [Anthropic Sampling Compatibility](#anthropic-sampling-compatibility)
   - [Request Timeouts](#request-timeouts)
   - [Reasoning Model Support](#reasoning-model-support)
   - [Orchestration Model Overrides](#orchestration-model-overrides)
@@ -680,6 +682,10 @@ logger.Info("Request completed", map[string]interface{}{
 // Note: Provider tracking is available via telemetry spans (ai.chain.provider attribute)
 ```
 
+TruvaG3 records normalized token usage, not an estimated USD amount. For
+authoritative spend reporting, join provider/model/token telemetry with the
+provider's billing export and your negotiated pricing.
+
 ### Scenario 6: Privacy-First Deployment
 
 **Goal**: Keep sensitive data local, use cloud only as fallback
@@ -1072,12 +1078,14 @@ If you have telemetry enabled, AI requests create spans:
 
 1. Open Jaeger: `http://localhost:16686`
 2. Select your service
-3. Find traces with `ai.generate_response` spans
+3. Find traces with `ai.generate` or `ai.stream` spans
 4. Expand to see:
    - `ai.provider`: Which provider handled the request
    - `ai.model`: Resolved model name
    - `ai.prompt_tokens`, `ai.completion_tokens`: Token usage
-   - `ai.attempt` spans: Each provider attempt during failover
+   - `ai.request.prepared`: Sanitized request-policy preparation event
+   - `ai.generate_response` / `ai.stream_response`: Provider execution
+   - `ai.http_attempt`: Each HTTP retry attempt
 
 ---
 
@@ -1121,8 +1129,90 @@ Precedence rules:
 - Framework-managed request fields win over everything else
 - Per-request `Extra` / `Headers` override client defaults
 - Protected headers such as auth and content type are not user-overridable
+- The same resolved custom headers are applied to sync and streaming requests
 
 Use escape hatches sparingly. If a field is portable, prefer the typed option.
+
+### Request-Aware Clients and Policy
+
+Use `ai.NewRequestClient` when a call must distinguish an inherited value from
+an explicitly supplied zero or an intentionally omitted field, or when the
+client needs request rules, middleware, dynamic credentials, or endpoint
+routing. Existing `AIOption` values such as `WithProvider`, `WithModel`, and
+`WithTimeout` can be passed directly because they also satisfy `ClientOption`.
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("openai"),
+    ai.WithModel("smart"),
+)
+
+request := core.NewAIRequest("Extract the entities", "entity_extraction")
+request.Generation.Temperature = core.SetAIParameter(float32(0))
+request.Generation.TopP = core.OmitAIParameter[float32]()
+request.Generation.ResponseFormat = core.SetAIParameter("json")
+
+result, err := core.GenerateAI(ctx, client, request)
+```
+
+The zero value of `AIParameter` means inherit, `SetAIParameter` means send the
+value even when it is zero, and `OmitAIParameter` means the provider field must
+be absent. If a provider or a legacy fallback cannot preserve that intent, the
+call returns `core.ErrAIRequestFeatureUnsupported`; it never silently drops the
+field.
+
+Request-aware built-in construction currently supports Anthropic and OpenAI,
+plus Bedrock when built with `-tags bedrock`. Gemini continues to use the legacy
+API. The legacy `NewClient`, `GenerateResponse`, and `NewChainClient` APIs remain
+supported for existing and simple portable calls.
+
+Application policy is attached at construction with `WithRequestRules`,
+`WithRequestMiddleware`, and `WithCompatibilityMode`. Per-call patches live on
+`AIRequest.Patches`. Rules are validated and defensively copied before use;
+protected model, stream, content-type, and credential fields cannot be changed
+through policy.
+
+For custom factories, policy precedence, enterprise credential and route
+hooks, heterogeneous chains, reusable OpenAI-compatible codecs, retry-body
+requirements, and cache fingerprints, see the
+[Custom AI Providers and Enterprise Integration Guide](CUSTOM_AI_PROVIDER_GUIDE.md).
+
+### Anthropic Sampling Compatibility
+
+Some Anthropic model families reject explicit sampling controls. The Anthropic
+adapter resolves the model alias or environment override first, then applies a
+model-family policy shared by sync and streaming requests. For the restricted
+families currently listed in
+[`ai/providers/anthropic/request_policy.go`](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/request_policy.go),
+it removes `temperature`, `top_p`, and `top_k` and records only fields that were
+actually present as adjustments. Matching uses an exact-or-hyphen boundary, so
+a similarly prefixed model name is not classified accidentally.
+
+Known compatible model families retain sampling fields. An unknown model also
+preserves the legacy behavior instead of guessing that sampling is forbidden.
+This protects older and private models, but a newly released restricted family
+must be added to the built-in list. Until the framework is updated, a
+request-aware client can apply an explicit removal rule:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithRequestRules(core.AIProviderPatch{
+        Name:    "new-claude-sampling-compatibility",
+        Version: "1",
+        Selector: core.AIProviderSelector{
+            Provider: "anthropic",
+            Surface:  "messages",
+            Model:    "claude-next-*",
+        },
+        Remove: []string{"/temperature", "/top_p", "/top_k"},
+    }),
+)
+```
+
+Use this only after confirming the provider's model contract. Prefer upgrading
+to a framework release with the family in its built-in policy so every caller
+gets the same sync/stream behavior.
 
 ### Request Timeouts
 
@@ -1195,6 +1285,7 @@ Notes:
 - Native `openai` supports `ReasoningEffort` directly.
 - `openai.ollama` now allows reasoning controls to pass through as well.
 - For unsupported OpenAI-compatible aliases, advanced reasoning fields may be stripped conservatively.
+- Anthropic does not expose this portable control. A request-aware `ReasoningEffort` set returns `core.ErrAIRequestFeatureUnsupported` instead of being silently dropped.
 - There is currently no env-var shortcut for `ReasoningEffort`; use code or orchestration overrides.
 
 OpenAI reasoning models (GPT-5, o1, o3, o4) require special handling because they:
@@ -1429,5 +1520,6 @@ func isClientError(err error) bool {
 
 - **[ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)** - AI module overview and quick start
 - **[ai/ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md)** - Technical architecture details
+- **[CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md)** - Request-aware clients, policy, enterprise routing and credentials, custom factories, and codecs
 - **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Logging patterns including AI module logging
 - **[DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md)** - Tracing AI requests in Jaeger

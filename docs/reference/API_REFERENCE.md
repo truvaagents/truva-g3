@@ -14,6 +14,7 @@ A comprehensive guide to TruvaG3's APIs with practical examples and best practic
 - [RegisterCapability](#registercapability) - Define capabilities with AI-powered payload generation (3-phase approach)
 - [Schema Cache](#schema-cache-phase-3-validation) - Redis-backed schema caching for validation
 - [Schema Discovery](#registercapability) - Progressive enhancement: Phase 1 (descriptions) → Phase 2 (field hints) → Phase 3 (validation)
+- [Request-Aware AI API](#request-aware-ai-api) - Presence-aware requests, policy, enterprise hooks, and heterogeneous failover
 
 **By Module:**
 - [Core](#core-module) - Foundation types and component lifecycle
@@ -1492,6 +1493,231 @@ func RateLimitMiddleware(store core.Memory, limit int) func(http.Handler) http.H
 
 Connect to AI providers and build intelligent agents that leverage LLMs for natural language understanding and generation.
 
+### Request-Aware AI API
+
+The request-aware API extends the legacy `AIClient` contract without breaking
+existing clients. Its provider-neutral types and dispatch helpers live in
+`core`; provider construction and integration options live in `ai`.
+
+#### Construction and dispatch
+
+```go
+func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error)
+
+func GenerateAI(
+    ctx context.Context,
+    client core.AIClient,
+    request *core.AIRequest,
+) (*core.AIResult, error)
+
+func StreamAI(
+    ctx context.Context,
+    client core.AIClient,
+    request *core.AIRequest,
+    callback core.StreamCallback,
+) (*core.AIResult, error)
+```
+
+Existing `AIOption` values satisfy `ClientOption`, so legacy configuration can
+be mixed with the advanced options. `GenerateAI` and `StreamAI` prefer the
+request-aware capability and fall back to legacy clients only when the request
+is losslessly representable. An unsupported feature returns
+`*core.AIRequestFeatureError` and matches
+`core.ErrAIRequestFeatureUnsupported`.
+
+Built-in request-aware factories currently include Anthropic and OpenAI, plus
+Bedrock with the `bedrock` build tag. Gemini remains legacy-only.
+
+#### AIRequest and presence-aware generation
+
+```go
+type AIRequest struct {
+    Prompt     string
+    Purpose    string
+    Generation AIGenerationOptions
+    Patches    []AIProviderPatch
+}
+
+type AIGenerationOptions struct {
+    Model           string
+    Temperature     AIParameter[float32]
+    TopP            AIParameter[float32]
+    TopK            AIParameter[int]
+    MaxTokens       AIParameter[int]
+    SystemPrompt    AIParameter[string]
+    ReasoningEffort AIParameter[string]
+    ResponseFormat  AIParameter[string]
+}
+
+func NewAIRequest(prompt, purpose string) *AIRequest
+func NewAIRequestFromLegacy(prompt, purpose string, options *AIOptions) *AIRequest
+func CloneAIRequest(request *AIRequest) (*AIRequest, error)
+
+func InheritAIParameter[T any]() AIParameter[T]
+func SetAIParameter[T any](value T) AIParameter[T]
+func OmitAIParameter[T any]() AIParameter[T]
+```
+
+The zero value of `AIParameter` is `Inherit`. `Set` explicitly supplies a value,
+including its zero value. `Omit` requires the provider field to be absent.
+`Model` is structural: an empty string inherits and the model cannot be
+explicitly omitted.
+
+`Purpose` must be a stable, non-secret operation label because it may appear in
+policy selectors, sanitized reports, and traces.
+
+#### AIResult and request reports
+
+```go
+type AIResult struct {
+    Response      *AIResponse
+    RequestReport *AIRequestReport
+    UsageDetails  *AIUsageDetails
+}
+
+type AIRequestReport struct {
+    Provider       string
+    ProviderAlias  string
+    Surface        string
+    Operation      string
+    Purpose        string
+    RequestedModel string
+    ResolvedModel  string
+    Adjustments    []AIRequestAdjustment
+    Fingerprint    string
+    Stable         bool
+}
+
+type AIUsageDetails struct {
+    CachedInputTokens int64
+    ReasoningTokens   int64
+    AudioInputTokens  int64
+    AudioOutputTokens int64
+    Counters          map[string]int64
+}
+```
+
+Reports contain only sanitized preparation facts. They must not contain prompt
+text, credentials, raw bodies, complete secret-bearing endpoints, or secret
+field values. `AIRequestFingerprinter` optionally exposes the same stable,
+secret-free semantic identity before execution; AI-output caches must bypass
+reads and writes when it reports `stable=false`.
+
+#### Provider patches
+
+```go
+type AIProviderPatch struct {
+    Name          string
+    Version       string
+    Selector      AIProviderSelector
+    Set           map[string]interface{}
+    Remove        []string
+    SetHeaders    map[string]string
+    RemoveHeaders []string
+}
+
+type AIProviderSelector struct {
+    Provider      string
+    ProviderAlias string
+    Surface       string
+    Model         string
+    Operation     string
+    Purpose       string
+    AllProviders  bool
+}
+```
+
+Body paths use RFC 6901 JSON Pointer syntax. `Set` values must be JSON-native:
+string-keyed maps, slices, arrays, finite scalars, or `nil`. Pointers, structs,
+non-finite floats, non-string map keys, and cyclic values are rejected.
+
+Request-aware construction accepts:
+
+```go
+func WithRequestRules(rules ...core.AIProviderPatch) ClientOption
+func WithRequestMiddleware(m ...requestpolicy.RequestMiddleware) ClientOption
+func WithCompatibilityMode(mode requestpolicy.CompatibilityMode) ClientOption
+```
+
+The order is provider built-ins, application rules, middleware, per-request
+patches, then compatibility and provider-draft validation. Compatible mode
+reports built-in adjustments. Strict mode rejects a built-in adjustment to
+explicit intent unless application policy acknowledges the affected path.
+
+Middleware must be safe for concurrent use and must not retain its call-local
+editor. It is fingerprint-unstable unless it implements
+`requestpolicy.StableRequestMiddleware` and explicitly declares deterministic,
+versioned behavior.
+
+#### Enterprise integration options
+
+```go
+func WithCredentialSource(source CredentialSource) ClientOption
+func WithEndpointResolver(resolver EndpointResolver) ClientOption
+func WithAuthHeader(name string, value AuthHeaderFunc) ClientOption
+func WithHTTPClient(client *http.Client) ClientOption
+```
+
+`CredentialSource` is called once per transport attempt after policy and route
+resolution. Implementations must be concurrency-safe; credential values are
+never included in reports, fingerprints, or logs. A source may implement
+`CredentialRejectionObserver` to observe HTTP 401/403 responses without
+replacing the original provider error.
+
+`EndpointResolver` returns a complete URL and a stable, non-secret
+`RouteIdentity`. It may run during cache fingerprint preflight and again on a
+cache miss, so it must be concurrency-safe, stable, and side-effect-free.
+`WithHTTPClient` is supported by the request-aware HTTP providers, which
+shallow-copy and do not mutate the supplied client. SDK-native Bedrock rejects
+HTTP-only integration options.
+
+#### Heterogeneous chains
+
+```go
+func NewChain(entries ...ChainEntry) (*ChainClient, error)
+func ProviderEntry(name, providerAlias string, options ...ClientOption) ChainEntry
+func ClientEntry(name string, client core.AIClient) ChainEntry
+```
+
+Entry names must be unique, stable, and non-secret. `ProviderEntry` constructs
+an independently configured request-aware provider. `ClientEntry` invokes a
+caller-owned client without mutating it through optional setters. Streaming
+failover is allowed only before the first chunk is delivered.
+
+`NewChainClient` remains the legacy homogeneous-chain constructor. Use
+`NewChain` when entries need different policy, routing, credentials, or client
+implementations.
+
+#### Provider factory extension contracts
+
+```go
+type ProviderFactory interface {
+    Create(*AIConfig) core.AIClient
+    DetectEnvironment() (priority int, available bool)
+    Name() string
+    Description() string
+}
+
+type ValidatedProviderFactory interface {
+    ProviderFactory
+    CreateValidated(*AIConfig) (core.AIClient, error)
+}
+
+type RequestProviderFactory interface {
+    ProviderFactory
+    CreateRequestClient(*AIConfig, ProviderIntegrationConfig) (core.AIRequestClient, error)
+}
+```
+
+`NewClient` prefers `CreateValidated`. `NewRequestClient` uses
+`CreateRequestClient` and passes an isolated integration snapshot. The reusable
+`ai/providerkit/openaiwire` package supplies the OpenAI chat-completions draft,
+encode, decode, and stream-decode contract without owning credentials, routing,
+retries, provider identity, or telemetry.
+
+See the [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md)
+for implementation patterns and security requirements.
+
 ### NewClient
 
 Create an AI client with automatic provider detection. The client intelligently selects the best available AI provider based on environment variables.
@@ -2120,7 +2346,12 @@ func (s *AIService) GenerateDocumentation(ctx context.Context, code string) (str
 
 ### InstrumentedAIClient
 
-Decorator that wraps any `core.AIClient` and records every LLM call to a `telemetry.LLMCallRecorder` for debugging and observability. The wrapper is transparent — callers see a standard `core.AIClient`.
+Decorator that wraps any `core.AIClient`, emits the common logical
+`ai.generate` / `ai.stream` spans, and optionally records every LLM call to a
+`telemetry.LLMCallRecorder` for debugging. `NewClient` and `NewRequestClient`
+always install this wrapper so logical telemetry is provider-independent.
+Consequently, code must depend on capability interfaces rather than asserting a
+constructor result to a concrete provider-client type.
 
 ```go
 func NewInstrumentedClient(
@@ -2137,12 +2368,14 @@ func NewInstrumentedClient(
 | `WithComponentName(name)` | Source component name for recordings (e.g., `"research-assistant"`) |
 | `WithDefaultCallType(type)` | Override default call type (default: `"agent_llm_call"`) |
 | `WithInstrumentedLogger(logger)` | Logger for recording failure warnings |
+| `WithInstrumentedTelemetry(provider)` | Telemetry provider for logical `ai.generate` / `ai.stream` spans |
 
 **Key behaviors:**
 - **Async recording** — LLM calls are never blocked by debug recording
 - **Nil-safe** — Defaults to `NoOpLLMCallRecorder` if recorder is nil
 - **Request ID resolution** — Tries OTel baggage first, then `core.GetRequestID(ctx)`
 - **Graceful shutdown** — `Shutdown(ctx)` drains in-flight recordings via `sync.WaitGroup`
+- **Factory wrapper collapse** — wrapping a `NewClient` or `NewRequestClient` result for debug recording replaces its internal no-op-recorder layer, avoiding duplicate logical spans
 
 **Example — Agent Setup:**
 ```go

@@ -489,6 +489,28 @@ Benefits of This Architecture:
 └── Compliance: Meet data residency requirements per provider
 ```
 
+The current provider boundary has two additive capability levels. Legacy
+clients implement `core.AIClient`; request-aware clients also implement
+`core.AIRequestClient` and optionally `core.StreamingAIRequestClient` and
+`core.AIRequestFingerprinter`. High-level modules dispatch through
+`core.GenerateAI` and `core.StreamAI`, so they never need to import provider
+packages and never silently discard presence-aware intent.
+
+Below that boundary, the shared request-policy engine applies provider
+compatibility rules, application rules, middleware, and per-request patches to
+a provider-local logical draft. Dynamic credentials and endpoint routing are
+attached after semantic policy, at the transport boundary, and excluded from
+reports, fingerprints, logs, and traces. OpenAI-compatible adapters can reuse
+the `openaiwire` codec; SDK-native providers use their own draft translation.
+
+`ai.NewChain` composes independently configured provider entries and
+caller-owned clients for heterogeneous failover. Stable, secret-free policy and
+route fingerprints protect orchestration caches from reusing AI-derived output
+after generation semantics change.
+
+See the [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md)
+and the module [AI Architecture](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md).
+
 #### Enterprise System Integration
 
 ```

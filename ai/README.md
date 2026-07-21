@@ -63,6 +63,8 @@ response, _ := client.GenerateResponse(ctx, "Hello AI!", nil)
 |---------|--------------|---------|
 | **Single Client** | Direct connection to one provider | `ai.NewClient(ai.WithProviderAlias("openai"))` |
 | **Chain Client** | Auto-failover across multiple providers | `ai.NewChainClient(ai.WithProviderChain("openai", "anthropic"))` |
+| **Request-Aware Client** | Presence-aware parameters, policy, reports, and enterprise hooks | `ai.NewRequestClient(ai.WithProvider("openai"))` |
+| **Heterogeneous Chain** | Independently configured or injected failover entries | `ai.NewChain(ai.ProviderEntry(...), ai.ClientEntry(...))` |
 | **Provider Aliases** | Clean identifiers with auto-configuration | `openai.groq` auto-configures Groq endpoint and API key |
 | **Model Aliases** | Portable model names | `smart` → `o3` (OpenAI), `claude-sonnet-4-5` (Anthropic) |
 | **Env Overrides** | Runtime model configuration | `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1` overrides the "smart" alias |
@@ -1291,7 +1293,8 @@ if err != nil {
 
 ### Creating Custom Providers
 
-The module is designed to be extended with your own providers:
+The legacy `ProviderFactory` remains supported and is sufficient for clients
+that implement only `core.AIClient`:
 
 ```go
 // mycompany/providers/custom_llm/provider.go
@@ -1344,6 +1347,17 @@ the request with `http.NewRequestWithContext` and a `bytes.Reader`,
 `bytes.Buffer`, or `strings.Reader` body sets `GetBody` automatically. For other
 body sources, set `GetBody` explicitly so it returns a fresh `io.ReadCloser`.
 `ExecuteWithRetry` rejects a non-replayable body before making a network call.
+
+New providers should also implement `ValidatedProviderFactory` so construction
+errors can be returned, and `RequestProviderFactory` when they support
+presence-aware requests, policy, reports, or enterprise integrations.
+Request-aware construction is currently built into Anthropic and OpenAI, plus
+Bedrock with the `bedrock` build tag; Gemini remains legacy-only.
+
+For the complete contracts, request-policy precedence, dynamic credentials and
+routing, heterogeneous chains, OpenAI-compatible codec reuse, and SDK-native
+draft pattern, see the
+[Custom AI Providers and Enterprise Integration Guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md).
 
 ### Adding New OpenAI-Compatible Services
 
@@ -1425,7 +1439,7 @@ Each provider applies sensible defaults that can be overridden:
 // These defaults are applied if not specified:
 // - Temperature: 0.7
 // - MaxTokens: 1000
-// - Timeout: 30 seconds
+// - Timeout: 180 seconds
 // - MaxRetries: 3
 // - RetryDelay: 1 second (with exponential backoff)
 ```
@@ -1436,8 +1450,8 @@ Each provider implementation can offer different capabilities:
 
 ```go
 // Check if a provider supports streaming
-if streamer, ok := client.(ai.StreamingAIClient); ok {
-    err := streamer.StreamResponse(ctx, prompt, options, func(chunk core.StreamChunk) error {
+if streamer, ok := client.(core.StreamingAIClient); ok {
+    _, err := streamer.StreamResponse(ctx, prompt, options, func(chunk core.StreamChunk) error {
         fmt.Print(chunk.Content)  // Real-time streaming
         return nil
     })
@@ -1451,6 +1465,46 @@ if embedder, ok := client.(ai.EmbeddingClient); ok {
 // and Redis examples, see docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md §8.
 ```
 
+### Request-Aware Clients and Policy
+
+Use `NewRequestClient` when a plain `AIOptions` value cannot preserve intent,
+or when the provider needs request rules, middleware, dynamic credentials, or
+endpoint routing:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("openai"),
+    ai.WithModel("smart"),
+)
+
+request := core.NewAIRequest("Summarize this incident", "incident_summary")
+request.Generation.Temperature = core.SetAIParameter(float32(0))
+request.Generation.TopP = core.OmitAIParameter[float32]()
+
+result, err := core.GenerateAI(ctx, client, request)
+```
+
+The zero value of `AIParameter` means inherit, `SetAIParameter` means explicitly
+send even a zero value, and `OmitAIParameter` means require absence. Core's
+`GenerateAI` and `StreamAI` helpers use the request-aware capability when
+available and use a legacy client only when the request can be represented
+without loss. Unsupported intent returns
+`core.ErrAIRequestFeatureUnsupported`.
+
+Application policy is configured with `WithRequestRules`,
+`WithRequestMiddleware`, and `WithCompatibilityMode`; per-request patches live
+on `AIRequest.Patches`. `AIResult.RequestReport` contains sanitized preparation
+facts and a secret-free semantic fingerprint. It never contains prompt text,
+credentials, or raw request bodies.
+
+Use `NewChain` with `ProviderEntry` and `ClientEntry` when failover entries need
+independent policy, credentials, routes, or client implementations. The legacy
+`NewChainClient` remains supported for a homogeneous option set.
+
+See the [Custom AI Providers and Enterprise Integration Guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)
+and [API Reference](../docs/reference/API_REFERENCE.md#request-aware-ai-api) for
+the complete contracts.
+
 ## 15. Streaming Support
 
 The AI module provides comprehensive streaming support across all providers. Streaming delivers AI responses token-by-token as they're generated, enabling real-time UX and lower time-to-first-token.
@@ -1463,10 +1517,11 @@ The AI module provides comprehensive streaming support across all providers. Str
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
     Content      string                 // The text content of this chunk
-    Done         bool                   // True if this is the final chunk
+    Delta        bool                   // True for incremental chunks; false for the final chunk
+    Index        int                    // Zero-based chunk index
     FinishReason string                 // Why generation stopped (e.g., "stop", "length")
-    Usage        *AIUsage               // Token usage (only on final chunk for most providers)
-    Error        error                  // Error if streaming failed
+    Model        string                 // Resolved provider model
+    Usage        *TokenUsage            // Token usage (normally on the final chunk)
     Metadata     map[string]interface{} // Provider-specific metadata
 }
 
@@ -1484,7 +1539,8 @@ type StreamingAIClient interface {
     AIClient
 
     // StreamResponse generates a streaming response
-    StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) error
+    StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) (*AIResponse, error)
+    SupportsStreaming() bool
 }
 ```
 
@@ -1503,20 +1559,21 @@ import (
 func main() {
     client, _ := ai.NewClient()
 
+    streaming, ok := client.(core.StreamingAIClient)
+    if !ok || !streaming.SupportsStreaming() {
+        log.Fatal("provider does not support streaming")
+    }
+
     // Stream response token-by-token
-    err := client.StreamResponse(
+    response, err := streaming.StreamResponse(
         context.Background(),
         "Explain quantum computing",
         nil, // Use default options
         func(chunk core.StreamChunk) error {
-            if chunk.Error != nil {
-                return chunk.Error
-            }
-
             // Print each token as it arrives
             fmt.Print(chunk.Content)
 
-            if chunk.Done {
+            if !chunk.Delta && chunk.FinishReason != "" {
                 fmt.Println("\n--- Stream complete ---")
                 if chunk.Usage != nil {
                     fmt.Printf("Tokens used: %d\n", chunk.Usage.TotalTokens)
@@ -1530,6 +1587,7 @@ func main() {
     if err != nil {
         fmt.Printf("Streaming failed: %v\n", err)
     }
+    _ = response // Contains accumulated content and final usage.
 }
 ```
 
@@ -1544,7 +1602,7 @@ client, _ := ai.NewChainClient(
 )
 
 // Stream with automatic failover
-err := client.StreamResponse(ctx, prompt, options, func(chunk core.StreamChunk) error {
+_, err := client.StreamResponse(ctx, prompt, options, func(chunk core.StreamChunk) error {
     fmt.Print(chunk.Content)
     return nil
 })
@@ -1554,7 +1612,7 @@ err := client.StreamResponse(ctx, prompt, options, func(chunk core.StreamChunk) 
 ### Streaming with Custom Options
 
 ```go
-err := client.StreamResponse(
+_, err := client.StreamResponse(
     ctx,
     "Write a short story",
     &core.AIOptions{
@@ -1590,7 +1648,7 @@ go func() {
     cancel() // Stop streaming after 5 seconds
 }()
 
-err := client.StreamResponse(ctx, prompt, nil, callback)
+_, err := client.StreamResponse(ctx, prompt, nil, callback)
 if errors.Is(err, context.Canceled) {
     fmt.Println("Stream was canceled")
 }
@@ -1613,8 +1671,8 @@ if errors.Is(err, context.Canceled) {
 
 ### Streaming Best Practices
 
-1. **Handle errors in callback**: Return errors from your callback to stop streaming
-2. **Check `Done` flag**: Final chunk has `Done: true` and may include usage stats
+1. **Handle returned errors**: Provider and transport failures are returned by `StreamResponse`; return a callback error to stop early
+2. **Check `Delta` and `FinishReason`**: The final chunk has `Delta: false` and normally carries the finish reason and usage
 3. **Use context for cancellation**: Pass a cancellable context for user-initiated stops
 4. **Buffer UI updates**: Consider buffering chunks before updating UI for smoother experience
 5. **Track finish reason**: Check `FinishReason` to detect truncation or stop reasons
@@ -1624,26 +1682,21 @@ if errors.Is(err, context.Canceled) {
 func streamWithBestPractices(ctx context.Context, client core.StreamingAIClient, prompt string) error {
     var totalContent strings.Builder
 
-    err := client.StreamResponse(ctx, prompt, nil, func(chunk core.StreamChunk) error {
-        // 1. Handle errors
-        if chunk.Error != nil {
-            return fmt.Errorf("stream error: %w", chunk.Error)
-        }
-
-        // 2. Accumulate content
+    _, err := client.StreamResponse(ctx, prompt, nil, func(chunk core.StreamChunk) error {
+        // 1. Accumulate content
         totalContent.WriteString(chunk.Content)
 
-        // 3. Update UI (could buffer for smoother experience)
+        // 2. Update UI (could buffer for smoother experience)
         updateUI(chunk.Content)
 
-        // 4. Handle completion
-        if chunk.Done {
-            // 5. Track finish reason
+        // 3. Handle completion
+        if !chunk.Delta && chunk.FinishReason != "" {
+            // 4. Track finish reason
             if chunk.FinishReason == "length" {
                 log.Warn("Response was truncated")
             }
 
-            // 6. Log usage
+            // 5. Log usage
             if chunk.Usage != nil {
                 log.Info("Streaming completed", map[string]interface{}{
                     "total_tokens": chunk.Usage.TotalTokens,
@@ -1715,7 +1768,9 @@ client, _ := ai.NewClient()  // Auto-detects from environment
 
 ## 17. Distributed Tracing for AI Operations
 
-The AI module supports distributed tracing via OpenTelemetry, allowing you to see AI operations (`ai.generate_response`, `ai.http_attempt`) in Jaeger as part of your request traces.
+The AI module supports distributed tracing via OpenTelemetry. Logical
+provider-neutral operations use `ai.generate` and `ai.stream`; provider
+execution and HTTP attempts appear beneath them in the same trace.
 
 ### Enabling AI Telemetry
 
@@ -1770,7 +1825,9 @@ func main() {
 
 | Span Name | Description | Key Attributes |
 |-----------|-------------|----------------|
-| `ai.generate_response` | Overall AI request | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`, `ai.total_tokens`, `ai.prompt_length`, `ai.response_length` |
+| `ai.generate` / `ai.stream` | Logical normalized call | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
+| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider execution attributes |
+| `ai.request.prepared` (event) | Sanitized request report | Purpose, requested/resolved model, adjustment count, fingerprint stability |
 | `ai.http_attempt` | Each HTTP attempt | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
 ### Viewing in Jaeger
@@ -1778,7 +1835,7 @@ func main() {
 1. Open Jaeger: `http://localhost:16686`
 2. Select your service
 3. Find a trace with AI operations
-4. Expand to see `ai.generate_response` and `ai.http_attempt` spans
+4. Expand `ai.generate` or `ai.stream` to see provider execution and `ai.http_attempt` spans
 5. Click spans to see token counts, model info, and timing
 
 ### Complete Example
@@ -1790,6 +1847,7 @@ See `examples/agent-with-orchestration/` for a production-ready example with ful
 | Document | Description |
 |----------|-------------|
 | **[AI Providers Setup Guide](../docs/building/AI_PROVIDERS_SETUP_GUIDE.md)** | Comprehensive guide for configuring providers, operational scenarios, Kubernetes deployment, and troubleshooting |
+| **[Custom AI Providers and Enterprise Integration](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)** | Request-aware contracts, policy, dynamic credentials and routing, heterogeneous chains, custom factories, and codecs |
 | **[ARCHITECTURE.md](./ARCHITECTURE.md)** | Technical architecture and design decisions |
 
 ## 19. Summary
@@ -1806,6 +1864,7 @@ See `examples/agent-with-orchestration/` for a production-ready example with ful
 8. **Binary Optimization** - Cloud providers use build tags to keep binaries small
 9. **Future-Proof** - New OpenAI-compatible services work instantly without any code changes
 10. **Production Ready** - Built-in retries, timeouts, and error handling
+11. **Request-Aware Extensions** - Presence-aware intent, policy reports, enterprise routing and credentials, and heterogeneous failover
 
 ### The Power of Abstraction
 

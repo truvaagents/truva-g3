@@ -32,8 +32,8 @@ type ChainEntry struct {
 // ProviderEntry constructs a framework-managed, request-capable provider
 // entry. The provider alias is applied after all supplied options so an entry
 // cannot accidentally materialize a different provider. The selected factory
-// must support request-aware construction; among built-in providers, that is
-// currently limited to Anthropic until the later provider migration phases.
+// must support request-aware construction. Built-in support currently includes
+// Anthropic, OpenAI, and Bedrock when the bedrock build tag is enabled.
 func ProviderEntry(name, providerAlias string, options ...ClientOption) ChainEntry {
 	return ChainEntry{
 		name:          name,
