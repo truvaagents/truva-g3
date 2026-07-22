@@ -52,6 +52,12 @@ func (c *ChainClient) logRequestError(ctx context.Context, message string, field
 	c.logger.ErrorWithContext(ctx, message, fields)
 }
 
+func addChainObservationError(fields map[string]interface{}, err error, fallback string) {
+	errorType, safeError := providers.SanitizedObservationError(err, fallback)
+	fields["error"] = safeError.Error()
+	fields["error_type"] = errorType
+}
+
 // RequestFingerprint combines the ordered semantic identities of every chain
 // entry. A cache entry is safe only when every possible failover target can
 // provide a stable fingerprint for the same request. Chain entries are assumed
@@ -163,7 +169,22 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 		attempt := index + 1
 		attemptRequest, err := core.CloneAIRequest(request)
 		if err != nil {
-			return lastResult, fmt.Errorf("clone AI chain request for entry %q: %w", entry.name, err)
+			returnedErr := fmt.Errorf("clone AI chain request for entry %q: %w", entry.name, err)
+			span.SetAttribute("ai.chain.status", "aborted")
+			span.SetAttribute("ai.chain.abort_reason", "invalid_request")
+			providers.RecordObservationError(span, returnedErr, "invalid_request")
+			if c.logger != nil {
+				fields := map[string]interface{}{
+					"operation":      "ai_chain_request_error",
+					"entry_name":     entry.name,
+					"attempt":        attempt,
+					"failed_entries": failedEntries,
+					"duration_ms":    time.Since(started).Milliseconds(),
+				}
+				addChainObservationError(fields, returnedErr, "invalid_request")
+				c.logRequestError(ctx, "Chain request could not be cloned", fields)
+			}
+			return lastResult, returnedErr
 		}
 
 		attemptStarted := time.Now()
@@ -248,13 +269,15 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 			span.SetAttribute("ai.chain.abort_reason", "non_retryable_error")
 			providers.RecordObservationError(span, callErr, "unknown")
 			if c.logger != nil {
-				c.logRequestError(ctx, "Chain aborted - client error not retryable", map[string]interface{}{
+				fields := map[string]interface{}{
 					"operation":      "ai_chain_abort",
 					"entry_name":     entry.name,
 					"attempt":        attempt,
 					"failed_entries": failedEntries,
 					"duration_ms":    time.Since(started).Milliseconds(),
-				})
+				}
+				addChainObservationError(fields, callErr, "unknown")
+				c.logRequestError(ctx, "Chain aborted - client error not retryable", fields)
 			}
 			return result, callErr
 		}
@@ -273,12 +296,14 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 	span.SetAttribute("ai.chain.total_duration_ms", time.Since(started).Milliseconds())
 	providers.RecordObservationError(span, joined, "unknown")
 	if c.logger != nil {
-		c.logRequestError(ctx, "All chain providers exhausted", map[string]interface{}{
+		fields := map[string]interface{}{
 			"operation":         "ai_chain_exhausted",
 			"entries_tried":     len(entries),
 			"failed_entries":    failedEntries,
 			"total_duration_ms": time.Since(started).Milliseconds(),
-		})
+		}
+		addChainObservationError(fields, joined, "unknown")
+		c.logRequestError(ctx, "All chain providers exhausted", fields)
 	}
 	return lastResult, fmt.Errorf("all %d chain entries failed: %w", len(entries), joined)
 }
@@ -319,7 +344,22 @@ func (c *ChainClient) Stream(
 		attempt := index + 1
 		attemptRequest, err := core.CloneAIRequest(request)
 		if err != nil {
-			return lastResult, fmt.Errorf("clone AI chain stream request for entry %q: %w", entry.name, err)
+			returnedErr := fmt.Errorf("clone AI chain stream request for entry %q: %w", entry.name, err)
+			span.SetAttribute("ai.chain.status", "aborted")
+			span.SetAttribute("ai.chain.abort_reason", "invalid_request")
+			providers.RecordObservationError(span, returnedErr, "invalid_request")
+			if c.logger != nil {
+				fields := map[string]interface{}{
+					"operation":      "ai_chain_stream_request_error",
+					"entry_name":     entry.name,
+					"attempt":        attempt,
+					"failed_entries": failedEntries,
+					"duration_ms":    time.Since(started).Milliseconds(),
+				}
+				addChainObservationError(fields, returnedErr, "invalid_request")
+				c.logRequestError(ctx, "Chain stream request could not be cloned", fields)
+			}
+			return lastResult, returnedErr
 		}
 
 		attemptStarted := time.Now()
@@ -396,16 +436,30 @@ func (c *ChainClient) Stream(
 		if !shouldFailOver(callErr) {
 			span.SetAttribute("ai.chain.status", "aborted")
 			providers.RecordObservationError(span, callErr, "unknown")
+			if c.logger != nil {
+				fields := map[string]interface{}{
+					"operation":      "ai_chain_stream_abort",
+					"entry_name":     entry.name,
+					"attempt":        attempt,
+					"failed_entries": failedEntries,
+					"duration_ms":    time.Since(started).Milliseconds(),
+				}
+				addChainObservationError(fields, callErr, "unknown")
+				c.logRequestError(ctx, "Chain stream aborted - client error not retryable", fields)
+			}
 			return result, callErr
 		}
 		if c.logger != nil {
-			c.logRequestWarn(attemptCtx, "Provider streaming failed, trying next", map[string]interface{}{
-				"operation":    "ai_chain_stream_failover",
-				"entry_name":   entry.name,
-				"attempt":      attempt,
-				"remaining":    len(entries) - attempt,
-				"failure_type": classifyFailoverReason(callErr),
-			})
+			fields := map[string]interface{}{
+				"operation":       "ai_chain_stream_failover",
+				"entry_name":      entry.name,
+				"attempt":         attempt,
+				"remaining":       len(entries) - attempt,
+				"duration_ms":     time.Since(attemptStarted).Milliseconds(),
+				"failover_reason": classifyFailoverReason(callErr),
+			}
+			addChainObservationError(fields, callErr, "unknown")
+			c.logRequestWarn(attemptCtx, "Provider streaming failed, trying next", fields)
 		}
 	}
 
@@ -418,6 +472,16 @@ func (c *ChainClient) Stream(
 	span.SetAttribute("ai.chain.status", "exhausted")
 	span.SetAttribute("ai.chain.failed_providers", strings.Join(failedEntries, ","))
 	providers.RecordObservationError(span, joined, "unknown")
+	if c.logger != nil {
+		fields := map[string]interface{}{
+			"operation":         "ai_chain_stream_exhausted",
+			"entries_tried":     len(entries),
+			"failed_entries":    failedEntries,
+			"total_duration_ms": time.Since(started).Milliseconds(),
+		}
+		addChainObservationError(fields, joined, "unknown")
+		c.logRequestError(ctx, "All chain providers exhausted for streaming", fields)
+	}
 	return lastResult, fmt.Errorf("all %d chain entries failed for streaming: %w", len(entries), joined)
 }
 
@@ -496,32 +560,40 @@ func (c *ChainClient) logChainFailover(
 	}
 	var providerErr core.ProviderError
 	if errors.As(err, &providerErr) && providerErr.IsTransient() {
-		c.logRequestWarn(ctx, "Transient proxy error, failing over to next provider", map[string]interface{}{
+		fields := map[string]interface{}{
 			"operation":     "chain_failover",
 			"from_provider": entries[index].name,
 			"to_provider":   nextEntry,
 			"status_code":   providerErr.StatusCode(),
 			"is_transient":  true,
-		})
+			"duration_ms":   duration.Milliseconds(),
+		}
+		addChainObservationError(fields, err, "transport")
+		c.logRequestWarn(ctx, "Transient proxy error, failing over to next provider", fields)
 	}
 	if errors.As(err, &providerErr) && providerErr.IsRetryable() {
-		c.logRequestWarn(ctx, "Provider terminal error (billing/quota), failing over to next provider", map[string]interface{}{
+		fields := map[string]interface{}{
 			"operation":     "chain_failover_retryable",
 			"from_provider": entries[index].name,
 			"to_provider":   nextEntry,
 			"status_code":   providerErr.StatusCode(),
 			"is_retryable":  true,
-		})
+			"duration_ms":   duration.Milliseconds(),
+		}
+		addChainObservationError(fields, err, "provider_client")
+		c.logRequestWarn(ctx, "Provider terminal error (billing/quota), failing over to next provider", fields)
 	}
-	c.logRequestWarn(ctx, "Provider failed in chain, trying next", map[string]interface{}{
+	fields := map[string]interface{}{
 		"operation":        "ai_chain_provider_failed",
 		"entry_name":       entries[index].name,
 		"attempt":          index + 1,
 		"remaining":        len(entries) - index - 1,
 		"duration_ms":      duration.Milliseconds(),
 		"failed_providers": failedEntries,
-		"failure_type":     classifyFailoverReason(err),
-	})
+		"failover_reason":  classifyFailoverReason(err),
+	}
+	addChainObservationError(fields, err, "unknown")
+	c.logRequestWarn(ctx, "Provider failed in chain, trying next", fields)
 }
 
 func chainEntryNames(entries []ChainEntry) []string {

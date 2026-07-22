@@ -403,11 +403,16 @@ func TestBedrockConfigurationValidation(t *testing.T) {
 }
 
 type fakeRuntimeClient struct {
-	converseInput *bedrockruntime.ConverseInput
-	converseOut   *bedrockruntime.ConverseOutput
-	converseErr   error
-	streamInput   *bedrockruntime.ConverseStreamInput
-	stream        converseEventStream
+	converseInput    *bedrockruntime.ConverseInput
+	converseOut      *bedrockruntime.ConverseOutput
+	converseErr      error
+	streamInput      *bedrockruntime.ConverseStreamInput
+	stream           converseEventStream
+	onConverseStream func()
+	invokeInput      *bedrockruntime.InvokeModelInput
+	invokeOut        *bedrockruntime.InvokeModelOutput
+	invokeErr        error
+	invokeNil        bool
 }
 
 type fakeEventStream struct {
@@ -485,15 +490,20 @@ func (logger *bedrockObservationLogger) ErrorWithContext(_ context.Context, _ st
 }
 
 type bedrockObservationTelemetry struct {
-	names []string
-	spans []*bedrockObservationSpan
+	names   []string
+	parents []string
+	spans   []*bedrockObservationSpan
 }
+
+type bedrockObservationSpanContextKey struct{}
 
 func (tracing *bedrockObservationTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
 	span := &bedrockObservationSpan{attributes: map[string]interface{}{}}
 	tracing.names = append(tracing.names, name)
+	parent, _ := ctx.Value(bedrockObservationSpanContextKey{}).(string)
+	tracing.parents = append(tracing.parents, parent)
 	tracing.spans = append(tracing.spans, span)
-	return ctx, span
+	return context.WithValue(ctx, bedrockObservationSpanContextKey{}, name), span
 }
 func (*bedrockObservationTelemetry) RecordMetric(string, float64, map[string]string) {}
 
@@ -587,6 +597,161 @@ func TestBedrockObservationContract(t *testing.T) {
 			t.Fatalf("observations leaked provider error: %s", observed)
 		}
 	})
+
+	t.Run("stream cancellation records a sanitized span error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := newFakeEventStream(&types.ConverseStreamOutputMemberMetadata{
+			Value: types.ConverseStreamMetadataEvent{},
+		})
+		runtime := &fakeRuntimeClient{stream: stream, onConverseStream: cancel}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+
+		_, err := client.Stream(ctx, core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Stream error = %v, want context cancellation", err)
+		}
+		if len(tracing.spans) != 1 || len(tracing.spans[0].errors) != 1 || tracing.spans[0].ended != 1 {
+			t.Fatalf("stream cancellation spans = %#v", tracing.spans)
+		}
+		if tracing.spans[0].errors[0].Error() != "AI provider request failed: cancelled" {
+			t.Fatalf("stream cancellation span error = %v", tracing.spans[0].errors[0])
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors)
+		if !strings.Contains(observed, "error_type:cancelled") || strings.Contains(observed, context.Canceled.Error()) {
+			t.Fatalf("stream cancellation observations = %s", observed)
+		}
+	})
+
+	t.Run("event stream error preserves identity and sanitizes observations", func(t *testing.T) {
+		const streamSecret = "bedrock-event-stream-provider-secret"
+		wantErr := errors.New(streamSecret)
+		stream := newFakeEventStream()
+		stream.err = wantErr
+		runtime := &fakeRuntimeClient{stream: stream}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+
+		_, err := client.Stream(context.Background(), core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Stream error = %v, want preserved event-stream error", err)
+		}
+		if len(tracing.spans) != 1 || len(tracing.spans[0].errors) != 1 || tracing.spans[0].ended != 1 {
+			t.Fatalf("event stream error spans = %#v", tracing.spans)
+		}
+		if tracing.spans[0].errors[0].Error() != "AI provider request failed: transport" {
+			t.Fatalf("event stream span error = %v", tracing.spans[0].errors[0])
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors)
+		if strings.Contains(observed, streamSecret) {
+			t.Fatalf("event stream observations leaked provider error: %s", observed)
+		}
+	})
+
+	t.Run("embedding decode failure has nested spans and sanitized observations", func(t *testing.T) {
+		const (
+			requestID    = "bedrock-embedding-request"
+			responseBody = "bedrock-embedding-response-secret"
+		)
+		runtime := &fakeRuntimeClient{invokeOut: &bedrockruntime.InvokeModelOutput{Body: []byte(responseBody)}}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+		ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+
+		_, err := client.GetEmbeddings(ctx, "embedding input")
+		if err == nil || !strings.Contains(err.Error(), "parse Bedrock embed response") {
+			t.Fatalf("GetEmbeddings error = %v", err)
+		}
+		if !reflect.DeepEqual(tracing.names, []string{"ai.get_embeddings", "ai.invoke_model"}) ||
+			!reflect.DeepEqual(tracing.parents, []string{"", "ai.get_embeddings"}) {
+			t.Fatalf("embedding span hierarchy names=%#v parents=%#v", tracing.names, tracing.parents)
+		}
+		if len(tracing.spans[0].errors) != 1 || tracing.spans[0].errors[0].Error() != "AI provider request failed: decode" {
+			t.Fatalf("embedding span error = %#v", tracing.spans[0].errors)
+		}
+		if len(tracing.spans[1].errors) != 0 {
+			t.Fatalf("successful invoke span errors = %#v", tracing.spans[1].errors)
+		}
+		for index, span := range tracing.spans {
+			if span.ended != 1 {
+				t.Errorf("embedding span %d ended %d times", index, span.ended)
+			}
+		}
+		if tracing.spans[0].attributes["request_id"] != requestID ||
+			tracing.spans[0].attributes["ai.model"] != ModelTitanEmbed ||
+			tracing.spans[0].attributes["ai.text_length"] != len("embedding input") ||
+			tracing.spans[0].attributes["ai.input_length"] != nil {
+			t.Fatalf("embedding span attributes = %#v", tracing.spans[0].attributes)
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors)
+		if !strings.Contains(observed, "error_type:decode") || strings.Contains(observed, responseBody) {
+			t.Fatalf("embedding decode observations = %s", observed)
+		}
+	})
+
+	t.Run("embedding invocation error marks both owning spans", func(t *testing.T) {
+		const invokeSecret = "bedrock-embedding-invoke-secret"
+		wantErr := errors.New(invokeSecret)
+		runtime := &fakeRuntimeClient{invokeErr: wantErr}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+
+		_, err := client.GetEmbeddings(context.Background(), "embedding input")
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("GetEmbeddings error = %v, want preserved invocation error", err)
+		}
+		if !reflect.DeepEqual(tracing.names, []string{"ai.get_embeddings", "ai.invoke_model"}) {
+			t.Fatalf("embedding invocation spans = %#v", tracing.names)
+		}
+		for index, span := range tracing.spans {
+			if len(span.errors) != 1 || span.errors[0].Error() != "AI provider request failed: transport" || span.ended != 1 {
+				t.Errorf("embedding invocation span %d = %#v", index, span)
+			}
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors, tracing.spans[1].errors)
+		if strings.Contains(observed, invokeSecret) {
+			t.Fatalf("embedding invocation observations leaked provider error: %s", observed)
+		}
+	})
+
+	t.Run("nil invocation output stays decode on both embedding spans", func(t *testing.T) {
+		runtime := &fakeRuntimeClient{invokeNil: true}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+
+		_, err := client.GetEmbeddings(context.Background(), "embedding input")
+		if !errors.Is(err, errInvokeModelOutputNil) {
+			t.Fatalf("GetEmbeddings error = %v, want nil-output sentinel", err)
+		}
+		if !reflect.DeepEqual(tracing.names, []string{"ai.get_embeddings", "ai.invoke_model"}) {
+			t.Fatalf("nil-output embedding spans = %#v", tracing.names)
+		}
+		for index, span := range tracing.spans {
+			if len(span.errors) != 1 || span.errors[0].Error() != "AI provider request failed: decode" ||
+				span.attributes["ai.error_type"] != "decode" || span.ended != 1 {
+				t.Errorf("nil-output embedding span %d = %#v", index, span)
+			}
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors, tracing.spans[1].errors)
+		if strings.Contains(observed, errInvokeModelOutputNil.Error()) {
+			t.Fatalf("nil-output observations leaked raw diagnostic: %s", observed)
+		}
+	})
 }
 
 func (client *fakeRuntimeClient) ConverseStream(
@@ -595,6 +760,9 @@ func (client *fakeRuntimeClient) ConverseStream(
 	_ ...func(*bedrockruntime.Options),
 ) (converseEventStream, error) {
 	client.streamInput = input
+	if client.onConverseStream != nil {
+		client.onConverseStream()
+	}
 	if client.stream == nil {
 		return nil, errors.New("not implemented")
 	}
@@ -602,9 +770,19 @@ func (client *fakeRuntimeClient) ConverseStream(
 }
 
 func (client *fakeRuntimeClient) InvokeModel(
-	context.Context,
-	*bedrockruntime.InvokeModelInput,
-	...func(*bedrockruntime.Options),
+	_ context.Context,
+	input *bedrockruntime.InvokeModelInput,
+	_ ...func(*bedrockruntime.Options),
 ) (*bedrockruntime.InvokeModelOutput, error) {
+	client.invokeInput = input
+	if client.invokeErr != nil {
+		return nil, client.invokeErr
+	}
+	if client.invokeNil {
+		return nil, nil
+	}
+	if client.invokeOut != nil {
+		return client.invokeOut, nil
+	}
 	return nil, errors.New("not implemented")
 }

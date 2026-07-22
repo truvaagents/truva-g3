@@ -1231,6 +1231,13 @@ if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 
 **Always record errors on the span for trace visibility.** This makes errors visible in Jaeger.
 
+At an external-service or AI-provider boundary, record a sanitized derivative
+when the original error may contain response bodies, endpoints, credential
+diagnostics, or other sensitive material. Preserve the original error in the
+caller-visible error chain. The AI module uses
+`providers.RecordObservationError` for this purpose; it records the sanitized
+exception and bounded `ai.error_type` while still marking the span as failed.
+
 ```go
 // From orchestration/executor.go:1228-1235
 agentInfo := e.findAgentByName(step.AgentName)
@@ -2165,8 +2172,17 @@ When properly configured, the AI module emits these spans:
 | `ai.generate` | Logical normalized generation | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
 | `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
 | `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider-specific execution attributes |
+| `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, `ai.model`, `ai.text_length`, embedding dimensions, bounded error classification |
+| `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.model`, request/response lengths, bounded error classification |
 | `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
+
+Every operation span that returns an error is marked failed, including both an
+outer embedding span and its invocation child when the invocation fails. This
+is expected nested observability rather than duplicate logical
+instrumentation. Provider-boundary exception messages are sanitized; the
+original error remains available to the caller through `errors.Is` and
+`errors.As`.
 
 The AI layer reports provider token usage but does not derive or emit an
 `ai.cost_usd` value. Provider prices, discounts, cached-token rules, and billing

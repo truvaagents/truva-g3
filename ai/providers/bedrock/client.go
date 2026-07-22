@@ -31,6 +31,8 @@ type converseEventStream interface {
 	Err() error
 }
 
+var errInvokeModelOutputNil = errors.New("bedrock invoke model output is nil")
+
 type sdkRuntimeClient struct{ client *bedrockruntime.Client }
 
 func (client sdkRuntimeClient) Converse(
@@ -525,9 +527,8 @@ func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) (
 		return nil, fmt.Errorf("bedrock invoke model error: %w", err)
 	}
 	if output == nil {
-		err := errors.New("bedrock invoke model output is nil")
-		c.observeError(ctx, span, "ai_invoke_model", "decode", err)
-		return nil, err
+		c.observeError(ctx, span, "ai_invoke_model", "decode", errInvokeModelOutputNil)
+		return nil, errInvokeModelOutputNil
 	}
 	span.SetAttribute("ai.response_length", len(output.Body))
 	return output.Body, nil
@@ -535,20 +536,36 @@ func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) (
 
 // GetEmbeddings generates embeddings using Amazon Titan Embed.
 func (c *Client) GetEmbeddings(ctx context.Context, text string) ([]float32, error) {
+	ctx, span := c.StartSpan(ctx, "ai.get_embeddings")
+	defer span.End()
+	span.SetAttribute("ai.provider", "bedrock")
+	span.SetAttribute("ai.model", ModelTitanEmbed)
+	span.SetAttribute("ai.text_length", len(text))
+
 	body, err := json.Marshal(map[string]interface{}{"inputText": text})
 	if err != nil {
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
 		return nil, fmt.Errorf("marshal Bedrock embed request: %w", err)
 	}
 	responseBody, err := c.InvokeModel(ctx, ModelTitanEmbed, body)
 	if err != nil {
+		// InvokeModel owns the detailed error log; the outer embedding span still
+		// records the propagated failure so every failed operation is visible.
+		fallback := "transport"
+		if errors.Is(err, errInvokeModelOutputNil) {
+			fallback = "decode"
+		}
+		providers.RecordObservationError(span, err, fallback)
 		return nil, err
 	}
 	var response struct {
 		Embedding []float32 `json:"embedding"`
 	}
 	if err := json.Unmarshal(responseBody, &response); err != nil {
+		c.observeError(ctx, span, "ai_get_embeddings", "decode", err)
 		return nil, fmt.Errorf("parse Bedrock embed response: %w", err)
 	}
+	span.SetAttribute("ai.embedding_dimensions", len(response.Embedding))
 	return response.Embedding, nil
 }
 

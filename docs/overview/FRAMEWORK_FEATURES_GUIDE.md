@@ -375,7 +375,7 @@ Enterprise integrations can supply concurrency-safe dynamic credentials, per-req
 
 `ai.NewChain` builds heterogeneous failover chains from independently configured provider entries and injected clients. This supports different credentials, regional routes, or custom providers per entry while preserving the same provider-neutral orchestration API.
 
-See the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-clients-and-policy), [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
+See the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-and-custom-integrations), [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
 
 #### Embeddings And Vector Integration
 
@@ -391,7 +391,7 @@ AI requests support common portable options such as temperature, max tokens, and
 
 Orchestration can override AI options per phase, including planning, synthesis, micro-resolution, error analysis, tiered selection, and result distillation.
 
-See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-clients-and-policy), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
+See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#portable-fields-vs-provider-specific-escape-hatches), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#request-aware-and-custom-integrations), [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#reasoning-model-support), and [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api).
 
 #### Streaming And AI Telemetry
 

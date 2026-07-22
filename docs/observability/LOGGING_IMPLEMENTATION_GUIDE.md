@@ -1167,7 +1167,7 @@ Use these field names across all your services:
 |------------|------|-------------|---------|
 | `operation` | string | The operation being performed | "research_topic", "get_weather" |
 | `status` | string | Result status | "success", "error", "retry" |
-| `error` | string | Error message | "connection refused" |
+| `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
 | `error_type` | string | Error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
@@ -1399,11 +1399,19 @@ Before submitting code, verify:
 - [ ] All logger calls wrapped in `if logger != nil { ... }`
 - [ ] Every log has an `operation` field
 - [ ] Request-scoped logs include `request_id`
-- [ ] Error logs include `error` field with `err.Error()`
+- [ ] Error logs include an `error` field; use `err.Error()` only when the error is safe to log, otherwise use a sanitized derivative
 - [ ] Error logs include `error_type` for classification (used as Prometheus metric label)
 - [ ] Duration-sensitive operations include `duration_ms`
 - [ ] Using `WithContext` methods for request handlers
 - [ ] Using standard field names (see table above)
+
+Errors crossing an external-service or AI-provider boundary may contain response
+bodies, endpoint query values, credential diagnostics, or other sensitive
+material. Framework code must not put the original `err.Error()` on an
+observation surface in those cases. It must preserve the original error for the
+caller while logging a sanitized error message and a bounded `error_type`. The
+AI module implements this boundary with
+`providers.SanitizedObservationError`.
 
 ---
 
@@ -2129,7 +2137,7 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 |-------|----------|---------|
 | `operation` | **YES** | What action is being performed (MUST be in every log) |
 | `request_id` | **YES** | Request identifier (for request-scoped logs) |
-| `error` | On errors | Error message (use `err.Error()`) |
+| `error` | On errors | Error message; sanitize external/provider errors before logging |
 | `duration_ms` | Recommended | How long it took |
 | `status` | Recommended | success, error, retry |
 | `method` | For HTTP | HTTP method |
@@ -2144,7 +2152,7 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 
 **Required (Application Code):**
 - [ ] Using `WithContext` methods in all HTTP handlers
-- [ ] `error` field for error logs (use `err.Error()`)
+- [ ] `error` field for error logs (`err.Error()` only when safe; otherwise use a sanitized derivative)
 - [ ] Logging both success and failure paths
 
 **Recommended:**

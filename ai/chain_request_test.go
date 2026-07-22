@@ -346,6 +346,8 @@ func TestChainStartRequestSpanIsNilSafe(t *testing.T) {
 
 type chainObservationLogStore struct {
 	components []string
+	levels     []string
+	messages   []string
 	fields     []map[string]interface{}
 }
 
@@ -357,33 +359,72 @@ type chainObservationLogger struct {
 func (logger *chainObservationLogger) WithComponent(component string) core.Logger {
 	return &chainObservationLogger{store: logger.store, component: component}
 }
-func (logger *chainObservationLogger) record(fields map[string]interface{}) {
+func (logger *chainObservationLogger) record(level, message string, fields map[string]interface{}) {
 	logger.store.components = append(logger.store.components, logger.component)
+	logger.store.levels = append(logger.store.levels, level)
+	logger.store.messages = append(logger.store.messages, message)
 	logger.store.fields = append(logger.store.fields, fields)
 }
-func (logger *chainObservationLogger) Debug(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) Debug(message string, fields map[string]interface{}) {
+	logger.record("DEBUG", message, fields)
 }
-func (logger *chainObservationLogger) Info(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) Info(message string, fields map[string]interface{}) {
+	logger.record("INFO", message, fields)
 }
-func (logger *chainObservationLogger) Warn(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) Warn(message string, fields map[string]interface{}) {
+	logger.record("WARN", message, fields)
 }
-func (logger *chainObservationLogger) Error(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) Error(message string, fields map[string]interface{}) {
+	logger.record("ERROR", message, fields)
 }
-func (logger *chainObservationLogger) DebugWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) DebugWithContext(_ context.Context, message string, fields map[string]interface{}) {
+	logger.record("DEBUG", message, fields)
 }
-func (logger *chainObservationLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) InfoWithContext(_ context.Context, message string, fields map[string]interface{}) {
+	logger.record("INFO", message, fields)
 }
-func (logger *chainObservationLogger) WarnWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) WarnWithContext(_ context.Context, message string, fields map[string]interface{}) {
+	logger.record("WARN", message, fields)
 }
-func (logger *chainObservationLogger) ErrorWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *chainObservationLogger) ErrorWithContext(_ context.Context, message string, fields map[string]interface{}) {
+	logger.record("ERROR", message, fields)
+}
+
+func findChainObservationLog(
+	t *testing.T,
+	store *chainObservationLogStore,
+	operation string,
+) (string, map[string]interface{}) {
+	t.Helper()
+	for index, fields := range store.fields {
+		if fields["operation"] == operation {
+			return store.levels[index], fields
+		}
+	}
+	t.Fatalf("operation %q not found in logs: %#v", operation, store.fields)
+	return "", nil
+}
+
+func requireChainSanitizedErrorLog(
+	t *testing.T,
+	store *chainObservationLogStore,
+	operation string,
+	wantLevel string,
+	wantErrorType string,
+) map[string]interface{} {
+	t.Helper()
+	level, fields := findChainObservationLog(t, store, operation)
+	if level != wantLevel {
+		t.Errorf("%s level = %q, want %q", operation, level, wantLevel)
+	}
+	if fields["error_type"] != wantErrorType {
+		t.Errorf("%s error_type = %#v, want %q", operation, fields["error_type"], wantErrorType)
+	}
+	wantError := "AI provider request failed: " + wantErrorType
+	if fields["error"] != wantError {
+		t.Errorf("%s error = %#v, want %q", operation, fields["error"], wantError)
+	}
+	return fields
 }
 
 type chainObservationTelemetry struct {
@@ -456,6 +497,8 @@ func TestChainObservabilitySanitizesErrorsAndCorrelatesRequests(t *testing.T) {
 			t.Errorf("log %d fields = %#v", index, fields)
 		}
 	}
+	requireChainSanitizedErrorLog(t, store, "ai_chain_provider_failed", "WARN", "unknown")
+	requireChainSanitizedErrorLog(t, store, "ai_chain_exhausted", "ERROR", "unknown")
 	var observed strings.Builder
 	fmt.Fprint(&observed, store.fields)
 	for index, span := range tracing.spans {
@@ -478,6 +521,221 @@ func TestChainObservabilitySanitizesErrorsAndCorrelatesRequests(t *testing.T) {
 			t.Fatalf("chain observations leaked %q: %s", forbidden, observed.String())
 		}
 	}
+}
+
+func TestChainFailureLogsUseSanitizedErrorContract(t *testing.T) {
+	const requestID = "chain-error-log-request"
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+	uncloneableRequest := func(secret string) *core.AIRequest {
+		request := core.NewAIRequest("prompt", "observation")
+		request.Patches = []core.AIProviderPatch{{
+			Name:     secret,
+			Version:  "1",
+			Selector: core.AIProviderSelector{AllProviders: true},
+			Set:      map[string]interface{}{`/` + secret: new(int)},
+		}}
+		return request
+	}
+
+	t.Run("request clone failures", func(t *testing.T) {
+		for _, test := range []struct {
+			name      string
+			operation string
+			spanName  string
+			invoke    func(*ChainClient, *core.AIRequest) error
+		}{
+			{
+				name:      "generate",
+				operation: "ai_chain_request_error",
+				spanName:  "ai.chain.generate",
+				invoke: func(chain *ChainClient, request *core.AIRequest) error {
+					_, err := chain.Generate(ctx, request)
+					return err
+				},
+			},
+			{
+				name:      "stream",
+				operation: "ai_chain_stream_request_error",
+				spanName:  "ai.chain.stream",
+				invoke: func(chain *ChainClient, request *core.AIRequest) error {
+					_, err := chain.Stream(ctx, request, func(core.StreamChunk) error {
+						return errors.New("callback called for an uncloneable request")
+					})
+					return err
+				},
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				secret := "chain-clone-" + test.name + "-secret"
+				chain, err := NewChain(ClientEntry("first", &phase5RequestClient{}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				store := &chainObservationLogStore{}
+				tracing := &chainObservationTelemetry{}
+				chain.SetLogger(&chainObservationLogger{store: store})
+				chain.SetTelemetry(tracing)
+
+				err = test.invoke(chain, uncloneableRequest(secret))
+				if err == nil || !strings.Contains(err.Error(), secret) {
+					t.Fatalf("caller error = %v, want original clone diagnostic", err)
+				}
+				fields := requireChainSanitizedErrorLog(t, store, test.operation, "ERROR", "invalid_request")
+				if fields["request_id"] != requestID {
+					t.Fatalf("clone failure fields = %#v", fields)
+				}
+				if !reflect.DeepEqual(tracing.names, []string{test.spanName}) || len(tracing.spans) != 1 ||
+					len(tracing.spans[0].errors) != 1 || tracing.spans[0].ended != 1 {
+					t.Fatalf("clone failure spans names=%#v spans=%#v", tracing.names, tracing.spans)
+				}
+				if tracing.spans[0].errors[0].Error() != "AI provider request failed: invalid_request" ||
+					tracing.spans[0].attributes["ai.error_type"] != "invalid_request" {
+					t.Fatalf("clone failure span = %#v", tracing.spans[0])
+				}
+				observed := fmt.Sprint(store.fields, tracing.spans[0].attributes, tracing.spans[0].errors)
+				if strings.Contains(observed, secret) {
+					t.Fatalf("clone failure observations leaked diagnostic: %s", observed)
+				}
+			})
+		}
+	})
+
+	t.Run("non-retryable generate abort", func(t *testing.T) {
+		const secret = "chain-abort-provider-secret"
+		wantErr := &testProviderError{statusCode: 400, message: secret}
+		first := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+			return nil, wantErr
+		}}
+		chain, err := NewChain(ClientEntry("first", first))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &chainObservationLogStore{}
+		chain.SetLogger(&chainObservationLogger{store: store})
+
+		_, err = chain.Generate(ctx, core.NewAIRequest("prompt", "observation"))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Generate error = %v, want preserved provider error", err)
+		}
+		fields := requireChainSanitizedErrorLog(t, store, "ai_chain_abort", "ERROR", "provider_client")
+		if fields["request_id"] != requestID || strings.Contains(fmt.Sprint(fields), secret) {
+			t.Fatalf("abort fields = %#v", fields)
+		}
+	})
+
+	t.Run("transient provider failover", func(t *testing.T) {
+		const secret = "chain-transient-provider-secret"
+		wantErr := &testProviderError{statusCode: 503, message: secret, transient: true}
+		first := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+			return nil, wantErr
+		}}
+		second := &phase5RequestClient{}
+		chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &chainObservationLogStore{}
+		chain.SetLogger(&chainObservationLogger{store: store})
+
+		if _, err := chain.Generate(ctx, core.NewAIRequest("prompt", "observation")); err != nil {
+			t.Fatalf("Generate returned error: %v", err)
+		}
+		for _, operation := range []string{"chain_failover", "ai_chain_provider_failed"} {
+			fields := requireChainSanitizedErrorLog(t, store, operation, "WARN", "transport")
+			if fields["request_id"] != requestID || strings.Contains(fmt.Sprint(fields), secret) {
+				t.Fatalf("%s fields = %#v", operation, fields)
+			}
+		}
+		_, providerFields := findChainObservationLog(t, store, "ai_chain_provider_failed")
+		if providerFields["failover_reason"] != "upstream_5xx" || providerFields["failure_type"] != nil {
+			t.Fatalf("provider failover classification = %#v", providerFields)
+		}
+	})
+
+	t.Run("retryable provider failover", func(t *testing.T) {
+		const secret = "chain-retryable-provider-secret"
+		wantErr := &testProviderError{statusCode: 429, message: secret, retryable: true}
+		first := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+			return nil, wantErr
+		}}
+		second := &phase5RequestClient{}
+		chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &chainObservationLogStore{}
+		chain.SetLogger(&chainObservationLogger{store: store})
+
+		if _, err := chain.Generate(ctx, core.NewAIRequest("prompt", "observation")); err != nil {
+			t.Fatalf("Generate returned error: %v", err)
+		}
+		for _, operation := range []string{"chain_failover_retryable", "ai_chain_provider_failed"} {
+			fields := requireChainSanitizedErrorLog(t, store, operation, "WARN", "provider_rate_limit")
+			if fields["request_id"] != requestID || strings.Contains(fmt.Sprint(fields), secret) {
+				t.Fatalf("%s fields = %#v", operation, fields)
+			}
+		}
+		_, providerFields := findChainObservationLog(t, store, "ai_chain_provider_failed")
+		if providerFields["failover_reason"] != "rate_limit" || providerFields["failure_type"] != nil {
+			t.Fatalf("retryable failover classification = %#v", providerFields)
+		}
+	})
+
+	t.Run("stream abort and exhaustion", func(t *testing.T) {
+		const (
+			abortSecret      = "chain-stream-abort-secret"
+			exhaustionSecret = "chain-stream-exhaustion-secret"
+		)
+		t.Run("abort", func(t *testing.T) {
+			wantErr := &testProviderError{statusCode: 400, message: abortSecret}
+			first := &phase5RequestClient{stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+				return nil, wantErr
+			}}
+			chain, err := NewChain(ClientEntry("first", first))
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &chainObservationLogStore{}
+			chain.SetLogger(&chainObservationLogger{store: store})
+			_, err = chain.Stream(ctx, core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("Stream error = %v, want preserved provider error", err)
+			}
+			fields := requireChainSanitizedErrorLog(t, store, "ai_chain_stream_abort", "ERROR", "provider_client")
+			if strings.Contains(fmt.Sprint(fields), abortSecret) {
+				t.Fatalf("stream abort leaked provider error: %#v", fields)
+			}
+		})
+
+		t.Run("exhaustion", func(t *testing.T) {
+			firstErr := errors.New(exhaustionSecret + "-first")
+			secondErr := errors.New(exhaustionSecret + "-second")
+			first := &phase5RequestClient{stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+				return nil, firstErr
+			}}
+			second := &phase5RequestClient{stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+				return nil, secondErr
+			}}
+			chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &chainObservationLogStore{}
+			chain.SetLogger(&chainObservationLogger{store: store})
+			_, err = chain.Stream(ctx, core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
+			if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+				t.Fatalf("Stream error = %v, want both causes", err)
+			}
+			failoverFields := requireChainSanitizedErrorLog(t, store, "ai_chain_stream_failover", "WARN", "unknown")
+			if failoverFields["failover_reason"] != "unknown" || failoverFields["failure_type"] != nil {
+				t.Fatalf("stream failover fields = %#v", failoverFields)
+			}
+			exhaustedFields := requireChainSanitizedErrorLog(t, store, "ai_chain_stream_exhausted", "ERROR", "unknown")
+			if exhaustedFields["request_id"] != requestID || strings.Contains(fmt.Sprint(store.fields), exhaustionSecret) {
+				t.Fatalf("stream exhaustion logs = %#v", store.fields)
+			}
+		})
+	})
 }
 
 func TestNewChain_Phase5ValidatesEntries(t *testing.T) {

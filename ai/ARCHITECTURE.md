@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.3
+**Version**: 1.4
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -597,20 +597,22 @@ result, err := chain.Generate(ctx, request)
 
 Provider entries are framework-managed and are constructed through
 `NewRequestClient`; therefore the selected factory must support request-aware
-construction. OpenAI and Anthropic support it directly. Bedrock supports it when
-the application is compiled with the `bedrock` build tag. Providers without a
-request-aware factory, currently including Gemini, can still be supplied through
-`ClientEntry` as legacy or application-local clients. `ClientEntry` accepts any
-`core.AIClient`, including application-local request-aware or native adapters.
+construction. OpenAI, Azure OpenAI, and Anthropic support it directly. Bedrock
+supports it when the application is compiled with the `bedrock` build tag.
+Providers without a request-aware factory, currently including Gemini, can
+still be supplied through `ClientEntry` as legacy or application-local clients.
+`ClientEntry` accepts any `core.AIClient`, including application-local
+request-aware or native adapters.
 Injected clients remain caller-owned: the chain invokes them but does not call
 optional logger, telemetry, or lifecycle setters on them.
 
 Entry names must be unique, stable, non-secret operator labels. They appear in
-sanitized chain report adjustments, logs, metrics, and spans. Every attempt
-receives a recursive `core.CloneAIRequest` snapshot, so failed providers cannot
-mutate the request, legacy options, or provider patches observed by a later
-entry. A provider report returned with either success or failure is preserved
-and receives a chain adjustment containing the entry name and attempt number.
+sanitized chain report adjustments, logs, and spans, but never as metric
+dimensions. Every attempt receives a recursive `core.CloneAIRequest` snapshot,
+so failed providers cannot mutate the request, legacy options, or provider
+patches observed by a later entry. A provider report returned with either
+success or failure is preserved and receives a chain adjustment containing the
+entry name and attempt number.
 
 `GenerateResponse` and `StreamResponse` remain compatible legacy adapters. For
 chains built through `NewChain` or `NewChainClient`, they compile the legacy
@@ -962,9 +964,9 @@ failover entry.
 
 `NewRequestClient` never silently discards integration behavior. A legacy
 factory may be used only when no integration options are supplied and its
-client already implements `core.AIRequestClient`. OpenAI and Anthropic have
-built-in request adapters, and Bedrock provides one behind its build tag.
-Providers without a request adapter return
+client already implements `core.AIRequestClient`. OpenAI, Azure OpenAI, and
+Anthropic have built-in request adapters, and Bedrock provides one behind its
+build tag. Providers without a request adapter return
 `core.ErrAIRequestFeatureUnsupported`.
 
 Provider authors can add error-capable construction without breaking the
@@ -1012,19 +1014,20 @@ excluded from request reports, fingerprints, spans, and framework logs.
 For simple dynamic headers, `WithAuthHeader(name, callback)` adapts a
 concurrency-safe callback into a credential source. Applications that need to
 invalidate cached credentials after early revocation should implement
-`CredentialRejectionObserver`; Anthropic and OpenAI notify it on HTTP 401 and
-403 before returning the original provider error. Observer failures are
-diagnostic and do not replace that error. The providers do not perform an
-immediate authentication retry because generation acceptance cannot generally
-be proven from an auth response; ordinary provider retry and chain failover
-semantics remain intact.
+`CredentialRejectionObserver`; Anthropic, Azure OpenAI, and OpenAI notify it on
+HTTP 401 and 403 before returning the original provider error. Observer
+failures are diagnostic and do not replace that error. The providers do not
+perform an immediate authentication retry because generation acceptance cannot
+generally be proven from an auth response; ordinary provider retry and chain
+failover semantics remain intact.
 
 `EndpointResolver` runs after portable request identity and concrete semantic
 model resolution, but before provider-draft construction and semantic request
 policy. This is the normative order for every provider that accepts the shared
-resolver, including Anthropic and OpenAI. It lets a trusted route supply a
-deployment or publisher-model identifier needed to construct protected wire
-structure without treating that identifier as the semantic model.
+resolver, including Anthropic, Azure OpenAI, and OpenAI. It lets a trusted route
+supply a deployment or publisher-model identifier needed to construct
+protected wire structure without treating that identifier as the semantic
+model.
 
 ```text
 snapshot and validate portable request identity
@@ -1066,10 +1069,11 @@ timeout. The configured transport sees the final serialized body, route,
 eligible application headers, and credential header, so mTLS and signing
 transports compose normally.
 
-Anthropic and OpenAI support these HTTP integrations. Bedrock accepts request
-rules and middleware but deliberately rejects credential sources, endpoint
-resolvers, injected HTTP clients, and request headers: AWS credentials, routing,
-and transport remain owned by `aws.Config` and the AWS SDK.
+Anthropic, Azure OpenAI, and OpenAI support these HTTP integrations. Bedrock
+accepts request rules and middleware but deliberately rejects credential
+sources, endpoint resolvers, injected HTTP clients, and request headers: AWS
+credentials, routing, and transport remain owned by `aws.Config` and the AWS
+SDK.
 
 ### Reusable Codecs and Native SDK Drafts
 
@@ -1103,15 +1107,15 @@ as, or masquerading as, the stock OpenAI provider. To preserve the module
 dependency direction, `providerkit/openaiwire` imports `core` and
 `ai/requestpolicy` but never the root `ai` package.
 
-The approved hosted-surface extension uses the same composition rule. Azure
-OpenAI selects the explicit aliases `azureopenai.v1` and
+The hosted-surface extension uses the same composition rule. Azure OpenAI
+selects the explicit aliases `azureopenai.v1` and
 `azureopenai.classic`. Google-hosted Claude selects `anthropic.vertex` and
 reuses the Anthropic Messages semantics with a provider-local typed profile:
 the publisher model is route-owned and omitted from the body,
 `anthropic_version` is a protected body member, and the Google access token is
-attached later through `CredentialSource`. These identifiers are Phase 9
-implementation targets, not a claim that the current provider table below
-already implements them.
+attached later through `CredentialSource`. These profiles are request-aware
+only; Azure OpenAI additionally disables automatic environment selection and
+requires an explicit endpoint resolver.
 
 Bedrock demonstrates the non-HTTP form of the same contract. Its logical
 `bedrock.Draft` is evaluated by the shared policy engine and then translated
@@ -1123,7 +1127,8 @@ race-test, lint, and vulnerability-check path.
 
 | Built-in provider | Policy surface | Request rules/middleware | HTTP integration seams |
 |-------------------|----------------|--------------------------|------------------------|
-| Anthropic | Messages | Yes | Yes |
+| Anthropic and `anthropic.vertex` | Messages / Vertex publisher prediction | Yes | Yes |
+| Azure OpenAI v1/classic | Profiled Chat Completions | Yes | Yes; resolver required |
 | OpenAI and compatible aliases | Chat Completions via `openaiwire` | Yes | Yes |
 | Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | No; AWS SDK owns them |
 | Gemini | Legacy client | No | No |
