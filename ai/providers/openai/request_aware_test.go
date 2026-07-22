@@ -162,6 +162,126 @@ func TestClientGenerateRejectsUnsupportedPortableFeatureBeforeNetwork(t *testing
 	}
 }
 
+func TestPrepareInvocationValidatesThenRoutesBeforePolicy(t *testing.T) {
+	endpoint, err := url.Parse("https://gateway.example.test/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient("key", "", "openai", &core.NoOpLogger{})
+	resolver := &lifecycleEndpointResolver{endpoint: endpoint, deployment: "ignored-deployment"}
+	client.endpointResolver = resolver
+
+	invalid := core.NewAIRequest("hello", "invalid")
+	invalid.Generation.TopK = core.SetAIParameter(10)
+	if _, err := client.prepareInvocation(t.Context(), invalid, false); !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("invalid intent error = %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("invalid intent invoked resolver %d times", resolver.calls)
+	}
+
+	policyFailure := core.NewAIRequestFromLegacy("hello", "policy", &core.AIOptions{Model: "gpt-4.1", MaxTokens: 10})
+	policyFailure.Patches = []core.AIProviderPatch{{
+		Name: "protected-model", Version: "1",
+		Selector: core.AIProviderSelector{AllProviders: true},
+		Set:      map[string]interface{}{"/model": "policy-model"},
+	}}
+	for _, stream := range []bool{false, true} {
+		before := resolver.calls
+		invocation, err := client.prepareInvocation(t.Context(), policyFailure, stream)
+		var policyErr *requestpolicy.PolicyError
+		if !errors.As(err, &policyErr) {
+			t.Fatalf("stream=%t policy error = %v", stream, err)
+		}
+		if resolver.calls != before+1 {
+			t.Fatalf("stream=%t resolver calls = %d, want %d", stream, resolver.calls, before+1)
+		}
+		if invocation == nil || invocation.Request == nil || invocation.Request.Report == nil {
+			t.Fatalf("stream=%t missing partial policy report: %#v", stream, invocation)
+		}
+	}
+	before := resolver.calls
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), policyFailure); stable || fingerprint != "" {
+		t.Fatalf("policy failure fingerprint = %q, %t", fingerprint, stable)
+	}
+	if resolver.calls != before+1 {
+		t.Fatalf("fingerprint resolver calls = %d, want %d", resolver.calls, before+1)
+	}
+
+	routeErr := errors.New("route unavailable")
+	resolver.err = routeErr
+	invocation, err := client.prepareInvocation(t.Context(), policyFailure, false)
+	if invocation != nil || !errors.Is(err, routeErr) {
+		t.Fatalf("route precedence invocation=%#v error=%v", invocation, err)
+	}
+}
+
+func TestGenericOpenAIProfileIgnoresRouteDeployment(t *testing.T) {
+	endpoint, err := url.Parse("https://gateway.example.test/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient("key", "", "openai", &core.NoOpLogger{})
+	resolver := &lifecycleEndpointResolver{endpoint: endpoint, deployment: "wire-deployment"}
+	client.endpointResolver = resolver
+	request := core.NewAIRequestFromLegacy("hello", "deployment", &core.AIOptions{Model: "gpt-4.1", MaxTokens: 10})
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
+	if err != nil {
+		t.Fatalf("prepareInvocation returned error: %v", err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["model"] != "gpt-4.1" || resolver.request.ResolvedModel != "gpt-4.1" {
+		t.Fatalf("body=%#v endpoint request=%#v", body, resolver.request)
+	}
+}
+
+func TestOllamaNonReasoningProfileRetainsOrdinarySyncAndStreamShape(t *testing.T) {
+	client := NewClient("", "http://127.0.0.1:11434/v1", "openai.ollama", &core.NoOpLogger{})
+	request := core.NewAIRequestFromLegacy("hello", "ollama", &core.AIOptions{
+		Model: "gemma4:31b", MaxTokens: 100, Temperature: 0.5,
+	})
+	for _, stream := range []bool{false, true} {
+		invocation, err := client.prepareInvocation(t.Context(), request, stream)
+		if err != nil {
+			t.Fatalf("stream=%t prepareInvocation returned error: %v", stream, err)
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
+			t.Fatalf("stream=%t decode body: %v", stream, err)
+		}
+		if body["max_tokens"] != float64(100) || body["temperature"] != float64(0.5) {
+			t.Fatalf("stream=%t ordinary body = %#v", stream, body)
+		}
+		for _, absent := range []string{"max_completion_tokens", "reasoning", "reasoning_effort"} {
+			if _, present := body[absent]; present {
+				t.Fatalf("stream=%t body unexpectedly contains %q: %#v", stream, absent, body)
+			}
+		}
+	}
+
+	request.Generation.ReasoningEffort = core.SetAIParameter("none")
+	for _, stream := range []bool{false, true} {
+		invocation, err := client.prepareInvocation(t.Context(), request, stream)
+		if err != nil {
+			t.Fatalf("stream=%t prepareInvocation with effort returned error: %v", stream, err)
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
+			t.Fatalf("stream=%t decode effort body: %v", stream, err)
+		}
+		reasoning, ok := body["reasoning"].(map[string]interface{})
+		if !ok || reasoning["effort"] != "none" {
+			t.Fatalf("stream=%t nested reasoning = %#v", stream, body["reasoning"])
+		}
+		if _, present := body["max_completion_tokens"]; present {
+			t.Fatalf("stream=%t effort changed token family: %#v", stream, body)
+		}
+	}
+}
+
 func TestClientRequestFingerprintIncludesPurposeAndRouteIdentity(t *testing.T) {
 	endpoint, err := url.Parse("https://gateway.example.test/v1/chat/completions")
 	if err != nil {
@@ -240,10 +360,11 @@ func TestClientPrepareAIRequestUsesCaseInsensitiveRequestHeaderPrecedence(t *tes
 	})
 
 	for _, stream := range []bool{false, true} {
-		prepared, err := client.prepareAIRequest(t.Context(), request, stream)
+		invocation, err := client.prepareInvocation(t.Context(), request, stream)
 		if err != nil {
-			t.Fatalf("prepareAIRequest(stream=%t) returned error: %v", stream, err)
+			t.Fatalf("prepareInvocation(stream=%t) returned error: %v", stream, err)
 		}
+		prepared := invocation.Request
 		if got := prepared.Headers.Get("X-Shared"); got != "request" {
 			t.Fatalf("case-insensitive request header precedence (stream=%t) = %q", stream, got)
 		}
@@ -265,6 +386,30 @@ type fingerprintEndpointResolver struct {
 	endpoint *url.URL
 	identity string
 	err      error
+}
+
+type lifecycleEndpointResolver struct {
+	endpoint   *url.URL
+	deployment string
+	err        error
+	calls      int
+	request    ai.EndpointRequest
+}
+
+func (resolver *lifecycleEndpointResolver) ResolveEndpoint(
+	_ context.Context,
+	request ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+	resolver.calls++
+	resolver.request = request
+	if resolver.err != nil {
+		return ai.ResolvedEndpoint{}, resolver.err
+	}
+	return ai.ResolvedEndpoint{
+		URL:           resolver.endpoint,
+		Deployment:    resolver.deployment,
+		RouteIdentity: "lifecycle-route-v1",
+	}, nil
 }
 
 func (resolver *fingerprintEndpointResolver) ResolveEndpoint(context.Context, ai.EndpointRequest) (ai.ResolvedEndpoint, error) {

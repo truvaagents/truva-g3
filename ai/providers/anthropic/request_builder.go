@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
@@ -29,11 +30,67 @@ type preparedRequest struct {
 	ProtectedConflicts   []string
 }
 
-func (c *Client) prepareRequest(prompt string, supplied *core.AIOptions, stream bool) (*preparedRequest, error) {
-	return c.prepareAIRequest(context.Background(), core.NewAIRequestFromLegacy(prompt, "", supplied), stream)
+type requestSemantics struct {
+	Request              *core.AIRequest
+	Options              *core.AIOptions
+	RequestedModel       string
+	SemanticModel        string
+	ProviderAlias        string
+	Surface              string
+	Operation            string
+	Purpose              string
+	MergedExtras         map[string]interface{}
+	SamplingPolicy       samplingPolicy
+	RequestedTemperature float32
 }
 
-func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest, stream bool) (*preparedRequest, error) {
+func (s *requestSemantics) endpointRequest() ai.EndpointRequest {
+	return ai.EndpointRequest{
+		Provider:      "anthropic",
+		ProviderAlias: s.ProviderAlias,
+		Surface:       s.Surface,
+		ResolvedModel: s.SemanticModel,
+		Operation:     s.Operation,
+		Purpose:       s.Purpose,
+	}
+}
+
+type preparedInvocation struct {
+	Request *preparedRequest
+	Route   resolvedRoute
+}
+
+func (c *Client) prepareRequest(prompt string, supplied *core.AIOptions, stream bool) (*preparedRequest, error) {
+	invocation, err := c.prepareInvocation(context.Background(), core.NewAIRequestFromLegacy(prompt, "", supplied), stream)
+	if invocation == nil {
+		return nil, err
+	}
+	return invocation.Request, err
+}
+
+func (c *Client) prepareInvocation(
+	ctx context.Context,
+	supplied *core.AIRequest,
+	stream bool,
+) (*preparedInvocation, error) {
+	semantics, err := c.prepareSemantics(supplied, stream)
+	if err != nil {
+		return nil, err
+	}
+	route, err := c.resolveEndpoint(ctx, semantics.endpointRequest())
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := c.buildPolicyRequest(ctx, semantics, stream)
+	invocation := &preparedInvocation{Request: prepared, Route: route}
+	if err != nil {
+		return invocation, err
+	}
+	c.bindRoute(prepared, route)
+	return invocation, nil
+}
+
+func (c *Client) prepareSemantics(supplied *core.AIRequest, stream bool) (*requestSemantics, error) {
 	request, err := core.CloneAIRequest(supplied)
 	if err != nil {
 		return nil, fmt.Errorf("clone Anthropic AI request: %w", err)
@@ -46,8 +103,75 @@ func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest,
 	if request.Generation.Model != "" {
 		options.Model = request.Generation.Model
 	}
+	if err := validatePortableIntent(request.Generation); err != nil {
+		return nil, err
+	}
 	requestedModel := options.Model
 	options.Model = resolveModel(options.Model)
+	clientDefaults, err := providers.CloneAIOptions(&core.AIOptions{Extra: c.defaultExtra})
+	if err != nil {
+		return nil, fmt.Errorf("clone Anthropic client request extras: %w", err)
+	}
+	mergedExtras := providers.MergeAnyMaps(clientDefaults.Extra, options.Extra)
+	requestedTemperature := options.Temperature
+	if request.Generation.Temperature.Mode == core.AIParameterSet {
+		requestedTemperature = request.Generation.Temperature.Value
+	}
+	operation := "generate"
+	if stream {
+		operation = "stream"
+	}
+	return &requestSemantics{
+		Request:              request,
+		Options:              options,
+		RequestedModel:       requestedModel,
+		SemanticModel:        options.Model,
+		ProviderAlias:        c.observationAlias(),
+		Surface:              "messages",
+		Operation:            operation,
+		Purpose:              request.Purpose,
+		MergedExtras:         mergedExtras,
+		SamplingPolicy:       samplingPolicyForModel(options.Model),
+		RequestedTemperature: requestedTemperature,
+	}, nil
+}
+
+func validatePortableIntent(generation core.AIGenerationOptions) error {
+	parameters := []struct {
+		name string
+		mode core.AIParameterMode
+	}{
+		{name: "temperature", mode: generation.Temperature.Mode},
+		{name: "top_p", mode: generation.TopP.Mode},
+		{name: "top_k", mode: generation.TopK.Mode},
+		{name: "max_tokens", mode: generation.MaxTokens.Mode},
+		{name: "system_prompt", mode: generation.SystemPrompt.Mode},
+		{name: "reasoning_effort", mode: generation.ReasoningEffort.Mode},
+		{name: "response_format", mode: generation.ResponseFormat.Mode},
+	}
+	for _, parameter := range parameters {
+		if parameter.mode != core.AIParameterInherit &&
+			parameter.mode != core.AIParameterSet &&
+			parameter.mode != core.AIParameterOmit {
+			return fmt.Errorf("invalid generation.%s mode %d", parameter.name, parameter.mode)
+		}
+	}
+	if generation.ReasoningEffort.Mode == core.AIParameterSet {
+		return &core.AIRequestFeatureError{ClientType: "*anthropic.Client", Feature: "generation.reasoning_effort"}
+	}
+	if generation.MaxTokens.Mode == core.AIParameterSet && generation.MaxTokens.Value <= 0 {
+		return errors.New("generation.max_tokens must be positive")
+	}
+	return nil
+}
+
+func (c *Client) buildPolicyRequest(
+	ctx context.Context,
+	semantics *requestSemantics,
+	stream bool,
+) (*preparedRequest, error) {
+	request := semantics.Request
+	options := semantics.Options
 
 	body := map[string]interface{}{
 		"model":       options.Model,
@@ -64,11 +188,7 @@ func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest,
 	if options.ResponseFormat != "" {
 		body["response_format"] = options.ResponseFormat
 	}
-	clientDefaults, err := providers.CloneAIOptions(&core.AIOptions{Extra: c.defaultExtra})
-	if err != nil {
-		return nil, fmt.Errorf("clone Anthropic client request extras: %w", err)
-	}
-	mergedExtras := providers.MergeAnyMaps(clientDefaults.Extra, options.Extra)
+	mergedExtras := semantics.MergedExtras
 	for key, value := range mergedExtras {
 		if _, structural := body[key]; !structural {
 			body[key] = value
@@ -79,27 +199,18 @@ func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest,
 	if err := applyGenerationSets(body, request.Generation, explicit); err != nil {
 		return nil, err
 	}
-	requestedTemperature := options.Temperature
-	if request.Generation.Temperature.Mode == core.AIParameterSet {
-		requestedTemperature = request.Generation.Temperature.Value
-	}
-
 	protectedHeaders := anthropicProtectedHeaders(stream)
 	protectedConflicts := protectedHeaderConflicts(protectedHeaders, c.defaultHeaders, options.Headers)
 	eligibleHeaders := eligibleLegacyHeaders(protectedHeaders, c.defaultHeaders, options.Headers)
-	operation := "generate"
-	if stream {
-		operation = "stream"
-	}
 	document, err := requestpolicy.NewDocument(requestpolicy.DocumentConfig{
 		Info: requestpolicy.RequestInfo{
 			Provider:       "anthropic",
-			ProviderAlias:  c.providerAlias,
-			Surface:        "messages",
-			Operation:      operation,
-			Purpose:        request.Purpose,
-			RequestedModel: requestedModel,
-			ResolvedModel:  options.Model,
+			ProviderAlias:  semantics.ProviderAlias,
+			Surface:        semantics.Surface,
+			Operation:      semantics.Operation,
+			Purpose:        semantics.Purpose,
+			RequestedModel: semantics.RequestedModel,
+			ResolvedModel:  semantics.SemanticModel,
 		},
 		Body:                 body,
 		Headers:              eligibleHeaders,
@@ -116,11 +227,10 @@ func (c *Client) prepareAIRequest(ctx context.Context, supplied *core.AIRequest,
 		return nil, err
 	}
 
-	policy := samplingPolicyForModel(options.Model)
 	prepared := &preparedRequest{
 		Model:                options.Model,
-		SamplingPolicy:       policy,
-		RequestedTemperature: requestedTemperature,
+		SamplingPolicy:       semantics.SamplingPolicy,
+		RequestedTemperature: semantics.RequestedTemperature,
 		LegacySamplingExtras: samplingExtraPaths(mergedExtras),
 		ProtectedConflicts:   protectedConflicts,
 	}

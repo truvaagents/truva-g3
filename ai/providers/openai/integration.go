@@ -40,23 +40,13 @@ func (c *Client) withRequestTimeout(ctx context.Context) (context.Context, conte
 	return context.WithTimeout(ctx, c.requestTimeout)
 }
 
-func (c *Client) resolveEndpoint(ctx context.Context, prepared *preparedRequest) (resolvedRoute, error) {
+func (c *Client) resolveEndpoint(ctx context.Context, request ai.EndpointRequest) (resolvedRoute, error) {
 	if c.endpointResolver == nil {
 		endpoint, err := parseOpenAIEndpoint(strings.TrimRight(c.baseURL, "/") + "/chat/completions")
 		if err != nil {
 			return resolvedRoute{}, err
 		}
 		return resolvedRoute{url: endpoint, identity: c.getProviderName() + ".default"}, nil
-	}
-	request := ai.EndpointRequest{
-		Provider:      "openai",
-		ProviderAlias: c.getProviderName(),
-		Surface:       "chat-completions",
-		ResolvedModel: prepared.Model,
-	}
-	if prepared.Report != nil {
-		request.Operation = prepared.Report.Operation
-		request.Purpose = prepared.Report.Purpose
 	}
 	resolved, err := c.endpointResolver.ResolveEndpoint(ctx, request)
 	if err != nil {

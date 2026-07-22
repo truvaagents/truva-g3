@@ -155,3 +155,12 @@ func TestResolveModelEnvOverrideTakesPriority(t *testing.T) {
 		t.Errorf("env override should take priority over hardcoded alias: got %q, want %q", result, expected)
 	}
 }
+
+func TestResolveModelPreservesMutableModelAliasesCompatibility(t *testing.T) {
+	original := ModelAliases["openai"]["smart"]
+	t.Cleanup(func() { ModelAliases["openai"]["smart"] = original })
+	ModelAliases["openai"]["smart"] = "runtime-model"
+	if got := ResolveModel("openai", "smart"); got != "runtime-model" {
+		t.Fatalf("ResolveModel runtime alias = %q", got)
+	}
+}

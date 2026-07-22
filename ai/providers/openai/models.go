@@ -1,9 +1,6 @@
 package openai
 
-import (
-	"os"
-	"strings"
-)
+import "github.com/truvaagents/truva-g3/ai/providers/openai/modelcatalog"
 
 // OpenAIResponse represents the response from OpenAI API
 type OpenAIResponse struct {
@@ -91,78 +88,7 @@ type StreamResponse struct {
 //   - Mistral: https://docs.mistral.ai/getting-started/models/models_overview/
 //   - Qwen: https://www.alibabacloud.com/help/en/model-studio/models
 //   - Ollama: https://ollama.com/library
-var ModelAliases = map[string]map[string]string{
-	// OpenAI - GPT-4.1 and O-series (December 2025)
-	// GPT-4.1 replaced GPT-4o in API with 1M context window
-	// O-series provides advanced reasoning capabilities
-	"openai": {
-		"fast":    "gpt-4.1-mini", // GPT-4.1 Mini: fast, affordable, 1M context
-		"smart":   "o3",           // O3: best reasoning model
-		"vision":  "gpt-4.1",      // GPT-4.1: vision + 1M context
-		"code":    "o3",           // O3: excellent at coding tasks
-		"default": "gpt-4.1-mini",
-	},
-	// DeepSeek - V3.2 family (December 2025)
-	// Two main models: chat (general) and reasoner (thinking mode)
-	"openai.deepseek": {
-		"fast":    "deepseek-chat",     // V3.2 default chat, 128K context
-		"smart":   "deepseek-reasoner", // V3.2 thinking mode, 128K context
-		"code":    "deepseek-chat",     // V3.2 has strong coding capabilities
-		"default": "deepseek-chat",
-	},
-	// Groq - Ultra-fast inference (December 2025)
-	// Known for extremely fast token generation speeds. The gpt-oss family
-	// (OpenAI-namespaced model IDs) is the strongest generalist choice on
-	// Groq today; Llama variants remain available for the fastest tier.
-	"openai.groq": {
-		"fast":    "llama-3.1-8b-instant", // 560 T/sec, fastest
-		"smart":   "openai/gpt-oss-120b",  // gpt-oss 120B: best quality on Groq
-		"code":    "openai/gpt-oss-120b",  // gpt-oss 120B: strong coding capability
-		"default": "openai/gpt-oss-120b",
-	},
-	// Together AI - Open source models (December 2025)
-	// Hosts popular open models with Turbo optimizations
-	"openai.together": {
-		"fast":    "meta-llama/Llama-3.1-8B-Instruct-Turbo",  // Fast inference
-		"smart":   "meta-llama/Llama-3.3-70B-Instruct-Turbo", // Best open model
-		"code":    "Qwen/Qwen2.5-Coder-32B-Instruct",         // Specialized coder
-		"default": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-	},
-	// xAI Grok - Grok 3 and 4 family (December 2025)
-	// Note: Model IDs use simple names without x-ai/ prefix for direct API use
-	"openai.xai": {
-		"fast":    "grok-2",           // Grok 2: fast, 131K context
-		"smart":   "grok-3-beta",      // Grok 3: best reasoning, 131K context
-		"code":    "grok-3-mini-beta", // Grok 3 Mini: fast reasoning for code
-		"vision":  "grok-2-vision-latest",
-		"default": "grok-3-beta",
-	},
-	// Mistral AI - Mistral models (February 2026)
-	// Small/Medium/Large generalist models + Codestral for code
-	"openai.mistral": {
-		"fast":    "mistral-small-latest",  // Small: efficient, fast inference
-		"smart":   "mistral-large-latest",  // Large: most capable generalist
-		"code":    "codestral-latest",      // Codestral: specialized for code
-		"default": "mistral-medium-latest", // Medium 3.1: balanced speed and quality
-	},
-	// Qwen - Alibaba Cloud DashScope (December 2025)
-	// Access via OpenAI-compatible endpoint at dashscope-intl.aliyuncs.com
-	"openai.qwen": {
-		"fast":    "qwen-turbo",       // Fast, cost-efficient, 1M context
-		"smart":   "qwen-max",         // Qwen2.5-Max, most capable
-		"code":    "qwen3-coder-plus", // Specialized for coding
-		"default": "qwen-plus",        // Good balance of speed and quality
-	},
-	// Ollama - Local models via OpenAI-compatible API (December 2025)
-	// Note: Model availability depends on what user has pulled locally
-	// Users can override defaults via TRUVAG3_OLLAMA_MODEL_DEFAULT environment variable
-	"openai.ollama": {
-		"fast":    "llama3.2:1b", // Smallest/fastest variant
-		"smart":   "llama3.2",    // Default 3B model, good balance
-		"code":    "codellama",   // Code-specialized model
-		"default": "llama3.2",    // Most commonly pulled model
-	},
-}
+var ModelAliases = modelcatalog.DefaultAliases()
 
 // ResolveModel resolves a model alias to the actual model name (Phase 2)
 // This function enables portable model names across providers.
@@ -185,29 +111,5 @@ var ModelAliases = map[string]map[string]string{
 //	ResolveModel("openai.groq", "default") → "openai/gpt-oss-120b"
 //	ResolveModel("openai", "gpt-4") → "gpt-4" (pass-through, not an alias)
 func ResolveModel(providerAlias string, model string) string {
-	// If no alias is set, use vanilla OpenAI
-	if providerAlias == "" {
-		providerAlias = "openai"
-	}
-
-	// Check for environment variable override: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}
-	// Normalize provider alias: "openai.deepseek" -> "DEEPSEEK", "openai" -> "OPENAI"
-	envProvider := providerAlias
-	if strings.HasPrefix(providerAlias, "openai.") {
-		envProvider = strings.TrimPrefix(providerAlias, "openai.")
-	}
-	envKey := "TRUVAG3_" + strings.ToUpper(envProvider) + "_MODEL_" + strings.ToUpper(model)
-	if override := os.Getenv(envKey); override != "" {
-		return override
-	}
-
-	// Check hardcoded aliases
-	if aliases, exists := ModelAliases[providerAlias]; exists {
-		if actualModel, exists := aliases[model]; exists {
-			return actualModel
-		}
-	}
-
-	// Not an alias, return as-is (pass-through for explicit model names)
-	return model
+	return modelcatalog.ResolveWithAliases(ModelAliases, providerAlias, model)
 }

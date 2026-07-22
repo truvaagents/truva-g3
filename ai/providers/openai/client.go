@@ -72,15 +72,25 @@ func (c *Client) observeError(
 	operation string,
 	fallback string,
 	err error,
+	duration time.Duration,
 ) {
 	var invocationErr *integrationInvocationError
 	if errors.As(err, &invocationErr) {
 		switch invocationErr.stage {
+		case "endpoint resolution":
+			fallback = "route"
 		case "credential acquisition", "credential validation":
 			fallback = "credential"
 		case "transport request":
 			fallback = "transport"
 		}
+	}
+	var policyErr *requestpolicy.PolicyError
+	var featureErr *core.AIRequestFeatureError
+	if errors.As(err, &policyErr) {
+		fallback = "policy"
+	} else if errors.As(err, &featureErr) {
+		fallback = "invalid_request"
 	}
 	errorType := providers.RecordObservationError(span, err, fallback)
 	c.LogErrorMetadata(ctx, providers.ErrorObservation{
@@ -88,6 +98,7 @@ func (c *Client) observeError(
 		Provider:      "openai",
 		ProviderAlias: c.getProviderName(),
 		ErrorType:     errorType,
+		Duration:      duration,
 	})
 }
 
@@ -106,8 +117,13 @@ func filterOpenAIExtraFields(
 	for key, value := range extra {
 		switch strings.ToLower(key) {
 		case "reasoning":
-			if caps.ReasoningStyle != "openai" {
+			if caps.ReasoningStyle != "openai" || providerAlias != "openai.ollama" {
 				providers.LogTranslationDegraded(ctx, logger, providerAlias, model, "extra_reasoning_stripped", "reasoning")
+				continue
+			}
+		case "reasoning_effort":
+			if caps.ReasoningStyle != "openai" || providerAlias == "openai.ollama" {
+				providers.LogTranslationDegraded(ctx, logger, providerAlias, model, "extra_reasoning_effort_stripped", "reasoning_effort")
 				continue
 			}
 		case "response_format":
@@ -141,53 +157,41 @@ func (c *Client) GenerateResponse(
 // AI-output caches. Preparation is call-local and does not acquire credentials
 // or perform transport I/O.
 func (c *Client) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
-	prepared, err := c.prepareAIRequest(ctx, request, false)
-	if err != nil || prepared == nil || prepared.Report == nil {
+	invocation, err := c.prepareInvocation(ctx, request, false)
+	if err != nil || invocation == nil || invocation.Request == nil || invocation.Request.Report == nil {
 		return "", false
 	}
-	route, err := c.resolveEndpoint(ctx, prepared)
-	if err != nil {
-		return "", false
-	}
-	c.bindRoute(prepared, route)
-	return prepared.Report.Fingerprint, prepared.Report.Stable && prepared.Report.Fingerprint != ""
+	report := invocation.Request.Report
+	return report.Fingerprint, report.Stable && report.Fingerprint != ""
 }
 
 // Generate executes an OpenAI-compatible chat completion.
-func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.AIResult, error) {
-	if request == nil {
-		return nil, errors.New("OpenAI AI request is nil")
-	}
+func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (result *core.AIResult, err error) {
+	started := time.Now()
 	ctx, cancel := c.withRequestTimeout(ctx)
 	defer cancel()
 	ctx, span := c.StartSpan(ctx, "ai.generate_response")
-	defer span.End()
-	span.SetAttribute("ai.provider", c.getProviderName())
+	defer func() { c.finishProviderSpan(ctx, span, "ai_request", started, result, err) }()
+	span.SetAttribute("ai.provider", "openai")
+	span.SetAttribute("ai.provider_alias", c.getProviderName())
+	if request == nil {
+		return nil, errors.New("OpenAI AI request is nil")
+	}
 	span.SetAttribute("ai.prompt_length", len(request.Prompt))
 
-	prepared, err := c.prepareAIRequest(ctx, request, false)
+	invocation, err := c.prepareInvocation(ctx, request, false)
 	if err != nil {
-		if prepared != nil {
-			c.recordRequestPreparation(ctx, span, prepared)
-			span.SetAttribute("ai.model", prepared.Model)
-		}
-		c.observeError(ctx, span, "ai_request", "policy", err)
-		return resultWithReport(prepared, nil), err
-	}
-	route, err := c.resolveEndpoint(ctx, prepared)
-	if err != nil {
+		prepared := preparedFromInvocation(invocation)
 		c.recordRequestPreparation(ctx, span, prepared)
-		c.observeError(ctx, span, "ai_request", "route", err)
 		return resultWithReport(prepared, nil), err
 	}
-	c.bindRoute(prepared, route)
+	prepared, route := invocation.Request, invocation.Route
 	c.recordRequestPreparation(ctx, span, prepared)
 	span.SetAttribute("ai.model", prepared.Model)
+	span.SetAttribute("ai.surface", prepared.Report.Surface)
 	span.SetAttribute("ai.request.route_identity", route.identity)
 	if c.requiresAPIKey() && c.credentialSource == nil && c.apiKey == "" {
-		err := errors.New("OpenAI API key not configured")
-		c.observeError(ctx, span, "ai_request", "credential", err)
-		return resultWithReport(prepared, nil), err
+		return resultWithReport(prepared, nil), errors.New("OpenAI API key not configured")
 	}
 
 	c.LogRequestMetadata(ctx, providers.RequestObservation{
@@ -196,7 +200,6 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 		SemanticModel: prepared.Model,
 		PromptLength:  len(request.Prompt),
 	})
-	started := time.Now()
 	httpRequest, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -204,14 +207,12 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 		bytes.NewReader(prepared.Body),
 	)
 	if err != nil {
-		c.observeError(ctx, span, "ai_request", "invalid_request", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("create OpenAI request: %w", err)
 	}
 	httpRequest.Header = prepared.Headers.Clone()
 	credentialRequest := c.credentialRequest(prepared, route)
 	response, err := c.executeWithCredential(ctx, httpRequest, credentialRequest)
 	if err != nil {
-		c.observeError(ctx, span, "ai_request", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI request: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -219,14 +220,12 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
 		providerErr := c.HandleError(response.StatusCode, body, "OpenAI", prepared.Model)
-		c.observeError(ctx, span, "ai_request", "provider_client", providerErr)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr
 	}
 
-	result, err := prepared.Codec.Decode(response.Body)
+	result, err = prepared.Codec.Decode(response.Body)
 	if err != nil {
-		c.observeError(ctx, span, "ai_request", "decode", err)
 		return resultWithReport(prepared, nil), err
 	}
 	result.Response.Provider = c.getProviderName()
@@ -253,44 +252,36 @@ func (c *Client) Stream(
 	ctx context.Context,
 	request *core.AIRequest,
 	callback core.StreamCallback,
-) (*core.AIResult, error) {
+) (result *core.AIResult, err error) {
+	started := time.Now()
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
+	ctx, span := c.StartSpan(ctx, "ai.stream_response")
+	defer func() { c.finishProviderSpan(ctx, span, "ai_stream", started, result, err) }()
+	span.SetAttribute("ai.provider", "openai")
+	span.SetAttribute("ai.provider_alias", c.getProviderName())
+	span.SetAttribute("ai.streaming", true)
 	if request == nil {
 		return nil, errors.New("OpenAI AI request is nil")
 	}
 	if callback == nil {
 		return nil, errors.New("OpenAI stream callback is nil")
 	}
-	ctx, cancel := c.withRequestTimeout(ctx)
-	defer cancel()
-	ctx, span := c.StartSpan(ctx, "ai.stream_response")
-	defer span.End()
-	span.SetAttribute("ai.provider", c.getProviderName())
-	span.SetAttribute("ai.streaming", true)
 	span.SetAttribute("ai.prompt_length", len(request.Prompt))
 
-	prepared, err := c.prepareAIRequest(ctx, request, true)
+	invocation, err := c.prepareInvocation(ctx, request, true)
 	if err != nil {
-		if prepared != nil {
-			c.recordRequestPreparation(ctx, span, prepared)
-			span.SetAttribute("ai.model", prepared.Model)
-		}
-		c.observeError(ctx, span, "ai_stream", "policy", err)
-		return resultWithReport(prepared, nil), err
-	}
-	route, err := c.resolveEndpoint(ctx, prepared)
-	if err != nil {
+		prepared := preparedFromInvocation(invocation)
 		c.recordRequestPreparation(ctx, span, prepared)
-		c.observeError(ctx, span, "ai_stream", "route", err)
 		return resultWithReport(prepared, nil), err
 	}
-	c.bindRoute(prepared, route)
+	prepared, route := invocation.Request, invocation.Route
 	c.recordRequestPreparation(ctx, span, prepared)
 	span.SetAttribute("ai.model", prepared.Model)
+	span.SetAttribute("ai.surface", prepared.Report.Surface)
 	span.SetAttribute("ai.request.route_identity", route.identity)
 	if c.requiresAPIKey() && c.credentialSource == nil && c.apiKey == "" {
-		err := errors.New("OpenAI API key not configured")
-		c.observeError(ctx, span, "ai_stream", "credential", err)
-		return resultWithReport(prepared, nil), err
+		return resultWithReport(prepared, nil), errors.New("OpenAI API key not configured")
 	}
 
 	c.LogRequestMetadata(ctx, providers.RequestObservation{
@@ -299,7 +290,6 @@ func (c *Client) Stream(
 		SemanticModel: prepared.Model,
 		PromptLength:  len(request.Prompt),
 	})
-	started := time.Now()
 	httpRequest, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -307,29 +297,19 @@ func (c *Client) Stream(
 		bytes.NewReader(prepared.Body),
 	)
 	if err != nil {
-		c.observeError(ctx, span, "ai_stream", "invalid_request", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("create OpenAI stream request: %w", err)
 	}
 	httpRequest.Header = prepared.Headers.Clone()
 	credentialRequest := c.credentialRequest(prepared, route)
-	if err := c.prepareCredential(ctx, httpRequest, credentialRequest); err != nil {
-		c.observeError(ctx, span, "ai_stream", "credential", err)
-		return resultWithReport(prepared, nil), err
-	}
-	// #nosec G704 -- the request URL comes from validated provider configuration
-	// or a trusted EndpointResolver result.
-	response, err := c.HTTPClient.Do(httpRequest)
+	response, err := c.executeWithCredential(ctx, httpRequest, credentialRequest)
 	if err != nil {
-		err = &integrationInvocationError{stage: "transport request", cause: err}
-		c.observeError(ctx, span, "ai_stream", "transport", err)
-		return resultWithReport(prepared, nil), err
+		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI stream request: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
 		providerErr := c.HandleError(response.StatusCode, body, "OpenAI", prepared.Model)
-		c.observeError(ctx, span, "ai_stream", "provider_client", providerErr)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr
 	}
@@ -342,7 +322,7 @@ func (c *Client) Stream(
 		}
 		return callbackErr
 	}
-	result, err := prepared.Codec.DecodeStream(response.Body, observedCallback)
+	result, err = prepared.Codec.DecodeStream(response.Body, observedCallback)
 	if callbackStopped {
 		span.SetAttribute("ai.stream_stopped_by_callback", true)
 		span.SetAttribute("ai.stream_status", "callback_stop")
@@ -351,10 +331,39 @@ func (c *Client) Stream(
 		result.Response.Provider = c.getProviderName()
 		c.recordResponse(ctx, span, prepared.Model, result.Response, started)
 	}
-	if err != nil {
-		c.observeError(ctx, span, "ai_stream", "decode", err)
-	}
 	return resultWithReport(prepared, result), err
+}
+
+func preparedFromInvocation(invocation *preparedInvocation) *preparedRequest {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.Request
+}
+
+func (c *Client) finishProviderSpan(
+	ctx context.Context,
+	span core.Span,
+	operation string,
+	started time.Time,
+	result *core.AIResult,
+	err error,
+) {
+	defer span.End()
+	span.SetAttribute("ai.duration_ms", time.Since(started).Milliseconds())
+	if err != nil {
+		span.SetAttribute("ai.status", "error")
+		c.observeError(ctx, span, operation, "provider_client", err, time.Since(started))
+		return
+	}
+	span.SetAttribute("ai.status", "success")
+	if result == nil || result.Response == nil {
+		return
+	}
+	span.SetAttribute("ai.prompt_tokens", result.Response.Usage.PromptTokens)
+	span.SetAttribute("ai.completion_tokens", result.Response.Usage.CompletionTokens)
+	span.SetAttribute("ai.total_tokens", result.Response.Usage.TotalTokens)
+	span.SetAttribute("ai.response_length", len(result.Response.Content))
 }
 
 func (c *Client) recordResponse(

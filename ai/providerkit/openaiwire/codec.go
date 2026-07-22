@@ -36,6 +36,12 @@ type Codec interface {
 	SurfaceVersion() string
 }
 
+// ProfiledCodec adds explicit semantic and wire-profile draft construction.
+type ProfiledCodec interface {
+	Codec
+	BuildDraftWithProfile(request *core.AIRequest, profile RequestProfile, stream bool) (*Draft, error)
+}
+
 // Config controls wire-level behavior that differs among OpenAI-compatible
 // deployments. Its zero value retains the stock OpenAI defaults.
 type Config struct {
@@ -59,6 +65,15 @@ func NewCodec(surfaceVersion string) (Codec, error) {
 
 // NewConfiguredCodec constructs a codec with explicit wire-level behavior.
 func NewConfiguredCodec(config Config) (Codec, error) {
+	return newConfiguredCodec(config)
+}
+
+// NewProfiledCodec constructs a codec that exposes explicit wire profiles.
+func NewProfiledCodec(config Config) (ProfiledCodec, error) {
+	return newConfiguredCodec(config)
+}
+
+func newConfiguredCodec(config Config) (*codec, error) {
 	version := strings.TrimSpace(config.SurfaceVersion)
 	if version == "" {
 		return nil, errors.New("OpenAI wire surface version is empty")
@@ -83,9 +98,14 @@ func (c *codec) SurfaceVersion() string { return c.surfaceVersion }
 type Draft struct {
 	*requestpolicy.Document
 	surfaceVersion  string
-	resolvedModel   string
+	profileIdentity string
+	semanticModel   string
+	wireModel       string
+	modelField      ModelFieldMode
+	tokenLimit      TokenLimitField
+	reasoningStyle  ReasoningEffortStyle
+	sampling        SamplingPolicy
 	stream          bool
-	reasoning       bool
 	explicit        map[string]struct{}
 	adjustments     []core.AIRequestAdjustment
 	headerConflicts []string
@@ -143,16 +163,25 @@ func (d *Draft) HasExplicitIntent(path string) bool {
 }
 
 // PolicyFingerprintIdentity supplies the versioned codec identity.
-func (d *Draft) PolicyFingerprintIdentity() string { return d.surfaceVersion }
+func (d *Draft) PolicyFingerprintIdentity() string { return d.profileIdentity }
 
 // Validate checks invariants after every policy layer has run.
 func (d *Draft) Validate() error {
 	if d == nil || d.Document == nil {
 		return errors.New("OpenAI wire draft is nil")
 	}
-	model, ok := d.Get("/model")
-	if !ok || model != d.resolvedModel {
-		return errors.New("resolved model invariant was not preserved")
+	model, modelPresent := d.Get("/model")
+	switch d.modelField {
+	case ModelFieldRequired:
+		if !modelPresent || model != d.wireModel {
+			return errors.New("wire model invariant was not preserved")
+		}
+	case ModelFieldOmitted:
+		if modelPresent {
+			return errors.New("wire model omission invariant was not preserved")
+		}
+	default:
+		return errors.New("wire model-field invariant is invalid")
 	}
 	messages, ok := d.Get("/messages")
 	if !ok || !hasMessages(messages) {
@@ -175,6 +204,12 @@ func (d *Draft) Validate() error {
 	if maxTokens && maxCompletionTokens {
 		return errors.New("max_tokens and max_completion_tokens cannot both be set")
 	}
+	if d.tokenLimit == TokenLimitMaxTokens && maxCompletionTokens {
+		return errors.New("max_completion_tokens is incompatible with the wire profile")
+	}
+	if d.tokenLimit == TokenLimitMaxCompletionTokens && maxTokens {
+		return errors.New("max_tokens is incompatible with the wire profile")
+	}
 	for _, path := range []string{"/max_tokens", "/max_completion_tokens"} {
 		if value, present := d.Get(path); present {
 			if err := validatePositiveInteger(path, value); err != nil {
@@ -182,7 +217,25 @@ func (d *Draft) Validate() error {
 			}
 		}
 	}
-	if d.reasoning && reasoningEffort(d.Body()) != "none" {
+	_, nestedReasoning := d.Get("/reasoning")
+	_, topLevelReasoning := d.Get("/reasoning_effort")
+	switch d.reasoningStyle {
+	case ReasoningEffortOmitted:
+		if nestedReasoning || topLevelReasoning {
+			return errors.New("reasoning effort is incompatible with the wire profile")
+		}
+	case ReasoningEffortTopLevel:
+		if nestedReasoning {
+			return errors.New("nested reasoning effort is incompatible with the wire profile")
+		}
+	case ReasoningEffortNestedObject:
+		if topLevelReasoning {
+			return errors.New("top-level reasoning effort is incompatible with the wire profile")
+		}
+	default:
+		return errors.New("wire reasoning-effort invariant is invalid")
+	}
+	if d.sampling == SamplingReasoningRestricted && profileReasoningEffort(d.Body(), d.reasoningStyle) != "none" {
 		if _, present := d.Get("/temperature"); present {
 			return &core.AIRequestFeatureError{
 				ClientType: "openaiwire.Codec",
@@ -194,11 +247,31 @@ func (d *Draft) Validate() error {
 }
 
 func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream bool) (*Draft, error) {
+	profile := RequestProfile{
+		SemanticModel:   resolvedModel,
+		WireModel:       resolvedModel,
+		ModelField:      ModelFieldRequired,
+		TokenLimit:      TokenLimitMaxTokens,
+		ReasoningEffort: ReasoningEffortOmitted,
+		Sampling:        SamplingOrdinary,
+	}
+	if IsReasoningModel(resolvedModel) {
+		profile.TokenLimit = TokenLimitMaxCompletionTokens
+		profile.ReasoningEffort = ReasoningEffortNestedObject
+		profile.Sampling = SamplingReasoningRestricted
+	} else if c.forceReasoningObject || request != nil && request.Generation.ReasoningEffort.Mode == core.AIParameterSet {
+		profile.ReasoningEffort = ReasoningEffortNestedObject
+	}
+	return c.BuildDraftWithProfile(request, profile, stream)
+}
+
+// BuildDraftWithProfile constructs one isolated policy-editable request draft.
+func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestProfile, stream bool) (*Draft, error) {
 	if request == nil {
 		return nil, errors.New("OpenAI wire AI request is nil")
 	}
-	if strings.TrimSpace(resolvedModel) == "" {
-		return nil, errors.New("OpenAI wire resolved model is empty")
+	if err := profile.Validate(); err != nil {
+		return nil, err
 	}
 	request, err := core.CloneAIRequest(request)
 	if err != nil {
@@ -229,7 +302,7 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 			return nil, errors.New("generation.max_tokens must be positive")
 		}
 		maxTokens = value
-		explicit[maxTokensPath(resolvedModel)] = struct{}{}
+		explicit[tokenLimitPath(profile.TokenLimit)] = struct{}{}
 	}
 	if value, set, err := resolveParameter("system_prompt", request.Generation.SystemPrompt); err != nil {
 		return nil, err
@@ -241,7 +314,9 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 		return nil, err
 	} else if set {
 		reasoningEffort = value
-		explicit["/reasoning"] = struct{}{}
+		if path := reasoningEffortPath(profile.ReasoningEffort); path != "" {
+			explicit[path] = struct{}{}
+		}
 	}
 	if value, set, err := resolveParameter("response_format", request.Generation.ResponseFormat); err != nil {
 		return nil, err
@@ -277,15 +352,14 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 	}
 	messages = append(messages, map[string]string{"role": "user", "content": request.Prompt})
 
-	body := buildBody(
-		resolvedModel,
+	body := buildProfiledBody(
+		profile,
 		messages,
 		maxTokens,
 		temperature,
 		stream,
 		c.reasoningTokenMultiplier,
 		reasoningEffort,
-		c.forceReasoningObject,
 	)
 	if responseFormat != "" {
 		body["response_format"] = map[string]interface{}{"type": responseFormat}
@@ -305,8 +379,7 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 		body["top_p"] = options.Extra["top_p"]
 	}
 	if request.Generation.ReasoningEffort.Mode == core.AIParameterSet {
-		removeKeyFold(body, "reasoning")
-		body["reasoning"] = map[string]interface{}{"effort": reasoningEffort}
+		applyReasoningEffort(body, profile.ReasoningEffort, reasoningEffort)
 	}
 	if request.Generation.ResponseFormat.Mode == core.AIParameterSet {
 		removeKeyFold(body, "response_format")
@@ -321,8 +394,8 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 		{request.Generation.Temperature.Mode, "/temperature"},
 		{request.Generation.TopP.Mode, "/top_p"},
 		{request.Generation.TopK.Mode, "/top_k"},
-		{request.Generation.MaxTokens.Mode, maxTokensPath(resolvedModel)},
-		{request.Generation.ReasoningEffort.Mode, "/reasoning"},
+		{request.Generation.MaxTokens.Mode, tokenLimitPath(profile.TokenLimit)},
+		{request.Generation.ReasoningEffort.Mode, reasoningEffortPath(profile.ReasoningEffort)},
 		{request.Generation.ResponseFormat.Mode, "/response_format"},
 	}
 	if request.Generation.SystemPrompt.Mode == core.AIParameterOmit && legacySystemPrompt != "" {
@@ -330,6 +403,9 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 	}
 	for _, omit := range omits {
 		if omit.mode != core.AIParameterOmit {
+			continue
+		}
+		if omit.path == "" {
 			continue
 		}
 		if removeKeyFold(body, strings.TrimPrefix(omit.path, "/")) {
@@ -348,7 +424,7 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 			Operation:      operation,
 			Purpose:        request.Purpose,
 			RequestedModel: requestedModel(request, options),
-			ResolvedModel:  resolvedModel,
+			ResolvedModel:  profile.SemanticModel,
 		},
 		Body:                 body,
 		Headers:              eligible,
@@ -362,9 +438,14 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 	draft := &Draft{
 		Document:        document,
 		surfaceVersion:  c.surfaceVersion,
-		resolvedModel:   resolvedModel,
+		profileIdentity: profileFingerprintIdentity(c.surfaceVersion, profile),
+		semanticModel:   profile.SemanticModel,
+		wireModel:       profile.WireModel,
+		modelField:      profile.ModelField,
+		tokenLimit:      profile.TokenLimit,
+		reasoningStyle:  profile.ReasoningEffort,
+		sampling:        profile.Sampling,
 		stream:          stream,
-		reasoning:       IsReasoningModel(resolvedModel),
 		explicit:        explicit,
 		adjustments:     adjustments,
 		headerConflicts: headerConflicts,
@@ -549,6 +630,85 @@ func buildBody(
 	return body
 }
 
+func buildProfiledBody(
+	profile RequestProfile,
+	messages []map[string]string,
+	maxTokens int,
+	temperature float32,
+	stream bool,
+	reasoningTokenMultiplier int,
+	reasoningEffort string,
+) map[string]interface{} {
+	body := map[string]interface{}{"messages": messages}
+	if profile.ModelField == ModelFieldRequired {
+		body["model"] = profile.WireModel
+	}
+	if maxTokens > 0 {
+		switch profile.TokenLimit {
+		case TokenLimitMaxTokens:
+			body["max_tokens"] = maxTokens
+		case TokenLimitMaxCompletionTokens:
+			budget := maxTokens
+			if reasoningEffort != "none" {
+				budget *= reasoningTokenMultiplier
+			}
+			body["max_completion_tokens"] = budget
+		}
+	}
+	if profile.Sampling == SamplingOrdinary || reasoningEffort == "none" {
+		body["temperature"] = temperature
+	}
+	if reasoningEffort != "" {
+		applyReasoningEffort(body, profile.ReasoningEffort, reasoningEffort)
+	}
+	if stream {
+		body["stream"] = true
+		body["stream_options"] = map[string]interface{}{"include_usage": true}
+	}
+	return body
+}
+
+func applyReasoningEffort(body map[string]interface{}, style ReasoningEffortStyle, effort string) {
+	removeKeyFold(body, "reasoning")
+	removeKeyFold(body, "reasoning_effort")
+	switch style {
+	case ReasoningEffortTopLevel:
+		body["reasoning_effort"] = effort
+	case ReasoningEffortNestedObject:
+		body["reasoning"] = map[string]interface{}{"effort": effort}
+	}
+}
+
+func tokenLimitPath(field TokenLimitField) string {
+	if field == TokenLimitMaxCompletionTokens {
+		return "/max_completion_tokens"
+	}
+	return "/max_tokens"
+}
+
+func reasoningEffortPath(style ReasoningEffortStyle) string {
+	switch style {
+	case ReasoningEffortTopLevel:
+		return "/reasoning_effort"
+	case ReasoningEffortNestedObject:
+		return "/reasoning"
+	default:
+		return ""
+	}
+}
+
+func profileReasoningEffort(body map[string]interface{}, style ReasoningEffortStyle) string {
+	switch style {
+	case ReasoningEffortTopLevel:
+		effort, _ := body["reasoning_effort"].(string)
+		return effort
+	case ReasoningEffortNestedObject:
+		return reasoningEffort(body)
+	default:
+		return ""
+	}
+}
+
 func resolveParameter[T any](name string, parameter core.AIParameter[T]) (T, bool, error) {
 	switch parameter.Mode {
 	case core.AIParameterInherit, core.AIParameterOmit:
@@ -567,13 +727,6 @@ func requestedModel(request *core.AIRequest, options *core.AIOptions) string {
 		return request.Generation.Model
 	}
 	return options.Model
-}
-
-func maxTokensPath(model string) string {
-	if IsReasoningModel(model) {
-		return "/max_completion_tokens"
-	}
-	return "/max_tokens"
 }
 
 func protectedPaths() []string {

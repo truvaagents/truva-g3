@@ -287,6 +287,154 @@ func TestCodecConfiguredReasoningObjectForCompatibleStandardModel(t *testing.T) 
 	}
 }
 
+func TestLegacyCodecRetainsExplicitNestedReasoningForStandardModel(t *testing.T) {
+	codec := mustCodec(t)
+	request := core.NewAIRequest("hello", "legacy-explicit-reasoning")
+	request.Generation.ReasoningEffort = core.SetAIParameter("high")
+	draft, err := codec.BuildDraft(request, "gpt-4.1", false)
+	if err != nil {
+		t.Fatalf("BuildDraft returned error: %v", err)
+	}
+	if got := draft.Body()["reasoning"]; !reflect.DeepEqual(got, map[string]interface{}{"effort": "high"}) {
+		t.Fatalf("legacy explicit reasoning = %#v", got)
+	}
+}
+
+func TestProfiledCodecUsesIndependentReasoningAndSamplingModes(t *testing.T) {
+	codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{
+		SurfaceVersion:           openaiwire.DefaultSurfaceVersion,
+		ReasoningTokenMultiplier: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewProfiledCodec returned error: %v", err)
+	}
+
+	reasoningRequest := core.NewAIRequestFromLegacy("hello", "reasoning", &core.AIOptions{
+		MaxTokens:       100,
+		Temperature:     0.7,
+		ReasoningEffort: "high",
+	})
+	reasoningDraft, err := codec.BuildDraftWithProfile(reasoningRequest, openaiwire.RequestProfile{
+		SemanticModel:   "gpt-5",
+		WireModel:       "gpt-5",
+		ModelField:      openaiwire.ModelFieldRequired,
+		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		ReasoningEffort: openaiwire.ReasoningEffortTopLevel,
+		Sampling:        openaiwire.SamplingReasoningRestricted,
+	}, false)
+	if err != nil {
+		t.Fatalf("reasoning profile returned error: %v", err)
+	}
+	reasoningBody := reasoningDraft.Body()
+	if reasoningBody["reasoning_effort"] != "high" || reasoningBody["max_completion_tokens"] != 500 {
+		t.Fatalf("reasoning body = %#v", reasoningBody)
+	}
+	for _, absent := range []string{"reasoning", "max_tokens", "temperature"} {
+		if _, present := reasoningBody[absent]; present {
+			t.Fatalf("reasoning body unexpectedly contains %q: %#v", absent, reasoningBody)
+		}
+	}
+
+	ordinaryProfile := openaiwire.RequestProfile{
+		SemanticModel:   "gemma4:31b",
+		WireModel:       "gemma4:31b",
+		ModelField:      openaiwire.ModelFieldRequired,
+		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		ReasoningEffort: openaiwire.ReasoningEffortNestedObject,
+		Sampling:        openaiwire.SamplingOrdinary,
+	}
+	ordinaryRequest := core.NewAIRequestFromLegacy("hello", "ollama", &core.AIOptions{
+		MaxTokens:   100,
+		Temperature: 0.4,
+	})
+	ordinaryDraft, err := codec.BuildDraftWithProfile(ordinaryRequest, ordinaryProfile, false)
+	if err != nil {
+		t.Fatalf("ordinary profile returned error: %v", err)
+	}
+	ordinaryBody := ordinaryDraft.Body()
+	if ordinaryBody["max_tokens"] != 100 || ordinaryBody["temperature"] != float32(0.4) {
+		t.Fatalf("ordinary body = %#v", ordinaryBody)
+	}
+	if _, present := ordinaryBody["reasoning"]; present {
+		t.Fatalf("ordinary body emitted unset reasoning: %#v", ordinaryBody)
+	}
+	ordinaryRequest.Generation.ReasoningEffort = core.SetAIParameter("none")
+	ordinaryDraft, err = codec.BuildDraftWithProfile(ordinaryRequest, ordinaryProfile, false)
+	if err != nil {
+		t.Fatalf("ordinary profile with effort returned error: %v", err)
+	}
+	if got := ordinaryDraft.Body()["reasoning"]; !reflect.DeepEqual(got, map[string]interface{}{"effort": "none"}) {
+		t.Fatalf("ordinary nested reasoning = %#v", got)
+	}
+	if _, present := ordinaryDraft.Body()["max_completion_tokens"]; present {
+		t.Fatalf("ordinary profile gained reasoning token field: %#v", ordinaryDraft.Body())
+	}
+}
+
+func TestProfiledCodecProtectsOmittedModelAndExcludesIdentityFromProfileFingerprint(t *testing.T) {
+	codec := mustProfiledCodec(t)
+	profile := openaiwire.RequestProfile{
+		SemanticModel:   "gpt-4.1",
+		ModelField:      openaiwire.ModelFieldOmitted,
+		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
+		Sampling:        openaiwire.SamplingOrdinary,
+	}
+	draft, err := codec.BuildDraftWithProfile(core.NewAIRequest("hello", "classic"), profile, false)
+	if err != nil {
+		t.Fatalf("BuildDraftWithProfile returned error: %v", err)
+	}
+	if _, present := draft.Body()["model"]; present {
+		t.Fatalf("omitted model profile body = %#v", draft.Body())
+	}
+	if err := draft.Set("/model", "deployment"); err == nil {
+		t.Fatal("policy editor changed protected omitted model")
+	}
+
+	other := profile
+	other.SemanticModel = "o3"
+	otherDraft, err := codec.BuildDraftWithProfile(core.NewAIRequest("hello", "classic"), other, false)
+	if err != nil {
+		t.Fatalf("other BuildDraftWithProfile returned error: %v", err)
+	}
+	if draft.PolicyFingerprintIdentity() != otherDraft.PolicyFingerprintIdentity() {
+		t.Fatalf("profile fingerprint included semantic identity: %q vs %q", draft.PolicyFingerprintIdentity(), otherDraft.PolicyFingerprintIdentity())
+	}
+}
+
+func TestRequestProfileValidationRejectsContradictions(t *testing.T) {
+	valid := openaiwire.RequestProfile{
+		SemanticModel:   "gpt-5",
+		WireModel:       "gpt-5",
+		ModelField:      openaiwire.ModelFieldRequired,
+		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
+		Sampling:        openaiwire.SamplingReasoningRestricted,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid independent profile rejected: %v", err)
+	}
+	ordinaryWithEffort := valid
+	ordinaryWithEffort.TokenLimit = openaiwire.TokenLimitMaxTokens
+	ordinaryWithEffort.ReasoningEffort = openaiwire.ReasoningEffortNestedObject
+	ordinaryWithEffort.Sampling = openaiwire.SamplingOrdinary
+	if err := ordinaryWithEffort.Validate(); err != nil {
+		t.Fatalf("ordinary profile with effort spelling rejected: %v", err)
+	}
+
+	tests := []openaiwire.RequestProfile{
+		{},
+		{SemanticModel: "gpt-4.1", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
+		{SemanticModel: "gpt-4.1", WireModel: "deployment", ModelField: openaiwire.ModelFieldOmitted, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
+		{SemanticModel: "gpt-5", WireModel: "gpt-5", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortTopLevel, Sampling: openaiwire.SamplingReasoningRestricted},
+	}
+	for index, profile := range tests {
+		if err := profile.Validate(); err == nil {
+			t.Fatalf("invalid profile %d accepted: %#v", index, profile)
+		}
+	}
+}
+
 func TestCodecDecodeNormalizesUsageDetails(t *testing.T) {
 	codec := mustCodec(t)
 	result, err := codec.Decode(strings.NewReader(`{
@@ -486,6 +634,15 @@ func mustCodec(t *testing.T) openaiwire.Codec {
 	codec, err := openaiwire.NewCodec(openaiwire.DefaultSurfaceVersion)
 	if err != nil {
 		t.Fatalf("NewCodec returned error: %v", err)
+	}
+	return codec
+}
+
+func mustProfiledCodec(t *testing.T) openaiwire.ProfiledCodec {
+	t.Helper()
+	codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{SurfaceVersion: openaiwire.DefaultSurfaceVersion})
+	if err != nil {
+		t.Fatalf("NewProfiledCodec returned error: %v", err)
 	}
 	return codec
 }

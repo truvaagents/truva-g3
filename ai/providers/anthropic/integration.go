@@ -42,7 +42,7 @@ func (c *Client) withRequestTimeout(ctx context.Context) (context.Context, conte
 	return context.WithTimeout(ctx, c.requestTimeout)
 }
 
-func (c *Client) resolveEndpoint(ctx context.Context, prepared *preparedRequest) (resolvedRoute, error) {
+func (c *Client) resolveEndpoint(ctx context.Context, request ai.EndpointRequest) (resolvedRoute, error) {
 	if c.endpointResolver == nil {
 		endpoint, err := parseAnthropicEndpoint(c.baseURL + "/messages")
 		if err != nil {
@@ -51,16 +51,6 @@ func (c *Client) resolveEndpoint(ctx context.Context, prepared *preparedRequest)
 		return resolvedRoute{url: endpoint, identity: defaultRouteIdentity}, nil
 	}
 
-	request := ai.EndpointRequest{
-		Provider:      "anthropic",
-		ProviderAlias: c.providerAlias,
-		Surface:       "messages",
-		ResolvedModel: prepared.Model,
-	}
-	if prepared.Report != nil {
-		request.Operation = prepared.Report.Operation
-		request.Purpose = prepared.Report.Purpose
-	}
 	resolved, err := c.endpointResolver.ResolveEndpoint(ctx, request)
 	if err != nil {
 		return resolvedRoute{}, &integrationInvocationError{stage: "endpoint resolution", cause: err}

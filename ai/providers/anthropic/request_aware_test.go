@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -47,10 +49,11 @@ func TestClientPrepareAIRequest_AppliesPresenceAwareIntentAndRequestPatch(t *tes
 		SetHeaders: map[string]string{"x-feature": "enabled"},
 	}}
 
-	prepared, err := client.prepareAIRequest(t.Context(), request, false)
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
 	if err != nil {
-		t.Fatalf("prepareAIRequest returned error: %v", err)
+		t.Fatalf("prepareInvocation returned error: %v", err)
 	}
+	prepared := invocation.Request
 	patchValue["tenant"] = "caller-mutated"
 	body := decodePreparedBody(t, prepared.Body)
 	if got := body["temperature"]; got != 0.4 {
@@ -147,14 +150,15 @@ func TestClientPrepareAIRequest_PortableOmitAndSyncStreamParity(t *testing.T) {
 	request.Generation.TopP = core.OmitAIParameter[float32]()
 	request.Generation.SystemPrompt = core.OmitAIParameter[string]()
 
-	syncPrepared, err := client.prepareAIRequest(t.Context(), request, false)
+	syncInvocation, err := client.prepareInvocation(t.Context(), request, false)
 	if err != nil {
 		t.Fatalf("prepare sync request: %v", err)
 	}
-	streamPrepared, err := client.prepareAIRequest(t.Context(), request, true)
+	streamInvocation, err := client.prepareInvocation(t.Context(), request, true)
 	if err != nil {
 		t.Fatalf("prepare stream request: %v", err)
 	}
+	syncPrepared, streamPrepared := syncInvocation.Request, streamInvocation.Request
 	syncBody := decodePreparedBody(t, syncPrepared.Body)
 	streamBody := decodePreparedBody(t, streamPrepared.Body)
 	if streamBody["stream"] != true {
@@ -196,10 +200,11 @@ func TestClientPrepareAIRequest_ExplicitSamplingSetNormalizesLegacyCasing(t *tes
 	request.Generation.Temperature = core.SetAIParameter(float32(0))
 	request.Generation.TopP = core.SetAIParameter(float32(0.25))
 
-	prepared, err := client.prepareAIRequest(t.Context(), request, false)
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
 	if err != nil {
-		t.Fatalf("prepareAIRequest returned error: %v", err)
+		t.Fatalf("prepareInvocation returned error: %v", err)
 	}
+	prepared := invocation.Request
 	body := decodePreparedBody(t, prepared.Body)
 	if got := body["temperature"]; got != float64(0) {
 		t.Fatalf("explicit zero temperature = %#v", got)
@@ -231,10 +236,11 @@ func TestClientPrepareAIRequest_IsolatesNestedClientExtrasFromPatches(t *testing
 		Set:      map[string]interface{}{"/metadata/source": "request"},
 	}}
 
-	prepared, err := client.prepareAIRequest(t.Context(), request, false)
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
 	if err != nil {
-		t.Fatalf("prepareAIRequest returned error: %v", err)
+		t.Fatalf("prepareInvocation returned error: %v", err)
 	}
+	prepared := invocation.Request
 	if got := decodePreparedBody(t, prepared.Body)["metadata"].(map[string]interface{})["source"]; got != "request" {
 		t.Fatalf("effective metadata source = %#v", got)
 	}
@@ -332,20 +338,103 @@ func TestClientPrepareAIRequest_RejectsUnrepresentablePortableIntent(t *testing.
 
 	reasoning := core.NewAIRequest("hello", "")
 	reasoning.Generation.ReasoningEffort = core.SetAIParameter("high")
-	_, err := client.prepareAIRequest(t.Context(), reasoning, false)
+	_, err := client.prepareInvocation(t.Context(), reasoning, false)
 	if !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
 		t.Fatalf("reasoning effort error = %v", err)
 	}
 
 	maxTokens := core.NewAIRequest("hello", "")
 	maxTokens.Generation.MaxTokens = core.OmitAIParameter[int]()
-	prepared, err := client.prepareAIRequest(t.Context(), maxTokens, false)
+	invocation, err := client.prepareInvocation(t.Context(), maxTokens, false)
+	prepared := preparedFromInvocation(invocation)
 	var policyErr *requestpolicy.PolicyError
 	if !errors.As(err, &policyErr) || policyErr.Stage != "draft-validation" {
 		t.Fatalf("max_tokens omit error = %v", err)
 	}
 	if prepared == nil || prepared.Report == nil {
 		t.Fatalf("max_tokens omit did not preserve partial report: %#v", prepared)
+	}
+}
+
+func TestPrepareInvocationValidatesThenRoutesBeforePolicy(t *testing.T) {
+	endpoint, err := url.Parse("https://gateway.example.test/v1/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient("anthropic-key", "", &core.NoOpLogger{})
+	resolver := &phase4Resolver{endpoint: ai.ResolvedEndpoint{
+		URL: endpoint, Deployment: "ignored-deployment", RouteIdentity: "lifecycle-route-v1",
+	}}
+	client.endpointResolver = resolver
+
+	invalid := core.NewAIRequest("hello", "invalid")
+	invalid.Generation.ReasoningEffort = core.SetAIParameter("high")
+	if _, err := client.prepareInvocation(t.Context(), invalid, false); !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("invalid intent error = %v", err)
+	}
+	if got := resolver.calls.Load(); got != 0 {
+		t.Fatalf("invalid intent invoked resolver %d times", got)
+	}
+
+	policyFailure := core.NewAIRequestFromLegacy("hello", "policy", &core.AIOptions{
+		Model: "claude-sonnet-4-6", MaxTokens: 10,
+	})
+	policyFailure.Patches = []core.AIProviderPatch{{
+		Name: "protected-model", Version: "1",
+		Selector: core.AIProviderSelector{AllProviders: true},
+		Set:      map[string]interface{}{"/model": "policy-model"},
+	}}
+	for _, stream := range []bool{false, true} {
+		before := resolver.calls.Load()
+		invocation, err := client.prepareInvocation(t.Context(), policyFailure, stream)
+		var policyErr *requestpolicy.PolicyError
+		if !errors.As(err, &policyErr) {
+			t.Fatalf("stream=%t policy error = %v", stream, err)
+		}
+		if got := resolver.calls.Load(); got != before+1 {
+			t.Fatalf("stream=%t resolver calls = %d, want %d", stream, got, before+1)
+		}
+		if invocation == nil || invocation.Request == nil || invocation.Request.Report == nil {
+			t.Fatalf("stream=%t missing partial policy report: %#v", stream, invocation)
+		}
+	}
+	before := resolver.calls.Load()
+	if fingerprint, stable := client.RequestFingerprint(t.Context(), policyFailure); stable || fingerprint != "" {
+		t.Fatalf("policy failure fingerprint = %q, %t", fingerprint, stable)
+	}
+	if got := resolver.calls.Load(); got != before+1 {
+		t.Fatalf("fingerprint resolver calls = %d, want %d", got, before+1)
+	}
+
+	routeErr := errors.New("route unavailable")
+	resolver.err = routeErr
+	invocation, err := client.prepareInvocation(t.Context(), policyFailure, false)
+	if invocation != nil || !errors.Is(err, routeErr) {
+		t.Fatalf("route precedence invocation=%#v error=%v", invocation, err)
+	}
+}
+
+func TestGenericAnthropicProfileIgnoresRouteDeployment(t *testing.T) {
+	endpoint, err := url.Parse("https://gateway.example.test/v1/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &phase4Resolver{endpoint: ai.ResolvedEndpoint{
+		URL: endpoint, Deployment: "publisher-model", RouteIdentity: "direct-route-v1",
+	}}
+	client := NewClient("anthropic-key", "", &core.NoOpLogger{})
+	client.endpointResolver = resolver
+	request := core.NewAIRequestFromLegacy("hello", "deployment", &core.AIOptions{
+		Model: "claude-sonnet-4-6", MaxTokens: 10,
+	})
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
+	if err != nil {
+		t.Fatalf("prepareInvocation returned error: %v", err)
+	}
+	body := decodePreparedBody(t, invocation.Request.Body)
+	requests := resolver.capturedRequests()
+	if body["model"] != "claude-sonnet-4-6" || len(requests) != 1 || requests[0].ResolvedModel != "claude-sonnet-4-6" {
+		t.Fatalf("body=%#v endpoint requests=%#v", body, requests)
 	}
 }
 
@@ -383,11 +472,12 @@ func TestClientPrepareAIRequest_IsSafeForConcurrentRequestReuse(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			prepared, err := client.prepareAIRequest(context.Background(), request, false)
+			invocation, err := client.prepareInvocation(context.Background(), request, false)
 			if err != nil {
 				errorsFound <- err
 				return
 			}
+			prepared := invocation.Request
 			if prepared.Report == nil || !prepared.Report.Stable {
 				errorsFound <- fmt.Errorf("missing stable report")
 			}
