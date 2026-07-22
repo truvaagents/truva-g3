@@ -5055,9 +5055,12 @@ The names above are implementation targets; `prepared.HTTPRequest` represents
 the provider-local immutable-request builder rather than a new public draft
 escape hatch. The streaming method follows the same deferred span completion
 pattern and adds only bounded stream metadata such as chunk count, partial
-status, or callback termination. A callback error or
-`core.ErrStreamPartiallyCompleted` is still a returned error and is recorded in
-sanitized form.
+status, or callback termination. A callback error and
+`core.ErrStreamPartiallyCompleted` have different established semantics: a
+callback error requests a graceful early stop and is not returned, while
+`core.ErrStreamPartiallyCompleted` remains a returned error and is recorded in
+sanitized form. Callback termination may be recorded only as a bounded status;
+the callback error text must not enter logs, spans, metrics, or reports.
 
 `BaseClient.StartSpan` remains optional and fail-open. It returns a no-op span
 when telemetry is absent and normalizes a nil context or nil span returned by a
@@ -5495,7 +5498,7 @@ Observability fixtures use a component-aware recording logger, recording
 contract for OpenAI, both Azure aliases, direct Anthropic, and
 `anthropic.vertex`; cover sync success, stream success, one recovered retry,
 terminal provider error, credential error, resolver error, decoder error,
-callback error, and partial stream.
+callback termination, and partial stream.
 
 The shared metadata-helper and legacy-helper regression table additionally
 covers Gemini and tagged Bedrock. It proves those built-ins no longer emit raw
@@ -5528,7 +5531,7 @@ func TestHostedProviderObservabilityContract(t *testing.T) {
         "credential_error",
         "resolver_error",
         "decoder_error",
-        "callback_error",
+        "callback_stop",
         "partial_stream",
     } {
         t.Run(operation, func(t *testing.T) {
