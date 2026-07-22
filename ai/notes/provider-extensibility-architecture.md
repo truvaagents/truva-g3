@@ -3218,7 +3218,7 @@ Phase 9 code ownership is deliberately narrow:
 
 | Concern | Planned files | Ownership rule |
 |---|---|---|
-| Common AI observability hardening | `ai/providers/base.go`, `base_test.go`, `ai/chain_request.go`, OpenAI/Anthropic/Gemini clients and factories, tagged Bedrock client tests, chain/provider tests, and `ai/instrumented_client.go` only if logical-span sanitization needs adjustment | `ai` preserves the common/logical/provider/attempt hierarchy, context-aware `framework/ai` logs, bounded module-local metrics, and sanitized errors. All built-ins migrate from raw-content helpers; complete base URLs become safe booleans at factory startup. Chain entry names remain stable non-secret log/report/span fields, never metric dimensions. No Phase 9 observability behavior moves into `core`, `telemetry`, or provider codecs. |
+| Common AI observability hardening | `ai/providers/base.go`, `base_test.go`, `ai/chain_request.go`, `ai/embedding.go`, OpenAI/Anthropic/Gemini clients and factories, tagged Bedrock client tests, chain/provider/embedding tests, and `ai/instrumented_client.go` only if logical-span sanitization needs adjustment | `ai` preserves the common/logical/provider/attempt hierarchy, context-aware `framework/ai` logs, bounded module-local metrics, and sanitized errors. All built-ins migrate from raw-content helpers; complete base URLs become safe booleans at factory startup. The OpenAI-compatible embedding transport follows the same sanitization and metric-cardinality boundary while retaining its explicit caller error contract. Chain entry names remain stable non-secret log/report/span fields, never metric dimensions. No Phase 9 observability behavior moves into `core`, `telemetry`, or provider codecs. |
 | Profiled OpenAI wire shape | `ai/providerkit/openaiwire/profile.go`, `codec.go`, `codec_test.go` | `openaiwire` owns only typed JSON/body decisions; it does not import root `ai`, resolve routes, acquire credentials, or send HTTP. |
 | Shared OpenAI semantic alias catalog | new `ai/providers/openai/modelcatalog/catalog.go` plus compatibility wrappers/tests in `ai/providers/openai/models.go` | Stock OpenAI and Azure may resolve the same application aliases before capability lookup without making Azure depend on the OpenAI client package or ever rewriting route deployment. |
 | Generic OpenAI lifecycle | `ai/providers/openai/request_builder.go`, `profile.go`, `client.go`, `integration.go`, existing OpenAI tests | The OpenAI adapter owns semantic capability validation and uses the resolver before profile/draft construction. A generic OpenAI route never substitutes `ResolvedEndpoint.Deployment` into the body. |
@@ -5100,6 +5100,13 @@ does not knowingly leave a second observation path behind. Replace OpenAI and
 Gemini factory `base_url` fields with safe `custom_endpoint` booleans; no
 provider factory startup log emits a complete endpoint.
 
+The same boundary applies to `ai/embedding.go`. Its provider-response body and
+transport errors remain available through the existing caller-visible error
+path, but common embedding logs and span events record only a sanitized error
+and bounded classifier. Embedding model IDs remain permissible log/span fields
+and are removed from metric labels; embedding metrics use only framework-owned
+bounded dimensions such as `module`, `status`, `type`, and `error_type`.
+
 The new helpers accept semantic identity explicitly and keep metric dimensions
 bounded:
 
@@ -5501,11 +5508,12 @@ terminal provider error, credential error, resolver error, decoder error,
 callback termination, and partial stream.
 
 The shared metadata-helper and legacy-helper regression table additionally
-covers Gemini and tagged Bedrock. It proves those built-ins no longer emit raw
-prompt/response content, retain semantic model identity only on permitted
-surfaces, and preserve their existing provider-specific trace shapes. Bedrock
-does not manufacture an `ai.http_attempt` span because its SDK owns transport;
-its tagged test asserts the logical/provider hierarchy instead.
+covers Gemini, the OpenAI-compatible embedding client, and tagged Bedrock. It
+proves those built-ins no longer emit raw prompt/response/provider-error
+content, retain semantic model identity only on permitted surfaces, and
+preserve their existing provider-specific trace shapes. Bedrock does not
+manufacture an `ai.http_attempt` span because its SDK owns transport; its
+tagged test asserts the logical/provider hierarchy instead.
 
 A representative hosted-provider fixture has this shape:
 
@@ -5827,9 +5835,10 @@ amendment land before production implementation. After that documentation gate,
 land Phase 9 as five independently reviewable implementation changes:
 
 1. common AI observability hardening: context-aware metadata helpers,
-   raw-content logging removal, bounded provider metrics, sanitized provider
-   and chain errors, nil-safe span normalization, chain metric hardening, and
-   cross-provider observability tests, including tagged Bedrock coverage;
+   raw-content logging removal, bounded provider and embedding metrics,
+   sanitized provider, embedding, and chain errors, nil-safe span
+   normalization, chain metric hardening, and cross-provider observability
+   tests, including tagged Bedrock coverage;
 2. route-before-draft preparation for OpenAI and Anthropic, the
    side-effect-free OpenAI semantic alias catalog, additive typed wire profiles,
    and direct-provider regression tests;
