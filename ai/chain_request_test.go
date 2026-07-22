@@ -316,6 +316,34 @@ func (*phase5Telemetry) StartSpan(ctx context.Context, name string) (context.Con
 
 func (*phase5Telemetry) RecordMetric(string, float64, map[string]string) {}
 
+type nilReturningChainTelemetry struct{}
+
+func (nilReturningChainTelemetry) StartSpan(context.Context, string) (context.Context, core.Span) {
+	return nil, nil
+}
+func (nilReturningChainTelemetry) RecordMetric(string, float64, map[string]string) {}
+
+func TestChainStartRequestSpanIsNilSafe(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		telemetry core.Telemetry
+	}{
+		{name: "nil telemetry"},
+		{name: "nil-returning telemetry", telemetry: nilReturningChainTelemetry{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &ChainClient{telemetry: test.telemetry}
+			ctx, span := client.startRequestSpan(nil, "ai.chain.nil-safe")
+			if ctx == nil || span == nil {
+				t.Fatalf("startRequestSpan returned context=%#v span=%#v", ctx, span)
+			}
+			span.SetAttribute("test", true)
+			span.RecordError(errors.New("safe"))
+			span.End()
+		})
+	}
+}
+
 type chainObservationLogStore struct {
 	components []string
 	fields     []map[string]interface{}

@@ -681,6 +681,70 @@ func TestVertexPolicyCannotChangeHostedStructuralContract(t *testing.T) {
 	}
 }
 
+func TestVertexResolverAndCredentialFailuresStopBeforeTransport(t *testing.T) {
+	const semanticModel = "claude-sonnet-4-5-20250929"
+	resolverErr := errors.New("Vertex resolver unavailable")
+	credentialErr := errors.New("ADC unavailable")
+	tests := []struct {
+		name             string
+		resolver         *vertexTestResolver
+		credentials      *phase4CredentialSource
+		want             error
+		wantReport       bool
+		wantResolverCall int
+		wantCredCall     int64
+	}{
+		{
+			name: "resolver failure",
+			resolver: &vertexTestResolver{
+				err:             resolverErr,
+				publisherModels: map[string]string{semanticModel: "unused"},
+			},
+			credentials: &phase4CredentialSource{credential: func(_ int64, _ ai.CredentialRequest) (ai.HeaderCredential, error) {
+				return ai.NewHeaderCredential("Authorization", "Bearer unused"), nil
+			}},
+			want: resolverErr, wantResolverCall: 1,
+		},
+		{
+			name: "credential failure",
+			resolver: &vertexTestResolver{
+				projectID: "acme-prod", location: "global",
+				publisherModels: map[string]string{semanticModel: "claude-sonnet-4-5@20250929"},
+				routeIdentity:   "vertex-credential-error-v1",
+			},
+			credentials: &phase4CredentialSource{credential: func(_ int64, _ ai.CredentialRequest) (ai.HeaderCredential, error) {
+				return ai.HeaderCredential{}, credentialErr
+			}},
+			want: credentialErr, wantReport: true, wantResolverCall: 1, wantCredCall: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transportCalls := 0
+			requestClient := newVertexTestClient(t, semanticModel, test.resolver, test.credentials, phase4RoundTripFunc(func(*http.Request) (*http.Response, error) {
+				transportCalls++
+				return nil, errors.New("unexpected transport")
+			}))
+			result, err := requestClient.Generate(t.Context(), core.NewAIRequest("hello", "vertex-failure"))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Generate error = %v, want %v", err, test.want)
+			}
+			if test.wantReport != (result != nil && result.RequestReport != nil) {
+				t.Fatalf("Generate result = %#v, want report=%t", result, test.wantReport)
+			}
+			if got := len(test.resolver.capturedRequests()); got != test.wantResolverCall {
+				t.Fatalf("resolver calls = %d, want %d", got, test.wantResolverCall)
+			}
+			if got := test.credentials.calls.Load(); got != test.wantCredCall {
+				t.Fatalf("credential calls = %d, want %d", got, test.wantCredCall)
+			}
+			if transportCalls != 0 {
+				t.Fatalf("transport calls = %d", transportCalls)
+			}
+		})
+	}
+}
+
 func TestDirectAnthropicProfileRemainsNativeForNonVertexAliases(t *testing.T) {
 	for _, alias := range []string{"anthropic.primary", "anthropic.vertex.custom"} {
 		t.Run(alias, func(t *testing.T) {

@@ -61,6 +61,52 @@ type googleRecordingTransport struct {
 	requests []googleRecordedRequest
 }
 
+type googleStreamTransport struct {
+	mu       sync.Mutex
+	requests []googleRecordedRequest
+}
+
+func (transport *googleStreamTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	bodyBytes, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		return nil, err
+	}
+	transport.mu.Lock()
+	transport.requests = append(transport.requests, googleRecordedRequest{
+		url: request.URL.String(), headers: request.Header.Clone(), body: body,
+	})
+	call := len(transport.requests)
+	transport.mu.Unlock()
+	if call == 1 {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"retry"}}`)),
+			Request:    request,
+		}, nil
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"model":"google/gemini-2.5-flash","choices":[{"delta":{"content":"first"}}]}`,
+			`data: {"model":"google/gemini-2.5-flash","choices":[{"delta":{"content":"second"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}, "\n\n"))),
+		Request: request,
+	}, nil
+}
+
+func (transport *googleStreamTransport) capturedRequests() []googleRecordedRequest {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return append([]googleRecordedRequest(nil), transport.requests...)
+}
+
 func (transport *googleRecordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	bodyBytes, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -192,4 +238,112 @@ func TestGoogleHostedOpenAIUsesGenericPublicContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGoogleHostedOpenAIStreamingRetainsOrdinaryProfileAndRefreshesADC(t *testing.T) {
+	const model = "google/gemini-2.5-flash"
+	baseURL, err := googleOpenAIBaseURL("acme-prod", "us-central1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &googleStreamTransport{}
+	var tokenCalls atomic.Int64
+	client, err := ai.NewRequestClient(
+		ai.WithProvider("openai"),
+		ai.WithBaseURL(baseURL.String()),
+		ai.WithModel(model),
+		ai.WithMaxRetries(1),
+		ai.WithAuthHeader("Authorization", func(context.Context) (string, error) {
+			return fmt.Sprintf("Bearer stream-adc-token-%d", tokenCalls.Add(1)), nil
+		}),
+		ai.WithRequestRules(core.AIProviderPatch{
+			Name: "google-stream-effort", Version: "1",
+			Selector: core.AIProviderSelector{Provider: "openai", Model: "google/*"},
+			Set:      map[string]interface{}{`/reasoning_effort`: "low"},
+		}),
+		ai.WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	if err != nil {
+		t.Fatalf("ai.NewRequestClient returned error: %v", err)
+	}
+	streaming, ok := client.(core.StreamingAIRequestClient)
+	if !ok {
+		t.Fatalf("Google hosted client %T does not support request-aware streaming", client)
+	}
+	stop := errors.New("stop after first chunk")
+	callbackCalls := 0
+	result, err := streaming.Stream(t.Context(), core.NewAIRequest("hello", "google-stream"), func(chunk core.StreamChunk) error {
+		callbackCalls++
+		if chunk.Content != "first" {
+			t.Fatalf("first callback chunk = %#v", chunk)
+		}
+		return stop
+	})
+	if err != nil || result == nil || result.Response == nil || result.Response.Content != "first" {
+		t.Fatalf("Stream result=%#v error=%v", result, err)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callback calls = %d", callbackCalls)
+	}
+	requests := transport.capturedRequests()
+	if len(requests) != 2 || tokenCalls.Load() != 2 {
+		t.Fatalf("transport calls=%d token calls=%d", len(requests), tokenCalls.Load())
+	}
+	wantURL := baseURL.String() + "/chat/completions"
+	for index, request := range requests {
+		if request.url != wantURL || request.headers.Get("Authorization") != fmt.Sprintf("Bearer stream-adc-token-%d", index+1) {
+			t.Fatalf("request %d = %#v", index+1, request)
+		}
+		if request.body["model"] != model || request.body["stream"] != true ||
+			request.body["reasoning_effort"] != "low" || request.body["max_tokens"] == nil ||
+			request.body["temperature"] == nil {
+			t.Fatalf("stream body %d = %#v", index+1, request.body)
+		}
+		for _, absent := range []string{"reasoning", "max_completion_tokens"} {
+			if _, present := request.body[absent]; present {
+				t.Fatalf("stream body %d contains %q: %#v", index+1, absent, request.body)
+			}
+		}
+	}
+	if !reflect.DeepEqual(requests[0].body, requests[1].body) {
+		t.Fatalf("retry body drift: %#v vs %#v", requests[0].body, requests[1].body)
+	}
+}
+
+func TestGoogleHostedOpenAICredentialFailureStopsBeforeTransport(t *testing.T) {
+	baseURL, err := googleOpenAIBaseURL("acme-prod", "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transportCalls := 0
+	credentialErr := errors.New("ADC unavailable")
+	client, err := ai.NewRequestClient(
+		ai.WithProvider("openai"),
+		ai.WithBaseURL(baseURL.String()),
+		ai.WithModel("google/gemini-2.5-flash"),
+		ai.WithMaxRetries(0),
+		ai.WithAuthHeader("Authorization", func(context.Context) (string, error) {
+			return "", credentialErr
+		}),
+		ai.WithHTTPClient(&http.Client{Transport: googleRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportCalls++
+			return nil, errors.New("unexpected transport")
+		})}),
+	)
+	if err != nil {
+		t.Fatalf("ai.NewRequestClient returned error: %v", err)
+	}
+	result, err := client.Generate(t.Context(), core.NewAIRequest("hello", "google-credential"))
+	if result == nil || result.RequestReport == nil || !errors.Is(err, credentialErr) {
+		t.Fatalf("Generate result=%#v error=%v", result, err)
+	}
+	if transportCalls != 0 {
+		t.Fatalf("transport calls = %d", transportCalls)
+	}
+}
+
+type googleRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function googleRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }

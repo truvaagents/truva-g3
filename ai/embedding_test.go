@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,13 @@ type embeddingRoundTripFunc func(*http.Request) (*http.Response, error)
 func (roundTrip embeddingRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return roundTrip(request)
 }
+
+type embeddingFailingReadCloser struct {
+	err error
+}
+
+func (reader *embeddingFailingReadCloser) Read([]byte) (int, error) { return 0, reader.err }
+func (*embeddingFailingReadCloser) Close() error                    { return nil }
 
 type embeddingCaptureLogger struct {
 	component string
@@ -227,6 +235,61 @@ func TestGenerateEmbeddings_ObservationsExcludeProviderAndRequestContent(t *test
 		if strings.Contains(observed, forbidden) {
 			t.Fatalf("embedding observation leaked %q: %s", forbidden, observed)
 		}
+	}
+}
+
+func TestEmbeddingErrorTypeForStatus(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{status: http.StatusBadRequest, want: "provider_client"},
+		{status: http.StatusUnauthorized, want: "provider_client"},
+		{status: http.StatusTooManyRequests, want: "provider_rate_limit"},
+		{status: http.StatusInternalServerError, want: "provider_server"},
+		{status: http.StatusServiceUnavailable, want: "provider_server"},
+	}
+	for _, test := range tests {
+		if got := embeddingErrorTypeForStatus(test.status); got != test.want {
+			t.Fatalf("embeddingErrorTypeForStatus(%d) = %q, want %q", test.status, got, test.want)
+		}
+	}
+}
+
+func TestGenerateEmbeddings_ResponseReadFailureIsSanitized(t *testing.T) {
+	const readerSecret = "embedding-reader-secret"
+	readErr := errors.New(readerSecret)
+	logger := &embeddingCaptureLogger{}
+	client, err := NewEmbeddingClient(
+		WithEmbeddingBaseURL("https://embedding.example/v1"),
+		WithEmbeddingLogger(logger),
+		WithEmbeddingHTTPClient(&http.Client{Transport: embeddingRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       &embeddingFailingReadCloser{err: readErr},
+				Request:    request,
+			}, nil
+		})}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "embedding-read-failure")
+	response, err := client.GenerateEmbeddings(ctx, []string{"input-content"}, nil)
+	if response != nil || !errors.Is(err, readErr) {
+		t.Fatalf("GenerateEmbeddings = %#v, %v", response, err)
+	}
+	if len(logger.fields) != 1 {
+		t.Fatalf("warning fields = %#v", logger.fields)
+	}
+	fields := logger.fields[0]
+	if fields["error_type"] != "decode" || fields["status_code"] != http.StatusOK ||
+		fields["request_id"] != "embedding-read-failure" {
+		t.Fatalf("read-failure fields = %#v", fields)
+	}
+	if strings.Contains(fmt.Sprint(fields), readerSecret) || strings.Contains(fmt.Sprint(fields), "input-content") {
+		t.Fatalf("read-failure fields leaked request or diagnostic: %#v", fields)
 	}
 }
 
