@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers/anthropic"
+	"github.com/truvaagents/truva-g3/ai/providers/azureopenai"
 	"github.com/truvaagents/truva-g3/ai/providers/gemini"
 	"github.com/truvaagents/truva-g3/ai/providers/openai"
 	"github.com/truvaagents/truva-g3/core"
@@ -110,14 +113,65 @@ func observationResponse(request *http.Request, body string) *http.Response {
 	}
 }
 
+type observationAzureResolver struct {
+	resolved ai.ResolvedEndpoint
+}
+
+func (resolver observationAzureResolver) ResolveEndpoint(
+	_ context.Context,
+	_ ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+	return resolver.resolved, nil
+}
+
+func invokeAzureObservation(
+	ctx context.Context,
+	logger core.Logger,
+	tracing core.Telemetry,
+	alias string,
+	endpoint *url.URL,
+	query url.Values,
+	semanticModel string,
+	deployment string,
+	prompt string,
+	responseContent string,
+) (*core.AIResponse, error) {
+	client, err := (&azureopenai.Factory{}).CreateRequestClient(&ai.AIConfig{
+		ProviderAlias: alias, APIKey: "observation-credential-secret", Model: semanticModel,
+		MaxTokens: 32, MaxRetries: 0, Logger: logger, Telemetry: tracing,
+	}, ai.ProviderIntegrationConfig{
+		EndpointResolver: observationAzureResolver{resolved: ai.ResolvedEndpoint{
+			URL: endpoint, Query: query, Deployment: deployment,
+			RouteIdentity: "observation-azure-route-v1", CredentialScope: "observation-credential-scope-secret",
+		}},
+		HTTPClient: &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return observationResponse(request, `{"id":"chatcmpl-test","model":"`+deployment+`","choices":[{"message":{"role":"assistant","content":"`+responseContent+`"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`), nil
+		})},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Initialization entries are deliberately not request-scoped. This test
+	// evaluates only request-path observations below.
+	if recorder, ok := logger.(*observationLogger); ok {
+		recorder.store.entries = nil
+	}
+	legacy, ok := client.(core.AIClient)
+	if !ok {
+		return nil, fmt.Errorf("Azure request client %T does not implement core.AIClient", client)
+	}
+	return legacy.GenerateResponse(ctx, prompt, &core.AIOptions{Model: semanticModel, MaxTokens: 32})
+}
+
 func TestBuiltInProviderObservationContract(t *testing.T) {
 	const (
-		requestID      = "observation-request-id"
-		promptSecret   = "observation-prompt-secret"
-		responseSecret = "observation-response-secret"
-		endpointSecret = "observation-endpoint-secret"
-		credential     = "observation-credential-secret"
-		wireModel      = "observation-wire-model-secret"
+		requestID       = "observation-request-id"
+		promptSecret    = "observation-prompt-secret"
+		responseSecret  = "observation-response-secret"
+		endpointSecret  = "observation-endpoint-secret"
+		credential      = "observation-credential-secret"
+		credentialScope = "observation-credential-scope-secret"
+		wireModel       = "observation-wire-model-secret"
 	)
 
 	tests := []struct {
@@ -151,6 +205,35 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 					return observationResponse(request, `{"id":"msg-test","type":"message","role":"assistant","model":"`+wireModel+`","content":[{"type":"text","text":"`+responseSecret+`"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`), nil
 				})}
 				return client.GenerateResponse(ctx, promptSecret, &core.AIOptions{Model: "claude-sonnet-4-5-20250929", MaxTokens: 32})
+			},
+		},
+		{
+			name:          "azureopenai.v1",
+			semanticModel: "gpt-4.1",
+			invoke: func(ctx context.Context, logger core.Logger, tracing core.Telemetry) (*core.AIResponse, error) {
+				endpoint, err := url.Parse("https://" + endpointSecret + ".example/openai/v1/chat/completions")
+				if err != nil {
+					return nil, err
+				}
+				return invokeAzureObservation(
+					ctx, logger, tracing, "azureopenai.v1", endpoint, nil,
+					"gpt-4.1", wireModel, promptSecret, responseSecret,
+				)
+			},
+		},
+		{
+			name:          "azureopenai.classic",
+			semanticModel: "gpt-4.1",
+			invoke: func(ctx context.Context, logger core.Logger, tracing core.Telemetry) (*core.AIResponse, error) {
+				endpoint, err := url.Parse("https://" + endpointSecret + ".example/openai/deployments/" + wireModel + "/chat/completions")
+				if err != nil {
+					return nil, err
+				}
+				return invokeAzureObservation(
+					ctx, logger, tracing, "azureopenai.classic", endpoint,
+					url.Values{"api-version": {"2024-10-21"}},
+					"gpt-4.1", wireModel, promptSecret, responseSecret,
+				)
 			},
 		},
 		{
@@ -223,6 +306,7 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 				responseSecret,
 				endpointSecret,
 				credential,
+				credentialScope,
 				wireModel,
 			} {
 				if strings.Contains(observations.String(), forbidden) {
