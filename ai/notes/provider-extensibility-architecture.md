@@ -3649,7 +3649,13 @@ func (c *Client) requestProfile(
         profile.TokenLimit = openaiwire.TokenLimitMaxCompletionTokens
         profile.Sampling = openaiwire.SamplingReasoningRestricted
     }
-    if semantics.Capabilities.ReasoningStyle == "openai" {
+    // The stock OpenAI Chat Completions surface owns the top-level field
+    // spelling even when the built-in catalog does not claim reasoning
+    // capability for an application-supplied model. A scoped native policy
+    // may make that provider-model assertion without reclassifying the model
+    // family or changing its token/sampling profile.
+    if semantics.ProviderAlias == "openai" ||
+        semantics.Capabilities.ReasoningStyle == "openai" {
         profile.ReasoningEffort = openaiwire.ReasoningEffortTopLevel
         if semantics.ProviderAlias == "openai.ollama" {
             profile.ReasoningEffort = openaiwire.ReasoningEffortNestedObject
@@ -3666,7 +3672,12 @@ effort it keeps `max_tokens`, ordinary sampling, and no reasoning field; with an
 effective effort it keeps those token/sampling rules and adds only the nested
 `reasoning.effort` compatibility object. OpenAI reasoning families continue to
 use the model-family token and sampling contract, with effort spelling selected
-independently by the surface capability.
+independently by the surface capability. The exact stock `openai` alias likewise
+retains the top-level field spelling for application-supplied models absent from
+the built-in capability table. That permits a narrowly scoped native rule such
+as the Google recipe in §19.12.6 without claiming that every such model is a
+reasoning family: ordinary token and sampling behavior remains unchanged unless
+the resolved semantic model-family predicate says otherwise.
 
 `ForceReasoningObject` remains source-compatible while external users migrate
 to `ProfiledCodec`; the built-in OpenAI client no longer uses that boolean to
