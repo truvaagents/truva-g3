@@ -81,7 +81,11 @@ func (c *Client) prepareInvocation(
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := c.buildPolicyRequest(ctx, semantics, stream)
+	profile, err := c.requestProfile(semantics, route)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := c.buildPolicyRequest(ctx, semantics, profile, stream)
 	invocation := &preparedInvocation{Request: prepared, Route: route}
 	if err != nil {
 		return invocation, err
@@ -168,16 +172,27 @@ func validatePortableIntent(generation core.AIGenerationOptions) error {
 func (c *Client) buildPolicyRequest(
 	ctx context.Context,
 	semantics *requestSemantics,
+	profile requestProfile,
 	stream bool,
 ) (*preparedRequest, error) {
 	request := semantics.Request
 	options := semantics.Options
 
 	body := map[string]interface{}{
-		"model":       options.Model,
 		"messages":    []Message{{Role: "user", Content: request.Prompt}},
 		"max_tokens":  options.MaxTokens,
 		"temperature": options.Temperature,
+	}
+	switch profile.modelField {
+	case modelInBody:
+		body["model"] = profile.wireModel
+	case modelInRoute:
+		// The route owns the publisher model and the body omission is protected.
+	default:
+		return nil, errors.New("anthropic model-field mode is invalid")
+	}
+	if profile.versionPlacement == versionInBody {
+		body["anthropic_version"] = profile.version
 	}
 	if options.SystemPrompt != "" {
 		body["system"] = options.SystemPrompt
@@ -190,6 +205,9 @@ func (c *Client) buildPolicyRequest(
 	}
 	mergedExtras := semantics.MergedExtras
 	for key, value := range mergedExtras {
+		if strings.EqualFold(key, "model") || strings.EqualFold(key, "anthropic_version") {
+			continue
+		}
 		if _, structural := body[key]; !structural {
 			body[key] = value
 		}
@@ -214,14 +232,14 @@ func (c *Client) buildPolicyRequest(
 		},
 		Body:                 body,
 		Headers:              eligibleHeaders,
-		ProtectedPaths:       []string{"/model", "/messages", "/stream"},
+		ProtectedPaths:       []string{"/model", "/anthropic_version", "/messages", "/stream"},
 		ProtectedHeaders:     protectedHeaderNames(protectedHeaders),
 		CaseInsensitivePaths: []string{"/temperature", "/top_p", "/top_k"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Anthropic request draft: %w", err)
 	}
-	draft := &anthropicDraft{Document: document, explicit: explicit, stream: stream}
+	draft := &anthropicDraft{Document: document, explicit: explicit, profile: profile, stream: stream}
 	portableAdjustments, err := applyGenerationOmits(draft, request.Generation)
 	if err != nil {
 		return nil, err
@@ -253,19 +271,39 @@ func (c *Client) buildPolicyRequest(
 		return prepared, fmt.Errorf("marshal Anthropic request: %w", err)
 	}
 
-	headers := make(http.Header)
-	headers.Set("Content-Type", "application/json")
-	if c.credentialSource == nil && c.apiKey != "" {
-		headers.Set("x-api-key", c.apiKey)
+	headers, err := c.finalizeHeaders(profile, draft, stream)
+	if err != nil {
+		return prepared, err
 	}
-	headers.Set("anthropic-version", APIVersion)
-	if stream {
-		headers.Set("Accept", "text/event-stream")
-	}
-	providers.ApplyLegacyHeaders(headers, protectedHeaders, draft.Headers(), nil)
 	prepared.Body = encoded
 	prepared.Headers = headers
 	return prepared, nil
+}
+
+func (c *Client) finalizeHeaders(
+	profile requestProfile,
+	draft *anthropicDraft,
+	stream bool,
+) (http.Header, error) {
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	if stream {
+		headers.Set("Accept", "text/event-stream")
+	}
+	switch profile.versionPlacement {
+	case versionInHeader:
+		headers.Set("anthropic-version", profile.version)
+		if c.credentialSource == nil && c.apiKey != "" {
+			headers.Set("x-api-key", c.apiKey)
+		}
+	case versionInBody:
+		// Vertex uses a Bearer credential added after policy on each attempt.
+	default:
+		return nil, errors.New("anthropic version placement is invalid")
+	}
+	protectedHeaders := anthropicProtectedHeaders(stream)
+	providers.ApplyLegacyHeaders(headers, protectedHeaders, draft.Headers(), nil)
+	return headers, nil
 }
 
 func applyGenerationSets(body map[string]interface{}, generation core.AIGenerationOptions, explicit map[string]struct{}) error {
@@ -356,6 +394,7 @@ func applyGenerationOmits(draft *anthropicDraft, generation core.AIGenerationOpt
 
 func anthropicProtectedHeaders(stream bool) map[string]struct{} {
 	protected := map[string]struct{}{
+		"authorization":     {},
 		"content-type":      {},
 		"x-api-key":         {},
 		"anthropic-version": {},

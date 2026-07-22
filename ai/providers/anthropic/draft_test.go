@@ -7,6 +7,17 @@ import (
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 )
 
+func directTestRequestProfile(model string) requestProfile {
+	return requestProfile{
+		fingerprintIdentity: directProfileIdentity,
+		semanticModel:       model,
+		wireModel:           model,
+		modelField:          modelInBody,
+		versionPlacement:    versionInHeader,
+		version:             APIVersion,
+	}
+}
+
 func TestAnthropicDraftValidate(t *testing.T) {
 	validBody := func() map[string]interface{} {
 		return map[string]interface{}{
@@ -50,7 +61,9 @@ func TestAnthropicDraftValidate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewDocument returned error: %v", err)
 			}
-			draft := &anthropicDraft{Document: document, stream: test.stream}
+			draft := &anthropicDraft{
+				Document: document, profile: directTestRequestProfile("claude-test"), stream: test.stream,
+			}
 			err = draft.Validate()
 			if test.wantErr == "" && err != nil {
 				t.Fatalf("Validate returned error: %v", err)

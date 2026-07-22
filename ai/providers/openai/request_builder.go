@@ -230,7 +230,12 @@ func (c *Client) requestProfile(
 		profile.TokenLimit = openaiwire.TokenLimitMaxCompletionTokens
 		profile.Sampling = openaiwire.SamplingReasoningRestricted
 	}
-	if semantics.Capabilities.ReasoningStyle == "openai" {
+	// The stock OpenAI Chat Completions surface supports the top-level field
+	// spelling even when the framework does not claim reasoning capability for
+	// an application-supplied model. This lets a scoped native policy make that
+	// provider-model assertion without classifying the model as a reasoning
+	// family or changing its token and sampling profile.
+	if semantics.ProviderAlias == "openai" || semantics.Capabilities.ReasoningStyle == "openai" {
 		profile.ReasoningEffort = openaiwire.ReasoningEffortTopLevel
 		if semantics.ProviderAlias == "openai.ollama" {
 			profile.ReasoningEffort = openaiwire.ReasoningEffortNestedObject

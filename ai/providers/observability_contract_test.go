@@ -113,11 +113,22 @@ func observationResponse(request *http.Request, body string) *http.Response {
 	}
 }
 
-type observationAzureResolver struct {
+type observationEndpointResolver struct {
 	resolved ai.ResolvedEndpoint
 }
 
-func (resolver observationAzureResolver) ResolveEndpoint(
+type observationCredentialSource struct {
+	credential ai.HeaderCredential
+}
+
+func (source observationCredentialSource) Credential(
+	_ context.Context,
+	_ ai.CredentialRequest,
+) (ai.HeaderCredential, error) {
+	return source.credential, nil
+}
+
+func (resolver observationEndpointResolver) ResolveEndpoint(
 	_ context.Context,
 	_ ai.EndpointRequest,
 ) (ai.ResolvedEndpoint, error) {
@@ -140,7 +151,7 @@ func invokeAzureObservation(
 		ProviderAlias: alias, APIKey: "observation-credential-secret", Model: semanticModel,
 		MaxTokens: 32, MaxRetries: 0, Logger: logger, Telemetry: tracing,
 	}, ai.ProviderIntegrationConfig{
-		EndpointResolver: observationAzureResolver{resolved: ai.ResolvedEndpoint{
+		EndpointResolver: observationEndpointResolver{resolved: ai.ResolvedEndpoint{
 			URL: endpoint, Query: query, Deployment: deployment,
 			RouteIdentity: "observation-azure-route-v1", CredentialScope: "observation-credential-scope-secret",
 		}},
@@ -159,6 +170,44 @@ func invokeAzureObservation(
 	legacy, ok := client.(core.AIClient)
 	if !ok {
 		return nil, fmt.Errorf("Azure request client %T does not implement core.AIClient", client)
+	}
+	return legacy.GenerateResponse(ctx, prompt, &core.AIOptions{Model: semanticModel, MaxTokens: 32})
+}
+
+func invokeVertexObservation(
+	ctx context.Context,
+	logger core.Logger,
+	tracing core.Telemetry,
+	endpoint *url.URL,
+	semanticModel string,
+	deployment string,
+	prompt string,
+	responseContent string,
+) (*core.AIResponse, error) {
+	client, err := (&anthropic.Factory{}).CreateRequestClient(&ai.AIConfig{
+		ProviderAlias: "anthropic.vertex", Model: semanticModel,
+		MaxTokens: 32, MaxRetries: 0, Logger: logger, Telemetry: tracing,
+	}, ai.ProviderIntegrationConfig{
+		EndpointResolver: observationEndpointResolver{resolved: ai.ResolvedEndpoint{
+			URL: endpoint, Deployment: deployment,
+			RouteIdentity: "observation-vertex-route-v1", CredentialScope: "observation-credential-scope-secret",
+		}},
+		CredentialSource: observationCredentialSource{credential: ai.NewHeaderCredential(
+			"Authorization", "Bearer observation-credential-secret",
+		)},
+		HTTPClient: &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return observationResponse(request, `{"id":"msg-test","type":"message","role":"assistant","model":"`+deployment+`","content":[{"type":"text","text":"`+responseContent+`"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`), nil
+		})},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if recorder, ok := logger.(*observationLogger); ok {
+		recorder.store.entries = nil
+	}
+	legacy, ok := client.(core.AIClient)
+	if !ok {
+		return nil, fmt.Errorf("Vertex request client %T does not implement core.AIClient", client)
 	}
 	return legacy.GenerateResponse(ctx, prompt, &core.AIOptions{Model: semanticModel, MaxTokens: 32})
 }
@@ -205,6 +254,23 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 					return observationResponse(request, `{"id":"msg-test","type":"message","role":"assistant","model":"`+wireModel+`","content":[{"type":"text","text":"`+responseSecret+`"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`), nil
 				})}
 				return client.GenerateResponse(ctx, promptSecret, &core.AIOptions{Model: "claude-sonnet-4-5-20250929", MaxTokens: 32})
+			},
+		},
+		{
+			name:          "anthropic.vertex",
+			semanticModel: "claude-sonnet-4-5-20250929",
+			invoke: func(ctx context.Context, logger core.Logger, tracing core.Telemetry) (*core.AIResponse, error) {
+				endpoint, err := url.Parse(
+					"https://aiplatform.googleapis.com/v1/projects/" + endpointSecret +
+						"/locations/global/publishers/anthropic/models/" + wireModel + ":rawPredict",
+				)
+				if err != nil {
+					return nil, err
+				}
+				return invokeVertexObservation(
+					ctx, logger, tracing, endpoint,
+					"claude-sonnet-4-5-20250929", wireModel, promptSecret, responseSecret,
+				)
 			},
 		},
 		{

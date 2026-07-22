@@ -56,7 +56,7 @@ func TestRequestPolicyEngine_RemovesCaseFoldedSamplingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDocument returned error: %v", err)
 	}
-	draft := &anthropicDraft{Document: document}
+	draft := &anthropicDraft{Document: document, profile: directTestRequestProfile("claude-sonnet-5")}
 	report, err := newRequestPolicyEngine().Apply(t.Context(), draft, nil)
 	if err != nil {
 		t.Fatalf("Apply returned error: %v", err)
@@ -106,7 +106,7 @@ func TestRequestPolicyEngine_MatchesSamplingClassification(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewDocument returned error: %v", err)
 			}
-			draft := &anthropicDraft{Document: document}
+			draft := &anthropicDraft{Document: document, profile: directTestRequestProfile(test.model)}
 			report, err := engine.Apply(t.Context(), draft, nil)
 			if err != nil {
 				t.Fatalf("Apply returned error: %v", err)

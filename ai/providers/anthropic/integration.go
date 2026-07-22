@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/truvaagents/truva-g3/ai"
@@ -59,13 +60,19 @@ func (c *Client) resolveEndpoint(ctx context.Context, request ai.EndpointRequest
 	if err != nil {
 		return resolvedRoute{}, err
 	}
-	return resolvedRoute{
+	route := resolvedRoute{
 		url:             endpoint.URL,
 		identity:        endpoint.RouteIdentity,
 		deployment:      endpoint.Deployment,
 		credentialScope: endpoint.CredentialScope,
 		custom:          true,
-	}, nil
+	}
+	if c.observationAlias() == "anthropic.vertex" {
+		if err := validateVertexRoute(route, request.Operation); err != nil {
+			return resolvedRoute{}, err
+		}
+	}
+	return route, nil
 }
 
 func snapshotResolvedEndpoint(resolved ai.ResolvedEndpoint) (ai.ResolvedEndpoint, error) {
@@ -196,13 +203,31 @@ func (c *Client) prepareCredential(
 	if err != nil {
 		return &integrationInvocationError{stage: "credential acquisition", cause: err}
 	}
-	if err := validateHeaderCredential(credential); err != nil {
+	if c.observationAlias() == "anthropic.vertex" {
+		if err := validateVertexCredential(credential); err != nil {
+			return err
+		}
+	} else if err := validateHeaderCredential(credential); err != nil {
 		return err
 	}
 	if request.Header.Values(credential.Name) != nil {
 		return fmt.Errorf("anthropic credential header %q conflicts with a prepared request header", credential.Name)
 	}
 	request.Header.Set(credential.Name, credential.Value)
+	return nil
+}
+
+func validateVertexCredential(credential ai.HeaderCredential) error {
+	if !strings.EqualFold(credential.Name, "Authorization") {
+		return errors.New("vertex Anthropic credential must use Authorization")
+	}
+	if err := validateHeaderCredential(credential); err != nil {
+		return err
+	}
+	parts := strings.SplitN(credential.Value, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
+		return errors.New("vertex Anthropic credential must be Authorization: Bearer")
+	}
 	return nil
 }
 
@@ -257,15 +282,81 @@ func (c *Client) observeCredentialRejection(
 		}
 		errorType, safeError := providers.SanitizedObservationError(err, "callback")
 		fields := map[string]interface{}{
-			"operation":   "ai_credential_rejection_observer",
-			"provider":    "anthropic",
-			"status_code": statusCode,
-			"error":       safeError.Error(),
-			"error_type":  errorType,
+			"operation":      "ai_credential_rejection_observer",
+			"provider":       "anthropic",
+			"provider_alias": c.observationAlias(),
+			"status_code":    statusCode,
+			"error":          safeError.Error(),
+			"error_type":     errorType,
 		}
 		providers.AddObservationRequestID(ctx, fields)
 		c.Logger.WarnWithContext(ctx, "Anthropic credential rejection observer failed", fields)
 	}
+}
+
+var (
+	vertexClaudePathPattern = regexp.MustCompile(
+		`^/v1/projects/([^/]+)/locations/([^/]+)/publishers/anthropic/models/([^/:]+):(rawPredict|streamRawPredict)$`,
+	)
+	vertexProjectPattern = regexp.MustCompile(
+		`^(?:[a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{6,30})$`,
+	)
+	vertexLocationPattern       = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	vertexPublisherModelPattern = regexp.MustCompile(`^[A-Za-z0-9._@-]+$`)
+)
+
+func vertexGoogleHost(location string) (string, error) {
+	switch location {
+	case "global":
+		return "aiplatform.googleapis.com", nil
+	case "us", "eu":
+		return "aiplatform." + location + ".rep.googleapis.com", nil
+	default:
+		if !vertexLocationPattern.MatchString(location) {
+			return "", errors.New("vertex Anthropic location is invalid")
+		}
+		return location + "-aiplatform.googleapis.com", nil
+	}
+}
+
+func validateVertexRoute(route resolvedRoute, operation string) error {
+	endpoint := route.url
+	if endpoint == nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" {
+		return errors.New("vertex Anthropic endpoint must use HTTPS with a nonempty host")
+	}
+	if endpoint.User != nil || endpoint.Port() != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return errors.New("vertex Anthropic endpoint contains a forbidden URL component")
+	}
+	match := vertexClaudePathPattern.FindStringSubmatch(endpoint.Path)
+	if len(match) != 5 {
+		return errors.New("vertex Anthropic endpoint path is invalid")
+	}
+	projectID, location, publisherModel, method := match[1], match[2], match[3], match[4]
+	if !vertexProjectPattern.MatchString(projectID) ||
+		!vertexLocationPattern.MatchString(location) ||
+		!vertexPublisherModelPattern.MatchString(publisherModel) {
+		return errors.New("vertex Anthropic endpoint contains an invalid resource identifier")
+	}
+	expectedHost, err := vertexGoogleHost(location)
+	if err != nil || endpoint.Hostname() != expectedHost {
+		return errors.New("vertex Anthropic endpoint host does not match its location")
+	}
+	if publisherModel != route.deployment {
+		return errors.New("vertex Anthropic route deployment does not match its URL")
+	}
+	switch operation {
+	case "generate":
+		if method != "rawPredict" {
+			return errors.New("vertex Anthropic prediction method does not match generate")
+		}
+	case "stream":
+		if method != "streamRawPredict" {
+			return errors.New("vertex Anthropic prediction method does not match stream")
+		}
+	default:
+		return fmt.Errorf("unsupported Anthropic operation %q", operation)
+	}
+	return nil
 }
 
 func providerHTTPClient(client *http.Client) *http.Client {

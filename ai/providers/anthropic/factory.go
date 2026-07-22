@@ -1,8 +1,10 @@
 package anthropic
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers"
@@ -36,7 +38,7 @@ func (f *Factory) Priority() int {
 
 // Create creates a new Anthropic client
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-	client, err := f.createClient(config)
+	client, err := f.CreateValidated(config)
 	if err != nil {
 		panic(fmt.Sprintf("create Anthropic client: %v", err))
 	}
@@ -46,7 +48,13 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 // CreateValidated creates a legacy Anthropic client with error-capable
 // configuration validation.
 func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
-	return f.createClient(config)
+	if config != nil && config.ProviderAlias == "anthropic.vertex" {
+		return nil, fmt.Errorf(
+			"%w: anthropic.vertex requires ai.NewRequestClient",
+			core.ErrAIRequestFeatureUnsupported,
+		)
+	}
+	return f.createDirectClient(config)
 }
 
 // CreateRequestClient creates an Anthropic request client with application
@@ -55,10 +63,26 @@ func (f *Factory) CreateRequestClient(
 	config *ai.AIConfig,
 	integration ai.ProviderIntegrationConfig,
 ) (core.AIRequestClient, error) {
-	client, err := f.createClient(config)
+	if config != nil && config.ProviderAlias == "anthropic.vertex" {
+		if integration.EndpointResolver == nil || integration.CredentialSource == nil {
+			return nil, errors.New("anthropic.vertex requires endpoint and credential sources")
+		}
+		if strings.TrimSpace(config.APIKey) != "" || strings.TrimSpace(config.BaseURL) != "" {
+			return nil, errors.New("anthropic.vertex does not accept Anthropic APIKey or BaseURL")
+		}
+		return f.createVertexClient(config, integration)
+	}
+	client, err := f.createDirectClient(config)
 	if err != nil {
 		return nil, err
 	}
+	return configureAnthropicRequestClient(client, integration)
+}
+
+func configureAnthropicRequestClient(
+	client *Client,
+	integration ai.ProviderIntegrationConfig,
+) (*Client, error) {
 	engine, err := newRequestPolicyEngineWithIntegration(
 		integration.RequestRules,
 		integration.RequestMiddleware,
@@ -76,7 +100,7 @@ func (f *Factory) CreateRequestClient(
 	return client, nil
 }
 
-func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
+func (f *Factory) createDirectClient(config *ai.AIConfig) (*Client, error) {
 	if config == nil {
 		return nil, fmt.Errorf("anthropic AI config is nil")
 	}
@@ -98,12 +122,7 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 		return nil, err
 	}
 
-	logger := config.Logger
-	if logger == nil {
-		logger = &core.NoOpLogger{}
-	} else if cal, ok := logger.(core.ComponentAwareLogger); ok {
-		logger = cal.WithComponent("framework/ai")
-	}
+	logger := configuredAnthropicLogger(config.Logger)
 
 	logger.Info("Anthropic provider initialized", map[string]interface{}{
 		"operation":       "ai_provider_init",
@@ -115,8 +134,46 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 		"model":           config.Model,
 	})
 
-	// Create the client with full configuration
+	// Create the client with full configuration.
 	client := NewClient(apiKey, baseURL, logger)
+	if err := applyAnthropicClientConfig(client, config); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func (f *Factory) createVertexClient(
+	config *ai.AIConfig,
+	integration ai.ProviderIntegrationConfig,
+) (*Client, error) {
+	logger := configuredAnthropicLogger(config.Logger)
+	logger.Info("Vertex Anthropic provider initialized", map[string]interface{}{
+		"operation":             "ai_provider_init",
+		"provider":              "anthropic",
+		"provider_alias":        "anthropic.vertex",
+		"has_credential_source": true,
+		"timeout":               config.Timeout.String(),
+		"max_retries":           config.MaxRetries,
+		"model":                 config.Model,
+	})
+	client := NewClient("", DefaultBaseURL, logger)
+	if err := applyAnthropicClientConfig(client, config); err != nil {
+		return nil, err
+	}
+	return configureAnthropicRequestClient(client, integration)
+}
+
+func configuredAnthropicLogger(logger core.Logger) core.Logger {
+	if logger == nil {
+		return &core.NoOpLogger{}
+	}
+	if componentLogger, ok := logger.(core.ComponentAwareLogger); ok {
+		return componentLogger.WithComponent("framework/ai")
+	}
+	return logger
+}
+
+func applyAnthropicClientConfig(client *Client, config *ai.AIConfig) error {
 	if config.Timeout > 0 {
 		client.requestTimeout = config.Timeout
 	}
@@ -163,12 +220,11 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	if len(config.Extra) > 0 {
 		cloned, err := providers.CloneAIOptions(&core.AIOptions{Extra: config.Extra})
 		if err != nil {
-			return nil, fmt.Errorf("clone Anthropic default request extras: %w", err)
+			return fmt.Errorf("clone Anthropic default request extras: %w", err)
 		}
 		client.defaultExtra = cloned.Extra
 	}
-
-	return client, nil
+	return nil
 }
 
 // DetectEnvironment checks if Anthropic is configured and returns priority

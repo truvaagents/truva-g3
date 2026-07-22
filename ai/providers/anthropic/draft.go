@@ -7,11 +7,10 @@ import (
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 )
 
-const anthropicMessagesAdapterVersion = "anthropic-messages-v1"
-
 type anthropicDraft struct {
 	*requestpolicy.Document
 	explicit map[string]struct{}
+	profile  requestProfile
 	stream   bool
 }
 
@@ -21,13 +20,25 @@ func (d *anthropicDraft) HasExplicitIntent(path string) bool {
 }
 
 func (d *anthropicDraft) PolicyFingerprintIdentity() string {
-	return anthropicMessagesAdapterVersion
+	return d.profile.fingerprintIdentity
 }
 
 func (d *anthropicDraft) Validate() error {
-	model, ok := d.Get("/model")
-	if !ok || model != d.Info().ResolvedModel {
-		return errors.New("resolved model invariant was not preserved")
+	if err := d.profile.validate(); err != nil {
+		return err
+	}
+	switch d.profile.modelField {
+	case modelInBody:
+		model, ok := d.Get("/model")
+		if !ok || model != d.profile.wireModel {
+			return errors.New("anthropic body model invariant was not preserved")
+		}
+	case modelInRoute:
+		if _, ok := d.Get("/model"); ok {
+			return errors.New("vertex Anthropic body model must be omitted")
+		}
+	default:
+		return errors.New("anthropic model-field mode is invalid")
 	}
 	if _, ok := d.Get("/messages"); !ok {
 		return errors.New("messages input is required")
@@ -59,6 +70,19 @@ func (d *anthropicDraft) Validate() error {
 		}
 	} else if exists {
 		return errors.New("non-streaming request cannot enable streaming")
+	}
+	version, bodyVersion := d.Get("/anthropic_version")
+	switch d.profile.versionPlacement {
+	case versionInBody:
+		if !bodyVersion || version != d.profile.version {
+			return errors.New("vertex Anthropic body version invariant was not preserved")
+		}
+	case versionInHeader:
+		if bodyVersion {
+			return errors.New("direct Anthropic version must not appear in the body")
+		}
+	default:
+		return errors.New("anthropic version placement is invalid")
 	}
 	return nil
 }
