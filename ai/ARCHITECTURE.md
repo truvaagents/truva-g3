@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.1
+**Version**: 1.3
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -387,7 +387,6 @@ func DetectAvailableProviders(logger core.Logger) []AliasAvailability {
 ```
 
 The `detectBestProvider()` function delegates to `DetectAvailableProviders()` and returns the highest-priority result. This ensures single-client auto-detection and chain auto-detection share the same logic.
-```
 
 **Provider Priorities** (default):
 | Provider | Alias | Priority | Detection Method |
@@ -479,15 +478,27 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
     // Apply defaults
     options = c.ApplyDefaults(options)
+    semanticModel := ResolveModel("openai", options.Model)
 
-    // Log request
-    c.LogRequest("openai", options.Model, prompt)
+    // Log only context-correlated, sanitized request metadata.
+    c.LogRequestMetadata(ctx, providers.RequestObservation{
+        Provider:      "openai",
+        ProviderAlias: "openai",
+        SemanticModel: semanticModel,
+        PromptLength:  len(prompt),
+    })
     startTime := time.Now()
 
     // Build and execute request...
 
-    // Log response
-    c.LogResponse("openai", result.Model, result.Usage, time.Since(startTime))
+    // Keep provider-reported wire model data out of metric dimensions.
+    c.LogResponseMetadata(ctx, providers.ResponseObservation{
+        Provider:      "openai",
+        ProviderAlias: "openai",
+        SemanticModel: semanticModel,
+        Usage:         result.Usage,
+        Duration:      time.Since(startTime),
+    })
 
     return result, nil
 }
@@ -686,15 +697,20 @@ When telemetry is initialized, the chain client should emit:
 ```go
 // On failover
 telemetry.Counter("ai.chain.failover",
-    "from_provider", "openai",
-    "to_provider", "anthropic",
+    "module", telemetry.ModuleAI,
+    "status", "attempted",
     "reason", "server_error")
 
 // On complete failure
 telemetry.Counter("ai.chain.exhausted",
-    "providers_tried", "3",
-    "final_error", "rate_limit")
+    "module", telemetry.ModuleAI,
+    "status", "exhausted",
+    "reason", "rate_limit")
 ```
+
+Chain entry names and from/to transitions are recorded on correlated logs and
+spans, not metric labels. Entry names are application-defined and would create
+unbounded time series if used as metric dimensions.
 
 ---
 
@@ -762,18 +778,18 @@ func (t *AITool) ProcessWithAI(ctx context.Context, input string) (string, error
 
 ```go
 // Standard fields for AI operations
-logger.Info("AI request initiated", map[string]interface{}{
+logger.InfoWithContext(ctx, "AI request initiated", map[string]interface{}{
     "operation":     "ai_request",        // Operation type
     "provider":      "openai",            // Provider name
-    "model":         "gpt-4",             // Model used
+    "model":         "gpt-4",             // Semantic model, never a deployment
     "prompt_length": len(prompt),         // Input size
     "max_tokens":    1000,                // Token limit
 })
 
-logger.Info("AI response received", map[string]interface{}{
+logger.InfoWithContext(ctx, "AI response received", map[string]interface{}{
     "operation":         "ai_response",
     "provider":          "openai",
-    "model":             "gpt-4",
+    "model":             "gpt-4", // Semantic model from the request report
     "prompt_tokens":     usage.PromptTokens,
     "completion_tokens": usage.CompletionTokens,
     "duration_ms":       duration.Milliseconds(),
@@ -781,17 +797,38 @@ logger.Info("AI response received", map[string]interface{}{
 })
 ```
 
+Provider request logs are request-scoped and therefore use the context-aware
+logger methods. AI observation helpers also attach a nonempty `request_id` from
+telemetry baggage with core request context as fallback, preserving correlation
+when telemetry is disabled; the logger context supplies trace correlation when
+available. Every log retains a stable `operation`; error logs also use a bounded
+`error_type` and a sanitized `error` value. Provider clients never log
+prompt text, system prompts, generated content, serialized request/response
+bodies, credentials, credential scopes, complete endpoint URLs, query values,
+or route-owned deployment/publisher-model identifiers. Prompt and response
+lengths and token counts are safe metadata. The optional application-controlled
+`LLMCallRecorder` is a separate debug-capture facility and is not permission for
+provider/common logs to record content.
+
 ### Telemetry Guidelines
 
 **Metrics to Emit** (using `telemetry` module):
 
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `ai.request.duration_ms` | Histogram | provider, model, status | Latency tracking |
-| `ai.request.tokens` | Counter | provider, model, token_type | Cost tracking |
+| `ai.request.duration_ms` | Histogram | module, provider, status | Latency tracking |
+| `ai.request.tokens` | Counter | module, provider, token_type | Usage tracking |
 | `ai.request.errors` | Counter | provider, error_type | Error rates |
-| `ai.chain.failover` | Counter | from_provider, to_provider | Failover frequency |
+| `ai.chain.failover` | Counter | module, status/reason | Failover frequency; provider/entry identities remain in logs and spans |
 | `ai.provider.available` | Gauge | provider | Health monitoring |
+
+Metric labels are deliberately bounded. Semantic model identity belongs in
+logs, reports, and spans, where it remains distinguishable from the wire
+deployment. Neither semantic model strings nor provider-reported wire model,
+deployment, route identity, credential scope, endpoint, request ID, or tenant
+identity is added as a provider metric label. This also prevents an Azure
+deployment or Vertex publisher-model ID returned in `AIResponse.Model` from
+silently becoming a time-series dimension.
 
 **Implementation Pattern**:
 
@@ -982,15 +1019,44 @@ immediate authentication retry because generation acceptance cannot generally
 be proven from an auth response; ordinary provider retry and chain failover
 semantics remain intact.
 
-`EndpointResolver` runs after concrete model resolution and semantic policy.
-AI-output caches may evaluate it during fingerprint preflight and again when a
-cache miss proceeds to provider execution, so resolver implementations must be
-concurrency-safe, side-effect-free, and return a stable route identity for the
-same semantic request. Its `ResolvedEndpoint.URL` is the complete HTTP endpoint,
-and `RouteIdentity` must be a stable, non-secret identifier suitable for a
-sanitized report and fingerprint. Resolver-owned URLs and query maps are
-cloned before use. Query values, deployment names, and credential scopes are
-available to transport/credential integration but are not reported.
+`EndpointResolver` runs after portable request identity and concrete semantic
+model resolution, but before provider-draft construction and semantic request
+policy. This is the normative order for every provider that accepts the shared
+resolver, including Anthropic and OpenAI. It lets a trusted route supply a
+deployment or publisher-model identifier needed to construct protected wire
+structure without treating that identifier as the semantic model.
+
+```text
+snapshot and validate portable request identity
+    -> resolve provider alias and concrete semantic model
+    -> validate known semantic capabilities
+    -> resolve deterministic endpoint route and deployment
+    -> select an explicit, versioned wire profile
+    -> build one provider-local policy draft
+    -> apply rules, middleware, and per-request patches
+    -> validate and encode immutable request semantics
+    -> acquire credentials for each transport attempt
+    -> send and decode
+```
+
+Basic portable-intent, model, and capability validation happens before route
+resolution. Application rules, middleware, per-request patches, and final draft
+validation happen after it. Consequently, a resolver can be invoked before a
+later policy failure, and a route failure takes precedence when both routing
+and a downstream policy stage would fail. A resolver receives no policy-edited
+body or headers and must not depend on policy having executed.
+
+AI-output caches may evaluate the resolver during fingerprint preflight and
+again when a cache miss proceeds to provider execution, so resolver
+implementations must be concurrency-safe, side-effect-free, and return a stable
+route identity for the same semantic request. Its `ResolvedEndpoint.URL` is the
+complete HTTP endpoint, and `RouteIdentity` must be a stable, non-secret
+identifier suitable for a sanitized report and fingerprint. Resolver-owned URLs
+and query maps are cloned before use. Query values, deployment names, and
+credential scopes are available to transport/credential integration but are not
+reported. A deployment affects the body or path only when an explicitly
+selected, typed provider surface consumes it; generic OpenAI and Anthropic
+routes do not silently reinterpret `Deployment` as their body model.
 
 An injected `*http.Client` remains caller-owned. The provider shallow-copies
 it, preserves its transport, redirect, cookie-jar, and timeout policies, and
@@ -1012,6 +1078,15 @@ every provider to use the same transport or wire format. The draft is prepared
 once per logical call, policy is applied once, and sync and stream execution are
 derived from the resulting semantics.
 
+Provider drafts keep semantic identity separate from wire identity. The
+semantic model remains the input to capability lookup, policy selectors,
+reports, and compatibility rules. An explicitly selected, versioned wire
+profile decides whether a route-owned deployment is emitted as the protected
+body model, placed only in the endpoint path, or ignored by that surface. Wire
+profiles are selected by provider configuration or an exact provider alias,
+never inferred from a hostname or arbitrary URL shape. Credentials remain
+outside both profiles and drafts.
+
 `ai/providerkit/openaiwire` is the public extension package for OpenAI-compatible
 Chat Completions adapters. Its codec owns:
 
@@ -1027,6 +1102,16 @@ may reuse the codec with their own routing and authentication without registerin
 as, or masquerading as, the stock OpenAI provider. To preserve the module
 dependency direction, `providerkit/openaiwire` imports `core` and
 `ai/requestpolicy` but never the root `ai` package.
+
+The approved hosted-surface extension uses the same composition rule. Azure
+OpenAI selects the explicit aliases `azureopenai.v1` and
+`azureopenai.classic`. Google-hosted Claude selects `anthropic.vertex` and
+reuses the Anthropic Messages semantics with a provider-local typed profile:
+the publisher model is route-owned and omitted from the body,
+`anthropic_version` is a protected body member, and the Google access token is
+attached later through `CredentialSource`. These identifiers are Phase 9
+implementation targets, not a claim that the current provider table below
+already implements them.
 
 Bedrock demonstrates the non-HTTP form of the same contract. Its logical
 `bedrock.Draft` is evaluated by the shared policy engine and then translated
@@ -1058,8 +1143,14 @@ ai.generate or ai.stream
 
 The logical span owns normalized duration, provider/model/surface identity,
 token usage, and policy adjustment paths. It does not record
-prompts, system prompts, provider request bodies, credentials, or complete
-endpoint URLs. Provider transports continue to own network-attempt spans.
+prompts, system prompts, generated content, serialized provider request or
+response bodies, credentials, credential scopes, complete endpoint URLs, query
+values, or route-owned deployments. Provider transports continue to own
+network-attempt spans. A provider-local span may record the resolved semantic
+model, bounded surface, sanitized stable route identity, status code, durations,
+token counts, and a bounded error classification. Errors recorded on common or
+provider-local spans use sanitized messages rather than raw provider response
+material.
 
 Orchestration emits an `ai.request.prepared` event on its active phase span
 when a sanitized report is available. The event contains provider/surface,
@@ -1343,6 +1434,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2026-07-22 | Approved route-before-draft hosted-provider lifecycle, semantic/wire identity separation, and bounded provider observability contracts |
 | 1.2 | 2026-07-20 | Added request fingerprint delegation, chain composition, and orchestration cache-safety guidance |
 | 1.1 | 2026-07-20 | Added request-aware provider status, reusable OpenAI wire codecs, and native Bedrock policy drafts |
 | 1.0 | 2025-12-14 | Initial architecture documentation |
