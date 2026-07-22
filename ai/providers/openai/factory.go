@@ -115,14 +115,14 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	// This enables Chain Client to pass portable aliases to all providers
 
 	logger.Info("OpenAI provider initialized", map[string]interface{}{
-		"operation":      "ai_provider_init",
-		"provider":       "openai",
-		"provider_alias": config.ProviderAlias, // Phase 2: Log which alias is used
-		"base_url":       baseURL,
-		"has_api_key":    apiKey != "",
-		"timeout":        config.Timeout.String(),
-		"max_retries":    config.MaxRetries,
-		"model":          config.Model,
+		"operation":       "ai_provider_init",
+		"provider":        "openai",
+		"provider_alias":  config.ProviderAlias, // Phase 2: Log which alias is used
+		"custom_endpoint": isCustomOpenAIEndpoint(config.ProviderAlias, baseURL),
+		"has_api_key":     apiKey != "",
+		"timeout":         config.Timeout.String(),
+		"max_retries":     config.MaxRetries,
+		"model":           config.Model,
 	})
 
 	// Create the client with resolved configuration
@@ -204,6 +204,18 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	}
 
 	return client, nil
+}
+
+func isCustomOpenAIEndpoint(alias, baseURL string) bool {
+	for _, subProvider := range subProviders {
+		if alias != "" && subProvider.Alias != alias {
+			continue
+		}
+		if strings.TrimRight(baseURL, "/") == strings.TrimRight(subProvider.DefaultURL, "/") {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveCredentials determines which OpenAI-compatible service to use and resolves credentials.

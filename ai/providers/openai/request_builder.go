@@ -220,13 +220,15 @@ func (c *Client) recordRequestPreparation(ctx context.Context, span core.Span, p
 		}
 	}
 	if len(prepared.ProtectedConflicts) > 0 && c.Logger != nil {
-		c.Logger.WarnWithContext(ctx, "OpenAI legacy protected headers ignored", map[string]interface{}{
+		fields := map[string]interface{}{
 			"operation":       "ai_request_policy",
 			"provider":        c.getProviderName(),
 			"model":           prepared.Model,
 			"ignored_headers": strings.Join(prepared.ProtectedConflicts, ","),
 			"migration":       "remove provider-managed names from WithHeaders and AIOptions.Headers",
-		})
+		}
+		providers.AddObservationRequestID(ctx, fields)
+		c.Logger.WarnWithContext(ctx, "OpenAI legacy protected headers ignored", fields)
 	}
 }
 

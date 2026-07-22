@@ -9,9 +9,48 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+func (c *ChainClient) startRequestSpan(ctx context.Context, name string) (context.Context, core.Span) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.telemetry == nil {
+		return ctx, &core.NoOpSpan{}
+	}
+	spanCtx, span := c.telemetry.StartSpan(ctx, name)
+	if spanCtx == nil {
+		spanCtx = ctx
+	}
+	if span == nil {
+		span = &core.NoOpSpan{}
+	}
+	telemetry.SetCommonAttrsOn(spanCtx, span)
+	return spanCtx, span
+}
+
+func (c *ChainClient) logRequestDebug(ctx context.Context, message string, fields map[string]interface{}) {
+	providers.AddObservationRequestID(ctx, fields)
+	c.logger.DebugWithContext(ctx, message, fields)
+}
+
+func (c *ChainClient) logRequestInfo(ctx context.Context, message string, fields map[string]interface{}) {
+	providers.AddObservationRequestID(ctx, fields)
+	c.logger.InfoWithContext(ctx, message, fields)
+}
+
+func (c *ChainClient) logRequestWarn(ctx context.Context, message string, fields map[string]interface{}) {
+	providers.AddObservationRequestID(ctx, fields)
+	c.logger.WarnWithContext(ctx, message, fields)
+}
+
+func (c *ChainClient) logRequestError(ctx context.Context, message string, fields map[string]interface{}) {
+	providers.AddObservationRequestID(ctx, fields)
+	c.logger.ErrorWithContext(ctx, message, fields)
+}
 
 // RequestFingerprint combines the ordered semantic identities of every chain
 // entry. A cache entry is safe only when every possible failover target can
@@ -100,16 +139,13 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 	fingerprint := chainRequestFingerprint(ctx, request, entries)
 
 	started := time.Now()
-	var span core.Span = &core.NoOpSpan{}
-	if c.telemetry != nil {
-		ctx, span = c.telemetry.StartSpan(ctx, "ai.chain.generate")
-	}
+	ctx, span := c.startRequestSpan(ctx, "ai.chain.generate")
 	defer span.End()
 	span.SetAttribute("ai.chain.providers_count", len(entries))
 	span.SetAttribute("ai.prompt_length", len(request.Prompt))
 
 	if c.logger != nil {
-		c.logger.InfoWithContext(ctx, "Chain client request started", map[string]interface{}{
+		c.logRequestInfo(ctx, "Chain client request started", map[string]interface{}{
 			"operation":       "ai_chain_request",
 			"entries_count":   len(entries),
 			"entry_names":     chainEntryNames(entries),
@@ -131,17 +167,13 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 		}
 
 		attemptStarted := time.Now()
-		attemptCtx := ctx
-		var attemptSpan core.Span = &core.NoOpSpan{}
-		if c.telemetry != nil {
-			attemptCtx, attemptSpan = c.telemetry.StartSpan(ctx, "ai.chain.provider_attempt")
-		}
+		attemptCtx, attemptSpan := c.startRequestSpan(ctx, "ai.chain.provider_attempt")
 		attemptSpan.SetAttribute("ai.chain.provider_index", index)
 		attemptSpan.SetAttribute("ai.chain.entry_name", entry.name)
 		attemptSpan.SetAttribute("ai.chain.is_retry", index > 0)
 
 		if c.logger != nil {
-			c.logger.DebugWithContext(attemptCtx, "Trying provider in chain", map[string]interface{}{
+			c.logRequestDebug(attemptCtx, "Trying provider in chain", map[string]interface{}{
 				"operation":     "ai_chain_attempt",
 				"entry_name":    entry.name,
 				"attempt":       attempt,
@@ -164,22 +196,19 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 			attemptSpan.End()
 			telemetry.Counter("ai.chain.attempt",
 				"module", telemetry.ModuleAI,
-				"provider", entry.name,
 				"status", "success",
-				"attempt", fmt.Sprintf("%d", attempt),
 			)
 			if index > 0 {
 				telemetry.Counter("ai.chain.failover",
 					"module", telemetry.ModuleAI,
-					"from_provider", failedEntries[len(failedEntries)-1],
-					"to_provider", entry.name,
-					"failed_count", fmt.Sprintf("%d", index),
+					"status", "recovered",
+					"reason", classifyFailoverReason(lastErr),
 				)
 				span.SetAttribute("ai.chain.failover_occurred", true)
 				span.SetAttribute("ai.chain.failover_count", index)
 				span.SetAttribute("ai.chain.failover_reason", classifyFailoverReason(lastErr))
 				if c.logger != nil {
-					c.logger.InfoWithContext(ctx, "Chain failover succeeded", map[string]interface{}{
+					c.logRequestInfo(ctx, "Chain failover succeeded", map[string]interface{}{
 						"operation":         "ai_chain_failover_success",
 						"failed_entries":    failedEntries,
 						"successful_entry":  entry.name,
@@ -206,21 +235,20 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 			attemptSpan.SetAttribute("ai.chain.is_transient", providerErr.IsTransient())
 			attemptSpan.SetAttribute("ai.chain.is_retryable", providerErr.IsRetryable())
 		}
-		attemptSpan.RecordError(callErr)
+		providers.RecordObservationError(attemptSpan, callErr, "unknown")
 		attemptSpan.End()
 		telemetry.Counter("ai.chain.attempt",
 			"module", telemetry.ModuleAI,
-			"provider", entry.name,
 			"status", "failed",
-			"attempt", fmt.Sprintf("%d", attempt),
+			"reason", classifyFailoverReason(callErr),
 		)
 
 		if !shouldFailOver(callErr) {
 			span.SetAttribute("ai.chain.status", "aborted")
 			span.SetAttribute("ai.chain.abort_reason", "non_retryable_error")
-			span.RecordError(callErr)
+			providers.RecordObservationError(span, callErr, "unknown")
 			if c.logger != nil {
-				c.logger.ErrorWithContext(ctx, "Chain aborted - client error not retryable", map[string]interface{}{
+				c.logRequestError(ctx, "Chain aborted - client error not retryable", map[string]interface{}{
 					"operation":      "ai_chain_abort",
 					"entry_name":     entry.name,
 					"attempt":        attempt,
@@ -237,14 +265,15 @@ func (c *ChainClient) Generate(ctx context.Context, request *core.AIRequest) (*c
 	joined := errors.Join(failures...)
 	telemetry.Counter("ai.chain.exhausted",
 		"module", telemetry.ModuleAI,
-		"providers_tried", fmt.Sprintf("%d", len(entries)),
+		"status", "exhausted",
+		"reason", classifyFailoverReason(lastErr),
 	)
 	span.SetAttribute("ai.chain.status", "exhausted")
 	span.SetAttribute("ai.chain.failed_providers", strings.Join(failedEntries, ","))
 	span.SetAttribute("ai.chain.total_duration_ms", time.Since(started).Milliseconds())
-	span.RecordError(joined)
+	providers.RecordObservationError(span, joined, "unknown")
 	if c.logger != nil {
-		c.logger.ErrorWithContext(ctx, "All chain providers exhausted", map[string]interface{}{
+		c.logRequestError(ctx, "All chain providers exhausted", map[string]interface{}{
 			"operation":         "ai_chain_exhausted",
 			"entries_tried":     len(entries),
 			"failed_entries":    failedEntries,
@@ -275,10 +304,7 @@ func (c *ChainClient) Stream(
 	fingerprint := chainRequestFingerprint(ctx, request, entries)
 
 	started := time.Now()
-	var span core.Span = &core.NoOpSpan{}
-	if c.telemetry != nil {
-		ctx, span = c.telemetry.StartSpan(ctx, "ai.chain.stream")
-	}
+	ctx, span := c.startRequestSpan(ctx, "ai.chain.stream")
 	defer span.End()
 	span.SetAttribute("ai.chain.total_providers", len(entries))
 	span.SetAttribute("ai.prompt_length", len(request.Prompt))
@@ -297,11 +323,7 @@ func (c *ChainClient) Stream(
 		}
 
 		attemptStarted := time.Now()
-		attemptCtx := ctx
-		var attemptSpan core.Span = &core.NoOpSpan{}
-		if c.telemetry != nil {
-			attemptCtx, attemptSpan = c.telemetry.StartSpan(ctx, "ai.chain.stream_attempt")
-		}
+		attemptCtx, attemptSpan := c.startRequestSpan(ctx, "ai.chain.stream_attempt")
 		attemptSpan.SetAttribute("ai.chain.provider_index", index)
 		attemptSpan.SetAttribute("ai.chain.entry_name", entry.name)
 		attemptSpan.SetAttribute("ai.chain.is_retry", index > 0)
@@ -324,13 +346,12 @@ func (c *ChainClient) Stream(
 			attemptSpan.End()
 			telemetry.Counter("ai.chain.stream.success",
 				"module", telemetry.ModuleAI,
-				"provider", entry.name,
-				"attempt", fmt.Sprintf("%d", attempt),
+				"status", "success",
 			)
 			telemetry.Histogram("ai.chain.stream.duration_ms",
 				float64(time.Since(started).Milliseconds()),
 				"module", telemetry.ModuleAI,
-				"provider", entry.name,
+				"status", "success",
 			)
 			span.SetAttribute("ai.chain.status", "success")
 			span.SetAttribute("ai.chain.entry_name", entry.name)
@@ -348,15 +369,16 @@ func (c *ChainClient) Stream(
 		if delivered.Load() || errors.Is(callErr, core.ErrStreamPartiallyCompleted) {
 			attemptSpan.SetAttribute("ai.chain.attempt_status", "partial")
 			attemptSpan.SetAttribute("ai.chain.attempt_duration_ms", time.Since(attemptStarted).Milliseconds())
-			attemptSpan.RecordError(callErr)
+			providers.RecordObservationError(attemptSpan, callErr, "partial_stream")
 			attemptSpan.End()
 			telemetry.Counter("ai.chain.stream.partial",
 				"module", telemetry.ModuleAI,
-				"provider", entry.name,
+				"status", "partial",
+				"reason", "partial_stream",
 			)
 			span.SetAttribute("ai.chain.status", "partial")
 			span.SetAttribute("ai.chain.entry_name", entry.name)
-			span.RecordError(callErr)
+			providers.RecordObservationError(span, callErr, "partial_stream")
 			return result, callErr
 		}
 
@@ -364,19 +386,20 @@ func (c *ChainClient) Stream(
 		failures = append(failures, annotateChainError(entry.name, attempt, callErr))
 		attemptSpan.SetAttribute("ai.chain.attempt_status", "failed")
 		attemptSpan.SetAttribute("ai.chain.attempt_duration_ms", time.Since(attemptStarted).Milliseconds())
-		attemptSpan.RecordError(callErr)
+		providers.RecordObservationError(attemptSpan, callErr, "unknown")
 		attemptSpan.End()
 		telemetry.Counter("ai.chain.stream.failure",
 			"module", telemetry.ModuleAI,
-			"provider", entry.name,
+			"status", "failed",
+			"reason", classifyFailoverReason(callErr),
 		)
 		if !shouldFailOver(callErr) {
 			span.SetAttribute("ai.chain.status", "aborted")
-			span.RecordError(callErr)
+			providers.RecordObservationError(span, callErr, "unknown")
 			return result, callErr
 		}
 		if c.logger != nil {
-			c.logger.WarnWithContext(attemptCtx, "Provider streaming failed, trying next", map[string]interface{}{
+			c.logRequestWarn(attemptCtx, "Provider streaming failed, trying next", map[string]interface{}{
 				"operation":    "ai_chain_stream_failover",
 				"entry_name":   entry.name,
 				"attempt":      attempt,
@@ -389,11 +412,12 @@ func (c *ChainClient) Stream(
 	joined := errors.Join(failures...)
 	telemetry.Counter("ai.chain.stream.exhausted",
 		"module", telemetry.ModuleAI,
-		"providers_tried", fmt.Sprintf("%d", len(entries)),
+		"status", "exhausted",
+		"reason", classifyFailoverReason(lastErr),
 	)
 	span.SetAttribute("ai.chain.status", "exhausted")
 	span.SetAttribute("ai.chain.failed_providers", strings.Join(failedEntries, ","))
-	span.RecordError(joined)
+	providers.RecordObservationError(span, joined, "unknown")
 	return lastResult, fmt.Errorf("all %d chain entries failed for streaming: %w", len(entries), joined)
 }
 
@@ -472,7 +496,7 @@ func (c *ChainClient) logChainFailover(
 	}
 	var providerErr core.ProviderError
 	if errors.As(err, &providerErr) && providerErr.IsTransient() {
-		c.logger.WarnWithContext(ctx, "Transient proxy error, failing over to next provider", map[string]interface{}{
+		c.logRequestWarn(ctx, "Transient proxy error, failing over to next provider", map[string]interface{}{
 			"operation":     "chain_failover",
 			"from_provider": entries[index].name,
 			"to_provider":   nextEntry,
@@ -481,7 +505,7 @@ func (c *ChainClient) logChainFailover(
 		})
 	}
 	if errors.As(err, &providerErr) && providerErr.IsRetryable() {
-		c.logger.WarnWithContext(ctx, "Provider terminal error (billing/quota), failing over to next provider", map[string]interface{}{
+		c.logRequestWarn(ctx, "Provider terminal error (billing/quota), failing over to next provider", map[string]interface{}{
 			"operation":     "chain_failover_retryable",
 			"from_provider": entries[index].name,
 			"to_provider":   nextEntry,
@@ -489,7 +513,7 @@ func (c *ChainClient) logChainFailover(
 			"is_retryable":  true,
 		})
 	}
-	c.logger.WarnWithContext(ctx, "Provider failed in chain, trying next", map[string]interface{}{
+	c.logRequestWarn(ctx, "Provider failed in chain, trying next", map[string]interface{}{
 		"operation":        "ai_chain_provider_failed",
 		"entry_name":       entries[index].name,
 		"attempt":          index + 1,

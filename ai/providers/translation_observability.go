@@ -9,7 +9,16 @@ import (
 )
 
 func LogTranslationDegraded(ctx context.Context, logger core.Logger, providerAlias, model, warningType, capability string) {
-	requestID := core.GetRequestID(ctx)
+	fields := map[string]interface{}{
+		"operation":      "ai_request",
+		"provider_alias": providerAlias,
+		"model":          model,
+		"status":         "degraded",
+		"warning_type":   warningType,
+		"capability":     capability,
+	}
+	AddObservationRequestID(ctx, fields)
+	requestID, _ := fields["request_id"].(string)
 
 	telemetry.AddSpanEvent(ctx, "ai.translation.degraded",
 		attribute.String("request_id", requestID),
@@ -21,20 +30,10 @@ func LogTranslationDegraded(ctx context.Context, logger core.Logger, providerAli
 
 	telemetry.Counter("ai.translation.warnings_total",
 		"module", telemetry.ModuleAI,
-		"provider_alias", providerAlias,
-		"warning_type", warningType,
-		"capability", capability,
+		"status", "degraded",
 	)
 
 	if logger != nil {
-		logger.WarnWithContext(ctx, "AI request degraded for unsupported provider capability", map[string]interface{}{
-			"operation":      "ai_request",
-			"request_id":     requestID,
-			"provider_alias": providerAlias,
-			"model":          model,
-			"status":         "degraded",
-			"warning_type":   warningType,
-			"capability":     capability,
-		})
+		logger.WarnWithContext(ctx, "AI request degraded for unsupported provider capability", fields)
 	}
 }

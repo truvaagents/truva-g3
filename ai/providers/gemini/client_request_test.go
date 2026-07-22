@@ -6,11 +6,36 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 )
+
+type captureLogger struct {
+	fields []map[string]interface{}
+}
+
+func (logger *captureLogger) record(fields map[string]interface{}) {
+	logger.fields = append(logger.fields, fields)
+}
+
+func (logger *captureLogger) Debug(string, map[string]interface{}) {}
+func (logger *captureLogger) Info(_ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *captureLogger) Warn(string, map[string]interface{})  {}
+func (logger *captureLogger) Error(string, map[string]interface{}) {}
+func (logger *captureLogger) DebugWithContext(context.Context, string, map[string]interface{}) {
+}
+func (logger *captureLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *captureLogger) WarnWithContext(context.Context, string, map[string]interface{}) {
+}
+func (logger *captureLogger) ErrorWithContext(context.Context, string, map[string]interface{}) {
+}
 
 func TestClient_GenerateResponse_ResponseFormatIsNestedUnderGenerationConfig(t *testing.T) {
 	var captured map[string]interface{}
@@ -205,5 +230,30 @@ func TestFactory_Create_CopiesHeadersAndExtra(t *testing.T) {
 	}
 	if got := client.defaultExtra["topP"]; got != 0.9 {
 		t.Fatalf("expected factory to copy default extra, got %#v", got)
+	}
+}
+
+func TestFactoryInitializationLogDoesNotExposeEndpoint(t *testing.T) {
+	const endpoint = "https://gemini-endpoint-secret.example/v1beta"
+	logger := &captureLogger{}
+	factory := &Factory{}
+	factory.Create(&ai.AIConfig{
+		APIKey:  "test-key",
+		BaseURL: endpoint,
+		Logger:  logger,
+	})
+
+	if len(logger.fields) == 0 {
+		t.Fatal("provider initialization log was not captured")
+	}
+	fields := logger.fields[0]
+	if _, exists := fields["base_url"]; exists {
+		t.Fatalf("initialization fields contain base_url: %#v", fields)
+	}
+	if fields["custom_endpoint"] != true {
+		t.Fatalf("custom_endpoint = %#v, want true", fields["custom_endpoint"])
+	}
+	if strings.Contains(fmt.Sprint(fields), "gemini-endpoint-secret") {
+		t.Fatalf("initialization fields leaked endpoint: %#v", fields)
 	}
 }

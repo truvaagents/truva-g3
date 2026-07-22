@@ -19,6 +19,7 @@ import (
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
@@ -403,6 +404,8 @@ func TestBedrockConfigurationValidation(t *testing.T) {
 
 type fakeRuntimeClient struct {
 	converseInput *bedrockruntime.ConverseInput
+	converseOut   *bedrockruntime.ConverseOutput
+	converseErr   error
 	streamInput   *bedrockruntime.ConverseStreamInput
 	stream        converseEventStream
 }
@@ -435,6 +438,12 @@ func (client *fakeRuntimeClient) Converse(
 	_ ...func(*bedrockruntime.Options),
 ) (*bedrockruntime.ConverseOutput, error) {
 	client.converseInput = input
+	if client.converseErr != nil {
+		return nil, client.converseErr
+	}
+	if client.converseOut != nil {
+		return client.converseOut, nil
+	}
 	return &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{Value: types.Message{
 			Role: types.ConversationRoleAssistant,
@@ -449,6 +458,135 @@ func (client *fakeRuntimeClient) Converse(
 		},
 		StopReason: types.StopReasonEndTurn,
 	}, nil
+}
+
+type bedrockObservationLogger struct {
+	component string
+	fields    []map[string]interface{}
+}
+
+func (logger *bedrockObservationLogger) WithComponent(component string) core.Logger {
+	logger.component = component
+	return logger
+}
+func (*bedrockObservationLogger) Debug(string, map[string]interface{}) {}
+func (*bedrockObservationLogger) Info(string, map[string]interface{})  {}
+func (*bedrockObservationLogger) Warn(string, map[string]interface{})  {}
+func (*bedrockObservationLogger) Error(string, map[string]interface{}) {}
+func (*bedrockObservationLogger) DebugWithContext(context.Context, string, map[string]interface{}) {
+}
+func (logger *bedrockObservationLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.fields = append(logger.fields, fields)
+}
+func (*bedrockObservationLogger) WarnWithContext(context.Context, string, map[string]interface{}) {
+}
+func (logger *bedrockObservationLogger) ErrorWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.fields = append(logger.fields, fields)
+}
+
+type bedrockObservationTelemetry struct {
+	names []string
+	spans []*bedrockObservationSpan
+}
+
+func (tracing *bedrockObservationTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
+	span := &bedrockObservationSpan{attributes: map[string]interface{}{}}
+	tracing.names = append(tracing.names, name)
+	tracing.spans = append(tracing.spans, span)
+	return ctx, span
+}
+func (*bedrockObservationTelemetry) RecordMetric(string, float64, map[string]string) {}
+
+type bedrockObservationSpan struct {
+	attributes map[string]interface{}
+	errors     []error
+	ended      int
+}
+
+func (span *bedrockObservationSpan) End() { span.ended++ }
+func (span *bedrockObservationSpan) SetAttribute(key string, value interface{}) {
+	span.attributes[key] = value
+}
+func (span *bedrockObservationSpan) RecordError(err error) { span.errors = append(span.errors, err) }
+
+func TestBedrockObservationContract(t *testing.T) {
+	const (
+		requestID      = "bedrock-observation-request"
+		promptSecret   = "bedrock-observation-prompt-secret"
+		responseSecret = "bedrock-observation-response-secret"
+		providerSecret = "bedrock-observation-provider-secret"
+	)
+
+	t.Run("success excludes request and response content", func(t *testing.T) {
+		runtime := &fakeRuntimeClient{converseOut: &bedrockruntime.ConverseOutput{
+			Output: &types.ConverseOutputMemberMessage{Value: types.Message{
+				Role: types.ConversationRoleAssistant,
+				Content: []types.ContentBlock{
+					&types.ContentBlockMemberText{Value: responseSecret},
+				},
+			}},
+			Usage: &types.TokenUsage{InputTokens: aws.Int32(1), OutputTokens: aws.Int32(1), TotalTokens: aws.Int32(2)},
+		}}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+		client.DefaultModel = "semantic-bedrock-model"
+		ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+
+		result, err := client.Generate(ctx, core.NewAIRequest(promptSecret, "observation"))
+		if err != nil {
+			t.Fatalf("Generate returned error: %v", err)
+		}
+		if result == nil || result.Response == nil || result.Response.Content != responseSecret {
+			t.Fatalf("result = %#v", result)
+		}
+		if logger.component != "framework/ai" {
+			t.Fatalf("logger component = %q", logger.component)
+		}
+		if len(tracing.names) != 1 || tracing.names[0] != "ai.generate_response" {
+			t.Fatalf("span hierarchy = %#v", tracing.names)
+		}
+
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes)
+		for _, fields := range logger.fields {
+			if fields["operation"] == "" || fields["request_id"] != requestID {
+				t.Errorf("log fields = %#v", fields)
+			}
+		}
+		for _, forbidden := range []string{promptSecret, responseSecret} {
+			if strings.Contains(observed, forbidden) {
+				t.Fatalf("observations leaked %q: %s", forbidden, observed)
+			}
+		}
+	})
+
+	t.Run("error preserves identity and sanitizes observations", func(t *testing.T) {
+		wantErr := errors.New(providerSecret)
+		runtime := &fakeRuntimeClient{converseErr: wantErr}
+		logger := &bedrockObservationLogger{}
+		tracing := &bedrockObservationTelemetry{}
+		client := newClientWithRuntime(runtime, "us-test-1", logger)
+		client.SetLogger(logger)
+		client.SetTelemetry(tracing)
+		client.DefaultModel = "semantic-bedrock-model"
+
+		_, err := client.Generate(context.Background(), core.NewAIRequest("prompt", "observation"))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Generate error = %v, want preserved identity", err)
+		}
+		if len(tracing.spans) != 1 || len(tracing.spans[0].errors) != 1 {
+			t.Fatalf("error spans = %#v", tracing.spans)
+		}
+		if tracing.spans[0].errors[0].Error() != "AI provider request failed: transport" {
+			t.Fatalf("span error = %v", tracing.spans[0].errors[0])
+		}
+		observed := fmt.Sprint(logger.fields, tracing.spans[0].attributes, tracing.spans[0].errors[0])
+		if strings.Contains(observed, providerSecret) {
+			t.Fatalf("observations leaked provider error: %s", observed)
+		}
+	})
 }
 
 func (client *fakeRuntimeClient) ConverseStream(

@@ -1162,8 +1162,11 @@ func TestInstrumentedClient_LogicalErrorIsSecretSafe(t *testing.T) {
 		t.Fatal("Generate() error = nil")
 	}
 	span := tracing.spans[0]
-	if span.ended != 1 || len(span.errors) != 1 || span.errors[0].Error() != "AI request failed" {
+	if span.ended != 1 || len(span.errors) != 1 || span.errors[0].Error() != "AI provider request failed: unknown" {
 		t.Fatalf("logical span errors = %#v, ended %d", span.errors, span.ended)
+	}
+	if span.attributes["ai.error_type"] != "unknown" {
+		t.Fatalf("logical span error type = %#v", span.attributes["ai.error_type"])
 	}
 	spanText := fmt.Sprintf("%#v %#v", span.attributes, span.errors)
 	for _, secret := range []string{"credential-secret", "prompt-secret"} {

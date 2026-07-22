@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -124,11 +126,13 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 		if err != nil {
 			// Runtime failures (e.g., missing API keys) are warnings, not errors
 			// This allows partial chain creation when some providers aren't configured
+			errorType, safeError := providers.SanitizedObservationError(err, "invalid_request")
 			logger.Warn("Provider not available (will skip in chain)", map[string]interface{}{
-				"operation": "ai_chain_init",
-				"alias":     alias,
-				"error":     err.Error(),
-				"note":      "This provider will be skipped during failover",
+				"operation":  "ai_chain_init",
+				"alias":      alias,
+				"error":      safeError.Error(),
+				"error_type": errorType,
+				"note":       "This provider will be skipped during failover",
 			})
 			continue // Skip unavailable providers gracefully
 		}
@@ -464,8 +468,8 @@ func (c *ChainClient) GetProviderInfo() ChainProviderInfo {
 // downstream metrics derived from spans (rate-limit vs upstream-5xx vs
 // transient-proxy vs network).
 //
-// Categories are intentionally coarse. The full error remains on the
-// ai.chain.provider_attempt child span via RecordError; this is the headline.
+// Categories are intentionally coarse. The child span records only the same
+// bounded error category; the original error remains caller-visible.
 func classifyFailoverReason(err error) string {
 	if err == nil {
 		return "unknown"
@@ -490,16 +494,18 @@ func classifyFailoverReason(err error) string {
 		}
 		return "provider_error"
 	}
-	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "context deadline") || strings.Contains(msg, "timeout"):
+	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
-	case strings.Contains(msg, "context canceled"):
+	case errors.Is(err, context.Canceled):
 		return "canceled"
-	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") || strings.Contains(msg, "i/o timeout"):
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		if networkErr.Timeout() {
+			return "timeout"
+		}
 		return "network"
-	case strings.Contains(msg, "does not support streaming"):
-		return "streaming_unsupported"
 	}
 	return "unknown"
 }

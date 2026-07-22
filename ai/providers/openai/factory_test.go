@@ -1,9 +1,11 @@
 package openai
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,34 @@ func TestFactory_Description(t *testing.T) {
 	}
 	if desc != "Universal OpenAI-compatible provider (OpenAI, Groq, DeepSeek, Qwen, local models, etc.)" {
 		t.Errorf("unexpected description: %q", desc)
+	}
+}
+
+func TestFactoryInitializationLogDoesNotExposeEndpoint(t *testing.T) {
+	const endpoint = "https://enterprise-endpoint-secret.example/v1"
+	logger := &mockLogger{}
+	factory := &Factory{}
+	_, err := factory.CreateValidated(&ai.AIConfig{
+		ProviderAlias: "openai",
+		APIKey:        "test-key",
+		BaseURL:       endpoint,
+		Logger:        logger,
+	})
+	if err != nil {
+		t.Fatalf("CreateValidated returned error: %v", err)
+	}
+	if len(logger.fields) == 0 {
+		t.Fatal("provider initialization log was not captured")
+	}
+	fields := logger.fields[0]
+	if _, exists := fields["base_url"]; exists {
+		t.Fatalf("initialization fields contain base_url: %#v", fields)
+	}
+	if fields["custom_endpoint"] != true {
+		t.Fatalf("custom_endpoint = %#v, want true", fields["custom_endpoint"])
+	}
+	if strings.Contains(fmt.Sprint(fields), "enterprise-endpoint-secret") {
+		t.Fatalf("initialization fields leaked endpoint: %#v", fields)
 	}
 }
 

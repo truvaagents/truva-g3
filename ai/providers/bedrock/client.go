@@ -92,6 +92,22 @@ func newClientWithRuntime(runtime runtimeClient, region string, logger core.Logg
 	}
 }
 
+func (c *Client) observeError(
+	ctx context.Context,
+	span core.Span,
+	operation string,
+	fallback string,
+	err error,
+) {
+	errorType := providers.RecordObservationError(span, err, fallback)
+	c.LogErrorMetadata(ctx, providers.ErrorObservation{
+		Operation:     operation,
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		ErrorType:     errorType,
+	})
+}
+
 type preparedRequest struct {
 	Model       string
 	Draft       *Draft
@@ -224,23 +240,28 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 		if prepared != nil {
 			c.recordPreparation(span, prepared)
 		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "policy", err)
 		return resultWithReport(prepared, nil), err
 	}
 	c.recordPreparation(span, prepared)
-	c.LogRequest("bedrock", prepared.Model, request.Prompt)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: prepared.Model,
+		PromptLength:  len(request.Prompt),
+	})
 	started := time.Now()
 	output, err := c.bedrockClient.Converse(ctx, prepared.SyncInput)
 	if err != nil {
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("bedrock converse error: %w", err)
 	}
 	result, err := decodeConverseOutput(prepared.Model, output)
 	if err != nil {
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "decode", err)
 		return resultWithReport(prepared, nil), err
 	}
-	c.recordResponse(ctx, span, result.Response, started)
+	c.recordResponse(ctx, span, prepared.Model, result.Response, started)
 	if output.StopReason != "" {
 		span.SetAttribute("ai.stop_reason", string(output.StopReason))
 	}
@@ -287,19 +308,25 @@ func (c *Client) Stream(
 		if prepared != nil {
 			c.recordPreparation(span, prepared)
 		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "policy", err)
 		return resultWithReport(prepared, nil), err
 	}
 	c.recordPreparation(span, prepared)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: prepared.Model,
+		PromptLength:  len(request.Prompt),
+	})
 	started := time.Now()
 	eventStream, err := c.bedrockClient.ConverseStream(ctx, prepared.StreamInput)
 	if err != nil {
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("bedrock stream error: %w", err)
 	}
 	if eventStream == nil {
 		err := errors.New("bedrock stream output is nil")
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "decode", err)
 		return resultWithReport(prepared, nil), err
 	}
 	defer func() { _ = eventStream.Close() }()
@@ -317,10 +344,14 @@ func (c *Client) Stream(
 				if callback(core.StreamChunk{
 					Content: delta.Value, Delta: true, Index: chunkIndex, Model: prepared.Model,
 				}) != nil {
+					span.SetAttribute("ai.stream_stopped_by_callback", true)
+					span.SetAttribute("ai.stream_status", "callback_stop")
 					result := &core.AIResult{
 						Response:     responseFor(content, prepared.Model, usage),
 						UsageDetails: usageDetails,
 					}
+					c.recordResponse(ctx, span, prepared.Model, result.Response, started)
+					span.SetAttribute("ai.chunks_sent", chunkIndex+1)
 					return resultWithReport(prepared, result), nil
 				}
 				chunkIndex++
@@ -335,24 +366,31 @@ func (c *Client) Stream(
 		select {
 		case <-ctx.Done():
 			if content != "" {
+				streamErr := core.ErrStreamPartiallyCompleted
+				c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
 				result := &core.AIResult{
 					Response:     responseFor(content, prepared.Model, usage),
 					UsageDetails: usageDetails,
 				}
-				return resultWithReport(prepared, result), core.ErrStreamPartiallyCompleted
+				return resultWithReport(prepared, result), streamErr
 			}
-			return resultWithReport(prepared, nil), ctx.Err()
+			ctxErr := ctx.Err()
+			c.observeError(ctx, span, "ai_stream", "cancelled", ctxErr)
+			return resultWithReport(prepared, nil), ctxErr
 		default:
 		}
 	}
 	if err := eventStream.Err(); err != nil {
 		if content != "" {
+			streamErr := core.ErrStreamPartiallyCompleted
+			c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
 			result := &core.AIResult{
 				Response:     responseFor(content, prepared.Model, usage),
 				UsageDetails: usageDetails,
 			}
-			return resultWithReport(prepared, result), core.ErrStreamPartiallyCompleted
+			return resultWithReport(prepared, result), streamErr
 		}
+		c.observeError(ctx, span, "ai_stream", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("bedrock stream error: %w", err)
 	}
 	if finishReason != "" {
@@ -365,7 +403,7 @@ func (c *Client) Stream(
 		Response:     responseFor(content, prepared.Model, usage),
 		UsageDetails: usageDetails,
 	}
-	c.recordResponse(ctx, span, result.Response, started)
+	c.recordResponse(ctx, span, prepared.Model, result.Response, started)
 	span.SetAttribute("ai.chunks_sent", chunkIndex)
 	return resultWithReport(prepared, result), nil
 }
@@ -436,13 +474,24 @@ func (c *Client) recordPreparation(span core.Span, prepared *preparedRequest) {
 	}
 }
 
-func (c *Client) recordResponse(ctx context.Context, span core.Span, response *core.AIResponse, started time.Time) {
+func (c *Client) recordResponse(
+	ctx context.Context,
+	span core.Span,
+	semanticModel string,
+	response *core.AIResponse,
+	started time.Time,
+) {
 	span.SetAttribute("ai.prompt_tokens", response.Usage.PromptTokens)
 	span.SetAttribute("ai.completion_tokens", response.Usage.CompletionTokens)
 	span.SetAttribute("ai.total_tokens", response.Usage.TotalTokens)
 	span.SetAttribute("ai.response_length", len(response.Content))
-	c.LogResponse(ctx, "bedrock", response.Model, response.Usage, time.Since(started))
-	c.LogResponseContent("bedrock", response.Model, response.Content)
+	c.LogResponseMetadata(ctx, providers.ResponseObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: semanticModel,
+		Usage:         response.Usage,
+		Duration:      time.Since(started),
+	})
 }
 
 func resultWithReport(prepared *preparedRequest, result *core.AIResult) *core.AIResult {
@@ -472,8 +521,13 @@ func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) (
 		ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
 	})
 	if err != nil {
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_invoke_model", "transport", err)
 		return nil, fmt.Errorf("bedrock invoke model error: %w", err)
+	}
+	if output == nil {
+		err := errors.New("bedrock invoke model output is nil")
+		c.observeError(ctx, span, "ai_invoke_model", "decode", err)
+		return nil, err
 	}
 	span.SetAttribute("ai.response_length", len(output.Body))
 	return output.Body, nil

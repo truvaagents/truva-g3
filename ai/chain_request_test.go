@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 type phase5RequestClient struct {
@@ -314,6 +315,142 @@ func (*phase5Telemetry) StartSpan(ctx context.Context, name string) (context.Con
 }
 
 func (*phase5Telemetry) RecordMetric(string, float64, map[string]string) {}
+
+type chainObservationLogStore struct {
+	components []string
+	fields     []map[string]interface{}
+}
+
+type chainObservationLogger struct {
+	store     *chainObservationLogStore
+	component string
+}
+
+func (logger *chainObservationLogger) WithComponent(component string) core.Logger {
+	return &chainObservationLogger{store: logger.store, component: component}
+}
+func (logger *chainObservationLogger) record(fields map[string]interface{}) {
+	logger.store.components = append(logger.store.components, logger.component)
+	logger.store.fields = append(logger.store.fields, fields)
+}
+func (logger *chainObservationLogger) Debug(_ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) Info(_ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) Warn(_ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) Error(_ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) DebugWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) WarnWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+func (logger *chainObservationLogger) ErrorWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.record(fields)
+}
+
+type chainObservationTelemetry struct {
+	names []string
+	spans []*chainObservationSpan
+}
+
+func (tracing *chainObservationTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
+	span := &chainObservationSpan{attributes: map[string]interface{}{}}
+	tracing.names = append(tracing.names, name)
+	tracing.spans = append(tracing.spans, span)
+	return ctx, span
+}
+func (*chainObservationTelemetry) RecordMetric(string, float64, map[string]string) {}
+
+type chainObservationSpan struct {
+	attributes map[string]interface{}
+	errors     []error
+	ended      int
+}
+
+func (span *chainObservationSpan) End() { span.ended++ }
+func (span *chainObservationSpan) SetAttribute(key string, value interface{}) {
+	span.attributes[key] = value
+}
+func (span *chainObservationSpan) RecordError(err error) { span.errors = append(span.errors, err) }
+
+func TestChainObservabilitySanitizesErrorsAndCorrelatesRequests(t *testing.T) {
+	const (
+		requestID    = "chain-observation-request"
+		promptSecret = "chain-observation-prompt-secret"
+		firstSecret  = "chain-first-error-secret"
+		secondSecret = "chain-second-error-secret"
+	)
+	firstErr := errors.New(firstSecret)
+	secondErr := errors.New(secondSecret)
+	first := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+		return nil, firstErr
+	}}
+	second := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+		return nil, secondErr
+	}}
+	chain, err := NewChain(ClientEntry("first", first), ClientEntry("second", second))
+	if err != nil {
+		t.Fatalf("NewChain returned error: %v", err)
+	}
+	store := &chainObservationLogStore{}
+	logger := &chainObservationLogger{store: store}
+	tracing := &chainObservationTelemetry{}
+	chain.SetLogger(logger)
+	chain.SetTelemetry(tracing)
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+
+	_, err = chain.Generate(ctx, core.NewAIRequest(promptSecret, "observation"))
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("Generate error = %v, want both original causes", err)
+	}
+	if !reflect.DeepEqual(tracing.names, []string{
+		"ai.chain.generate",
+		"ai.chain.provider_attempt",
+		"ai.chain.provider_attempt",
+	}) {
+		t.Fatalf("span hierarchy = %#v", tracing.names)
+	}
+	for index, fields := range store.fields {
+		if store.components[index] != "framework/ai" {
+			t.Errorf("log %d component = %q", index, store.components[index])
+		}
+		if fields["operation"] == "" || fields["request_id"] != requestID {
+			t.Errorf("log %d fields = %#v", index, fields)
+		}
+	}
+	var observed strings.Builder
+	fmt.Fprint(&observed, store.fields)
+	for index, span := range tracing.spans {
+		if span.ended != 1 {
+			t.Errorf("span %d ended %d times", index, span.ended)
+		}
+		if span.attributes["request_id"] != requestID {
+			t.Errorf("span %d request_id = %#v", index, span.attributes["request_id"])
+		}
+		fmt.Fprint(&observed, span.attributes)
+		for _, spanErr := range span.errors {
+			fmt.Fprint(&observed, spanErr.Error())
+			if spanErr.Error() != "AI provider request failed: unknown" {
+				t.Errorf("span %d error = %q", index, spanErr.Error())
+			}
+		}
+	}
+	for _, forbidden := range []string{promptSecret, firstSecret, secondSecret} {
+		if strings.Contains(observed.String(), forbidden) {
+			t.Fatalf("chain observations leaked %q: %s", forbidden, observed.String())
+		}
+	}
+}
 
 func TestNewChain_Phase5ValidatesEntries(t *testing.T) {
 	var typedNil *phase5LegacyClient

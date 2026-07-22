@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -351,10 +352,8 @@ func (c *InstrumentedAIClient) finishLogicalSpan(
 	span.SetAttribute("ai.duration_ms", time.Since(started).Milliseconds())
 	if err != nil {
 		span.SetAttribute("ai.status", "error")
-		// Provider errors may contain raw response material. Record a stable,
-		// secret-safe logical error while lower provider spans retain transport
-		// diagnostics under their own sanitization contract.
-		span.RecordError(errors.New("AI request failed"))
+		errorType := providers.RecordObservationError(span, err, "unknown")
+		span.SetAttribute("ai.error_type", errorType)
 	} else {
 		span.SetAttribute("ai.status", "success")
 	}
@@ -532,11 +531,14 @@ func (c *InstrumentedAIClient) recordAsync(ctx context.Context, requestID string
 		defer cancel()
 
 		if recErr := c.recorder.RecordLLMCall(recordCtx, requestID, record); recErr != nil {
-			c.logger.Warn("Failed to record LLM debug interaction", map[string]interface{}{
+			errorType, safeError := providers.SanitizedObservationError(recErr, "unknown")
+			c.logger.WarnWithContext(recordCtx, "Failed to record LLM debug interaction", map[string]interface{}{
+				"operation":        "ai_debug_record",
 				"request_id":       requestID,
 				"source_component": c.componentName,
 				"call_type":        c.defaultType,
-				"error":            recErr.Error(),
+				"error":            safeError.Error(),
+				"error_type":       errorType,
 			})
 		}
 	}()

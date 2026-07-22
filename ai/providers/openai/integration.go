@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -257,11 +258,16 @@ func (c *Client) observeCredentialRejection(
 		return
 	}
 	if err := observer.CredentialRejected(ctx, request, statusCode); err != nil && c.Logger != nil {
-		c.Logger.WarnWithContext(ctx, "OpenAI credential rejection observer failed", map[string]interface{}{
+		errorType, safeError := providers.SanitizedObservationError(err, "callback")
+		fields := map[string]interface{}{
 			"operation":   "ai_credential_rejection_observer",
 			"provider":    c.getProviderName(),
 			"status_code": statusCode,
-		})
+			"error":       safeError.Error(),
+			"error_type":  errorType,
+		}
+		providers.AddObservationRequestID(ctx, fields)
+		c.Logger.WarnWithContext(ctx, "OpenAI credential rejection observer failed", fields)
 	}
 }
 

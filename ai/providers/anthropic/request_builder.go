@@ -373,25 +373,30 @@ func (c *Client) recordRequestPreparation(ctx context.Context, span core.Span, p
 			fields["adjusted_paths"] = strings.Join(paths, ",")
 		}
 		fields["adjustment_count"] = len(prepared.Adjustments)
+		providers.AddObservationRequestID(ctx, fields)
 		c.Logger.DebugWithContext(ctx, "Anthropic request policy evaluated", fields)
 
 		if prepared.SamplingPolicy == samplingOmitted && len(prepared.LegacySamplingExtras) > 0 {
-			c.Logger.WarnWithContext(ctx, "Anthropic legacy sampling extras omitted for resolved model", map[string]interface{}{
+			warningFields := map[string]interface{}{
 				"operation":       "ai_request_policy",
 				"provider":        "anthropic",
 				"model":           prepared.Model,
 				"adjustment_rule": samplingAdjustmentRule,
 				"adjusted_paths":  strings.Join(prepared.LegacySamplingExtras, ","),
-			})
+			}
+			providers.AddObservationRequestID(ctx, warningFields)
+			c.Logger.WarnWithContext(ctx, "Anthropic legacy sampling extras omitted for resolved model", warningFields)
 		}
 		if len(prepared.ProtectedConflicts) > 0 {
-			c.Logger.WarnWithContext(ctx, "Anthropic legacy protected headers ignored", map[string]interface{}{
+			warningFields := map[string]interface{}{
 				"operation":       "ai_request_policy",
 				"provider":        "anthropic",
 				"model":           prepared.Model,
 				"ignored_headers": strings.Join(prepared.ProtectedConflicts, ","),
 				"migration":       "remove provider-managed names from WithHeaders and AIOptions.Headers",
-			})
+			}
+			providers.AddObservationRequestID(ctx, warningFields)
+			c.Logger.WarnWithContext(ctx, "Anthropic legacy protected headers ignored", warningFields)
 		}
 	}
 }

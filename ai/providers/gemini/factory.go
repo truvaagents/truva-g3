@@ -61,11 +61,11 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 
 	// Log provider initialization
 	logger.Info("Gemini provider initialized", map[string]interface{}{
-		"operation":   "ai_provider_init",
-		"provider":    "gemini",
-		"base_url":    baseURL,
-		"has_api_key": apiKey != "",
-		"model":       config.Model,
+		"operation":       "ai_provider_init",
+		"provider":        "gemini",
+		"custom_endpoint": baseURL != DefaultBaseURL,
+		"has_api_key":     apiKey != "",
+		"model":           config.Model,
 	})
 
 	// Create the client with full configuration

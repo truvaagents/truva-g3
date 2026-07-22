@@ -63,6 +63,38 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 	}
 }
 
+func (c *Client) observationAlias() string {
+	if c.providerAlias == "" {
+		return "anthropic"
+	}
+	return c.providerAlias
+}
+
+func (c *Client) observeError(
+	ctx context.Context,
+	span core.Span,
+	operation string,
+	fallback string,
+	err error,
+) {
+	var invocationErr *integrationInvocationError
+	if errors.As(err, &invocationErr) {
+		switch invocationErr.stage {
+		case "credential acquisition", "credential validation":
+			fallback = "credential"
+		case "transport request":
+			fallback = "transport"
+		}
+	}
+	errorType := providers.RecordObservationError(span, err, fallback)
+	c.LogErrorMetadata(ctx, providers.ErrorObservation{
+		Operation:     operation,
+		Provider:      "anthropic",
+		ProviderAlias: c.observationAlias(),
+		ErrorType:     errorType,
+	})
+}
+
 // GenerateResponse preserves the legacy AIClient surface by adapting it to the
 // request-aware path.
 func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
@@ -111,22 +143,14 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 			c.recordRequestPreparation(ctx, span, prepared)
 			span.SetAttribute("ai.model", prepared.Model)
 		}
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - preparation error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_preparation",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "policy", err)
 		return resultWithReport(prepared, nil), err
 	}
 	route, err := c.resolveEndpoint(ctx, prepared)
 	if err != nil {
 		c.recordRequestPreparation(ctx, span, prepared)
 		span.SetAttribute("ai.model", prepared.Model)
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "route", err)
 		return resultWithReport(prepared, nil), err
 	}
 	c.bindRoute(prepared, route)
@@ -136,34 +160,24 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	span.SetAttribute("ai.model", prepared.Model)
 	span.SetAttribute("ai.request.route_identity", route.identity)
 	if c.credentialSource == nil && c.apiKey == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - API key not configured", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     "api_key_missing",
-			})
-		}
 		missingKey := errors.New("anthropic API key not configured")
-		span.RecordError(missingKey)
+		c.observeError(ctx, span, "ai_request", "credential", missingKey)
 		return resultWithReport(prepared, nil), missingKey
 	}
 
 	// Log request
-	c.LogRequest("anthropic", prepared.Model, prompt)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "anthropic",
+		ProviderAlias: c.observationAlias(),
+		SemanticModel: prepared.Model,
+		PromptLength:  len(prompt),
+	})
 	startTime := time.Now()
 
 	// Create HTTP request to native Messages API endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route.url.String(), bytes.NewReader(prepared.Body))
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - create request error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_creation",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "invalid_request", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -174,15 +188,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	// preparation for each fresh transport attempt.
 	resp, err := c.executeWithCredential(ctx, req, credentialRequest)
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - send error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_execution",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
@@ -193,30 +199,14 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	// Read response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - read response error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "response_read",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "decode", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Handle errors
 	if resp.StatusCode != http.StatusOK {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - API error", map[string]interface{}{
-				"operation":   "ai_request_error",
-				"provider":    "anthropic",
-				"status_code": resp.StatusCode,
-				"phase":       "api_response",
-			})
-		}
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
-		span.RecordError(apiErr)
+		c.observeError(ctx, span, "ai_request", "provider_client", apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return resultWithReport(prepared, nil), apiErr
 	}
@@ -224,15 +214,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	// Parse response
 	var anthropicResp AnthropicResponse
 	if err := json.Unmarshal(body, &anthropicResp); err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - parse response error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "response_parse",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_request", "decode", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -245,16 +227,8 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	}
 
 	if content == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic request failed - empty response", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "anthropic",
-				"error":     "no_text_content",
-				"phase":     "response_validation",
-			})
-		}
 		emptyErr := fmt.Errorf("no text content in Anthropic response")
-		span.RecordError(emptyErr)
+		c.observeError(ctx, span, "ai_request", "decode", emptyErr)
 		return resultWithReport(prepared, nil), emptyErr
 	}
 
@@ -276,8 +250,13 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 	span.SetAttribute("ai.response_length", len(result.Content))
 
 	// Log response
-	c.LogResponse(ctx, "anthropic", result.Model, result.Usage, time.Since(startTime))
-	c.LogResponseContent("anthropic", result.Model, result.Content)
+	c.LogResponseMetadata(ctx, providers.ResponseObservation{
+		Provider:      "anthropic",
+		ProviderAlias: c.observationAlias(),
+		SemanticModel: prepared.Model,
+		Usage:         result.Usage,
+		Duration:      time.Since(startTime),
+	})
 
 	return resultWithReport(prepared, result), nil
 }
@@ -318,22 +297,14 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 			c.recordRequestPreparation(ctx, span, prepared)
 			span.SetAttribute("ai.model", prepared.Model)
 		}
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - preparation error", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_preparation",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "policy", err)
 		return resultWithReport(prepared, nil), err
 	}
 	route, err := c.resolveEndpoint(ctx, prepared)
 	if err != nil {
 		c.recordRequestPreparation(ctx, span, prepared)
 		span.SetAttribute("ai.model", prepared.Model)
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "route", err)
 		return resultWithReport(prepared, nil), err
 	}
 	c.bindRoute(prepared, route)
@@ -343,34 +314,24 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	span.SetAttribute("ai.model", prepared.Model)
 	span.SetAttribute("ai.request.route_identity", route.identity)
 	if c.credentialSource == nil && c.apiKey == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - API key not configured", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "anthropic",
-				"error":     "api_key_missing",
-			})
-		}
 		missingKey := errors.New("anthropic API key not configured")
-		span.RecordError(missingKey)
+		c.observeError(ctx, span, "ai_stream", "credential", missingKey)
 		return resultWithReport(prepared, nil), missingKey
 	}
 
 	// Log request
-	c.LogRequest("anthropic", prepared.Model, prompt)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "anthropic",
+		ProviderAlias: c.observationAlias(),
+		SemanticModel: prepared.Model,
+		PromptLength:  len(prompt),
+	})
 	startTime := time.Now()
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route.url.String(), bytes.NewReader(prepared.Body))
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - create request error", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_creation",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "invalid_request", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -378,7 +339,7 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 
 	credentialRequest := c.credentialRequest(prepared, route)
 	if err := c.prepareCredential(ctx, req, credentialRequest); err != nil {
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "credential", err)
 		return resultWithReport(prepared, nil), err
 	}
 
@@ -386,15 +347,7 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		err = &integrationInvocationError{stage: "transport request", cause: err}
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - send error", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "anthropic",
-				"error":     err.Error(),
-				"phase":     "request_execution",
-			})
-		}
-		span.RecordError(err)
+		c.observeError(ctx, span, "ai_stream", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
@@ -405,16 +358,8 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	// Handle error responses
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Anthropic streaming request failed - API error", map[string]interface{}{
-				"operation":   "ai_stream_error",
-				"provider":    "anthropic",
-				"status_code": resp.StatusCode,
-				"phase":       "api_response",
-			})
-		}
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
-		span.RecordError(apiErr)
+		c.observeError(ctx, span, "ai_stream", "provider_client", apiErr)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return resultWithReport(prepared, nil), apiErr
 	}
@@ -432,6 +377,8 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 		select {
 		case <-ctx.Done():
 			if fullContent.Len() > 0 {
+				streamErr := core.ErrStreamPartiallyCompleted
+				c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
 				return resultWithReport(prepared, &core.AIResponse{
 					Content:  fullContent.String(),
 					Model:    model,
@@ -441,9 +388,11 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 						CompletionTokens: outputTokens,
 						TotalTokens:      inputTokens + outputTokens,
 					},
-				}), core.ErrStreamPartiallyCompleted
+				}), streamErr
 			}
-			return resultWithReport(prepared, nil), ctx.Err()
+			contextErr := ctx.Err()
+			c.observeError(ctx, span, "ai_stream", "cancelled", contextErr)
+			return resultWithReport(prepared, nil), contextErr
 		default:
 		}
 
@@ -454,6 +403,8 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 			}
 			if fullContent.Len() > 0 {
 				span.SetAttribute("ai.stream_partial", true)
+				streamErr := core.ErrStreamPartiallyCompleted
+				c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
 				return resultWithReport(prepared, &core.AIResponse{
 					Content:  fullContent.String(),
 					Model:    model,
@@ -463,9 +414,9 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 						CompletionTokens: outputTokens,
 						TotalTokens:      inputTokens + outputTokens,
 					},
-				}), core.ErrStreamPartiallyCompleted
+				}), streamErr
 			}
-			span.RecordError(err)
+			c.observeError(ctx, span, "ai_stream", "decode", err)
 			return resultWithReport(prepared, nil), fmt.Errorf("error reading stream: %w", err)
 		}
 
@@ -492,11 +443,15 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 		var event StreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			if c.Logger != nil {
-				c.Logger.DebugWithContext(ctx, "Anthropic stream - failed to parse event", map[string]interface{}{
-					"operation": "ai_stream_parse",
-					"provider":  "anthropic",
-					"error":     err.Error(),
-				})
+				errorType, safeError := providers.SanitizedObservationError(err, "decode")
+				fields := map[string]interface{}{
+					"operation":  "ai_stream_parse",
+					"provider":   "anthropic",
+					"error":      safeError.Error(),
+					"error_type": errorType,
+				}
+				providers.AddObservationRequestID(ctx, fields)
+				c.Logger.DebugWithContext(ctx, "Anthropic stream - failed to parse event", fields)
 			}
 			continue
 		}
@@ -524,7 +479,8 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 
 				if err := callback(chunk); err != nil {
 					span.SetAttribute("ai.stream_stopped_by_callback", true)
-					return resultWithReport(prepared, &core.AIResponse{
+					span.SetAttribute("ai.stream_status", "callback_stop")
+					response := &core.AIResponse{
 						Content:  fullContent.String(),
 						Model:    model,
 						Provider: "anthropic",
@@ -533,7 +489,17 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 							CompletionTokens: outputTokens,
 							TotalTokens:      inputTokens + outputTokens,
 						},
-					}), nil
+					}
+					span.SetAttribute("ai.response_length", len(response.Content))
+					span.SetAttribute("ai.chunks_sent", chunkIndex)
+					c.LogResponseMetadata(ctx, providers.ResponseObservation{
+						Provider:      "anthropic",
+						ProviderAlias: c.observationAlias(),
+						SemanticModel: prepared.Model,
+						Usage:         response.Usage,
+						Duration:      time.Since(startTime),
+					})
+					return resultWithReport(prepared, response), nil
 				}
 			}
 
@@ -586,8 +552,13 @@ func (c *Client) Stream(ctx context.Context, request *core.AIRequest, callback c
 	span.SetAttribute("ai.chunks_sent", chunkIndex)
 
 	// Log response
-	c.LogResponse(ctx, "anthropic", result.Model, result.Usage, time.Since(startTime))
-	c.LogResponseContent("anthropic", result.Model, result.Content)
+	c.LogResponseMetadata(ctx, providers.ResponseObservation{
+		Provider:      "anthropic",
+		ProviderAlias: c.observationAlias(),
+		SemanticModel: prepared.Model,
+		Usage:         result.Usage,
+		Duration:      time.Since(startTime),
+	})
 
 	return resultWithReport(prepared, result), nil
 }
