@@ -22,6 +22,8 @@ import (
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
+const legacyBedrockTestModel = "anthropic.claude-3-haiku-20240307-v1:0"
+
 func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
 	extra := map[string]interface{}{
 		"top_k":  20,
@@ -38,7 +40,7 @@ func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
 	request.Generation.TopP = core.SetAIParameter(float32(0.8))
 	request.Generation.SystemPrompt = core.OmitAIParameter[string]()
 	request.Generation.TopK = core.OmitAIParameter[int]()
-	draft, err := NewDraft(ModelClaude3Sonnet, request)
+	draft, err := NewDraft(legacyBedrockTestModel, request)
 	if err != nil {
 		t.Fatalf("NewDraft returned error: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SDKInput returned error: %v", err)
 	}
-	if aws.ToString(input.ModelId) != ModelClaude3Sonnet || len(input.Messages) != 1 {
+	if aws.ToString(input.ModelId) != legacyBedrockTestModel || len(input.Messages) != 1 {
 		t.Fatalf("SDK input structural fields = %#v", input)
 	}
 	if input.System != nil {
@@ -347,7 +349,7 @@ func TestNormalizeUsageDetails(t *testing.T) {
 	}
 }
 
-func TestFactoryCreatesRequestClientAndRejectsHTTPIntegrations(t *testing.T) {
+func TestFactoryCreatesRequestClientWithSDKResolverAndRejectsHTTPIntegrations(t *testing.T) {
 	config := &ai.AIConfig{
 		Model: "model",
 		Extra: map[string]interface{}{
@@ -357,8 +359,12 @@ func TestFactoryCreatesRequestClientAndRejectsHTTPIntegrations(t *testing.T) {
 		},
 	}
 	factory := &Factory{}
+	resolver := &bedrockTestResolver{endpoint: ai.ResolvedEndpoint{
+		Deployment: "wire-model", RouteIdentity: "factory-route-v1",
+	}}
 	client, err := factory.CreateRequestClient(config, ai.ProviderIntegrationConfig{
 		CompatibilityMode: requestpolicy.CompatibilityCompatible,
+		EndpointResolver:  resolver,
 		RequestRules: []core.AIProviderPatch{{
 			Name: "rule", Version: "1", Selector: core.AIProviderSelector{AllProviders: true},
 			Set: map[string]interface{}{"/inference_config/top_p": 0.4},
@@ -367,8 +373,15 @@ func TestFactoryCreatesRequestClientAndRejectsHTTPIntegrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRequestClient returned error: %v", err)
 	}
-	if _, ok := client.(*Client); !ok {
+	bedrockClient, ok := client.(*Client)
+	if !ok {
 		t.Fatalf("client type = %T", client)
+	}
+	if bedrockClient.endpointResolver != resolver {
+		t.Fatalf("endpoint resolver = %T, want configured resolver", bedrockClient.endpointResolver)
+	}
+	if bedrockClient.requestTimeout != defaultBedrockRequestTimeout {
+		t.Fatalf("request timeout = %s, want %s", bedrockClient.requestTimeout, defaultBedrockRequestTimeout)
 	}
 	_, err = factory.CreateRequestClient(config, ai.ProviderIntegrationConfig{
 		CompatibilityMode: requestpolicy.CompatibilityCompatible,
@@ -376,6 +389,13 @@ func TestFactoryCreatesRequestClientAndRejectsHTTPIntegrations(t *testing.T) {
 	})
 	if !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
 		t.Fatalf("HTTP integration error = %v", err)
+	}
+	_, err = factory.CreateRequestClient(config, ai.ProviderIntegrationConfig{
+		CompatibilityMode: requestpolicy.CompatibilityCompatible,
+		CredentialSource:  bedrockTestCredentialSource{},
+	})
+	if !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("credential integration error = %v", err)
 	}
 	configWithHeaders := *config
 	configWithHeaders.Headers = map[string]string{"X-Test": "value"}
@@ -402,17 +422,60 @@ func TestBedrockConfigurationValidation(t *testing.T) {
 	}
 }
 
+func TestValidateImplicitBedrockDefault(t *testing.T) {
+	tests := []struct {
+		name                string
+		region              string
+		model               string
+		hasEndpointResolver bool
+		wantError           bool
+	}{
+		{name: "default supported region", region: "us-east-1"},
+		{name: "unsupported implicit region", region: "us-west-2", wantError: true},
+		{name: "explicit model", region: "us-west-2", model: "global.anthropic.claude-sonnet-5-v1:0"},
+		{name: "endpoint resolver", region: "us-west-2", hasEndpointResolver: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateImplicitBedrockDefault(test.region, test.model, test.hasEndpointResolver)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("expected implicit-default region error")
+				}
+				for _, want := range []string{
+					ModelClaudeSonnet5,
+					test.region,
+					"ai.WithModel",
+					"ai.WithEndpointResolver",
+				} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("error %q does not contain %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateImplicitBedrockDefault returned error: %v", err)
+			}
+		})
+	}
+}
+
 type fakeRuntimeClient struct {
 	converseInput    *bedrockruntime.ConverseInput
 	converseOut      *bedrockruntime.ConverseOutput
 	converseErr      error
+	converseAttempts int
 	streamInput      *bedrockruntime.ConverseStreamInput
 	stream           converseEventStream
+	streamErr        error
+	streamAttempts   int
 	onConverseStream func()
 	invokeInput      *bedrockruntime.InvokeModelInput
 	invokeOut        *bedrockruntime.InvokeModelOutput
 	invokeErr        error
 	invokeNil        bool
+	invokeAttempts   int
 }
 
 type fakeEventStream struct {
@@ -440,9 +503,10 @@ func (stream *fakeEventStream) Err() error { return stream.err }
 func (client *fakeRuntimeClient) Converse(
 	_ context.Context,
 	input *bedrockruntime.ConverseInput,
-	_ ...func(*bedrockruntime.Options),
+	options ...func(*bedrockruntime.Options),
 ) (*bedrockruntime.ConverseOutput, error) {
 	client.converseInput = input
+	client.converseAttempts = retryMaxAttempts(options)
 	if client.converseErr != nil {
 		return nil, client.converseErr
 	}
@@ -687,7 +751,7 @@ func TestBedrockObservationContract(t *testing.T) {
 			}
 		}
 		if tracing.spans[0].attributes["request_id"] != requestID ||
-			tracing.spans[0].attributes["ai.model"] != ModelTitanEmbed ||
+			tracing.spans[0].attributes["ai.model"] != titanEmbeddingSemanticModel ||
 			tracing.spans[0].attributes["ai.text_length"] != len("embedding input") ||
 			tracing.spans[0].attributes["ai.input_length"] != nil {
 			t.Fatalf("embedding span attributes = %#v", tracing.spans[0].attributes)
@@ -757,11 +821,15 @@ func TestBedrockObservationContract(t *testing.T) {
 func (client *fakeRuntimeClient) ConverseStream(
 	_ context.Context,
 	input *bedrockruntime.ConverseStreamInput,
-	_ ...func(*bedrockruntime.Options),
+	options ...func(*bedrockruntime.Options),
 ) (converseEventStream, error) {
 	client.streamInput = input
+	client.streamAttempts = retryMaxAttempts(options)
 	if client.onConverseStream != nil {
 		client.onConverseStream()
+	}
+	if client.streamErr != nil {
+		return nil, client.streamErr
 	}
 	if client.stream == nil {
 		return nil, errors.New("not implemented")
@@ -772,9 +840,10 @@ func (client *fakeRuntimeClient) ConverseStream(
 func (client *fakeRuntimeClient) InvokeModel(
 	_ context.Context,
 	input *bedrockruntime.InvokeModelInput,
-	_ ...func(*bedrockruntime.Options),
+	options ...func(*bedrockruntime.Options),
 ) (*bedrockruntime.InvokeModelOutput, error) {
 	client.invokeInput = input
+	client.invokeAttempts = retryMaxAttempts(options)
 	if client.invokeErr != nil {
 		return nil, client.invokeErr
 	}
@@ -785,4 +854,12 @@ func (client *fakeRuntimeClient) InvokeModel(
 		return client.invokeOut, nil
 	}
 	return nil, errors.New("not implemented")
+}
+
+func retryMaxAttempts(options []func(*bedrockruntime.Options)) int {
+	resolved := &bedrockruntime.Options{}
+	for _, option := range options {
+		option(resolved)
+	}
+	return resolved.RetryMaxAttempts
 }

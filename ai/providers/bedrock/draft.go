@@ -17,14 +17,19 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-const bedrockConverseAdapterVersion = "bedrock-converse-v1"
+const (
+	bedrockConverseAdapterVersion = "bedrock-converse-v3"
+	maxStopSequences              = 2500
+)
 
 // Draft is a logical, policy-editable Bedrock Converse request. It translates
 // directly into AWS SDK inputs and never pretends the SDK operation is an HTTP
 // JSON surface.
 type Draft struct {
 	*requestpolicy.Document
-	resolvedModel string
+	semanticModel string
+	wireModel     string
+	routeIdentity string
 	stream        bool
 	explicit      map[string]struct{}
 	adjustments   []core.AIRequestAdjustment
@@ -33,21 +38,39 @@ type Draft struct {
 // NewDraft builds an isolated logical Bedrock Converse request. The caller
 // should apply request defaults and resolve the model before invoking it.
 func NewDraft(resolvedModel string, request *core.AIRequest) (*Draft, error) {
-	return newDraft(resolvedModel, request, false)
+	return newDraft(requestProfile{
+		semanticModel: resolvedModel,
+		wireModel:     resolvedModel,
+		routeIdentity: defaultRouteIdentity,
+	}, request, false)
 }
 
 // NewStreamDraft builds the streaming form of the same logical Converse
 // request so policy semantics remain identical across both SDK operations.
 func NewStreamDraft(resolvedModel string, request *core.AIRequest) (*Draft, error) {
-	return newDraft(resolvedModel, request, true)
+	return newDraft(requestProfile{
+		semanticModel: resolvedModel,
+		wireModel:     resolvedModel,
+		routeIdentity: defaultRouteIdentity,
+	}, request, true)
 }
 
-func newDraft(resolvedModel string, request *core.AIRequest, stream bool) (*Draft, error) {
+func newRoutedDraft(profile requestProfile, request *core.AIRequest, stream bool) (*Draft, error) {
+	return newDraft(profile, request, stream)
+}
+
+func newDraft(profile requestProfile, request *core.AIRequest, stream bool) (*Draft, error) {
 	if request == nil {
 		return nil, errors.New("bedrock AI request is nil")
 	}
-	if strings.TrimSpace(resolvedModel) == "" {
-		return nil, errors.New("bedrock resolved model is empty")
+	if strings.TrimSpace(profile.semanticModel) == "" {
+		return nil, errors.New("bedrock semantic model is empty")
+	}
+	if err := validateWireModel(profile.wireModel); err != nil {
+		return nil, err
+	}
+	if err := validateBedrockRouteIdentity(profile.routeIdentity); err != nil {
+		return nil, err
 	}
 	request, err := core.CloneAIRequest(request)
 	if err != nil {
@@ -58,15 +81,29 @@ func newDraft(resolvedModel string, request *core.AIRequest, stream bool) (*Draf
 		options = &core.AIOptions{}
 	}
 
+	samplingPolicy := bedrockSamplingPolicyForModel(profile.semanticModel)
+	preparationAdjustments := make([]core.AIRequestAdjustment, 0, 1)
 	inference := make(map[string]interface{})
 	if options.MaxTokens > 0 {
 		inference["max_tokens"] = options.MaxTokens
 	}
 	if options.Temperature > 0 {
-		inference["temperature"] = options.Temperature
+		if samplingPolicy == bedrockSamplingFable5 &&
+			request.Generation.Temperature.Mode == core.AIParameterInherit &&
+			options.Temperature != 1 {
+			preparationAdjustments = append(preparationAdjustments, core.AIRequestAdjustment{
+				Source: "built-in-rule",
+				Rule:   bedrockSamplingRule + "@2",
+				Path:   "/inference_config/temperature",
+				Action: "remove",
+				Reason: "Bedrock Claude Fable 5 accepts only temperature 1 or omission",
+			})
+		} else {
+			inference["temperature"] = options.Temperature
+		}
 	}
 	body := map[string]interface{}{
-		"model": resolvedModel,
+		"model": profile.wireModel,
 		"messages": []map[string]string{{
 			"role": "user", "content": request.Prompt,
 		}},
@@ -78,7 +115,7 @@ func newDraft(resolvedModel string, request *core.AIRequest, stream bool) (*Draf
 		body["inference_config"] = inference
 	}
 	if len(options.Extra) > 0 {
-		body["additional_model_request_fields"] = options.Extra
+		body["additional_model_request_fields"] = canonicalizeBedrockSamplingFields(options.Extra, samplingPolicy)
 	}
 
 	explicit := make(map[string]struct{})
@@ -125,7 +162,7 @@ func newDraft(resolvedModel string, request *core.AIRequest, stream bool) (*Draf
 			Operation:      operation,
 			Purpose:        request.Purpose,
 			RequestedModel: requestedModel(request, options),
-			ResolvedModel:  resolvedModel,
+			ResolvedModel:  profile.semanticModel,
 		},
 		Body:             body,
 		ProtectedPaths:   []string{"/model", "/messages"},
@@ -136,14 +173,17 @@ func newDraft(resolvedModel string, request *core.AIRequest, stream bool) (*Draf
 	}
 	draft := &Draft{
 		Document:      document,
-		resolvedModel: resolvedModel,
+		semanticModel: profile.semanticModel,
+		wireModel:     profile.wireModel,
+		routeIdentity: profile.routeIdentity,
 		stream:        stream,
 		explicit:      explicit,
+		adjustments:   preparationAdjustments,
 	}
 	if err := draft.applyPortableOmits(request.Generation); err != nil {
 		return nil, err
 	}
-	if err := draft.Validate(); err != nil {
+	if err := draft.validate(false); err != nil {
 		return nil, fmt.Errorf("validate Bedrock request draft: %w", err)
 	}
 	return draft, nil
@@ -169,7 +209,12 @@ func (d *Draft) HasExplicitIntent(path string) bool {
 }
 
 // PolicyFingerprintIdentity versions the logical-to-SDK translation.
-func (d *Draft) PolicyFingerprintIdentity() string { return bedrockConverseAdapterVersion }
+func (d *Draft) PolicyFingerprintIdentity() string {
+	if d == nil {
+		return ""
+	}
+	return bedrockConverseAdapterVersion + "|route=" + d.routeIdentity
+}
 
 // Adjustments returns portable preparation adjustments made before policy.
 func (d *Draft) Adjustments() []core.AIRequestAdjustment {
@@ -181,12 +226,16 @@ func (d *Draft) Adjustments() []core.AIRequestAdjustment {
 
 // Validate checks logical and SDK translation invariants after policy.
 func (d *Draft) Validate() error {
+	return d.validate(true)
+}
+
+func (d *Draft) validate(validateModelSampling bool) error {
 	if d == nil || d.Document == nil {
 		return errors.New("bedrock request draft is nil")
 	}
 	model, ok := d.Get("/model")
-	if !ok || model != d.resolvedModel {
-		return errors.New("resolved model invariant was not preserved")
+	if !ok || model != d.wireModel {
+		return errors.New("wire model invariant was not preserved")
 	}
 	if messages, ok := d.Get("/messages"); !ok || !hasLogicalMessages(messages) {
 		return errors.New("messages input is required")
@@ -201,8 +250,12 @@ func (d *Draft) Validate() error {
 		}
 	}
 	if system, exists := d.Get("/system"); exists {
-		if _, ok := system.(string); !ok {
+		text, ok := system.(string)
+		if !ok {
 			return fmt.Errorf("system has unsupported type %T", system)
+		}
+		if text == "" {
+			return errors.New("system must be a non-empty string")
 		}
 	}
 	if value, exists := d.Get("/inference_config"); exists {
@@ -221,7 +274,7 @@ func (d *Draft) Validate() error {
 					return fmt.Errorf("%s: %w", key, err)
 				}
 			case "stop_sequences":
-				if _, err := stringSlice(parameter); err != nil {
+				if err := validateStopSequences(parameter); err != nil {
 					return fmt.Errorf("stop_sequences: %w", err)
 				}
 			default:
@@ -232,6 +285,11 @@ func (d *Draft) Validate() error {
 	if value, exists := d.Get("/additional_model_request_fields"); exists {
 		if _, ok := value.(map[string]interface{}); !ok {
 			return fmt.Errorf("additional_model_request_fields has unsupported type %T", value)
+		}
+	}
+	if validateModelSampling {
+		if err := d.validateModelSampling(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -250,7 +308,7 @@ func (d *Draft) SDKInput() (*bedrockruntime.ConverseInput, error) {
 		return nil, err
 	}
 	return &bedrockruntime.ConverseInput{
-		ModelId:                      aws.String(d.resolvedModel),
+		ModelId:                      aws.String(d.wireModel),
 		Messages:                     common.messages,
 		System:                       common.system,
 		InferenceConfig:              common.inference,
@@ -272,7 +330,7 @@ func (d *Draft) SDKStreamInput() (*bedrockruntime.ConverseStreamInput, error) {
 		return nil, err
 	}
 	return &bedrockruntime.ConverseStreamInput{
-		ModelId:                      aws.String(d.resolvedModel),
+		ModelId:                      aws.String(d.wireModel),
 		Messages:                     common.messages,
 		System:                       common.system,
 		InferenceConfig:              common.inference,
@@ -335,6 +393,71 @@ func (d *Draft) sdkFields() (sdkFields, error) {
 		fields.additional = bedrockdocument.NewLazyDocument(value)
 	}
 	return fields, nil
+}
+
+func (d *Draft) validateModelSampling() error {
+	inference, _ := d.Get("/inference_config")
+	config, _ := inference.(map[string]interface{})
+	_, hasTemperature := config["temperature"]
+	_, hasTopP := config["top_p"]
+	hasTopK := false
+	if additional, exists := d.Get("/additional_model_request_fields"); exists {
+		fields, _ := additional.(map[string]interface{})
+		for key := range fields {
+			if strings.EqualFold(key, "top_k") {
+				hasTopK = true
+				break
+			}
+		}
+	}
+
+	switch bedrockSamplingPolicyForModel(d.semanticModel) {
+	case bedrockSamplingOmitAll:
+		if hasTemperature || hasTopP || hasTopK {
+			return errors.New("selected Bedrock Claude model does not accept modified temperature, top_p, or top_k")
+		}
+	case bedrockSamplingFable5:
+		if hasTopK {
+			return errors.New("bedrock Claude Fable 5 does not accept top_k")
+		}
+		if hasTemperature {
+			temperature, err := unitFloat32(config["temperature"])
+			if err != nil || temperature != 1 {
+				return errors.New("bedrock Claude Fable 5 temperature must be 1 or omitted")
+			}
+		}
+		if hasTopP {
+			topP, err := unitFloat32(config["top_p"])
+			if err != nil || topP < 0.99 || topP >= 1 {
+				return errors.New("bedrock Claude Fable 5 top_p must be at least 0.99 and less than 1, or omitted")
+			}
+		}
+	}
+	return nil
+}
+
+func canonicalizeBedrockSamplingFields(
+	fields map[string]interface{},
+	policy bedrockSamplingPolicy,
+) map[string]interface{} {
+	if policy == bedrockSamplingUnrestricted {
+		return fields
+	}
+	var (
+		topK    interface{}
+		hasTopK bool
+	)
+	for key, value := range fields {
+		if strings.EqualFold(key, "top_k") {
+			delete(fields, key)
+			topK = value
+			hasTopK = true
+		}
+	}
+	if hasTopK {
+		fields["top_k"] = topK
+	}
+	return fields
 }
 
 func (d *Draft) applyPortableOmits(generation core.AIGenerationOptions) error {
@@ -543,4 +666,20 @@ func stringSlice(value interface{}) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("has unsupported type %T", value)
 	}
+}
+
+func validateStopSequences(value interface{}) error {
+	sequences, err := stringSlice(value)
+	if err != nil {
+		return err
+	}
+	if len(sequences) > maxStopSequences {
+		return fmt.Errorf("must contain at most %d items", maxStopSequences)
+	}
+	for index, sequence := range sequences {
+		if sequence == "" {
+			return fmt.Errorf("item %d must be non-empty", index)
+		}
+	}
+	return nil
 }

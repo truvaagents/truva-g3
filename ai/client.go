@@ -26,6 +26,8 @@ const maxRetriesUnset = -1
 // per-provider BaseClient ships with.
 const defaultMaxRetries = 3
 
+const defaultRequestTimeout = 180 * time.Second
+
 // resolveMaxRetries applies the single-client MaxRetries precedence chain.
 // Single clients (no chain failover layer below) absorb transient blips via
 // in-provider retries, so the fallback is the framework default of 3.
@@ -82,9 +84,12 @@ func resolveMaxRetriesWithDefault(current int, fallback int) int {
 
 func newClientConfigWithDefaults() *clientConfig {
 	return &clientConfig{legacy: AIConfig{
-		Provider:    string(ProviderAuto),
-		MaxRetries:  maxRetriesUnset,
-		Timeout:     180 * time.Second, // 3 minutes default for reasoning models
+		Provider:   string(ProviderAuto),
+		MaxRetries: maxRetriesUnset,
+		// A non-positive value means no application override. The selected
+		// factory may provide a provider-specific default; otherwise the
+		// framework applies defaultRequestTimeout before construction.
+		Timeout:     0,
 		Temperature: 0.7,
 		MaxTokens:   1000,
 		Logger:      nil, // Will be set by framework or options
@@ -190,6 +195,7 @@ func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {
 	// Resolve MaxRetries precedence after all options so an explicit value wins
 	// over the environment and hard-coded default.
 	config.MaxRetries = resolveMaxRetries(config.MaxRetries)
+	providerWasAutoDetected := config.Provider == string(ProviderAuto)
 
 	if config.Logger != nil {
 		if componentLogger, ok := config.Logger.(core.ComponentAwareLogger); ok {
@@ -245,6 +251,20 @@ func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {
 		}
 		return nil, fmt.Errorf("provider '%s' not registered. Import _ \"github.com/truvaagents/truva-g3/ai/providers/%s\"",
 			config.Provider, config.Provider)
+	}
+	if config.Timeout <= 0 {
+		config.Timeout = defaultRequestTimeout
+		if timeoutFactory, ok := factory.(ProviderRequestTimeoutFactory); ok && !providerWasAutoDetected {
+			providerTimeout := timeoutFactory.DefaultRequestTimeout()
+			if providerTimeout <= 0 {
+				return nil, fmt.Errorf(
+					"provider %q returned invalid default request timeout %s",
+					config.Provider,
+					providerTimeout,
+				)
+			}
+			config.Timeout = providerTimeout
+		}
 	}
 	return factory, nil
 }

@@ -71,10 +71,12 @@ type EndpointResolver interface {
 	ResolveEndpoint(context.Context, EndpointRequest) (ResolvedEndpoint, error)
 }
 
-// ResolvedEndpoint is a trusted route result. URL is the complete HTTP request
-// endpoint. RouteIdentity must be a stable, non-secret identity suitable for a
-// sanitized report and policy fingerprint. Query and CredentialScope are never
-// reported. Deployment is likewise excluded from reports.
+// ResolvedEndpoint is a trusted route result. URL is the complete request
+// endpoint for an HTTP-backed provider. An SDK-native provider may instead
+// require URL to be nil and consume Deployment as its opaque SDK destination.
+// RouteIdentity must be a stable, non-secret identity suitable for a sanitized
+// report and policy fingerprint. Query and CredentialScope are never reported.
+// Deployment is likewise excluded from reports.
 type ResolvedEndpoint struct {
 	_               noUnkeyedLiterals
 	URL             *url.URL

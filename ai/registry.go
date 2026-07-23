@@ -40,6 +40,15 @@ type RequestProviderFactory interface {
 	CreateRequestClient(*AIConfig, ProviderIntegrationConfig) (core.AIRequestClient, error)
 }
 
+// ProviderRequestTimeoutFactory optionally declares the request timeout used
+// for explicitly selected standalone clients when the application does not
+// supply WithTimeout. Auto-detected clients and framework-managed chain entries
+// retain the framework's failover-safe 180-second default.
+type ProviderRequestTimeoutFactory interface {
+	ProviderFactory
+	DefaultRequestTimeout() time.Duration
+}
+
 // ProviderRegistry manages registered AI providers
 type ProviderRegistry struct {
 	mu        sync.RWMutex

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
@@ -784,6 +785,38 @@ func TestNewChain_Phase5ProviderEntryRequiresRequestCapableFactory(t *testing.T)
 	_, err := NewChain(ProviderEntry("legacy-only", factory.name))
 	if !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
 		t.Fatalf("NewChain error = %v, want request capability error", err)
+	}
+}
+
+func TestNewChainProviderEntryUsesFailoverSafeTimeoutUnlessOverridden(t *testing.T) {
+	factory := &phase5RequestFactory{name: "phase5-timeout"}
+	installPhase3Factory(t, factory)
+
+	if _, err := NewChain(ProviderEntry("default", factory.name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := factory.configs[0].Timeout; got != defaultRequestTimeout {
+		t.Fatalf("default managed-entry timeout = %s, want %s", got, defaultRequestTimeout)
+	}
+
+	if _, err := NewChain(ProviderEntry(
+		"override",
+		factory.name,
+		WithTimeout(12*time.Minute),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if got := factory.configs[1].Timeout; got != 12*time.Minute {
+		t.Fatalf("overridden managed-entry timeout = %s, want 12m", got)
+	}
+
+	injected := &phase5RequestClient{}
+	chain, err := NewChain(ClientEntry("caller-owned", injected))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chain.entries[0].client != injected {
+		t.Fatal("caller-owned chain entry was replaced")
 	}
 }
 

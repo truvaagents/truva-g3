@@ -14,9 +14,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
+)
+
+const (
+	defaultBedrockRequestTimeout = 60 * time.Minute
+	titanEmbeddingSemanticModel  = "amazon.titan-embed-text-v2"
 )
 
 type runtimeClient interface {
@@ -69,10 +75,18 @@ func (client sdkRuntimeClient) InvokeModel(
 // Client implements legacy and request-aware AWS Bedrock operations.
 type Client struct {
 	*providers.BaseClient
-	bedrockClient  runtimeClient
-	region         string
-	requestPolicy  *requestpolicy.Engine
-	requestTimeout time.Duration
+	bedrockClient    runtimeClient
+	region           string
+	requestPolicy    *bedrockRequestPolicy
+	endpointResolver ai.EndpointResolver
+	requestTimeout   time.Duration
+	embedding        embeddingConfig
+}
+
+type embeddingConfig struct {
+	model      string
+	dimensions int32
+	normalize  *bool
 }
 
 // NewClient creates an AWS Bedrock client.
@@ -81,16 +95,17 @@ func NewClient(cfg aws.Config, region string, logger core.Logger) *Client {
 }
 
 func newClientWithRuntime(runtime runtimeClient, region string, logger core.Logger) *Client {
-	base := providers.NewBaseClient(180*time.Second, logger)
+	base := providers.NewBaseClient(defaultBedrockRequestTimeout, logger)
 	base.ProviderName = "bedrock"
-	base.DefaultModel = ModelClaude3Sonnet
+	base.DefaultModel = ModelClaudeSonnet5
 	base.DefaultMaxTokens = 1000
 	return &Client{
 		BaseClient:     base,
 		bedrockClient:  runtime,
 		region:         region,
 		requestPolicy:  newRequestPolicyEngine(),
-		requestTimeout: 180 * time.Second,
+		requestTimeout: defaultBedrockRequestTimeout,
+		embedding:      embeddingConfig{model: ModelTitanEmbedV2},
 	}
 }
 
@@ -101,6 +116,17 @@ func (c *Client) observeError(
 	fallback string,
 	err error,
 ) {
+	var routeErr *routeResolutionError
+	var policyErr *requestpolicy.PolicyError
+	var featureErr *core.AIRequestFeatureError
+	switch {
+	case errors.As(err, &routeErr):
+		fallback = "route"
+	case errors.As(err, &policyErr):
+		fallback = "policy"
+	case errors.As(err, &featureErr):
+		fallback = "invalid_request"
+	}
 	errorType := providers.RecordObservationError(span, err, fallback)
 	c.LogErrorMetadata(ctx, providers.ErrorObservation{
 		Operation:     operation,
@@ -111,31 +137,12 @@ func (c *Client) observeError(
 }
 
 type preparedRequest struct {
-	Model       string
-	Draft       *Draft
-	Report      *core.AIRequestReport
-	SyncInput   *bedrockruntime.ConverseInput
-	StreamInput *bedrockruntime.ConverseStreamInput
-}
-
-func newRequestPolicyEngine() *requestpolicy.Engine {
-	engine, err := newRequestPolicyEngineWithIntegration(nil, nil, requestpolicy.CompatibilityCompatible)
-	if err != nil {
-		panic(fmt.Sprintf("invalid built-in Bedrock request policy: %v", err))
-	}
-	return engine
-}
-
-func newRequestPolicyEngineWithIntegration(
-	appRules []core.AIProviderPatch,
-	middleware []requestpolicy.RequestMiddleware,
-	mode requestpolicy.CompatibilityMode,
-) (*requestpolicy.Engine, error) {
-	return requestpolicy.NewEngine(requestpolicy.Config{
-		AppRules:   appRules,
-		Middleware: middleware,
-		Mode:       mode,
-	})
+	Model         string
+	RouteIdentity string
+	Draft         *Draft
+	Report        *core.AIRequestReport
+	SyncInput     *bedrockruntime.ConverseInput
+	StreamInput   *bedrockruntime.ConverseStreamInput
 }
 
 func (c *Client) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -143,6 +150,19 @@ func (c *Client) withRequestTimeout(ctx context.Context) (context.Context, conte
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, c.requestTimeout)
+}
+
+func (c *Client) runtimeOptions() func(*bedrockruntime.Options) {
+	attempts := 1
+	if c.MaxRetries > 0 {
+		attempts = c.MaxRetries
+		if attempts < int(^uint(0)>>1) {
+			attempts++
+		}
+	}
+	return func(options *bedrockruntime.Options) {
+		options.RetryMaxAttempts = attempts
+	}
 }
 
 func (c *Client) prepareAIRequest(
@@ -162,22 +182,34 @@ func (c *Client) prepareAIRequest(
 	if request.Generation.Model != "" {
 		options.Model = request.Generation.Model
 	}
-	requestedModel := options.Model
-	wireOptions := *options
-	wireOptions.Model = requestedModel
-	wireRequest := core.NewAIRequestFromLegacy(request.Prompt, request.Purpose, &wireOptions)
-	wireRequest.Generation = request.Generation
-	wireRequest.Patches = request.Patches
-	var draft *Draft
+	semanticModel := options.Model
+	operation := "generate"
 	if stream {
-		draft, err = NewStreamDraft(options.Model, wireRequest)
-	} else {
-		draft, err = NewDraft(options.Model, wireRequest)
+		operation = "stream"
 	}
+	profile, err := c.resolveProfile(ctx, ai.EndpointRequest{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		Surface:       "converse",
+		ResolvedModel: semanticModel,
+		Operation:     operation,
+		Purpose:       request.Purpose,
+	})
 	if err != nil {
 		return nil, err
 	}
-	prepared := &preparedRequest{Model: options.Model, Draft: draft}
+	wireOptions := *options
+	wireOptions.Model = semanticModel
+	wireRequest := core.NewAIRequestFromLegacy(request.Prompt, request.Purpose, &wireOptions)
+	wireRequest.Generation = request.Generation
+	wireRequest.Patches = request.Patches
+	draft, err := newRoutedDraft(profile, wireRequest, stream)
+	if err != nil {
+		return nil, err
+	}
+	prepared := &preparedRequest{
+		Model: semanticModel, RouteIdentity: profile.routeIdentity, Draft: draft,
+	}
 	if c.requestPolicy == nil {
 		return prepared, errors.New("bedrock request policy engine is not configured")
 	}
@@ -253,8 +285,9 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.A
 		PromptLength:  len(request.Prompt),
 	})
 	started := time.Now()
-	output, err := c.bedrockClient.Converse(ctx, prepared.SyncInput)
+	output, err := c.bedrockClient.Converse(ctx, prepared.SyncInput, c.runtimeOptions())
 	if err != nil {
+		err = normalizeBedrockError(err, prepared.Model)
 		c.observeError(ctx, span, "ai_request", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("bedrock converse error: %w", err)
 	}
@@ -321,8 +354,9 @@ func (c *Client) Stream(
 		PromptLength:  len(request.Prompt),
 	})
 	started := time.Now()
-	eventStream, err := c.bedrockClient.ConverseStream(ctx, prepared.StreamInput)
+	eventStream, err := c.bedrockClient.ConverseStream(ctx, prepared.StreamInput, c.runtimeOptions())
 	if err != nil {
+		err = normalizeBedrockError(err, prepared.Model)
 		c.observeError(ctx, span, "ai_stream", "transport", err)
 		return resultWithReport(prepared, nil), fmt.Errorf("bedrock stream error: %w", err)
 	}
@@ -341,7 +375,8 @@ func (c *Client) Stream(
 	for event := range eventStream.Events() {
 		switch value := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			if delta, ok := value.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
+			switch delta := value.Value.Delta.(type) {
+			case *types.ContentBlockDeltaMemberText:
 				content += delta.Value
 				if callback(core.StreamChunk{
 					Content: delta.Value, Delta: true, Index: chunkIndex, Model: prepared.Model,
@@ -357,6 +392,10 @@ func (c *Client) Stream(
 					return resultWithReport(prepared, result), nil
 				}
 				chunkIndex++
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				// The normalized framework stream is text-only. Reasoning text,
+				// signatures, and redacted blocks are intentionally not exposed
+				// as generated content or observations.
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
 			if value.Value.Usage != nil {
@@ -383,6 +422,7 @@ func (c *Client) Stream(
 		}
 	}
 	if err := eventStream.Err(); err != nil {
+		err = normalizeBedrockError(err, prepared.Model)
 		if content != "" {
 			streamErr := core.ErrStreamPartiallyCompleted
 			c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
@@ -464,6 +504,7 @@ func (c *Client) recordPreparation(span core.Span, prepared *preparedRequest) {
 		return
 	}
 	span.SetAttribute("ai.model", prepared.Model)
+	span.SetAttribute("ai.request.route_identity", prepared.RouteIdentity)
 	if prepared.Report != nil {
 		span.SetAttribute("ai.request.provider_alias", prepared.Report.ProviderAlias)
 		span.SetAttribute("ai.request.surface", prepared.Report.Surface)
@@ -513,16 +554,32 @@ func (c *Client) SupportsStreaming() bool { return true }
 
 // InvokeModel provides direct access to model-specific Bedrock payloads.
 func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) ([]byte, error) {
+	return c.invokeModel(ctx, modelID, "", body)
+}
+
+func (c *Client) invokeModel(
+	ctx context.Context,
+	modelID string,
+	semanticModel string,
+	body []byte,
+) ([]byte, error) {
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	ctx, span := c.StartSpan(ctx, "ai.invoke_model")
 	defer span.End()
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.model", modelID)
+	span.SetAttribute("ai.surface", "invoke-model")
 	span.SetAttribute("ai.body_length", len(body))
+	if err := validateModelID(modelID, "bedrock InvokeModel model ID"); err != nil {
+		c.observeError(ctx, span, "ai_invoke_model", "invalid_request", err)
+		return nil, err
+	}
 	output, err := c.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 		ModelId: aws.String(modelID), Body: body,
 		ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
-	})
+	}, c.runtimeOptions())
 	if err != nil {
+		err = normalizeBedrockError(err, semanticModel)
 		c.observeError(ctx, span, "ai_invoke_model", "transport", err)
 		return nil, fmt.Errorf("bedrock invoke model error: %w", err)
 	}
@@ -534,20 +591,39 @@ func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) (
 	return output.Body, nil
 }
 
-// GetEmbeddings generates embeddings using Amazon Titan Embed.
-func (c *Client) GetEmbeddings(ctx context.Context, text string) ([]float32, error) {
+// GetEmbeddings generates a single embedding using a Titan-shaped InvokeModel
+// request. It defaults to Amazon Titan Text Embeddings V2. Per-call options
+// override client defaults without mutating the client.
+func (c *Client) GetEmbeddings(ctx context.Context, text string, options ...EmbeddingOption) ([]float32, error) {
 	ctx, span := c.StartSpan(ctx, "ai.get_embeddings")
 	defer span.End()
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.model", ModelTitanEmbed)
 	span.SetAttribute("ai.text_length", len(text))
 
-	body, err := json.Marshal(map[string]interface{}{"inputText": text})
+	if text == "" {
+		err := errors.New("bedrock embedding input text is empty")
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
+		return nil, err
+	}
+	embedding, err := applyEmbeddingOptions(c.embedding, options)
+	if err != nil {
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
+		return nil, err
+	}
+	span.SetAttribute("ai.model", titanEmbeddingSemanticModel)
+	payload := struct {
+		InputText  string `json:"inputText"`
+		Dimensions int32  `json:"dimensions,omitempty"`
+		Normalize  *bool  `json:"normalize,omitempty"`
+	}{
+		InputText: text, Dimensions: embedding.dimensions, Normalize: embedding.normalize,
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
 		return nil, fmt.Errorf("marshal Bedrock embed request: %w", err)
 	}
-	responseBody, err := c.InvokeModel(ctx, ModelTitanEmbed, body)
+	responseBody, err := c.invokeModel(ctx, embedding.model, titanEmbeddingSemanticModel, body)
 	if err != nil {
 		// InvokeModel owns the detailed error log; the outer embedding span still
 		// records the propagated failure so every failed operation is visible.
@@ -564,6 +640,11 @@ func (c *Client) GetEmbeddings(ctx context.Context, text string) ([]float32, err
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		c.observeError(ctx, span, "ai_get_embeddings", "decode", err)
 		return nil, fmt.Errorf("parse Bedrock embed response: %w", err)
+	}
+	if len(response.Embedding) == 0 {
+		err := errors.New("bedrock embedding response has no vector")
+		c.observeError(ctx, span, "ai_get_embeddings", "decode", err)
+		return nil, err
 	}
 	span.SetAttribute("ai.embedding_dimensions", len(response.Embedding))
 	return response.Embedding, nil

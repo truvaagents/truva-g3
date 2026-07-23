@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -15,6 +16,21 @@ type mockFactory struct {
 	available bool
 	client    core.AIClient
 	createErr error
+}
+
+type timeoutDefaultFactory struct {
+	*mockFactory
+	defaultTimeout time.Duration
+	lastConfig     *AIConfig
+}
+
+func (factory *timeoutDefaultFactory) Create(config *AIConfig) core.AIClient {
+	factory.lastConfig = config
+	return factory.client
+}
+
+func (factory *timeoutDefaultFactory) DefaultRequestTimeout() time.Duration {
+	return factory.defaultTimeout
 }
 
 func (f *mockFactory) Name() string {
@@ -590,5 +606,116 @@ func TestNewClient_ExplicitZeroDisablesRetries(t *testing.T) {
 	}
 	if factory.lastConfig.MaxRetries != 0 {
 		t.Errorf("WithMaxRetries(0) must be honored: got %d, want 0", factory.lastConfig.MaxRetries)
+	}
+}
+
+func TestNewClientProviderRequestTimeoutDefault(t *testing.T) {
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+
+	factory := &timeoutDefaultFactory{
+		mockFactory:    &mockFactory{name: "provider-timeout", client: &mockAIClient{}},
+		defaultTimeout: 60 * time.Minute,
+	}
+	registry = &ProviderRegistry{providers: map[string]ProviderFactory{
+		factory.Name(): factory,
+	}}
+
+	if _, err := NewClient(WithProvider(factory.Name())); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.Timeout != 60*time.Minute {
+		t.Fatalf("provider timeout config = %#v, want 60m", factory.lastConfig)
+	}
+
+	if _, err := NewClient(
+		WithProvider(factory.Name()),
+		WithTimeout(2*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig.Timeout != 2*time.Minute {
+		t.Fatalf("explicit timeout = %s, want 2m", factory.lastConfig.Timeout)
+	}
+
+	factory.defaultTimeout = 0
+	if _, err := NewClient(WithProvider(factory.Name())); err == nil ||
+		!strings.Contains(err.Error(), "invalid default request timeout") {
+		t.Fatalf("invalid provider timeout error = %v", err)
+	}
+	if _, err := NewClient(
+		WithProvider(factory.Name()),
+		WithTimeout(time.Minute),
+	); err != nil {
+		t.Fatalf("explicit timeout should bypass invalid unused provider default: %v", err)
+	}
+}
+
+func TestNewClientAutoDetectionRetainsFrameworkRequestTimeout(t *testing.T) {
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+
+	factory := &timeoutDefaultFactory{
+		mockFactory: &mockFactory{
+			name: "auto-provider-timeout", priority: 100, available: true, client: &mockAIClient{},
+		},
+		defaultTimeout: 60 * time.Minute,
+	}
+	registry = &ProviderRegistry{providers: map[string]ProviderFactory{
+		factory.Name(): factory,
+	}}
+
+	if _, err := NewClient(); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.Timeout != defaultRequestTimeout {
+		t.Fatalf("auto-detected timeout config = %#v, want %s", factory.lastConfig, defaultRequestTimeout)
+	}
+
+	factory.defaultTimeout = 0
+	if _, err := NewClient(); err != nil {
+		t.Fatalf("auto-detection should not evaluate the unused provider timeout default: %v", err)
+	}
+}
+
+func TestNewClientRetainsFrameworkRequestTimeoutDefault(t *testing.T) {
+	factory := withRecordingFactory(t)
+	if _, err := NewClient(WithProvider(factory.Name())); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.Timeout != defaultRequestTimeout {
+		t.Fatalf("framework timeout config = %#v, want %s", factory.lastConfig, defaultRequestTimeout)
+	}
+}
+
+func TestNewChainClientUsesFailoverSafeRequestTimeoutUnlessOverridden(t *testing.T) {
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+
+	factory := &timeoutDefaultFactory{
+		mockFactory: &mockFactory{
+			name: "chain-provider-timeout", client: &mockAIClient{},
+		},
+		defaultTimeout: 60 * time.Minute,
+	}
+	registry = &ProviderRegistry{providers: map[string]ProviderFactory{
+		factory.Name(): factory,
+	}}
+
+	if _, err := NewChainClient(WithProviderChain(factory.Name())); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.Timeout != defaultRequestTimeout {
+		t.Fatalf("provider chain timeout config = %#v, want %s", factory.lastConfig, defaultRequestTimeout)
+	}
+
+	if _, err := NewChainClient(
+		WithProviderChain(factory.Name()),
+		WithChainTimeout(2*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig.Timeout != 2*time.Minute {
+		t.Fatalf("explicit chain timeout = %s, want 2m", factory.lastConfig.Timeout)
 	}
 }

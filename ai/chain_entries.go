@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -168,7 +169,9 @@ func materializeEntry(entry ChainEntry) (ChainEntry, error) {
 	resolved := entry
 	switch entry.kind {
 	case chainRequestProvider:
-		options := append([]ClientOption(nil), entry.options...)
+		options := make([]ClientOption, 0, len(entry.options)+2)
+		options = append(options, entry.options...)
+		options = append(options, withDefaultRequestTimeout(defaultRequestTimeout))
 		options = append(options, WithProviderAlias(entry.providerAlias))
 		client, err := NewRequestClient(options...)
 		if err != nil {
@@ -177,7 +180,9 @@ func materializeEntry(entry ChainEntry) (ChainEntry, error) {
 		resolved.options = nil
 		resolved.client = client
 	case chainLegacyProvider:
-		options := append([]AIOption(nil), entry.legacyOptions...)
+		options := make([]AIOption, 0, len(entry.legacyOptions)+2)
+		options = append(options, entry.legacyOptions...)
+		options = append(options, withDefaultRequestTimeout(defaultRequestTimeout))
 		options = append(options, WithProviderAlias(entry.providerAlias))
 		client, err := NewClient(options...)
 		if err != nil {
@@ -191,6 +196,14 @@ func materializeEntry(entry ChainEntry) (ChainEntry, error) {
 		return ChainEntry{}, fmt.Errorf("invalid chain entry kind %d", entry.kind)
 	}
 	return resolved, nil
+}
+
+func withDefaultRequestTimeout(timeout time.Duration) AIOption {
+	return func(config *AIConfig) {
+		if config.Timeout <= 0 {
+			config.Timeout = timeout
+		}
+	}
 }
 
 func newChainFromEntries(entries []ChainEntry, logger core.Logger, telemetry core.Telemetry) *ChainClient {

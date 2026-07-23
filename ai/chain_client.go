@@ -93,7 +93,8 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 			WithLogger(config.Logger),
 			WithTelemetry(config.Telemetry),
 		}
-		// Apply timeout if configured (important for reasoning models)
+		// Apply an explicit chain timeout when configured. Otherwise the
+		// materializer supplies the framework's failover-safe 180s default.
 		if config.Timeout > 0 {
 			opts = append(opts, WithTimeout(config.Timeout))
 		}
@@ -350,10 +351,11 @@ func WithChainTelemetry(telemetry core.Telemetry) ChainOption {
 	}
 }
 
-// WithChainTimeout sets the HTTP timeout for AI requests in the chain
+// WithChainTimeout sets the request timeout for AI requests in the chain.
 // This is important for reasoning models (GPT-5, o1, o3, o4) that need longer
 // processing time for chain-of-thought responses.
-// If not set, the default provider timeout (180s) is used.
+// If not set, framework-managed entries use the failover-safe 180-second
+// framework default rather than a provider's longer standalone default.
 func WithChainTimeout(timeout time.Duration) ChainOption {
 	return func(c *ChainConfig) {
 		c.Timeout = timeout

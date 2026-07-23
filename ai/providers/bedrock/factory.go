@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -22,6 +24,7 @@ type Factory struct{}
 
 var _ ai.ValidatedProviderFactory = (*Factory)(nil)
 var _ ai.RequestProviderFactory = (*Factory)(nil)
+var _ ai.ProviderRequestTimeoutFactory = (*Factory)(nil)
 
 func (f *Factory) Name() string { return "bedrock" }
 
@@ -31,10 +34,16 @@ func (f *Factory) Description() string {
 
 func (f *Factory) Priority() int { return 200 }
 
+// DefaultRequestTimeout leaves headroom for Bedrock's long-running model
+// inference while remaining overrideable through ai.WithTimeout.
+func (f *Factory) DefaultRequestTimeout() time.Duration {
+	return defaultBedrockRequestTimeout
+}
+
 // Create preserves legacy registration behavior by returning a client that
 // reports AWS configuration failure on first use.
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-	client, err := f.createClient(config)
+	client, err := f.createClient(config, false)
 	if err != nil {
 		return &errorClient{err: err}
 	}
@@ -43,12 +52,12 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 
 // CreateValidated constructs Bedrock with error-capable validation.
 func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
-	return f.createClient(config)
+	return f.createClient(config, false)
 }
 
 // CreateRequestClient configures logical request policy for the SDK-native
-// Converse surface. HTTP transport integrations are deliberately rejected;
-// AWS routing and credentials remain owned by aws.Config.
+// Converse surface. EndpointResolver may select only the opaque SDK modelId;
+// HTTP transport and credentials remain owned by aws.Config and are rejected.
 func (f *Factory) CreateRequestClient(
 	config *ai.AIConfig,
 	integration ai.ProviderIntegrationConfig,
@@ -59,13 +68,10 @@ func (f *Factory) CreateRequestClient(
 	if integration.CredentialSource != nil {
 		return nil, &core.AIRequestFeatureError{ClientType: "*bedrock.Factory", Feature: "credential_source"}
 	}
-	if integration.EndpointResolver != nil {
-		return nil, &core.AIRequestFeatureError{ClientType: "*bedrock.Factory", Feature: "endpoint_resolver"}
-	}
 	if integration.HTTPClient != nil {
 		return nil, &core.AIRequestFeatureError{ClientType: "*bedrock.Factory", Feature: "http_client"}
 	}
-	client, err := f.createClient(config)
+	client, err := f.createClient(config, integration.EndpointResolver != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -78,14 +84,22 @@ func (f *Factory) CreateRequestClient(
 		return nil, fmt.Errorf("configure Bedrock request policy: %w", err)
 	}
 	client.requestPolicy = engine
+	client.endpointResolver = integration.EndpointResolver
 	return client, nil
 }
 
-func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
+func (f *Factory) createClient(config *ai.AIConfig, hasEndpointResolver bool) (*Client, error) {
 	if config == nil {
 		return nil, errors.New("bedrock AI config is nil")
 	}
 	region, err := bedrockRegion(config.Extra)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateImplicitBedrockDefault(region, config.Model, hasEndpointResolver); err != nil {
+		return nil, err
+	}
+	embedding, err := bedrockEmbeddingConfig(config.Extra)
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +118,10 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 		"operation": "ai_provider_init",
 		"provider":  "bedrock",
 		"region":    region,
-		"model":     config.Model,
 	})
 
 	client := NewClient(awsConfig, region, logger)
+	client.embedding = embedding
 	if config.Telemetry != nil {
 		client.SetTelemetry(config.Telemetry)
 	}
@@ -127,6 +141,71 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 		client.DefaultMaxTokens = config.MaxTokens
 	}
 	return client, nil
+}
+
+func validateImplicitBedrockDefault(region, configuredModel string, hasEndpointResolver bool) error {
+	if configuredModel != "" || hasEndpointResolver || region == "us-east-1" {
+		return nil
+	}
+	return fmt.Errorf(
+		"bedrock implicit default model %q is not available for direct in-region inference in region %q; "+
+			"configure ai.WithModel with an AWS-supported model or inference-profile ID, "+
+			"or use ai.WithEndpointResolver for an explicit route",
+		ModelClaudeSonnet5,
+		region,
+	)
+}
+
+func bedrockEmbeddingConfig(extra map[string]interface{}) (embeddingConfig, error) {
+	result := embeddingConfig{model: ModelTitanEmbedV2}
+	if value, exists := extra["embedding_model"]; exists {
+		model, ok := value.(string)
+		if !ok || strings.TrimSpace(model) == "" {
+			return embeddingConfig{}, fmt.Errorf("bedrock embedding_model must be a non-empty string, got %T", value)
+		}
+		if err := validateModelID(model, "bedrock embedding_model"); err != nil {
+			return embeddingConfig{}, err
+		}
+		result.model = model
+	}
+	if value, exists := extra["embedding_dimensions"]; exists {
+		dimensions, err := embeddingDimensions(value)
+		if err != nil {
+			return embeddingConfig{}, err
+		}
+		result.dimensions = dimensions
+	}
+	if value, exists := extra["embedding_normalize"]; exists {
+		normalize, ok := value.(bool)
+		if !ok {
+			return embeddingConfig{}, fmt.Errorf("bedrock embedding_normalize must be a bool, got %T", value)
+		}
+		result.normalize = &normalize
+	}
+	if err := validateEmbeddingModelControls(result); err != nil {
+		return embeddingConfig{}, err
+	}
+	return result, nil
+}
+
+func embeddingDimensions(value interface{}) (int32, error) {
+	var dimensions int64
+	switch number := value.(type) {
+	case int:
+		dimensions = int64(number)
+	case int32:
+		dimensions = int64(number)
+	case int64:
+		dimensions = number
+	default:
+		return 0, fmt.Errorf("bedrock embedding_dimensions must be an integer, got %T", value)
+	}
+	switch dimensions {
+	case 0, 256, 512, 1024:
+		return int32(dimensions), nil
+	default:
+		return 0, errors.New("bedrock embedding_dimensions must be 0, 256, 512, or 1024")
+	}
 }
 
 func bedrockRegion(extra map[string]interface{}) (string, error) {
