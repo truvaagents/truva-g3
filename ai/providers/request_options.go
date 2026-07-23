@@ -10,7 +10,10 @@ import (
 
 type cloneVisit struct {
 	kind reflect.Kind
+	typ  reflect.Type
 	ptr  uintptr
+	len  int
+	cap  int
 }
 
 // CloneAIOptions returns a request-local copy of legacy AI options.
@@ -57,7 +60,7 @@ func cloneLegacyReflect(value reflect.Value, seen map[cloneVisit]reflect.Value) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		visit := cloneVisit{kind: reflect.Map, ptr: value.Pointer()}
+		visit := cloneVisit{kind: reflect.Map, typ: value.Type(), ptr: value.Pointer()}
 		if existing, ok := seen[visit]; ok {
 			return existing
 		}
@@ -72,7 +75,13 @@ func cloneLegacyReflect(value reflect.Value, seen map[cloneVisit]reflect.Value) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		visit := cloneVisit{kind: reflect.Slice, ptr: value.Pointer()}
+		visit := cloneVisit{
+			kind: reflect.Slice,
+			typ:  value.Type(),
+			ptr:  value.Pointer(),
+			len:  value.Len(),
+			cap:  value.Cap(),
+		}
 		if existing, ok := seen[visit]; ok {
 			return existing
 		}

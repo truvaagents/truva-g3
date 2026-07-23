@@ -33,6 +33,9 @@ func (e *routeResolutionError) Error() string {
 	return fmt.Sprintf("Bedrock endpoint resolution failed: %v", e.cause)
 }
 func (e *routeResolutionError) Unwrap() error { return e.cause }
+func (e *routeResolutionError) AIRequestFailureReason() ai.AIRequestFailureReason {
+	return ai.AIRequestFailureReasonRoute
+}
 
 func (c *Client) resolveProfile(
 	ctx context.Context,
@@ -81,6 +84,8 @@ func (c *Client) resolveProfile(
 func newRouteResolutionError(err error) error {
 	return &routeResolutionError{cause: err}
 }
+
+var _ ai.AIRequestFailureReasoner = (*routeResolutionError)(nil)
 
 func validateWireModel(model string) error {
 	return validateModelID(model, "bedrock resolved endpoint deployment")

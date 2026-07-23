@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	defaultBedrockRequestTimeout = 60 * time.Minute
-	titanEmbeddingSemanticModel  = "amazon.titan-embed-text-v2"
+	defaultBedrockRequestTimeout  = 60 * time.Minute
+	titanEmbeddingV1SemanticModel = "amazon.titan-embed-text-v1"
+	titanEmbeddingV2SemanticModel = "amazon.titan-embed-text-v2"
 )
 
 type runtimeClient interface {
@@ -75,12 +76,13 @@ func (client sdkRuntimeClient) InvokeModel(
 // Client implements legacy and request-aware AWS Bedrock operations.
 type Client struct {
 	*providers.BaseClient
-	bedrockClient    runtimeClient
-	region           string
-	requestPolicy    *bedrockRequestPolicy
-	endpointResolver ai.EndpointResolver
-	requestTimeout   time.Duration
-	embedding        embeddingConfig
+	bedrockClient        runtimeClient
+	region               string
+	requestPolicy        *bedrockRequestPolicy
+	endpointResolver     ai.EndpointResolver
+	requestTimeout       time.Duration
+	embedding            embeddingConfig
+	defaultModelExplicit bool
 }
 
 type embeddingConfig struct {
@@ -92,6 +94,20 @@ type embeddingConfig struct {
 // NewClient creates an AWS Bedrock client.
 func NewClient(cfg aws.Config, region string, logger core.Logger) *Client {
 	return newClientWithRuntime(sdkRuntimeClient{client: bedrockruntime.NewFromConfig(cfg)}, region, logger)
+}
+
+// SetDefaultModel selects an explicit default model for direct clients. Call it
+// during client construction, before the client is used concurrently.
+func (c *Client) SetDefaultModel(model string) error {
+	if c == nil || c.BaseClient == nil {
+		return errors.New("bedrock client is nil")
+	}
+	if err := validateModelID(model, "bedrock default model"); err != nil {
+		return err
+	}
+	c.DefaultModel = model
+	c.defaultModelExplicit = true
+	return nil
 }
 
 func newClientWithRuntime(runtime runtimeClient, region string, logger core.Logger) *Client {
@@ -138,6 +154,7 @@ func (c *Client) observeError(
 
 type preparedRequest struct {
 	Model         string
+	ModelExplicit bool
 	RouteIdentity string
 	Draft         *Draft
 	Report        *core.AIRequestReport
@@ -170,6 +187,34 @@ func (c *Client) prepareAIRequest(
 	supplied *core.AIRequest,
 	stream bool,
 ) (*preparedRequest, error) {
+	prepared, err := c.preparePolicyRequest(ctx, supplied, stream)
+	if err != nil {
+		return prepared, err
+	}
+	if err := validateImplicitBedrockDefault(
+		c.region,
+		prepared.Model,
+		prepared.ModelExplicit,
+		c.endpointResolver != nil,
+	); err != nil {
+		return prepared, err
+	}
+	if stream {
+		prepared.StreamInput, err = prepared.Draft.sdkStreamInput()
+	} else {
+		prepared.SyncInput, err = prepared.Draft.sdkInput()
+	}
+	if err != nil {
+		return prepared, fmt.Errorf("translate Bedrock logical request: %w", err)
+	}
+	return prepared, nil
+}
+
+func (c *Client) preparePolicyRequest(
+	ctx context.Context,
+	supplied *core.AIRequest,
+	stream bool,
+) (*preparedRequest, error) {
 	request, err := core.CloneAIRequest(supplied)
 	if err != nil {
 		return nil, fmt.Errorf("clone Bedrock AI request: %w", err)
@@ -178,6 +223,8 @@ func (c *Client) prepareAIRequest(
 	if err != nil {
 		return nil, fmt.Errorf("clone Bedrock legacy request options: %w", err)
 	}
+	requestModelExplicit := options != nil && options.Model != "" ||
+		request.Generation.Model != ""
 	options = c.ApplyDefaults(options)
 	if request.Generation.Model != "" {
 		options.Model = request.Generation.Model
@@ -208,7 +255,10 @@ func (c *Client) prepareAIRequest(
 		return nil, err
 	}
 	prepared := &preparedRequest{
-		Model: semanticModel, RouteIdentity: profile.routeIdentity, Draft: draft,
+		Model:         semanticModel,
+		ModelExplicit: c.defaultModelExplicit || requestModelExplicit,
+		RouteIdentity: profile.routeIdentity,
+		Draft:         draft,
 	}
 	if c.requestPolicy == nil {
 		return prepared, errors.New("bedrock request policy engine is not configured")
@@ -221,14 +271,6 @@ func (c *Client) prepareAIRequest(
 	if err != nil {
 		return prepared, err
 	}
-	if stream {
-		prepared.StreamInput, err = draft.SDKStreamInput()
-	} else {
-		prepared.SyncInput, err = draft.SDKInput()
-	}
-	if err != nil {
-		return prepared, fmt.Errorf("translate Bedrock logical request: %w", err)
-	}
 	return prepared, nil
 }
 
@@ -236,7 +278,7 @@ func (c *Client) prepareAIRequest(
 // caches. Bedrock routing is captured by the versioned Converse adapter
 // identity; no credentials or SDK calls are made here.
 func (c *Client) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
-	prepared, err := c.prepareAIRequest(ctx, request, false)
+	prepared, err := c.preparePolicyRequest(ctx, request, false)
 	if err != nil || prepared == nil || prepared.Report == nil {
 		return "", false
 	}
@@ -570,6 +612,9 @@ func (c *Client) invokeModel(
 	span.SetAttribute("ai.provider", "bedrock")
 	span.SetAttribute("ai.surface", "invoke-model")
 	span.SetAttribute("ai.body_length", len(body))
+	if semanticModel != "" {
+		span.SetAttribute("ai.model", semanticModel)
+	}
 	if err := validateModelID(modelID, "bedrock InvokeModel model ID"); err != nil {
 		c.observeError(ctx, span, "ai_invoke_model", "invalid_request", err)
 		return nil, err
@@ -610,7 +655,8 @@ func (c *Client) GetEmbeddings(ctx context.Context, text string, options ...Embe
 		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
 		return nil, err
 	}
-	span.SetAttribute("ai.model", titanEmbeddingSemanticModel)
+	semanticModel := titanEmbeddingSemanticModel(embedding.model)
+	span.SetAttribute("ai.model", semanticModel)
 	payload := struct {
 		InputText  string `json:"inputText"`
 		Dimensions int32  `json:"dimensions,omitempty"`
@@ -623,7 +669,7 @@ func (c *Client) GetEmbeddings(ctx context.Context, text string, options ...Embe
 		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
 		return nil, fmt.Errorf("marshal Bedrock embed request: %w", err)
 	}
-	responseBody, err := c.invokeModel(ctx, embedding.model, titanEmbeddingSemanticModel, body)
+	responseBody, err := c.invokeModel(ctx, embedding.model, semanticModel, body)
 	if err != nil {
 		// InvokeModel owns the detailed error log; the outer embedding span still
 		// records the propagated failure so every failed operation is visible.

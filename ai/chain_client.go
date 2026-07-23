@@ -308,12 +308,15 @@ func isClientError(err error) bool {
 // now interpret as "no retries" — silently disabling the retry budget instead
 // of falling back to the framework default. Use NewChainClient and pass options.
 type ChainConfig struct {
-	ProviderAliases          []string
-	Logger                   core.Logger
-	Telemetry                core.Telemetry
-	Timeout                  time.Duration // HTTP timeout for AI requests (0 = use provider default)
-	ReasoningTokenMultiplier int           // Token multiplier for reasoning models (0 = use default 5x)
-	ReasoningEffort          string        // Default reasoning effort: "none", "low", "medium", "high", "xhigh" (empty = model default)
+	ProviderAliases []string
+	Logger          core.Logger
+	Telemetry       core.Telemetry
+	// Timeout is a positive request deadline override. Zero or a negative value
+	// means unset; framework-managed entries then use the failover-safe 180s
+	// framework default rather than a provider's longer standalone default.
+	Timeout                  time.Duration
+	ReasoningTokenMultiplier int    // Token multiplier for reasoning models (0 = use default 5x)
+	ReasoningEffort          string // Default reasoning effort: "none", "low", "medium", "high", "xhigh" (empty = model default)
 	// MaxRetries controls the per-provider HTTP retry count for every provider
 	// in the chain. The maxRetriesUnset sentinel (NewChainClient initializes
 	// this) means "let each per-provider NewClient resolve via env var or
@@ -356,6 +359,7 @@ func WithChainTelemetry(telemetry core.Telemetry) ChainOption {
 // processing time for chain-of-thought responses.
 // If not set, framework-managed entries use the failover-safe 180-second
 // framework default rather than a provider's longer standalone default.
+// Zero and negative durations are treated as unset, not as an unbounded mode.
 func WithChainTimeout(timeout time.Duration) ChainOption {
 	return func(c *ChainConfig) {
 		c.Timeout = timeout
@@ -476,6 +480,21 @@ func classifyFailoverReason(err error) string {
 	if err == nil {
 		return "unknown"
 	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	var classified AIRequestFailureReasoner
+	if errors.As(err, &classified) {
+		// Keep provider-supplied classifications bounded before using them in
+		// logs, spans, or metrics.
+		switch classified.AIRequestFailureReason() {
+		case AIRequestFailureReasonRoute:
+			return string(AIRequestFailureReasonRoute)
+		}
+	}
 	var pe core.ProviderError
 	if errors.As(err, &pe) {
 		switch pe.StatusCode() {
@@ -495,12 +514,6 @@ func classifyFailoverReason(err error) string {
 			return "provider_retryable"
 		}
 		return "provider_error"
-	}
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
-	case errors.Is(err, context.Canceled):
-		return "canceled"
 	}
 	var networkErr net.Error
 	if errors.As(err, &networkErr) {

@@ -638,6 +638,18 @@ func TestNewClientProviderRequestTimeoutDefault(t *testing.T) {
 		t.Fatalf("explicit timeout = %s, want 2m", factory.lastConfig.Timeout)
 	}
 
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		if _, err := NewClient(
+			WithProvider(factory.Name()),
+			WithTimeout(timeout),
+		); err != nil {
+			t.Fatal(err)
+		}
+		if factory.lastConfig.Timeout != 60*time.Minute {
+			t.Fatalf("non-positive timeout %s resolved to %s, want provider default 60m", timeout, factory.lastConfig.Timeout)
+		}
+	}
+
 	factory.defaultTimeout = 0
 	if _, err := NewClient(WithProvider(factory.Name())); err == nil ||
 		!strings.Contains(err.Error(), "invalid default request timeout") {

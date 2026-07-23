@@ -13,7 +13,15 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-const bedrockSamplingRule = "bedrock-current-claude-sampling"
+const (
+	bedrockSamplingRule                    = "bedrock-current-claude-sampling"
+	bedrockSamplingRuleVersion             = "3"
+	bedrockFableTemperaturePreparationRule = "bedrock-fable-inherited-temperature"
+	bedrockFableTemperatureRuleVersion     = "1"
+	bedrockFableTemperature                = float32(1)
+	bedrockFableTopPMinimum                = float32(0.99)
+	bedrockFableTopPMaximum                = float32(1)
+)
 
 type bedrockSamplingPolicy uint8
 
@@ -60,7 +68,7 @@ func newRequestPolicyEngineWithIntegration(
 		bedrockSamplingOmitAll: {
 			{
 				Name:    bedrockSamplingRule,
-				Version: "2",
+				Version: bedrockSamplingRuleVersion,
 				Selector: core.AIProviderSelector{
 					Provider: "bedrock",
 					Surface:  "converse",
@@ -68,6 +76,8 @@ func newRequestPolicyEngineWithIntegration(
 				Remove: []string{
 					"/inference_config/temperature",
 					"/inference_config/top_p",
+					"/additional_model_request_fields/temperature",
+					"/additional_model_request_fields/top_p",
 					"/additional_model_request_fields/top_k",
 				},
 			},
@@ -75,7 +85,7 @@ func newRequestPolicyEngineWithIntegration(
 		bedrockSamplingFable5: {
 			{
 				Name:    bedrockSamplingRule,
-				Version: "2",
+				Version: bedrockSamplingRuleVersion,
 				Selector: core.AIProviderSelector{
 					Provider: "bedrock",
 					Surface:  "converse",

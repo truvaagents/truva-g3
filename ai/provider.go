@@ -200,7 +200,9 @@ func WithAWSCredentials(accessKey, secretKey, sessionToken string) AIOption {
 	}
 }
 
-// WithTimeout sets the request timeout
+// WithTimeout sets a positive provider request timeout. Zero and negative
+// values are treated as unset so the framework or selected provider default
+// applies; they do not enable an unbounded request mode.
 func WithTimeout(timeout time.Duration) AIOption {
 	return func(c *AIConfig) {
 		c.Timeout = timeout

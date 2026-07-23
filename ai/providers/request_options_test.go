@@ -53,6 +53,42 @@ func TestCloneAIOptions_IsolatesNestedLegacyValues(t *testing.T) {
 	}
 }
 
+func TestCloneAIOptions_DistinguishesAliasedSubsliceViews(t *testing.T) {
+	type namedValues []interface{}
+
+	aliased := make([]interface{}, 2)
+	aliased[0] = "head"
+	aliased[1] = aliased[:1]
+	shared := []interface{}{"shared"}
+	original := &core.AIOptions{
+		Extra: map[string]interface{}{
+			"aliased":    aliased,
+			"plain_view": shared,
+			"named_view": namedValues(shared),
+		},
+	}
+
+	clone, err := CloneAIOptions(original)
+	if err != nil {
+		t.Fatalf("CloneAIOptions returned error: %v", err)
+	}
+	values := clone.Extra["aliased"].([]interface{})
+	nested := values[1].([]interface{})
+	if len(nested) != 1 || nested[0] != "head" {
+		t.Fatalf("cloned aliased subslice = %#v", values)
+	}
+	nested[0] = "clone"
+	if aliased[0] != "head" {
+		t.Fatalf("original aliased slice was mutated: %#v", aliased)
+	}
+	if _, ok := clone.Extra["plain_view"].([]interface{}); !ok {
+		t.Fatalf("plain slice type was not preserved: %T", clone.Extra["plain_view"])
+	}
+	if _, ok := clone.Extra["named_view"].(namedValues); !ok {
+		t.Fatalf("named slice type was not preserved: %T", clone.Extra["named_view"])
+	}
+}
+
 func TestMergeAnyMaps_RequestOverridesDefault(t *testing.T) {
 	merged := MergeAnyMaps(
 		map[string]interface{}{"temperature": 0.3, "foo": "default"},

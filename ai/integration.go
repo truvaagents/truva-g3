@@ -71,6 +71,24 @@ type EndpointResolver interface {
 	ResolveEndpoint(context.Context, EndpointRequest) (ResolvedEndpoint, error)
 }
 
+// AIRequestFailureReason is a bounded provider-local failure classification
+// that the chain may safely copy into logs, spans, and metric labels.
+type AIRequestFailureReason string
+
+const (
+	// AIRequestFailureReasonRoute identifies endpoint resolution or
+	// invocation-viability failures that may succeed on another chain entry.
+	AIRequestFailureReasonRoute AIRequestFailureReason = "route"
+)
+
+// AIRequestFailureReasoner is an optional error contract for provider-local
+// failures whose chain meaning cannot be expressed accurately by
+// core.ProviderError. The chain accepts only the exported bounded constants;
+// unknown values degrade to "unknown".
+type AIRequestFailureReasoner interface {
+	AIRequestFailureReason() AIRequestFailureReason
+}
+
 // ResolvedEndpoint is a trusted route result. URL is the complete request
 // endpoint for an HTTP-backed provider. An SDK-native provider may instead
 // require URL to be nil and consume Deployment as its opaque SDK destination.

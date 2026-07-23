@@ -15,6 +15,24 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+type chainFailureReasonError struct{ reason string }
+
+func (err chainFailureReasonError) Error() string { return "classified chain failure" }
+func (err chainFailureReasonError) AIRequestFailureReason() AIRequestFailureReason {
+	return AIRequestFailureReason(err.reason)
+}
+
+type wrappedChainFailureReasonError struct {
+	reason AIRequestFailureReason
+	cause  error
+}
+
+func (err *wrappedChainFailureReasonError) Error() string { return "classified wrapped chain failure" }
+func (err *wrappedChainFailureReasonError) Unwrap() error { return err.cause }
+func (err *wrappedChainFailureReasonError) AIRequestFailureReason() AIRequestFailureReason {
+	return err.reason
+}
+
 // ================================
 // Phase 3 Unit Tests: Chain Client (Pure Unit Tests Only)
 // ================================
@@ -592,6 +610,28 @@ func TestPhase3_FailoverBehavior(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClassifyFailoverReasonAcceptsOnlyBoundedProviderReasons(t *testing.T) {
+	if got := classifyFailoverReason(chainFailureReasonError{reason: "route"}); got != "route" {
+		t.Fatalf("route classification = %q", got)
+	}
+	if got := classifyFailoverReason(chainFailureReasonError{reason: "tenant-secret"}); got != "unknown" {
+		t.Fatalf("unrecognized provider classification = %q, want unknown", got)
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		err := &wrappedChainFailureReasonError{
+			reason: AIRequestFailureReasonRoute,
+			cause:  cause,
+		}
+		want := "canceled"
+		if errors.Is(cause, context.DeadlineExceeded) {
+			want = "timeout"
+		}
+		if got := classifyFailoverReason(err); got != want {
+			t.Fatalf("route marker wrapping %v = %q, want %q", cause, got, want)
+		}
 	}
 }
 

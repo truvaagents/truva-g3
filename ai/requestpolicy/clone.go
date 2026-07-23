@@ -9,7 +9,10 @@ import (
 
 type cloneVisit struct {
 	kind reflect.Kind
+	typ  reflect.Type
 	ptr  uintptr
+	len  int
+	cap  int
 }
 
 // CloneJSONValue returns an isolated copy of a JSON-native value while
@@ -28,7 +31,7 @@ func cloneJSONValue(value interface{}, path string, active map[cloneVisit]struct
 	switch reflected.Kind() {
 	case reflect.Bool,
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.String:
 		return value, nil
 	case reflect.Float32, reflect.Float64:
@@ -43,7 +46,7 @@ func cloneJSONValue(value interface{}, path string, active map[cloneVisit]struct
 		if reflected.IsNil() {
 			return value, nil
 		}
-		visit := cloneVisit{kind: reflect.Map, ptr: reflected.Pointer()}
+		visit := cloneVisit{kind: reflect.Map, typ: reflected.Type(), ptr: reflected.Pointer()}
 		if _, exists := active[visit]; exists {
 			return nil, fmt.Errorf("%s: %w", path, errors.New("cyclic map value is not JSON-compatible"))
 		}
@@ -65,7 +68,13 @@ func cloneJSONValue(value interface{}, path string, active map[cloneVisit]struct
 		if reflected.IsNil() {
 			return value, nil
 		}
-		visit := cloneVisit{kind: reflect.Slice, ptr: reflected.Pointer()}
+		visit := cloneVisit{
+			kind: reflect.Slice,
+			typ:  reflected.Type(),
+			ptr:  reflected.Pointer(),
+			len:  reflected.Len(),
+			cap:  reflected.Cap(),
+		}
 		if _, exists := active[visit]; exists {
 			return nil, fmt.Errorf("%s: %w", path, errors.New("cyclic slice value is not JSON-compatible"))
 		}

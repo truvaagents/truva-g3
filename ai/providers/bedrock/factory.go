@@ -43,7 +43,7 @@ func (f *Factory) DefaultRequestTimeout() time.Duration {
 // Create preserves legacy registration behavior by returning a client that
 // reports AWS configuration failure on first use.
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-	client, err := f.createClient(config, false)
+	client, err := f.createClient(config)
 	if err != nil {
 		return &errorClient{err: err}
 	}
@@ -52,7 +52,7 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 
 // CreateValidated constructs Bedrock with error-capable validation.
 func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
-	return f.createClient(config, false)
+	return f.createClient(config)
 }
 
 // CreateRequestClient configures logical request policy for the SDK-native
@@ -71,7 +71,7 @@ func (f *Factory) CreateRequestClient(
 	if integration.HTTPClient != nil {
 		return nil, &core.AIRequestFeatureError{ClientType: "*bedrock.Factory", Feature: "http_client"}
 	}
-	client, err := f.createClient(config, integration.EndpointResolver != nil)
+	client, err := f.createClient(config)
 	if err != nil {
 		return nil, err
 	}
@@ -88,15 +88,12 @@ func (f *Factory) CreateRequestClient(
 	return client, nil
 }
 
-func (f *Factory) createClient(config *ai.AIConfig, hasEndpointResolver bool) (*Client, error) {
+func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	if config == nil {
 		return nil, errors.New("bedrock AI config is nil")
 	}
 	region, err := bedrockRegion(config.Extra)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateImplicitBedrockDefault(region, config.Model, hasEndpointResolver); err != nil {
 		return nil, err
 	}
 	embedding, err := bedrockEmbeddingConfig(config.Extra)
@@ -132,7 +129,9 @@ func (f *Factory) createClient(config *ai.AIConfig, hasEndpointResolver bool) (*
 		client.MaxRetries = config.MaxRetries
 	}
 	if config.Model != "" {
-		client.DefaultModel = config.Model
+		if err := client.SetDefaultModel(config.Model); err != nil {
+			return nil, err
+		}
 	}
 	if config.Temperature > 0 {
 		client.DefaultTemperature = config.Temperature
@@ -143,17 +142,26 @@ func (f *Factory) createClient(config *ai.AIConfig, hasEndpointResolver bool) (*
 	return client, nil
 }
 
-func validateImplicitBedrockDefault(region, configuredModel string, hasEndpointResolver bool) error {
-	if configuredModel != "" || hasEndpointResolver || region == "us-east-1" {
+func validateImplicitBedrockDefault(
+	region string,
+	semanticModel string,
+	hasExplicitModel bool,
+	hasEndpointResolver bool,
+) error {
+	if hasExplicitModel ||
+		hasEndpointResolver ||
+		region == "us-east-1" ||
+		semanticModel != ModelClaudeSonnet5 {
 		return nil
 	}
-	return fmt.Errorf(
+	return newRouteResolutionError(fmt.Errorf(
 		"bedrock implicit default model %q is not available for direct in-region inference in region %q; "+
-			"configure ai.WithModel with an AWS-supported model or inference-profile ID, "+
+			"configure ai.WithModel or a per-request model with an AWS-supported model or inference-profile ID, "+
+			"call bedrock.Client.SetDefaultModel for a direct package client, "+
 			"or use ai.WithEndpointResolver for an explicit route",
 		ModelClaudeSonnet5,
 		region,
-	)
+	))
 }
 
 func bedrockEmbeddingConfig(extra map[string]interface{}) (embeddingConfig, error) {

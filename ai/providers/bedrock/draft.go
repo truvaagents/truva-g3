@@ -4,21 +4,24 @@
 package bedrock
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrockdocument "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithydocument "github.com/aws/smithy-go/document"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
 const (
-	bedrockConverseAdapterVersion = "bedrock-converse-v3"
+	bedrockConverseAdapterVersion = "bedrock-converse-v5"
 	maxStopSequences              = 2500
 )
 
@@ -90,10 +93,11 @@ func newDraft(profile requestProfile, request *core.AIRequest, stream bool) (*Dr
 	if options.Temperature > 0 {
 		if samplingPolicy == bedrockSamplingFable5 &&
 			request.Generation.Temperature.Mode == core.AIParameterInherit &&
-			options.Temperature != 1 {
+			options.Temperature != bedrockFableTemperature {
 			preparationAdjustments = append(preparationAdjustments, core.AIRequestAdjustment{
 				Source: "built-in-rule",
-				Rule:   bedrockSamplingRule + "@2",
+				Rule: bedrockFableTemperaturePreparationRule + "@" +
+					bedrockFableTemperatureRuleVersion,
 				Path:   "/inference_config/temperature",
 				Action: "remove",
 				Reason: "Bedrock Claude Fable 5 accepts only temperature 1 or omission",
@@ -101,6 +105,13 @@ func newDraft(profile requestProfile, request *core.AIRequest, stream bool) (*Dr
 		} else {
 			inference["temperature"] = options.Temperature
 		}
+	}
+	additional, err := prepareBedrockAdditionalFields(
+		options.Extra,
+		samplingPolicy,
+	)
+	if err != nil {
+		return nil, err
 	}
 	body := map[string]interface{}{
 		"model": profile.wireModel,
@@ -114,8 +125,8 @@ func newDraft(profile requestProfile, request *core.AIRequest, stream bool) (*Dr
 	if len(inference) > 0 {
 		body["inference_config"] = inference
 	}
-	if len(options.Extra) > 0 {
-		body["additional_model_request_fields"] = canonicalizeBedrockSamplingFields(options.Extra, samplingPolicy)
+	if len(additional) > 0 {
+		body["additional_model_request_fields"] = additional
 	}
 
 	explicit := make(map[string]struct{})
@@ -286,6 +297,9 @@ func (d *Draft) validate(validateModelSampling bool) error {
 		if _, ok := value.(map[string]interface{}); !ok {
 			return fmt.Errorf("additional_model_request_fields has unsupported type %T", value)
 		}
+		if err := validateBedrockDocumentValue(value); err != nil {
+			return fmt.Errorf("additional_model_request_fields: %w", err)
+		}
 	}
 	if validateModelSampling {
 		if err := d.validateModelSampling(); err != nil {
@@ -303,6 +317,10 @@ func (d *Draft) SDKInput() (*bedrockruntime.ConverseInput, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	return d.sdkInput()
+}
+
+func (d *Draft) sdkInput() (*bedrockruntime.ConverseInput, error) {
 	common, err := d.sdkFields()
 	if err != nil {
 		return nil, err
@@ -325,6 +343,10 @@ func (d *Draft) SDKStreamInput() (*bedrockruntime.ConverseStreamInput, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	return d.sdkStreamInput()
+}
+
+func (d *Draft) sdkStreamInput() (*bedrockruntime.ConverseStreamInput, error) {
 	common, err := d.sdkFields()
 	if err != nil {
 		return nil, err
@@ -348,6 +370,8 @@ type sdkFields struct {
 func (d *Draft) sdkFields() (sdkFields, error) {
 	fields := sdkFields{}
 	messages, _ := d.Get("/messages")
+	// /messages is protected by the draft, so this guard can become reachable
+	// only if a future Document implementation changes protected-path typing.
 	logicalMessages, ok := messages.([]map[string]string)
 	if !ok {
 		return fields, fmt.Errorf("messages has unsupported type %T", messages)
@@ -390,7 +414,11 @@ func (d *Draft) sdkFields() (sdkFields, error) {
 		}
 	}
 	if value, exists := d.Get("/additional_model_request_fields"); exists {
-		fields.additional = bedrockdocument.NewLazyDocument(value)
+		normalized, err := normalizeBedrockDocumentValue(value)
+		if err != nil {
+			return fields, fmt.Errorf("normalize additional_model_request_fields: %w", err)
+		}
+		fields.additional = bedrockdocument.NewLazyDocument(normalized)
 	}
 	return fields, nil
 }
@@ -398,37 +426,65 @@ func (d *Draft) sdkFields() (sdkFields, error) {
 func (d *Draft) validateModelSampling() error {
 	inference, _ := d.Get("/inference_config")
 	config, _ := inference.(map[string]interface{})
-	_, hasTemperature := config["temperature"]
-	_, hasTopP := config["top_p"]
-	hasTopK := false
+	sampling := bedrockDraftSamplingFields{}
+	if value, exists := config["temperature"]; exists {
+		sampling.temperatures = append(sampling.temperatures, value)
+	}
+	if value, exists := config["top_p"]; exists {
+		sampling.topPs = append(sampling.topPs, value)
+	}
 	if additional, exists := d.Get("/additional_model_request_fields"); exists {
 		fields, _ := additional.(map[string]interface{})
-		for key := range fields {
-			if strings.EqualFold(key, "top_k") {
-				hasTopK = true
-				break
+		for key, value := range fields {
+			field, samplingField := canonicalBedrockSamplingField(key)
+			if !samplingField {
+				continue
+			}
+			switch field {
+			case "temperature":
+				sampling.additionalTemperatures = append(sampling.additionalTemperatures, value)
+			case "top_p":
+				sampling.additionalTopPs = append(sampling.additionalTopPs, value)
+			case "top_k":
+				sampling.hasTopK = true
 			}
 		}
 	}
 
 	switch bedrockSamplingPolicyForModel(d.semanticModel) {
 	case bedrockSamplingOmitAll:
-		if hasTemperature || hasTopP || hasTopK {
+		if len(sampling.temperatures) > 0 ||
+			len(sampling.topPs) > 0 ||
+			len(sampling.additionalTemperatures) > 0 ||
+			len(sampling.additionalTopPs) > 0 ||
+			sampling.hasTopK {
 			return errors.New("selected Bedrock Claude model does not accept modified temperature, top_p, or top_k")
 		}
 	case bedrockSamplingFable5:
-		if hasTopK {
+		if sampling.hasTopK {
 			return errors.New("bedrock Claude Fable 5 does not accept top_k")
 		}
-		if hasTemperature {
-			temperature, err := unitFloat32(config["temperature"])
-			if err != nil || temperature != 1 {
+		if len(sampling.additionalTemperatures) > 0 || len(sampling.additionalTopPs) > 0 {
+			return errors.New(
+				"bedrock Claude Fable 5 temperature and top_p must use inference_config, " +
+					"not additional_model_request_fields",
+			)
+		}
+		for _, value := range sampling.temperatures {
+			temperature, err := unitFloat32(value)
+			if err != nil {
+				return fmt.Errorf("bedrock Claude Fable 5 temperature: %w", err)
+			}
+			if temperature != bedrockFableTemperature {
 				return errors.New("bedrock Claude Fable 5 temperature must be 1 or omitted")
 			}
 		}
-		if hasTopP {
-			topP, err := unitFloat32(config["top_p"])
-			if err != nil || topP < 0.99 || topP >= 1 {
+		for _, value := range sampling.topPs {
+			topP, err := unitFloat32(value)
+			if err != nil {
+				return fmt.Errorf("bedrock Claude Fable 5 top_p: %w", err)
+			}
+			if topP < bedrockFableTopPMinimum || topP >= bedrockFableTopPMaximum {
 				return errors.New("bedrock Claude Fable 5 top_p must be at least 0.99 and less than 1, or omitted")
 			}
 		}
@@ -436,28 +492,265 @@ func (d *Draft) validateModelSampling() error {
 	return nil
 }
 
-func canonicalizeBedrockSamplingFields(
+type bedrockDraftSamplingFields struct {
+	temperatures           []interface{}
+	topPs                  []interface{}
+	additionalTemperatures []interface{}
+	additionalTopPs        []interface{}
+	hasTopK                bool
+}
+
+func prepareBedrockAdditionalFields(
 	fields map[string]interface{},
 	policy bedrockSamplingPolicy,
-) map[string]interface{} {
-	if policy == bedrockSamplingUnrestricted {
-		return fields
+) (map[string]interface{}, error) {
+	if len(fields) == 0 || policy == bedrockSamplingUnrestricted {
+		return fields, nil
 	}
-	var (
-		topK    interface{}
-		hasTopK bool
-	)
-	for key, value := range fields {
-		if strings.EqualFold(key, "top_k") {
-			delete(fields, key)
-			topK = value
-			hasTopK = true
+	counts := make(map[string]int, 3)
+	for key := range fields {
+		if canonical, ok := canonicalBedrockSamplingField(key); ok {
+			counts[canonical]++
 		}
 	}
-	if hasTopK {
-		fields["top_k"] = topK
+	for field, count := range counts {
+		if count > 1 {
+			return nil, fmt.Errorf(
+				"additional_model_request_fields contains %d case-insensitive %s fields",
+				count,
+				field,
+			)
+		}
 	}
-	return fields
+	canonical := make(map[string]interface{}, len(fields))
+	for key, value := range fields {
+		field, ok := canonicalBedrockSamplingField(key)
+		if !ok {
+			canonical[key] = value
+			continue
+		}
+		canonical[field] = value
+	}
+	return canonical, nil
+}
+
+func canonicalBedrockSamplingField(field string) (string, bool) {
+	switch {
+	case strings.EqualFold(field, "temperature"):
+		return "temperature", true
+	case strings.EqualFold(field, "top_p"):
+		return "top_p", true
+	case strings.EqualFold(field, "top_k"):
+		return "top_k", true
+	default:
+		return "", false
+	}
+}
+
+type bedrockDocumentVisit struct {
+	kind reflect.Kind
+	typ  reflect.Type
+	ptr  uintptr
+	len  int
+	cap  int
+}
+
+// validateBedrockDocumentValue rejects values that cannot be translated to a
+// Bedrock Smithy document. It deliberately runs during final draft validation,
+// before a stable policy fingerprint is produced.
+func validateBedrockDocumentValue(value interface{}) error {
+	_, err := walkBedrockDocumentValue(
+		reflect.ValueOf(value),
+		"$",
+		make(map[bedrockDocumentVisit]struct{}),
+		false,
+	)
+	return err
+}
+
+// normalizeBedrockDocumentValue converts JSON decoder numbers to Smithy's
+// arbitrary-precision number type before the AWS document encoder sees them.
+// It validates and preserves the original decimal representation instead of
+// round-tripping integers through a precision-losing float64. The Smithy
+// encoder otherwise observes encoding/json.Number's string kind and emits a
+// quoted JSON string. Maps and sequences are rebuilt into wire-local JSON
+// containers so typed decoder shapes are handled recursively.
+func normalizeBedrockDocumentValue(value interface{}) (interface{}, error) {
+	return walkBedrockDocumentValue(
+		reflect.ValueOf(value),
+		"$",
+		make(map[bedrockDocumentVisit]struct{}),
+		true,
+	)
+}
+
+func walkBedrockDocumentValue(
+	value reflect.Value,
+	path string,
+	active map[bedrockDocumentVisit]struct{},
+	normalize bool,
+) (interface{}, error) {
+	if !value.IsValid() {
+		return nil, nil
+	}
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return nil, nil
+		}
+		return walkBedrockDocumentValue(value.Elem(), path, active, normalize)
+	}
+	if value.CanInterface() {
+		if number, ok := value.Interface().(json.Number); ok {
+			if number == "" {
+				return nil, fmt.Errorf("%s: invalid empty JSON number", path)
+			}
+			encoded, err := json.Marshal(number)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid JSON number %q: %w", path, number, err)
+			}
+			if !normalize {
+				return nil, nil
+			}
+			return smithydocument.Number(encoded), nil
+		}
+	}
+
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() {
+			return nil, nil
+		}
+		visit := bedrockDocumentVisit{
+			kind: reflect.Pointer,
+			typ:  value.Type(),
+			ptr:  value.Pointer(),
+		}
+		if _, exists := active[visit]; exists {
+			return nil, fmt.Errorf("%s: cyclic pointer value is not document-compatible", path)
+		}
+		active[visit] = struct{}{}
+		defer delete(active, visit)
+		return walkBedrockDocumentValue(value.Elem(), path, active, normalize)
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("%s: unsupported document map key type %s", path, value.Type().Key())
+		}
+		if value.IsNil() {
+			return nil, nil
+		}
+		visit := bedrockDocumentVisit{
+			kind: reflect.Map,
+			typ:  value.Type(),
+			ptr:  value.Pointer(),
+		}
+		if _, exists := active[visit]; exists {
+			return nil, fmt.Errorf("%s: cyclic map value is not document-compatible", path)
+		}
+		active[visit] = struct{}{}
+		defer delete(active, visit)
+
+		var normalized map[string]interface{}
+		if normalize {
+			normalized = make(map[string]interface{}, value.Len())
+		}
+		iterator := value.MapRange()
+		for iterator.Next() {
+			key := iterator.Key().String()
+			item, err := walkBedrockDocumentValue(
+				iterator.Value(),
+				path+"/"+key,
+				active,
+				normalize,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if normalize {
+				normalized[key] = item
+			}
+		}
+		return normalized, nil
+	case reflect.Slice:
+		if value.IsNil() {
+			return nil, nil
+		}
+		visit := bedrockDocumentVisit{
+			kind: reflect.Slice,
+			typ:  value.Type(),
+			ptr:  value.Pointer(),
+			len:  value.Len(),
+			cap:  value.Cap(),
+		}
+		if _, exists := active[visit]; exists {
+			return nil, fmt.Errorf("%s: cyclic slice value is not document-compatible", path)
+		}
+		active[visit] = struct{}{}
+		defer delete(active, visit)
+
+		var normalized []interface{}
+		if normalize {
+			normalized = make([]interface{}, value.Len())
+		}
+		for index := range value.Len() {
+			item, err := walkBedrockDocumentValue(
+				value.Index(index),
+				fmt.Sprintf("%s/%d", path, index),
+				active,
+				normalize,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if normalize {
+				normalized[index] = item
+			}
+		}
+		return normalized, nil
+	case reflect.Array:
+		var normalized []interface{}
+		if normalize {
+			normalized = make([]interface{}, value.Len())
+		}
+		for index := range value.Len() {
+			item, err := walkBedrockDocumentValue(
+				value.Index(index),
+				fmt.Sprintf("%s/%d", path, index),
+				active,
+				normalize,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if normalize {
+				normalized[index] = item
+			}
+		}
+		return normalized, nil
+	case reflect.Struct:
+		return nil, fmt.Errorf(
+			"%s: unsupported document struct type %s; use maps and JSON-compatible values",
+			path,
+			value.Type(),
+		)
+	case reflect.Bool, reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if !normalize {
+			return nil, nil
+		}
+		return value.Interface(), nil
+	case reflect.Float32, reflect.Float64:
+		number := value.Float()
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return nil, fmt.Errorf("%s: non-finite floating-point value is not document-compatible", path)
+		}
+		if !normalize {
+			return nil, nil
+		}
+		return value.Interface(), nil
+	default:
+		return nil, fmt.Errorf("%s: unsupported document value type %s", path, value.Type())
+	}
 }
 
 func (d *Draft) applyPortableOmits(generation core.AIGenerationOptions) error {
@@ -595,20 +888,44 @@ func hasLogicalMessages(value interface{}) bool {
 
 func positiveInt32(value interface{}) (int32, error) {
 	var converted int64
-	switch number := value.(type) {
-	case int:
-		converted = int64(number)
-	case int32:
-		converted = int64(number)
-	case int64:
-		converted = number
-	case float64:
-		if number != math.Trunc(number) {
+	if number, ok := value.(json.Number); ok {
+		parsed, err := number.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("has invalid JSON number %q: %w", number, err)
+		}
+		if parsed != math.Trunc(parsed) {
 			return 0, errors.New("must be an integer")
 		}
-		converted = int64(number)
-	default:
-		return 0, fmt.Errorf("has unsupported type %T", value)
+		if parsed > math.MaxInt64 || parsed < math.MinInt64 {
+			return 0, errors.New("must be a 64-bit integer")
+		}
+		converted = int64(parsed)
+	} else {
+		reflected := reflect.ValueOf(value)
+		if !reflected.IsValid() {
+			return 0, errors.New("has unsupported type <nil>")
+		}
+		switch reflected.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			converted = reflected.Int()
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			number := reflected.Uint()
+			if number > math.MaxInt64 {
+				return 0, errors.New("must be a 64-bit integer")
+			}
+			converted = int64(number)
+		case reflect.Float32, reflect.Float64:
+			number := reflected.Float()
+			if number != math.Trunc(number) {
+				return 0, errors.New("must be an integer")
+			}
+			if number > math.MaxInt64 || number < math.MinInt64 {
+				return 0, errors.New("must be a 64-bit integer")
+			}
+			converted = int64(number)
+		default:
+			return 0, fmt.Errorf("has unsupported type %T", value)
+		}
 	}
 	if converted <= 0 || converted > math.MaxInt32 {
 		return 0, errors.New("must be a positive 32-bit integer")
@@ -618,19 +935,27 @@ func positiveInt32(value interface{}) (int32, error) {
 
 func finiteFloat32(value interface{}) (float32, error) {
 	var converted float64
-	switch number := value.(type) {
-	case float32:
-		converted = float64(number)
-	case float64:
-		converted = number
-	case int:
-		converted = float64(number)
-	case int32:
-		converted = float64(number)
-	case int64:
-		converted = float64(number)
-	default:
-		return 0, fmt.Errorf("has unsupported type %T", value)
+	if number, ok := value.(json.Number); ok {
+		parsed, err := number.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("has invalid JSON number %q: %w", number, err)
+		}
+		converted = parsed
+	} else {
+		reflected := reflect.ValueOf(value)
+		if !reflected.IsValid() {
+			return 0, errors.New("has unsupported type <nil>")
+		}
+		switch reflected.Kind() {
+		case reflect.Float32, reflect.Float64:
+			converted = reflected.Float()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			converted = float64(reflected.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			converted = float64(reflected.Uint())
+		default:
+			return 0, fmt.Errorf("has unsupported type %T", value)
+		}
 	}
 	if math.IsNaN(converted) || math.IsInf(converted, 0) || converted > math.MaxFloat32 || converted < -math.MaxFloat32 {
 		return 0, errors.New("must be a finite 32-bit float")

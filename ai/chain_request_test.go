@@ -286,6 +286,14 @@ func (factory *phase5RequestFactory) CreateRequestClient(
 	return client, nil
 }
 
+type phase5LongTimeoutRequestFactory struct {
+	*phase5RequestFactory
+}
+
+func (*phase5LongTimeoutRequestFactory) DefaultRequestTimeout() time.Duration {
+	return 60 * time.Minute
+}
+
 type phase5CredentialSource struct{ name string }
 
 func (source *phase5CredentialSource) Credential(
@@ -452,6 +460,266 @@ func (span *chainObservationSpan) SetAttribute(key string, value interface{}) {
 	span.attributes[key] = value
 }
 func (span *chainObservationSpan) RecordError(err error) { span.errors = append(span.errors, err) }
+
+type chainRouteError struct{ cause error }
+
+func (err *chainRouteError) Error() string { return err.cause.Error() }
+func (err *chainRouteError) Unwrap() error { return err.cause }
+func (*chainRouteError) AIRequestFailureReason() AIRequestFailureReason {
+	return AIRequestFailureReasonRoute
+}
+
+type chainRouteProviderError struct {
+	*chainRouteError
+	status int
+}
+
+func (err *chainRouteProviderError) StatusCode() int { return err.status }
+func (*chainRouteProviderError) Provider() string    { return "test" }
+func (*chainRouteProviderError) Model() string       { return "semantic-model" }
+func (*chainRouteProviderError) IsTransient() bool   { return false }
+func (*chainRouteProviderError) IsRetryable() bool   { return false }
+
+func countChainObservationLogs(store *chainObservationLogStore, operation string) int {
+	count := 0
+	for _, fields := range store.fields {
+		if fields["operation"] == operation {
+			count++
+		}
+	}
+	return count
+}
+
+func TestChainRouteFailureReasonAcrossGenerateAndStream(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		spanName   string
+		invoke     func(*ChainClient, *core.AIRequest) (*core.AIResult, error)
+		firstCalls func(*phase5RequestClient) int64
+	}{
+		{
+			name:     "generate",
+			spanName: "ai.chain.generate",
+			invoke: func(chain *ChainClient, request *core.AIRequest) (*core.AIResult, error) {
+				return chain.Generate(t.Context(), request)
+			},
+			firstCalls: func(client *phase5RequestClient) int64 { return client.generateCalls.Load() },
+		},
+		{
+			name:     "stream",
+			spanName: "ai.chain.stream",
+			invoke: func(chain *ChainClient, request *core.AIRequest) (*core.AIResult, error) {
+				return chain.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+			},
+			firstCalls: func(client *phase5RequestClient) int64 { return client.streamCalls.Load() },
+		},
+	} {
+		t.Run(test.name+" failover", func(t *testing.T) {
+			routeErr := &chainRouteError{cause: errors.New("private route diagnostic")}
+			first := &phase5RequestClient{
+				generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+				stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+			}
+			second := &phase5RequestClient{}
+			chain, err := NewChain(ClientEntry("route", first), ClientEntry("backup", second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &chainObservationLogStore{}
+			tracing := &chainObservationTelemetry{}
+			chain.SetLogger(&chainObservationLogger{store: store})
+			chain.SetTelemetry(tracing)
+
+			result, err := test.invoke(chain, core.NewAIRequest("prompt", "route-failover"))
+			if err != nil || result == nil || result.Response == nil {
+				t.Fatalf("%s result=%#v error=%v", test.name, result, err)
+			}
+			if got := test.firstCalls(first); got != 1 {
+				t.Fatalf("%s first calls = %d, want 1", test.name, got)
+			}
+			fields := requireChainSanitizedErrorLog(
+				t,
+				store,
+				map[string]string{
+					"generate": "ai_chain_provider_failed",
+					"stream":   "ai_chain_stream_failover",
+				}[test.name],
+				"WARN",
+				"route",
+			)
+			if fields["failover_reason"] != "route" {
+				t.Fatalf("%s route fields = %#v", test.name, fields)
+			}
+			if len(tracing.spans) < 3 || tracing.names[0] != test.spanName {
+				t.Fatalf("%s spans = %#v", test.name, tracing.names)
+			}
+			parent := tracing.spans[0]
+			if parent.attributes["ai.chain.status"] != "success" ||
+				parent.attributes["ai.chain.failover_reason"] != "route" ||
+				parent.attributes["ai.chain.successful_entry"] != "backup" ||
+				parent.attributes["ai.chain.entry_name"] != "backup" ||
+				parent.attributes["ai.chain.attempt"] != 2 {
+				t.Fatalf("%s parent span = %#v", test.name, parent.attributes)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		spanName  string
+		operation string
+		invoke    func(*ChainClient, *core.AIRequest) error
+	}{
+		{
+			name: "generate", spanName: "ai.chain.generate", operation: "ai_chain_exhausted",
+			invoke: func(chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Generate(t.Context(), request)
+				return err
+			},
+		},
+		{
+			name: "stream", spanName: "ai.chain.stream", operation: "ai_chain_stream_exhausted",
+			invoke: func(chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+				return err
+			},
+		},
+	} {
+		t.Run(test.name+" exhaustion", func(t *testing.T) {
+			routeErr := &chainRouteError{cause: errors.New("private route diagnostic")}
+			client := &phase5RequestClient{
+				generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+				stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+			}
+			chain, err := NewChain(ClientEntry("route", client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &chainObservationLogStore{}
+			tracing := &chainObservationTelemetry{}
+			chain.SetLogger(&chainObservationLogger{store: store})
+			chain.SetTelemetry(tracing)
+
+			if err := test.invoke(chain, core.NewAIRequest("prompt", "route-exhaustion")); err == nil {
+				t.Fatal("expected route exhaustion")
+			}
+			fields := requireChainSanitizedErrorLog(t, store, test.operation, "ERROR", "route")
+			if fields["failover_reason"] != "route" {
+				t.Fatalf("%s exhaustion fields = %#v", test.name, fields)
+			}
+			if countChainObservationLogs(store, "ai_chain_provider_failed") != 0 ||
+				countChainObservationLogs(store, "ai_chain_stream_failover") != 0 {
+				t.Fatalf("%s terminal attempt emitted failover logs: %#v", test.name, store.fields)
+			}
+			if len(tracing.spans) != 2 || tracing.names[0] != test.spanName {
+				t.Fatalf("%s exhaustion spans = %#v", test.name, tracing.names)
+			}
+			parent := tracing.spans[0]
+			if parent.attributes["ai.error_type"] != "route" ||
+				parent.attributes["ai.chain.failover_reason"] != "route" ||
+				len(parent.errors) != 1 ||
+				parent.errors[0].Error() != "AI provider request failed: route" {
+				t.Fatalf("%s exhaustion parent = %#v", test.name, parent)
+			}
+		})
+	}
+
+	t.Run("final attempted error owns exhaustion classification", func(t *testing.T) {
+		routeErr := &chainRouteError{cause: errors.New("private route diagnostic")}
+		finalErr := errors.New("private downstream diagnostic")
+		first := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+			return nil, routeErr
+		}}
+		second := &phase5RequestClient{generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+			return nil, finalErr
+		}}
+		chain, err := NewChain(ClientEntry("route", first), ClientEntry("final", second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &chainObservationLogStore{}
+		tracing := &chainObservationTelemetry{}
+		chain.SetLogger(&chainObservationLogger{store: store})
+		chain.SetTelemetry(tracing)
+
+		if _, err := chain.Generate(t.Context(), core.NewAIRequest("prompt", "mixed-exhaustion")); err == nil {
+			t.Fatal("expected mixed exhaustion")
+		}
+		fields := requireChainSanitizedErrorLog(t, store, "ai_chain_exhausted", "ERROR", "unknown")
+		if fields["failover_reason"] != "unknown" ||
+			tracing.spans[0].attributes["ai.chain.failover_reason"] != "unknown" ||
+			tracing.spans[0].attributes["ai.error_type"] != "unknown" {
+			t.Fatalf("mixed exhaustion observations fields=%#v span=%#v", fields, tracing.spans[0])
+		}
+		if countChainObservationLogs(store, "ai_chain_provider_failed") != 1 {
+			t.Fatalf("mixed exhaustion failover logs = %#v", store.fields)
+		}
+	})
+
+	for _, test := range []struct {
+		name      string
+		spanName  string
+		operation string
+		invoke    func(*ChainClient, *core.AIRequest) error
+	}{
+		{
+			name: "generate", spanName: "ai.chain.generate", operation: "ai_chain_abort",
+			invoke: func(chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Generate(t.Context(), request)
+				return err
+			},
+		},
+		{
+			name: "stream", spanName: "ai.chain.stream", operation: "ai_chain_stream_abort",
+			invoke: func(chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+				return err
+			},
+		},
+	} {
+		t.Run(test.name+" route abort", func(t *testing.T) {
+			routeErr := &chainRouteProviderError{
+				chainRouteError: &chainRouteError{cause: errors.New("private route client diagnostic")},
+				status:          400,
+			}
+			client := &phase5RequestClient{
+				generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+				stream: func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error) {
+					return nil, routeErr
+				},
+			}
+			chain, err := NewChain(ClientEntry("route", client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &chainObservationLogStore{}
+			tracing := &chainObservationTelemetry{}
+			chain.SetLogger(&chainObservationLogger{store: store})
+			chain.SetTelemetry(tracing)
+
+			if err := test.invoke(chain, core.NewAIRequest("prompt", "route-abort")); !errors.Is(err, routeErr) {
+				t.Fatalf("%s abort error = %v", test.name, err)
+			}
+			fields := requireChainSanitizedErrorLog(t, store, test.operation, "ERROR", "route")
+			if fields["failover_reason"] != "route" ||
+				tracing.names[0] != test.spanName ||
+				tracing.spans[0].attributes["ai.error_type"] != "route" ||
+				tracing.spans[0].attributes["ai.chain.failover_reason"] != "route" {
+				t.Fatalf("%s route abort fields=%#v span=%#v", test.name, fields, tracing.spans[0])
+			}
+		})
+	}
+}
 
 func TestChainObservabilitySanitizesErrorsAndCorrelatesRequests(t *testing.T) {
 	const (
@@ -789,13 +1057,14 @@ func TestNewChain_Phase5ProviderEntryRequiresRequestCapableFactory(t *testing.T)
 }
 
 func TestNewChainProviderEntryUsesFailoverSafeTimeoutUnlessOverridden(t *testing.T) {
-	factory := &phase5RequestFactory{name: "phase5-timeout"}
+	recordingFactory := &phase5RequestFactory{name: "phase5-timeout"}
+	factory := &phase5LongTimeoutRequestFactory{phase5RequestFactory: recordingFactory}
 	installPhase3Factory(t, factory)
 
 	if _, err := NewChain(ProviderEntry("default", factory.name)); err != nil {
 		t.Fatal(err)
 	}
-	if got := factory.configs[0].Timeout; got != defaultRequestTimeout {
+	if got := recordingFactory.configs[0].Timeout; got != defaultRequestTimeout {
 		t.Fatalf("default managed-entry timeout = %s, want %s", got, defaultRequestTimeout)
 	}
 
@@ -806,8 +1075,19 @@ func TestNewChainProviderEntryUsesFailoverSafeTimeoutUnlessOverridden(t *testing
 	)); err != nil {
 		t.Fatal(err)
 	}
-	if got := factory.configs[1].Timeout; got != 12*time.Minute {
+	if got := recordingFactory.configs[1].Timeout; got != 12*time.Minute {
 		t.Fatalf("overridden managed-entry timeout = %s, want 12m", got)
+	}
+
+	if _, err := NewChain(ProviderEntry(
+		"zero-is-unset",
+		factory.name,
+		WithTimeout(0),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if got := recordingFactory.configs[2].Timeout; got != defaultRequestTimeout {
+		t.Fatalf("zero managed-entry timeout = %s, want %s", got, defaultRequestTimeout)
 	}
 
 	injected := &phase5RequestClient{}

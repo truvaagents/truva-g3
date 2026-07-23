@@ -22,7 +22,13 @@ import (
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
-const legacyBedrockTestModel = "anthropic.claude-3-haiku-20240307-v1:0"
+const (
+	legacyBedrockTestModel = "anthropic.claude-3-haiku-20240307-v1:0"
+	fableBedrockTestModel  = "anthropic.claude-fable-5"
+	validFableTopP         = float32(0.995)
+	fableTemperatureJSON   = json.Number("1")
+	validFableTopPJSON     = json.Number("0.995")
+)
 
 func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
 	extra := map[string]interface{}{
@@ -407,6 +413,43 @@ func TestFactoryCreatesRequestClientWithSDKResolverAndRejectsHTTPIntegrations(t 
 	}
 }
 
+func TestFactoryDefersImplicitDefaultRegionGuardUntilRequestPreparation(t *testing.T) {
+	config := &ai.AIConfig{
+		Extra: map[string]interface{}{
+			"region":                "us-west-2",
+			"aws_access_key_id":     "access",
+			"aws_secret_access_key": "secret",
+		},
+	}
+	factory := &Factory{}
+
+	legacy, err := factory.CreateValidated(config)
+	if err != nil {
+		t.Fatalf("CreateValidated returned error: %v", err)
+	}
+	legacyClient, ok := legacy.(*Client)
+	if !ok {
+		t.Fatalf("legacy client type = %T", legacy)
+	}
+	if legacyClient.defaultModelExplicit {
+		t.Fatal("implicit legacy default was marked explicit")
+	}
+
+	requestAware, err := factory.CreateRequestClient(config, ai.ProviderIntegrationConfig{
+		CompatibilityMode: requestpolicy.CompatibilityCompatible,
+	})
+	if err != nil {
+		t.Fatalf("CreateRequestClient returned error: %v", err)
+	}
+	requestClient, ok := requestAware.(*Client)
+	if !ok {
+		t.Fatalf("request-aware client type = %T", requestAware)
+	}
+	if requestClient.defaultModelExplicit {
+		t.Fatal("implicit request-aware default was marked explicit")
+	}
+}
+
 func TestBedrockConfigurationValidation(t *testing.T) {
 	if _, err := bedrockRegion(map[string]interface{}{"region": 42}); err == nil {
 		t.Fatal("expected typed region validation error")
@@ -426,18 +469,34 @@ func TestValidateImplicitBedrockDefault(t *testing.T) {
 	tests := []struct {
 		name                string
 		region              string
-		model               string
+		semanticModel       string
+		hasExplicitModel    bool
 		hasEndpointResolver bool
 		wantError           bool
 	}{
-		{name: "default supported region", region: "us-east-1"},
-		{name: "unsupported implicit region", region: "us-west-2", wantError: true},
-		{name: "explicit model", region: "us-west-2", model: "global.anthropic.claude-sonnet-5-v1:0"},
-		{name: "endpoint resolver", region: "us-west-2", hasEndpointResolver: true},
+		{name: "default supported region", region: "us-east-1", semanticModel: ModelClaudeSonnet5},
+		{name: "unsupported implicit region", region: "us-west-2", semanticModel: ModelClaudeSonnet5, wantError: true},
+		{
+			name:   "explicit model",
+			region: "us-west-2", semanticModel: ModelClaudeSonnet5, hasExplicitModel: true,
+		},
+		{
+			name:   "different effective model",
+			region: "us-west-2", semanticModel: "global.anthropic.claude-sonnet-5-v1:0",
+		},
+		{
+			name:   "endpoint resolver",
+			region: "us-west-2", semanticModel: ModelClaudeSonnet5, hasEndpointResolver: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateImplicitBedrockDefault(test.region, test.model, test.hasEndpointResolver)
+			err := validateImplicitBedrockDefault(
+				test.region,
+				test.semanticModel,
+				test.hasExplicitModel,
+				test.hasEndpointResolver,
+			)
 			if test.wantError {
 				if err == nil {
 					t.Fatal("expected implicit-default region error")
@@ -446,6 +505,8 @@ func TestValidateImplicitBedrockDefault(t *testing.T) {
 					ModelClaudeSonnet5,
 					test.region,
 					"ai.WithModel",
+					"per-request model",
+					"bedrock.Client.SetDefaultModel",
 					"ai.WithEndpointResolver",
 				} {
 					if !strings.Contains(err.Error(), want) {
@@ -547,7 +608,8 @@ func (*bedrockObservationLogger) DebugWithContext(context.Context, string, map[s
 func (logger *bedrockObservationLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
 	logger.fields = append(logger.fields, fields)
 }
-func (*bedrockObservationLogger) WarnWithContext(context.Context, string, map[string]interface{}) {
+func (logger *bedrockObservationLogger) WarnWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.fields = append(logger.fields, fields)
 }
 func (logger *bedrockObservationLogger) ErrorWithContext(_ context.Context, _ string, fields map[string]interface{}) {
 	logger.fields = append(logger.fields, fields)
@@ -673,6 +735,7 @@ func TestBedrockObservationContract(t *testing.T) {
 		client := newClientWithRuntime(runtime, "us-test-1", logger)
 		client.SetLogger(logger)
 		client.SetTelemetry(tracing)
+		client.DefaultModel = "semantic-bedrock-model"
 
 		_, err := client.Stream(ctx, core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
 		if !errors.Is(err, context.Canceled) {
@@ -701,6 +764,7 @@ func TestBedrockObservationContract(t *testing.T) {
 		client := newClientWithRuntime(runtime, "us-test-1", logger)
 		client.SetLogger(logger)
 		client.SetTelemetry(tracing)
+		client.DefaultModel = "semantic-bedrock-model"
 
 		_, err := client.Stream(context.Background(), core.NewAIRequest("prompt", "observation"), func(core.StreamChunk) error { return nil })
 		if !errors.Is(err, wantErr) {
@@ -751,7 +815,7 @@ func TestBedrockObservationContract(t *testing.T) {
 			}
 		}
 		if tracing.spans[0].attributes["request_id"] != requestID ||
-			tracing.spans[0].attributes["ai.model"] != titanEmbeddingSemanticModel ||
+			tracing.spans[0].attributes["ai.model"] != titanEmbeddingV2SemanticModel ||
 			tracing.spans[0].attributes["ai.text_length"] != len("embedding input") ||
 			tracing.spans[0].attributes["ai.input_length"] != nil {
 			t.Fatalf("embedding span attributes = %#v", tracing.spans[0].attributes)
