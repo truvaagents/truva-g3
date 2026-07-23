@@ -666,7 +666,17 @@ chain, err := ai.NewChainClient(
 | **Rate limits (429)** | Try next provider | Provider at capacity |
 | **Network errors** | Try next provider | Transient connectivity |
 
-The two override flags (`IsTransient` and `IsRetryable`) are independent — see godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx classification, but they signal different conditions: `IsTransient` = "this never reached the API" (proxy 4xx), `IsRetryable` = "the API gave a definitive answer that may differ on a different provider" (billing/quota).
+The two override flags (`IsTransient` and `IsRetryable`) are independent — see
+godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx
+classification, but they signal different conditions: `IsTransient` = "this
+never reached the API" (proxy 4xx), `IsRetryable` = "the API gave a definitive
+answer that may differ on a different provider" (billing/quota).
+`IsRetryable` takes precedence over generic HTTP-status classification when the
+chain derives the bounded `failover_reason`, so an `insufficient_quota` response
+reported as HTTP 429 remains `provider_retryable`; an ordinary 429 remains
+`rate_limit`. This bounded reason is the canonical operator-action signal on
+both non-terminal failover and terminal exhaustion events. Operations whose
+names say “failover” are emitted only when another entry actually remains.
 
 ### Per-Provider Retry Budget
 

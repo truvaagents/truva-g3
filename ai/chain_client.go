@@ -497,6 +497,13 @@ func classifyFailoverReason(err error) string {
 	}
 	var pe core.ProviderError
 	if errors.As(err, &pe) {
+		// IsRetryable identifies provider-specific terminal conditions such as
+		// exhausted credit or a hard quota. Preserve that operator-action
+		// signal even when the provider reports it with a generic status such
+		// as 429; ordinary rate limits leave IsRetryable false.
+		if pe.IsRetryable() {
+			return "provider_retryable"
+		}
 		switch pe.StatusCode() {
 		case 429:
 			return "rate_limit"
@@ -509,9 +516,6 @@ func classifyFailoverReason(err error) string {
 		}
 		if pe.IsTransient() {
 			return "transient_proxy"
-		}
-		if pe.IsRetryable() {
-			return "provider_retryable"
 		}
 		return "provider_error"
 	}

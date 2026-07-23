@@ -714,11 +714,164 @@ func TestChainRouteFailureReasonAcrossGenerateAndStream(t *testing.T) {
 			if fields["failover_reason"] != "route" ||
 				tracing.names[0] != test.spanName ||
 				tracing.spans[0].attributes["ai.error_type"] != "route" ||
+				tracing.spans[0].attributes["ai.chain.abort_reason"] != "non_retryable_error" ||
 				tracing.spans[0].attributes["ai.chain.failover_reason"] != "route" {
 				t.Fatalf("%s route abort fields=%#v span=%#v", test.name, fields, tracing.spans[0])
 			}
 		})
 	}
+}
+
+func TestChainProviderRetryableCostSignalAcrossGenerateAndStream(t *testing.T) {
+	operations := []struct {
+		name       string
+		exhausted  string
+		clientWith func(error) *phase5RequestClient
+		invoke     func(context.Context, *ChainClient, *core.AIRequest) error
+	}{
+		{
+			name:      "generate",
+			exhausted: "ai_chain_exhausted",
+			clientWith: func(wantErr error) *phase5RequestClient {
+				return &phase5RequestClient{
+					generate: func(context.Context, *core.AIRequest) (*core.AIResult, error) {
+						return nil, wantErr
+					},
+				}
+			},
+			invoke: func(ctx context.Context, chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Generate(ctx, request)
+				return err
+			},
+		},
+		{
+			name:      "stream",
+			exhausted: "ai_chain_stream_exhausted",
+			clientWith: func(wantErr error) *phase5RequestClient {
+				return &phase5RequestClient{
+					stream: func(
+						context.Context,
+						*core.AIRequest,
+						core.StreamCallback,
+					) (*core.AIResult, error) {
+						return nil, wantErr
+					},
+				}
+			},
+			invoke: func(ctx context.Context, chain *ChainClient, request *core.AIRequest) error {
+				_, err := chain.Stream(ctx, request, func(core.StreamChunk) error { return nil })
+				return err
+			},
+		},
+	}
+
+	for _, status := range []struct {
+		code          int
+		wantErrorType string
+	}{
+		{code: 400, wantErrorType: "provider_client"},
+		{code: 429, wantErrorType: "provider_rate_limit"},
+	} {
+		for _, operation := range operations {
+			t.Run(fmt.Sprintf("%s status %d", operation.name, status.code), func(t *testing.T) {
+				wantErr := &testProviderError{
+					statusCode: status.code,
+					message:    "private billing diagnostic",
+					retryable:  true,
+				}
+				chain, err := NewChain(ClientEntry("billing", operation.clientWith(wantErr)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				store := &chainObservationLogStore{}
+				tracing := &chainObservationTelemetry{}
+				chain.SetLogger(&chainObservationLogger{store: store})
+				chain.SetTelemetry(tracing)
+
+				err = operation.invoke(
+					t.Context(),
+					chain,
+					core.NewAIRequest("prompt", "billing-exhaustion"),
+				)
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("%s error = %v, want preserved provider error", operation.name, err)
+				}
+				fields := requireChainSanitizedErrorLog(
+					t,
+					store,
+					operation.exhausted,
+					"ERROR",
+					status.wantErrorType,
+				)
+				if fields["failover_reason"] != "provider_retryable" {
+					t.Fatalf("%s terminal cost fields = %#v", operation.name, fields)
+				}
+				for _, failoverOperation := range []string{
+					"chain_failover_retryable",
+					"ai_chain_provider_failed",
+					"ai_chain_stream_failover",
+				} {
+					if count := countChainObservationLogs(store, failoverOperation); count != 0 {
+						t.Fatalf(
+							"%s terminal cost failure emitted %s %d times: %#v",
+							operation.name,
+							failoverOperation,
+							count,
+							store.fields,
+						)
+					}
+				}
+				if len(tracing.spans) != 2 ||
+					tracing.spans[0].attributes["ai.chain.failover_reason"] != "provider_retryable" {
+					t.Fatalf("%s terminal cost spans = %#v", operation.name, tracing.spans)
+				}
+			})
+		}
+	}
+
+	t.Run("stream failover", func(t *testing.T) {
+		wantErr := &testProviderError{
+			statusCode: 429,
+			message:    "private quota diagnostic",
+			retryable:  true,
+		}
+		first := &phase5RequestClient{
+			stream: func(
+				context.Context,
+				*core.AIRequest,
+				core.StreamCallback,
+			) (*core.AIResult, error) {
+				return nil, wantErr
+			},
+		}
+		chain, err := NewChain(
+			ClientEntry("billing", first),
+			ClientEntry("backup", &phase5RequestClient{}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &chainObservationLogStore{}
+		chain.SetLogger(&chainObservationLogger{store: store})
+
+		if _, err := chain.Stream(
+			t.Context(),
+			core.NewAIRequest("prompt", "billing-failover"),
+			func(core.StreamChunk) error { return nil },
+		); err != nil {
+			t.Fatalf("Stream returned error: %v", err)
+		}
+		fields := requireChainSanitizedErrorLog(
+			t,
+			store,
+			"ai_chain_stream_failover",
+			"WARN",
+			"provider_rate_limit",
+		)
+		if fields["failover_reason"] != "provider_retryable" {
+			t.Fatalf("stream cost failover fields = %#v", fields)
+		}
+	})
 }
 
 func TestChainObservabilitySanitizesErrorsAndCorrelatesRequests(t *testing.T) {
@@ -943,9 +1096,12 @@ func TestChainFailureLogsUseSanitizedErrorContract(t *testing.T) {
 			if fields["request_id"] != requestID || strings.Contains(fmt.Sprint(fields), secret) {
 				t.Fatalf("%s fields = %#v", operation, fields)
 			}
+			if fields["failover_reason"] != "provider_retryable" {
+				t.Fatalf("%s cost classification = %#v", operation, fields)
+			}
 		}
 		_, providerFields := findChainObservationLog(t, store, "ai_chain_provider_failed")
-		if providerFields["failover_reason"] != "rate_limit" || providerFields["failure_type"] != nil {
+		if providerFields["failure_type"] != nil {
 			t.Fatalf("retryable failover classification = %#v", providerFields)
 		}
 	})

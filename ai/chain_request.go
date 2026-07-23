@@ -58,14 +58,13 @@ func addChainObservationError(fields map[string]interface{}, err error, fallback
 	fields["error_type"] = errorType
 }
 
-func recordChainObservationError(span core.Span, err error, fallback string) string {
+func recordChainObservationError(span core.Span, err error, fallback string) {
 	errorType, safeError := sanitizedChainObservationError(err, fallback)
 	if span == nil {
-		return errorType
+		return
 	}
 	span.SetAttribute("ai.error_type", errorType)
 	span.RecordError(safeError)
-	return errorType
 }
 
 func sanitizedChainObservationError(err error, fallback string) (string, error) {
@@ -491,6 +490,7 @@ func (c *ChainClient) Stream(
 		if !shouldFailOver(callErr) {
 			reason := classifyFailoverReason(callErr)
 			span.SetAttribute("ai.chain.status", "aborted")
+			span.SetAttribute("ai.chain.abort_reason", "non_retryable_error")
 			span.SetAttribute("ai.chain.failover_reason", reason)
 			recordChainObservationError(
 				span,
@@ -640,12 +640,13 @@ func (c *ChainClient) logChainFailover(
 	}
 	if errors.As(err, &providerErr) && providerErr.IsRetryable() {
 		fields := map[string]interface{}{
-			"operation":     "chain_failover_retryable",
-			"from_provider": entries[index].name,
-			"to_provider":   nextEntry,
-			"status_code":   providerErr.StatusCode(),
-			"is_retryable":  true,
-			"duration_ms":   duration.Milliseconds(),
+			"operation":       "chain_failover_retryable",
+			"from_provider":   entries[index].name,
+			"to_provider":     nextEntry,
+			"status_code":     providerErr.StatusCode(),
+			"is_retryable":    true,
+			"duration_ms":     duration.Milliseconds(),
+			"failover_reason": classifyFailoverReason(err),
 		}
 		addChainObservationError(fields, err, "provider_client")
 		c.logRequestWarn(ctx, "Provider terminal error (billing/quota), failing over to next provider", fields)

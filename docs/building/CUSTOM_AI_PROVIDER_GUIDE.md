@@ -2765,7 +2765,10 @@ Derive `transient` and `retryable` from status codes and documented provider
 error metadata, not string matching at the chain layer. A malformed-request 4xx
 normally sets neither flag. A proxy-generated failure may be transient even
 when its status is unusual; an account or capacity error may be provider-
-retryable without being a transport failure.
+retryable without being a transport failure. When `IsRetryable` is true, the
+chain emits the bounded `provider_retryable` failover reason even if the
+provider used a generic status such as 429. Ordinary 429 responses with
+`IsRetryable` false remain `rate_limit`.
 
 Preserve `context.Canceled` and `context.DeadlineExceeded` so callers can use
 `errors.Is`. For streaming, an error before the first delivered chunk may be

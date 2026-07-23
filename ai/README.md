@@ -788,9 +788,17 @@ Chain Client is smart about which errors trigger failover:
 
 - **Allows failover**: Unstructured network errors, provider HTTP timeouts
   such as 408/504, server errors (5xx), rate limits, and authentication or
-  authorization errors (401/403)
-- **Stops failover**: Bad requests and other non-transient 4xx errors, caller
-  cancellation, and caller context deadlines
+  authorization errors (401/403), plus provider-specific terminal errors marked
+  `IsRetryable` such as exhausted credit or a hard quota
+- **Stops failover**: Bad requests and other 4xx errors that are neither
+  transient nor provider-retryable, caller cancellation, and caller context
+  deadlines
+
+Billing/quota failures use the bounded
+`failover_reason=provider_retryable` operator signal on generate and stream
+failover or exhaustion events. This takes precedence over generic status
+classification when, for example, a provider reports `insufficient_quota` as
+HTTP 429; an ordinary 429 remains `rate_limit`.
 
 **Why authentication errors trigger failover**: Each provider has its own API key. If OpenAI's key is invalid, Groq might still work with a valid key. This enables resilient multi-provider setups.
 

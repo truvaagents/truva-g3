@@ -617,8 +617,11 @@ client, err := ai.NewRequestClient(
 )
 ```
 
-**Durable fix:** alert on failover rates and on `IsRetryable` provider errors;
-review strict-mode failures as provider-contract change reports.
+**Durable fix:** alert on failover rates and on the bounded
+`failover_reason=provider_retryable` field across generate/stream failover and
+exhaustion operations. Do not rely only on `operation=chain_failover_retryable`,
+which is emitted only for a non-terminal generate attempt with another entry
+remaining. Review strict-mode failures as provider-contract change reports.
 
 **Canonical reference:**
 [Understanding Failover Behavior](AI_PROVIDERS_SETUP_GUIDE.md#understanding-failover-behavior),

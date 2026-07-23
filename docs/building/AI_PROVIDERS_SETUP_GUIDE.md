@@ -414,7 +414,8 @@ Not all errors should trigger failover. If your request is malformed, trying ano
 
 Chain Client classifies completed provider failures using the
 `core.ProviderError` interface, which carries structured metadata (HTTP status
-code, provider name, model, and transient flag) from the AI provider layer.
+code, provider name, model, transient flag, and provider-retryable flag) from
+the AI provider layer.
 Provider-owned route-resolution or invocation-viability errors may additionally
 implement `ai.AIRequestFailureReasoner` and return the typed
 `ai.AIRequestFailureReasonRoute` constant. This replaces fragile string
@@ -430,6 +431,7 @@ matching with type-safe classification via `errors.As()`.
 | Rate limits (429) | `StatusCode() == 429` | Limits are per-provider |
 | Network errors | Non-`ProviderError` (no HTTP status) | Might be routing/DNS issue |
 | Transient proxy errors | `IsTransient() == true` | Proxy/CDN issue (e.g., Cloudflare HTML 400), not a request problem |
+| Provider-specific terminal errors | `IsRetryable() == true` | Billing, hard quota, or account state may differ on another provider |
 | Provider HTTP timeout (for example 408/504) | Retryable provider status | A different provider may remain healthy |
 | Provider route unavailable | `AIRequestFailureReason() == ai.AIRequestFailureReasonRoute` | Another independently routed entry may remain viable |
 
@@ -437,7 +439,7 @@ matching with type-safe classification via `errors.As()`.
 
 | Error Type | `core.ProviderError` Classification | Why Failover Won't Help |
 |------------|--------------------------------------|-------------------------|
-| Bad request (400) | `StatusCode() == 400 && !IsTransient()` | Same input fails everywhere |
+| Bad request (400) | `StatusCode() == 400 && !IsTransient() && !IsRetryable()` | Same input fails everywhere |
 | Content policy | `StatusCode() == 400` with policy message | Same content fails everywhere |
 | Malformed input | `StatusCode() == 400` with parse error | Structural issue in your code |
 | Caller cancellation or context deadline | `errors.Is(err, context.Canceled)` or `context.DeadlineExceeded` | The caller's stop signal applies to the whole chain |
@@ -1154,6 +1156,7 @@ AI module logs use the component prefix `framework/ai`. Here's what to look for:
   "operation": "ai_chain_exhausted",
   "entries_tried": 3,
   "failed_entries": ["openai", "anthropic", "openai.groq"],
+  "failover_reason": "rate_limit",
   "error": "AI provider request failed: provider_rate_limit",
   "error_type": "provider_rate_limit"
 }
@@ -1162,6 +1165,11 @@ AI module logs use the component prefix `framework/ai`. Here's what to look for:
 These observation errors are deliberately sanitized; the original typed error
 is still returned to the caller. `request_id` is included when the supplied
 context carries it (framework handlers and orchestration normally seed it).
+For billing, hard-quota, and account-action alerts, match the bounded
+`failover_reason=provider_retryable` field across generate and stream failover
+and exhaustion operations. A provider may report `insufficient_quota` as HTTP
+429; the provider-retryable classification intentionally takes precedence over
+the generic `rate_limit` failover reason in that case.
 
 ### Tracing AI Requests in Jaeger
 

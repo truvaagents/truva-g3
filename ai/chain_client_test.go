@@ -620,6 +620,12 @@ func TestClassifyFailoverReasonAcceptsOnlyBoundedProviderReasons(t *testing.T) {
 	if got := classifyFailoverReason(chainFailureReasonError{reason: "tenant-secret"}); got != "unknown" {
 		t.Fatalf("unrecognized provider classification = %q, want unknown", got)
 	}
+	if got := classifyFailoverReason(&testProviderError{statusCode: 429, retryable: true}); got != "provider_retryable" {
+		t.Fatalf("retryable 429 classification = %q, want provider_retryable", got)
+	}
+	if got := classifyFailoverReason(&testProviderError{statusCode: 429}); got != "rate_limit" {
+		t.Fatalf("ordinary 429 classification = %q, want rate_limit", got)
+	}
 	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
 		err := &wrappedChainFailureReasonError{
 			reason: AIRequestFailureReasonRoute,

@@ -6313,7 +6313,13 @@ contract. Generate and streaming attempts, recoveries, aborts, and exhaustion
 therefore agree on `route`; unknown marker values degrade to `unknown`.
 Terminal classification uses the final attempted error consistently across
 logs, spans, and metrics, while the joined error remains caller-facing. A
-failed final entry emits no “trying next” operation.
+failed final entry emits no “trying next” operation. Provider-specific
+`IsRetryable` failures use the bounded `provider_retryable` reason before
+generic status classification, including `insufficient_quota` reported as HTTP
+429; an ordinary 429 remains `rate_limit`. That reason is the canonical
+billing/quota operator-action signal on generate and stream failover or
+exhaustion events. The compatibility `chain_failover_retryable` operation is
+limited to non-terminal generate attempts.
 
 #### 19.13.5 Titan V2 helper
 
@@ -6461,8 +6467,10 @@ the existing `runtimeClient` and `converseEventStream` seams and cover:
     route guard, independent provider log/span route classification, bounded
     chain `failover_reason=route`, chain-attempt and failure-log
     `error_type=route`, generate/stream recovery, terminal exhaustion and abort
-    classification, final-entry failover-log suppression, direct-client
-    `SetDefaultModel`, and resolver-failure instability; and
+    classification, final-entry failover-log suppression, terminal
+    `provider_retryable` cost classification for 400/429 generate and stream
+    failures, direct-client `SetDefaultModel`, and resolver-failure instability;
+    and
 12. nil logger/telemetry safety and existing request/response/error observation
     invariants.
 
