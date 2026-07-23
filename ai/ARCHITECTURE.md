@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.4
+**Version**: 1.7
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -960,7 +960,11 @@ fingerprint returns `stable=false`; AI-output caches must bypass rather than
 reuse an incomplete namespace. The common instrumentation wrapper delegates
 this capability and supplies a stable adapter namespace for faithfully
 representable legacy clients. A chain fingerprint covers every ordered
-failover entry.
+failover entry. Provider-local invocation viability checks that do not change
+semantic policy or route identity run after fingerprint preparation. A
+deterministic failure at that later boundary may therefore return a stable
+request report and permit chain failover without disabling cache identity for
+the healthy entry; a dynamic resolver failure remains fingerprint-unstable.
 
 `NewRequestClient` never silently discards integration behavior. A legacy
 factory may be used only when no integration options are supplied and its
@@ -1149,16 +1153,49 @@ sanitized route identity binds the policy fingerprint and may be recorded on the
 provider-local span. Without a resolver, the direct route deliberately uses the
 semantic model as the wire model and never silently adds a geographic or global
 inference-profile prefix. Because the implicit Sonnet 5 default is documented
-for direct in-region use only in `us-east-1`, factory construction outside that
-region fails unless the application supplies an explicit model/profile or an
-endpoint resolver. Explicit routing intent remains application-owned.
+for direct in-region use only in `us-east-1`, request preparation outside that
+region rejects an invocation that would use that implicit default after
+per-request model selection. The route-classified viability check runs after
+policy/report preparation, so it does not erase a deterministic fingerprint or
+poison a failover chain's successful report. An explicit framework client
+model, per-request model/profile, or endpoint resolver remains
+application-owned and bypasses that guard. Direct package clients declare the
+same intent with `Client.SetDefaultModel` during construction. Bedrock route
+errors implement the exported, AI-local `AIRequestFailureReasoner` contract and
+return `AIRequestFailureReasonRoute`. The chain accepts only exported bounded
+reasons and never imports a provider package or inspects an error string.
+Generate and streaming attempts, recoveries, aborts, and exhaustion therefore
+report `error_type=route`, `failover_reason=route`, and bounded metric
+`reason=route` consistently without exposing the raw route error. Caller
+cancellation and deadlines retain precedence over a wrapped route marker.
+Exhaustion classification comes from the final attempted error; the joined
+error is reserved for the caller. A failed final entry emits only the terminal
+exhaustion event, never a misleading “trying next” failover event.
 
 One Bedrock-local, boundary-aware, case-insensitive family classifier selects
 both sampling mutation and final validation. Sonnet 5 and Opus 4.7/4.8 remove
 `temperature`, `top_p`, and `top_k`; Fable 5 removes inherited incompatible
 temperature and `top_k` while preserving only `temperature=1` and `top_p` in
-`[0.99,1)`. Models exposed only through a different AWS surface, including the
-current Mythos Messages surface, are not classified as Converse models.
+`[0.99,1)`. Converse common sampling belongs in `inference_config`.
+Case-insensitive legacy `Extra` spellings are canonicalized but remain in
+`additional_model_request_fields` while policy runs, so application rules,
+middleware, or per-request patches can remove them or explicitly set the
+canonical common field and remove the legacy copy. Case-insensitive duplicates
+fail closed before policy; final validation rejects every unremediated Fable
+temperature/top-p field in the additional container. JSON-decoder
+`json.Number` values receive bounded validation in common inference fields.
+The complete model-specific additional document is recursively validated
+during final draft validation, before the policy report can be marked stable:
+empty or malformed numbers, structs, `uintptr`, non-string map keys, cycles,
+and non-finite floats fail locally with a path-qualified error. Valid
+`json.Number` values are converted to Smithy document numbers immediately
+before SDK translation; named signed and unsigned native numeric values remain
+numeric. Cycle detection distinguishes legal overlapping slice views from true
+recursive cycles.
+Models exposed only through a different AWS surface, including the current
+Mythos Messages surface, are not classified as Converse models. Resolver
+implementations must preserve semantic equivalence: the semantic model drives
+policy even when the protected wire deployment is an opaque profile or ARN.
 
 Provider factories may implement the additive
 `ProviderRequestTimeoutFactory` contract when their documented operation
@@ -1170,14 +1207,21 @@ failover entries retain 180 seconds so a long provider default cannot stall
 provider selection. Direct `bedrock.NewClient` construction also retains the
 60-minute default, while caller-owned chain clients remain untouched. This
 keeps provider-specific operation policy in the provider module while explicit
-application configuration retains precedence.
+positive application configuration retains precedence. Zero and negative
+durations mean unset; they do not request an unbounded provider call.
 
 The Bedrock-specific embedding helper defaults to Titan Text Embeddings V2
 (`amazon.titan-embed-text-v2:0`, 1024 dimensions by default). The exported
 `ModelTitanEmbedV1` constant exists only as an explicit migration pin for
-1536-dimensional V1 stores. Selecting that exact V1 model rejects V2-only
-dimensions and normalization controls before SDK invocation. The framework
-never mixes or migrates vector-store dimensions implicitly.
+1536-dimensional V1 stores. A per-call V1 pin discards inherited V2-only client
+defaults, while V2 dimensions or normalization explicitly supplied on that
+same call are rejected before SDK invocation (zero dimensions remains an
+explicit omission). Boundary-aware recognition also covers recognizable V1
+variants and foundation-model ARNs. The framework never mixes or migrates
+vector-store dimensions implicitly. `WithoutEmbeddingNormalization` explicitly
+omits an inherited V2 normalization setting for one call. Embedding spans use
+only the bounded V1 or V2 semantic family and never a route-owned model ID or
+ARN.
 
 | Built-in provider | Policy surface | Request rules/middleware | HTTP integration seams |
 |-------------------|----------------|--------------------------|------------------------|
@@ -1493,6 +1537,8 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.7 | 2026-07-23 | Exported the bounded route-failure marker, aligned terminal generate/stream observability and success attributes, removed last-entry failover logs, and moved Bedrock additional-document rejection before stable fingerprinting |
+| 1.6 | 2026-07-23 | Split Bedrock semantic fingerprint preparation from invocation viability, made Fable legacy sampling policy-remediable and fail-closed, normalized Bedrock document numbers, added bounded route failover classification, direct-client model intent, and embedding override/semantic-family controls |
 | 1.5 | 2026-07-23 | Aligned Bedrock family sampling classification, implicit-region validation, failover-safe timeout scoping, and Titan V1 migration support |
 | 1.4 | 2026-07-22 | Added SDK-native Bedrock destination resolution, provider-specific default timeouts, semantic/wire model separation, and bounded route observability |
 | 1.3 | 2026-07-22 | Approved route-before-draft hosted-provider lifecycle, semantic/wire identity separation, and bounded provider observability contracts |

@@ -2171,9 +2171,11 @@ When properly configured, the AI module emits these spans:
 |-----------|-------------|----------------|
 | `ai.generate` | Logical normalized generation | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
 | `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
+| `ai.chain.generate` / `ai.chain.stream` | Ordered provider failover | Shared success attributes `ai.chain.attempt`, `ai.chain.entry_name`, `ai.chain.successful_entry`, and `ai.chain.total_duration_ms`, plus bounded status and `ai.chain.failover_reason`; recovered, aborted, and exhausted local route-resolution or invocation-viability failures use `route` rather than `unknown`. Exhaustion classification comes from the final attempted error |
+| `ai.chain.provider_attempt` / `ai.chain.stream_attempt` | One provider entry attempt | Stable non-secret entry name, attempt status/duration, retry marker, and sanitized bounded failure metadata; route failures use `ai.error_type=route` |
 | `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Semantic provider/model, optional sanitized route identity, and provider-specific execution attributes |
-| `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, stable Titan semantic family, `ai.text_length`, embedding dimensions, bounded error classification |
-| `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; raw SDK model/profile IDs are omitted |
+| `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, bounded Titan V1/V2 semantic family, `ai.text_length`, embedding dimensions, bounded error classification |
+| `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; the embedding child carries only the bounded Titan V1/V2 semantic family, and raw SDK model/profile IDs are omitted |
 | `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
@@ -2188,8 +2190,9 @@ Provider-local spans distinguish the semantic model from a route-owned wire
 deployment. A stable application-sanitized route identity may be attached as
 `ai.request.route_identity`; raw deployment names, publisher-model IDs,
 inference-profile IDs/ARNs, endpoint URLs, query values, and credential scopes
-must not be recorded. Bedrock's direct `InvokeModel` surface therefore omits
-`ai.model`, while the Titan helper records only its stable semantic family.
+must not be recorded. Bedrock's public direct `InvokeModel` surface therefore
+omits `ai.model`. When that operation is the child of `GetEmbeddings`, both
+spans record only the bounded Titan V1 or V2 semantic family.
 
 The AI layer reports provider token usage but does not derive or emit an
 `ai.cost_usd` value. Provider prices, discounts, cached-token rules, and billing

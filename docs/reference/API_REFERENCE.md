@@ -1864,6 +1864,16 @@ type EndpointResolver interface {
     ResolveEndpoint(context.Context, EndpointRequest) (ResolvedEndpoint, error)
 }
 
+type AIRequestFailureReason string
+
+const (
+    AIRequestFailureReasonRoute AIRequestFailureReason = "route"
+)
+
+type AIRequestFailureReasoner interface {
+    AIRequestFailureReason() AIRequestFailureReason
+}
+
 type ResolvedEndpoint struct {
     URL             *url.URL
     Deployment      string
@@ -1917,6 +1927,15 @@ cache miss, so it must be concurrency-safe, stable, and side-effect-free.
 shallow-copy and do not mutate the supplied client. SDK-native Bedrock rejects
 HTTP and credential integration options while accepting its constrained
 destination resolver.
+
+`AIRequestFailureReasoner` is an optional error contract for provider-owned
+failures whose chain meaning cannot be expressed accurately by
+`core.ProviderError`.
+Route-resolution and local route-viability errors return the typed
+`AIRequestFailureReasonRoute` constant. Generate and streaming chains use it
+for bounded `route` failure metadata on attempts, recovery, abort, and
+exhaustion. Unknown values degrade to `unknown`; callers still receive the
+original wrapped error. Caller cancellation and deadlines retain precedence.
 
 #### Heterogeneous chains
 
@@ -2457,7 +2476,9 @@ not interchangeable Go types.
 Set the provider request timeout. The framework default is 180 seconds (3
 minutes); an explicitly selected standalone Bedrock provider declares 60
 minutes. Auto-detected clients and framework-managed chain entries use 180
-seconds. An explicit positive value overrides the applicable default.
+seconds. An explicit positive value overrides the applicable default. Zero and
+negative values mean unset and select the applicable bounded default; they do
+not disable request deadlines.
 
 ```go
 func WithTimeout(timeout time.Duration) AIOption
@@ -2840,6 +2861,13 @@ model only. Azure uses `TRUVAG3_OPENAI_MODEL_*`; Vertex-hosted Claude uses
 model, while deployment and publisher-model identifiers remain route-owned and
 are never rewritten by those variables.
 
+For Bedrock, an invocation outside `us-east-1` that would use the implicit bare
+Sonnet 5 default fails during request preparation, after per-request model
+selection. Explicit client/request models and SDK-destination resolvers remain
+application-owned. A Bedrock resolver must preserve semantic equivalence
+between `EndpointRequest.ResolvedModel` and its opaque deployment because
+sampling policy follows the semantic model.
+
 #### Build-Tagged Bedrock Helpers
 
 The following package API is present only in binaries built with
@@ -2858,6 +2886,7 @@ func CreateAWSConfig(
 ) (aws.Config, error)
 
 func NewClient(cfg aws.Config, region string, logger core.Logger) *Client
+func (client *Client) SetDefaultModel(model string) error
 
 func NewDraft(
     resolvedModel string,
@@ -2895,16 +2924,37 @@ func (client *Client) GetEmbeddings(
 func WithEmbeddingModel(model string) EmbeddingOption
 func WithEmbeddingDimensions(dimensions int) EmbeddingOption
 func WithEmbeddingNormalization(normalize bool) EmbeddingOption
+func WithoutEmbeddingNormalization() EmbeddingOption
 ```
 
 `GetEmbeddings` is a Titan-shaped, single-text helper with a V2 default, not an
 implementation of the batch `core.EmbeddingClient`. `EmbeddingOption` has an unexported
 configuration parameter and is intentionally constructed only through the
-three helpers above. Dimensions are 256, 512, or 1024; zero omits the field and
+four helpers above. Dimensions are 256, 512, or 1024; zero omits the field and
 uses AWS's V2 default. `ModelTitanEmbedV1` is an explicit migration pin for
-existing 1536-dimensional V1 stores and rejects the V2-only dimensions and
-normalization options. Generation uses Converse/ConverseStream; an optional
-request-aware resolver selects only the opaque SDK `modelId` in `Deployment`. See
+existing 1536-dimensional V1 stores. A per-call V1 pin discards V2-only
+dimensions and normalization inherited from client configuration; those
+controls remain invalid when a non-zero dimension or normalization is
+explicitly supplied on the V1 call. Zero dimensions means omission.
+`WithoutEmbeddingNormalization` omits an inherited V2 normalization field for
+one call. Recognizable V1 variants and foundation-model ARNs use the same V1
+payload validation. Embedding observations expose only the bounded Titan V1/V2
+semantic family, never the selected SDK model ID or ARN.
+
+`SetDefaultModel` is the error-returning construction-time API for a direct
+package client to declare explicit model routing. Call it before concurrent
+use; assigning the embedded `DefaultModel` field does not record explicit
+intent for the implicit Sonnet 5 region guard.
+
+Generation uses Converse/ConverseStream; an optional request-aware resolver
+selects only the opaque SDK `modelId` in `Deployment`. Current-Claude sampling
+validation covers both `inferenceConfig` and case-insensitive sampling keys in
+`additionalModelRequestFields`. For Fable, unique common sampling fields from
+legacy `Extra` remain policy-editable in the additional container; policy may
+remove them or set the canonical common field and remove the legacy copy.
+Duplicates and unremediated post-policy placement fail locally. JSON
+`UseNumber`, named, and unsigned numeric values remain numeric in common and
+nested additional fields. See
 [AWS Bedrock SDK-Native Routing](../building/CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
 
 **Example - Multi-Provider Strategy:**

@@ -52,7 +52,7 @@ be used as route identities.
 | What | Default / Limit | Environment | Programmatic Override |
 |------|-----------------|-------------|-----------------------|
 | Region | `us-east-1` | `AWS_REGION`, then `AWS_DEFAULT_REGION` | `ai.WithRegion(region)` |
-| Direct generation model | `anthropic.claude-sonnet-5`; implicit use is accepted only in `us-east-1` | — | `ai.WithModel(modelID)` or SDK-destination `EndpointResolver` |
+| Direct generation model | `anthropic.claude-sonnet-5`; an invocation that would use the implicit default is accepted only in `us-east-1` after per-request model selection | — | `ai.WithModel(modelID)`, per-request model, SDK-destination `EndpointResolver`, or direct-package `Client.SetDefaultModel(modelID)` |
 | Explicit standalone/direct-package request timeout | 60m | — | `ai.WithTimeout(d)` |
 | In-provider retries | 3 retries / 4 AWS SDK total attempts | `TRUVAG3_AI_RETRY_ATTEMPTS` when positive | `ai.WithMaxRetries(n)`; SDK attempts are `max(1, n+1)` |
 | Converse `modelId` / resolver `Deployment` | Framework pre-validation: 1–2048 bytes with no surrounding whitespace or controls; AWS additionally validates supported model/resource formats | — | Resolver output |
@@ -61,16 +61,24 @@ be used as route identities.
 | Converse `temperature` / `topP` (logical `top_p`) | Finite value from 0 through 1; the selected model may impose narrower constraints | — | Portable parameters or `/inference_config/*` policy paths |
 | Converse `stopSequences` | Framework maximum: 2500 non-empty strings; the selected model may impose a lower maximum | — | Bedrock request policy path `/inference_config/stop_sequences` |
 | Titan embedding model | `amazon.titan-embed-text-v2:0` | — | `bedrock.WithEmbeddingModel(modelID)` per call |
-| Titan V1 migration pin | `amazon.titan-embed-text-v1`; 1536 dimensions; V2 controls rejected | — | `bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1)` |
+| Titan V1 migration pin | `amazon.titan-embed-text-v1`; 1536 dimensions; inherited V2 controls omitted, explicitly supplied V2 controls rejected | — | `bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1)` |
 | Titan V2 input text | Non-empty; AWS model limit is 8,192 tokens or 50,000 characters (the framework pre-validates only non-empty input) | — | `Client.GetEmbeddings` text argument |
 | Titan V2 dimensions | 1024 when omitted (AWS default); otherwise 256, 512, or 1024 | — | `bedrock.WithEmbeddingDimensions(n)` per call |
-| Titan V2 normalization | `true` when omitted (AWS default) | — | `bedrock.WithEmbeddingNormalization(bool)` per call |
+| Titan V2 normalization | `true` when omitted (AWS default) | — | `bedrock.WithEmbeddingNormalization(bool)` per call; `bedrock.WithoutEmbeddingNormalization()` omits an inherited client setting |
 
 The resolver deployment is an opaque AWS SDK `modelId`; TruvaG3 does not add a
 geographic or global inference-profile prefix. Raw model/profile IDs and ARNs
-must not be used as route identities.
+must not be used as route identities. The resolver must preserve semantic
+equivalence because sampling policy follows the semantic model rather than the
+opaque deployment.
 
 Current Bedrock Claude sampling contracts are enforced before SDK invocation:
+the checks cover both `inferenceConfig` and case-insensitive sampling keys in
+`additionalModelRequestFields`. Fable temperature/top-p are Converse common
+fields and must end in `inferenceConfig`; unique legacy `Extra` spellings remain
+policy-editable until final validation, while duplicates and unremediated
+additional copies fail locally. JSON `UseNumber`, named, and unsigned numeric
+values remain numeric, including in nested additional fields.
 
 | Semantic model family | Effective sampling constraint |
 |---|---|

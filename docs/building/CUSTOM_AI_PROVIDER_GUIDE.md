@@ -1539,10 +1539,12 @@ silently select a profile: in-region, geographic cross-region, and global
 cross-region routing can differ in residency, IAM/SCP behavior, availability,
 and price.
 
-If the factory resolves another region while no model or endpoint resolver is
-configured, construction fails locally with a targeted routing error. This
-guard applies only to the implicit default. An explicit supported model/profile
-ID or an endpoint resolver remains application-owned routing intent.
+If another region would actually invoke the implicit default, request
+preparation fails locally with a targeted routing error. The check runs after
+per-request model selection, so a client may be constructed for a deployment
+that always supplies a request model. An explicit supported client or
+per-request model/profile ID, or an endpoint resolver, remains
+application-owned routing intent.
 
 Use a direct ID when that model is supported in the configured region:
 
@@ -1553,6 +1555,12 @@ client, err := ai.NewClient(
     ai.WithModel(bedrock.ModelClaudeSonnet5),
 )
 ```
+
+For a package-level client created with `bedrock.NewClient`, declare an
+explicit default with `client.SetDefaultModel(modelID)` before concurrent use.
+The method returns validation errors and records explicit routing intent;
+assigning the embedded `DefaultModel` field alone does not bypass the implicit
+default guard.
 
 Use an SDK-destination resolver when an application must choose an inference
 profile, application inference profile, provisioned model, or another
@@ -1643,12 +1651,24 @@ behavior. Raw model/profile IDs and ARNs are excluded from reports,
 fingerprints, logs, and spans. Change the route identity when a routing change
 can affect the answer.
 
+The resolver must preserve semantic equivalence between
+`request.ResolvedModel` and its opaque deployment/profile. Sampling policy is
+selected from the semantic model; TruvaG3 intentionally does not inspect or
+reclassify a route-owned ARN.
+
 Resolvers may run during cache fingerprint preflight and again during live
 execution, so the general resolver rules still apply: make them deterministic,
 side-effect-free, and concurrency-safe. The AWS SDK—not the resolver—continues
 to own the service endpoint, region, credentials, SigV4 signing, and HTTP
 transport. Bedrock rejects `WithCredentialSource`, `WithHTTPClient`, static
 request headers, and any resolver URL/query/credential scope.
+
+The deterministic implicit-default region guard is an invocation-viability
+check, not a policy or route-identity input. It runs after the sanitized policy
+report is prepared. A guarded Bedrock entry can therefore retain its stable
+fingerprint while a chain fails over and attaches the complete chain
+fingerprint to a healthy provider's result. Resolver failures remain
+fingerprint-unstable.
 
 The Bedrock provider uses one boundary-aware, case-insensitive family
 classifier for both policy mutation and final validation:
@@ -1657,12 +1677,28 @@ classifier for both policy mutation and final validation:
 - Fable 5 accepts temperature `1` or omission and top-p in `[0.99, 1)`, and
   rejects top-k; incompatible inherited temperature and top-k are omitted,
   while documented-valid explicit values survive compatible and strict modes.
+- Converse common sampling belongs in `inferenceConfig`, not
+  `additionalModelRequestFields`. Unique case-insensitive legacy `Extra`
+  temperature/top-p keys remain policy-editable in the additional container.
+  Rules, middleware, and per-request patches may remove them, or set the
+  canonical common field and remove the legacy copy. Duplicates and
+  unremediated wrong-container fields fail closed.
 - Unrelated and legacy models retain ordinary sampling so a model is not
   classified merely because it is served by Bedrock.
 - Mythos is intentionally absent because its current Bedrock model cards expose
   the Messages surface rather than Converse.
-- Application rules can narrow current compatibility, but final validation
-  prevents them from restoring a model-invalid sampling value.
+- Draft preparation canonicalizes affected legacy sampling keys. Final
+  validation scans both containers case-insensitively, so application rules,
+  middleware, and per-request patches cannot restore model-invalid sampling or
+  place Fable's common temperature/top-p fields in the additional container.
+  `json.Number` values produced by decoders using `UseNumber` receive bounded
+  validation in common fields and recursive final-draft validation in nested
+  additional fields before a stable fingerprint is produced. Valid values are
+  preserved as numeric Smithy document values on the wire; empty or malformed
+  numbers fail locally. Named signed and unsigned Go numeric values remain
+  numeric as well. Structs, `uintptr`, non-string map keys, cycles, and
+  non-finite floating-point values are not part of the additional-document
+  contract and fail with a path-qualified validation error.
 
 Model access remains an AWS account concern. For example, AWS currently states
 that Claude Fable 5 requires its documented provider-data-sharing retention
@@ -1684,14 +1720,20 @@ fresh signing. Typed Bedrock service exceptions are returned as
 `core.ProviderError` values while retaining the original SDK error through
 `errors.Is` and `errors.As`, allowing chain failover to distinguish validation,
 authorization, throttling, quota, timeout, and server failures.
+Bedrock route-resolution and local invocation-viability errors additionally
+implement `ai.AIRequestFailureReasoner` and return the bounded
+`ai.AIRequestFailureReasonRoute` value. This lets generate and streaming chains
+classify recovered, aborted, and exhausted route failures consistently without
+inspecting provider error strings.
 
 An explicitly selected standalone Bedrock provider declares a 60-minute
 default request timeout, and direct `bedrock.NewClient` construction uses the
 same value. Auto-detected clients and framework-managed chain entries retain
 the failover-safe 180-second framework default; use `ai.WithChainTimeout` to
 override managed chain entries. Caller-owned `ClientEntry` values are not
-mutated. An explicit `ai.WithTimeout` wins, and context cancellation also stops
-AWS SDK retries.
+mutated. An explicit positive `ai.WithTimeout` wins; zero and negative values
+mean unset rather than unbounded. Context cancellation also stops AWS SDK
+retries.
 
 The Bedrock-specific `GetEmbeddings` helper defaults to Amazon Titan Text
 Embeddings V2 and deliberately remains a single-text convenience API rather
@@ -1741,9 +1783,17 @@ vector, err := client.GetEmbeddings(
 )
 ```
 
-Do not pass `WithEmbeddingDimensions` or `WithEmbeddingNormalization` with
-`ModelTitanEmbedV1`; the framework rejects those V2-only controls before the
-AWS SDK call. Do not mix V1 and V2 vectors in one index.
+A per-call `ModelTitanEmbedV1` pin automatically drops V2-only dimensions and
+normalization inherited from client defaults. Do not explicitly pass a
+non-zero `WithEmbeddingDimensions` or any `WithEmbeddingNormalization` on that
+same V1 call; the framework rejects those controls before the AWS SDK call.
+`WithEmbeddingDimensions(0)` means omission and can restore the provider
+default for either a V1 or V2-shaped request.
+`WithoutEmbeddingNormalization()` similarly omits an inherited V2
+normalization setting for one call. Traces identify embedding work only as the
+bounded Titan V1 or V2 semantic family, including on the nested invocation
+span; they never record a route-owned model ID or ARN. Do not mix V1 and V2
+vectors in one index.
 
 Keep the following official references with the deployment configuration,
 because model catalogs and regional availability change independently of the
@@ -2204,8 +2254,9 @@ The root constructor uses this positive value only for an explicitly selected
 standalone provider when the application did not supply a positive
 `ai.WithTimeout`. Bedrock uses the optional contract for its 60-minute
 standalone default. Auto-detected clients and framework-managed chains retain
-180 seconds; caller-owned chain clients remain untouched. Do not branch on
-provider names in root construction.
+180 seconds; caller-owned chain clients remain untouched. Zero and negative
+application durations are unset and do not request an unbounded call. Do not
+branch on provider names in root construction.
 
 A practical implementation order is:
 
@@ -2722,6 +2773,31 @@ eligible for chain failover. After any chunk has been delivered, return the
 partial normalized result and an error matching
 `core.ErrStreamPartiallyCompleted`; the chain must not restart the answer on a
 different provider.
+
+Provider-owned route resolution or invocation-viability errors that may
+succeed on another chain entry can implement the optional bounded route marker:
+
+```go
+type routeError struct {
+    cause error
+}
+
+func (err *routeError) Error() string { return err.cause.Error() }
+func (err *routeError) Unwrap() error { return err.cause }
+func (*routeError) AIRequestFailureReason() ai.AIRequestFailureReason {
+    return ai.AIRequestFailureReasonRoute
+}
+
+var _ ai.AIRequestFailureReasoner = (*routeError)(nil)
+```
+
+Use this marker only for route selection or local route-viability failures—not
+for ordinary provider responses. The chain accepts only exported bounded
+reason constants; unknown values degrade to `unknown`. The typed constant also
+avoids relying on the exact casing of the underlying string. The original
+error remains caller-visible through `errors.Is` and `errors.As`, while chain
+logs and spans use only sanitized `route` metadata. Caller cancellation and
+deadlines retain precedence even when wrapped by a marked route error.
 
 ### Implement Semantic Fingerprinting
 

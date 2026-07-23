@@ -5901,8 +5901,8 @@ of the Markdown reconciliation.
 
 ### 19.13 Phase 10 — harden AWS Bedrock official-contract conformance
 
-**Status:** Implemented and locally verified (2026-07-22); documentation
-changes await human sign-off before commit.
+**Status:** Implemented, follow-up review fixes applied, and locally verified
+(2026-07-23); documentation changes await human sign-off before commit.
 
 This phase follows an audit of the build-tagged Bedrock provider against the
 current AWS Bedrock Runtime API, current model cards, the AWS SDK for Go v2
@@ -5931,7 +5931,7 @@ and its review must explicitly recheck:
   `docs/reference/LIMITS_CHEATSHEET.md` if configuration or documented limits
   change; and
 - `CONTRIBUTING.md` and the repository `AGENTS.md` for tagged and workspace Go
-  gates plus human sign-off before Markdown is committed.
+gates plus human sign-off before Markdown is committed.
 
 No Phase 10 code may add a provider type to `core`, import `ai` from
 orchestration or memory, import `resilience` from the Bedrock provider, expose
@@ -5950,9 +5950,15 @@ or region selection.
    `us-east-1` default region. A `global.`, geographic, application, or other
    inference profile is an explicit application routing choice because it can
    affect data residency, IAM/SCP behavior, supported regions, and price.
-   Factory construction with an implicit model fails outside `us-east-1`;
-   supplying an explicit model/profile ID or an endpoint resolver is explicit
-   routing intent and bypasses this local guard.
+   Request preparation outside `us-east-1` fails only when the selected request
+   would actually use the implicit default. An explicit client model,
+   per-request model/profile ID, or endpoint resolver is application-owned
+   routing intent and bypasses this local guard. A direct package client uses
+   the error-returning `Client.SetDefaultModel` construction-time method to
+   record the same intent. The deterministic guard is a typed route-viability
+   failure after policy/report preparation, so it retains a stable fingerprint
+   for failover-chain cache identity; dynamic resolver failures remain
+   fingerprint-unstable.
 3. **Reuse the shared resolver for an SDK destination only.** Bedrock accepts
    `EndpointResolver`, but a valid result has `URL == nil`, empty `Query`, empty
    `CredentialScope`, a non-empty opaque `Deployment` containing the AWS
@@ -5966,13 +5972,30 @@ or region selection.
    normalized responses, logs, and request reports. Only the protected SDK
    `ModelId` uses the wire value. Raw profile/deployment values never enter
    request reports, fingerprints, logs, or spans; the sanitized route identity
-   binds the fingerprint and may appear on a provider-local span.
+   binds the fingerprint and may appear on a provider-local span. A resolver
+   must preserve semantic equivalence between the semantic model and opaque
+   deployment because policy never derives model capabilities from a
+   route-owned ID or ARN.
 5. **Install provider-owned sampling compatibility.** One Bedrock-local,
    boundary-aware, case-insensitive family classifier selects both built-in
    mutation and final validation. Sonnet 5 and Opus 4.7/4.8 remove
    `temperature`, `top_p`, and `top_k`. Fable 5 removes incompatible inherited
    temperature and `top_k`, preserves documented-valid portable temperature
    and top-p values, and validates their ranges after application policy.
+   Common Converse sampling belongs in `inference_config`. Unique
+   case-insensitive legacy `Extra` temperature/top-p fields for Fable remain in
+   the additional container while policy runs. Application rules, middleware,
+   and per-request patches may remove them, or set the common field and remove
+   the legacy copy. Duplicate case variants fail closed before policy; final
+   validation rejects every unremediated wrong-container value. JSON-decoder
+   `json.Number` values receive bounded common-field validation, while the
+   entire model-specific additional document receives recursive final-draft
+   validation before a stable fingerprint is produced. Empty or malformed
+   numbers, structs, `uintptr`, non-string map keys, true cycles, and
+   non-finite floats fail locally; legal overlapping slice views remain valid.
+   Valid decoder numbers receive recursive Smithy-number conversion immediately
+   before SDK translation. Named signed and unsigned native numeric values
+   remain numeric.
    Legacy models and models exposed only on a different surface, including the
    current Mythos Messages surface, retain their existing Converse behavior.
 6. **Honor the framework retry setting through the AWS SDK.** Bedrock passes a
@@ -5997,8 +6020,15 @@ or region selection.
    The helper remains a single-text, Titan-shaped convenience method rather
    than claiming to be the provider-neutral batch `core.EmbeddingClient`.
    `ModelTitanEmbedV1` remains available only as an explicit
-   1536-dimensional-store migration pin; when that exact model is selected,
-   V2-only dimensions and normalization controls fail before SDK invocation.
+   1536-dimensional-store migration pin. A per-call V1 pin removes inherited
+   V2-only client defaults, while non-zero dimensions or normalization
+   explicitly supplied on that same call fail before SDK invocation. An
+   explicit zero dimension remains omission.
+   `WithoutEmbeddingNormalization` explicitly omits inherited V2
+   normalization for one call. Per-call provenance lives in a separate
+   override object rather than persistent client configuration.
+   Boundary-aware recognition also covers recognizable V1 variants and
+   foundation-model ARNs. Spans use only bounded Titan V1/V2 semantic families.
 9. **Fail locally on documented shape limits.** An explicitly present system
    string must not be empty. Stop sequences must contain at most 2500 non-empty
    entries. Configured embedding dimensions and types must be validated during
@@ -6009,8 +6039,9 @@ or region selection.
     `bedrock.NewClient` construction default to 60 minutes. Auto-detected
     clients and framework-managed chain entries use the framework's 180-second
     default. Positive application timeouts override either default, while
-    caller-owned chain clients remain untouched. This avoids provider-name
-    branching in the root package and keeps timeout ownership compositional.
+    caller-owned chain clients remain untouched. Zero and negative values are
+    unset, not an unbounded mode. This avoids provider-name branching in the
+    root package and keeps timeout ownership compositional.
 11. **Keep the normalized output text-only.** Reasoning-content stream deltas
     remain intentionally ignored; they are neither exposed as generated text
     nor logged. Supporting reasoning-block replay or a Mantle Messages surface
@@ -6075,6 +6106,16 @@ selection but before draft construction and policy. It is called by
 fingerprinting as well as execution, so the resolver contract remains
 side-effect-free, deterministic, and concurrency-safe. A route failure wins
 over a later application-policy failure, consistently with Phase 9.
+
+Preparation has two provider-local stages. `preparePolicyRequest` performs the
+semantic snapshot, route resolution, draft construction, policy application,
+final validation, and sanitized report/fingerprint. Execution then performs
+static invocation-viability checks and translates the already-validated draft
+to SDK input without re-running policy or validation. `RequestFingerprint`
+stops after the first stage. This keeps a deterministic implicit-default region
+failure typed as a route error without making the whole failover chain
+fingerprint-unstable; resolver failures still occur in the first stage and
+remain unstable.
 
 The draft receives all three identities but exposes only the semantic one to
 policy selection:
@@ -6153,12 +6194,32 @@ func (policy *bedrockRequestPolicy) Apply(
 ~~~
 
 Each behavior owns a prebuilt immutable shared-policy engine. The omit-all
-engine removes temperature, top-p, and canonical `top_k`; the Fable engine
-removes only canonical `top_k`. Before policy, affected-family extra fields
-canonicalize case-insensitive `top_k` spelling so mutation is a superset of
-validation. The same classifier drives final validation, eliminating selector
-and validator drift for profile prefixes, ARN paths, `/`/`.` boundaries, and
-mixed case.
+engine removes common temperature/top-p plus canonical `top_k`; the Fable
+engine removes only canonical `top_k`. Before policy, affected-family legacy
+extra fields are classified and canonicalized once. Unique Fable
+temperature/top-p values remain in `additional_model_request_fields` so every
+policy stage can remove them or explicitly set the common field and remove the
+legacy copy. Duplicate case variants fail closed before policy. After policy,
+any Fable common sampling still present in the additional container is rejected
+regardless of value, while canonical inference values receive Fable range
+validation. The same classifier drives all paths, eliminating selector and
+validator drift for profile prefixes, ARN paths, `/`/`.` boundaries, and mixed
+case. Final draft validation recursively checks the complete additional
+document before the policy report can become stable. It rejects empty or
+malformed `encoding/json.Number` values, structs, `uintptr`, non-string map
+keys, true cycles, and non-finite floats with path-qualified errors while
+distinguishing legal overlapping slice views from cycles. At SDK translation,
+recursive document normalization converts valid decoder numbers to Smithy
+document numbers so model-specific fields such as Llama `top_k` cannot become
+quoted strings.
+
+The two draft-validation boundaries are intentional. Construction validates
+the provider-owned base shape before untrusted policy runs; the policy engine
+validates the final mutated shape before translation. A chain also evaluates
+deterministic fingerprint preparation separately from the later provider
+execution so it never shares a mutable draft across entries or calls. Those
+checks are not redundant retry work: policy preparation still runs once per
+logical provider attempt, and AWS SDK retries reuse the translated input.
 
 Portable explicit intent continues to participate in compatible/strict policy
 semantics. Sonnet 5 and Opus 4.7/4.8 reject all three modified sampling
@@ -6243,6 +6304,17 @@ remain unchanged. Observability calls receive the structured error so they can
 derive `provider_client`, `provider_rate_limit`, `provider_server`, `transport`,
 `cancelled`, or `deadline`; they still record only a sanitized error object.
 
+Route-resolution and local invocation-viability errors implement the exported
+AI-module `AIRequestFailureReasoner` contract and return
+`AIRequestFailureReasonRoute`. After caller cancellation and deadline
+classification take precedence, the chain treats that bounded marker as
+authoritative even when a wrapped cause satisfies another generic error
+contract. Generate and streaming attempts, recoveries, aborts, and exhaustion
+therefore agree on `route`; unknown marker values degrade to `unknown`.
+Terminal classification uses the final attempted error consistently across
+logs, spans, and metrics, while the joined error remains caller-facing. A
+failed final entry emits no “trying next” operation.
+
 #### 19.13.5 Titan V2 helper
 
 Factory-owned configuration is snapshotted and validated before the client is
@@ -6282,10 +6354,11 @@ request := struct {
 }
 ~~~
 
-The response continues to decode the float `embedding` member. Spans may record
-only the stable Titan V2 semantic helper family, never an application-supplied
-wire model/profile ID or ARN. Input text, response body, and vector contents may
-not be logged or recorded on spans.
+The response continues to decode the float `embedding` member. The outer
+embedding span and its nested InvokeModel span record only the bounded Titan V1
+or V2 semantic helper family, never an application-supplied wire model/profile
+ID or ARN. Public direct InvokeModel calls omit `ai.model`. Input text, response
+body, and vector contents may not be logged or recorded on spans.
 
 Titan V2 changes the default vector size from Titan V1's 1536 dimensions to
 1024. `ModelTitanEmbedV1` therefore remains as an explicit migration pin for an
@@ -6299,8 +6372,13 @@ vector, err := client.GetEmbeddings(
 )
 ~~~
 
-That exact V1 model accepts only the shared `inputText` field through this
-helper; configuring V2-only dimensions or normalization is a local error.
+The recognizable V1 family accepts only the shared `inputText` field through
+this helper. A per-call V1 pin clears V2-only controls inherited from the
+client; configuring non-zero dimensions or normalization explicitly on that
+same call is a local error. An explicit zero dimension is omission.
+`WithoutEmbeddingNormalization` is the symmetric one-call omission for an
+inherited V2 normalization setting. Per-call selection/provenance is stored in
+an override object and never persisted in `embeddingConfig`.
 Applications must not write V2 vectors into a V1 index without an intentional
 vector-store migration or rebuild.
 
@@ -6338,8 +6416,9 @@ No live AWS integration test is required or authorized. Deterministic tests use
 the existing `runtimeClient` and `converseEventStream` seams and cover:
 
 1. current direct default selection, no implicit `global.` profile, and
-   fail-fast implicit-default construction outside `us-east-1` while explicit
-   model/profile and resolver routes remain valid;
+   fail-fast implicit-default request preparation outside `us-east-1` after
+   per-request model selection while explicit client/request model/profile and
+   resolver routes remain valid;
 2. resolver order, context propagation, SDK-route validation, semantic policy
    selection, opaque wire `ModelId`, sync/stream parity, stable fingerprint
    changes by route identity, and absence of raw deployment/profile values from
@@ -6349,7 +6428,15 @@ the existing `runtimeClient` and `converseEventStream` seams and cover:
    non-current, Mythos, and non-Anthropic regressions;
 4. compatible and strict explicit-intent behavior, documented-valid Fable 5
    sampling preservation, every Fable rejection branch, and final
-   current-model sampling validation;
+   current-model sampling validation across both inference configuration and
+   case-insensitive additional-model fields introduced through legacy
+   `Extra`, application policy, middleware, or per-request patches; canonical
+   legacy-field classification, duplicate rejection, policy remediation and
+   final wrong-container rejection across legacy, application, middleware, and
+   per-request channels, pre-fingerprint recursive document validation, empty
+   and malformed `json.Number` rejection, recursive numeric wire conversion,
+   legal overlapping slice views, struct/`uintptr` rejection, and named signed
+   or unsigned numeric conversion;
 5. empty system, empty stop entry, stop-count overflow, numeric range, protected
    model, and unsupported header failures before the runtime seam is called;
 6. exact `MaxRetries + 1` operation options for Converse, ConverseStream, and
@@ -6357,16 +6444,26 @@ the existing `runtimeClient` and `converseEventStream` seams and cover:
 7. every documented typed exception mapping, preserved SDK error identity,
    correct chain fail-fast/failover metadata, unknown-error passthrough, and
    sanitized log/span output;
-8. Titan V2 default payload, configurable model/dimensions/normalize, V1
-   migration-pin payload, rejection of V2-only controls on V1,
-   construction-time configuration failures, successful decode, nil output,
-   and malformed response handling;
+8. Titan V2 default payload, configurable model/dimensions/normalize,
+   one-call normalization omission, V1
+   migration-pin payload, inherited V2-default removal for a per-call V1 pin,
+   rejection of explicitly supplied V2 controls on recognizable V1 IDs/ARNs,
+   bounded V1/V2 span identity without raw IDs, construction-time
+   configuration failures, successful decode, nil output, and malformed
+   response handling;
 9. reasoning deltas omitted from normalized chunks while later text and usage
    remain correct;
 10. 60-minute explicit/direct Bedrock default, 180-second auto-detected and
     framework-managed chain defaults, explicit timeout overrides,
-    caller-owned-chain preservation, and cancellation behavior; and
-11. nil logger/telemetry safety and existing request/response/error observation
+    zero/negative-as-unset behavior, caller-owned-chain preservation, and
+    cancellation behavior;
+11. stable request and chain fingerprints across the deterministic implicit
+    route guard, independent provider log/span route classification, bounded
+    chain `failover_reason=route`, chain-attempt and failure-log
+    `error_type=route`, generate/stream recovery, terminal exhaustion and abort
+    classification, final-entry failover-log suppression, direct-client
+    `SetDefaultModel`, and resolver-failure instability; and
+12. nil logger/telemetry safety and existing request/response/error observation
     invariants.
 
 The slice then runs the Bedrock-tagged package build, vet, race/unit tests,
@@ -6377,7 +6474,7 @@ separately from the Bedrock code.
 
 The completed implementation satisfies these conditions. The Bedrock-tagged
 package passed build, vet, race/unit tests, golangci-lint, gosec, and
-govulncheck, with 78.2% statement coverage. The full AI module passed the same
+govulncheck, with 82.4% statement coverage. The full AI module passed the same
 tagged build, vet, race, lint, and vulnerability checks, and all workspace
 modules passed the untagged pre-commit gates required by `AGENTS.md`. The final
 review found no raw Bedrock deployment/profile identifiers in request reports,

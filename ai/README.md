@@ -228,17 +228,37 @@ client, err := ai.NewClient(
 ```
 
 The generation default is the bare `anthropic.claude-sonnet-5` model. An
-implicit factory-created default is accepted only in `us-east-1`; in another
-region, configure an explicit model/profile ID or an SDK-destination resolver.
+implicit default is accepted only in `us-east-1`. The check runs after
+per-request model selection, so a deployment that always supplies a request
+model can still construct the client in another region. Configure an explicit
+client or request model/profile ID, or an SDK-destination resolver, before an
+invocation would otherwise use the implicit default.
 TruvaG3 deliberately does not add `us.`, `global.`, or another
 inference-profile prefix: those choices can change routing, data residency,
 IAM/SCP behavior, availability, and cost. To map a semantic model to an
 inference-profile ID or ARN, use the SDK-destination resolver recipe in the
 [custom provider guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
+If you construct the provider package directly, call
+`bedrockClient.SetDefaultModel(modelID)` before concurrent use to declare an
+explicit default; assigning the embedded `DefaultModel` field alone does not
+express that routing intent.
 
 Current Claude Sonnet 5 and Opus 4.7/4.8 requests omit modified `temperature`,
 `top_p`, and `top_k`; Fable 5 preserves only its documented compatibility
-ranges and rejects `top_k`.
+ranges and rejects `top_k`. Final validation covers both Converse
+`inferenceConfig` and case-insensitive copies in
+`additionalModelRequestFields`, including fields introduced by legacy `Extra`
+or application request policy. Unique legacy Fable `temperature`/`top_p`
+spellings remain policy-editable in the additional container: a rule,
+middleware, or per-request patch may remove them, or set the canonical
+`inferenceConfig` value and remove the legacy copy. Case-insensitive duplicates
+and any unremediated wrong-container fields fail locally after policy.
+JSON-decoder `json.Number` values remain numeric in both common inference and
+nested model-specific additional fields; named signed and unsigned Go numeric
+values are also accepted. The complete additional document is validated before
+its policy fingerprint is marked stable. Empty or malformed decoder numbers,
+structs, `uintptr`, non-string map keys, cycles, and non-finite floats fail
+locally with a path-qualified error rather than reaching the AWS SDK.
 The provider passes `WithMaxRetries(n)` to the AWS SDK as `n+1` total attempts,
 with a minimum of one. Reasoning-content stream deltas are intentionally not
 included in TruvaG3's normalized text response.
@@ -247,7 +267,8 @@ An explicitly selected standalone Bedrock client defaults to a 60-minute
 request timeout, as does a client created directly with
 `bedrock.NewClient`. Auto-detected clients and framework-managed failover-chain
 entries retain the failover-safe 180-second framework default. Explicit
-`ai.WithTimeout` or `ai.WithChainTimeout` values win.
+positive `ai.WithTimeout` or `ai.WithChainTimeout` values win. Zero and
+negative values mean unset; they do not disable request deadlines.
 
 `GetEmbeddings` is a Bedrock-specific, single-text helper. It uses
 `amazon.titan-embed-text-v2:0` and supports validated per-call model,
@@ -269,7 +290,7 @@ vector, err := bedrockClient.GetEmbeddings(
 
 Titan V2 produces 1024 dimensions by default, while Titan V1 produces 1536.
 When upgrading an application with an existing V1 vector store, pin V1 and do
-not supply the V2-only dimensions or normalization options:
+not supply V2-only dimensions or normalization options on that call:
 
 ```go
 vector, err := bedrockClient.GetEmbeddings(
@@ -278,6 +299,11 @@ vector, err := bedrockClient.GetEmbeddings(
     bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1),
 )
 ```
+
+The per-call V1 pin automatically omits V2-only dimensions and normalization
+inherited from client defaults. Explicit V2 controls on the same V1 call are
+rejected. `bedrock.WithoutEmbeddingNormalization()` explicitly omits an
+inherited V2 `normalize` field for one call.
 
 Do not mix vectors from the two models in one index; migrate or rebuild the
 store before changing dimensions.

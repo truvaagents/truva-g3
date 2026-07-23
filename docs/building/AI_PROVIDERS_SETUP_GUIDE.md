@@ -412,7 +412,13 @@ Result: Use model "o3"
 
 Not all errors should trigger failover. If your request is malformed, trying another provider won't help—you'll just get the same error three times.
 
-Chain Client classifies errors using the `core.ProviderError` interface, which carries structured metadata (HTTP status code, provider name, model, and transient flag) from the AI provider layer. This replaces fragile string matching with type-safe error classification via `errors.As()`.
+Chain Client classifies completed provider failures using the
+`core.ProviderError` interface, which carries structured metadata (HTTP status
+code, provider name, model, and transient flag) from the AI provider layer.
+Provider-owned route-resolution or invocation-viability errors may additionally
+implement `ai.AIRequestFailureReasoner` and return the typed
+`ai.AIRequestFailureReasonRoute` constant. This replaces fragile string
+matching with type-safe classification via `errors.As()`.
 
 **Errors that ALLOW failover** (tries next provider):
 
@@ -425,6 +431,7 @@ Chain Client classifies errors using the `core.ProviderError` interface, which c
 | Network errors | Non-`ProviderError` (no HTTP status) | Might be routing/DNS issue |
 | Transient proxy errors | `IsTransient() == true` | Proxy/CDN issue (e.g., Cloudflare HTML 400), not a request problem |
 | Provider HTTP timeout (for example 408/504) | Retryable provider status | A different provider may remain healthy |
+| Provider route unavailable | `AIRequestFailureReason() == ai.AIRequestFailureReasonRoute` | Another independently routed entry may remain viable |
 
 **Errors that STOP failover** (fails immediately):
 
@@ -1312,8 +1319,10 @@ Build with `-tags bedrock` and import the provider package so its factory is
 registered. With no model option, Bedrock uses the direct
 `anthropic.claude-sonnet-5` model in the default `us-east-1` region. Because
 AWS currently documents that bare model for direct in-region use only there,
-an implicit-model factory construction in another region fails locally. Supply
-an explicit supported model/profile ID or an endpoint resolver in that case:
+request preparation in another region rejects an invocation that would
+actually use the implicit default. Client construction remains valid when the
+deployment supplies a model on every request. Supply an explicit supported
+client model, per-request model/profile ID, or endpoint resolver:
 
 ```go
 import (
@@ -1330,6 +1339,11 @@ client, err := ai.NewClient(
     ai.WithModel(bedrock.ModelClaudeSonnet5),
 )
 ```
+
+For direct package construction with `bedrock.NewClient`, call
+`client.SetDefaultModel(modelID)` before concurrent use. That method records
+that the default was an explicit application routing choice; assigning the
+embedded `DefaultModel` field alone does not.
 
 TruvaG3 never silently changes that direct ID to `us.`, `global.`, or another
 inference profile. AWS documents in-region, geographic cross-region, and global
@@ -1382,6 +1396,9 @@ A Bedrock resolver must return no URL, query, or credential scope. AWS SDK
 configuration continues to own the region, credentials, SigV4, service
 endpoint, and HTTP transport. Accordingly, Bedrock rejects
 `WithCredentialSource`, `WithHTTPClient`, and request headers.
+The resolver's deployment must remain semantically equivalent to
+`request.ResolvedModel`: request policy uses the semantic model and never
+reclassifies an opaque deployment/profile ARN.
 
 Current Claude compatibility is provider-owned and shared by sync and stream:
 
@@ -1389,6 +1406,17 @@ Current Claude compatibility is provider-owned and shared by sync and stream:
 - Fable 5 omits incompatible inherited temperature and top-k, preserves
   temperature `1` or omission and top-p from `0.99` inclusive to `1` exclusive
   or omission, and rejects other values.
+- Unique legacy Fable `temperature`/`top_p` spellings remain in
+  `additionalModelRequestFields` while policy runs. Application rules,
+  middleware, or per-request patches may remove them, or set the canonical
+  `inferenceConfig` field and remove the legacy copy. Case-insensitive
+  duplicates and unremediated wrong-container fields fail locally.
+- Numeric values decoded with JSON `UseNumber` are accepted and range-checked
+  in common inference fields and remain numeric recursively in model-specific
+  additional fields. The full additional document is validated before its
+  fingerprint becomes stable; empty or malformed numbers, structs, `uintptr`,
+  non-string map keys, cycles, and non-finite floats fail locally. Named signed
+  and unsigned Go numeric values are also accepted.
 - Other model families retain ordinary sampling behavior.
 - Current Mythos model cards expose the Messages surface rather than Converse,
   so Mythos is not included in this Converse policy table.
@@ -1397,13 +1425,17 @@ Current Claude compatibility is provider-owned and shared by sync and stream:
 passes `n+1` total attempts to each AWS SDK operation. Explicitly selected
 standalone Bedrock clients and direct `bedrock.NewClient` values default to 60
 minutes. Auto-detected clients and framework-managed chain entries default to
-180 seconds. `WithTimeout` and `WithChainTimeout` override those defaults.
+180 seconds. Positive `WithTimeout` and `WithChainTimeout` values override
+those defaults; zero and negative values mean unset rather than unbounded.
 
 `GetEmbeddings` now defaults to 1024-dimensional Titan V2. An application with
 an existing 1536-dimensional Titan V1 store must pin
-`bedrock.ModelTitanEmbedV1` through `bedrock.WithEmbeddingModel` and omit the
-V2-only dimensions/normalization options until the vector store is migrated or
-rebuilt.
+`bedrock.ModelTitanEmbedV1` through `bedrock.WithEmbeddingModel`. A per-call V1
+pin omits V2-only dimensions/normalization inherited from client defaults, but
+explicit V2 controls on that same call are rejected. Keep the pin until the
+vector store is migrated or rebuilt.
+`bedrock.WithoutEmbeddingNormalization()` explicitly omits an inherited V2
+normalization field for one call.
 
 For the complete resolver and Titan V2 helper contracts, see the
 [Bedrock recipe](CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).

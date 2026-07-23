@@ -117,6 +117,18 @@ version join the policy fingerprint (the cache key explained in
 AI-output caches roll over automatically instead of serving answers produced
 under the old semantics.
 
+For Bedrock Converse, common `temperature`, `top_p`, and `max_tokens` paths
+live under `/inference_config`; `additional_model_request_fields` is for
+model-specific fields such as `top_k`. The Bedrock adapter rejects a
+policy-created Fable temperature/top-p value in the additional container even
+when its numeric value is otherwise valid. A legacy Fable value in that
+container remains policy-editable: remove it, or set the corresponding common
+field and remove the legacy copy before final validation. Numeric patch values
+decoded with JSON `UseNumber` are accepted and range-checked in common fields;
+nested additional-field values are validated before fingerprinting and remain
+numeric on the AWS wire. Empty or malformed numbers and non-document Go shapes
+such as structs or `uintptr` fail locally.
+
 **Durable fix:** upgrade to the framework release that adds the family to the
 provider's built-in compatibility rules, then delete your rule. Keeping the
 built-in list current gives every caller identical sync/stream behavior.
@@ -430,7 +442,10 @@ func (resolver *bedrockResolver) ResolveEndpoint(
 ```
 
 Change `RouteIdentity` whenever the mapping changes in a way that can affect
-answers. Never put a raw ARN, account ID, tenant ID, or credential in it.
+answers. Never put a raw ARN, account ID, tenant ID, or credential in it. The
+Bedrock deployment must remain semantically equivalent to
+`request.ResolvedModel`: provider policy follows the semantic model and does
+not inspect an opaque route ARN to rediscover model capabilities.
 
 Resolvers must be deterministic, concurrency-safe, and free of side effects —
 the framework may call them during cache-fingerprint preflight as well as on
@@ -446,6 +461,14 @@ and credential hooks.
 [Custom HTTP Clients](CUSTOM_AI_PROVIDER_GUIDE.md#custom-http-clients). For
 Bedrock, see
 [AWS Bedrock SDK-Native Routing](CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
+
+When implementing a provider rather than configuring a built-in adapter, wrap
+route-resolution or local invocation-viability failures in an error that
+implements `ai.AIRequestFailureReasoner` and returns
+`ai.AIRequestFailureReasonRoute`. Use the typed constant rather than a raw
+string. The chain then applies the same bounded `route` classification to
+generate and stream attempts, recovery, abort, and exhaustion without parsing
+the error message.
 
 ---
 
