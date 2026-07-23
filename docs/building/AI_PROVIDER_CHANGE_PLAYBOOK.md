@@ -363,9 +363,11 @@ export GROQ_BASE_URL=https://ai-gateway.company.internal/groq/openai/v1
 ```
 
 This does not apply to every provider profile. Azure OpenAI and
-`anthropic.vertex` require `EndpointResolver`; Bedrock routing belongs to the
-AWS SDK configuration. Use the hosted-cloud recipes in the custom-provider
-guide for those surfaces.
+`anthropic.vertex` require `EndpointResolver`. Bedrock's AWS service endpoint,
+region, credentials, signing, and transport remain AWS SDK configuration, but
+its semantic-model-to-`modelId` selection may use a constrained
+`EndpointResolver`. Use the hosted-cloud recipes in the custom-provider guide
+for those surfaces.
 
 **Day-0 response (per-request routing):** an `EndpointResolver` owns the
 complete request URL and gives the route a stable, non-secret identity:
@@ -399,16 +401,51 @@ client, err := ai.NewRequestClient(
 )
 ```
 
+The HTTP example above must return a complete URL. Bedrock uses the same shared
+resolver at a narrower SDK boundary: return no URL, query, or credential scope;
+put the exact foundation-model, inference-profile, application-profile, or
+provisioned-model ID/ARN in `Deployment`:
+
+```go
+type bedrockResolver struct {
+    routes map[string]string // keyed by post-default semantic model ID
+}
+
+func (resolver *bedrockResolver) ResolveEndpoint(
+    _ context.Context,
+    request ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+    modelID, ok := resolver.routes[request.ResolvedModel]
+    if !ok {
+        return ai.ResolvedEndpoint{}, fmt.Errorf(
+            "no Bedrock route for semantic model %q",
+            request.ResolvedModel,
+        )
+    }
+    return ai.ResolvedEndpoint{
+        Deployment:    modelID,
+        RouteIdentity: "bedrock-us-primary-v2",
+    }, nil
+}
+```
+
+Change `RouteIdentity` whenever the mapping changes in a way that can affect
+answers. Never put a raw ARN, account ID, tenant ID, or credential in it.
+
 Resolvers must be deterministic, concurrency-safe, and free of side effects —
 the framework may call them during cache-fingerprint preflight as well as on
 the live request.
 
-**Durable fix:** for corporate CAs, mTLS, or proxies, pair the resolver with
-`ai.WithHTTPClient(corporateHTTPClient)`.
+**Durable fix:** for HTTP providers using corporate CAs, mTLS, or proxies, pair
+the resolver with `ai.WithHTTPClient(corporateHTTPClient)`. For Bedrock, change
+the application-owned `aws.Config`; the Bedrock factory rejects the shared HTTP
+and credential hooks.
 
 **Canonical reference:**
 [Per-Request Endpoint Routing](CUSTOM_AI_PROVIDER_GUIDE.md#per-request-endpoint-routing) and
-[Custom HTTP Clients](CUSTOM_AI_PROVIDER_GUIDE.md#custom-http-clients).
+[Custom HTTP Clients](CUSTOM_AI_PROVIDER_GUIDE.md#custom-http-clients). For
+Bedrock, see
+[AWS Bedrock SDK-Native Routing](CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
 
 ---
 

@@ -280,6 +280,15 @@ core.NewConfig(
 
 Configure AI client settings for LLM integration.
 
+This table distinguishes the core configuration object from direct provider
+construction. `core.Config.LoadFromEnv` reads rows marked **Implemented** into
+`core.Config.AI`; it does not automatically pass those values to
+`ai.NewClient` or `ai.NewRequestClient`. Applications using the direct
+constructors must pass the corresponding `ai.With*` options. Rows marked
+**Struct Tag Only** are metadata declarations that `LoadFromEnv` does not
+currently read. Provider-specific variables in the next section and
+`TRUVAG3_AI_RETRY_ATTEMPTS` are read directly by the `ai` module as documented.
+
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_AI_ENABLED` | `false` | **Implemented** | Enable AI features | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
@@ -288,17 +297,17 @@ Configure AI client settings for LLM integration.
 | `TRUVAG3_AI_MODEL` | `gpt-4` | **Implemented** | Model name to use | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_BASE_URL` | Provider-specific | **Implemented** | Custom base URL for API calls | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_PROVIDER` | `openai` | Struct Tag Only | AI provider | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature (0.0-2.0) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature declaration; permitted values and field support are provider/model-specific | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_AI_TIMEOUT` | `180s` | Struct Tag Only | Request timeout (3 min default for reasoning model support) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` (single client) / `0` (chain client) | **Implemented** | Per-provider HTTP retry budget for AI API calls. Honored by both `ai.NewClient` and `ai.NewChainClient`, with different defaults: single clients absorb transient blips with 3 retries (no failover layer below), chain clients default to 0 because the chain's failover loop is the retry mechanism. Precedence: explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > `TRUVAG3_AI_RETRY_ATTEMPTS` > default. Per FRAMEWORK_DESIGN_PRINCIPLES §3.5 rule 3, env var values are guarded with `val > 0` — zero, negative, and non-integer values are silently rejected and fall through to the default. To explicitly disable retries on a single client, use `ai.WithMaxRetries(0)` programmatically. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_AI_TIMEOUT` | `30s` in `core.DefaultConfig` (the unused struct tag says `180s`) | Struct Tag Only | `core.Config.LoadFromEnv` does not read this variable. Direct `ai.NewClient` / `ai.NewRequestClient` construction also does not read it: those constructors use 180s unless an explicitly selected standalone provider declares another default (Bedrock: 60m) or `ai.WithTimeout(d)` supplies a positive override. Auto-detected clients and framework-managed chain entries use 180s. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go), [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/registry.go](https://github.com/truvaagents/truva-g3/blob/main/ai/registry.go) |
+| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 because failover is its retry layer. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
 | `TRUVAG3_AI_RETRY_DELAY` | `1s` | Struct Tag Only | Delay between retries | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 
 ### Example
 
 ```bash
 export TRUVAG3_AI_ENABLED=true
-export TRUVAG3_AI_MODEL="gpt-4-turbo"
+export TRUVAG3_AI_MODEL="smart"
 export TRUVAG3_AI_BASE_URL="https://api.openai.com/v1"
 ```
 
@@ -306,7 +315,13 @@ export TRUVAG3_AI_BASE_URL="https://api.openai.com/v1"
 
 ## AI Provider-Specific Variables
 
-The framework supports multiple AI providers with automatic detection based on available API keys.
+The framework supports multiple AI providers with automatic detection based on
+available API keys and provider-specific indicators. Detection considers only
+factories linked into the application; import each selected provider package,
+normally as a blank import. Bedrock must also be compiled with `-tags bedrock`.
+See the
+[AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#single-client-the-simple-path)
+for the registration pattern.
 
 ### OpenAI (Priority: 1000)
 
@@ -320,7 +335,7 @@ The framework supports multiple AI providers with automatic detection based on a
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `ANTHROPIC_API_KEY` | (none) | **Implemented** | Anthropic API key | [ai/providers/anthropic/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/factory.go) |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | **Implemented** | Anthropic API base URL | [ai/providers/anthropic/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/factory.go) |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | **Implemented** | Anthropic API base URL | [ai/providers/anthropic/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/client.go), [ai/providers/anthropic/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/factory.go) |
 
 ### Google Gemini (Priority: 800)
 
@@ -328,7 +343,7 @@ The framework supports multiple AI providers with automatic detection based on a
 |----------|---------|--------|-------------|--------|
 | `GEMINI_API_KEY` | (none) | **Implemented** | Google Gemini API key | [ai/providers/gemini/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/factory.go) |
 | `GOOGLE_API_KEY` | (fallback) | **Implemented** | Alternative Google API key (either activates Gemini) | [ai/providers/gemini/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/factory.go) |
-| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | **Implemented** | Gemini API base URL | [ai/providers/gemini/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/factory.go) |
+| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | **Implemented** | Gemini API base URL | [ai/providers/gemini/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/client.go), [ai/providers/gemini/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/factory.go) |
 
 ### Groq (Priority: 700)
 
@@ -380,23 +395,98 @@ The framework supports multiple AI providers with automatic detection based on a
 
 > **Note**: Ollama is only auto-detected when `OLLAMA_BASE_URL` is explicitly set. The framework does not probe `localhost:11434` by default to avoid a 2-second timeout penalty in environments where Ollama is not running.
 
-### AWS Bedrock (Priority: 200)
+### AWS Bedrock (Priority: 200, or 250 for detected Lambda/ECS environments)
+
+Bedrock support is compiled only when the application is built with
+`-tags bedrock`. Without that tag the provider is not registered and none of
+the detection rows below can select it.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `AWS_ACCESS_KEY_ID` | (none) | **Implemented** | AWS access key | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
-| `AWS_SECRET_ACCESS_KEY` | (none) | **Implemented** | AWS secret key | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
-| `AWS_SESSION_TOKEN` | (none) | **Implemented** | AWS session token (temporary credentials) | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
-| `AWS_REGION` | `us-east-1` | **Implemented** | AWS region | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
-| `AWS_DEFAULT_REGION` | (fallback) | **Implemented** | Alternative region variable | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
+| `AWS_ACCESS_KEY_ID` | (none) | **Implemented** | AWS access key; triggers framework auto-detection only when `AWS_SECRET_ACCESS_KEY` is also non-empty | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
+| `AWS_SECRET_ACCESS_KEY` | (none) | **Implemented** | AWS secret key; triggers framework auto-detection only when `AWS_ACCESS_KEY_ID` is also non-empty | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
+| `AWS_SESSION_TOKEN` | (none) | **Implemented by AWS SDK** | Optional session token used with temporary static credentials; does not trigger framework auto-detection by itself | [AWS SDK for Go v2 configuration](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/configure-gosdk.html) |
+| `AWS_REGION` | `us-east-1` | **Implemented** | AWS region. If this resolves outside `us-east-1`, the implicit Sonnet 5 model is rejected; configure an explicit supported model/profile or endpoint resolver. | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
+| `AWS_DEFAULT_REGION` | (fallback) | **Implemented** | Alternative region variable; the same implicit Sonnet 5 region guard applies | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
 | `AWS_PROFILE` | (none) | **Implemented** | AWS CLI profile name | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
-| `AWS_EXECUTION_ENV` | (auto) | **Implemented** | Set by AWS Lambda | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
+| `AWS_EXECUTION_ENV` | (auto) | **Implemented** | Managed AWS runtime indicator, including Lambda/ECS environments | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
 | `AWS_LAMBDA_FUNCTION_NAME` | (auto) | **Implemented** | Set in Lambda environment | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
 | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | (auto) | **Implemented** | Set in ECS environment | [ai/providers/bedrock/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/bedrock/factory.go) |
 
+The factory returns priority 250 when availability is established by
+`AWS_EXECUTION_ENV`, `AWS_LAMBDA_FUNCTION_NAME`, or
+`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`. A static environment credential pair
+or `AWS_PROFILE` is checked first and yields priority 200 even if a managed
+runtime indicator is also present; a detected `~/.aws/credentials` file also
+uses priority 200. Credential loading then delegates to the AWS SDK default
+credential chain unless explicit `ai.WithAWSCredentials` values were supplied.
+
+Framework auto-detection is intentionally narrower than the AWS SDK credential
+chain. Explicit `ai.WithProvider("bedrock")` construction can use other
+SDK-supported sources—such as web identity, ECS/EKS container credentials, or
+an EC2 instance role—even when those sources alone do not satisfy TruvaG3's
+detector. See the official
+[AWS SDK for Go v2 configuration guide](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/configure-gosdk.html).
+
+### Semantic Model Alias Overrides
+
+Model override variables change the semantic model selected for a portable
+alias. They do not rewrite route-owned Azure deployment names, Vertex
+publisher-model IDs, Bedrock `modelId` values, inference-profile IDs, or ARNs.
+Only a non-empty environment value overrides the built-in mapping.
+
+| Provider/profile | Override pattern | Examples and route behavior |
+|---|---|---|
+| OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=o3`; Azure resolver maps are keyed by the resulting semantic model |
+| DeepSeek | `TRUVAG3_DEEPSEEK_MODEL_{ALIAS}` | Applies to `openai.deepseek` |
+| Groq | `TRUVAG3_GROQ_MODEL_{ALIAS}` | Applies to `openai.groq` |
+| Together AI | `TRUVAG3_TOGETHER_MODEL_{ALIAS}` | Applies to `openai.together` |
+| xAI | `TRUVAG3_XAI_MODEL_{ALIAS}` | Applies to `openai.xai` |
+| Mistral | `TRUVAG3_MISTRAL_MODEL_{ALIAS}` | Applies to `openai.mistral` |
+| Qwen | `TRUVAG3_QWEN_MODEL_{ALIAS}` | Applies to `openai.qwen` |
+| Ollama | `TRUVAG3_OLLAMA_MODEL_{ALIAS}` | Applies to `openai.ollama` |
+| Anthropic direct and Vertex-hosted Claude | `TRUVAG3_ANTHROPIC_MODEL_{ALIAS}` | Vertex resolver maps are keyed by the resulting semantic model |
+| Google Gemini | `TRUVAG3_GEMINI_MODEL_{ALIAS}` | Applies to the native Gemini provider |
+| AWS Bedrock | No provider-specific alias environment variable | Use `ai.WithModel` or an SDK-destination `EndpointResolver` |
+
+Resolver maps receive `EndpointRequest.ResolvedModel`, which is the concrete
+post-alias semantic model. For example, a map must use `"o3"` rather than
+`"smart"` after `TRUVAG3_OPENAI_MODEL_SMART=o3`.
+
+Azure semantic resolution uses the immutable built-in OpenAI catalog plus the
+environment overrides above. Runtime mutations of the compatibility variable
+`openai.ModelAliases` apply to the OpenAI provider, but not to Azure.
+
+### Hosted Enterprise Profiles Without Auto-Detection
+
+The following profiles intentionally have no framework-owned API-key or
+base-URL environment shortcut:
+
+| Surface | Selection | Required construction |
+|---|---|---|
+| Azure OpenAI v1 | `ai.WithProviderAlias("azureopenai.v1")` | `ai.NewRequestClient` with `WithEndpointResolver` plus `WithAPIKey`, `WithCredentialSource`, or `WithAuthHeader` |
+| Azure OpenAI classic | `ai.WithProviderAlias("azureopenai.classic")` | Same as v1; resolver must supply the deployment URL and exactly one non-empty `api-version` |
+| Vertex-hosted Claude | `ai.WithProviderAlias("anthropic.vertex")` | `ai.NewRequestClient` with a Vertex route and Google bearer-token credential source |
+| Google Cloud OpenAI compatibility | `ai.WithProviderAlias("openai")` | `ai.NewRequestClient` with the Google OpenAI-compatible route and bearer-token credential source |
+
+The Azure factory returns `(0, false)` from provider auto-detection. Anthropic
+auto-detection can select only the direct `anthropic` profile; it never proposes
+`anthropic.vertex`. Vertex also rejects direct Anthropic `APIKey` and `BaseURL`
+configuration, so setting `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` does not
+configure that profile. Provider SDKs used inside application-owned token
+sources may honor their own environment variables, but those variables are not
+read or interpreted by TruvaG3.
+
+Official provider contracts:
+[Azure OpenAI v1 chat completions](https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat),
+[Azure OpenAI classic versioned REST endpoints](https://learn.microsoft.com/en-us/azure/foundry/openai/reference?view=foundry-classic),
+[OpenAI compatibility on Google Cloud](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/openai),
+and [Claude request predictions on Google Cloud](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude).
+
 ### Auto-Detection Priority
 
-When no explicit provider is specified, the framework auto-detects available providers:
+When no explicit provider is specified, the framework auto-detects available,
+linked providers:
 
 1. **OpenAI** (1000) - `OPENAI_API_KEY`
 2. **Anthropic** (900) - `ANTHROPIC_API_KEY`
@@ -407,8 +497,12 @@ When no explicit provider is specified, the framework auto-detects available pro
 7. **Mistral** (450) - `MISTRAL_API_KEY`
 8. **Qwen** (400) - `QWEN_API_KEY`
 9. **Together AI** (300) - `TOGETHER_API_KEY`
-10. **Bedrock** (200) - AWS credentials
+10. **Bedrock** (200, or 250 when detected through Lambda/ECS indicators) - AWS credentials; static credential/profile indicators take precedence; available only with `-tags bedrock`
 11. **Ollama** (100) - Requires `OLLAMA_BASE_URL` to be explicitly set
+
+Azure OpenAI, Vertex-hosted Claude, and Google Cloud OpenAI compatibility are
+not additional auto-detection candidates. They require explicit request-aware
+construction as described above.
 
 ### Overriding Auto-Detection Priority
 
@@ -438,7 +532,7 @@ client, _ := ai.NewChainClient(
 ```go
 func (p *CustomProvider) DetectEnvironment() (priority int, available bool) {
     if os.Getenv("CUSTOM_LLM_KEY") != "" {
-        return 200, true  // Higher than OpenAI's 100
+        return 1100, true  // Higher than OpenAI's 1000
     }
     return 0, false
 }
@@ -512,7 +606,7 @@ Configure cross-agent shared memory — episodic events, knowledge extraction, a
 | `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | `30m` | **Implemented** | Auto-expiry for investigation claims. Must be >= HITL timeout + execution buffer for agents using cross-agent delegation. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `2000` | **Implemented** | Max tokens of memory context injected into the planning prompt. Caps enrichment to prevent prompt bloat. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `20` | **Implemented** | Recent domain events for baseline situational awareness (without compactor). Higher values show more cross-agent activity but consume more prompt tokens. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` (agent default) | **Implemented** | Model for LLM event summarization and activity compaction calls. Supports aliases (`fast`, `smart`) or concrete model names. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` (agent default) | **Implemented** | Model for LLM event summarization and activity compaction calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Max token budget for the compacted domain activity digest. Controls the output size of the `ActivityCompactor` LLM call. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | **Implemented** | Max raw events fetched before compaction. Higher values give the compactor more context but increase LLM input size. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `15` | **Implemented** | Raw events appended after the compacted digest for immediate detail access. Set to `0` to disable. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
@@ -582,7 +676,7 @@ The reflection job is wired automatically by `BuildReflectionJob` when Phase 2 b
 | `TRUVAG3_REFLECTION_INTERVAL` | `24h` | **Implemented** | How often the reflection pass runs. Go duration format (`5m`, `6h`, `24h`). Shorter intervals increase LLM cost; longer intervals delay knowledge accumulation. | [memory/reflection_job.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go) |
 | `TRUVAG3_REFLECTION_AGE_THRESHOLD` | `168h` (7 days) | **Implemented** | Only events older than this are eligible for reflection. Should be longer than the activity compactor's window — events younger than this are still represented in the per-request activity digest, so reflecting them prematurely spends LLM tokens on under-developed patterns. Go duration format. | [memory/reflection_job.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go) |
 | `TRUVAG3_REFLECTION_MIN_EVENTS` | `5` | **Implemented** | Minimum events per entity required to trigger reflection. Below this, the entity is skipped. Propagated to both the job's discovery pass and the LLM reflector — they share the same threshold. Lower values produce more fragments from less data (riskier); higher values produce fewer, more confident fragments. | [memory/reflection_job.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go), [memory/reflection_job_builder.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job_builder.go) |
-| `TRUVAG3_REFLECTION_MODEL` | `""` (AIClient default) | **Implemented** | Model used for the reflection LLM call. Accepts cross-provider aliases (`fast`, `smart`, `default`) or concrete model names — the chain client resolves aliases per-provider at call time. Empty string means "use the AIClient's default selection." Reflection is durable — fragments influence every future request — so this is a real cost-vs-quality trade-off. See [Choosing a model for reflection](#choosing-a-model-for-reflection) below. | [memory/reflector.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflector.go), [memory/reflection_job_builder.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job_builder.go) |
+| `TRUVAG3_REFLECTION_MODEL` | `""` (AIClient default) | **Implemented** | Model used for the reflection LLM call. Accepts a portable alias (`fast`, `smart`, `default`) when the selected provider defines that alias, or a concrete model ID. The selected provider performs alias resolution; Bedrock has no portable-alias catalog. Empty string means "use the AIClient's default selection." Reflection is durable—fragments influence every future request—so this is a real cost-vs-quality trade-off. See [Choosing a model for reflection](#choosing-a-model-for-reflection) below. | [memory/reflector.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflector.go), [memory/reflection_job_builder.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job_builder.go) |
 
 ### Choosing a model for reflection
 
@@ -597,13 +691,22 @@ Recommended configurations:
 | **Aggressive learning** | unset | `2` | Captures patterns from sparse-event entities. Use only with the strongest model — low signal × weak model = noise. |
 | **Bulk indexing of historical data** | `fast` | `10` | When backfilling reflection over a large existing event log, the cheap model handles the volume and the high `min_events` floor filters out low-signal entities. |
 
-Aliases (`fast`, `smart`, `default`, `code`, `vision`) are resolved per-provider by the chain client at call time. The authoritative alias-to-model mappings live in the provider source files, not in this guide — bumping them here would silently desync from code on every model release. See:
+Where supported, aliases (`fast`, `smart`, `default`, `code`, `vision`) are
+resolved by the selected AI provider at call time. Bedrock does not define
+portable alias mappings. The authoritative alias-to-model mappings live in the
+provider source files, not in this guide—copying the concrete mappings here
+would silently desynchronize them from code on every model release. See:
 
 - **Anthropic:** [ai/providers/anthropic/models.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/models.go)
 - **OpenAI and OpenAI-compatible (Groq, DeepSeek, xAI, Together, Mistral, Qwen, Ollama):** [ai/providers/openai/models.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/models.go) — sub-providers use the `openai.<sub>` alias namespace
 - **Google Gemini:** [ai/providers/gemini/models.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/gemini/models.go)
 
-You can override any alias on any provider without recompiling by setting `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` — for example `TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001` or `TRUVAG3_GROQ_MODEL_FAST=llama-3.1-8b-instant`.
+Providers with an environment-backed model catalog can override an alias
+without recompiling—for example,
+`TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001` or
+`TRUVAG3_GROQ_MODEL_FAST=llama-3.1-8b-instant`. See
+[Semantic Model Alias Overrides](#semantic-model-alias-overrides) for the exact
+supported prefixes and the hosted-provider semantic/wire boundary.
 
 To set the model programmatically (Layer 3, bypassing the env var):
 
@@ -734,7 +837,7 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_PLAN_MAX_TOKENS` | `15000` | **Implemented** | Max output tokens for plan generation LLM calls (including hallucination and validation retries) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `5000` | **Implemented** | Max output tokens for response synthesis LLM calls | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_TEMPERATURE` | `0.5` | **Implemented** | LLM temperature for response synthesis (0.0–2.0). Lower = more deterministic | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_PLAN_MODEL` | `""` | **Implemented** | Portable alias or model name for plan generation LLM calls. Use `"smart"`, `"default"`, or `"fast"` with ChainClient | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_PLAN_MODEL` | `""` | **Implemented** | Portable alias or model name for plan generation LLM calls. Aliases work across catalog-backed chain entries; leave unset for a chain containing Bedrock so each entry uses its configured default | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_MODEL` | `""` | **Implemented** | Portable alias or model name for response synthesis LLM calls (streaming + non-streaming) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `""` | **Implemented** | Portable alias or model name for micro-resolution **and** Layer 4 semantic retry (contextual re-resolution) LLM calls. When unset, both use the provider-default model | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `2000` | **Implemented** | Maximum output tokens for micro-resolution (base default 2000) **and** Layer 4 semantic retry (base default 1000); setting this overrides **both** | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -765,11 +868,17 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `16384` | **Implemented** | Minimum result size (bytes) to trigger LLM distillation. Below this, structural trimming only. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_PREFILTER` | `131072` | **Implemented** | StructuralTrimmer budget (bytes) applied before LLM distillation (Stage 1 pre-filter). 128 KB — fits the 64K fast-tier context floor. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_TARGET` | `4096` | **Implemented** | Target output size for LLM distillation (Stage 2). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for LLM distillation calls. Default `fast` (a ChainClient-safe alias); empty string = use the AIClient's default model. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for LLM distillation calls. Default `fast` resolves for catalog-backed providers. For a chain containing Bedrock, set `ResultDistill.Model` or `WithResultDistillModel` to an empty string programmatically so each entry uses its configured default; the environment loader ignores an empty value. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | `5m` | **Implemented** | How long a distillation result stays cached (keyed by result content + instruction + query + budget). Fail-open. Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call) or returns completed chunks + a "partial" disclosure (map-reduce). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | `8` | **Implemented** | Max chunks compacted concurrently in the map-reduce path. `≤ 0` falls back to the default. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+
+For every orchestration model override above, aliases are portable only across
+providers with alias catalogs. Leave the plan, synthesis, and micro-resolution
+model variables unset for a chain containing Bedrock so each entry can use its
+configured default. Result distillation is the exception because its built-in
+model is `"fast"`; use the programmatic empty override described in its row.
 
 ### Tiered Capability Resolution
 
@@ -856,7 +965,8 @@ export TRUVAG3_SYNTHESIS_TEMPERATURE=0.7
 # Reduce plan generation for cost savings
 export TRUVAG3_PLAN_MAX_TOKENS=5000
 
-# Model overrides — use portable aliases for ChainClient compatibility
+# Model overrides — aliases are portable across catalog-backed chain entries;
+# leave them unset for a chain containing Bedrock
 export TRUVAG3_PLAN_MODEL=smart
 export TRUVAG3_SYNTHESIS_MODEL=default
 export TRUVAG3_MICRO_RESOLUTION_MODEL=fast
@@ -1065,7 +1175,7 @@ For results that are extremely large or contain domain-specific content that str
 | `TRUVAG3_RESULT_DISTILL_THRESHOLD` | `16384` | **Implemented** | Minimum result size (bytes) to trigger distillation. Below this threshold, structural trimming is used instead. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_PREFILTER` | `131072` | **Implemented** | StructuralTrimmer budget (bytes) for Stage 1 pre-filtering. Reduces input to the LLM before distillation. 128 KB — fits the 64K fast-tier context floor. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_TARGET` | `4096` | **Implemented** | Target output size for the LLM distillation (Stage 2). The LLM summarizes the pre-filtered result to approximately this size. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for distillation LLM calls. Default `fast` (a ChainClient-safe alias resolving to Haiku / gpt-4.1-mini / gemini-flash-lite per provider); empty string = use the AIClient's default model. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MODEL` | `fast` | **Implemented** | Portable alias or model name for distillation LLM calls. Default `fast` resolves for Anthropic, OpenAI-compatible, and Gemini providers. Bedrock has no alias catalog; for a chain containing Bedrock, set `ResultDistill.Model` or `WithResultDistillModel` to an empty string programmatically so each entry uses its configured default. The environment loader ignores an empty value. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CACHE_TTL` | `5m` | **Implemented** | How long a distillation result stays cached (keyed by result content + instruction + query + budget). Fail-open — a nil cache disables it with no overhead. Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call path) or returns the chunks that completed plus a "partial" disclosure (map-reduce path). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1117,7 +1227,7 @@ config.ResultDistill = orchestration.ResultDistillConfig{
     DistillThreshold:   65536,             // Only distill results > 64 KB
     PreFilterBudget:    131072,            // 128 KB pre-filter budget (default)
     TargetSize:         2048,              // 2 KB target output
-    Model:              "fast",            // Portable alias (ChainClient-safe)
+    Model:              "fast",            // Portable across catalog-backed providers
     CacheTTL:           5 * time.Minute,   // Reuse identical distillations (default 5m)
     CompactionDeadline: 45 * time.Second,  // Hot-path bound; 0 disables (default 45s)
     ModelContextTokens: 150000,            // Above this, chunk → map-reduce (default)
@@ -1695,7 +1805,7 @@ export TRUVAG3_RESULT_DISTILL_ENABLED=true
 export TRUVAG3_RESULT_DISTILL_THRESHOLD=16384       # Min bytes to trigger
 export TRUVAG3_RESULT_DISTILL_PREFILTER=131072      # Pre-filter budget (128 KB)
 export TRUVAG3_RESULT_DISTILL_TARGET=4096           # LLM output target
-export TRUVAG3_RESULT_DISTILL_MODEL=fast            # Model override (portable alias)
+export TRUVAG3_RESULT_DISTILL_MODEL=fast            # Catalog-backed providers; Bedrock needs a programmatic empty override
 export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m          # Distillation cache TTL
 export TRUVAG3_RESULT_DISTILL_DEADLINE=45s          # Hot-path compaction bound (positive durations only)
 export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000 # Above this, chunk → map-reduce

@@ -985,10 +985,20 @@ type RequestProviderFactory interface {
         ProviderIntegrationConfig,
     ) (core.AIRequestClient, error)
 }
+
+type ProviderRequestTimeoutFactory interface {
+    ProviderFactory
+    DefaultRequestTimeout() time.Duration
+}
 ```
 
 Factories validate and wire configuration only. They do not invoke middleware
-or take ownership of application-supplied lifecycle components.
+or take ownership of application-supplied lifecycle components. The timeout
+interface is optional: providers that omit it retain 180 seconds. A positive
+factory value applies only to an explicitly selected standalone provider when
+the application did not supply a positive `WithTimeout`. Auto-detected clients
+and framework-managed chain entries retain the failover-safe 180-second
+framework default; caller-owned `ClientEntry` values remain untouched.
 
 ### Enterprise Credentials, Routing, and HTTP Transport
 
@@ -1052,14 +1062,16 @@ body or headers and must not depend on policy having executed.
 AI-output caches may evaluate the resolver during fingerprint preflight and
 again when a cache miss proceeds to provider execution, so resolver
 implementations must be concurrency-safe, side-effect-free, and return a stable
-route identity for the same semantic request. Its `ResolvedEndpoint.URL` is the
-complete HTTP endpoint, and `RouteIdentity` must be a stable, non-secret
-identifier suitable for a sanitized report and fingerprint. Resolver-owned URLs
-and query maps are cloned before use. Query values, deployment names, and
-credential scopes are available to transport/credential integration but are not
-reported. A deployment affects the body or path only when an explicitly
-selected, typed provider surface consumes it; generic OpenAI and Anthropic
-routes do not silently reinterpret `Deployment` as their body model.
+route identity for the same semantic request. For HTTP-backed providers,
+`ResolvedEndpoint.URL` is the complete HTTP endpoint. An SDK-native provider may
+instead require `URL` to be nil and consume `Deployment` as an opaque SDK
+destination. `RouteIdentity` must be a stable, non-secret identifier suitable
+for a sanitized report and fingerprint. Resolver-owned URLs and query maps are
+cloned before use. Query values, deployment names, and credential scopes are
+available to transport/credential integration but are not reported. A
+deployment affects an SDK input, body, or path only when an explicitly selected,
+typed provider surface consumes it; generic OpenAI and Anthropic routes do not
+silently reinterpret `Deployment` as their body model.
 
 An injected `*http.Client` remains caller-owned. The provider shallow-copies
 it, preserves its transport, redirect, cookie-jar, and timeout policies, and
@@ -1070,10 +1082,12 @@ eligible application headers, and credential header, so mTLS and signing
 transports compose normally.
 
 Anthropic, Azure OpenAI, and OpenAI support these HTTP integrations. Bedrock
-accepts request rules and middleware but deliberately rejects credential
-sources, endpoint resolvers, injected HTTP clients, and request headers: AWS
-credentials, routing, and transport remain owned by `aws.Config` and the AWS
-SDK.
+accepts request rules, middleware, and an SDK-destination endpoint resolver. A
+Bedrock resolver supplies only the opaque Converse `modelId` through
+`Deployment` and a sanitized route identity; it must return no URL, query, or
+credential scope. Bedrock deliberately rejects credential sources, injected
+HTTP clients, and request headers. AWS credentials, SigV4, service endpoint,
+region, and transport remain owned by `aws.Config` and the AWS SDK.
 
 ### Reusable Codecs and Native SDK Drafts
 
@@ -1125,12 +1139,52 @@ JSON request merely to reuse request policy. The provider and its tests are
 compiled only with the `bedrock` build tag; CI has a dedicated tagged build,
 race-test, lint, and vulnerability-check path.
 
+Bedrock also follows route-before-draft identity separation. The resolved
+semantic model drives policy selectors, normalized results, logs, and request
+reports. A resolver-owned deployment is the protected wire `ModelId` only and
+may contain a foundation model, inference profile, application inference
+profile, or provisioned-model identifier accepted by Converse. Raw wire IDs and
+ARNs are excluded from reports, fingerprints, logs, and spans; the stable
+sanitized route identity binds the policy fingerprint and may be recorded on the
+provider-local span. Without a resolver, the direct route deliberately uses the
+semantic model as the wire model and never silently adds a geographic or global
+inference-profile prefix. Because the implicit Sonnet 5 default is documented
+for direct in-region use only in `us-east-1`, factory construction outside that
+region fails unless the application supplies an explicit model/profile or an
+endpoint resolver. Explicit routing intent remains application-owned.
+
+One Bedrock-local, boundary-aware, case-insensitive family classifier selects
+both sampling mutation and final validation. Sonnet 5 and Opus 4.7/4.8 remove
+`temperature`, `top_p`, and `top_k`; Fable 5 removes inherited incompatible
+temperature and `top_k` while preserving only `temperature=1` and `top_p` in
+`[0.99,1)`. Models exposed only through a different AWS surface, including the
+current Mythos Messages surface, are not classified as Converse models.
+
+Provider factories may implement the additive
+`ProviderRequestTimeoutFactory` contract when their documented operation
+headroom differs from the framework's 180-second default. The root constructor
+applies that factory default only to an explicitly selected standalone
+provider when the application does not provide a positive `WithTimeout`;
+Bedrock declares 60 minutes. Auto-detected clients and framework-managed
+failover entries retain 180 seconds so a long provider default cannot stall
+provider selection. Direct `bedrock.NewClient` construction also retains the
+60-minute default, while caller-owned chain clients remain untouched. This
+keeps provider-specific operation policy in the provider module while explicit
+application configuration retains precedence.
+
+The Bedrock-specific embedding helper defaults to Titan Text Embeddings V2
+(`amazon.titan-embed-text-v2:0`, 1024 dimensions by default). The exported
+`ModelTitanEmbedV1` constant exists only as an explicit migration pin for
+1536-dimensional V1 stores. Selecting that exact V1 model rejects V2-only
+dimensions and normalization controls before SDK invocation. The framework
+never mixes or migrates vector-store dimensions implicitly.
+
 | Built-in provider | Policy surface | Request rules/middleware | HTTP integration seams |
 |-------------------|----------------|--------------------------|------------------------|
 | Anthropic and `anthropic.vertex` | Messages / Vertex publisher prediction | Yes | Yes |
 | Azure OpenAI v1/classic | Profiled Chat Completions | Yes | Yes; resolver required |
 | OpenAI and compatible aliases | Chat Completions via `openaiwire` | Yes | Yes |
-| Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | No; AWS SDK owns them |
+| Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | SDK destination resolver only; AWS SDK owns HTTP, credentials, signing, and region |
 | Gemini | Legacy client | No | No |
 
 ### Common Logical Instrumentation
@@ -1439,6 +1493,8 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.5 | 2026-07-23 | Aligned Bedrock family sampling classification, implicit-region validation, failover-safe timeout scoping, and Titan V1 migration support |
+| 1.4 | 2026-07-22 | Added SDK-native Bedrock destination resolution, provider-specific default timeouts, semantic/wire model separation, and bounded route observability |
 | 1.3 | 2026-07-22 | Approved route-before-draft hosted-provider lifecycle, semantic/wire identity separation, and bounded provider observability contracts |
 | 1.2 | 2026-07-20 | Added request fingerprint delegation, chain composition, and orchestration cache-safety guidance |
 | 1.1 | 2026-07-20 | Added request-aware provider status, reusable OpenAI wire codecs, and native Bedrock policy drafts |

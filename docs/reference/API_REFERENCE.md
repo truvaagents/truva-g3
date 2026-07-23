@@ -644,7 +644,7 @@ WithHeartbeatInterval(d)           // Heartbeat interval (default: 0 = TTL/2, mi
 ```go
 WithAI(enabled bool, provider, apiKey string)  // Enable AI with provider + API key
 WithOpenAIAPIKey(key string)        // Set OpenAI key
-WithAIModel(model string)           // Choose model (gpt-4, claude-3, etc.)
+WithAIModel(model string)           // Choose a catalog-backed alias or concrete model
 WithMockAI(bool)                    // Use mock for testing
 ```
 
@@ -1493,6 +1493,24 @@ func RateLimitMiddleware(store core.Memory, limit int) func(http.Handler) http.H
 
 Connect to AI providers and build intelligent agents that leverage LLMs for natural language understanding and generation.
 
+Provider packages are opt-in and register their factories from `init`. Link
+every provider an application may select or auto-detect, normally with blank
+imports:
+
+```go
+import (
+    _ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
+    _ "github.com/truvaagents/truva-g3/ai/providers/azureopenai"
+    _ "github.com/truvaagents/truva-g3/ai/providers/gemini"
+    _ "github.com/truvaagents/truva-g3/ai/providers/openai"
+)
+```
+
+Bedrock additionally requires a blank import of
+`github.com/truvaagents/truva-g3/ai/providers/bedrock` from code compiled with
+`-tags bedrock`. Construction and auto-detection can use only linked provider
+factories.
+
 ### Request-Aware AI API
 
 The request-aware API extends the legacy `AIClient` contract without breaking
@@ -1503,6 +1521,10 @@ existing clients. Its provider-neutral types and dispatch helpers live in
 
 ```go
 func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error)
+
+type ClientOption interface {
+    // sealed framework option contract
+}
 
 func GenerateAI(
     ctx context.Context,
@@ -1516,17 +1538,37 @@ func StreamAI(
     request *core.AIRequest,
     callback core.StreamCallback,
 ) (*core.AIResult, error)
+
+type AIRequestClient interface {
+    AIClient
+    Generate(context.Context, *AIRequest) (*AIResult, error)
+}
+
+type StreamingAIRequestClient interface {
+    AIRequestClient
+    Stream(context.Context, *AIRequest, StreamCallback) (*AIResult, error)
+}
+
+var ErrAIRequestFeatureUnsupported error
+
+type AIRequestFeatureError struct {
+    ClientType string
+    Feature    string
+}
 ```
 
-Existing `AIOption` values satisfy `ClientOption`, so legacy configuration can
-be mixed with the advanced options. `GenerateAI` and `StreamAI` prefer the
-request-aware capability and fall back to legacy clients only when the request
-is losslessly representable. An unsupported feature returns
+`ClientOption` is sealed; applications compose the exported option helpers
+rather than implementing it. Existing `AIOption` values satisfy
+`ClientOption`, so legacy configuration can be mixed with the advanced options.
+`GenerateAI` and `StreamAI` prefer the request-aware capability and fall back
+to legacy clients only when the request is losslessly representable. An
+unsupported feature returns
 `*core.AIRequestFeatureError` and matches
 `core.ErrAIRequestFeatureUnsupported`.
 
-Built-in request-aware factories currently include Anthropic and OpenAI, plus
-Bedrock with the `bedrock` build tag. Gemini remains legacy-only.
+Built-in request-aware factories currently include Anthropic, OpenAI, Azure
+OpenAI, Vertex-hosted Claude, and Bedrock with the `bedrock` build tag. Gemini
+remains legacy-only.
 
 #### AIRequest and presence-aware generation
 
@@ -1549,9 +1591,25 @@ type AIGenerationOptions struct {
     ResponseFormat  AIParameter[string]
 }
 
+type AIParameterMode uint8
+
+const (
+    AIParameterInherit AIParameterMode = iota
+    AIParameterSet
+    AIParameterOmit
+)
+
+type AIParameter[T any] struct {
+    Mode  AIParameterMode
+    Value T
+}
+
 func NewAIRequest(prompt, purpose string) *AIRequest
 func NewAIRequestFromLegacy(prompt, purpose string, options *AIOptions) *AIRequest
 func CloneAIRequest(request *AIRequest) (*AIRequest, error)
+
+func (request *AIRequest) LegacyOptions() *AIOptions
+func (request *AIRequest) LegacyRepresentable() bool
 
 func InheritAIParameter[T any]() AIParameter[T]
 func SetAIParameter[T any](value T) AIParameter[T]
@@ -1562,6 +1620,13 @@ The zero value of `AIParameter` is `Inherit`. `Set` explicitly supplies a value,
 including its zero value. `Omit` requires the provider field to be absent.
 `Model` is structural: an empty string inherits and the model cannot be
 explicitly omitted.
+
+`NewAIRequestFromLegacy` and `LegacyOptions` recursively copy legacy map,
+slice, and array containers. Opaque legacy `Extra` leaves retain their
+backward-compatible shared-reference behavior and are never mutated by the
+framework. `LegacyOptions` is not an application mutation surface.
+`LegacyRepresentable` reports whether dispatch to a legacy-only `AIClient`
+would preserve every request-aware semantic.
 
 `Purpose` must be a stable, non-secret operation label because it may appear in
 policy selectors, sanitized reports, and traces.
@@ -1588,12 +1653,27 @@ type AIRequestReport struct {
     Stable         bool
 }
 
+type AIRequestAdjustment struct {
+    Source string
+    Rule   string
+    Path   string
+    Action string
+    Reason string
+}
+
 type AIUsageDetails struct {
     CachedInputTokens int64
     ReasoningTokens   int64
     AudioInputTokens  int64
     AudioOutputTokens int64
     Counters          map[string]int64
+}
+
+type AIRequestFingerprinter interface {
+    RequestFingerprint(
+        context.Context,
+        *AIRequest,
+    ) (fingerprint string, stable bool)
 }
 ```
 
@@ -1639,6 +1719,54 @@ func WithRequestMiddleware(m ...requestpolicy.RequestMiddleware) ClientOption
 func WithCompatibilityMode(mode requestpolicy.CompatibilityMode) ClientOption
 ```
 
+The middleware and compatibility contracts are:
+
+```go
+type RequestMiddleware interface {
+    Name() string
+    Version() string
+    Apply(context.Context, RequestEditor) error
+}
+
+type StableRequestMiddleware interface {
+    RequestMiddleware
+    StablePolicyFingerprint() bool
+}
+
+type RequestInfo struct {
+    Provider       string
+    ProviderAlias  string
+    Surface        string
+    Operation      string
+    Purpose        string
+    RequestedModel string
+    ResolvedModel  string
+}
+
+type RequestEditor interface {
+    Info() RequestInfo
+    Get(path string) (interface{}, bool)
+    Set(path string, value interface{}) error
+    Remove(path string) error
+    SetHeader(name, value string) error
+    RemoveHeader(name string) error
+}
+
+type CompatibilityMode uint8
+
+const (
+    CompatibilityCompatible CompatibilityMode = iota
+    CompatibilityStrict
+)
+
+type PolicyError struct {
+    Stage string
+    Rule  string
+    Path  string
+    Err   error
+}
+```
+
 The order is provider built-ins, application rules, middleware, per-request
 patches, then compatibility and provider-draft validation. Compatible mode
 reports built-in adjustments. Strict mode rejects a built-in adjustment to
@@ -1649,6 +1777,68 @@ editor. It is fingerprint-unstable unless it implements
 `requestpolicy.StableRequestMiddleware` and explicitly declares deterministic,
 versioned behavior.
 
+Provider authors can use the complete shared policy engine and logical-document
+surface:
+
+```go
+type Draft interface {
+    RequestEditor
+    Validate() error
+}
+
+type Config struct {
+    BuiltIns   []core.AIProviderPatch
+    AppRules   []core.AIProviderPatch
+    Middleware []RequestMiddleware
+    Mode       CompatibilityMode
+}
+
+type Engine struct { /* unexported fields */ }
+
+func NewEngine(config Config) (*Engine, error)
+func (engine *Engine) Apply(
+    ctx context.Context,
+    draft Draft,
+    perRequest []core.AIProviderPatch,
+) (*core.AIRequestReport, error)
+
+type DocumentConfig struct {
+    Info                 RequestInfo
+    Body                 map[string]interface{}
+    Headers              map[string]string
+    ProtectedPaths       []string
+    ProtectedHeaders     []string
+    CaseInsensitivePaths []string
+}
+
+type Document struct { /* unexported fields */ }
+
+func NewDocument(config DocumentConfig) (*Document, error)
+func (document *Document) Info() RequestInfo
+func (document *Document) Get(path string) (interface{}, bool)
+func (document *Document) Set(path string, value interface{}) error
+func (document *Document) Remove(path string) error
+func (document *Document) SetHeader(name, value string) error
+func (document *Document) RemoveHeader(name string) error
+func (document *Document) Header(name string) (string, bool)
+func (document *Document) Body() map[string]interface{}
+func (document *Document) Headers() map[string]string
+func (document *Document) WouldSetChange(path string, value interface{}) bool
+func (document *Document) Validate() error
+
+func CloneJSONValue(value interface{}) (interface{}, error)
+func ClonePatches(
+    patches []core.AIProviderPatch,
+) ([]core.AIProviderPatch, error)
+```
+
+`NewEngine` snapshots its configuration and returns an immutable,
+concurrency-safe engine. `NewDocument` adopts `Body`, so that map must already
+be call-local; it snapshots the other configuration. `Body` exposes the
+document-owned map for provider validation and encoding, while `Headers`
+returns an isolated copy. `CloneJSONValue` and `ClonePatches` reject unsupported
+or cyclic values instead of retaining caller-owned mutable containers.
+
 #### Enterprise integration options
 
 ```go
@@ -1658,18 +1848,75 @@ func WithAuthHeader(name string, value AuthHeaderFunc) ClientOption
 func WithHTTPClient(client *http.Client) ClientOption
 ```
 
+The corresponding public contracts are:
+
+```go
+type EndpointRequest struct {
+    Provider      string
+    ProviderAlias string
+    Surface       string
+    ResolvedModel string
+    Operation     string
+    Purpose       string
+}
+
+type EndpointResolver interface {
+    ResolveEndpoint(context.Context, EndpointRequest) (ResolvedEndpoint, error)
+}
+
+type ResolvedEndpoint struct {
+    URL             *url.URL
+    Deployment      string
+    RouteIdentity   string
+    CredentialScope string
+    Query           url.Values
+}
+
+type CredentialRequest struct {
+    Provider        string
+    ProviderAlias   string
+    Surface         string
+    Operation       string
+    ResolvedModel   string
+    RouteIdentity   string
+    Deployment      string
+    CredentialScope string
+}
+
+type HeaderCredential struct {
+    Name  string
+    Value string
+}
+
+func NewHeaderCredential(name, value string) HeaderCredential
+
+type CredentialSource interface {
+    Credential(context.Context, CredentialRequest) (HeaderCredential, error)
+}
+
+type CredentialRejectionObserver interface {
+    CredentialRejected(context.Context, CredentialRequest, statusCode int) error
+}
+
+type AuthHeaderFunc func(context.Context) (string, error)
+```
+
 `CredentialSource` is called once per transport attempt after policy and route
 resolution. Implementations must be concurrency-safe; credential values are
 never included in reports, fingerprints, or logs. A source may implement
 `CredentialRejectionObserver` to observe HTTP 401/403 responses without
 replacing the original provider error.
 
-`EndpointResolver` returns a complete URL and a stable, non-secret
-`RouteIdentity`. It may run during cache fingerprint preflight and again on a
+For HTTP providers, `EndpointResolver` returns a complete URL and a stable,
+non-secret `RouteIdentity`. An SDK-native provider may define a narrower
+destination contract. Bedrock requires `URL == nil`, no query or credential
+scope, an opaque Converse `modelId` in `Deployment`, and a stable route
+identity. A resolver may run during cache fingerprint preflight and again on a
 cache miss, so it must be concurrency-safe, stable, and side-effect-free.
 `WithHTTPClient` is supported by the request-aware HTTP providers, which
 shallow-copy and do not mutate the supplied client. SDK-native Bedrock rejects
-HTTP-only integration options.
+HTTP and credential integration options while accepting its constrained
+destination resolver.
 
 #### Heterogeneous chains
 
@@ -1679,14 +1926,27 @@ func ProviderEntry(name, providerAlias string, options ...ClientOption) ChainEnt
 func ClientEntry(name string, client core.AIClient) ChainEntry
 ```
 
-Entry names must be unique, stable, and non-secret. `ProviderEntry` constructs
-an independently configured request-aware provider. `ClientEntry` invokes a
+Entry names must be unique, stable, non-secret labels of 1–256 bytes with no
+surrounding whitespace or control characters. `ProviderEntry` aliases have the
+same length and character constraints. `ProviderEntry` constructs an
+independently configured request-aware provider. `ClientEntry` invokes a
 caller-owned client without mutating it through optional setters. Streaming
 failover is allowed only before the first chunk is delivered.
 
 `NewChainClient` remains the legacy homogeneous-chain constructor. Use
 `NewChain` when entries need different policy, routing, credentials, or client
 implementations.
+
+Retry defaults differ deliberately. A legacy `NewChainClient` gives each
+provider zero in-provider retries by default because failover is its retry
+layer. Each `ProviderEntry` in `NewChain` is independently materialized through
+`NewRequestClient`, so it uses the single-client default of three retries unless
+that entry supplies `WithMaxRetries(0)` or another explicit value. A
+`ClientEntry` keeps whatever retry behavior its caller-owned client implements.
+Unless an explicit option wins, a positive `TRUVAG3_AI_RETRY_ATTEMPTS` value
+overrides the constructor-specific default for single clients,
+`ProviderEntry`, and legacy `NewChainClient`; it never reconfigures an injected
+`ClientEntry`.
 
 #### Provider factory extension contracts
 
@@ -1707,13 +1967,230 @@ type RequestProviderFactory interface {
     ProviderFactory
     CreateRequestClient(*AIConfig, ProviderIntegrationConfig) (core.AIRequestClient, error)
 }
+
+type ProviderRequestTimeoutFactory interface {
+    ProviderFactory
+    DefaultRequestTimeout() time.Duration
+}
+
+type ProviderIntegrationConfig struct {
+    RequestRules      []core.AIProviderPatch
+    RequestMiddleware []requestpolicy.RequestMiddleware
+    CompatibilityMode requestpolicy.CompatibilityMode
+    CredentialSource  CredentialSource
+    EndpointResolver  EndpointResolver
+    HTTPClient        *http.Client
+}
 ```
 
 `NewClient` prefers `CreateValidated`. `NewRequestClient` uses
 `CreateRequestClient` and passes an isolated integration snapshot. The reusable
+`ProviderRequestTimeoutFactory` is optional: without it, a provider receives
+the framework's 180-second default. When implemented, its positive duration is
+used only for an explicitly selected standalone provider if the application
+did not supply a positive `WithTimeout`. Bedrock uses this contract to declare
+a 60-minute standalone default. Auto-detected clients and framework-managed
+chain entries retain 180 seconds; caller-owned `ClientEntry` values remain
+untouched. The reusable
 `ai/providerkit/openaiwire` package supplies the OpenAI chat-completions draft,
 encode, decode, and stream-decode contract without owning credentials, routing,
 retries, provider identity, or telemetry.
+
+The provider-authoring codec surface is:
+
+```go
+type Codec interface {
+    BuildDraft(*core.AIRequest, string, bool) (*Draft, error)
+    Encode(*Draft) ([]byte, error)
+    Decode(io.Reader) (*core.AIResult, error)
+    DecodeStream(io.Reader, core.StreamCallback) (*core.AIResult, error)
+    SurfaceVersion() string
+}
+
+type ProfiledCodec interface {
+    Codec
+    BuildDraftWithProfile(
+        *core.AIRequest,
+        RequestProfile,
+        bool,
+    ) (*Draft, error)
+}
+
+type RequestProfile struct {
+    SemanticModel   string
+    WireModel       string
+    ModelField      ModelFieldMode
+    TokenLimit      TokenLimitField
+    ReasoningEffort ReasoningEffortStyle
+    Sampling        SamplingPolicy
+}
+
+type Config struct {
+    SurfaceVersion           string
+    ReasoningTokenMultiplier int
+    DefaultReasoningEffort   string
+    ForceReasoningObject     bool
+}
+
+const DefaultSurfaceVersion = "openai-chat-completions-v1"
+const DefaultReasoningTokenMultiplier = 5
+
+type ModelFieldMode uint8
+
+const (
+    ModelFieldRequired ModelFieldMode = iota + 1
+    ModelFieldOmitted
+)
+
+type TokenLimitField uint8
+
+const (
+    TokenLimitMaxTokens TokenLimitField = iota + 1
+    TokenLimitMaxCompletionTokens
+)
+
+type ReasoningEffortStyle uint8
+
+const (
+    ReasoningEffortOmitted ReasoningEffortStyle = iota + 1
+    ReasoningEffortTopLevel
+    ReasoningEffortNestedObject
+)
+
+type SamplingPolicy uint8
+
+const (
+    SamplingOrdinary SamplingPolicy = iota + 1
+    SamplingReasoningRestricted
+)
+
+func NewCodec(surfaceVersion string) (Codec, error)
+func NewConfiguredCodec(config Config) (Codec, error)
+func NewProfiledCodec(config Config) (ProfiledCodec, error)
+
+func (profile RequestProfile) Validate() error
+
+type Draft struct {
+    *requestpolicy.Document
+    // unexported wire-profile state
+}
+
+func (draft *Draft) BindIdentity(provider, providerAlias string) error
+func (draft *Draft) HasExplicitIntent(path string) bool
+func (draft *Draft) PolicyFingerprintIdentity() string
+func (draft *Draft) Adjustments() []core.AIRequestAdjustment
+func (draft *Draft) ProtectedHeaderConflicts() []string
+func (draft *Draft) Validate() error
+
+func IsReasoningModel(model string) bool
+func BuildRequestBody(
+    model string,
+    messages []map[string]string,
+    maxTokens int,
+    temperature float32,
+    stream bool,
+    reasoningTokenMultiplier int,
+    reasoningEffort string,
+) map[string]interface{}
+```
+
+`RequestProfile` is the explicit boundary between semantic model identity and
+route-owned wire identity. Use its exported mode constants rather than numeric
+values, and call `Validate` before relying on a profile constructed outside the
+codec. `BuildRequestBody` is a compatibility bridge for providers that adopted
+the earlier OpenAI reasoning helper; new provider integrations should use a
+`Codec`.
+
+The side-effect-free OpenAI-compatible semantic catalog is also public:
+
+```go
+// Package ai/providers/openai/modelcatalog
+func DefaultAliases() map[string]map[string]string
+func Resolve(providerAlias, model string) string
+func ResolveWithAliases(
+    aliases map[string]map[string]string,
+    providerAlias string,
+    model string,
+) string
+
+// Package ai/providers/openai
+var ModelAliases map[string]map[string]string
+func ResolveModel(providerAlias, model string) string
+```
+
+`modelcatalog.Resolve` uses the immutable built-in catalog plus non-empty
+`TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` overrides. `DefaultAliases` returns a deep
+copy. `openai.ResolveModel` deliberately uses the mutable compatibility map
+`openai.ModelAliases`; Azure uses `modelcatalog.Resolve`, so runtime mutations
+of that compatibility map do not affect Azure semantic resolution.
+
+The shared `ai/providers` package also supplies the provider-observation and
+retry boundary:
+
+```go
+type RequestObservation struct {
+    Provider      string
+    ProviderAlias string
+    SemanticModel string
+    PromptLength  int
+}
+
+type ResponseObservation struct {
+    Provider      string
+    ProviderAlias string
+    SemanticModel string
+    Usage         core.TokenUsage
+    Duration      time.Duration
+}
+
+type ErrorObservation struct {
+    Operation     string
+    Provider      string
+    ProviderAlias string
+    ErrorType     string
+    Duration      time.Duration
+}
+
+type RequestAttemptPreparer func(context.Context, *http.Request) error
+
+func (client *BaseClient) ExecuteWithRetry(
+    ctx context.Context,
+    request *http.Request,
+) (*http.Response, error)
+
+func (client *BaseClient) ExecuteWithRetryPrepared(
+    ctx context.Context,
+    request *http.Request,
+    prepare RequestAttemptPreparer,
+) (*http.Response, error)
+
+func (client *BaseClient) LogRequestMetadata(ctx context.Context, observation RequestObservation)
+func (client *BaseClient) LogResponseMetadata(ctx context.Context, observation ResponseObservation)
+func (client *BaseClient) LogErrorMetadata(ctx context.Context, observation ErrorObservation)
+
+func NormalizeObservationErrorType(value string) string
+func SanitizedObservationError(err error, fallback string) (string, error)
+func RecordObservationError(span core.Span, err error, fallback string) string
+func AddObservationRequestID(
+    ctx context.Context,
+    fields map[string]interface{},
+)
+func LogTranslationDegraded(
+    ctx context.Context,
+    logger core.Logger,
+    providerAlias string,
+    model string,
+    warningType string,
+    capability string,
+)
+```
+
+Request bodies must be replayable before `ExecuteWithRetry` performs network
+I/O. `ExecuteWithRetryPrepared` invokes its preparer once per attempt on a fresh
+request, which is the supported point for rotating credentials. Observation
+error types are closed, bounded classifiers; raw provider error text must not
+be used as a log, metric, or span label. `AddObservationRequestID` uses
+telemetry baggage first and the core request context as a fallback.
 
 See the [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md)
 for implementation patterns and security requirements.
@@ -1737,8 +2214,14 @@ func MustNewClient(opts ...AIOption) core.AIClient  // Panics on error
 7. Mistral (`MISTRAL_API_KEY`) - Priority 450
 8. Qwen (`QWEN_API_KEY`) - Priority 400
 9. Together AI (`TOGETHER_API_KEY`) - Priority 300
-10. AWS Bedrock (AWS credentials) - Priority 200
+10. AWS Bedrock (AWS credentials, `-tags bedrock`) - Priority 200; priority
+    250 when availability is detected from a Lambda/ECS-style managed-runtime
+    indicator (static credential and profile indicators are checked first)
 11. Ollama (`OLLAMA_BASE_URL` must be set) - Priority 100
+
+Azure OpenAI and Vertex-hosted Claude deliberately do not participate in
+environment auto-detection. Their route and short-lived credential contracts
+must be supplied explicitly through `NewRequestClient`.
 
 **Example - Auto-detect Provider:**
 ```go
@@ -1757,7 +2240,7 @@ fmt.Println(response.Content)
 // Use specific provider with custom settings
 client, err := ai.NewClient(
     ai.WithProvider("anthropic"),
-    ai.WithModel("claude-3-opus-20240229"),
+    ai.WithModel("smart"),
     ai.WithTemperature(0.7),
     ai.WithMaxTokens(2000),
 )
@@ -1773,25 +2256,45 @@ response, _ := client.GenerateResponse(ctx,
 
 ### WithProviderAlias
 
-Configure OpenAI-compatible providers with automatic endpoint and model resolution. Provider aliases offer a clean way to use alternative AI providers that implement the OpenAI API specification.
+Select a registered provider profile. Some aliases select an automatically
+configured OpenAI-compatible service; hosted-enterprise aliases select a
+request-aware wire profile whose route and credentials must be supplied by the
+application.
 
 ```go
 func WithProviderAlias(alias string) AIOption
 ```
 
-**Supported provider aliases:**
+**Automatically configured OpenAI-compatible aliases:**
+
 - `"openai"` - Standard OpenAI (default)
 - `"openai.deepseek"` - DeepSeek with reasoning models
 - `"openai.groq"` - Groq for ultra-fast inference
 - `"openai.together"` - Together AI for open models
 - `"openai.xai"` - xAI Grok models
+- `"openai.mistral"` - Mistral AI
 - `"openai.qwen"` - Alibaba Qwen models
+- `"openai.ollama"` - Local Ollama
+
+**Request-aware hosted profiles:**
+
+- `"azureopenai.v1"` - Azure OpenAI v1 chat completions
+- `"azureopenai.classic"` - Azure deployment-scoped classic chat completions
+- `"anthropic.vertex"` - Anthropic Claude on Vertex AI
+
+The hosted profiles require `NewRequestClient` and `WithEndpointResolver`.
+Azure accepts either `WithAPIKey` or an application-owned credential source;
+Vertex requires the credential source. Google Cloud's OpenAI-compatible
+endpoint uses the ordinary `"openai"` profile with a Google route and
+credential source; it does not have a separate provider alias.
 
 **Features:**
-- **Automatic endpoint configuration** - No need to specify base URLs
-- **Model aliases** - Use portable names like "smart", "fast", "code"
-- **Environment variable support** - Override endpoints via environment
-- **Three-tier configuration** - Explicit → Environment → Defaults
+
+- **Automatic endpoint configuration** for the `openai.*` service aliases
+- **Explicit, route-owned endpoints** for Azure and Google-hosted profiles
+- **Model aliases** such as `"smart"`, `"fast"`, and `"code"`
+- **Configuration precedence** of explicit option → environment → built-in
+  default where that provider supports environment configuration
 
 **Example - Using Alternative Providers:**
 ```go
@@ -1836,7 +2339,12 @@ client, _ := ai.NewClient(
 
 ### Model Aliases
 
-Use portable model names across different providers. Model aliases allow you to write provider-agnostic code.
+Use portable model names across providers that define an alias catalog.
+OpenAI-compatible, Anthropic, and Gemini providers resolve the aliases below;
+Bedrock and custom providers without a catalog pass model strings through
+unchanged. For a chain that includes such a provider, leave a per-request model
+empty to use each entry's configured default, or supply only a concrete ID
+accepted by every entry.
 
 **Standard aliases:**
 - `"smart"` - Most capable model for complex tasks
@@ -1939,11 +2447,17 @@ chain, _ := ai.NewChainClient(
 
 ### Client Configuration Options
 
-Configure AI client behavior with these options. All options work with both `NewClient` and `NewChainClient`.
+`AIOption` values configure `NewClient`, `NewRequestClient`, and individual
+heterogeneous `ProviderEntry` values. The legacy `NewChainClient` accepts the
+separate `ChainOption` helpers documented below; similarly named options are
+not interchangeable Go types.
 
 #### WithTimeout
 
-Set the HTTP timeout for AI API requests. Default is 180 seconds (3 minutes), which accommodates reasoning models that require longer processing time.
+Set the provider request timeout. The framework default is 180 seconds (3
+minutes); an explicitly selected standalone Bedrock provider declares 60
+minutes. Auto-detected clients and framework-managed chain entries use 180
+seconds. An explicit positive value overrides the applicable default.
 
 ```go
 func WithTimeout(timeout time.Duration) AIOption
@@ -1996,7 +2510,11 @@ chainClient, _ := ai.NewChainClient(
 )
 ```
 
-> **Note:** The multiplier only affects OpenAI reasoning models. Standard models (GPT-4, Claude, etc.) are unaffected.
+> **Note:** The multiplier affects requests classified into an OpenAI
+> reasoning-family wire profile, including stock OpenAI and Azure v1.
+> Ordinary-model profiles are unaffected, and Azure classic rejects reasoning
+> families because this release does not claim a verified classic reasoning
+> contract.
 
 #### Other Configuration Options
 
@@ -2004,15 +2522,27 @@ chainClient, _ := ai.NewChainClient(
 |--------|------|---------|-------------|
 | `WithProvider(name)` | `string` | auto-detect | AI provider name |
 | `WithProviderAlias(alias)` | `string` | - | Provider alias (e.g., "openai.groq") |
-| `WithModel(model)` | `string` | provider default | Model name or alias |
+| `WithModel(model)` | `string` | provider default | Concrete model ID, or an alias when the selected provider defines a model catalog |
 | `WithAPIKey(key)` | `string` | from env | Override API key |
 | `WithBaseURL(url)` | `string` | provider default | Custom API endpoint |
-| `WithTemperature(t)` | `float32` | 0.7 | Sampling temperature (0.0-2.0) |
+| `WithRegion(region)` | `string` | `us-east-1` for Bedrock | Bedrock AWS region |
+| `WithAWSCredentials(access, secret, session)` | three `string` values | AWS SDK credential chain | Explicit Bedrock credentials |
+| `WithTemperature(t)` | `float32` | 0.7 | Sampling temperature; permitted range is provider/model-specific |
 | `WithMaxTokens(n)` | `int` | 1000 | Default max tokens (per `ai/providers/base.go`) |
-| `WithTimeout(d)` | `time.Duration` | 180s | HTTP request timeout |
+| `WithTimeout(d)` | `time.Duration` | 180s; explicit standalone Bedrock 60m | Provider request timeout |
+| `WithMaxRetries(n)` | `int` | 3 | In-provider retries; explicit 0 disables |
 | `WithReasoningTokenMultiplier(n)` | `int` | 5 | Token multiplier for reasoning models |
+| `WithReasoningEffort(effort)` | `string` | model default | OpenAI-compatible reasoning effort, model dependent |
+| `WithHeaders(headers)` | `map[string]string` | none | Snapshot custom eligible request headers |
+| `WithExtra(key, value)` | `string`, `interface{}` | none | Provider-specific legacy configuration |
 | `WithLogger(l)` | `core.Logger` | nil | Logger for AI operations |
 | `WithTelemetry(t)` | `core.Telemetry` | nil | Telemetry for distributed tracing |
+
+Azure requires an endpoint resolver, rejects `WithBaseURL`, and accepts either
+`WithAPIKey` or a credential source. Vertex requires endpoint and credential
+sources and rejects both direct `WithAPIKey` and `WithBaseURL`. Request-aware
+Bedrock accepts the region and AWS-credential options but rejects HTTP headers,
+HTTP-client injection, and HTTP credential sources.
 
 ### GenerateResponse
 
@@ -2128,6 +2658,10 @@ if errors.Is(err, context.Canceled) {
 | OpenAI | ✅ Full | Native streaming |
 | Anthropic | ✅ Full | Native streaming |
 | Gemini | ✅ Full | Native streaming |
+| Azure OpenAI v1 | ✅ Full | Request-aware OpenAI-compatible SSE |
+| Azure OpenAI classic | ✅ Full | Request-aware deployment-scoped SSE |
+| Vertex-hosted Claude | ✅ Full | Request-aware Vertex `streamRawPredict` SSE |
+| Google Cloud OpenAI compatibility | ✅ Full | OpenAI-compatible SSE through the configured Google route |
 | Bedrock | ✅ Full | Native streaming |
 | Groq | ✅ Full | OpenAI-compatible |
 | DeepSeek | ✅ Full | OpenAI-compatible |
@@ -2140,7 +2674,8 @@ if errors.Is(err, context.Canceled) {
 For a complete production example with SSE streaming, session management, and conversation history, see the [Chat Agent Implementation Guide](../memory-and-chat/CHAT_AGENT_GUIDE.md).
 
 **AIOptions parameters:**
-- `Temperature` (0.0-1.0) - Creativity level (0=deterministic, 1=creative)
+- `Temperature` - Sampling temperature; accepted range and whether the field is
+  allowed are provider/model-specific
 - `MaxTokens` - Maximum response length
 - `TopP` - Nucleus sampling (alternative to temperature)
 - `Model` - Override default model
@@ -2273,32 +2808,111 @@ go summarizer.Start(ctx, 8082)
 
 ### AI Provider Support
 
-TruvaG3 supports the same set of providers documented in the auto-detection
-order above, all behind the unified `core.AIClient` API. Pick a model with the
-portable `"smart"`/`"fast"`/`"code"`/`"vision"` aliases or a provider-specific
-identifier; concrete model lists evolve faster than this doc, so use
-`ai/providers/openai/models.go` for the current alias resolutions.
+TruvaG3 supports both environment-detected providers and explicitly configured
+hosted-enterprise profiles behind the unified `core.AIClient` API. Concrete
+model lists evolve faster than this document; the canonical portable mappings
+live in `ai/providers/openai/models.go`,
+`ai/providers/anthropic/models.go`, and `ai/providers/gemini/models.go`.
+Every row assumes its provider package has been linked as described at the
+start of this module.
 
-| Provider | Alias | Best For |
-|----------|-------|----------|
-| **OpenAI** | `openai` (native) | General purpose, code generation |
-| **Anthropic** | `anthropic` (native) | Complex reasoning, analysis |
-| **Google Gemini** | `gemini` (native) | Multimodal, long context |
-| **AWS Bedrock** | `bedrock` (native) | Enterprise/regulated workloads |
-| **Groq** | `openai.groq` | Fastest inference (Llama family) |
-| **DeepSeek** | `openai.deepseek` | Reasoning + chat at low cost |
-| **xAI Grok** | `openai.xai` | Grok 3/4 family |
-| **Mistral** | `openai.mistral` | European-hosted Mistral models |
-| **Qwen** | `openai.qwen` | Alibaba Qwen family |
-| **Together AI** | `openai.together` | Open-weights models with Turbo |
-| **Ollama** | `openai.ollama` | Local/self-hosted models |
+| Provider or surface | Alias / selection | Supported construction | Auto-detected |
+|---|---|---|---|
+| **OpenAI** | `openai` | `NewClient`, `NewRequestClient` | Yes |
+| **Anthropic direct** | `anthropic` | `NewClient`, `NewRequestClient` | Yes |
+| **Google Gemini** | `gemini` | `NewClient` (legacy request contract) | Yes |
+| **Azure OpenAI v1** | `azureopenai.v1` | `NewRequestClient` with route and credentials | No |
+| **Azure OpenAI classic** | `azureopenai.classic` | `NewRequestClient` with route and credentials | No |
+| **Vertex-hosted Claude** | `anthropic.vertex` | `NewRequestClient` with route and credentials | No |
+| **Google Cloud OpenAI compatibility** | `openai` plus Google route/credentials | `NewRequestClient` | No distinct profile |
+| **AWS Bedrock** | `ai.WithProvider("bedrock")` | `NewClient`, `NewRequestClient`; requires `-tags bedrock` | Yes, when compiled in |
+| **Groq** | `openai.groq` | `NewClient`, `NewRequestClient` | Yes |
+| **DeepSeek** | `openai.deepseek` | `NewClient`, `NewRequestClient` | Yes |
+| **xAI Grok** | `openai.xai` | `NewClient`, `NewRequestClient` | Yes |
+| **Mistral** | `openai.mistral` | `NewClient`, `NewRequestClient` | Yes |
+| **Qwen** | `openai.qwen` | `NewClient`, `NewRequestClient` | Yes |
+| **Together AI** | `openai.together` | `NewClient`, `NewRequestClient` | Yes |
+| **Ollama** | `openai.ollama` | `NewClient`, `NewRequestClient` | Only when `OLLAMA_BASE_URL` is set |
+
+Azure and Vertex model-selection environment overrides affect the semantic
+model only. Azure uses `TRUVAG3_OPENAI_MODEL_*`; Vertex-hosted Claude uses
+`TRUVAG3_ANTHROPIC_MODEL_*`. Resolver maps are keyed by the post-alias semantic
+model, while deployment and publisher-model identifiers remain route-owned and
+are never rewritten by those variables.
+
+#### Build-Tagged Bedrock Helpers
+
+The following package API is present only in binaries built with
+`-tags bedrock`:
+
+```go
+// Package github.com/truvaagents/truva-g3/ai/providers/bedrock
+const ModelClaudeSonnet5 = "anthropic.claude-sonnet-5"
+const ModelTitanEmbedV2 = "amazon.titan-embed-text-v2:0"
+const ModelTitanEmbedV1 = "amazon.titan-embed-text-v1"
+
+func CreateAWSConfig(
+    ctx context.Context,
+    region string,
+    credentials ...aws.CredentialsProvider,
+) (aws.Config, error)
+
+func NewClient(cfg aws.Config, region string, logger core.Logger) *Client
+
+func NewDraft(
+    resolvedModel string,
+    request *core.AIRequest,
+) (*Draft, error)
+func NewStreamDraft(
+    resolvedModel string,
+    request *core.AIRequest,
+) (*Draft, error)
+
+type Draft struct { /* unexported Converse state */ }
+
+func (draft *Draft) SetHeader(name, value string) error
+func (draft *Draft) RemoveHeader(name string) error
+func (draft *Draft) Header(name string) (string, bool)
+func (draft *Draft) HasExplicitIntent(path string) bool
+func (draft *Draft) PolicyFingerprintIdentity() string
+func (draft *Draft) Adjustments() []core.AIRequestAdjustment
+func (draft *Draft) Validate() error
+func (draft *Draft) SDKInput() (*bedrockruntime.ConverseInput, error)
+func (draft *Draft) SDKStreamInput() (*bedrockruntime.ConverseStreamInput, error)
+
+func (client *Client) InvokeModel(
+    ctx context.Context,
+    modelID string,
+    body []byte,
+) ([]byte, error)
+
+func (client *Client) GetEmbeddings(
+    ctx context.Context,
+    text string,
+    options ...EmbeddingOption,
+) ([]float32, error)
+
+func WithEmbeddingModel(model string) EmbeddingOption
+func WithEmbeddingDimensions(dimensions int) EmbeddingOption
+func WithEmbeddingNormalization(normalize bool) EmbeddingOption
+```
+
+`GetEmbeddings` is a Titan-shaped, single-text helper with a V2 default, not an
+implementation of the batch `core.EmbeddingClient`. `EmbeddingOption` has an unexported
+configuration parameter and is intentionally constructed only through the
+three helpers above. Dimensions are 256, 512, or 1024; zero omits the field and
+uses AWS's V2 default. `ModelTitanEmbedV1` is an explicit migration pin for
+existing 1536-dimensional V1 stores and rejects the V2-only dimensions and
+normalization options. Generation uses Converse/ConverseStream; an optional
+request-aware resolver selects only the opaque SDK `modelId` in `Deployment`. See
+[AWS Bedrock SDK-Native Routing](../building/CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
 
 **Example - Multi-Provider Strategy:**
 ```go
 // Use different providers for different tasks
 type AIService struct {
     reasoning  core.AIClient  // Claude for complex reasoning
-    creative   core.AIClient  // GPT-4 for creative tasks
+    creative   core.AIClient  // OpenAI for creative tasks
     fast       core.AIClient  // Groq for quick responses
 }
 
@@ -2306,11 +2920,11 @@ func NewAIService() *AIService {
     return &AIService{
         reasoning: ai.MustNewClient(
             ai.WithProvider("anthropic"),
-            ai.WithModel("claude-3-opus-20240229"),
+            ai.WithModel("smart"),
         ),
         creative: ai.MustNewClient(
             ai.WithProvider("openai"),
-            ai.WithModel("gpt-4"),
+            ai.WithModel("smart"),
         ),
         fast: ai.MustNewClient(
             ai.WithProviderAlias("openai.groq"),
@@ -2881,7 +3495,7 @@ type LLMCallRecord struct {
     SystemPrompt    string
     Temperature     float64
     MaxTokens       int
-    Model           string    // e.g., "gpt-4o", "claude-3-sonnet"
+    Model           string    // concrete model reported by the provider
     Provider        string    // e.g., "openai", "anthropic"
     Response        string
     PromptTokens    int
@@ -3150,7 +3764,7 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithResultTrimming(enabled, maxResultBytes)` - Enable/configure structural result trimming (Layer 1)
 - `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer always keeps
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
-- `WithResultDistillModel(model)` - Model or portable alias for distillation calls (use `fast`/`default`/`smart`, not a concrete name, for ChainClient failover)
+- `WithResultDistillModel(model)` - Model or portable alias for distillation calls; aliases are portable only across catalog-backed entries, so leave it empty for a chain containing Bedrock
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
 - `WithStepTimeout(d)` - Per-step execution timeout (default: 120s)
 - `WithTotalTimeout(d)` - Total HTTP client timeout for tool/agent calls (default: 600s)
@@ -3502,7 +4116,7 @@ config := orchestration.DefaultConfig()
 config.IterativePlanning.Enabled = false // All plans treated as single-shot
 ```
 
-**Environment variable overrides** (take precedence over programmatic config):
+**Environment-backed defaults** (read by `DefaultConfig`):
 ```bash
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
 export TRUVAG3_ITERATIVE_MAX_PHASES=5
@@ -3510,7 +4124,9 @@ export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200
 export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s
 ```
 
-**Configuration precedence:** Environment variable → Programmatic config → `DefaultConfig()` defaults.
+`DefaultConfig` applies these variables while constructing the returned value.
+Programmatic field mutations or functional options applied afterward take
+precedence over that environment-backed snapshot.
 
 ### ContinuationResultMaxChars
 
@@ -3729,9 +4345,10 @@ type ResultDistillConfig struct {
     TargetSize int `json:"target_size"`
 
     // Model overrides the default AI model for distillation calls. Defaults to
-    // the portable "fast" alias (ChainClient-safe; resolves to Haiku /
-    // gpt-4.1-mini / gemini-flash-lite per provider). Empty string = use the
-    // AIClient's default model.
+    // the "fast" alias, which resolves for Anthropic, OpenAI-compatible, and
+    // Gemini providers. Bedrock has no portable-alias catalog; set this empty
+    // programmatically for a chain containing Bedrock so each entry uses its
+    // configured default. The environment loader ignores an empty value.
     // Default: "fast" | Env: TRUVAG3_RESULT_DISTILL_MODEL
     Model string `json:"model,omitempty"`
 
@@ -3777,7 +4394,7 @@ config := orchestration.DefaultConfig()
 // the default.)
 config.ResultDistill.DistillThreshold = 65536 // only distill results > 64 KB
 config.ResultDistill.TargetSize = 2048        // tighter ~2 KB summaries
-config.ResultDistill.Model = "fast"           // portable alias (ChainClient-safe)
+config.ResultDistill.Model = "fast"           // portable across catalog-backed providers
 // To opt out entirely:
 // config.ResultDistill.Enabled = false
 ```
@@ -3788,7 +4405,7 @@ export TRUVAG3_RESULT_DISTILL_ENABLED=true            # default-on; =false to op
 export TRUVAG3_RESULT_DISTILL_THRESHOLD=16384         # min bytes to trigger (default 16 KB)
 export TRUVAG3_RESULT_DISTILL_PREFILTER=131072        # Stage-1 pre-filter budget (default 128 KB)
 export TRUVAG3_RESULT_DISTILL_TARGET=4096             # Stage-2 LLM output target (default 4 KB)
-export TRUVAG3_RESULT_DISTILL_MODEL=fast              # portable alias (ChainClient-safe)
+export TRUVAG3_RESULT_DISTILL_MODEL=fast              # catalog-backed providers; Bedrock needs a programmatic empty override
 export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m            # distillation cache TTL
 export TRUVAG3_RESULT_DISTILL_DEADLINE=45s            # hot-path compaction bound (positive durations only)
 export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000   # above this, chunk → map-reduce
@@ -4652,22 +5269,22 @@ Use different AI providers for different tasks:
 type SmartAI struct {
     fast      core.AIClient  // Groq for speed
     accurate  core.AIClient  // Claude for accuracy
-    creative  core.AIClient  // GPT-4 for creativity
+    creative  core.AIClient  // OpenAI for creativity
 }
 
 func NewSmartAI() *SmartAI {
     return &SmartAI{
         fast: ai.MustNewClient(
-            ai.WithProvider("groq"),
-            ai.WithModel("llama3-8b"),
+            ai.WithProviderAlias("openai.groq"),
+            ai.WithModel("fast"),
         ),
         accurate: ai.MustNewClient(
             ai.WithProvider("anthropic"),
-            ai.WithModel("claude-3-opus-20240229"),
+            ai.WithModel("smart"),
         ),
         creative: ai.MustNewClient(
             ai.WithProvider("openai"),
-            ai.WithModel("gpt-4"),
+            ai.WithModel("smart"),
         ),
     }
 }
@@ -4940,7 +5557,7 @@ TruvaG3 supports configuration through environment variables:
 - `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` - Recent domain events for baseline awareness (default: `20`)
 
 **Activity Compaction (LLM-powered digest):**
-- `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Supports aliases (`fast`, `smart`) (default: agent's model)
+- `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID (default: agent's model)
 - `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Max tokens for compacted digest output (default: `500`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` - Max events fetched before compaction (default: `200`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` - Raw events appended after digest for detail (default: `15`)

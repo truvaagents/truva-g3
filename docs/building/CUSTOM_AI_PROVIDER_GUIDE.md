@@ -43,6 +43,7 @@ Use this guide in two ways:
    - [OAuth-Protected Azure-Style Enterprise Gateway](#oauth-protected-azure-style-enterprise-gateway)
    - [Google Cloud OpenAI Compatibility](#google-cloud-openai-compatibility)
    - [Google-hosted Anthropic Claude](#google-hosted-anthropic-claude)
+   - [AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing)
    - [Know the Compatibility Boundary](#know-the-compatibility-boundary)
 5. [Scenario 2: Apply Request Rules and Middleware](#5-scenario-2-apply-request-rules-and-middleware)
    - [Declarative Request Rules](#declarative-request-rules)
@@ -191,10 +192,10 @@ Use Level 2 whenever the built-in provider still describes the service
 honestly. Move to Level 3 only when the provider itself is different.
 
 The request-aware OpenAI, Azure OpenAI, and Anthropic clients support Level 2
-HTTP integrations. Bedrock supports request policy under the `bedrock` build
-tag but uses an SDK-native transport, so it rejects HTTP-only hooks. Gemini
-remains legacy-only and can be included in a heterogeneous chain with
-`ClientEntry`.
+HTTP integrations. Bedrock supports request policy and SDK-destination routing
+under the `bedrock` build tag, but rejects HTTP and credential hooks because
+the AWS SDK owns those concerns. Gemini remains legacy-only and can be included
+in a heterogeneous chain with `ClientEntry`.
 
 ### Choose a Scenario
 
@@ -214,6 +215,7 @@ provider to discover the contract.
 | Exchange enterprise OAuth credentials, then send the token as `api-key` | Application token manager plus `CredentialSource` | [OAuth-Protected Azure-Style Enterprise Gateway](#oauth-protected-azure-style-enterprise-gateway) |
 | Connect to a Google-hosted OpenAI-compatible endpoint | OpenAI provider plus an application-owned Google access-token source | [Google Cloud OpenAI Compatibility](#google-cloud-openai-compatibility) |
 | Connect to Anthropic Claude hosted on Google Vertex AI | `anthropic.vertex` plus a publisher-model resolver and Google access-token source | [Google-hosted Anthropic Claude](#google-hosted-anthropic-claude) |
+| Select an AWS Bedrock model, inference profile, or provisioned route per semantic model | `bedrock` plus an SDK-destination resolver | [AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing) |
 | Enforce a stable declarative request rule | `AIProviderPatch` | [Declarative Request Rules](#declarative-request-rules) |
 | Derive a request edit from trusted runtime context | `RequestMiddleware` | [Request Middleware](#request-middleware) |
 | Fail over between independently configured providers | `ai.NewChain` | [Heterogeneous Failover](#6-scenario-3-build-a-heterogeneous-failover-chain) |
@@ -576,7 +578,8 @@ upper bounds; configure them consistently.
 
 HTTP-only integrations are supported by the request-aware OpenAI, Azure OpenAI,
 and Anthropic clients. The Bedrock adapter is SDK-native and rejects these
-options instead of pretending they apply.
+options instead of pretending they apply; it separately accepts a resolver
+whose result contains only an SDK `modelId` and sanitized route identity.
 
 ### Choose a Hosted Cloud Recipe
 
@@ -1501,6 +1504,264 @@ The token source must request a credential with the
 IAM permissions cover prediction. Keep token refresh application-owned and
 contract-test both sync and streaming against the selected model and location.
 
+### AWS Bedrock SDK-Native Routing
+
+Bedrock is a first-class SDK-native provider behind the `bedrock` build tag. It
+uses AWS Bedrock Runtime Converse/ConverseStream for portable generation and
+InvokeModel for its Titan-shaped embedding helper. It does not use an
+OpenAI-compatible URL and does not expose AWS SDK types through `core`.
+
+Compile the provider and import its package to register the factory:
+
+```bash
+go build -tags bedrock ./...
+```
+
+```go
+import (
+    "context"
+    "errors"
+    "fmt"
+    "strings"
+
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/ai/providers/bedrock"
+    "github.com/truvaagents/truva-g3/core"
+)
+```
+
+The generation default is the direct model ID
+`anthropic.claude-sonnet-5` in `us-east-1`. AWS currently documents that exact
+model as available in-region in `us-east-1`, and also documents separate
+`us.anthropic.claude-sonnet-5` and
+`global.anthropic.claude-sonnet-5` inference-profile IDs. TruvaG3 does not
+silently select a profile: in-region, geographic cross-region, and global
+cross-region routing can differ in residency, IAM/SCP behavior, availability,
+and price.
+
+If the factory resolves another region while no model or endpoint resolver is
+configured, construction fails locally with a targeted routing error. This
+guard applies only to the implicit default. An explicit supported model/profile
+ID or an endpoint resolver remains application-owned routing intent.
+
+Use a direct ID when that model is supported in the configured region:
+
+```go
+client, err := ai.NewClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+)
+```
+
+Use an SDK-destination resolver when an application must choose an inference
+profile, application inference profile, provisioned model, or another
+Converse-supported `modelId`. The resolver map is keyed by
+`EndpointRequest.ResolvedModel`, the post-default semantic model ID—not by the
+wire profile ID:
+
+```go
+type bedrockRoute struct {
+    modelID       string
+    routeIdentity string
+}
+
+type bedrockResolver struct {
+    routes map[string]bedrockRoute
+}
+
+func newBedrockResolver(
+    routes map[string]bedrockRoute,
+) (*bedrockResolver, error) {
+    if len(routes) == 0 {
+        return nil, errors.New("at least one Bedrock route is required")
+    }
+    copied := make(map[string]bedrockRoute, len(routes))
+    for semanticModel, route := range routes {
+        semanticModel = strings.TrimSpace(semanticModel)
+        route.modelID = strings.TrimSpace(route.modelID)
+        route.routeIdentity = strings.TrimSpace(route.routeIdentity)
+        if semanticModel == "" || route.modelID == "" ||
+            route.routeIdentity == "" {
+            return nil, errors.New(
+                "Bedrock semantic model, model ID, and route identity are required",
+            )
+        }
+        copied[semanticModel] = route
+    }
+    return &bedrockResolver{routes: copied}, nil
+}
+
+func (resolver *bedrockResolver) ResolveEndpoint(
+    _ context.Context,
+    request ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+    if request.Provider != "bedrock" || request.Surface != "converse" {
+        return ai.ResolvedEndpoint{}, errors.New(
+            "Bedrock resolver received the wrong provider surface",
+        )
+    }
+    route, ok := resolver.routes[request.ResolvedModel]
+    if !ok {
+        return ai.ResolvedEndpoint{}, fmt.Errorf(
+            "no Bedrock route for semantic model %q",
+            request.ResolvedModel,
+        )
+    }
+    return ai.ResolvedEndpoint{
+        Deployment:    route.modelID,
+        RouteIdentity: route.routeIdentity,
+    }, nil
+}
+```
+
+Construct a US cross-region client like this:
+
+```go
+resolver, err := newBedrockResolver(map[string]bedrockRoute{
+    bedrock.ModelClaudeSonnet5: {
+        modelID:       "us.anthropic.claude-sonnet-5",
+        routeIdentity: "bedrock-us-sonnet-primary-v1",
+    },
+})
+if err != nil {
+    return nil, err
+}
+
+client, err := ai.NewRequestClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+    ai.WithEndpointResolver(resolver),
+)
+```
+
+The resolver must return `URL == nil`, no query values, and no credential
+scope. `Deployment` becomes only the protected AWS SDK `ModelId`.
+`RouteIdentity` is the non-secret, versioned identity used to distinguish cache
+behavior. Raw model/profile IDs and ARNs are excluded from reports,
+fingerprints, logs, and spans. Change the route identity when a routing change
+can affect the answer.
+
+Resolvers may run during cache fingerprint preflight and again during live
+execution, so the general resolver rules still apply: make them deterministic,
+side-effect-free, and concurrency-safe. The AWS SDK—not the resolver—continues
+to own the service endpoint, region, credentials, SigV4 signing, and HTTP
+transport. Bedrock rejects `WithCredentialSource`, `WithHTTPClient`, static
+request headers, and any resolver URL/query/credential scope.
+
+The Bedrock provider uses one boundary-aware, case-insensitive family
+classifier for both policy mutation and final validation:
+
+- Sonnet 5 and Opus 4.7/4.8 omit modified `temperature`, `top_p`, and `top_k`.
+- Fable 5 accepts temperature `1` or omission and top-p in `[0.99, 1)`, and
+  rejects top-k; incompatible inherited temperature and top-k are omitted,
+  while documented-valid explicit values survive compatible and strict modes.
+- Unrelated and legacy models retain ordinary sampling so a model is not
+  classified merely because it is served by Bedrock.
+- Mythos is intentionally absent because its current Bedrock model cards expose
+  the Messages surface rather than Converse.
+- Application rules can narrow current compatibility, but final validation
+  prevents them from restoring a model-invalid sampling value.
+
+Model access remains an AWS account concern. For example, AWS currently states
+that Claude Fable 5 requires its documented provider-data-sharing retention
+mode; the TruvaG3 adapter does not opt an account into that policy. Verify the
+[Fable 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html)
+before selecting it.
+
+Sync and streaming use the same route, logical draft, built-in rules,
+application policy, and final validation. Reasoning-content stream deltas are
+intentionally omitted from TruvaG3's text-only normalized output; only text
+deltas become response content. A future Bedrock Mantle Messages adapter or
+reasoning-block replay would require a separate provider-surface design.
+
+`WithMaxRetries(n)` counts retries after the first request. The Bedrock adapter
+sets the AWS SDK operation maximum to `n+1` total attempts, with a minimum of
+one, for Converse, ConverseStream, and InvokeModel. Policy and routing run once
+per logical request; the SDK owns retry classification, delay, replay, and
+fresh signing. Typed Bedrock service exceptions are returned as
+`core.ProviderError` values while retaining the original SDK error through
+`errors.Is` and `errors.As`, allowing chain failover to distinguish validation,
+authorization, throttling, quota, timeout, and server failures.
+
+An explicitly selected standalone Bedrock provider declares a 60-minute
+default request timeout, and direct `bedrock.NewClient` construction uses the
+same value. Auto-detected clients and framework-managed chain entries retain
+the failover-safe 180-second framework default; use `ai.WithChainTimeout` to
+override managed chain entries. Caller-owned `ClientEntry` values are not
+mutated. An explicit `ai.WithTimeout` wins, and context cancellation also stops
+AWS SDK retries.
+
+The Bedrock-specific `GetEmbeddings` helper defaults to Amazon Titan Text
+Embeddings V2 and deliberately remains a single-text convenience API rather
+than claiming to implement the provider-neutral batch `core.EmbeddingClient`:
+
+```go
+func titanVector(
+    ctx context.Context,
+    region string,
+    text string,
+) ([]float32, error) {
+    awsConfig, err := bedrock.CreateAWSConfig(ctx, region)
+    if err != nil {
+        return nil, err
+    }
+    client := bedrock.NewClient(
+        awsConfig,
+        region,
+        &core.NoOpLogger{},
+    )
+    return client.GetEmbeddings(
+        ctx,
+        text,
+        bedrock.WithEmbeddingDimensions(512),
+        bedrock.WithEmbeddingNormalization(true),
+    )
+}
+```
+
+The model defaults to `amazon.titan-embed-text-v2:0`. Supported dimensions are
+`256`, `512`, and `1024`; omitting the option uses AWS's default. The helper
+sends only `inputText` plus configured `dimensions` and `normalize`, and
+decodes the float `embedding` member. Per-call options operate on a local copy
+and do not mutate client defaults. Except for the explicit Titan V1 migration
+pin below, use `bedrock.WithEmbeddingModel` only for a model that accepts this
+same Titan V2 request/response shape.
+
+Titan V2 defaults to 1024 dimensions; Titan V1 produces 1536. If an existing
+vector store was populated by V1, pin that model until the index is explicitly
+migrated or rebuilt:
+
+```go
+vector, err := client.GetEmbeddings(
+    ctx,
+    text,
+    bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1),
+)
+```
+
+Do not pass `WithEmbeddingDimensions` or `WithEmbeddingNormalization` with
+`ModelTitanEmbedV1`; the framework rejects those V2-only controls before the
+AWS SDK call. Do not mix V1 and V2 vectors in one index.
+
+Keep the following official references with the deployment configuration,
+because model catalogs and regional availability change independently of the
+framework:
+
+- [Converse API `modelId` forms and errors](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
+- [Claude Sonnet 5 model card and routing IDs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html)
+- [Claude Opus 4.7 model card and routing IDs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html)
+- [Claude Opus 4.8 model card and routing IDs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html)
+- [Claude Fable 5 sampling contract](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html)
+- [Claude Mythos 5 Messages surface](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html)
+- [Cross-region inference](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)
+- [AWS SDK for Go v2 retries and context timeouts](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/configure-retries-timeouts.html)
+- [Claude Messages timeout guidance](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html)
+- [Titan Text Embeddings V2 model](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html)
+- [Titan V2 request and response fields](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html)
+- [Anthropic sampling-parameter deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
+
 ### Know the Compatibility Boundary
 
 The generic OpenAI recipe is appropriate only while a hosted endpoint accepts
@@ -1519,6 +1780,7 @@ this table before calling an integration complete:
 | Standard chat response and usage | Normalized into `core.AIResult`; unknown response members are ignored | Use directly when extra response members are not application data |
 | Azure OpenAI v1 or classic | Reported as provider `azureopenai` with the exact alias | Use the first-class Azure profiles and route-owned deployment |
 | Vertex Claude | Reported as provider `anthropic`, alias `anthropic.vertex` | Use the first-class Vertex profile and route-owned publisher model |
+| AWS Bedrock Runtime | Reported as provider `bedrock`; semantic model remains separate from SDK `ModelId` | Use the SDK-native Bedrock profile and optional route-owned model/profile ID |
 | Google OpenAI compatibility or a private generic gateway | Reported as provider `openai` | Register a custom provider only if distinct operational identity is required |
 | Native Vertex `generateContent`, provider-specific tool objects, image/audio results, or a proprietary envelope | Outside the portable text contract | Implement a provider-specific adapter and contract |
 
@@ -1850,6 +2112,7 @@ also implement the optional validated and request-aware contracts:
 | `ProviderFactory` | Registration, environment detection, and legacy client construction |
 | `ValidatedProviderFactory` | Error-capable legacy construction |
 | `RequestProviderFactory` | Request-aware construction with an isolated integration snapshot |
+| `ProviderRequestTimeoutFactory` | Optional positive request-timeout default when 180 seconds is not appropriate |
 
 ```go
 type Factory struct{}
@@ -1926,6 +2189,23 @@ reports the saved construction error instead of panicking.
 integration snapshot. Treat `AIConfig.Headers`, `AIConfig.Extra`, request
 rules, and provider requests as caller-owned. Clone them before applying
 defaults or mutating nested values.
+
+Most providers should keep the framework's 180-second request timeout. If the
+official operation contract needs different default headroom, the factory may
+also implement:
+
+```go
+func (*Factory) DefaultRequestTimeout() time.Duration {
+    return 60 * time.Minute
+}
+```
+
+The root constructor uses this positive value only for an explicitly selected
+standalone provider when the application did not supply a positive
+`ai.WithTimeout`. Bedrock uses the optional contract for its 60-minute
+standalone default. Auto-detected clients and framework-managed chains retain
+180 seconds; caller-owned chain clients remain untouched. Do not branch on
+provider names in root construction.
 
 A practical implementation order is:
 
@@ -2389,12 +2669,16 @@ and model-specific restrictions. Only after validation should a provider-local
 `toSDKInput` function translate `draft.Body()` into the SDK's request types.
 Never expose SDK input or output types through `core`.
 
-An SDK adapter normally rejects `CredentialSource`, `EndpointResolver`, and
-`HTTPClient` in `CreateRequestClient` with `AIRequestFeatureError`, because its
-SDK owns those concerns. If the SDK offers equivalent, safe injection points,
-support them explicitly and document their attempt, concurrency, and secrecy
-semantics. Sync and streaming must call the same `newDraft` and policy engine;
-only `toSDKInput` and SDK execution should differ.
+An SDK adapter normally rejects `CredentialSource` and `HTTPClient` in
+`CreateRequestClient` with `AIRequestFeatureError`, because its SDK owns those
+concerns. Routing is provider-specific: reject `EndpointResolver` unless the
+adapter defines a constrained SDK-destination contract. Bedrock is the
+built-in example—it accepts only `Deployment` plus a sanitized
+`RouteIdentity`, and rejects URL, query, and credential-scope fields. If an SDK
+offers other equivalent, safe injection points, support them explicitly and
+document their attempt, concurrency, and secrecy semantics. Sync and streaming
+must call the same `newDraft` and policy engine; only `toSDKInput` and SDK
+execution should differ.
 
 Do not make an SDK-native provider masquerade as an OpenAI endpoint merely to
 reuse unrelated transport code.
@@ -2958,9 +3242,10 @@ Before registering or shipping a provider:
 |---|---|---|
 | `AIProviderPatch` | Declarative logical body/header policy | Credentials or raw transport mutation |
 | `RequestMiddleware` | Context-aware constrained policy edits | Retained request editors or mutable call state |
-| `EndpointResolver` | Complete URL and stable route identity | Credentials, network discovery, side effects |
+| `EndpointResolver` | Complete HTTP URL or explicitly supported SDK destination, plus stable route identity | Credentials, network discovery, side effects |
 | `CredentialSource` | Attempt-local authentication | Reports, fingerprints, or routing policy |
 | `RequestProviderFactory` | Request-aware provider construction | Agent or orchestration behavior |
+| `ProviderRequestTimeoutFactory` | Optional provider request-timeout default | Overriding an explicit positive application timeout |
 | `openaiwire.Codec` | OpenAI-compatible wire encoding/decoding | Provider identity, routing, credentials, retries, telemetry |
 | `requestpolicy.Document` | JSON Pointer edits, protected paths, and eligible headers | Provider validation or SDK conversion |
 | `requestpolicy.Engine` | Ordered policy, reports, and base fingerprints | Routing, credentials, transport, or decoding |

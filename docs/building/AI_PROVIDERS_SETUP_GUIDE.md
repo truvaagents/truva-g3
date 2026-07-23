@@ -51,6 +51,7 @@ Welcome to the TruvaG3 AI providers guide! This document explains how to configu
 - [Advanced Configuration](#advanced-configuration)
   - [Portable Fields vs Provider-Specific Escape Hatches](#portable-fields-vs-provider-specific-escape-hatches)
   - [Request-Aware and Custom Integrations](#request-aware-and-custom-integrations)
+  - [AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing)
   - [Anthropic Sampling Compatibility](#anthropic-sampling-compatibility)
   - [Request Timeouts](#request-timeouts)
   - [Reasoning Model Support](#reasoning-model-support)
@@ -233,7 +234,7 @@ The framework knows that `openai.groq` means:
 | `azureopenai.v1` | Hosted request-aware profile | Azure OpenAI v1 | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
 | `azureopenai.classic` | Hosted request-aware profile | Azure OpenAI classic | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
 | `anthropic.vertex` | Hosted request-aware profile | Claude on Vertex AI | Google `CredentialSource` or `WithAuthHeader` | Required `EndpointResolver` | Route-owned |
-| `bedrock` | Native SDK | AWS Bedrock | AWS SDK default configuration or `WithAWSCredentials` | AWS region/configuration | Region-owned |
+| `bedrock` | Native SDK | AWS Bedrock | AWS SDK default configuration or `WithAWSCredentials` | AWS region/configuration plus optional SDK-destination `EndpointResolver` | Region-owned |
 | `openai.groq` | OpenAI-compatible | Groq | `GROQ_API_KEY` | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
 | `openai.deepseek` | OpenAI-compatible | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `openai.xai` | OpenAI-compatible | xAI Grok | `XAI_API_KEY` | `XAI_BASE_URL` | `https://api.x.ai/v1` |
@@ -245,6 +246,9 @@ The framework knows that `openai.groq` means:
 The Azure and Vertex aliases are request-aware-only, never auto-detected, and
 do not accept a static base URL. Their resolver and credential recipes are in
 [CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md#choose-a-hosted-cloud-recipe).
+Bedrock is build-tagged and SDK-native: its optional resolver selects an AWS
+`modelId`, not an HTTP endpoint. See
+[AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing).
 
 ### How Auto-Configuration Works
 
@@ -1302,6 +1306,114 @@ the third. It explains policy and middleware, enterprise credential and route
 hooks, heterogeneous chains, custom factories, reusable OpenAI-compatible
 codecs, retry-body requirements, and semantic cache fingerprints.
 
+### AWS Bedrock SDK-Native Routing
+
+Build with `-tags bedrock` and import the provider package so its factory is
+registered. With no model option, Bedrock uses the direct
+`anthropic.claude-sonnet-5` model in the default `us-east-1` region. Because
+AWS currently documents that bare model for direct in-region use only there,
+an implicit-model factory construction in another region fails locally. Supply
+an explicit supported model/profile ID or an endpoint resolver in that case:
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/ai/providers/bedrock"
+)
+
+client, err := ai.NewClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+)
+```
+
+TruvaG3 never silently changes that direct ID to `us.`, `global.`, or another
+inference profile. AWS documents in-region, geographic cross-region, and global
+cross-region routing as different choices. Select one explicitly when your
+region, throughput, residency, IAM/SCP, or pricing requirements call for it.
+
+For request-aware routing, `ResolvedEndpoint.Deployment` is the exact AWS
+`modelId` supplied to Converse and `RouteIdentity` is a stable, non-secret cache
+identity. Resolver maps are keyed by the post-default semantic model ID:
+
+```go
+type bedrockRoute struct {
+    modelID  string
+    identity string
+}
+
+type bedrockRoutes map[string]bedrockRoute
+
+func (routes bedrockRoutes) ResolveEndpoint(
+    _ context.Context,
+    request ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+    route, ok := routes[request.ResolvedModel]
+    if !ok {
+        return ai.ResolvedEndpoint{}, fmt.Errorf(
+            "no Bedrock route for semantic model %q",
+            request.ResolvedModel,
+        )
+    }
+    return ai.ResolvedEndpoint{
+        Deployment:    route.modelID,
+        RouteIdentity: route.identity,
+    }, nil
+}
+
+client, err := ai.NewRequestClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+    ai.WithEndpointResolver(bedrockRoutes{
+        bedrock.ModelClaudeSonnet5: {
+            modelID:  "us.anthropic.claude-sonnet-5",
+            identity: "bedrock-us-sonnet-primary-v1",
+        },
+    }),
+)
+```
+
+A Bedrock resolver must return no URL, query, or credential scope. AWS SDK
+configuration continues to own the region, credentials, SigV4, service
+endpoint, and HTTP transport. Accordingly, Bedrock rejects
+`WithCredentialSource`, `WithHTTPClient`, and request headers.
+
+Current Claude compatibility is provider-owned and shared by sync and stream:
+
+- Sonnet 5 and Opus 4.7/4.8 omit modified `temperature`, `top_p`, and `top_k`.
+- Fable 5 omits incompatible inherited temperature and top-k, preserves
+  temperature `1` or omission and top-p from `0.99` inclusive to `1` exclusive
+  or omission, and rejects other values.
+- Other model families retain ordinary sampling behavior.
+- Current Mythos model cards expose the Messages surface rather than Converse,
+  so Mythos is not included in this Converse policy table.
+
+`WithMaxRetries(n)` means `n` retries after the first call; the Bedrock adapter
+passes `n+1` total attempts to each AWS SDK operation. Explicitly selected
+standalone Bedrock clients and direct `bedrock.NewClient` values default to 60
+minutes. Auto-detected clients and framework-managed chain entries default to
+180 seconds. `WithTimeout` and `WithChainTimeout` override those defaults.
+
+`GetEmbeddings` now defaults to 1024-dimensional Titan V2. An application with
+an existing 1536-dimensional Titan V1 store must pin
+`bedrock.ModelTitanEmbedV1` through `bedrock.WithEmbeddingModel` and omit the
+V2-only dimensions/normalization options until the vector store is migrated or
+rebuilt.
+
+For the complete resolver and Titan V2 helper contracts, see the
+[Bedrock recipe](CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
+Confirm changing catalog details against AWS's
+[Claude Sonnet 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html),
+[Claude Opus 4.7 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html),
+[Claude Opus 4.8 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html),
+[Converse API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html),
+and [cross-region inference documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html).
+
 ### Anthropic Sampling Compatibility
 
 Some Anthropic model families reject explicit sampling controls. The Anthropic
@@ -1341,19 +1453,27 @@ gets the same sync/stream behavior.
 
 ### Request Timeouts
 
-Clients constructed through TruvaG3's built-in provider factories default to a
-**180-second (3 minute) timeout**. The longer default accommodates model
-families whose responses can take substantially longer than ordinary chat
-requests. Application-defined clients and injected chain entries retain their
-own timeout behavior.
+Most clients constructed through TruvaG3's built-in provider factories default
+to a **180-second (3 minute) timeout**. An explicitly selected standalone
+SDK-native Bedrock provider declares a **60-minute default** for long-running
+inference; direct `bedrock.NewClient` does the same. Auto-detected clients and
+framework-managed failover entries keep 180 seconds so one provider cannot
+block selection or failover for an hour. An explicit `WithTimeout` wins.
+Application-defined clients and injected chain entries retain their own timeout
+behavior.
 
 #### Single Client Timeout
 
 ```go
 import "time"
 
-// Default timeout (180s) - sufficient for most use cases including reasoning models
+// Auto-detection defaults to 180s, even if it selects Bedrock.
 client, err := ai.NewClient()
+
+// Explicit standalone Bedrock defaults to 60m.
+bedrockClient, err := ai.NewClient(
+    ai.WithProvider("bedrock"),
+)
 
 // Custom timeout for very complex tasks
 client, err := ai.NewClient(
@@ -1375,6 +1495,10 @@ chainClient, err := ai.NewChainClient(
     ai.WithChainTimeout(240 * time.Second),  // 4 minutes
 )
 ```
+
+Without `WithChainTimeout`, every framework-managed chain entry uses 180
+seconds, including Bedrock. `ProviderEntry` follows the same rule. A
+caller-owned `ClientEntry` is never mutated.
 
 Chain clients default each entry to **0 in-provider retries** because moving to
 the next entry is already the retry mechanism. `NewClient` defaults to 3

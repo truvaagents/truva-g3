@@ -203,44 +203,98 @@ client, _ := ai.NewClient(
 
 #### AWS Bedrock Provider
 
-AWS Bedrock provides unified access to multiple foundation models including Claude, Llama, Titan, and more. It requires the `bedrock` build tag:
+AWS Bedrock provides SDK-native Converse/ConverseStream access to supported
+foundation models. It requires both the `bedrock` build tag and an import of
+the build-tagged provider package:
 
 ```bash
-# Build with Bedrock support
-go build -tags bedrock
+go build -tags bedrock ./...
 ```
-
-**Configuration Methods:**
 
 ```go
-// Method 1: Use AWS environment variables or IAM role
-client, _ := ai.NewClient(
+import (
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/ai/providers/bedrock"
+)
+
+// The named import registers the provider and exposes current constants.
+client, err := ai.NewClient(
     ai.WithProvider("bedrock"),
     ai.WithRegion("us-east-1"),
-)
-
-// Method 2: Explicit credentials
-client, _ := ai.NewClient(
-    ai.WithProvider("bedrock"),
-    ai.WithRegion("us-west-2"),
-    ai.WithAWSCredentials(accessKey, secretKey, sessionToken),
-)
-
-// Method 3: Specify a model
-client, _ := ai.NewClient(
-    ai.WithProvider("bedrock"),
-    ai.WithModel(os.Getenv("BEDROCK_MODEL_ID")),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+    // Omit this option to use the AWS SDK default credential chain.
+    // ai.WithAWSCredentials(accessKey, secretKey, sessionToken),
 )
 ```
 
-Generation uses the AWS Bedrock Converse/ConverseStream APIs, so the selected
-model must support that surface in your configured region. `GetEmbeddings`
-uses Bedrock `InvokeModel` with the Titan embedding request shape. Confirm
-current model IDs, regional availability, and API support in AWS documentation.
+The generation default is the bare `anthropic.claude-sonnet-5` model. An
+implicit factory-created default is accepted only in `us-east-1`; in another
+region, configure an explicit model/profile ID or an SDK-destination resolver.
+TruvaG3 deliberately does not add `us.`, `global.`, or another
+inference-profile prefix: those choices can change routing, data residency,
+IAM/SCP behavior, availability, and cost. To map a semantic model to an
+inference-profile ID or ARN, use the SDK-destination resolver recipe in the
+[custom provider guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
+
+Current Claude Sonnet 5 and Opus 4.7/4.8 requests omit modified `temperature`,
+`top_p`, and `top_k`; Fable 5 preserves only its documented compatibility
+ranges and rejects `top_k`.
+The provider passes `WithMaxRetries(n)` to the AWS SDK as `n+1` total attempts,
+with a minimum of one. Reasoning-content stream deltas are intentionally not
+included in TruvaG3's normalized text response.
+
+An explicitly selected standalone Bedrock client defaults to a 60-minute
+request timeout, as does a client created directly with
+`bedrock.NewClient`. Auto-detected clients and framework-managed failover-chain
+entries retain the failover-safe 180-second framework default. Explicit
+`ai.WithTimeout` or `ai.WithChainTimeout` values win.
+
+`GetEmbeddings` is a Bedrock-specific, single-text helper. It uses
+`amazon.titan-embed-text-v2:0` and supports validated per-call model,
+dimensions, and normalization options:
+
+```go
+awsConfig, err := bedrock.CreateAWSConfig(ctx, "us-east-1")
+if err != nil {
+    return err
+}
+bedrockClient := bedrock.NewClient(awsConfig, "us-east-1", logger)
+vector, err := bedrockClient.GetEmbeddings(
+    ctx,
+    text,
+    bedrock.WithEmbeddingDimensions(512),
+    bedrock.WithEmbeddingNormalization(true),
+)
+```
+
+Titan V2 produces 1024 dimensions by default, while Titan V1 produces 1536.
+When upgrading an application with an existing V1 vector store, pin V1 and do
+not supply the V2-only dimensions or normalization options:
+
+```go
+vector, err := bedrockClient.GetEmbeddings(
+    ctx,
+    text,
+    bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1),
+)
+```
+
+Do not mix vectors from the two models in one index; migrate or rebuild the
+store before changing dimensions.
 
 `WithAWSCredentials()` installs an explicit static credential provider. Without
 it, TruvaG3 calls the AWS SDK default configuration loader; the SDK—not this
-module—owns the credential-provider precedence.
+module—owns credentials, SigV4, region, service endpoint, and HTTP transport.
+The request-aware Bedrock provider therefore rejects credential sources,
+injected HTTP clients, and headers; its resolver can select only the opaque SDK
+`modelId` and a sanitized route identity.
+
+Verify model IDs, supported APIs, and regional/profile availability against
+the [AWS Claude Sonnet 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html),
+the [AWS Claude Opus 4.7 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html),
+the [AWS Claude Opus 4.8 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html),
+the [Converse API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html),
+and the [Titan V2 request contract](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html).
 
 ### Method 3: Multi-Provider Strategy (Advanced)
 
@@ -307,13 +361,14 @@ These are `NewClient` defaults:
 | Setting | Default |
 |---------|---------|
 | Provider | "auto" (auto-detects) |
-| Timeout | 180 seconds |
+| Timeout | 180 seconds; explicitly selected standalone Bedrock declares 60 minutes |
 | MaxRetries | 3 |
 | Temperature | 0.7 |
 | MaxTokens | 1000 |
 
-`NewChainClient` uses the same generation and timeout defaults but sets each
-entry's in-provider retry budget to `0`; walking the chain is its retry layer.
+`NewChainClient` and framework-managed `ProviderEntry` values use a
+failover-safe 180-second entry timeout and set each entry's in-provider retry
+budget to `0`; walking the chain is its retry layer.
 Override deliberately with `WithChainMaxRetries` when a provider should absorb
 transient failures before failover.
 
@@ -1045,7 +1100,7 @@ client, _ := ai.NewClient(
 | `gemini` | Gemini GenerateContent (legacy client API) | `GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_BASE_URL` | Yes | Default |
 | `azureopenai.v1` / `azureopenai.classic` | Azure OpenAI chat profiles | Request-aware endpoint resolver and credential source | No | Default |
 | `anthropic.vertex` | Claude on Vertex AI | Request-aware endpoint resolver and Google credential source | No | Default |
-| `bedrock` | AWS Bedrock Converse | AWS SDK configuration; optional explicit static credentials | Yes | `bedrock` tag |
+| `bedrock` | AWS Bedrock Converse | AWS SDK configuration; optional static credentials and SDK-destination resolver | Yes | `bedrock` tag |
 | `openai.groq` | OpenAI-compatible | `GROQ_API_KEY`, optional `GROQ_BASE_URL` | Yes | Default |
 | `openai.deepseek` | OpenAI-compatible | `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL` | Yes | Default |
 | `openai.xai` | OpenAI-compatible | `XAI_API_KEY`, optional `XAI_BASE_URL` | Yes | Default |
@@ -1231,7 +1286,7 @@ client, _ := ai.NewClient(
     ai.WithMaxTokens(2000),             // Maximum tokens in response
 
     // Connection settings
-    ai.WithTimeout(180 * time.Second),  // Request timeout (default: 180s)
+    ai.WithTimeout(180 * time.Second),  // Explicit request-timeout override
     ai.WithMaxRetries(3),               // Number of retries on failure (default: 3)
 
     // Custom headers (for special requirements)
@@ -1255,7 +1310,8 @@ client, _ := ai.NewClient(
 #### Default Configuration Values
 
 - **Provider**: "auto" (auto-detects from environment)
-- **Timeout**: 180 seconds
+- **Timeout**: 180 seconds; explicitly selected standalone Bedrock clients
+  declare 60 minutes
 - **MaxRetries**: 3 for `NewClient`; 0 per entry for `NewChainClient`
 - **Temperature**: 0.7
 - **MaxTokens**: 1000
@@ -1570,7 +1626,7 @@ Each provider applies sensible defaults that can be overridden:
 // These defaults are applied if not specified:
 // - Temperature: 0.7
 // - MaxTokens: 1000
-// - Timeout: 180 seconds
+// - Timeout: 180 seconds (explicit standalone Bedrock: 60 minutes)
 // - MaxRetries: 3 for NewClient (NewChainClient defaults each entry to 0)
 // - RetryDelay: 1 second (with exponential backoff)
 ```

@@ -1,6 +1,6 @@
 # AI Provider Extensibility Architecture
 
-**Status:** Accepted architecture; Phase 9 implementation pending
+**Status:** Accepted architecture; Phases 9 and 10 implemented
 
 **Date:** 2026-07-18
 
@@ -11,11 +11,14 @@ applications adapt to provider changes without waiting for a framework release,
 while preserving safety, portability, retries, streaming, failover, and
 observability.
 
-**Implementation status:** In progress. Phases 0A through 8 are committed on
-the local `feat/provider-extensibility` branch. Phase 9 was holistically
-reviewed and approved on 2026-07-22 and remains unimplemented; Section 19.12 is
-its code-level implementation blueprint. Public Phase 9 names remain proposed
-until their implementation API review.
+**Implementation status:** Phases 0A through 8 and all Phase 9 production/test
+slices are committed on the local `feat/provider-extensibility` branch. Phase 9
+was holistically reviewed, implemented, and locally verified on 2026-07-22.
+Phase 10 is the bounded AWS Bedrock official-contract conformance slice
+described in §19.13. Its production and deterministic test implementation was
+completed and locally verified on 2026-07-22. The reconciled provider guides
+and architecture-status edits remain uncommitted for the required human
+documentation sign-off.
 
 ---
 
@@ -68,13 +71,13 @@ The immediate symptoms are different, but the shared failure is:
 
 The long-term solution is a layered provider integration pipeline:
 
-1. presence-aware portable intent;
-2. provider/model/surface-scoped declarative request rules;
-3. constrained request middleware over a safe provider draft;
-4. endpoint and deployment resolution;
-5. protected credential and transport strategies;
-6. reusable request/response codecs and normalized results;
-7. explicit per-entry chain composition;
+1. presence-aware portable intent and semantic-model resolution;
+2. endpoint and deployment resolution;
+3. an explicit provider wire profile and safe provider draft;
+4. provider/model/surface-scoped declarative request rules;
+5. constrained request middleware over that draft;
+6. validated encoding plus protected credential and transport strategies;
+7. normalized results and explicit per-entry chain composition; and
 8. a custom `core.AIClient` as the full-control exit path.
 
 The architecture deliberately does **not** turn TruvaG3 into a universal schema
@@ -1311,6 +1314,11 @@ type RequestProviderFactory interface {
         ProviderIntegrationConfig,
     ) (core.AIRequestClient, error)
 }
+
+type ProviderRequestTimeoutFactory interface {
+    ProviderFactory
+    DefaultRequestTimeout() time.Duration
+}
 ~~~
 
 `NewClient` prefers the optional interface and falls back to legacy `Create`.
@@ -1320,6 +1328,15 @@ implements `core.AIRequestClient`; with non-zero integration behavior it
 requires the new factory contract. It never passes advanced semantics to a
 factory that cannot honor them. Common static validation still occurs before
 factory construction.
+
+`ProviderRequestTimeoutFactory` is independently optional. A positive factory
+duration replaces the framework's 180-second default only for an explicitly
+selected standalone provider when the application did not supply a positive
+`WithTimeout`; explicit application configuration retains precedence.
+Auto-detected clients and framework-managed chain entries retain 180 seconds,
+and caller-owned `ClientEntry` values remain untouched. This keeps
+provider-specific operation headroom out of the root package's provider-name
+logic without allowing a long standalone default to stall failover.
 
 This supports:
 
@@ -1672,7 +1689,7 @@ The execution decision is:
   the goal is one coherent design rather than a partial landing that forces
   re-opening already-released contracts later.
 - **Delivery — phased PRs, not a big-bang merge.** Land the phases as the small,
-  independently reviewable PRs in §19.13; every PR keeps the tree compiling and
+  independently reviewable PRs in §19.14; every PR keeps the tree compiling and
   passes the full Go gates in `CONTRIBUTING.md`. "No rush" is the argument *for*
   incremental, bisectable delivery — a ~4k-line framework change is the worst
   place to lose a bisectable history or rubber-stamp a 3k-line review.
@@ -3124,8 +3141,8 @@ names, and never handles credentials or routes.
 
 ### 19.12 Phase 9 — make hosted provider contracts explicit
 
-**Status:** Architecture decisions and detailed code blueprint holistically
-reviewed and approved (2026-07-22); not implemented.
+**Status:** Production and test implementation committed and locally verified
+(2026-07-22); final Markdown reconciliation awaits human sign-off.
 
 This phase follows the first full implementation and documentation audit. The
 basic Azure OpenAI v1, Azure classic, and Google OpenAI-compatible request
@@ -3193,12 +3210,12 @@ normative design. Basic portable-intent, semantic-model, and capability
 validation precedes routing; application policy follows routing; credential
 acquisition remains after finalized policy. A resolver may therefore run before
 a later policy failure, and a route failure takes precedence when both routing
-and a downstream policy stage would fail. Implementation conformance remains
-pending until the Phase 9 code lands. The 2026-07-22 holistic review rechecked
-that decision against the completed Phase 0A-through-8 code, the illustrative
-Phase 9 snippets, every authority in §2, and the current provider contracts
-linked above; it found no dependency-boundary or ownership change beyond the
-already approved AI-module lifecycle amendment.
+and a downstream policy stage would fail. The committed Phase 9 code now
+implements that lifecycle for OpenAI, Azure OpenAI, direct Anthropic, and
+`anthropic.vertex`. The 2026-07-22 completion review rechecked that decision
+against the code, every authority in §2, the observability guides, and the
+current provider contracts linked above; it found no dependency-boundary or
+ownership change beyond the already approved AI-module lifecycle amendment.
 
 The audit result by authority is:
 
@@ -3207,12 +3224,12 @@ The audit result by authority is:
 | Framework Design Principles | Aligned: small additive interfaces, application composition, dumb factories, fail-fast validation, preserved public APIs, secret rotation, and no optional-module import from `core`. |
 | Framework Architecture Overview | Aligned: agents continue to consume abstract `core.AIClient` capabilities; provider adapters, fallback, enterprise routing, and secret-free fingerprints remain below that boundary. |
 | Core Module Architecture | Aligned: Phase 9 adds no provider-specific type, HTTP type, credential, codec, or new dependency to `core`; existing request/result capabilities remain the only cross-module contracts. |
-| AI Module Architecture | Design aligned: the approved resolver order, provider registration, optional request-factory interfaces, `openaiwire` ownership, client-owned transport, and common instrumentation are preserved. OpenAI and Anthropic implementation conformance remains a Phase 9 delivery requirement. |
+| AI Module Architecture | Implemented and aligned: the approved resolver order, provider registration, optional request-factory interfaces, `openaiwire` ownership, client-owned transport, and common instrumentation are preserved across OpenAI, Azure OpenAI, and Anthropic. |
 | Orchestration Module Architecture | Aligned: orchestration continues to import only `core` and `telemetry`, invokes through `core.GenerateAI`/`core.StreamAI`, and never branches on provider, model, deployment, or hostname. |
 | Memory Module Architecture | No Phase 9 code impact: provider routing and AI-output cache fingerprints do not add an `ai` import or provider knowledge to `memory`. |
-| Telemetry Module Architecture and observability guides | Design aligned; implementation evidence pending: §19.12.8 defines the common/provider/attempt span hierarchy, context propagation, sanitized error recording, safe request/response metadata, bounded module-local metrics, nil-safe fail-open behavior, and deterministic observability fixtures. Hosted and chain paths do not use the legacy raw-content logging helpers, record raw provider errors on spans, or place semantic models, chain entry names, deployments, route identities, credential scopes, or endpoints in metric labels. |
+| Telemetry Module Architecture and observability guides | Implemented and aligned: deterministic cross-provider fixtures verify the common/provider/attempt hierarchy, context propagation, sanitized errors, context-aware `framework/ai` logs, bounded module-local metrics, and nil-safe fail-open behavior. Hosted and chain paths do not use legacy raw-content helpers or place semantic models, chain entries, deployments, route identities, credential scopes, or endpoints in metric labels. |
 | Resilience module boundary | No Phase 9 code impact: reuse the AI module's replayable provider-attempt machinery; do not import or modify `resilience`. |
-| Repository instructions and Contributing Guide | Pending implementation evidence: preserve human sign-off for Markdown, run the full workspace Go gates for every Go-touching slice, and add deterministic external-package and request-contract tests. |
+| Repository instructions and Contributing Guide | Production and test slices passed workspace vet, build, race/coverage tests, golangci-lint, gosec, govulncheck, and the Bedrock-tag gates. Phase 9 Go files are goimports-clean; the repository-wide scan still lists pre-existing example formatting outside this phase. The external-package guide fixture is committed; human sign-off remains pending for the final Markdown edits. |
 
 Phase 9 code ownership is deliberately narrow:
 
@@ -5062,11 +5079,11 @@ func finishProviderSpan(
 }
 ~~~
 
-The names above are implementation targets; `prepared.HTTPRequest` represents
-the provider-local immutable-request builder rather than a new public draft
-escape hatch. The streaming method follows the same deferred span completion
-pattern and adds only bounded stream metadata such as chunk count, partial
-status, or callback termination. A callback error and
+The names above are illustrative; `prepared.HTTPRequest` represents the
+implemented provider-local immutable-request builder rather than a new public
+draft escape hatch. The streaming method follows the same deferred span
+completion pattern and adds only bounded stream metadata such as chunk count,
+partial status, or callback termination. A callback error and
 `core.ErrStreamPartiallyCompleted` have different established semantics: a
 callback error requests a graceful early stop and is not returned, while
 `core.ErrStreamPartiallyCompleted` remains a returned error and is recorded in
@@ -5435,9 +5452,9 @@ replaces the alias and resolver together. Google OpenAI and Vertex Claude use
 the constructors in §§19.12.6–19.12.7. None of the recipes capture a startup
 access token as a static string.
 
-After Phase 9 lands, update this document's top-level implementation status and
-the phase statuses to reflect the committed branch. Do not mark Phase 9
-implemented merely because the documentation proposal has been approved.
+The top-level and phase statuses now distinguish the committed production/test
+implementation from the final uncommitted Markdown reconciliation. Do not mark
+the documentation closeout complete until it receives human sign-off.
 
 #### 19.12.10 Contract and regression tests
 
@@ -5845,20 +5862,25 @@ The approved Phase 9 plan and the normative `ai/ARCHITECTURE.md` lifecycle
 amendment land before production implementation. After that documentation gate,
 land Phase 9 as five independently reviewable implementation changes:
 
-1. common AI observability hardening: context-aware metadata helpers,
+1. `c16ad39` — common AI observability hardening: context-aware metadata helpers,
    raw-content logging removal, bounded provider and embedding metrics,
    sanitized provider, embedding, and chain errors, nil-safe span
    normalization, chain metric hardening, and cross-provider observability
    tests, including tagged Bedrock coverage;
-2. route-before-draft preparation for OpenAI and Anthropic, the
+2. `9ab9726` — route-before-draft preparation for OpenAI and Anthropic, the
    side-effect-free OpenAI semantic alias catalog, additive typed wire profiles,
    and direct-provider regression tests;
-3. Azure v1/classic adapter, strict endpoint validation, and hosted-provider
-   contract fixtures;
-4. Google-hosted OpenAI helpers plus the `anthropic.vertex` profile, endpoint
-   validation, and hosted-provider contract fixtures;
-5. provider guide reconciliation, compiled example fixtures, and architecture
-   status update.
+3. `6fbcc41` — Azure v1/classic adapter, strict endpoint validation, and
+   hosted-provider contract fixtures;
+4. `6cb4a86` — Google-hosted OpenAI helpers plus the `anthropic.vertex`
+   profile, endpoint validation, and hosted-provider contract fixtures;
+5. `57f6fdf` — externally compiled hosted-provider guide fixtures and the
+   provider-entry contract update. The provider-guide reconciliation and final
+   architecture status are ready but intentionally uncommitted pending human
+   documentation sign-off.
+
+Supporting approved-plan corrections landed as `3e72f26`, `d9baf4f`, and
+`9a863b2`; the initial Phase 9 plan approval is `1c2158f`.
 
 Phase 9 is complete only when all five slices pass the full repository gates,
 the affected modules pass `go test -race ./...`, the cloud examples compile as
@@ -5868,7 +5890,502 @@ also re-read every applicable authority in §2, confirm the dependency-import
 checks above, and find no unresolved architecture delta. Human documentation
 sign-off remains required before committing the Markdown changes.
 
-### 19.13 Pull-request sequence and completion gates
+The production/test implementation satisfies those technical conditions. On
+2026-07-22, all workspace modules passed vet, build, race/atomic-coverage tests,
+golangci-lint, gosec, and govulncheck; the AI module also passed the Bedrock-tag
+build, race/coverage tests, lint, and vulnerability scan. The Phase 9 Go files
+are goimports-clean. A repository-wide goimports scan continues to report only
+pre-existing files under `examples/`, which this phase deliberately did not
+rewrite. Final phase closeout is therefore limited to human approval and commit
+of the Markdown reconciliation.
+
+### 19.13 Phase 10 — harden AWS Bedrock official-contract conformance
+
+**Status:** Implemented and locally verified (2026-07-22); documentation
+changes await human sign-off before commit.
+
+This phase follows an audit of the build-tagged Bedrock provider against the
+current AWS Bedrock Runtime API, current model cards, the AWS SDK for Go v2
+retry contract, and the framework code that consumes provider errors and
+request reports. It fixes the model-facing correctness gaps without converting
+Bedrock into an HTTP-compatible provider or weakening the route-before-draft
+lifecycle delivered in Phase 9.
+
+The implementation must obey every authority in §2. In particular, the code
+and its review must explicitly recheck:
+
+- `FRAMEWORK_DESIGN_PRINCIPLES.md` and `docs/overview/ARCHITECTURE.md` for the
+  dependency DAG, interface ownership, composition, compatibility, and
+  production-first behavior;
+- `core/ARCHITECTURE.md` for the provider-neutral `core.AIClient`,
+  `core.ProviderError`, request-report, and failover boundaries;
+- `ai/ARCHITECTURE.md` for provider-owned routing, route-before-draft ordering,
+  SDK-native drafts, retry ownership, semantic/wire identity, and common
+  instrumentation;
+- `telemetry/ARCHITECTURE.md`,
+  `docs/observability/DISTRIBUTED_TRACING_GUIDE.md`, and
+  `docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md` for nil-safe spans,
+  context-aware structured logs, sanitized errors, and bounded-cardinality
+  attributes and labels;
+- `docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md` and
+  `docs/reference/LIMITS_CHEATSHEET.md` if configuration or documented limits
+  change; and
+- `CONTRIBUTING.md` and the repository `AGENTS.md` for tagged and workspace Go
+  gates plus human sign-off before Markdown is committed.
+
+No Phase 10 code may add a provider type to `core`, import `ai` from
+orchestration or memory, import `resilience` from the Bedrock provider, expose
+an AWS SDK type through a provider-neutral interface, or allow an endpoint
+resolver to replace AWS SDK transport, credentials, signing, service endpoint,
+or region selection.
+
+#### 19.13.1 Accepted decisions and scope
+
+1. **Keep Converse SDK-native.** Generation remains
+   `logical draft -> request policy -> bedrockruntime input -> AWS SDK call`.
+   There is no artificial HTTP document, HTTP credential source, injected HTTP
+   client, raw header policy, or Mantle client in this phase.
+2. **Use a current direct default without silently selecting global routing.**
+   The default becomes the current bare Sonnet 5 model ID in the existing
+   `us-east-1` default region. A `global.`, geographic, application, or other
+   inference profile is an explicit application routing choice because it can
+   affect data residency, IAM/SCP behavior, supported regions, and price.
+   Factory construction with an implicit model fails outside `us-east-1`;
+   supplying an explicit model/profile ID or an endpoint resolver is explicit
+   routing intent and bypasses this local guard.
+3. **Reuse the shared resolver for an SDK destination only.** Bedrock accepts
+   `EndpointResolver`, but a valid result has `URL == nil`, empty `Query`, empty
+   `CredentialScope`, a non-empty opaque `Deployment` containing the AWS
+   `modelId` value, and a stable sanitized `RouteIdentity`. `Deployment` may be
+   a foundation-model ID, inference-profile ID/ARN, application-inference-
+   profile ARN, provisioned-model ARN, or other value accepted by Converse.
+   The SDK still owns the actual AWS endpoint, credentials, SigV4, and region.
+4. **Separate requested, semantic, and wire model identity.** Model defaults
+   produce the semantic model first. Routing then chooses the wire model. The
+   semantic model drives policy selectors, `RequestInfo.ResolvedModel`,
+   normalized responses, logs, and request reports. Only the protected SDK
+   `ModelId` uses the wire value. Raw profile/deployment values never enter
+   request reports, fingerprints, logs, or spans; the sanitized route identity
+   binds the fingerprint and may appear on a provider-local span.
+5. **Install provider-owned sampling compatibility.** One Bedrock-local,
+   boundary-aware, case-insensitive family classifier selects both built-in
+   mutation and final validation. Sonnet 5 and Opus 4.7/4.8 remove
+   `temperature`, `top_p`, and `top_k`. Fable 5 removes incompatible inherited
+   temperature and `top_k`, preserves documented-valid portable temperature
+   and top-p values, and validates their ranges after application policy.
+   Legacy models and models exposed only on a different surface, including the
+   current Mythos Messages surface, retain their existing Converse behavior.
+6. **Honor the framework retry setting through the AWS SDK.** Bedrock passes a
+   per-operation `RetryMaxAttempts` override to Converse, ConverseStream, and
+   InvokeModel. Framework `MaxRetries` counts retries after the first attempt,
+   while the SDK setting counts total attempts, so the exact conversion is
+   `max(1, MaxRetries + 1)`. Semantic preparation and request policy still run
+   once per logical call; the AWS SDK alone repeats transport attempts.
+7. **Normalize documented AWS failures at the provider boundary.** Typed
+   Bedrock exceptions become a Bedrock-local error implementing
+   `core.ProviderError` and `Unwrap`. Validation and other ordinary client
+   errors remain fail-fast; throttling, server failures, model-not-ready,
+   model-stream, model-timeout, and quota conditions preserve the status and
+   failover meaning documented by AWS. The original SDK error remains visible
+   to callers through `errors.Is`/`errors.As`, while logs and spans retain only
+   the framework's bounded sanitized error classification.
+8. **Move the Titan helper to V2 and make its V2 controls configurable.**
+   `GetEmbeddings` defaults to `amazon.titan-embed-text-v2:0`; snapshotted
+   client configuration and validated per-call options may select the
+   embedding model, V2 dimensions (`256`, `512`, or `1024`), and normalization.
+   Per-call options override the client defaults without mutating the client.
+   The helper remains a single-text, Titan-shaped convenience method rather
+   than claiming to be the provider-neutral batch `core.EmbeddingClient`.
+   `ModelTitanEmbedV1` remains available only as an explicit
+   1536-dimensional-store migration pin; when that exact model is selected,
+   V2-only dimensions and normalization controls fail before SDK invocation.
+9. **Fail locally on documented shape limits.** An explicitly present system
+   string must not be empty. Stop sequences must contain at most 2500 non-empty
+   entries. Configured embedding dimensions and types must be validated during
+   construction, and invalid SDK routes must fail before policy encoding or a
+   network call.
+10. **Give standalone Bedrock inference documented headroom without stalling
+    failover.** An explicitly selected standalone Bedrock provider and direct
+    `bedrock.NewClient` construction default to 60 minutes. Auto-detected
+    clients and framework-managed chain entries use the framework's 180-second
+    default. Positive application timeouts override either default, while
+    caller-owned chain clients remain untouched. This avoids provider-name
+    branching in the root package and keeps timeout ownership compositional.
+11. **Keep the normalized output text-only.** Reasoning-content stream deltas
+    remain intentionally ignored; they are neither exposed as generated text
+    nor logged. Supporting reasoning-block replay or a Mantle Messages surface
+    requires a separate architecture proposal.
+12. **Remove misleading pre-release exports.** Because the framework has no
+    external users, unused hand-written SDK mirror structs and retired model
+    constants are removed rather than deprecated. The remaining constants
+    represent the current default, Titan V2 helper, and the explicit Titan V1
+    migration pin; applications use explicit model/profile strings for the
+    evolving Bedrock generation catalog.
+
+#### 19.13.2 SDK route and request profile
+
+The shared endpoint contract is clarified, not broadened into transport
+ownership: HTTP providers require `ResolvedEndpoint.URL`; an SDK-native
+provider may require it to be nil and consume only `Deployment`. Bedrock uses a
+provider-local immutable profile:
+
+~~~go
+type requestProfile struct {
+    SemanticModel string
+    WireModel     string
+    RouteIdentity string
+}
+
+func (c *Client) resolveProfile(
+    ctx context.Context,
+    request ai.EndpointRequest,
+) (requestProfile, error) {
+    if c.endpointResolver == nil {
+        return requestProfile{
+            SemanticModel: request.ResolvedModel,
+            WireModel:     request.ResolvedModel,
+            RouteIdentity: "bedrock.direct",
+        }, nil
+    }
+
+    endpoint, err := c.endpointResolver.ResolveEndpoint(ctx, request)
+    if err != nil {
+        return requestProfile{}, wrapRouteError(err)
+    }
+    if endpoint.URL != nil || len(endpoint.Query) != 0 ||
+        endpoint.CredentialScope != "" {
+        return requestProfile{}, errInvalidBedrockSDKRoute
+    }
+    if err := validateWireModel(endpoint.Deployment); err != nil {
+        return requestProfile{}, err
+    }
+    if err := validateRouteIdentity(endpoint.RouteIdentity); err != nil {
+        return requestProfile{}, err
+    }
+    return requestProfile{
+        SemanticModel: request.ResolvedModel,
+        WireModel:     endpoint.Deployment,
+        RouteIdentity: endpoint.RouteIdentity,
+    }, nil
+}
+~~~
+
+`resolveProfile` runs after request cloning, defaults, and semantic-model
+selection but before draft construction and policy. It is called by
+fingerprinting as well as execution, so the resolver contract remains
+side-effect-free, deterministic, and concurrency-safe. A route failure wins
+over a later application-policy failure, consistently with Phase 9.
+
+The draft receives all three identities but exposes only the semantic one to
+policy selection:
+
+~~~go
+document, err := requestpolicy.NewDocument(requestpolicy.DocumentConfig{
+    Info: requestpolicy.RequestInfo{
+        Provider:       "bedrock",
+        ProviderAlias:  "bedrock",
+        Surface:        "converse",
+        Operation:      operation,
+        Purpose:        request.Purpose,
+        RequestedModel: requestedModel,
+        ResolvedModel:  profile.SemanticModel,
+    },
+    Body: map[string]interface{}{
+        "model":    profile.WireModel,
+        "messages": messages,
+    },
+    ProtectedPaths:   []string{"/model", "/messages"},
+    ProtectedHeaders: []string{"*"},
+})
+~~~
+
+The SDK encoder verifies the protected model invariant and assigns only
+`profile.WireModel` to `ConverseInput.ModelId` or
+`ConverseStreamInput.ModelId`. `PolicyFingerprintIdentity` includes the
+versioned Converse adapter plus sanitized `RouteIdentity`; it never includes
+`WireModel`.
+
+#### 19.13.3 Sampling and validation policy
+
+The built-in layer is scoped to the Bedrock Converse surface and semantic model
+families. Matching tolerates the AWS `anthropic.` namespace, geographic/global
+profile prefixes, ARNs, and documented model-version suffix drift, but cannot
+match another provider because `Provider: "bedrock"` is mandatory.
+
+~~~go
+type bedrockSamplingPolicy uint8
+
+const (
+    bedrockSamplingUnrestricted bedrockSamplingPolicy = iota
+    bedrockSamplingOmitAll
+    bedrockSamplingFable5
+)
+
+var bedrockSamplingFamilies = []struct {
+    ModelFamily string
+    Policy      bedrockSamplingPolicy
+}{
+    {"anthropic.claude-opus-4-7", bedrockSamplingOmitAll},
+    {"anthropic.claude-opus-4-8", bedrockSamplingOmitAll},
+    {"anthropic.claude-sonnet-5", bedrockSamplingOmitAll},
+    {"anthropic.claude-fable-5", bedrockSamplingFable5},
+}
+
+func bedrockSamplingPolicyForModel(model string) bedrockSamplingPolicy {
+    for _, family := range bedrockSamplingFamilies {
+        if bedrockModelInFamily(model, family.ModelFamily) {
+            return family.Policy
+        }
+    }
+    return bedrockSamplingUnrestricted
+}
+
+func (policy *bedrockRequestPolicy) Apply(
+    ctx context.Context,
+    draft *Draft,
+    perRequest []core.AIProviderPatch,
+) (*core.AIRequestReport, error) {
+    engine := policy.engines[
+        bedrockSamplingPolicyForModel(draft.semanticModel)
+    ]
+    return engine.Apply(ctx, draft, perRequest)
+}
+~~~
+
+Each behavior owns a prebuilt immutable shared-policy engine. The omit-all
+engine removes temperature, top-p, and canonical `top_k`; the Fable engine
+removes only canonical `top_k`. Before policy, affected-family extra fields
+canonicalize case-insensitive `top_k` spelling so mutation is a superset of
+validation. The same classifier drives final validation, eliminating selector
+and validator drift for profile prefixes, ARN paths, `/`/`.` boundaries, and
+mixed case.
+
+Portable explicit intent continues to participate in compatible/strict policy
+semantics. Sonnet 5 and Opus 4.7/4.8 reject all three modified sampling
+controls. Fable 5 omits the inherited incompatible `0.7` temperature, preserves
+explicit `temperature=1` and `top_p` in `[0.99,1)` in both compatibility modes,
+and rejects all other values plus `top_k`. This preserves application-policy
+precedence without allowing that precedence to generate a request AWS
+documents as invalid. Mythos is intentionally absent because its current
+Bedrock model cards expose the Messages surface, not Converse.
+
+System and stop validation is local and deterministic:
+
+~~~go
+if system, exists := draft.Get("/system"); exists {
+    text, ok := system.(string)
+    if !ok || text == "" {
+        return errors.New("system must be a non-empty string")
+    }
+}
+
+stops, err := stringSlice(value)
+if err != nil || len(stops) > 2500 || containsEmpty(stops) {
+    return errors.New("stop_sequences must contain at most 2500 non-empty strings")
+}
+~~~
+
+#### 19.13.4 Retry and error normalization
+
+Every Bedrock runtime operation receives the same call-local retry override:
+
+~~~go
+func (c *Client) runtimeOptions() func(*bedrockruntime.Options) {
+    attempts := 1
+    if c.MaxRetries > 0 {
+        attempts = c.MaxRetries
+        if attempts < int(^uint(0)>>1) {
+            attempts++
+        }
+    }
+    return func(options *bedrockruntime.Options) {
+        options.RetryMaxAttempts = attempts
+    }
+}
+
+output, err := c.bedrockClient.Converse(
+    ctx,
+    prepared.SyncInput,
+    c.runtimeOptions(),
+)
+~~~
+
+This is an operation option rather than a second retry loop. It therefore
+honors an explicit framework retry count, including `WithMaxRetries(0)`, while
+preserving the SDK's retryable-error classification, backoff, fresh signing,
+and body replay.
+
+Provider error normalization happens once, immediately after the SDK boundary:
+
+~~~go
+type providerError struct {
+    cause      error
+    code       string
+    statusCode int
+    model      string // semantic model only
+    transient  bool
+    retryable  bool
+}
+
+func (e *providerError) Error() string     { return e.cause.Error() }
+func (e *providerError) Unwrap() error     { return e.cause }
+func (e *providerError) StatusCode() int   { return e.statusCode }
+func (e *providerError) Provider() string  { return "bedrock" }
+func (e *providerError) Model() string     { return e.model }
+func (e *providerError) IsTransient() bool { return e.transient }
+func (e *providerError) IsRetryable() bool { return e.retryable }
+~~~
+
+The implementation first preserves an SDK response status when one is present,
+then uses documented Bedrock exception defaults for deterministic typed-error
+tests. Unknown non-Bedrock errors, context cancellation, and context deadlines
+remain unchanged. Observability calls receive the structured error so they can
+derive `provider_client`, `provider_rate_limit`, `provider_server`, `transport`,
+`cancelled`, or `deadline`; they still record only a sanitized error object.
+
+#### 19.13.5 Titan V2 helper
+
+Factory-owned configuration is snapshotted and validated before the client is
+returned:
+
+~~~go
+type embeddingConfig struct {
+    Model      string
+    Dimensions int32
+    Normalize  *bool
+}
+
+// AIConfig.Extra keys:
+//   embedding_model      string
+//   embedding_dimensions int (0, 256, 512, or 1024)
+//   embedding_normalize  bool
+~~~
+
+The Bedrock-specific helper also accepts validated `EmbeddingOption` values for
+one-call overrides. The variadic addition preserves existing two-argument
+`GetEmbeddings(ctx, text)` calls, keeps provider-specific controls out of
+`core`, and applies options to a local copy so concurrent requests cannot
+mutate client defaults.
+
+The request uses only the official Titan V2 fields and omits optional fields
+that the application did not configure:
+
+~~~go
+request := struct {
+    InputText  string `json:"inputText"`
+    Dimensions int32  `json:"dimensions,omitempty"`
+    Normalize  *bool  `json:"normalize,omitempty"`
+}{
+    InputText:  text,
+    Dimensions: c.embedding.Dimensions,
+    Normalize:  c.embedding.Normalize,
+}
+~~~
+
+The response continues to decode the float `embedding` member. Spans may record
+only the stable Titan V2 semantic helper family, never an application-supplied
+wire model/profile ID or ARN. Input text, response body, and vector contents may
+not be logged or recorded on spans.
+
+Titan V2 changes the default vector size from Titan V1's 1536 dimensions to
+1024. `ModelTitanEmbedV1` therefore remains as an explicit migration pin for an
+existing V1 store:
+
+~~~go
+vector, err := client.GetEmbeddings(
+    ctx,
+    text,
+    bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1),
+)
+~~~
+
+That exact V1 model accepts only the shared `inputText` field through this
+helper; configuring V2-only dimensions or normalization is a local error.
+Applications must not write V2 vectors into a V1 index without an intentional
+vector-store migration or rebuild.
+
+#### 19.13.6 Documentation and observability contract
+
+The normative `ai/ARCHITECTURE.md` must be updated in the same slice to state
+that Bedrock accepts an SDK-destination resolver while rejecting HTTP and
+credential integration seams. `ai/integration.go` must clarify that
+`ResolvedEndpoint.URL` is mandatory for HTTP routes and intentionally nil for
+an SDK-native route. Public Bedrock setup documentation must subsequently cover
+the direct-versus-inference-profile decision, current default, explicit route
+mapping, retry attempt semantics, explicit/direct 60-minute timeout,
+failover-safe 180-second auto/chain timeout, Titan V2 settings, Titan V1
+migration pin, and text-only reasoning-delta behavior.
+
+Provider-local observations may include:
+
+- bounded provider and surface values;
+- requested/resolved semantic model where the existing contract permits it;
+- sanitized stable route identity;
+- region, token counts, request/response sizes, duration, stop reason, and the
+  bounded error type; and
+- the framework request ID through context-aware logging and trace context.
+
+They must not include prompts, system prompts, generated content, Titan input
+text or vector values, serialized SDK inputs/outputs, AWS access keys or session
+tokens, raw SDK error messages, AWS endpoint URLs, raw inference-profile or
+deployment IDs/ARNs, or those values as metric labels. Metrics remain bounded
+to the existing module/provider/status/token-type vocabulary. Nil telemetry,
+nil spans, and nil loggers remain fail-open.
+
+#### 19.13.7 Unit and mock-contract tests
+
+No live AWS integration test is required or authorized. Deterministic tests use
+the existing `runtimeClient` and `converseEventStream` seams and cover:
+
+1. current direct default selection, no implicit `global.` profile, and
+   fail-fast implicit-default construction outside `us-east-1` while explicit
+   model/profile and resolver routes remain valid;
+2. resolver order, context propagation, SDK-route validation, semantic policy
+   selection, opaque wire `ModelId`, sync/stream parity, stable fingerprint
+   changes by route identity, and absence of raw deployment/profile values from
+   reports and observations;
+3. sampling removal for bare, geographic/global, version-suffixed, mixed-case,
+   slash/dot-boundary, and ARN-like Sonnet 5 and Opus 4.7/4.8 identities, with
+   non-current, Mythos, and non-Anthropic regressions;
+4. compatible and strict explicit-intent behavior, documented-valid Fable 5
+   sampling preservation, every Fable rejection branch, and final
+   current-model sampling validation;
+5. empty system, empty stop entry, stop-count overflow, numeric range, protected
+   model, and unsupported header failures before the runtime seam is called;
+6. exact `MaxRetries + 1` operation options for Converse, ConverseStream, and
+   InvokeModel, including zero retries, without re-running policy;
+7. every documented typed exception mapping, preserved SDK error identity,
+   correct chain fail-fast/failover metadata, unknown-error passthrough, and
+   sanitized log/span output;
+8. Titan V2 default payload, configurable model/dimensions/normalize, V1
+   migration-pin payload, rejection of V2-only controls on V1,
+   construction-time configuration failures, successful decode, nil output,
+   and malformed response handling;
+9. reasoning deltas omitted from normalized chunks while later text and usage
+   remain correct;
+10. 60-minute explicit/direct Bedrock default, 180-second auto-detected and
+    framework-managed chain defaults, explicit timeout overrides,
+    caller-owned-chain preservation, and cancellation behavior; and
+11. nil logger/telemetry safety and existing request/response/error observation
+    invariants.
+
+The slice then runs the Bedrock-tagged package build, vet, race/unit tests,
+coverage, lint, security, and vulnerability gates followed by every
+repository-wide Go gate required by `AGENTS.md` and `CONTRIBUTING.md`. Any
+workspace checksum change must be attributable to those commands and reviewed
+separately from the Bedrock code.
+
+The completed implementation satisfies these conditions. The Bedrock-tagged
+package passed build, vet, race/unit tests, golangci-lint, gosec, and
+govulncheck, with 78.2% statement coverage. The full AI module passed the same
+tagged build, vet, race, lint, and vulnerability checks, and all workspace
+modules passed the untagged pre-commit gates required by `AGENTS.md`. The final
+review found no raw Bedrock deployment/profile identifiers in request reports,
+fingerprints, logs, spans, or provider-error metadata; only the sanitized route
+identity crosses those observation boundaries. No live AWS integration test or
+example change was made.
+
+### 19.14 Pull-request sequence and completion gates
 
 Use small, reviewable PRs in this order:
 
@@ -5886,7 +6403,9 @@ Use small, reviewable PRs in this order:
 12. route-before-draft preparation for OpenAI and Anthropic, shared OpenAI semantic aliases, and typed wire profiles;
 13. Azure v1/classic adapter and hosted-provider contract fixtures;
 14. Google-hosted OpenAI and `anthropic.vertex` contract fixtures;
-15. provider guide reconciliation and final architecture status update.
+15. provider guide reconciliation and final architecture status update;
+16. AWS Bedrock SDK-route, current-model, retry, error, embedding, validation,
+    observability, and deterministic contract hardening.
 
 Each PR must keep existing constructors and interfaces compiling, pass the full
 repository Go gates in `CONTRIBUTING.md`, and include race tests for retained
