@@ -6,6 +6,7 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,547 +14,700 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers"
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// Client implements core.AIClient for AWS Bedrock
+const (
+	defaultBedrockRequestTimeout  = 60 * time.Minute
+	titanEmbeddingV1SemanticModel = "amazon.titan-embed-text-v1"
+	titanEmbeddingV2SemanticModel = "amazon.titan-embed-text-v2"
+)
+
+type runtimeClient interface {
+	Converse(context.Context, *bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error)
+	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (converseEventStream, error)
+	InvokeModel(context.Context, *bedrockruntime.InvokeModelInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelOutput, error)
+}
+
+type converseEventStream interface {
+	Events() <-chan types.ConverseStreamOutput
+	Close() error
+	Err() error
+}
+
+var errInvokeModelOutputNil = errors.New("bedrock invoke model output is nil")
+
+type sdkRuntimeClient struct{ client *bedrockruntime.Client }
+
+func (client sdkRuntimeClient) Converse(
+	ctx context.Context,
+	input *bedrockruntime.ConverseInput,
+	options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.ConverseOutput, error) {
+	return client.client.Converse(ctx, input, options...)
+}
+
+func (client sdkRuntimeClient) ConverseStream(
+	ctx context.Context,
+	input *bedrockruntime.ConverseStreamInput,
+	options ...func(*bedrockruntime.Options),
+) (converseEventStream, error) {
+	output, err := client.client.ConverseStream(ctx, input, options...)
+	if err != nil {
+		return nil, err
+	}
+	if output == nil {
+		return nil, errors.New("bedrock ConverseStream output is nil")
+	}
+	return output.GetStream(), nil
+}
+
+func (client sdkRuntimeClient) InvokeModel(
+	ctx context.Context,
+	input *bedrockruntime.InvokeModelInput,
+	options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.InvokeModelOutput, error) {
+	return client.client.InvokeModel(ctx, input, options...)
+}
+
+// Client implements legacy and request-aware AWS Bedrock operations.
 type Client struct {
 	*providers.BaseClient
-	bedrockClient *bedrockruntime.Client
-	region        string
+	bedrockClient        runtimeClient
+	region               string
+	requestPolicy        *bedrockRequestPolicy
+	endpointResolver     ai.EndpointResolver
+	requestTimeout       time.Duration
+	embedding            embeddingConfig
+	defaultModelExplicit bool
 }
 
-// NewClient creates a new AWS Bedrock client
+type embeddingConfig struct {
+	model      string
+	dimensions int32
+	normalize  *bool
+}
+
+// NewClient creates an AWS Bedrock client.
 func NewClient(cfg aws.Config, region string, logger core.Logger) *Client {
-	// Create Bedrock Runtime client
-	bedrockClient := bedrockruntime.NewFromConfig(cfg)
+	return newClientWithRuntime(sdkRuntimeClient{client: bedrockruntime.NewFromConfig(cfg)}, region, logger)
+}
 
-	// Create base client with defaults
-	base := providers.NewBaseClient(180*time.Second, logger) // 3 minutes default for reasoning models
-	base.DefaultModel = ModelClaude3Sonnet                   // Default to Claude Sonnet
+// SetDefaultModel selects an explicit default model for direct clients. Call it
+// during client construction, before the client is used concurrently.
+func (c *Client) SetDefaultModel(model string) error {
+	if c == nil || c.BaseClient == nil {
+		return errors.New("bedrock client is nil")
+	}
+	if err := validateModelID(model, "bedrock default model"); err != nil {
+		return err
+	}
+	c.DefaultModel = model
+	c.defaultModelExplicit = true
+	return nil
+}
+
+func newClientWithRuntime(runtime runtimeClient, region string, logger core.Logger) *Client {
+	base := providers.NewBaseClient(defaultBedrockRequestTimeout, logger)
+	base.ProviderName = "bedrock"
+	base.DefaultModel = ModelClaudeSonnet5
 	base.DefaultMaxTokens = 1000
-
 	return &Client{
-		BaseClient:    base,
-		bedrockClient: bedrockClient,
-		region:        region,
+		BaseClient:     base,
+		bedrockClient:  runtime,
+		region:         region,
+		requestPolicy:  newRequestPolicyEngine(),
+		requestTimeout: defaultBedrockRequestTimeout,
+		embedding:      embeddingConfig{model: ModelTitanEmbedV2},
 	}
 }
 
-// GenerateResponse generates a response using AWS Bedrock's Converse API
-func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
-	// Start distributed tracing span
+func (c *Client) observeError(
+	ctx context.Context,
+	span core.Span,
+	operation string,
+	fallback string,
+	err error,
+) {
+	var routeErr *routeResolutionError
+	var policyErr *requestpolicy.PolicyError
+	var featureErr *core.AIRequestFeatureError
+	switch {
+	case errors.As(err, &routeErr):
+		fallback = "route"
+	case errors.As(err, &policyErr):
+		fallback = "policy"
+	case errors.As(err, &featureErr):
+		fallback = "invalid_request"
+	}
+	errorType := providers.RecordObservationError(span, err, fallback)
+	c.LogErrorMetadata(ctx, providers.ErrorObservation{
+		Operation:     operation,
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		ErrorType:     errorType,
+	})
+}
+
+type preparedRequest struct {
+	Model         string
+	ModelExplicit bool
+	RouteIdentity string
+	Draft         *Draft
+	Report        *core.AIRequestReport
+	SyncInput     *bedrockruntime.ConverseInput
+	StreamInput   *bedrockruntime.ConverseStreamInput
+}
+
+func (c *Client) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.requestTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.requestTimeout)
+}
+
+func (c *Client) runtimeOptions() func(*bedrockruntime.Options) {
+	attempts := 1
+	if c.MaxRetries > 0 {
+		attempts = c.MaxRetries
+		if attempts < int(^uint(0)>>1) {
+			attempts++
+		}
+	}
+	return func(options *bedrockruntime.Options) {
+		options.RetryMaxAttempts = attempts
+	}
+}
+
+func (c *Client) prepareAIRequest(
+	ctx context.Context,
+	supplied *core.AIRequest,
+	stream bool,
+) (*preparedRequest, error) {
+	prepared, err := c.preparePolicyRequest(ctx, supplied, stream)
+	if err != nil {
+		return prepared, err
+	}
+	if err := validateImplicitBedrockDefault(
+		c.region,
+		prepared.Model,
+		prepared.ModelExplicit,
+		c.endpointResolver != nil,
+	); err != nil {
+		return prepared, err
+	}
+	if stream {
+		prepared.StreamInput, err = prepared.Draft.sdkStreamInput()
+	} else {
+		prepared.SyncInput, err = prepared.Draft.sdkInput()
+	}
+	if err != nil {
+		return prepared, fmt.Errorf("translate Bedrock logical request: %w", err)
+	}
+	return prepared, nil
+}
+
+func (c *Client) preparePolicyRequest(
+	ctx context.Context,
+	supplied *core.AIRequest,
+	stream bool,
+) (*preparedRequest, error) {
+	request, err := core.CloneAIRequest(supplied)
+	if err != nil {
+		return nil, fmt.Errorf("clone Bedrock AI request: %w", err)
+	}
+	options, err := providers.CloneAIOptions(request.LegacyOptions())
+	if err != nil {
+		return nil, fmt.Errorf("clone Bedrock legacy request options: %w", err)
+	}
+	requestModelExplicit := options != nil && options.Model != "" ||
+		request.Generation.Model != ""
+	options = c.ApplyDefaults(options)
+	if request.Generation.Model != "" {
+		options.Model = request.Generation.Model
+	}
+	semanticModel := options.Model
+	operation := "generate"
+	if stream {
+		operation = "stream"
+	}
+	profile, err := c.resolveProfile(ctx, ai.EndpointRequest{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		Surface:       "converse",
+		ResolvedModel: semanticModel,
+		Operation:     operation,
+		Purpose:       request.Purpose,
+	})
+	if err != nil {
+		return nil, err
+	}
+	wireOptions := *options
+	wireOptions.Model = semanticModel
+	wireRequest := core.NewAIRequestFromLegacy(request.Prompt, request.Purpose, &wireOptions)
+	wireRequest.Generation = request.Generation
+	wireRequest.Patches = request.Patches
+	draft, err := newRoutedDraft(profile, wireRequest, stream)
+	if err != nil {
+		return nil, err
+	}
+	prepared := &preparedRequest{
+		Model:         semanticModel,
+		ModelExplicit: c.defaultModelExplicit || requestModelExplicit,
+		RouteIdentity: profile.routeIdentity,
+		Draft:         draft,
+	}
+	if c.requestPolicy == nil {
+		return prepared, errors.New("bedrock request policy engine is not configured")
+	}
+	report, err := c.requestPolicy.Apply(ctx, draft, request.Patches)
+	if report != nil {
+		report.Adjustments = append(draft.Adjustments(), report.Adjustments...)
+		prepared.Report = report
+	}
+	if err != nil {
+		return prepared, err
+	}
+	return prepared, nil
+}
+
+// RequestFingerprint returns the stable policy identity used by AI-output
+// caches. Bedrock routing is captured by the versioned Converse adapter
+// identity; no credentials or SDK calls are made here.
+func (c *Client) RequestFingerprint(ctx context.Context, request *core.AIRequest) (string, bool) {
+	prepared, err := c.preparePolicyRequest(ctx, request, false)
+	if err != nil || prepared == nil || prepared.Report == nil {
+		return "", false
+	}
+	return prepared.Report.Fingerprint, prepared.Report.Stable && prepared.Report.Fingerprint != ""
+}
+
+// GenerateResponse adapts the legacy client interface to the request-aware path.
+func (c *Client) GenerateResponse(
+	ctx context.Context,
+	prompt string,
+	options *core.AIOptions,
+) (*core.AIResponse, error) {
+	result, err := c.Generate(ctx, core.NewAIRequestFromLegacy(prompt, "", options))
+	if result != nil && result.Response != nil {
+		return result.Response, err
+	}
+	return nil, err
+}
+
+// Generate applies logical policy and invokes the AWS Converse SDK operation.
+func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (*core.AIResult, error) {
+	if request == nil {
+		return nil, errors.New("bedrock AI request is nil")
+	}
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	ctx, span := c.StartSpan(ctx, "ai.generate_response")
 	defer span.End()
-
-	// Set initial span attributes
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.prompt_length", len(prompt))
-
-	// Apply defaults
-	options = c.ApplyDefaults(options)
-
-	// Add model to span attributes after defaults are applied
-	span.SetAttribute("ai.model", options.Model)
+	span.SetAttribute("ai.prompt_length", len(request.Prompt))
 	span.SetAttribute("ai.region", c.region)
 
-	// Log request
-	c.LogRequest("bedrock", options.Model, prompt)
-	startTime := time.Now()
-
-	// Build messages for Converse API
-	messages := []types.Message{
-		{
-			Role: types.ConversationRoleUser,
-			Content: []types.ContentBlock{
-				&types.ContentBlockMemberText{
-					Value: prompt,
-				},
-			},
-		},
-	}
-
-	// Build the Converse input
-	input := &bedrockruntime.ConverseInput{
-		ModelId:  aws.String(options.Model),
-		Messages: messages,
-	}
-
-	// Add system prompt if provided
-	if options.SystemPrompt != "" {
-		input.System = []types.SystemContentBlock{
-			&types.SystemContentBlockMemberText{
-				Value: options.SystemPrompt,
-			},
-		}
-	}
-
-	// Add inference configuration
-	inferenceConfig := &types.InferenceConfiguration{}
-	configSet := false
-
-	if options.MaxTokens > 0 {
-		inferenceConfig.MaxTokens = aws.Int32(int32(options.MaxTokens))
-		configSet = true
-	}
-
-	if options.Temperature > 0 {
-		inferenceConfig.Temperature = aws.Float32(options.Temperature)
-		configSet = true
-	}
-
-	if configSet {
-		input.InferenceConfig = inferenceConfig
-	}
-
-	// Make the request to AWS Bedrock
-	output, err := c.bedrockClient.Converse(ctx, input)
+	prepared, err := c.prepareAIRequest(ctx, request, false)
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock request failed - converse error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     err.Error(),
-				"phase":     "request_execution",
-			})
+		if prepared != nil {
+			c.recordPreparation(span, prepared)
 		}
-		span.RecordError(err)
-		return nil, fmt.Errorf("bedrock converse error: %w", err)
+		c.observeError(ctx, span, "ai_request", "policy", err)
+		return resultWithReport(prepared, nil), err
 	}
-
-	// Extract text content from response
-	if output.Output == nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock request failed - no output", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     "no_output",
-				"phase":     "response_validation",
-			})
-		}
-		noOutputErr := fmt.Errorf("no output in Bedrock response")
-		span.RecordError(noOutputErr)
-		return nil, noOutputErr
+	c.recordPreparation(span, prepared)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: prepared.Model,
+		PromptLength:  len(request.Prompt),
+	})
+	started := time.Now()
+	output, err := c.bedrockClient.Converse(ctx, prepared.SyncInput, c.runtimeOptions())
+	if err != nil {
+		err = normalizeBedrockError(err, prepared.Model)
+		c.observeError(ctx, span, "ai_request", "transport", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("bedrock converse error: %w", err)
 	}
-
-	var content string
-	switch v := output.Output.(type) {
-	case *types.ConverseOutputMemberMessage:
-		for _, block := range v.Value.Content {
-			switch b := block.(type) {
-			case *types.ContentBlockMemberText:
-				content += b.Value
-			}
-		}
-	default:
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock request failed - unexpected output type", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     "unexpected_output_type",
-				"phase":     "response_validation",
-			})
-		}
-		unexpectedErr := fmt.Errorf("unexpected output type from Bedrock")
-		span.RecordError(unexpectedErr)
-		return nil, unexpectedErr
+	result, err := decodeConverseOutput(prepared.Model, output)
+	if err != nil {
+		c.observeError(ctx, span, "ai_request", "decode", err)
+		return resultWithReport(prepared, nil), err
 	}
-
-	if content == "" {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock request failed - empty response", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     "no_text_content",
-				"phase":     "response_validation",
-			})
-		}
-		emptyErr := fmt.Errorf("no text content in Bedrock response")
-		span.RecordError(emptyErr)
-		return nil, emptyErr
-	}
-
-	// Build the response
-	result := &core.AIResponse{
-		Content:  content,
-		Model:    options.Model,
-		Provider: "bedrock",
-	}
-
-	// Add usage information if available
-	if output.Usage != nil {
-		result.Usage = core.TokenUsage{
-			PromptTokens:     int(*output.Usage.InputTokens),
-			CompletionTokens: int(*output.Usage.OutputTokens),
-			TotalTokens:      int(*output.Usage.TotalTokens),
-		}
-	}
-
-	// Add token usage to span for cost tracking and debugging
-	span.SetAttribute("ai.prompt_tokens", result.Usage.PromptTokens)
-	span.SetAttribute("ai.completion_tokens", result.Usage.CompletionTokens)
-	span.SetAttribute("ai.total_tokens", result.Usage.TotalTokens)
-	span.SetAttribute("ai.response_length", len(result.Content))
-
-	// Add stop reason if available
+	c.recordResponse(ctx, span, prepared.Model, result.Response, started)
 	if output.StopReason != "" {
 		span.SetAttribute("ai.stop_reason", string(output.StopReason))
 	}
-
-	// Log response
-	c.LogResponse(ctx, "bedrock", result.Model, result.Usage, time.Since(startTime))
-	c.LogResponseContent("bedrock", result.Model, result.Content)
-
-	return result, nil
+	return resultWithReport(prepared, result), nil
 }
 
-// StreamResponse generates a streaming response using AWS Bedrock's ConverseStream API
-func (c *Client) StreamResponse(ctx context.Context, prompt string, options *core.AIOptions, callback core.StreamCallback) (*core.AIResponse, error) {
-	// Start distributed tracing span for streaming
+// StreamResponse adapts legacy streaming to the request-aware path.
+func (c *Client) StreamResponse(
+	ctx context.Context,
+	prompt string,
+	options *core.AIOptions,
+	callback core.StreamCallback,
+) (*core.AIResponse, error) {
+	result, err := c.Stream(ctx, core.NewAIRequestFromLegacy(prompt, "", options), callback)
+	if result != nil && result.Response != nil {
+		return result.Response, err
+	}
+	return nil, err
+}
+
+// Stream applies the same logical policy and invokes ConverseStream.
+func (c *Client) Stream(
+	ctx context.Context,
+	request *core.AIRequest,
+	callback core.StreamCallback,
+) (*core.AIResult, error) {
+	if request == nil {
+		return nil, errors.New("bedrock AI request is nil")
+	}
+	if callback == nil {
+		return nil, errors.New("bedrock stream callback is nil")
+	}
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	ctx, span := c.StartSpan(ctx, "ai.stream_response")
 	defer span.End()
-
-	// Set initial span attributes
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.prompt_length", len(prompt))
+	span.SetAttribute("ai.prompt_length", len(request.Prompt))
 	span.SetAttribute("ai.streaming", true)
-
-	// Apply defaults
-	options = c.ApplyDefaults(options)
-
-	// Add model to span attributes after defaults are applied
-	span.SetAttribute("ai.model", options.Model)
 	span.SetAttribute("ai.region", c.region)
 
-	// Log streaming request
-	if c.Logger != nil {
-		c.Logger.InfoWithContext(ctx, "Bedrock stream request initiated", map[string]interface{}{
-			"operation":     "ai_stream_request",
-			"provider":      "bedrock",
-			"model":         options.Model,
-			"prompt_length": len(prompt),
-		})
-	}
-	startTime := time.Now()
-
-	// Build messages for ConverseStream API
-	messages := []types.Message{
-		{
-			Role: types.ConversationRoleUser,
-			Content: []types.ContentBlock{
-				&types.ContentBlockMemberText{
-					Value: prompt,
-				},
-			},
-		},
-	}
-
-	// Build the ConverseStream input
-	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:  aws.String(options.Model),
-		Messages: messages,
-	}
-
-	// Add system prompt if provided
-	if options.SystemPrompt != "" {
-		input.System = []types.SystemContentBlock{
-			&types.SystemContentBlockMemberText{
-				Value: options.SystemPrompt,
-			},
-		}
-	}
-
-	// Add inference configuration
-	inferenceConfig := &types.InferenceConfiguration{}
-	if options.MaxTokens > 0 {
-		inferenceConfig.MaxTokens = aws.Int32(int32(options.MaxTokens))
-	}
-	if options.Temperature > 0 {
-		inferenceConfig.Temperature = aws.Float32(options.Temperature)
-	}
-	input.InferenceConfig = inferenceConfig
-
-	// Start the stream
-	output, err := c.bedrockClient.ConverseStream(ctx, input)
+	prepared, err := c.prepareAIRequest(ctx, request, true)
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock stream request failed - stream error", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "bedrock",
-				"error":     err.Error(),
-				"phase":     "stream_start",
-			})
+		if prepared != nil {
+			c.recordPreparation(span, prepared)
 		}
-		span.RecordError(err)
-		return nil, fmt.Errorf("bedrock stream error: %w", err)
+		c.observeError(ctx, span, "ai_stream", "policy", err)
+		return resultWithReport(prepared, nil), err
 	}
+	c.recordPreparation(span, prepared)
+	c.LogRequestMetadata(ctx, providers.RequestObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: prepared.Model,
+		PromptLength:  len(request.Prompt),
+	})
+	started := time.Now()
+	eventStream, err := c.bedrockClient.ConverseStream(ctx, prepared.StreamInput, c.runtimeOptions())
+	if err != nil {
+		err = normalizeBedrockError(err, prepared.Model)
+		c.observeError(ctx, span, "ai_stream", "transport", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("bedrock stream error: %w", err)
+	}
+	if eventStream == nil {
+		err := errors.New("bedrock stream output is nil")
+		c.observeError(ctx, span, "ai_stream", "decode", err)
+		return resultWithReport(prepared, nil), err
+	}
+	defer func() { _ = eventStream.Close() }()
 
-	// Process the stream
-	eventStream := output.GetStream()
-	defer eventStream.Close()
-
-	var fullContent string
+	var content string
 	var usage core.TokenUsage
+	var usageDetails *core.AIUsageDetails
 	chunkIndex := 0
 	var finishReason string
-
-	for {
-		event, ok := <-eventStream.Events()
-		if !ok {
-			break
-		}
-
-		switch v := event.(type) {
+	for event := range eventStream.Events() {
+		switch value := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			if v.Value.Delta != nil {
-				switch d := v.Value.Delta.(type) {
-				case *types.ContentBlockDeltaMemberText:
-					fullContent += d.Value
-
-					// Create chunk and call callback
-					chunk := core.StreamChunk{
-						Content: d.Value,
-						Delta:   true,
-						Index:   chunkIndex,
-						Model:   options.Model,
+			switch delta := value.Value.Delta.(type) {
+			case *types.ContentBlockDeltaMemberText:
+				content += delta.Value
+				if callback(core.StreamChunk{
+					Content: delta.Value, Delta: true, Index: chunkIndex, Model: prepared.Model,
+				}) != nil {
+					span.SetAttribute("ai.stream_stopped_by_callback", true)
+					span.SetAttribute("ai.stream_status", "callback_stop")
+					result := &core.AIResult{
+						Response:     responseFor(content, prepared.Model, usage),
+						UsageDetails: usageDetails,
 					}
-					chunkIndex++
-
-					if err := callback(chunk); err != nil {
-						// Callback requested stop
-						span.SetAttribute("ai.stream_stopped_by_callback", true)
-						return &core.AIResponse{
-							Content:  fullContent,
-							Model:    options.Model,
-							Provider: "bedrock",
-							Usage:    usage,
-						}, nil
-					}
+					c.recordResponse(ctx, span, prepared.Model, result.Response, started)
+					span.SetAttribute("ai.chunks_sent", chunkIndex+1)
+					return resultWithReport(prepared, result), nil
 				}
+				chunkIndex++
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				// The normalized framework stream is text-only. Reasoning text,
+				// signatures, and redacted blocks are intentionally not exposed
+				// as generated content or observations.
 			}
-
 		case *types.ConverseStreamOutputMemberMetadata:
-			// Capture usage from metadata
-			if v.Value.Usage != nil {
-				usage = core.TokenUsage{
-					PromptTokens:     int(aws.ToInt32(v.Value.Usage.InputTokens)),
-					CompletionTokens: int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-					TotalTokens:      int(aws.ToInt32(v.Value.Usage.TotalTokens)),
-				}
+			if value.Value.Usage != nil {
+				usage, usageDetails = normalizeUsage(value.Value.Usage)
 			}
-
 		case *types.ConverseStreamOutputMemberMessageStop:
-			// Stream ended normally - capture stop reason
-			finishReason = string(v.Value.StopReason)
-			if c.Logger != nil {
-				c.Logger.DebugWithContext(ctx, "Bedrock stream completed", map[string]interface{}{
-					"operation":   "ai_stream_complete",
-					"provider":    "bedrock",
-					"stop_reason": finishReason,
-				})
-			}
-			span.SetAttribute("ai.stream_completed", true)
+			finishReason = string(value.Value.StopReason)
 		}
-
-		// Check for context cancellation
 		select {
 		case <-ctx.Done():
-			if fullContent != "" {
-				span.SetAttribute("ai.stream_partial", true)
-				return &core.AIResponse{
-					Content:  fullContent,
-					Model:    options.Model,
-					Provider: "bedrock",
-					Usage:    usage,
-				}, core.ErrStreamPartiallyCompleted
+			if content != "" {
+				streamErr := core.ErrStreamPartiallyCompleted
+				c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
+				result := &core.AIResult{
+					Response:     responseFor(content, prepared.Model, usage),
+					UsageDetails: usageDetails,
+				}
+				return resultWithReport(prepared, result), streamErr
 			}
-			span.RecordError(ctx.Err())
-			return nil, ctx.Err()
+			ctxErr := ctx.Err()
+			c.observeError(ctx, span, "ai_stream", "cancelled", ctxErr)
+			return resultWithReport(prepared, nil), ctxErr
 		default:
 		}
 	}
-
-	// Check for stream errors
 	if err := eventStream.Err(); err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock stream error during processing", map[string]interface{}{
-				"operation": "ai_stream_error",
-				"provider":  "bedrock",
-				"error":     err.Error(),
-				"phase":     "stream_processing",
-			})
+		err = normalizeBedrockError(err, prepared.Model)
+		if content != "" {
+			streamErr := core.ErrStreamPartiallyCompleted
+			c.observeError(ctx, span, "ai_stream", "partial_stream", streamErr)
+			result := &core.AIResult{
+				Response:     responseFor(content, prepared.Model, usage),
+				UsageDetails: usageDetails,
+			}
+			return resultWithReport(prepared, result), streamErr
 		}
-		// Return partial content if available
-		if fullContent != "" {
-			span.SetAttribute("ai.stream_partial", true)
-			return &core.AIResponse{
-				Content:  fullContent,
-				Model:    options.Model,
-				Provider: "bedrock",
-				Usage:    usage,
-			}, core.ErrStreamPartiallyCompleted
-		}
-		span.RecordError(err)
-		return nil, fmt.Errorf("bedrock stream error: %w", err)
+		c.observeError(ctx, span, "ai_stream", "transport", err)
+		return resultWithReport(prepared, nil), fmt.Errorf("bedrock stream error: %w", err)
 	}
-
-	// Send final chunk with finish reason
 	if finishReason != "" {
-		finalChunk := core.StreamChunk{
-			Delta:        false,
-			Index:        chunkIndex,
-			FinishReason: finishReason,
-			Model:        options.Model,
-			Usage:        &usage,
-		}
-		_ = callback(finalChunk)
+		_ = callback(core.StreamChunk{
+			Delta: false, Index: chunkIndex, FinishReason: finishReason,
+			Model: prepared.Model, Usage: &usage,
+		})
 	}
-
-	result := &core.AIResponse{
-		Content:  fullContent,
-		Model:    options.Model,
-		Provider: "bedrock",
-		Usage:    usage,
+	result := &core.AIResult{
+		Response:     responseFor(content, prepared.Model, usage),
+		UsageDetails: usageDetails,
 	}
-
-	// Add token usage to span
-	span.SetAttribute("ai.prompt_tokens", result.Usage.PromptTokens)
-	span.SetAttribute("ai.completion_tokens", result.Usage.CompletionTokens)
-	span.SetAttribute("ai.total_tokens", result.Usage.TotalTokens)
-	span.SetAttribute("ai.response_length", len(result.Content))
+	c.recordResponse(ctx, span, prepared.Model, result.Response, started)
 	span.SetAttribute("ai.chunks_sent", chunkIndex)
-
-	// Log response
-	c.LogResponse(ctx, "bedrock", result.Model, result.Usage, time.Since(startTime))
-	c.LogResponseContent("bedrock", result.Model, result.Content)
-
-	return result, nil
+	return resultWithReport(prepared, result), nil
 }
 
-// SupportsStreaming returns true as Bedrock supports native streaming
-func (c *Client) SupportsStreaming() bool {
-	return true
+func decodeConverseOutput(model string, output *bedrockruntime.ConverseOutput) (*core.AIResult, error) {
+	if output == nil || output.Output == nil {
+		return nil, errors.New("no output in Bedrock response")
+	}
+	message, ok := output.Output.(*types.ConverseOutputMemberMessage)
+	if !ok {
+		return nil, errors.New("unexpected output type from Bedrock")
+	}
+	var content string
+	for _, block := range message.Value.Content {
+		if text, ok := block.(*types.ContentBlockMemberText); ok {
+			content += text.Value
+		}
+	}
+	if content == "" {
+		return nil, errors.New("no text content in Bedrock response")
+	}
+	usage, usageDetails := normalizeUsage(output.Usage)
+	return &core.AIResult{
+		Response:     responseFor(content, model, usage),
+		UsageDetails: usageDetails,
+	}, nil
 }
 
-// InvokeModel provides direct access to specific model APIs (for advanced use cases)
-// This bypasses the Converse API and uses model-specific formats
+func normalizeUsage(usage *types.TokenUsage) (core.TokenUsage, *core.AIUsageDetails) {
+	if usage == nil {
+		return core.TokenUsage{}, nil
+	}
+	normalized := core.TokenUsage{
+		PromptTokens:     int(aws.ToInt32(usage.InputTokens)),
+		CompletionTokens: int(aws.ToInt32(usage.OutputTokens)),
+		TotalTokens:      int(aws.ToInt32(usage.TotalTokens)),
+	}
+	cacheRead := int64(aws.ToInt32(usage.CacheReadInputTokens))
+	cacheWrite := int64(aws.ToInt32(usage.CacheWriteInputTokens))
+	if cacheRead == 0 && cacheWrite == 0 {
+		return normalized, nil
+	}
+	details := &core.AIUsageDetails{CachedInputTokens: cacheRead}
+	if cacheWrite != 0 {
+		details.Counters = map[string]int64{"cache_write_input_tokens": cacheWrite}
+	}
+	return normalized, details
+}
+
+func responseFor(content, model string, usage core.TokenUsage) *core.AIResponse {
+	return &core.AIResponse{Content: content, Model: model, Provider: "bedrock", Usage: usage}
+}
+
+func (c *Client) recordPreparation(span core.Span, prepared *preparedRequest) {
+	if prepared == nil {
+		return
+	}
+	span.SetAttribute("ai.model", prepared.Model)
+	span.SetAttribute("ai.request.route_identity", prepared.RouteIdentity)
+	if prepared.Report != nil {
+		span.SetAttribute("ai.request.provider_alias", prepared.Report.ProviderAlias)
+		span.SetAttribute("ai.request.surface", prepared.Report.Surface)
+		span.SetAttribute("ai.request.operation", prepared.Report.Operation)
+		span.SetAttribute("ai.request.policy_stable", prepared.Report.Stable)
+		span.SetAttribute("ai.request.adjustment_count", len(prepared.Report.Adjustments))
+		if prepared.Report.Fingerprint != "" {
+			span.SetAttribute("ai.request.policy_fingerprint", prepared.Report.Fingerprint)
+		}
+	}
+}
+
+func (c *Client) recordResponse(
+	ctx context.Context,
+	span core.Span,
+	semanticModel string,
+	response *core.AIResponse,
+	started time.Time,
+) {
+	span.SetAttribute("ai.prompt_tokens", response.Usage.PromptTokens)
+	span.SetAttribute("ai.completion_tokens", response.Usage.CompletionTokens)
+	span.SetAttribute("ai.total_tokens", response.Usage.TotalTokens)
+	span.SetAttribute("ai.response_length", len(response.Content))
+	c.LogResponseMetadata(ctx, providers.ResponseObservation{
+		Provider:      "bedrock",
+		ProviderAlias: "bedrock",
+		SemanticModel: semanticModel,
+		Usage:         response.Usage,
+		Duration:      time.Since(started),
+	})
+}
+
+func resultWithReport(prepared *preparedRequest, result *core.AIResult) *core.AIResult {
+	if result == nil {
+		if prepared == nil || prepared.Report == nil {
+			return nil
+		}
+		result = &core.AIResult{}
+	}
+	if prepared != nil {
+		result.RequestReport = prepared.Report
+	}
+	return result
+}
+
+func (c *Client) SupportsStreaming() bool { return true }
+
+// InvokeModel provides direct access to model-specific Bedrock payloads.
 func (c *Client) InvokeModel(ctx context.Context, modelID string, body []byte) ([]byte, error) {
-	// Start distributed tracing span
+	return c.invokeModel(ctx, modelID, "", body)
+}
+
+func (c *Client) invokeModel(
+	ctx context.Context,
+	modelID string,
+	semanticModel string,
+	body []byte,
+) ([]byte, error) {
+	ctx, cancel := c.withRequestTimeout(ctx)
+	defer cancel()
 	ctx, span := c.StartSpan(ctx, "ai.invoke_model")
 	defer span.End()
-
-	// Set span attributes
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.model", modelID)
+	span.SetAttribute("ai.surface", "invoke-model")
 	span.SetAttribute("ai.body_length", len(body))
-
-	input := &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(modelID),
-		Body:        body,
-		ContentType: aws.String("application/json"),
-		Accept:      aws.String("application/json"),
+	if semanticModel != "" {
+		span.SetAttribute("ai.model", semanticModel)
 	}
-
-	output, err := c.bedrockClient.InvokeModel(ctx, input)
+	if err := validateModelID(modelID, "bedrock InvokeModel model ID"); err != nil {
+		c.observeError(ctx, span, "ai_invoke_model", "invalid_request", err)
+		return nil, err
+	}
+	output, err := c.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
+		ModelId: aws.String(modelID), Body: body,
+		ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
+	}, c.runtimeOptions())
 	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock invoke model failed", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"model":     modelID,
-				"error":     err.Error(),
-				"phase":     "model_invocation",
-			})
-		}
-		span.RecordError(err)
+		err = normalizeBedrockError(err, semanticModel)
+		c.observeError(ctx, span, "ai_invoke_model", "transport", err)
 		return nil, fmt.Errorf("bedrock invoke model error: %w", err)
 	}
-
+	if output == nil {
+		c.observeError(ctx, span, "ai_invoke_model", "decode", errInvokeModelOutputNil)
+		return nil, errInvokeModelOutputNil
+	}
 	span.SetAttribute("ai.response_length", len(output.Body))
 	return output.Body, nil
 }
 
-// GetEmbeddings generates embeddings using Amazon Titan Embed model
-func (c *Client) GetEmbeddings(ctx context.Context, text string) ([]float32, error) {
-	// Start distributed tracing span
+// GetEmbeddings generates a single embedding using a Titan-shaped InvokeModel
+// request. It defaults to Amazon Titan Text Embeddings V2. Per-call options
+// override client defaults without mutating the client.
+func (c *Client) GetEmbeddings(ctx context.Context, text string, options ...EmbeddingOption) ([]float32, error) {
 	ctx, span := c.StartSpan(ctx, "ai.get_embeddings")
 	defer span.End()
-
-	// Set span attributes
 	span.SetAttribute("ai.provider", "bedrock")
-	span.SetAttribute("ai.model", ModelTitanEmbed)
 	span.SetAttribute("ai.text_length", len(text))
 
-	// Build request for Titan Embed model
-	request := map[string]interface{}{
-		"inputText": text,
-	}
-
-	body, err := json.Marshal(request)
-	if err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock embeddings failed - marshal error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     err.Error(),
-				"phase":     "request_preparation",
-			})
-		}
-		span.RecordError(err)
-		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
-	}
-
-	// Invoke Titan Embed model
-	responseBody, err := c.InvokeModel(ctx, ModelTitanEmbed, body)
-	if err != nil {
-		// Error already logged and recorded in InvokeModel span
+	if text == "" {
+		err := errors.New("bedrock embedding input text is empty")
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
 		return nil, err
 	}
-
-	// Parse response
+	embedding, err := applyEmbeddingOptions(c.embedding, options)
+	if err != nil {
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
+		return nil, err
+	}
+	semanticModel := titanEmbeddingSemanticModel(embedding.model)
+	span.SetAttribute("ai.model", semanticModel)
+	payload := struct {
+		InputText  string `json:"inputText"`
+		Dimensions int32  `json:"dimensions,omitempty"`
+		Normalize  *bool  `json:"normalize,omitempty"`
+	}{
+		InputText: text, Dimensions: embedding.dimensions, Normalize: embedding.normalize,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		c.observeError(ctx, span, "ai_get_embeddings", "invalid_request", err)
+		return nil, fmt.Errorf("marshal Bedrock embed request: %w", err)
+	}
+	responseBody, err := c.invokeModel(ctx, embedding.model, semanticModel, body)
+	if err != nil {
+		// InvokeModel owns the detailed error log; the outer embedding span still
+		// records the propagated failure so every failed operation is visible.
+		fallback := "transport"
+		if errors.Is(err, errInvokeModelOutputNil) {
+			fallback = "decode"
+		}
+		providers.RecordObservationError(span, err, fallback)
+		return nil, err
+	}
 	var response struct {
 		Embedding []float32 `json:"embedding"`
 	}
-
 	if err := json.Unmarshal(responseBody, &response); err != nil {
-		if c.Logger != nil {
-			c.Logger.ErrorWithContext(ctx, "Bedrock embeddings failed - parse response error", map[string]interface{}{
-				"operation": "ai_request_error",
-				"provider":  "bedrock",
-				"error":     err.Error(),
-				"phase":     "response_parse",
-			})
-		}
-		span.RecordError(err)
-		return nil, fmt.Errorf("failed to parse embed response: %w", err)
+		c.observeError(ctx, span, "ai_get_embeddings", "decode", err)
+		return nil, fmt.Errorf("parse Bedrock embed response: %w", err)
 	}
-
+	if len(response.Embedding) == 0 {
+		err := errors.New("bedrock embedding response has no vector")
+		c.observeError(ctx, span, "ai_get_embeddings", "decode", err)
+		return nil, err
+	}
 	span.SetAttribute("ai.embedding_dimensions", len(response.Embedding))
 	return response.Embedding, nil
 }
 
-// CreateAWSConfig creates an AWS configuration for Bedrock
-// This can use various authentication methods:
-// 1. IAM role (when running on EC2/ECS/Lambda)
-// 2. AWS credentials from environment variables
-// 3. AWS profile from ~/.aws/credentials
-// 4. Explicit credentials passed in
+// CreateAWSConfig loads AWS region and credentials for Bedrock.
 func CreateAWSConfig(ctx context.Context, region string, credentials ...aws.CredentialsProvider) (aws.Config, error) {
-	opts := []func(*config.LoadOptions) error{
-		config.WithRegion(region),
-	}
-
-	// Add explicit credentials if provided
+	options := []func(*config.LoadOptions) error{config.WithRegion(region)}
 	if len(credentials) > 0 && credentials[0] != nil {
-		opts = append(opts, config.WithCredentialsProvider(credentials[0]))
+		options = append(options, config.WithCredentialsProvider(credentials[0]))
 	}
-
-	// Load the configuration
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	configuration, err := config.LoadDefaultConfig(ctx, options...)
 	if err != nil {
-		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
+		return aws.Config{}, fmt.Errorf("load AWS config: %w", err)
 	}
-
-	return cfg, nil
+	return configuration, nil
 }
+
+var _ core.AIRequestClient = (*Client)(nil)
+var _ core.StreamingAIRequestClient = (*Client)(nil)

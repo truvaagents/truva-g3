@@ -15,39 +15,48 @@ import (
 
 // mockLogger implements core.Logger for testing
 type mockLogger struct {
-	logs []string
+	logs   []string
+	fields []map[string]interface{}
 }
 
 func (m *mockLogger) Debug(msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "DEBUG: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) Info(msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "INFO: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) Warn(msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "WARN: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) Error(msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "ERROR: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) DebugWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "DEBUG: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) InfoWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "INFO: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) WarnWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "WARN: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func (m *mockLogger) ErrorWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	m.logs = append(m.logs, "ERROR: "+msg)
+	m.fields = append(m.fields, fields)
 }
 
 func TestNewClient(t *testing.T) {

@@ -140,9 +140,13 @@ Example: [{"content": "High latency on Go services with tight memory limits is c
 
 Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(synthesizedResponse, 3000))
 
-	aiResp, err := h.aiClient.GenerateResponse(ctx, extractionPrompt, &core.AIOptions{
-		Temperature: 0.3,
-		MaxTokens:   1000,
+	aiResp, _, err := invokeAI(ctx, h.aiClient, aiInvocation{
+		Purpose: "knowledge-extraction",
+		Prompt:  extractionPrompt,
+		Options: &core.AIOptions{
+			Temperature: 0.3,
+			MaxTokens:   1000,
+		},
 	})
 	if err != nil {
 		h.logger.WarnWithContext(ctx, "Knowledge extraction LLM call failed", map[string]interface{}{

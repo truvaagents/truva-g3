@@ -665,37 +665,6 @@ func (m *mockDebugStoreForRefinement) ListRecent(ctx context.Context, limit int)
 	return nil, nil
 }
 
-// ---------------------------------------------------------------------------
-// Batch B DoD tests — BUG_LLM_INTERACTION_DOUBLE_RECORDING.md Layer 2
-// ---------------------------------------------------------------------------
-
-// TestPlanRefiner_DeferLLMRecording_GatesOnDebugStore verifies the
-// graceful-fallback invariant (orchestration/ARCHITECTURE.md §
-// "Never fails orchestration if debug store fails"): when
-// debugStore is nil, the helper MUST return ctx unchanged so that
-// InstrumentedAIClient remains the authoritative recorder. When
-// debugStore is set, the helper marks ctx so the wrapper defers.
-func TestPlanRefiner_DeferLLMRecording_GatesOnDebugStore(t *testing.T) {
-	t.Run("nil debug store returns ctx unchanged", func(t *testing.T) {
-		refiner := NewPlanRefiner(&refinementMockAIClient{}, nil)
-		ctx := context.Background()
-		out := refiner.deferLLMRecordingIfWeWillRecord(ctx)
-		if telemetry.IsLLMCallRecordingDeferred(out) {
-			t.Fatal("refiner with nil debugStore must NOT set the deferral marker; wrapper would lose the record")
-		}
-	})
-
-	t.Run("configured debug store marks ctx for deferral", func(t *testing.T) {
-		refiner := NewPlanRefiner(&refinementMockAIClient{}, nil)
-		refiner.SetDebugStore(&mockDebugStoreForRefinement{})
-		ctx := context.Background()
-		out := refiner.deferLLMRecordingIfWeWillRecord(ctx)
-		if !telemetry.IsLLMCallRecordingDeferred(out) {
-			t.Fatal("refiner with debugStore set must mark ctx so InstrumentedAIClient skips agent_llm_call")
-		}
-	})
-}
-
 // TestPlanRefiner_Refine_MarksContextForWrapperDeferral proves the
 // end-to-end plumbing: when Refine() is invoked with debugStore set,
 // every AI call sees a context that carries the deferral marker. The

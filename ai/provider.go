@@ -1,9 +1,13 @@
 package ai
 
 import (
+	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -68,6 +72,89 @@ type AIConfig struct {
 // AIOption configures an AI client
 type AIOption func(*AIConfig)
 
+// ProviderIntegrationConfig contains request-policy behavior supplied to a
+// request-capable provider factory. Its collections are defensively
+// snapshotted before construction.
+type ProviderIntegrationConfig struct {
+	_                 noUnkeyedLiterals
+	RequestRules      []core.AIProviderPatch
+	RequestMiddleware []requestpolicy.RequestMiddleware
+	CompatibilityMode requestpolicy.CompatibilityMode
+	CredentialSource  CredentialSource
+	EndpointResolver  EndpointResolver
+	HTTPClient        *http.Client
+}
+
+type noUnkeyedLiterals struct{}
+
+type clientConfig struct {
+	legacy      AIConfig
+	integration ProviderIntegrationConfig
+
+	credentialSourceSet bool
+	endpointResolverSet bool
+	httpClientSet       bool
+}
+
+// ClientOption is the sealed option contract accepted by NewRequestClient.
+// Existing AIOption values satisfy this contract automatically.
+type ClientOption interface {
+	applyClient(*clientConfig) error
+}
+
+type clientOptionFunc func(*clientConfig) error
+
+func (option clientOptionFunc) applyClient(config *clientConfig) error {
+	if option == nil {
+		return errors.New("client option is nil")
+	}
+	return option(config)
+}
+
+func (option AIOption) applyClient(config *clientConfig) error {
+	if option == nil {
+		return errors.New("AI option is nil")
+	}
+	option(&config.legacy)
+	return nil
+}
+
+// WithRequestRules appends validated application request rules in declaration
+// order. Captured rule values are isolated when the option is created.
+func WithRequestRules(rules ...core.AIProviderPatch) ClientOption {
+	copied, cloneErr := requestpolicy.ClonePatches(rules)
+	return clientOptionFunc(func(config *clientConfig) error {
+		if cloneErr != nil {
+			return cloneErr
+		}
+		config.integration.RequestRules = append(config.integration.RequestRules, copied...)
+		return nil
+	})
+}
+
+// WithRequestMiddleware appends constrained request middleware in declaration
+// order. Middleware implementations remain application-owned and must be safe
+// for concurrent use.
+func WithRequestMiddleware(middleware ...requestpolicy.RequestMiddleware) ClientOption {
+	copied := append([]requestpolicy.RequestMiddleware(nil), middleware...)
+	return clientOptionFunc(func(config *clientConfig) error {
+		config.integration.RequestMiddleware = append(config.integration.RequestMiddleware, copied...)
+		return nil
+	})
+}
+
+// WithCompatibilityMode selects how built-in provider compatibility rules
+// interact with explicit presence-aware request intent.
+func WithCompatibilityMode(mode requestpolicy.CompatibilityMode) ClientOption {
+	return clientOptionFunc(func(config *clientConfig) error {
+		if !mode.Valid() {
+			return fmt.Errorf("invalid AI compatibility mode %d", mode)
+		}
+		config.integration.CompatibilityMode = mode
+		return nil
+	})
+}
+
 // WithProvider sets the AI provider
 func WithProvider(provider string) AIOption {
 	return func(c *AIConfig) {
@@ -113,7 +200,9 @@ func WithAWSCredentials(accessKey, secretKey, sessionToken string) AIOption {
 	}
 }
 
-// WithTimeout sets the request timeout
+// WithTimeout sets a positive provider request timeout. Zero and negative
+// values are treated as unset so the framework or selected provider default
+// applies; they do not enable an unbounded request mode.
 func WithTimeout(timeout time.Duration) AIOption {
 	return func(c *AIConfig) {
 		c.Timeout = timeout
@@ -176,14 +265,26 @@ func WithReasoningEffort(effort string) AIOption {
 
 // WithHeaders sets custom headers
 func WithHeaders(headers map[string]string) AIOption {
+	snapshot := snapshotStringMap(headers)
 	return func(c *AIConfig) {
 		if c.Headers == nil {
 			c.Headers = make(map[string]string)
 		}
-		for k, v := range headers {
+		for k, v := range snapshot {
 			c.Headers[k] = v
 		}
 	}
+}
+
+func snapshotStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 // WithExtra sets extra configuration options

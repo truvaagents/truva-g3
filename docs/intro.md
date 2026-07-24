@@ -39,9 +39,13 @@ framework treats them differently:
 
 ## What you get out of the box
 
-- **Vendor-agnostic AI.** Switch between OpenAI, Anthropic, Gemini,
-  Groq, DeepSeek — or self-hosted models via Ollama, vLLM, or
-  llama.cpp — without changing agent code.
+- **Provider-neutral AI.** Keep agent and orchestration logic on Core
+  interfaces while using registered profiles for OpenAI, Anthropic, Gemini,
+  Azure OpenAI, Claude on Vertex AI, build-tagged AWS Bedrock, and several
+  OpenAI-compatible services. Other compatible endpoints, including vLLM and
+  llama.cpp, can reuse the OpenAI adapter after application-level contract
+  testing. Hosted surfaces may require different construction-time routes and
+  credentials without changing the provider-neutral call sites.
 - **Distributed-systems patterns.** Capability-based service discovery
   (Redis/Valkey by default, pluggable behind `core.Discovery`),
   circuit breakers, semantic retry, panic recovery,

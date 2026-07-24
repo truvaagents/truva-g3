@@ -247,18 +247,6 @@ func (s *LLMEventSummarizer) SetLLMDebugStore(store LLMDebugStore) {
 	s.debugStore = store
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when LLMEventSummarizer will emit a typed
-// event_summarization record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (s *LLMEventSummarizer) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if s.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
-}
-
 // recordDebugInteraction asynchronously records an LLM interaction to the debug store.
 // Same pattern as synthesizer.go:recordDebugInteraction — async, fail-open, WaitGroup-tracked.
 func (s *LLMEventSummarizer) recordDebugInteraction(ctx context.Context, requestID string, interaction LLMInteraction) {
@@ -378,8 +366,12 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		aiOpts.Model = s.model
 	}
 
-	callCtx := s.deferLLMRecordingIfWeWillRecord(ctx)
-	aiResp, err := s.aiClient.GenerateResponse(callCtx, prompt, aiOpts)
+	aiResp, _, err := invokeAI(ctx, s.aiClient, aiInvocation{
+		Purpose:        "event-summarization",
+		Prompt:         prompt,
+		Options:        aiOpts,
+		DeferRecording: s.debugStore != nil,
+	})
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)

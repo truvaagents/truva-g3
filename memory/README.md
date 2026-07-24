@@ -23,6 +23,12 @@ Implementations of six `core` interfaces, each with Redis (shared) and/or in-mem
 | `DigestCache` | `RedisDigestCache` | `InMemoryDigestCache` | Cache compacted activity digests (avoid redundant LLM calls) |
 | `MemoryReflector` | `LLMMemoryReflector` | — | Extract patterns from events via LLM (uses `EpisodicMemory` + `SharedKnowledge`) |
 
+The orchestration layer stores the stable, secret-free AI policy and route
+fingerprint with each activity digest. A semantic policy change misses the old
+entry; an unstable fingerprint bypasses cache reads and writes. The memory
+backend treats that fingerprint as opaque cache-envelope data and does not need
+provider-specific logic.
+
 ## Quick Start
 
 The simplest way to add memory to an agent — `NewSharedBackends` creates all backends, `BuildMemoryHooks` creates all hooks:

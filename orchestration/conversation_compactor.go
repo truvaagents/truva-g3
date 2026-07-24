@@ -53,17 +53,11 @@ func (c *LLMConversationCompactor) SetLLMDebugStore(store LLMDebugStore) {
 	c.debugStore = store
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when LLMConversationCompactor will emit
-// a typed conversation_history_compaction record itself. Gated on debugStore
-// presence to preserve the graceful-fallback invariant in
-// orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (c *LLMConversationCompactor) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if c.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
+func (c *LLMConversationCompactor) aiSemanticFingerprint(ctx context.Context) (string, bool) {
+	return fingerprintAI(ctx, c.aiClient, aiInvocation{
+		Purpose: "conversation-compaction",
+		Options: mergeAIOptions(&core.AIOptions{}, c.aiOptions),
+	})
 }
 
 func (c *LLMConversationCompactor) Compact(ctx context.Context, priorSummary string, newTurns []core.ConversationTurn) (string, error) {
@@ -80,8 +74,12 @@ func (c *LLMConversationCompactor) Compact(ctx context.Context, priorSummary str
 	prompt := buildConversationCompactionPrompt(priorSummary, newTurns)
 	opts := mergeAIOptions(&core.AIOptions{}, c.aiOptions)
 	ctx = telemetry.WithBaggage(ctx, "ai.purpose", "conversation_history_compaction")
-	callCtx := c.deferLLMRecordingIfWeWillRecord(ctx)
-	resp, err := c.aiClient.GenerateResponse(callCtx, prompt, opts)
+	resp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+		Purpose:        "conversation-compaction",
+		Prompt:         prompt,
+		Options:        opts,
+		DeferRecording: c.debugStore != nil,
+	})
 	if err != nil {
 		c.recordDebugInteraction(ctx, startTime, prompt, opts, nil, err)
 		telemetry.RecordSpanError(ctx, err)

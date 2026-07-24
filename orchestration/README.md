@@ -974,6 +974,13 @@ func main() {
    // Orchestration code remains unchanged!
    ```
 
+   All framework-owned orchestration calls are dispatched through
+   `core.GenerateAI` or `core.StreamAI` with a stable, non-secret `Purpose`.
+   Request-aware clients therefore receive presence-aware intent and sanitized
+   reports, while legacy clients continue to work when the request is
+   losslessly representable. Orchestration still depends only on Core; it does
+   not import provider packages.
+
 #### The Dependency Flow
 
 ```
@@ -1134,6 +1141,20 @@ lruCache := NewLRUCache(100)
 // Automatically removes least-used items when full
 lruCache.Set("apple-data", data)  // Might remove "old-company-data"
 ```
+
+### AI-Output Cache Safety
+
+The result-distillation, conversation-summary, and activity-digest caches also
+include the stable, secret-free AI policy and route fingerprint when a
+request-aware client supplies one. Changes to provider surface, resolved model,
+rules, deterministic middleware, or semantic route therefore miss old entries.
+If the fingerprint is unstable, these caches bypass reads and writes instead of
+serving output whose generation semantics cannot be reproduced.
+
+For a heterogeneous `ai.NewChain`, the chain is treated as one semantically
+interchangeable logical service. A cache hit may return output previously
+produced by a different chain entry than the one that would win now. Only put
+providers in the same chain when their answers are acceptable substitutes.
 
 ### Configuring Cache for Your Needs
 
@@ -1962,7 +1983,7 @@ The orchestration module captures complete LLM request/response payloads for pro
 - **9 Recording Sites**: `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, `hallucination_detection`, plus `agent_llm_call` (via `ai.InstrumentedAIClient`)
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
-- **Provider Tracking**: Captures AI provider (openai, anthropic, gemini, bedrock)
+- **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
 - **Atomic Storage**: List-based storage (RPUSH) safe for concurrent writes from orchestrator and agents
 
 **Configuration:**

@@ -159,16 +159,18 @@ func (c *LLMActivityCompactor) SetLLMDebugStore(store LLMDebugStore) {
 	c.debugStore = store
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when LLMActivityCompactor will emit a typed
-// activity_compaction record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (c *LLMActivityCompactor) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if c.debugStore == nil {
-		return ctx
+func (c *LLMActivityCompactor) aiSemanticFingerprint(ctx context.Context) (string, bool) {
+	options := &core.AIOptions{
+		Temperature:  c.temperature,
+		SystemPrompt: activityCompactorSystemPrompt,
 	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
+	if c.model != "" {
+		options.Model = c.model
+	}
+	return fingerprintAI(ctx, c.aiClient, aiInvocation{
+		Purpose: "activity-compaction",
+		Options: options,
+	})
 }
 
 // SetTelemetry sets the telemetry provider for span creation.
@@ -236,8 +238,12 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 		aiOpts.Model = c.model
 	}
 
-	callCtx := c.deferLLMRecordingIfWeWillRecord(ctx)
-	aiResp, err := c.aiClient.GenerateResponse(callCtx, prompt, aiOpts)
+	aiResp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+		Purpose:        "activity-compaction",
+		Prompt:         prompt,
+		Options:        aiOpts,
+		DeferRecording: c.debugStore != nil,
+	})
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)
@@ -373,8 +379,12 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 		aiOpts.Model = c.model
 	}
 
-	callCtx := c.deferLLMRecordingIfWeWillRecord(ctx)
-	aiResp, err := c.aiClient.GenerateResponse(callCtx, prompt, aiOpts)
+	aiResp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+		Purpose:        "activity-compaction",
+		Prompt:         prompt,
+		Options:        aiOpts,
+		DeferRecording: c.debugStore != nil,
+	})
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)

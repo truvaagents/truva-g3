@@ -1167,8 +1167,8 @@ Use these field names across all your services:
 |------------|------|-------------|---------|
 | `operation` | string | The operation being performed | "research_topic", "get_weather" |
 | `status` | string | Result status | "success", "error", "retry" |
-| `error` | string | Error message | "connection refused" |
-| `error_type` | string | Error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
+| `error_type` | string | Error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
 | `path` | string | Request path | "/api/capabilities/get_weather" |
@@ -1284,7 +1284,10 @@ if o.logger != nil {
 | orchestration | `terminal_synthesis_normalization` | Acceptance-time normalizer removed a terminal "synthesis pseudo-step" (agent absent from catalog + capability registered nowhere + every param leaf a satisfiable step-output template) so the framework synthesizer produces the answer; the plan becomes a zero-step terminal plan when that was its only step. WARN level. Fields: `request_id`, `plan_id`, dropped `step_id`/`agent_name`/`capability`, `remaining_steps`. Counter: `orchestration.plan.terminal_synthesis_normalized` |
 | ai | `ai_request` | AI provider calls |
 | ai | `chain_failover` | Chain client failed over to the next provider after a transient (proxy/CDN) 4xx error classified via `core.ProviderError.IsTransient()`. Indicates an infrastructure hiccup, not a request problem; usually self-resolves on the next provider |
-| ai | `chain_failover_retryable` | Chain client failed over to the next provider after a billing/quota terminal error classified via `core.ProviderError.IsRetryable()` (e.g. Anthropic credit balance exhausted, OpenAI insufficient_quota). **Cost signal — the failed provider's account needs operator action (top up credits, raise quota).** Distinct from `chain_failover` because the operator response is different: transient errors self-resolve, billing errors require intervention |
+| ai | `chain_failover_retryable` | A generate-chain entry failed over to the next provider after a billing/quota terminal error classified via `core.ProviderError.IsRetryable()` (e.g. Anthropic credit balance exhausted, OpenAI insufficient_quota). Includes `failover_reason=provider_retryable`. **Compatibility cost signal for non-terminal generate attempts only**—terminal and streaming signals use the operations below |
+| ai | `ai_chain_provider_failed` | A generate-chain entry failed and another entry remains. Includes stable non-secret `entry_name`, attempt metadata, sanitized error fields, and bounded `failover_reason`; provider route-resolution or invocation-viability failures use `route`, while billing/quota failures use `provider_retryable` |
+| ai | `ai_chain_stream_failover` | A streaming-chain entry failed before emitting output and another entry remains. Includes stable non-secret `entry_name`, attempt metadata, sanitized error fields, and bounded `failover_reason`; route failures use `route`, while billing/quota failures use `provider_retryable` |
+| ai | `ai_chain_exhausted` / `ai_chain_stream_exhausted` | Every entry failed. Emitted once at ERROR level with the final attempted error's sanitized `error_type` and bounded `failover_reason`; the joined caller error is not used for classification. A final billing/quota failure uses `failover_reason=provider_retryable` and does not emit a misleading “trying next” operation |
 | resilience | `circuit_breaker` | Circuit breaker state |
 | resilience | `retry_attempt` | Retry operations |
 | core | `framework_register_runnable` | A `core.Runnable` was registered with the framework via `Framework.RegisterRunnable`. Emitted once per registration, before `Run` is called |
@@ -1304,6 +1307,16 @@ if o.logger != nil {
 | scheduled-executor | `executor_consume` | Consumer returned a transient error (Redis transport glitch, etc.). Emitted at WARN level with `error_type=consume_error` |
 | scheduled-executor | `executor_dispatch` | One dispatch of a scheduled task to a target agent's `/api/v1/scheduled` endpoint. Error sub-types: `invalid_task_type`, `missing_target_agent`, `unknown_target_agent`, `target_not_agent`, `marshal_error`, `agent_error`, `max_retries_exhausted`, `dlq_write_failure`, `ack_failure` |
 | scheduled-executor | `scheduled_task_handle` | Agent-side receipt of a scheduled task via `/api/v1/scheduled`. Emitted by `orchestration.RegisterScheduledEndpoint`. Includes `request_id`, `schedule_id`, `task_id`, `status`, and `duration_ms` |
+
+For AI billing, hard-quota, and account-action alerts, select
+`component=framework/ai` and `failover_reason=provider_retryable` across
+`chain_failover_retryable`, `ai_chain_provider_failed`,
+`ai_chain_stream_failover`, `ai_chain_exhausted`, and
+`ai_chain_stream_exhausted`. Do not alert only on
+`operation=chain_failover_retryable`: that compatibility operation applies only
+to a non-terminal generate attempt with another entry to try. The bounded
+reason remains present when the final or only entry fails and the chain emits
+the terminal exhaustion operation instead.
 
 ### Pattern 3: Request ID Propagation (REQUIRED)
 
@@ -1403,11 +1416,19 @@ Before submitting code, verify:
 - [ ] All logger calls wrapped in `if logger != nil { ... }`
 - [ ] Every log has an `operation` field
 - [ ] Request-scoped logs include `request_id`
-- [ ] Error logs include `error` field with `err.Error()`
+- [ ] Error logs include an `error` field; use `err.Error()` only when the error is safe to log, otherwise use a sanitized derivative
 - [ ] Error logs include `error_type` for classification (used as Prometheus metric label)
 - [ ] Duration-sensitive operations include `duration_ms`
 - [ ] Using `WithContext` methods for request handlers
 - [ ] Using standard field names (see table above)
+
+Errors crossing an external-service or AI-provider boundary may contain response
+bodies, endpoint query values, credential diagnostics, or other sensitive
+material. Framework code must not put the original `err.Error()` on an
+observation surface in those cases. It must preserve the original error for the
+caller while logging a sanitized error message and a bounded `error_type`. The
+AI module implements this boundary with
+`providers.SanitizedObservationError`.
 
 ---
 
@@ -2133,7 +2154,7 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 |-------|----------|---------|
 | `operation` | **YES** | What action is being performed (MUST be in every log) |
 | `request_id` | **YES** | Request identifier (for request-scoped logs) |
-| `error` | On errors | Error message (use `err.Error()`) |
+| `error` | On errors | Error message; sanitize external/provider errors before logging |
 | `duration_ms` | Recommended | How long it took |
 | `status` | Recommended | success, error, retry |
 | `method` | For HTTP | HTTP method |
@@ -2148,7 +2169,7 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 
 **Required (Application Code):**
 - [ ] Using `WithContext` methods in all HTTP handlers
-- [ ] `error` field for error logs (use `err.Error()`)
+- [ ] `error` field for error logs (`err.Error()` only when safe; otherwise use a sanitized derivative)
 - [ ] Logging both success and failure paths
 
 **Recommended:**

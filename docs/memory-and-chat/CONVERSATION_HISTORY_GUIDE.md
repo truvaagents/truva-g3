@@ -642,6 +642,15 @@ For most deployments:
 - increase preserved turns if recency matters more than compression
 - keep cache size proportional to the number of concurrently active sessions on a pod
 
+The recursive summary cache also records the stable, secret-free AI policy and
+route fingerprint used by the compactor. A rule, deterministic middleware,
+resolved-model, provider-surface, or semantic-route change therefore misses and
+resets the old recursive summary instead of incrementally extending an answer
+created under different semantics. If a request-aware client cannot provide a
+stable fingerprint, recursive summary cache reads and writes are bypassed and
+compaction starts from the available turns. This is safe but loses incremental
+compaction until the policy becomes fingerprint-stable.
+
 ---
 
 ## Level 3: Full Manual Control

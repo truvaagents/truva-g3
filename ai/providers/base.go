@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -84,18 +85,333 @@ func (b *BaseClient) SetLogger(logger core.Logger) {
 // pulled off baggage and stamped onto the new span so AI spans become greppable
 // in Jaeger by request_id without joining to the orchestrator span.
 func (b *BaseClient) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
-	if b.Telemetry != nil {
-		spanCtx, span := b.Telemetry.StartSpan(ctx, name)
-		telemetry.SetCommonAttrsOn(spanCtx, span)
-		return spanCtx, span
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return ctx, &core.NoOpSpan{}
+	if b.Telemetry == nil {
+		return ctx, &core.NoOpSpan{}
+	}
+	spanCtx, span := b.Telemetry.StartSpan(ctx, name)
+	if spanCtx == nil {
+		spanCtx = ctx
+	}
+	if span == nil {
+		span = &core.NoOpSpan{}
+	}
+	telemetry.SetCommonAttrsOn(spanCtx, span)
+	return spanCtx, span
 }
+
+// RequestObservation is safe request metadata for framework logs. Provider is
+// the bounded base provider name; ProviderAlias and SemanticModel are emitted
+// only to logs and spans, never metric labels.
+type RequestObservation struct {
+	Provider      string
+	ProviderAlias string
+	SemanticModel string
+	PromptLength  int
+}
+
+// ResponseObservation is safe response metadata for framework logs and
+// bounded AI metrics.
+type ResponseObservation struct {
+	Provider      string
+	ProviderAlias string
+	SemanticModel string
+	Usage         core.TokenUsage
+	Duration      time.Duration
+}
+
+// ErrorObservation is safe provider-error metadata for framework logs.
+// ErrorType is normalized to the closed observation classifier below.
+type ErrorObservation struct {
+	Operation     string
+	Provider      string
+	ProviderAlias string
+	ErrorType     string
+	Duration      time.Duration
+}
+
+func normalizeObservationProvider(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "azureopenai", "bedrock", "gemini", "openai":
+		return strings.ToLower(strings.TrimSpace(provider))
+	case "":
+		return "unknown"
+	default:
+		return "other"
+	}
+}
+
+// NormalizeObservationErrorType constrains error classification used by logs,
+// metrics, and spans. It intentionally never derives a label from err.Error().
+func NormalizeObservationErrorType(value string) string {
+	switch value {
+	case "invalid_request", "route", "policy", "credential", "transport",
+		"provider_client", "provider_rate_limit", "provider_server", "decode",
+		"callback", "partial_stream", "cancelled", "deadline":
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+// SanitizedObservationError returns a bounded classifier and a safe error for
+// framework observations while leaving the original error untouched for the
+// caller. fallback must be one of the closed observation classifiers.
+func SanitizedObservationError(err error, fallback string) (string, error) {
+	errorType := NormalizeObservationErrorType(fallback)
+	switch {
+	case errors.Is(err, context.Canceled):
+		errorType = "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		errorType = "deadline"
+	case errors.Is(err, core.ErrStreamPartiallyCompleted):
+		errorType = "partial_stream"
+	default:
+		var transportErr *transportRequestError
+		var providerErr core.ProviderError
+		switch {
+		case errors.As(err, &transportErr):
+			errorType = "transport"
+		case errors.As(err, &providerErr):
+			switch {
+			case providerErr.IsTransient():
+				errorType = "transport"
+			case providerErr.StatusCode() == http.StatusTooManyRequests:
+				errorType = "provider_rate_limit"
+			case providerErr.StatusCode() >= http.StatusInternalServerError:
+				errorType = "provider_server"
+			default:
+				errorType = "provider_client"
+			}
+		}
+	}
+	errorType = NormalizeObservationErrorType(errorType)
+	return errorType, errors.New("AI provider request failed: " + errorType)
+}
+
+// RecordObservationError records only a sanitized error on a provider-owned
+// span. The original error remains available to return to the caller.
+func RecordObservationError(span core.Span, err error, fallback string) string {
+	errorType, safeError := SanitizedObservationError(err, fallback)
+	if span == nil {
+		return errorType
+	}
+	span.SetAttribute("ai.error_type", errorType)
+	span.RecordError(safeError)
+	return errorType
+}
+
+func normalizeObservationContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+// AddObservationRequestID copies the request ID into a log field set using the
+// framework's baggage-first, core-context-fallback precedence.
+func AddObservationRequestID(ctx context.Context, fields map[string]interface{}) {
+	if fields == nil {
+		return
+	}
+	ctx = normalizeObservationContext(ctx)
+	requestID := ""
+	if baggage := telemetry.GetBaggage(ctx); baggage != nil {
+		requestID = baggage["request_id"]
+	}
+	if requestID == "" {
+		requestID = core.GetRequestID(ctx)
+	}
+	if requestID != "" {
+		fields["request_id"] = requestID
+	}
+}
+
+// LogRequestMetadata emits context-correlated metadata without prompt content.
+func (b *BaseClient) LogRequestMetadata(ctx context.Context, observation RequestObservation) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	fields := map[string]interface{}{
+		"operation":      "ai_request",
+		"provider":       normalizeObservationProvider(observation.Provider),
+		"provider_alias": observation.ProviderAlias,
+		"model":          observation.SemanticModel,
+		"prompt_length":  observation.PromptLength,
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.InfoWithContext(ctx, "AI request initiated", fields)
+}
+
+// LogResponseMetadata emits context-correlated metadata and bounded metrics.
+func (b *BaseClient) LogResponseMetadata(ctx context.Context, observation ResponseObservation) {
+	provider := normalizeObservationProvider(observation.Provider)
+	telemetry.RecordAIRequest(
+		telemetry.ModuleAI,
+		provider,
+		float64(observation.Duration.Milliseconds()),
+		"success",
+	)
+	if observation.Usage.PromptTokens > 0 {
+		telemetry.RecordAITokens(
+			telemetry.ModuleAI,
+			provider,
+			"input",
+			int64(observation.Usage.PromptTokens),
+		)
+	}
+	if observation.Usage.CompletionTokens > 0 {
+		telemetry.RecordAITokens(
+			telemetry.ModuleAI,
+			provider,
+			"output",
+			int64(observation.Usage.CompletionTokens),
+		)
+	}
+	if b == nil || b.Logger == nil {
+		return
+	}
+	fields := map[string]interface{}{
+		"operation":         "ai_response",
+		"provider":          provider,
+		"provider_alias":    observation.ProviderAlias,
+		"model":             observation.SemanticModel,
+		"prompt_tokens":     observation.Usage.PromptTokens,
+		"completion_tokens": observation.Usage.CompletionTokens,
+		"total_tokens":      observation.Usage.TotalTokens,
+		"duration_ms":       observation.Duration.Milliseconds(),
+		"status":            "success",
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.InfoWithContext(ctx, "AI response received", fields)
+}
+
+// LogErrorMetadata emits only a bounded classifier and sanitized message.
+func (b *BaseClient) LogErrorMetadata(ctx context.Context, observation ErrorObservation) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	errorType := NormalizeObservationErrorType(observation.ErrorType)
+	fields := map[string]interface{}{
+		"operation":      observation.Operation,
+		"provider":       normalizeObservationProvider(observation.Provider),
+		"provider_alias": observation.ProviderAlias,
+		"status":         "error",
+		"error":          "AI provider request failed: " + errorType,
+		"error_type":     errorType,
+		"duration_ms":    observation.Duration.Milliseconds(),
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.ErrorWithContext(ctx, "AI provider request failed", fields)
+}
+
+func (b *BaseClient) logDebugWithContext(ctx context.Context, message string, fields map[string]interface{}) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.DebugWithContext(ctx, message, fields)
+}
+
+func (b *BaseClient) logInfoWithContext(ctx context.Context, message string, fields map[string]interface{}) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.InfoWithContext(ctx, message, fields)
+}
+
+func (b *BaseClient) logWarnWithContext(ctx context.Context, message string, fields map[string]interface{}) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.WarnWithContext(ctx, message, fields)
+}
+
+func (b *BaseClient) logErrorWithContext(ctx context.Context, message string, fields map[string]interface{}) {
+	if b == nil || b.Logger == nil {
+		return
+	}
+	ctx = normalizeObservationContext(ctx)
+	AddObservationRequestID(ctx, fields)
+	b.Logger.ErrorWithContext(ctx, message, fields)
+}
+
+func requestForAttempt(ctx context.Context, request *http.Request) (*http.Request, error) {
+	clone := request.Clone(ctx)
+	if request.Body == nil || request.Body == http.NoBody {
+		return clone, nil
+	}
+	if request.GetBody == nil {
+		return nil, errors.New("AI request body is not replayable")
+	}
+
+	body, err := request.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("recreate AI request body: %w", err)
+	}
+	clone.Body = body
+	return clone, nil
+}
+
+// RequestAttemptPreparer applies per-attempt transport state, such as a
+// rotating credential, to a fresh replayable request. Implementations must not
+// retain or mutate the original logical request.
+type RequestAttemptPreparer func(context.Context, *http.Request) error
+
+type transportRequestError struct {
+	cause error
+}
+
+func (e *transportRequestError) Error() string { return "AI HTTP transport request failed" }
+
+func (e *transportRequestError) Unwrap() error { return e.cause }
 
 // ExecuteWithRetry performs an HTTP request with exponential backoff retry.
 // Each retry attempt creates a child span visible in Jaeger for debugging.
+// Requests with a body must provide GetBody so every attempt can use a fresh
+// copy; non-replayable bodies are rejected before the first network call, even
+// when MaxRetries is zero. http.NewRequestWithContext sets GetBody automatically
+// for *bytes.Buffer, *bytes.Reader, and *strings.Reader bodies.
 func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return b.executeWithRetry(ctx, req, nil)
+}
+
+// ExecuteWithRetryPrepared behaves like ExecuteWithRetry and invokes prepare
+// exactly once for every transport attempt after the request body has been
+// recreated and before the configured RoundTripper sees it.
+func (b *BaseClient) ExecuteWithRetryPrepared(
+	ctx context.Context,
+	req *http.Request,
+	prepare RequestAttemptPreparer,
+) (*http.Response, error) {
+	if prepare == nil {
+		return nil, errors.New("AI request attempt preparer is nil")
+	}
+	return b.executeWithRetry(ctx, req, prepare)
+}
+
+func (b *BaseClient) executeWithRetry(
+	ctx context.Context,
+	req *http.Request,
+	prepare RequestAttemptPreparer,
+) (*http.Response, error) {
 	var lastErr error
+	lastErrorType := "unknown"
+	if req.Body != nil && req.Body != http.NoBody {
+		defer func() {
+			_ = req.Body.Close()
+		}()
+	}
 
 	for attempt := 0; attempt <= b.MaxRetries; attempt++ {
 		// Create a span for each attempt (visible in Jaeger as child spans)
@@ -110,23 +426,59 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 				"module", telemetry.ModuleAI,
 			)
 
-			attemptSpan.SetAttribute("ai.previous_error", lastErr.Error())
+			_, previousError := SanitizedObservationError(lastErr, lastErrorType)
+			attemptSpan.SetAttribute("ai.previous_error", previousError.Error())
 
-			b.Logger.WarnWithContext(attemptCtx, "AI request retry attempt", map[string]interface{}{
+			b.logWarnWithContext(attemptCtx, "AI request retry attempt", map[string]interface{}{
 				"operation":   "ai_request_retry",
 				"attempt":     attempt,
 				"max_retries": b.MaxRetries,
-				"last_error":  lastErr.Error(),
+				"error":       previousError.Error(),
+				"error_type":  NormalizeObservationErrorType(lastErrorType),
 			})
 		}
 
-		// Clone request for retry
-		reqClone := req.Clone(attemptCtx)
+		attemptRequest, err := requestForAttempt(attemptCtx, req)
+		if err != nil {
+			RecordObservationError(attemptSpan, err, "invalid_request")
+			attemptSpan.SetAttribute("ai.attempt_status", "request_error")
+			attemptSpan.SetAttribute("ai.retryable", false)
+			attemptSpan.End()
+			b.LogErrorMetadata(attemptCtx, ErrorObservation{
+				Operation: "ai_request_error",
+				Provider:  b.ProviderName,
+				ErrorType: "invalid_request",
+			})
+			return nil, err
+		}
+		if prepare != nil {
+			if err := prepare(attemptCtx, attemptRequest); err != nil {
+				if attemptRequest.Body != nil {
+					_ = attemptRequest.Body.Close()
+				}
+				RecordObservationError(attemptSpan, err, "credential")
+				attemptSpan.SetAttribute("ai.attempt_status", "request_error")
+				attemptSpan.SetAttribute("ai.retryable", false)
+				attemptSpan.End()
+				b.LogErrorMetadata(attemptCtx, ErrorObservation{
+					Operation: "ai_request_error",
+					Provider:  b.ProviderName,
+					ErrorType: "credential",
+				})
+				return nil, err
+			}
+		}
 
 		// Execute request
 		attemptStart := time.Now()
 		// #nosec G704 -- provider clients build these requests from explicit provider config.
-		resp, err := b.HTTPClient.Do(reqClone)
+		resp, err := b.HTTPClient.Do(attemptRequest)
+		if err != nil {
+			// net/http errors can embed the complete request URL, including trusted
+			// resolver query values. Preserve the cause for errors.Is/errors.As but
+			// expose only a sanitized message to spans and framework logs.
+			err = &transportRequestError{cause: err}
+		}
 		attemptDuration := time.Since(attemptStart)
 
 		attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())
@@ -140,14 +492,14 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 			if b.Logger != nil {
 				if attempt > 0 {
 					// Retry recovery - log at INFO level
-					b.Logger.InfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
+					b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
 						"operation":          "ai_request_recovery",
 						"successful_attempt": attempt + 1,
 						"total_attempts":     attempt + 1,
 					})
 				} else {
 					// First attempt success - log at DEBUG level
-					b.Logger.DebugWithContext(ctx, "AI HTTP request completed", map[string]interface{}{
+					b.logDebugWithContext(ctx, "AI HTTP request completed", map[string]interface{}{
 						"operation":   "ai_http_success",
 						"status_code": resp.StatusCode,
 						"duration_ms": attemptDuration.Milliseconds(),
@@ -166,19 +518,21 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 			contentType := resp.Header.Get("Content-Type")
 			if !strings.Contains(contentType, "text/html") {
 				// Real API error — non-retryable, return immediately
+				RecordObservationError(
+					attemptSpan,
+					errors.New("AI provider returned a non-retryable client response"),
+					"provider_client",
+				)
 				attemptSpan.SetAttribute("ai.attempt_status", "client_error")
 				attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
 				attemptSpan.SetAttribute("ai.retryable", false)
 				attemptSpan.End()
 
-				if b.Logger != nil {
-					b.Logger.ErrorWithContext(ctx, "AI request failed with non-retryable error", map[string]interface{}{
-						"operation":   "ai_request_error",
-						"status_code": resp.StatusCode,
-						"error_type":  "client_error",
-						"retryable":   false,
-					})
-				}
+				b.LogErrorMetadata(ctx, ErrorObservation{
+					Operation: "ai_request_error",
+					Provider:  b.ProviderName,
+					ErrorType: "provider_client",
+				})
 				return resp, nil
 			}
 
@@ -189,19 +543,20 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 				message:    fmt.Sprintf("non-API error response (status %d, content-type: %s)", resp.StatusCode, contentType),
 				transient:  true,
 			}
-			attemptSpan.RecordError(lastErr)
+			lastErrorType = "transport"
+			RecordObservationError(attemptSpan, lastErr, lastErrorType)
 			attemptSpan.SetAttribute("ai.attempt_status", "proxy_error")
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
-			attemptSpan.SetAttribute("http.content_type", contentType)
+			attemptSpan.SetAttribute("http.content_type", "text/html")
 			attemptSpan.SetAttribute("ai.retryable", true)
 			attemptSpan.End()
 			_ = resp.Body.Close()
 
 			if b.Logger != nil {
-				b.Logger.WarnWithContext(attemptCtx, "Non-API error response, retrying", map[string]interface{}{
+				b.logWarnWithContext(attemptCtx, "Non-API error response, retrying", map[string]interface{}{
 					"operation":    "ai_proxy_error",
 					"status_code":  resp.StatusCode,
-					"content_type": contentType,
+					"content_type": "text/html",
 					"attempt":      attempt + 1,
 					"max_retries":  b.MaxRetries,
 				})
@@ -209,14 +564,19 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 		} else if err != nil {
 			// Network error — retryable
 			lastErr = err
-			attemptSpan.RecordError(err)
+			lastErrorType = "transport"
+			RecordObservationError(attemptSpan, err, lastErrorType)
 			attemptSpan.SetAttribute("ai.attempt_status", "network_error")
 			attemptSpan.SetAttribute("ai.retryable", true)
 			attemptSpan.End()
 		} else {
 			// Server error (5xx) or 429 rate limit — retryable
 			lastErr = fmt.Errorf("server error: status %d", resp.StatusCode)
-			attemptSpan.RecordError(lastErr)
+			lastErrorType = "provider_server"
+			if resp.StatusCode == http.StatusTooManyRequests {
+				lastErrorType = "provider_rate_limit"
+			}
+			RecordObservationError(attemptSpan, lastErr, lastErrorType)
 			attemptSpan.SetAttribute("ai.attempt_status", "server_error")
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
 			attemptSpan.SetAttribute("ai.retryable", true)
@@ -237,13 +597,14 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 			delay := b.RetryDelay * time.Duration(1<<shiftAmount)
 
 			if b.Logger != nil {
-				b.Logger.WarnWithContext(ctx, "AI request failed, retrying", map[string]interface{}{
+				_, safeError := SanitizedObservationError(lastErr, lastErrorType)
+				b.logWarnWithContext(ctx, "AI request failed, retrying", map[string]interface{}{
 					"operation":        "ai_request_retry_wait",
 					"attempt":          attempt + 1,
 					"max_retries":      b.MaxRetries,
 					"retry_delay_ms":   delay.Milliseconds(),
-					"error":            lastErr.Error(),
-					"error_type":       fmt.Sprintf("%T", lastErr),
+					"error":            safeError.Error(),
+					"error_type":       NormalizeObservationErrorType(lastErrorType),
 					"backoff_strategy": "exponential",
 				})
 			}
@@ -254,10 +615,12 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 				// Continue to next attempt
 			case <-ctx.Done():
 				if b.Logger != nil {
-					b.Logger.ErrorWithContext(ctx, "AI request cancelled during retry", map[string]interface{}{
-						"operation":     "ai_request_cancelled",
-						"cancelled_at":  attempt + 1,
-						"context_error": ctx.Err().Error(),
+					errorType, safeError := SanitizedObservationError(ctx.Err(), "cancelled")
+					b.logErrorWithContext(ctx, "AI request cancelled during retry", map[string]interface{}{
+						"operation":    "ai_request_cancelled",
+						"cancelled_at": attempt + 1,
+						"error":        safeError.Error(),
+						"error_type":   errorType,
 					})
 				}
 				return nil, ctx.Err()
@@ -272,22 +635,32 @@ func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*
 	)
 
 	if b.Logger != nil {
-		b.Logger.ErrorWithContext(ctx, "AI request failed after all retries", map[string]interface{}{
+		_, safeError := SanitizedObservationError(lastErr, lastErrorType)
+		b.logErrorWithContext(ctx, "AI request failed after all retries", map[string]interface{}{
 			"operation":      "ai_request_final_failure",
 			"total_attempts": b.MaxRetries + 1,
-			"final_error":    lastErr.Error(),
-			"error_type":     fmt.Sprintf("%T", lastErr),
+			"error":          safeError.Error(),
+			"error_type":     NormalizeObservationErrorType(lastErrorType),
 		})
 	}
 
 	return nil, fmt.Errorf("request failed after %d retries: %w", b.MaxRetries, lastErr)
 }
 
-// LogError logs an error with provider context
+// LogError logs a sanitized error with provider context.
+//
+// Deprecated: use LogErrorMetadata for request-correlated observations.
 func (b *BaseClient) LogError(provider string, err error) {
-	b.Logger.Error("Provider error", map[string]interface{}{
-		"provider": provider,
-		"error":    err.Error(),
+	if b == nil || b.Logger == nil {
+		return
+	}
+	errorType, safeError := SanitizedObservationError(err, "unknown")
+	b.Logger.Error("AI provider request failed", map[string]interface{}{
+		"operation":  "ai_request_error",
+		"provider":   normalizeObservationProvider(provider),
+		"status":     "error",
+		"error":      safeError.Error(),
+		"error_type": errorType,
 	})
 }
 
@@ -431,63 +804,27 @@ func (b *BaseClient) HandleError(statusCode int, body []byte, provider, model st
 	}
 }
 
-// LogRequest logs outgoing API requests
-func (b *BaseClient) LogRequest(provider, model, prompt string) {
-	b.Logger.Info("AI request initiated", map[string]interface{}{
-		"operation":     "ai_request",
-		"provider":      provider,
-		"model":         model,
-		"prompt_length": len(prompt),
-		"max_tokens":    b.DefaultMaxTokens,
-		"temperature":   b.DefaultTemperature,
-	})
+// LogRequest is retained as a safe no-op for source compatibility.
+//
+// Deprecated: use LogRequestMetadata with the active request context.
+func (b *BaseClient) LogRequest(provider, model, prompt string) {}
 
-	// Log full prompt content at DEBUG level for troubleshooting
-	b.Logger.Debug("AI request prompt content", map[string]interface{}{
-		"operation": "ai_request_content",
-		"provider":  provider,
-		"model":     model,
-		"prompt":    prompt,
-	})
-}
-
-// LogResponse logs API responses with trace correlation
+// LogResponse logs API responses with trace correlation while deliberately
+// omitting its ambiguous model argument from logs and metrics.
+//
+// Deprecated: use LogResponseMetadata with the semantic model identity.
 func (b *BaseClient) LogResponse(ctx context.Context, provider, model string, tokens core.TokenUsage, duration time.Duration) {
-	// Record AI request metrics using unified telemetry
-	telemetry.RecordAIRequest(telemetry.ModuleAI, provider,
-		float64(duration.Milliseconds()), "success", "model", model)
-
-	// Record token usage
-	if tokens.PromptTokens > 0 {
-		telemetry.RecordAITokens(telemetry.ModuleAI, provider, "input", int64(tokens.PromptTokens), "model", model)
-	}
-	if tokens.CompletionTokens > 0 {
-		telemetry.RecordAITokens(telemetry.ModuleAI, provider, "output", int64(tokens.CompletionTokens), "model", model)
-	}
-
-	b.Logger.InfoWithContext(ctx, "AI response received", map[string]interface{}{
-		"operation":         "ai_response",
-		"provider":          provider,
-		"model":             model,
-		"prompt_tokens":     tokens.PromptTokens,
-		"completion_tokens": tokens.CompletionTokens,
-		"total_tokens":      tokens.TotalTokens,
-		"duration_ms":       duration.Milliseconds(),
-		"tokens_per_second": float64(tokens.TotalTokens) / duration.Seconds(),
-		"status":            "success",
+	b.LogResponseMetadata(ctx, ResponseObservation{
+		Provider: provider,
+		Usage:    tokens,
+		Duration: duration,
 	})
 }
 
-// LogResponseContent logs the full response content at DEBUG level
-func (b *BaseClient) LogResponseContent(provider, model, content string) {
-	b.Logger.Debug("AI response content", map[string]interface{}{
-		"operation":       "ai_response_content",
-		"provider":        provider,
-		"model":           model,
-		"response":        content,
-		"response_length": len(content),
-	})
-}
+// LogResponseContent is retained as a safe no-op for source compatibility.
+//
+// Deprecated: response content is not emitted by provider logging helpers.
+func (b *BaseClient) LogResponseContent(provider, model, content string) {}
 
 // RetryConfig holds retry configuration
 type RetryConfig struct {

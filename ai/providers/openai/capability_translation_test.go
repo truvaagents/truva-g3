@@ -111,12 +111,11 @@ func TestClient_GenerateResponse_AllowsAdvancedFieldsForNativeOpenAIReasoningMod
 		t.Fatalf("GenerateResponse returned error: %v", err)
 	}
 
-	reasoning, ok := captured["reasoning"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected reasoning object for native OpenAI reasoning model, got %#v", captured["reasoning"])
+	if got := captured["reasoning_effort"]; got != "high" {
+		t.Fatalf("expected reasoning_effort=high, got %#v", got)
 	}
-	if reasoning["effort"] != "high" {
-		t.Fatalf("expected reasoning.effort=high, got %#v", reasoning["effort"])
+	if _, present := captured["reasoning"]; present {
+		t.Fatalf("native OpenAI request unexpectedly used nested reasoning: %#v", captured["reasoning"])
 	}
 	responseFormat, ok := captured["response_format"].(map[string]interface{})
 	if !ok {

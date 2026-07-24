@@ -307,7 +307,7 @@
 <header class="article-header">
   <h1>TruvaG3: An Introduction to the Microagents Framework</h1>
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
-  <p class="meta">Neelabh Tripathi · May 16, 2026</p>
+  <p class="meta">Neelabh Tripathi · May 16, 2026 · Updated July 23, 2026</p>
 </header>
 
 <details class="toc">
@@ -645,7 +645,7 @@ type Discovery interface {
 
 <ul>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/core/README.md"><strong><code>core</code></strong></a> — defines the framework's interfaces (<code>Component</code>, <code>Registry</code>, <code>Discovery</code>, <code>AIClient</code>, <code>Telemetry</code>), base implementations for tools and agents, configuration loading, the pluggable service registry, and the auto-generated HTTP surface (capability endpoints, <code>/health</code>, <code>/openapi.json</code>). Every component depends on it.</li>
-  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md"><strong><code>ai</code></strong></a> — provider-neutral LLM client with zero-configuration provider detection, provider and model aliases, chain-client failover, and embeddings. Add it when an agent needs to call an LLM.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md"><strong><code>ai</code></strong></a> — provider-neutral LLM clients with environment-based detection among registered providers, request-aware enterprise profiles, dynamic routing and credentials, model aliases, heterogeneous chain failover, request policy, and embeddings. Add it when an agent needs to call an LLM.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md"><strong><code>orchestration</code></strong></a> — the per-agent reasoning loop: dynamic LLM-driven planning, DAG execution with parallelism, iterative multi-phase plans, streaming, human-in-the-loop approvals, async tasks, and scheduled execution. Add it when an agent coordinates multi-step work.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/memory/README.md"><strong><code>memory</code></strong></a> — shared agent memory (episodic events, knowledge store, semantic recall) and per-user memory (extraction, reconciliation, forget). Add it when agents need state across requests.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md"><strong><code>resilience</code></strong></a> — circuit breakers, retry with exponential backoff and jitter, panic recovery. Add it for robust fault isolation between components.</li>
@@ -788,7 +788,7 @@ type Discovery interface {
 <p><strong>Distributed traces.</strong> W3C TraceContext propagation reassembles a request that spans several agents and tools into one trace in any OTLP-compatible backend (Jaeger, Tempo, Honeycomb, Datadog, etc.). Each span carries operation-specific attributes:</p>
 
 <ul>
-  <li><strong>AI calls</strong> — provider, model, prompt and completion token counts, total tokens, cost in USD, finish reason, streaming flag, retry attempt, max retries, chain provider index, attempt status.</li>
+  <li><strong>AI calls</strong> — provider, semantic model, prompt and completion token counts, total tokens, finish reason, streaming flag, retry attempt, max retries, chain entry index, attempt status, request-policy adjustments, and sanitized route identity when an application supplies one. The framework deliberately does not infer cost in USD; authoritative spend comes from the provider's billing export and negotiated pricing.</li>
   <li><strong>Orchestrator phases and steps</strong> — plan ID, phase number, total phases, steps per phase, terminal flag, termination reason; per step: agent name, capability invoked, attempt count, success status, duration.</li>
   <li><strong>Synthesis</strong> — model, provider, prompt/completion/total tokens, step count, success and failure counts, finish reason, streaming flag.</li>
   <li><strong>Pipeline hooks</strong> — hook name and stage (before-planning, after-planning, after-execution, after-synthesis), duration, short-circuit outcome.</li>
@@ -800,7 +800,7 @@ type Discovery interface {
 
 <ul>
   <li><strong>Orchestration</strong> — plans generated, plan success rate, average phases per request, plan-generation duration, continuation re-plan rate, parse-error counts.</li>
-  <li><strong>AI</strong> — requests per provider and model, token usage, request duration, failure counts, chain failover and exhaustion events, embedding requests, embedding tokens.</li>
+  <li><strong>AI</strong> — successful provider responses and reported token usage, successful-request duration, bounded retry-exhaustion counts, chain failover and exhaustion events, and embedding outcomes.</li>
   <li><strong>Discovery</strong> — lookups, registrations, deregistrations, health-check duration, services found per lookup.</li>
   <li><strong>Memory</strong> — cache hits and misses, eviction rate, ops rate, conversation-history compaction duration, episodic events recorded.</li>
   <li><strong>HITL</strong> — checkpoints created, decisions per outcome (approved, rejected, edited, expired).</li>
@@ -824,63 +824,69 @@ type Discovery interface {
 
 <h3 id="ai-provider-layer">5. Vendor-agnostic AI provider layer</h3>
 
-<p>The <code>ai</code> module sits behind a single Go interface — <code>core.AIClient</code> — that every agent talks to. Behind that interface, the framework supports eleven providers out of the box and lets teams plug in their own. Application code never names a provider in source; it asks for a client and gets one wired to whichever provider the deployment has configured. The same agent image runs against OpenAI in one environment, a self-hosted Ollama model in another, and an Anthropic-with-Groq-fallback chain in a third — without recompiling.</p>
+<p>The <code>ai</code> module presents two provider-neutral contracts: the compact <code>core.AIClient</code> interface used by existing agents, and the presence-aware <code>core.AIRequestClient</code> interface used when an application needs explicit parameter intent, request policy, preparation reports, or enterprise routing. Applications can let <code>ai.NewClient()</code> auto-detect a registered provider from the environment, explicitly select one, construct a request-aware client, or assemble independently configured entries with <code>ai.NewChain</code>. Built-in provider packages are opt-in: importing a package runs its registration hook, and auto-detection considers only registered factories. The agent and orchestration layers remain independent of each provider's HTTP schema or SDK types.</p>
 
-<p><strong>Eleven providers ship in the box.</strong> Four native (each with first-class support for that provider's API features) and seven OpenAI-compatible (any service that exposes an OpenAI-compatible HTTP API):</p>
-
-<ul>
-  <li><strong>Native:</strong> <code>openai</code>, <code>anthropic</code>, <code>gemini</code>, <code>bedrock</code></li>
-  <li><strong>OpenAI-compatible:</strong> <code>openai.groq</code>, <code>openai.deepseek</code>, <code>openai.xai</code>, <code>openai.mistral</code>, <code>openai.qwen</code>, <code>openai.together</code>, <code>openai.ollama</code></li>
-</ul>
-
-<p>Provider names are logical; they map to concrete endpoints at runtime through environment variables. Switching a deployment from <code>openai</code> to <code>openai.groq</code> is one env-var change — no code change, no rebuild.</p>
-
-<p><strong>Zero-configuration provider detection.</strong> <code>ai.NewClient()</code> scans environment variables, detects which API key is present (<code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, …), picks the highest-priority configured provider, and returns a ready-to-use client. Two metrics expose what happened (canonical OTEL names; Prometheus exporters add <code>_total</code> and replace dots with underscores):</p>
+<p><strong>Support is organized by integration surface rather than a single provider count.</strong> This distinction matters in enterprise deployments: a direct API key, an Azure deployment, a Google publisher model, and an AWS inference profile are not interchangeable configuration shapes.</p>
 
 <ul>
-  <li><code>ai.provider.detection</code> — counter of detection runs.</li>
-  <li><code>ai.provider.selected</code> — counter labeled by which provider won, so dashboards can show provider mix across environments at a glance.</li>
+  <li><strong>Direct HTTP providers:</strong> <code>openai</code>, <code>anthropic</code>, and <code>gemini</code>. OpenAI and Anthropic support both legacy and request-aware construction; Gemini currently uses the legacy client contract.</li>
+  <li><strong>Native SDK provider:</strong> <code>bedrock</code>, compiled with the <code>bedrock</code> build tag. It uses AWS SDK configuration and the Converse API, supports generate, stream, Titan Text Embeddings, request policy, and optional per-request selection of a Converse-supported <code>modelId</code>, such as a foundation model, inference profile, provisioned model, or custom model deployment.</li>
+  <li><strong>First-class hosted request-aware profiles:</strong> <code>azureopenai.v1</code>, <code>azureopenai.classic</code>, and <code>anthropic.vertex</code>. The first two cover Azure OpenAI v1 and the classic deployment-scoped Chat Completions surface; the third covers Anthropic Claude publisher models on Google Vertex AI. All three support generate and stream through the same normalized request contract.</li>
+  <li><strong>Registered OpenAI-compatible aliases:</strong> <code>openai.groq</code>, <code>openai.deepseek</code>, <code>openai.xai</code>, <code>openai.mistral</code>, <code>openai.qwen</code>, <code>openai.together</code>, and <code>openai.ollama</code>.</li>
+  <li><strong>Hosted compatibility recipe:</strong> Google Cloud's OpenAI-compatible Vertex AI endpoint reuses the <code>openai</code> request-aware adapter with an application-owned endpoint resolver and Google access-token source. It remains under the <code>openai</code> provider identity because its wire contract is OpenAI Chat Completions.</li>
 </ul>
 
-<p><strong>Six portable model aliases.</strong> Instead of hardcoding model IDs like <code>gpt-4.1-mini</code> or <code>claude-sonnet-4-5-20250929</code>, application code requests a role. Each provider has its own mapping:</p>
+<p>The Azure and Vertex profiles are explicit by design: they are not auto-detected, do not accept a generic static base URL, and require application-supplied routing and explicit credentials. Azure accepts either a static API key or a dynamic credential source; Vertex requires a Google bearer-token source. That keeps tenant, region, Azure deployment, Google publisher model, and short-lived token lifecycle decisions in application code rather than hiding them behind environment-variable conventions. Bedrock can participate in auto-detection only when its build tag is present and the process exposes one of the AWS credential signals checked by its factory. Those signals identify a candidate; client construction loads AWS SDK configuration, and an invocation can still fail if its credentials, region, or selected model are unusable.</p>
+
+<p><strong>Environment-based detection remains the simple path.</strong> After the application imports the provider packages it intends to use, <code>ai.NewClient()</code> checks registered factories for configured credentials or local-service signals, orders the available aliases by priority, and constructs the highest-priority candidate. Common signals include <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, alias-specific API keys, and an explicitly configured local Ollama URL. Explicit selection and explicit chains remain available when deployment order must be deterministic. Two metrics expose detection (canonical OTEL names; Prometheus exporters add <code>_total</code> and replace dots with underscores):</p>
 
 <ul>
-  <li><strong><code>default</code></strong> — provider-recommended workhorse (OpenAI → gpt-4.1-mini, Anthropic → claude-sonnet-4-5, Gemini → gemini-2.5-flash)</li>
-  <li><strong><code>fast</code></strong> — cheapest / lowest-latency option</li>
-  <li><strong><code>smart</code></strong> — best-reasoning model (OpenAI → o3, Anthropic → sonnet-4-5, Gemini → gemini-2.5-pro)</li>
-  <li><strong><code>premium</code></strong> — maximum-intelligence model (Anthropic → opus-4-5, Gemini → gemini-3-pro-preview)</li>
-  <li><strong><code>code</code></strong> — best for code generation</li>
-  <li><strong><code>vision</code></strong> — supports multimodal image input</li>
+  <li><code>ai.provider.detection</code> — counter for provider-detection activity, including the no-provider outcome.</li>
+  <li><code>ai.provider.selected</code> — counter labeled by the selected base provider and alias, so dashboards can show provider mix across environments at a glance.</li>
 </ul>
 
-<p>Each alias can be overridden per environment with <code>TRUVAG3_{PROVIDER}_MODEL_{ALIAS}</code> env vars — so you can pin a specific model in production while letting development float to the latest.</p>
-
-<p><strong>Chain client with automatic failover.</strong> A chain client wraps multiple providers and tries them in order; if a request gets a retryable error (rate limit, 5xx, transient failure), it fails over to the next provider transparently. The chain is instrumented at every level:</p>
+<p><strong>Catalog-backed semantic model roles.</strong> Instead of hardcoding a direct model ID everywhere, application code can request one of up to six roles. The direct HTTP providers, registered OpenAI-compatible aliases, Azure profiles, and Vertex profile resolve only the roles their corresponding model catalog defines. Bedrock does not resolve these roles; it uses its own direct default or an application-supplied model or inference-profile ID. Environment overrides are available when a deployment needs to pin a specific catalog mapping:</p>
 
 <ul>
-  <li><code>ai.chain.attempt</code> — every provider attempt, labeled by provider and attempt index.</li>
-  <li><code>ai.chain.failover</code> — counter of failover events. A rising rate is the canonical signal that the primary provider is degraded.</li>
-  <li><code>ai.chain.exhausted</code> — counter of requests where every provider in the chain failed. Should be near zero in healthy operation.</li>
-  <li><code>ai.chain.stream.success</code> / <code>ai.chain.stream.partial</code> / <code>ai.chain.stream.failure</code> — outcomes for streaming requests, which can succeed, partially succeed (some tokens before failure), or fail.</li>
+  <li><strong><code>default</code></strong> — the framework catalog's workhorse choice (currently OpenAI → gpt-4.1-mini, Anthropic → Claude Sonnet 4.5, Gemini → Gemini 2.5 Flash)</li>
+  <li><strong><code>fast</code></strong> — the catalog's speed- or cost-oriented choice</li>
+  <li><strong><code>smart</code></strong> — the catalog's higher-reasoning choice (currently OpenAI → o3, Anthropic → Claude Sonnet 4.5, Gemini → Gemini 2.5 Pro)</li>
+  <li><strong><code>premium</code></strong> — the catalog's highest-capability tier, where defined</li>
+  <li><strong><code>code</code></strong> — the catalog's code-oriented choice</li>
+  <li><strong><code>vision</code></strong> — an image-capable catalog choice, where defined. The current portable <code>core.AIRequest</code> envelope is text-only; this alias does not by itself add image input to a request.</li>
 </ul>
 
-<p>The trace view of a failover looks like this: a parent <code>ai.chain.generate_response</code> span containing one or more <code>ai.chain.provider_attempt</code> spans, each carrying <code>ai.chain.provider</code>, <code>ai.chain.provider_alias</code>, <code>ai.chain.provider_index</code>, <code>ai.chain.attempt_status</code>, and <code>ai.chain.attempt_duration_ms</code>. The reason a request took two seconds is visible without reading logs.</p>
+<p>Alias overrides use <code>TRUVAG3_{PROVIDER}_MODEL_{ALIAS}</code>-style environment variables. Hosted routing happens after semantic alias resolution: an Azure resolver maps the resolved OpenAI semantic model to an Azure deployment, while a Vertex resolver maps the resolved Anthropic semantic model to a publisher-model ID. The semantic model stays stable for policy and capability decisions even when the wire destination is deployment-specific.</p>
 
-<p><strong>Per-request cost annotation.</strong> Every <code>ai.generate_response</code> and <code>ai.stream_response</code> span carries an <code>ai.cost_usd</code> attribute computed from prompt and completion token counts at the model's list price. The pricing table covers about 20 model families (current OpenAI, Anthropic, Gemini, Groq's gpt-oss) and is treated as an estimate rather than a billing source of truth. The point is per-trace cost visibility in Jaeger or any tracing backend — clicking on a slow trace also tells you what that request cost.</p>
+<p><strong>Enterprise integrations extend built-in providers instead of forking them.</strong> For HTTP providers that support the request-aware hooks, <code>ai.NewRequestClient</code> accepts an <code>EndpointResolver</code> for per-request destinations, a <code>CredentialSource</code> for rotating API keys or bearer tokens, and an application-owned <code>http.Client</code> for corporate CAs, mTLS, proxies, and connection policy. A credential source may also implement <code>CredentialRejectionObserver</code> so the provider can report a 401 or 403 and the application can invalidate cached credentials. Request preparation resolves the semantic model and route, applies declarative rules and trusted middleware under the selected compatibility mode, and produces a secret-free report and fingerprint before credentials are attached for transport. These HTTP hooks cover Azure OpenAI, Google-hosted OpenAI compatibility, Claude on Vertex AI, and compatible private enterprise gateways. Bedrock participates in the same normalized request, policy, reporting, fingerprinting, and chain contracts through an SDK-native adapter; its AWS SDK configuration continues to own credentials and HTTP transport.</p>
 
-<p><strong>Standard AI metrics across all providers.</strong></p>
+<p><strong>Chain clients support both convenient and heterogeneous failover.</strong> <code>ai.NewChainClient</code> constructs an ordered chain from provider aliases. <code>ai.NewChain</code> can combine provider entries with independently configured or injected clients — for example, Azure OpenAI first, Claude on Vertex AI second, and a direct Anthropic client third. Failover is allowed for provider-specific failures such as authentication, rate limits, upstream server errors, network failures, local route-viability failures, and billing or hard-quota conditions marked <code>IsRetryable</code>. A malformed request or another non-transient, non-provider-retryable client error aborts the chain. Streaming fails over only before the callback observes output; once a chunk is visible, the chain never restarts the answer on a different provider.</p>
+
+<p>The chain is instrumented at every level:</p>
 
 <ul>
-  <li><code>ai.request.total</code> + <code>ai.request.duration_ms</code> + <code>ai.request.failures</code> — request rate, latency, and error rate per provider/model.</li>
-  <li><code>ai.tokens.used</code> — token throughput, labeled by provider, model, and token type (prompt vs completion).</li>
-  <li><code>ai.embedding.duration_ms</code>, <code>ai.embedding.tokens_total</code>, <code>ai.embedding.success</code>, <code>ai.embedding.errors</code> — separate instrumentation for embeddings, which most agent frameworks bundle into the same metric as generation.</li>
+  <li><code>ai.chain.attempt</code> — every generate attempt, with a bounded outcome label and, for failures, a bounded reason label.</li>
+  <li><code>ai.chain.failover</code> — successful generate requests that recovered on a later entry. A rising rate is the signal that an earlier entry is failing while a fallback still succeeds.</li>
+  <li><code>ai.chain.exhausted</code> — generate requests for which every chain entry was tried and failed.</li>
+  <li><code>ai.chain.stream.success</code> — successful stream requests; <code>ai.chain.stream.partial</code> — streams that emitted output and then failed; <code>ai.chain.stream.failure</code> — entry attempts that failed before output; <code>ai.chain.stream.exhausted</code> — stream requests for which every entry failed before output.</li>
+  <li><code>failover_reason=route</code> — bounded signal for endpoint resolution or local invocation-viability failures; <code>failover_reason=provider_retryable</code> — bounded operator-action signal for billing, hard quota, or provider account state, including terminal exhaustion.</li>
 </ul>
 
-<p><strong>Custom providers.</strong> Internal gateways, private endpoints, or new external services all plug in behind the same <code>AIClient</code> interface. The provider registry is what auto-detection consults, so a custom provider becomes a first-class option once registered. The histogram <code>ai.provider.detection.duration_ms</code> tracks how long detection itself takes, which becomes useful when a registry has many providers.</p>
+<p>The trace view of a failover is a parent <code>ai.chain.generate</code> or <code>ai.chain.stream</code> span containing one or more <code>ai.chain.provider_attempt</code> or <code>ai.chain.stream_attempt</code> spans. Attempt spans carry the stable non-secret entry name, provider index, attempt status, retry marker, duration, and sanitized bounded failure metadata. Parent spans record the successful entry or the final exhaustion classification. Raw provider, route, credential, and SDK error messages are returned to the caller but are not copied into logs, traces, or metric labels.</p>
 
-<p><strong>Working examples in the cluster.</strong> The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-orchestration">agent-with-orchestration</a> example wires <code>ai.NewChainClient</code> with explicit ordering. The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a> uses the same chain pattern with auto-detection.</p>
+<p><strong>Common AI metrics, with scope made explicit.</strong></p>
 
-<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md">ai/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/AI_PROVIDERS_SETUP_GUIDE.md">AI Providers Setup Guide</a>.</p>
+<ul>
+  <li><code>ai.request.total</code> and <code>ai.request.duration_ms</code> — successful built-in provider responses and their duration; <code>ai.request.failures</code> — exhausted HTTP retry sequences. Chain-level failures use the separate metrics above.</li>
+  <li><code>ai.tokens.used</code> — token throughput when a provider returns usage, labeled by provider and token type (<code>input</code> or <code>output</code>).</li>
+  <li><code>ai.embedding.duration_ms</code> and <code>ai.embedding.success</code> — successful-call latency and count from the OpenAI-compatible embedding client; <code>ai.embedding.errors</code> — its bounded error count. When that endpoint returns nonzero usage, the <code>ai.embedding.completed</code> span event carries prompt and total token counts. Bedrock's Titan helper instead exposes an <code>ai.get_embeddings</code> span.</li>
+</ul>
+
+<p><strong>Custom providers have three integration levels.</strong> Configure a built-in provider when only keys, models, timeouts, or a static URL differ. Extend a request-aware built-in provider when credentials, routes, HTTP transport, policy, or independently configured failover entries differ. Implement a new provider only when identity, model semantics, wire format, SDK request types, response decoding, or error translation differ. New implementations register a <code>ProviderFactory</code>, normally add <code>ValidatedProviderFactory</code> for error-capable construction, and add <code>RequestProviderFactory</code> when they support the normalized request path. OpenAI-compatible services can reuse the public <code>openaiwire.Codec</code>, while SDK-native adapters can expose their own policy draft. The provider registry remains the source used by explicit construction and auto-detection.</p>
+
+<p><strong>Working examples in the cluster.</strong> Both the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-orchestration">agent-with-orchestration</a> and <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent">travel-chat-agent</a> examples construct <code>ai.NewChainClient</code> in auto-detect mode; their source comments also show how to supply <code>WithProviderChain</code> for explicit ordering.</p>
+
+<p><em>Deep dive:</em> <a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md">ai/README.md</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/AI_PROVIDERS_SETUP_GUIDE.md">AI Providers Setup Guide</a> · <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/CUSTOM_AI_PROVIDER_GUIDE.md">Custom AI Providers and Enterprise Integration Guide</a>.</p>
 
 <h3 id="orchestration">6. Orchestration</h3>
 
@@ -1214,14 +1220,14 @@ type Discovery interface {
 
 <ul>
   <li><code>core.Discovery</code> — service registry (default: Redis or Valkey; in-memory mock ships for tests; other backends such as etcd or Consul require a user-written adapter against the same interface).</li>
-  <li><code>core.AIClient</code> — LLM provider client (default: auto-detected provider registry; chain-client failover and custom providers also supported).</li>
+  <li><code>core.AIClient</code> and <code>core.AIRequestClient</code> — compact and presence-aware LLM provider contracts (clients are constructed from registered provider factories, typically registered through opt-in package imports; request-aware enterprise profiles, heterogeneous chain failover, and custom providers are also supported).</li>
   <li><code>core.Memory</code> — per-component key-value memory (Redis in production, in-memory for tests).</li>
   <li><code>core.TaskQueue</code> and <code>core.TaskStore</code> — async task backends (Redis lists by default; Redis Streams also bundled). The <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/agent-with-async">agent-with-async</a> example wires the full request → task-ID → poll pattern on the default Redis backend.</li>
   <li><code>core.ScheduleStore</code>, <code>core.TaskDispatcher</code>, <code>core.TaskConsumer</code> — scheduled-execution backends, used by the <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/scheduled-executor">scheduled-executor</a> example.</li>
   <li>Embedding client, LLM debug store, execution debug store — all behind interfaces with default implementations.</li>
 </ul>
 
-<p>The framework also ships in-memory implementations of every interface plus a <code>core/conformance</code> package that validates custom backends against the same contract the defaults meet.</p>
+<p>The framework ships in-memory or mock implementations for discovery, component memory, and many memory-related contracts; tests can supply small fakes for the remaining interfaces. The <code>core/conformance</code> package currently provides reusable contract suites for <code>TaskConsumer</code> implementations and for the shared AI option and JSON-value cloning rules.</p>
 
 <p><strong>Custom result processors.</strong> The <code>ResultProcessor</code> interface controls how large tool and agent results are trimmed before they enter LLM prompts. The default <code>StructuralTrimmer</code> preserves JSON structure, key names, and representative samples within byte budgets. Teams with domain-specific outputs (large clinical datasets, deeply nested telemetry payloads) can replace it behind the same interface.</p>
 

@@ -670,8 +670,12 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 				attribute.String("request_id", requestID),
 				attribute.String("user_id", userID),
 			)
-			summaryCallCtx := h.deferLLMRecordingIfWeWillRecord(summaryCtx)
-			summaryResp, summaryErr = h.aiClient.GenerateResponse(summaryCallCtx, summaryPrompt, summaryOpts)
+			summaryResp, _, summaryErr = invokeAI(summaryCtx, h.aiClient, aiInvocation{
+				Purpose:        "user-memory-extraction",
+				Prompt:         summaryPrompt,
+				Options:        summaryOpts,
+				DeferRecording: h.debugStore != nil,
+			})
 			summaryDuration = time.Since(summaryStart)
 			if summaryResp != nil {
 				telemetry.SetSpanAttributes(summaryCtx,
@@ -1249,7 +1253,11 @@ func (e *DefaultUserFactExtractor) ExtractFacts(ctx context.Context, userRequest
 		opts.Model = e.model
 	}
 
-	resp, err := e.aiClient.GenerateResponse(ctx, prompt, opts)
+	resp, _, err := invokeAI(ctx, e.aiClient, aiInvocation{
+		Purpose: "user-memory-extraction",
+		Prompt:  prompt,
+		Options: opts,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("user fact extraction LLM call failed: %w", err)
 	}
@@ -2173,7 +2181,11 @@ func (r *LLMUserFactReconciler) Reconcile(ctx context.Context, userID string, na
 		opts.Model = r.model
 	}
 
-	resp, err := r.aiClient.GenerateResponse(ctx, prompt, opts)
+	resp, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+		Purpose: "user-memory-extraction",
+		Prompt:  prompt,
+		Options: opts,
+	})
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconciliation LLM call failed: %w", err)
 	}
@@ -2355,7 +2367,11 @@ func (r *LLMUserFactReconciler) ReconcileBatch(
 		opts.Model = r.model
 	}
 
-	resp, err := r.aiClient.GenerateResponse(ctx, prompt, opts)
+	resp, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+		Purpose: "user-memory-extraction",
+		Prompt:  prompt,
+		Options: opts,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("batched reconciliation LLM call failed: %w", err)
 	}

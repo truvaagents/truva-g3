@@ -26,6 +26,29 @@ type ProviderFactory interface {
 	Description() string
 }
 
+// ValidatedProviderFactory optionally adds error-capable legacy client
+// construction without breaking existing ProviderFactory implementations.
+type ValidatedProviderFactory interface {
+	ProviderFactory
+	CreateValidated(*AIConfig) (core.AIClient, error)
+}
+
+// RequestProviderFactory constructs a request-capable provider client and
+// accepts the validated request-policy integration snapshot.
+type RequestProviderFactory interface {
+	ProviderFactory
+	CreateRequestClient(*AIConfig, ProviderIntegrationConfig) (core.AIRequestClient, error)
+}
+
+// ProviderRequestTimeoutFactory optionally declares the request timeout used
+// for explicitly selected standalone clients when the application does not
+// supply WithTimeout. Auto-detected clients and framework-managed chain entries
+// retain the framework's failover-safe 180-second default.
+type ProviderRequestTimeoutFactory interface {
+	ProviderFactory
+	DefaultRequestTimeout() time.Duration
+}
+
 // ProviderRegistry manages registered AI providers
 type ProviderRegistry struct {
 	mu        sync.RWMutex
