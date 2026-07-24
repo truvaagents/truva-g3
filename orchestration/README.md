@@ -1983,7 +1983,7 @@ The orchestration module captures complete LLM request/response payloads for pro
 - **9 Recording Sites**: `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, `hallucination_detection`, plus `agent_llm_call` (via `ai.InstrumentedAIClient`)
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
-- **Provider Tracking**: Captures AI provider (openai, anthropic, gemini, bedrock)
+- **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
 - **Atomic Storage**: List-based storage (RPUSH) safe for concurrent writes from orchestrator and agents
 
 **Configuration:**

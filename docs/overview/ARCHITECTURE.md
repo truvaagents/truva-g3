@@ -452,37 +452,27 @@ General Enterprise:
 #### AI Provider Integration Strategy
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  AI Provider Architecture                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 Agent Layer                                 ││
-│  │  Uses Abstract AIClient Interface                           ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                │                                │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Provider Abstraction Layer                     ││
-│  │                                                             ││
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           ││
-│  │  │ OpenAI      │ │ Anthropic   │ │ Custom      │           ││
-│  │  │ Adapter     │ │ Adapter     │ │ Provider    │           ││
-│  │  │             │ │             │ │ Adapter     │           ││
-│  │  │ • GPT-4     │ │ • Claude-3  │ │ • Local LLM │           ││
-│  │  │ • GPT-3.5   │ │ • Claude-2  │ │ • Fine-tuned│           ││
-│  │  │ • Embeddings│ │ • Instant   │ │ • Specialized│           ││
-│  │  └─────────────┘ └─────────────┘ └─────────────┘           ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                │                                │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 External APIs                               ││
-│  │                                                             ││
-│  │ api.openai.com     api.anthropic.com     custom-llm.local  ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                     AI Provider Architecture                       │
+├────────────────────────────────────────────────────────────────────┤
+│ Application and orchestration                                      │
+│   core.AIClient + optional request-aware capabilities               │
+│   core.GenerateAI / core.StreamAI                                   │
+├────────────────────────────────────────────────────────────────────┤
+│ AI construction, policy, failover, and instrumentation              │
+│   ai.NewClient / ai.NewRequestClient / ai.NewChain                  │
+│   semantic model → policy → route → credentials → transport         │
+├───────────────────────┬───────────────────────┬────────────────────┤
+│ Direct HTTP profiles  │ Hosted profiles       │ SDK/custom adapters│
+│ OpenAI, Anthropic,    │ Azure OpenAI, Claude │ AWS Bedrock        │
+│ Gemini, registered    │ on Vertex AI, Google │ (`bedrock` tag),   │
+│ compatible services   │ OpenAI compatibility │ custom factories   │
+├───────────────────────┴───────────────────────┴────────────────────┤
+│ Provider APIs, enterprise gateways, and self-hosted model services  │
+└────────────────────────────────────────────────────────────────────┘
 
 Benefits of This Architecture:
-├── Provider Independence: Switch providers without agent changes
+├── Provider-Neutral Calls: Keep agent/orchestration call sites stable
 ├── Multi-Provider: Use different providers for different use cases
 ├── Fallback Strategy: Graceful degradation when providers fail
 ├── Cost Optimization: Route to cost-effective providers

@@ -1460,7 +1460,7 @@ Some Anthropic model families reject explicit sampling controls. The Anthropic
 adapter resolves the model alias or environment override first, then applies a
 model-family policy shared by sync and streaming requests. For the restricted
 families currently listed in
-[`ai/providers/anthropic/request_policy.go`](../../ai/providers/anthropic/request_policy.go),
+[`ai/providers/anthropic/request_policy.go`](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/request_policy.go),
 it removes `temperature`, `top_p`, and `top_k` and records only fields that were
 actually present as adjustments. Matching uses an exact-or-hyphen boundary, so
 a similarly prefixed model name is not classified accidentally.
@@ -1836,8 +1836,8 @@ func isClientError(err error) bool {
 
 ## See Also
 
-- **[ai/README.md](../../ai/README.md)** - AI module overview and quick start
-- **[ai/ARCHITECTURE.md](../../ai/ARCHITECTURE.md)** - Technical architecture details
+- **[ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)** - AI module overview and quick start
+- **[ai/ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md)** - Technical architecture details
 - **[CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md)** - Request-aware clients, policy, enterprise routing and credentials, custom factories, and codecs
 - **[AI_PROVIDER_CHANGE_PLAYBOOK.md](AI_PROVIDER_CHANGE_PLAYBOOK.md)** - Day-0 responses when providers change: broken parameter contracts, new models and providers, auth/endpoint churn, cache safety
 - **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Logging patterns including AI module logging

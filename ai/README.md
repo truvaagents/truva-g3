@@ -585,7 +585,13 @@ When you use `WithProviderAlias("openai.mistral")`, the framework automatically:
 
 It's like speed dial for your phone - instead of remembering full phone numbers, just press one button!
 
-### Supported Provider Aliases
+### Registered OpenAI-Compatible Aliases
+
+This table covers the aliases implemented by the reusable OpenAI-compatible
+provider. Native and hosted profiles such as `anthropic`, `gemini`,
+`azureopenai.v1`, `azureopenai.classic`, `anthropic.vertex`, and `bedrock` have
+different construction contracts and are listed in
+[Built-in Profiles and Registered Aliases](#built-in-profiles-and-registered-aliases).
 
 | Alias | What It Is | Environment Variables | Auto-Configured URL |
 |-------|-----------|----------------------|-------------------|
@@ -1603,14 +1609,16 @@ not a guarantee that a service honors every parameter or streaming extension.
 
 ### Binary Size Management
 
-Only the AWS SDK-backed Bedrock provider is gated by a build tag:
+Only the AWS SDK-backed Bedrock provider is gated by a build tag. The other
+provider packages are available without build tags but remain opt-in: an
+application must import each package it wants to register.
 
 ```bash
-# Default build includes OpenAI, Anthropic (including Vertex profile), Gemini,
-# and Azure OpenAI.
+# OpenAI, Anthropic (including the Vertex profile), Gemini, and Azure OpenAI
+# are available to ordinary builds when their packages are imported.
 go build
 
-# Add the AWS SDK-backed Bedrock provider.
+# Make the imported AWS SDK-backed Bedrock provider available.
 go build -tags bedrock
 ```
 
@@ -2117,7 +2125,7 @@ See `examples/agent-with-orchestration/` for a production-ready example with ful
 1. **Reusable OpenAI Adapter** - One implementation backs registered compatible aliases and contract-tested custom endpoints
 2. **Provider-Specific Profiles** - Native Anthropic, Gemini, Azure OpenAI, Vertex-hosted Claude, and optional AWS Bedrock behavior
 3. **Auto-Detection** - Selects the highest-priority registered provider detected from the environment
-4. **Zero Code Changes** - Switch between providers by changing configuration, not code
+4. **Provider-Neutral Call Sites** - Keep agent and orchestration logic unchanged while provider-specific construction supplies the required credentials, routes, and transport
 5. **Provider Registry** - Plugin architecture for easy extension with custom providers
 6. **AI Components** - Build intelligent agents that can discover and orchestrate other components
 7. **Smart Configuration** - Sensible defaults with fine-grained control when needed

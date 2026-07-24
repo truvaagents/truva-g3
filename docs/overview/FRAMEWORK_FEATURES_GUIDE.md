@@ -333,11 +333,15 @@ See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#chain-cli
 
 #### Provider Aliases
 
-Provider aliases allow clean, environment-driven configuration. Current documented aliases include native providers and OpenAI-compatible endpoints:
+Provider aliases identify native providers, hosted request-aware profiles, and
+registered OpenAI-compatible services:
 
 - `openai`
 - `anthropic`
 - `gemini`
+- `azureopenai.v1`
+- `azureopenai.classic`
+- `anthropic.vertex`
 - `bedrock`
 - `openai.groq`
 - `openai.deepseek`
@@ -347,7 +351,10 @@ Provider aliases allow clean, environment-driven configuration. Current document
 - `openai.together`
 - `openai.ollama`
 
-The native Bedrock provider is build-tagged and requires importing the Bedrock provider package and building with the `bedrock` tag.
+The Azure and Vertex profiles require explicit request-aware construction with
+application-owned routes and credentials and are not auto-detected. The native
+Bedrock provider is build-tagged and requires importing the Bedrock provider
+package and building with the `bedrock` tag.
 
 See [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md#provider-aliases-the-clean-way-to-configure).
 
@@ -1024,6 +1031,8 @@ Use these docs for deeper feature-level details:
 - [TOOL_SCHEMA_DISCOVERY_GUIDE.md](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) - schema discovery and tool payload generation
 - [AGENT_DEVELOPMENT_GUIDE.md](../building/AGENT_DEVELOPMENT_GUIDE.md) - building agents
 - [AI_PROVIDERS_SETUP_GUIDE.md](../building/AI_PROVIDERS_SETUP_GUIDE.md) - provider aliases, model aliases, and client setup
+- [CUSTOM_AI_PROVIDER_GUIDE.md](../building/CUSTOM_AI_PROVIDER_GUIDE.md) - request-aware policy, hosted-cloud profiles, enterprise routing and credentials, and custom adapters
+- [AI_PROVIDER_CHANGE_PLAYBOOK.md](../building/AI_PROVIDER_CHANGE_PLAYBOOK.md) - safe responses to provider model, parameter, authentication, and endpoint changes
 - [ORCHESTRATION_MODES_GUIDE.md](../orchestration/ORCHESTRATION_MODES_GUIDE.md) - orchestration modes
 - [EFFECTIVE_PROMPTS_GUIDE.md](../building/EFFECTIVE_PROMPTS_GUIDE.md) - capability descriptions and prompt quality
 - [ERROR_HANDLING_GUIDE.md](../orchestration/ERROR_HANDLING_GUIDE.md) - structured error patterns

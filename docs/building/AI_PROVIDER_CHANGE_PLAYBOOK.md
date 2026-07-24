@@ -312,7 +312,7 @@ pattern. Both are application-local packages registered with a blank import:
 no framework fork required.
 
 **Canonical reference:**
-[Adding New OpenAI-Compatible Services](../../ai/README.md#adding-new-openai-compatible-services),
+[Adding New OpenAI-Compatible Services](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#adding-new-openai-compatible-services),
 [Reuse the OpenAI-Compatible Codec](CUSTOM_AI_PROVIDER_GUIDE.md#reuse-the-openai-compatible-codec), and
 [Adapt an SDK-Native Provider](CUSTOM_AI_PROVIDER_GUIDE.md#adapt-an-sdk-native-provider).
 
@@ -659,5 +659,5 @@ same change that adapts the code.
   aliases, failover, and operations
 - [Custom AI Providers and Enterprise Integration Guide](CUSTOM_AI_PROVIDER_GUIDE.md)
   — request-aware contracts, policy, credentials, routing, and adapters
-- [ai/README.md](../../ai/README.md)
+- [ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)
   — AI module overview

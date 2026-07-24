@@ -733,6 +733,12 @@ framework, err := core.NewFramework(component,
 import (
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
+
+	// Provider packages are opt-in and register themselves from init.
+	// Import every provider this binary may select or auto-detect.
+	_ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
+	_ "github.com/truvaagents/truva-g3/ai/providers/gemini"
+	_ "github.com/truvaagents/truva-g3/ai/providers/openai"
 )
 
 // Auto-configured AI client - detects from environment
@@ -963,6 +969,9 @@ You'll have ~10–30s of ingress downtime while the new pod schedules.
 ### Explore Advanced Features
 
 - **[AI Module](ai/README.md)** - Multi-provider support with automatic failover
+- **[AI Providers Setup Guide](docs/building/AI_PROVIDERS_SETUP_GUIDE.md)** - Provider aliases, model selection, failover, and deployment configuration
+- **[Custom AI Providers and Enterprise Integration](docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)** - Request-aware policy, Azure OpenAI, Google-hosted models, dynamic credentials, routing, and custom adapters
+- **[AI Provider Change Playbook](docs/building/AI_PROVIDER_CHANGE_PLAYBOOK.md)** - Safe responses to provider model, parameter, authentication, and endpoint changes
 - **[Orchestration Module](orchestration/README.md)** - DAG workflows and AI-generated plans
 - **[Telemetry Module](telemetry/README.md)** - OpenTelemetry integration
 - **[Resilience Module](resilience/README.md)** - Circuit breakers and graceful degradation

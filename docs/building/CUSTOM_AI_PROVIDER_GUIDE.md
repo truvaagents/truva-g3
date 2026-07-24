@@ -3353,11 +3353,11 @@ if errors.As(err, &featureErr) {
   responses to model, parameter, authentication, endpoint, and response drift
 - [API Reference](../reference/API_REFERENCE.md#request-aware-ai-api) —
   package-level request-aware interfaces and type signatures
-- [Framework Design Principles](../../FRAMEWORK_DESIGN_PRINCIPLES.md) —
+- [Framework Design Principles](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md) —
   stability, ownership, isolation, and dependency rules
-- [AI Architecture](../../ai/ARCHITECTURE.md) — AI module boundaries and
+- [AI Architecture](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md) — AI module boundaries and
   provider extension points
-- [Core Architecture](../../core/ARCHITECTURE.md) — provider-neutral contracts
+- [Core Architecture](https://github.com/truvaagents/truva-g3/blob/main/core/ARCHITECTURE.md) — provider-neutral contracts
   and dependency direction
 - [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md#17-ai-module-distributed-tracing) —
   logical spans, provider spans, and sanitized preparation events
