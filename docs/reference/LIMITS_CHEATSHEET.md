@@ -1,8 +1,11 @@
 # TruvaG3 Limits & Configuration Cheatsheet
 
-Quick reference for all configurable limits, thresholds, and budgets. Every value below can be overridden via environment variable or programmatic config.
+Quick reference for configurable defaults and enforced framework/provider
+boundaries. A value is overrideable only where its row names an environment
+variable or programmatic option; fixed validation limits cannot be raised.
 
-**Precedence:** Functional option > Environment variable > `DefaultConfig()` default
+**Configuration precedence where all three layers exist:** Functional option >
+environment variable > constructor/config default.
 
 > For full details on environment variables see [ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md).
 > For programmatic configuration and `With*` options see [API_REFERENCE.md](API_REFERENCE.md).
@@ -24,6 +27,93 @@ Quick reference for all configurable limits, thresholds, and budgets. Every valu
 | Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` | — |
 
 > `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` / `TRUVAG3_MICRO_RESOLUTION_MODEL` are **shared**: they govern both micro-resolution and Layer 4 semantic retry (contextual re-resolution). The base **defaults differ** — micro-resolution is 2000 tokens, semantic retry is 1000 — but setting either env var (or `WithMicroResolutionAIOptions`) overrides **both**. There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS`; raise the micro-resolution token limit if a semantic-retry response is being truncated. `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
+
+## AI Request Policy, Routing, and Construction
+
+| What | Default / Limit | Environment | Programmatic Override |
+|---|---|---|---|
+| General provider request timeout for direct `ai` constructors | 180s | `TRUVAG3_AI_TIMEOUT` is not read by `core.Config.LoadFromEnv` or direct `ai` constructors | `ai.WithTimeout(d)` |
+| Auto-detected client / framework-managed chain-entry timeout | 180s, including Bedrock | — | `ai.WithTimeout(d)` / `ai.WithChainTimeout(d)` |
+| Request-policy model selector glob | At most 256 bytes | — | `core.AIProviderSelector.Model` |
+| Heterogeneous chain entry name | 1–256 bytes; no surrounding whitespace or controls; unique within the chain | — | First argument to `ai.ProviderEntry` / `ai.ClientEntry` |
+| Heterogeneous `ProviderEntry` provider alias | 1–256 bytes; no surrounding whitespace or controls | — | Second argument to `ai.ProviderEntry` |
+| HTTP-provider resolver route identity | 1–256 bytes; non-secret, no control characters | — | `ai.ResolvedEndpoint.RouteIdentity` |
+| Bedrock resolver route identity | 1–256 bytes; non-secret, no surrounding whitespace or controls | — | `ai.ResolvedEndpoint.RouteIdentity` |
+
+Provider rule model selectors use a case-insensitive glob in which `*` is the
+only wildcard. An unscoped rule is rejected unless
+`AIProviderSelector.AllProviders` is explicitly true. Route identities are
+reported and fingerprinted; credentials, raw endpoints, Azure deployment
+names, Vertex publisher-model IDs, Bedrock `modelId` values, and ARNs must not
+be used as route identities.
+
+## AWS Bedrock Provider (`-tags bedrock`)
+
+| What | Default / Limit | Environment | Programmatic Override |
+|------|-----------------|-------------|-----------------------|
+| Region | `us-east-1` | `AWS_REGION`, then `AWS_DEFAULT_REGION` | `ai.WithRegion(region)` |
+| Direct generation model | `anthropic.claude-sonnet-5`; an invocation that would use the implicit default is accepted only in `us-east-1` after per-request model selection | — | `ai.WithModel(modelID)`, per-request model, SDK-destination `EndpointResolver`, or direct-package `Client.SetDefaultModel(modelID)` |
+| Explicit standalone/direct-package request timeout | 60m | — | `ai.WithTimeout(d)` |
+| In-provider retries | 3 retries / 4 AWS SDK total attempts | `TRUVAG3_AI_RETRY_ATTEMPTS` when positive | `ai.WithMaxRetries(n)`; SDK attempts are `max(1, n+1)` |
+| Converse `modelId` / resolver `Deployment` | Framework pre-validation: 1–2048 bytes with no surrounding whitespace or controls; AWS additionally validates supported model/resource formats | — | Resolver output |
+| Resolver route identity | 1–256 bytes; non-secret, no surrounding whitespace or controls | — | Resolver output |
+| Converse `maxTokens` (logical `max_tokens`) | Framework range: positive 32-bit integer (1–2,147,483,647); the selected model may impose a lower maximum | — | Portable `MaxTokens` or policy path `/inference_config/max_tokens` |
+| Converse `temperature` / `topP` (logical `top_p`) | Finite value from 0 through 1; the selected model may impose narrower constraints | — | Portable parameters or `/inference_config/*` policy paths |
+| Converse `stopSequences` | Framework maximum: 2500 non-empty strings; the selected model may impose a lower maximum | — | Bedrock request policy path `/inference_config/stop_sequences` |
+| Titan embedding model | `amazon.titan-embed-text-v2:0` | — | `bedrock.WithEmbeddingModel(modelID)` per call |
+| Titan V1 migration pin | `amazon.titan-embed-text-v1`; 1536 dimensions; inherited V2 controls omitted, explicitly supplied V2 controls rejected | — | `bedrock.WithEmbeddingModel(bedrock.ModelTitanEmbedV1)` |
+| Titan V2 input text | Non-empty; AWS model limit is 8,192 tokens or 50,000 characters (the framework pre-validates only non-empty input) | — | `Client.GetEmbeddings` text argument |
+| Titan V2 dimensions | 1024 when omitted (AWS default); otherwise 256, 512, or 1024 | — | `bedrock.WithEmbeddingDimensions(n)` per call |
+| Titan V2 normalization | `true` when omitted (AWS default) | — | `bedrock.WithEmbeddingNormalization(bool)` per call; `bedrock.WithoutEmbeddingNormalization()` omits an inherited client setting |
+
+The resolver deployment is an opaque AWS SDK `modelId`; TruvaG3 does not add a
+geographic or global inference-profile prefix. Raw model/profile IDs and ARNs
+must not be used as route identities. The resolver must preserve semantic
+equivalence because sampling policy follows the semantic model rather than the
+opaque deployment.
+
+Current Bedrock Claude sampling contracts are enforced before SDK invocation:
+the checks cover both `inferenceConfig` and case-insensitive sampling keys in
+`additionalModelRequestFields`. Fable temperature/top-p are Converse common
+fields and must end in `inferenceConfig`; unique legacy `Extra` spellings remain
+policy-editable until final validation, while duplicates and unremediated
+additional copies fail locally. JSON `UseNumber`, named, and unsigned numeric
+values remain numeric, including in nested additional fields.
+
+| Semantic model family | Effective sampling constraint |
+|---|---|
+| `*anthropic.claude-sonnet-5*` | `temperature`, `top_p`, and `top_k` must be absent |
+| `*anthropic.claude-opus-4-7*` | `temperature`, `top_p`, and `top_k` must be absent |
+| `*anthropic.claude-opus-4-8*` | `temperature`, `top_p`, and `top_k` must be absent |
+| `*anthropic.claude-fable-5*` | Incompatible inherited temperature and `top_k` are omitted; explicit `temperature` must be 1 and explicit `top_p` must be at least 0.99 and less than 1 |
+
+Current Mythos model cards expose the Messages surface rather than Converse,
+so Mythos is not part of this SDK-native Converse compatibility table.
+
+Provider contract sources: [AWS Converse](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html),
+[AWS inference configuration](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html),
+the [Claude Opus 4.7 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html),
+the [Claude Opus 4.8 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html),
+the [Claude Fable 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html),
+and [Titan Text Embeddings V2](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html).
+
+## AI Provider Compatibility Boundaries
+
+| Surface / family | Enforced behavior |
+|---|---|
+| Direct Anthropic and Vertex Claude: Opus 4.7/4.8, Sonnet 5, Fable 5, Mythos 5, Mythos Preview | Built-in policy omits `temperature`, `top_p`, and `top_k` |
+| Azure OpenAI v1 reasoning families | Uses `max_completion_tokens`, top-level `reasoning_effort`, and reasoning-restricted sampling |
+| Azure OpenAI classic | Ordinary `max_tokens` profile only; reasoning-family requests are rejected because no classic reasoning contract is verified |
+| Stock OpenAI reasoning families | Uses `max_completion_tokens`; the default reasoning token multiplier is 5 |
+| `openai.ollama` non-reasoning models | Retains `max_tokens` and ordinary sampling; nested reasoning effort is emitted only when effort is set |
+
+Compatible policy mode reports built-in adjustments. Strict mode rejects a
+built-in adjustment to explicit request-aware intent unless application policy
+acknowledges the affected path.
+
+Provider contract sources: [Anthropic Sonnet 5 sampling changes](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
+[Anthropic model deprecations and migration behavior](https://platform.claude.com/docs/en/docs/about-claude/model-deprecations),
+and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat).
 
 ## Conversation History Preparation
 
@@ -150,8 +240,10 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Hallucination retry | 1 | `TRUVAG3_HALLUCINATION_MAX_RETRIES` | `WithHallucinationRetry(bool, n)` |
 | Semantic retry (Layer 4) | 2 | `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` | — |
 | Step execution retry | 2 | — | — |
-| AI provider retry (single client) | 3 | `TRUVAG3_AI_RETRY_ATTEMPTS` (rejects ≤0) | `ai.WithMaxRetries(n)` |
-| AI provider retry (inside chain) | 0 (failover is the retry layer) | `TRUVAG3_AI_RETRY_ATTEMPTS` (rejects ≤0) | `ai.WithChainMaxRetries(n)` |
+| AI provider retry (`NewClient` / `NewRequestClient`) | 3 | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)`; explicit 0 disables |
+| AI provider retry (legacy `NewChainClient`) | 0 per provider (failover is the retry layer) | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithChainMaxRetries(n)`; explicit 0 disables |
+| AI provider retry (heterogeneous `NewChain` `ProviderEntry`) | 3 per independently constructed entry | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)` on each entry; explicit 0 disables |
+| AI provider retry (heterogeneous `NewChain` `ClientEntry`) | Caller-owned client behavior | Caller-owned | Configure the injected client |
 
 ## Circuit Breaker
 

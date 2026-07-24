@@ -377,6 +377,14 @@ By placing the recorder interface and Redis implementation in telemetry, agents 
 └─────────────────────────────────────────────────────────────┘
 ```
 
+`ai.NewClient` and `ai.NewRequestClient` already install a factory-managed
+`InstrumentedAIClient` with a no-op recorder so every constructed provider has
+the common logical-span boundary. When an application calls
+`ai.NewInstrumentedClient` with a real debug recorder, the constructor
+collapses that factory-managed layer and retains one logical wrapper rather
+than emitting duplicate common spans. Caller-owned clients that were not
+created by those factories are wrapped normally.
+
 ### Key Design Decisions
 
 1. **Write-only**: `RedisLLMCallRecorder` only appends interactions (RPUSH). Reading is done by `orchestration.RedisLLMDebugStore.GetRecord()` via the registry-viewer.

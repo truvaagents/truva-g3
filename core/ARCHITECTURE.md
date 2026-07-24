@@ -34,6 +34,38 @@ type AIClient interface {
     GenerateResponse(ctx context.Context, prompt string, options *AIOptions) (*AIResponse, error)
 }
 
+// Additive capability: callers that need presence-aware request intent,
+// sanitized preparation reports or detailed usage can use
+// AIRequestClient without changing the legacy AIClient contract.
+type AIRequestClient interface {
+    AIClient
+    Generate(context.Context, *AIRequest) (*AIResult, error)
+}
+
+// StreamingAIRequestClient and the canonical StreamAI dispatcher provide the
+// same lossless capability selection for streaming calls.
+type StreamingAIRequestClient interface {
+    AIRequestClient
+    Stream(context.Context, *AIRequest, StreamCallback) (*AIResult, error)
+}
+
+// AIRequestFingerprinter is optional. AI-output caches use only stable,
+// secret-free policy and route fingerprints; stable=false means bypass.
+type AIRequestFingerprinter interface {
+    RequestFingerprint(context.Context, *AIRequest) (string, bool)
+}
+
+// LegacyRepresentable centralizes the lossless-fallback decision so wrappers
+// and cache adapters do not duplicate parameter representability rules.
+func (r *AIRequest) LegacyRepresentable() bool
+
+// GenerateAI and StreamAI are the canonical dispatchers. They prefer the
+// request-aware capabilities and use legacy clients only when the request can
+// be represented without loss.
+func generate(ctx context.Context, client AIClient, request *AIRequest) (*AIResult, error) {
+    return GenerateAI(ctx, client, request)
+}
+
 // ✅ Modules implement the interface
 type OpenAIClient struct { ... }
 func (c *OpenAIClient) GenerateResponse(...) (*AIResponse, error) { ... }
@@ -47,6 +79,7 @@ import "github.com/truvaagents/truva-g3/ai" // NEVER in core
 - Module interchangeability
 - Dependency inversion principle
 - Prevents circular dependencies
+- Additive AI capabilities without forcing provider or orchestration imports
 
 ### 2. **Zero Framework Dependencies**
 

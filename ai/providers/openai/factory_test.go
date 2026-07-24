@@ -1,12 +1,16 @@
 package openai
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestFactory_Name(t *testing.T) {
@@ -24,6 +28,34 @@ func TestFactory_Description(t *testing.T) {
 	}
 	if desc != "Universal OpenAI-compatible provider (OpenAI, Groq, DeepSeek, Qwen, local models, etc.)" {
 		t.Errorf("unexpected description: %q", desc)
+	}
+}
+
+func TestFactoryInitializationLogDoesNotExposeEndpoint(t *testing.T) {
+	const endpoint = "https://enterprise-endpoint-secret.example/v1"
+	logger := &mockLogger{}
+	factory := &Factory{}
+	_, err := factory.CreateValidated(&ai.AIConfig{
+		ProviderAlias: "openai",
+		APIKey:        "test-key",
+		BaseURL:       endpoint,
+		Logger:        logger,
+	})
+	if err != nil {
+		t.Fatalf("CreateValidated returned error: %v", err)
+	}
+	if len(logger.fields) == 0 {
+		t.Fatal("provider initialization log was not captured")
+	}
+	fields := logger.fields[0]
+	if _, exists := fields["base_url"]; exists {
+		t.Fatalf("initialization fields contain base_url: %#v", fields)
+	}
+	if fields["custom_endpoint"] != true {
+		t.Fatalf("custom_endpoint = %#v, want true", fields["custom_endpoint"])
+	}
+	if strings.Contains(fmt.Sprint(fields), "enterprise-endpoint-secret") {
+		t.Fatalf("initialization fields leaked endpoint: %#v", fields)
 	}
 }
 
@@ -398,107 +430,34 @@ func TestFactory_Create(t *testing.T) {
 }
 
 func TestFactory_CreateWithHeaders(t *testing.T) {
+	var customHeader string
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		customHeader = request.Header.Get("X-Custom-Header")
+		authorization = request.Header.Get("Authorization")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"model":"gpt-4.1","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
 	factory := &Factory{}
-
 	config := &ai.AIConfig{
+		APIKey:  "framework-key",
+		BaseURL: server.URL,
+		Model:   "gpt-4.1",
 		Headers: map[string]string{
 			"X-Custom-Header": "custom-value",
 			"Authorization":   "Bearer custom-token",
 		},
 	}
-
 	client := factory.Create(config)
-
-	if client == nil {
-		t.Fatal("expected non-nil client")
-	}
-
-	// Verify that custom headers are applied via transport
-	openaiClient, ok := client.(*Client)
-	if !ok {
-		t.Fatal("expected *Client type")
-	}
-
-	// Check that transport was set
-	if openaiClient.HTTPClient.Transport == nil {
-		t.Error("expected custom transport for headers, got nil")
-	}
-
-	// Verify it's a headerTransport
-	if _, ok := openaiClient.HTTPClient.Transport.(*headerTransport); !ok {
-		t.Error("expected headerTransport type")
-	}
-}
-
-func TestHeaderTransport_RoundTrip(t *testing.T) {
-	headers := map[string]string{
-		"X-Custom-Header": "test-value",
-		"X-Another":       "another-value",
-	}
-
-	transport := &headerTransport{
-		headers:   headers,
-		protected: map[string]struct{}{},
-		base:      &mockRoundTripper{},
-	}
-
-	req, _ := http.NewRequest("GET", "http://test.com", nil)
-
-	resp, err := transport.RoundTrip(req)
+	_, err := client.GenerateResponse(t.Context(), "hello", &core.AIOptions{MaxTokens: 10})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("GenerateResponse returned error: %v", err)
 	}
-
-	if resp == nil {
-		t.Fatal("expected non-nil response")
+	if customHeader != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q", customHeader)
 	}
-
-	// Verify headers were added
-	if req.Header.Get("X-Custom-Header") != "test-value" {
-		t.Errorf("expected header X-Custom-Header='test-value', got %q", req.Header.Get("X-Custom-Header"))
+	if authorization != "Bearer framework-key" {
+		t.Fatalf("Authorization = %q, want provider-managed credential", authorization)
 	}
-	if req.Header.Get("X-Another") != "another-value" {
-		t.Errorf("expected header X-Another='another-value', got %q", req.Header.Get("X-Another"))
-	}
-}
-
-func TestHeaderTransport_ProtectedHeadersAreNotOverridden(t *testing.T) {
-	transport := &headerTransport{
-		headers: map[string]string{
-			"Authorization": "Bearer custom-token",
-			"Content-Type":  "text/plain",
-			"X-Custom":      "value",
-		},
-		protected: map[string]struct{}{
-			"authorization": {},
-			"content-type":  {},
-		},
-		base: &mockRoundTripper{},
-	}
-
-	req, _ := http.NewRequest("POST", "http://test.com", nil)
-	req.Header.Set("Authorization", "Bearer framework-token")
-	req.Header.Set("Content-Type", "application/json")
-
-	_, err := transport.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if got := req.Header.Get("Authorization"); got != "Bearer framework-token" {
-		t.Fatalf("expected protected Authorization header to stay unchanged, got %q", got)
-	}
-	if got := req.Header.Get("Content-Type"); got != "application/json" {
-		t.Fatalf("expected protected Content-Type header to stay unchanged, got %q", got)
-	}
-	if got := req.Header.Get("X-Custom"); got != "value" {
-		t.Fatalf("expected unprotected custom header to be applied, got %q", got)
-	}
-}
-
-// mockRoundTripper for testing headerTransport
-type mockRoundTripper struct{}
-
-func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: 200}, nil
 }

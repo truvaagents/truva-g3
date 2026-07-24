@@ -1,21 +1,43 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (b *trackingReadCloser) Close() error {
+	b.closed = true
+	return nil
+}
 
 // mockLogger for testing
 type mockLogger struct {
 	debugCalls []map[string]interface{}
 	infoCalls  []map[string]interface{}
+	warnCalls  []map[string]interface{}
 	errorCalls []map[string]interface{}
 }
 
@@ -31,7 +53,9 @@ func (m *mockLogger) Error(msg string, fields map[string]interface{}) {
 	m.errorCalls = append(m.errorCalls, fields)
 }
 
-func (m *mockLogger) Warn(msg string, fields map[string]interface{}) {}
+func (m *mockLogger) Warn(msg string, fields map[string]interface{}) {
+	m.warnCalls = append(m.warnCalls, fields)
+}
 
 func (m *mockLogger) DebugWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	m.debugCalls = append(m.debugCalls, fields)
@@ -42,6 +66,7 @@ func (m *mockLogger) InfoWithContext(ctx context.Context, msg string, fields map
 }
 
 func (m *mockLogger) WarnWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
+	m.warnCalls = append(m.warnCalls, fields)
 }
 
 func (m *mockLogger) ErrorWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
@@ -342,6 +367,338 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 	}
 }
 
+func TestBaseClient_ExecuteWithRetry_ReplaysCompleteBodyForEveryAttempt(t *testing.T) {
+	payload := []byte(`{"model":"test-model","prompt":"non-empty"}`)
+	var capturedBodies [][]byte
+	var attemptBodies []*trackingReadCloser
+	callCount := 0
+
+	client := NewBaseClient(180*time.Second, nil)
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		callCount++
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read attempt body: %v", err)
+		}
+		if err := request.Body.Close(); err != nil {
+			t.Fatalf("close attempt body: %v", err)
+		}
+		capturedBodies = append(capturedBodies, append([]byte(nil), body...))
+
+		status := http.StatusInternalServerError
+		if callCount == 2 {
+			status = http.StatusOK
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(http.StatusText(status))),
+			Request:    request,
+		}, nil
+	})}
+
+	originalBody := &trackingReadCloser{Reader: bytes.NewReader(payload)}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	request.GetBody = func() (io.ReadCloser, error) {
+		body := &trackingReadCloser{Reader: bytes.NewReader(payload)}
+		attemptBodies = append(attemptBodies, body)
+		return body, nil
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if err != nil {
+		t.Fatalf("ExecuteWithRetry returned error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if callCount != 2 {
+		t.Fatalf("expected two network attempts, got %d", callCount)
+	}
+	if len(capturedBodies) != 2 {
+		t.Fatalf("expected two captured bodies, got %d", len(capturedBodies))
+	}
+	for attempt, body := range capturedBodies {
+		if !bytes.Equal(body, payload) {
+			t.Errorf("attempt %d body = %q, want %q", attempt+1, body, payload)
+		}
+	}
+	if len(attemptBodies) != 2 || attemptBodies[0] == attemptBodies[1] {
+		t.Fatalf("expected a distinct body for each attempt, got %#v", attemptBodies)
+	}
+	for attempt, body := range attemptBodies {
+		if !body.closed {
+			t.Errorf("attempt %d body was not closed", attempt+1)
+		}
+	}
+	if !originalBody.closed {
+		t.Error("original request body was not closed")
+	}
+}
+
+func TestBaseClient_ExecuteWithRetryPrepared_PreparesEveryFreshAttempt(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+
+	var bodies []string
+	var credentials []string
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read attempt body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		credentials = append(credentials, request.Header.Get("X-Attempt-Credential"))
+		status := http.StatusInternalServerError
+		if len(bodies) == 2 {
+			status = http.StatusOK
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("response")),
+			Request:    request,
+		}, nil
+	})}
+
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		bytes.NewReader([]byte("complete-body")),
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	prepareCalls := 0
+	response, err := client.ExecuteWithRetryPrepared(context.Background(), request, func(_ context.Context, attempt *http.Request) error {
+		prepareCalls++
+		attempt.Header.Set("X-Attempt-Credential", fmt.Sprintf("credential-%d", prepareCalls))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ExecuteWithRetryPrepared returned error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if prepareCalls != 2 {
+		t.Fatalf("preparer calls = %d, want 2", prepareCalls)
+	}
+	if !reflect.DeepEqual(bodies, []string{"complete-body", "complete-body"}) {
+		t.Fatalf("attempt bodies = %#v", bodies)
+	}
+	if !reflect.DeepEqual(credentials, []string{"credential-1", "credential-2"}) {
+		t.Fatalf("attempt credentials = %#v", credentials)
+	}
+	if request.Header.Get("X-Attempt-Credential") != "" {
+		t.Fatalf("logical request was mutated: %#v", request.Header)
+	}
+}
+
+func TestBaseClient_ExecuteWithRetryPrepared_RejectsNilPreparer(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if _, err := client.ExecuteWithRetryPrepared(context.Background(), request, nil); err == nil || !strings.Contains(err.Error(), "preparer is nil") {
+		t.Fatalf("nil preparer error = %v", err)
+	}
+}
+
+func TestBaseClient_ExecuteWithRetry_RejectsNonReplayableBodyBeforeNetwork(t *testing.T) {
+	networkCalls := 0
+	logger := &mockLogger{}
+	client := NewBaseClient(180*time.Second, logger)
+	client.MaxRetries = 3
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		networkCalls++
+		return nil, errors.New("network should not be called")
+	})}
+	tracing := &mockTelemetry{}
+	client.SetTelemetry(tracing)
+
+	originalBody := &trackingReadCloser{Reader: strings.NewReader("non-replayable")}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if request.GetBody != nil {
+		t.Fatal("test request unexpectedly has GetBody")
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if response != nil {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if err == nil || !strings.Contains(err.Error(), "AI request body is not replayable") {
+		t.Fatalf("expected non-replayable body error, got %v", err)
+	}
+	if networkCalls != 0 {
+		t.Fatalf("network called %d times", networkCalls)
+	}
+	if !originalBody.closed {
+		t.Error("rejected request body was not closed")
+	}
+	if tracing.lastSpan == nil || !tracing.lastSpan.ended {
+		t.Fatal("attempt span was not ended")
+	}
+	if len(tracing.lastSpan.errors) != 1 || tracing.lastSpan.errors[0].Error() != "AI provider request failed: invalid_request" {
+		t.Fatalf("attempt span did not record the sanitized replay error: %#v", tracing.lastSpan.errors)
+	}
+	if got := tracing.lastSpan.attributes["ai.error_type"]; got != "invalid_request" {
+		t.Fatalf("span error type = %v, want invalid_request", got)
+	}
+	if got := tracing.lastSpan.attributes["ai.attempt_status"]; got != "request_error" {
+		t.Fatalf("attempt status = %v, want request_error", got)
+	}
+	if got := tracing.lastSpan.attributes["ai.retryable"]; got != false {
+		t.Fatalf("retryable attribute = %v, want false", got)
+	}
+	if len(logger.errorCalls) != 1 {
+		t.Fatalf("error log count = %d, want 1", len(logger.errorCalls))
+	}
+	fields := logger.errorCalls[0]
+	if got := fields["operation"]; got != "ai_request_error" {
+		t.Fatalf("log operation = %v, want ai_request_error", got)
+	}
+	if got := fields["error_type"]; got != "invalid_request" {
+		t.Fatalf("log error_type = %v, want invalid_request", got)
+	}
+	if got := fields["error"]; got != "AI provider request failed: invalid_request" {
+		t.Fatalf("log error = %v, want sanitized invalid_request", got)
+	}
+	if strings.Contains(fmt.Sprint(fields), err.Error()) {
+		t.Fatalf("log leaked original replay error: %#v", fields)
+	}
+}
+
+func TestBaseClient_ExecuteWithRetry_PropagatesGetBodyErrorBeforeNetwork(t *testing.T) {
+	networkCalls := 0
+	client := NewBaseClient(180*time.Second, nil)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		networkCalls++
+		return nil, errors.New("network should not be called")
+	})}
+
+	recreateErr := errors.New("body source unavailable")
+	originalBody := &trackingReadCloser{Reader: strings.NewReader("replayable")}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://provider.example/messages",
+		originalBody,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	request.GetBody = func() (io.ReadCloser, error) {
+		return nil, recreateErr
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if response != nil {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if !errors.Is(err, recreateErr) || !strings.Contains(err.Error(), "recreate AI request body") {
+		t.Fatalf("expected wrapped GetBody error, got %v", err)
+	}
+	if networkCalls != 0 {
+		t.Fatalf("network called %d times", networkCalls)
+	}
+	if !originalBody.closed {
+		t.Error("request body was not closed after GetBody failure")
+	}
+}
+
+func TestBaseClient_RetryObservationsSanitizeTransportDetails(t *testing.T) {
+	const (
+		querySecret = "query-credential-secret"
+		causeSecret = "transport-cause-secret"
+	)
+	wantCause := errors.New(causeSecret)
+	logger := &mockLogger{}
+	tracing := &mockTelemetry{}
+	client := NewBaseClient(time.Second, logger)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.SetTelemetry(tracing)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, wantCause
+	})}
+
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		"https://provider.example/v1/chat/completions?credential="+querySecret,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	response, err := client.ExecuteWithRetry(context.Background(), request)
+	if response != nil {
+		t.Fatalf("response = %#v, want nil", response)
+	}
+	if !errors.Is(err, wantCause) {
+		t.Fatalf("returned error = %v, want cause identity", err)
+	}
+	if len(tracing.spans) != 2 {
+		t.Fatalf("attempt spans = %d, want 2", len(tracing.spans))
+	}
+
+	var observed strings.Builder
+	for _, fields := range logger.debugCalls {
+		fmt.Fprint(&observed, fields)
+	}
+	for _, fields := range logger.infoCalls {
+		fmt.Fprint(&observed, fields)
+	}
+	for _, fields := range logger.warnCalls {
+		fmt.Fprint(&observed, fields)
+	}
+	for _, fields := range logger.errorCalls {
+		fmt.Fprint(&observed, fields)
+	}
+	for attempt, span := range tracing.spans {
+		if !span.ended {
+			t.Errorf("attempt span %d was not ended", attempt+1)
+		}
+		if span.attributes["ai.error_type"] != "transport" {
+			t.Errorf("attempt span %d error type = %#v", attempt+1, span.attributes["ai.error_type"])
+		}
+		fmt.Fprint(&observed, span.attributes)
+		for _, spanErr := range span.errors {
+			fmt.Fprint(&observed, spanErr.Error())
+			if spanErr.Error() != "AI provider request failed: transport" {
+				t.Errorf("attempt span %d error = %q", attempt+1, spanErr.Error())
+			}
+		}
+	}
+	for _, forbidden := range []string{querySecret, causeSecret, "provider.example"} {
+		if strings.Contains(observed.String(), forbidden) {
+			t.Fatalf("observations leaked %q: %s", forbidden, observed.String())
+		}
+	}
+}
+
 func TestBaseClient_HandleError(t *testing.T) {
 	client := NewBaseClient(180*time.Second, nil)
 
@@ -419,54 +776,73 @@ func TestBaseClient_Logging(t *testing.T) {
 	logger := &mockLogger{}
 	client := NewBaseClient(180*time.Second, logger)
 
-	// Test LogRequest
+	// Legacy content-bearing helpers are safe no-ops.
 	client.LogRequest("test-provider", "test-model", "test prompt")
+	client.LogResponseContent("test-provider", "test-model", "test response")
 
+	if len(logger.infoCalls) != 0 || len(logger.debugCalls) != 0 {
+		t.Fatalf("legacy content helpers emitted logs: info=%#v debug=%#v", logger.infoCalls, logger.debugCalls)
+	}
+
+	ctx := core.WithRequestID(context.Background(), "core-request")
+	ctx = telemetry.WithBaggage(ctx, "request_id", "baggage-request")
+	client.LogRequestMetadata(ctx, RequestObservation{
+		Provider:      "openai",
+		ProviderAlias: "openai.groq",
+		SemanticModel: "semantic-model",
+		PromptLength:  11,
+	})
 	if len(logger.infoCalls) != 1 {
-		t.Errorf("expected 1 info call, got %d", len(logger.infoCalls))
+		t.Fatalf("request metadata info calls = %d, want 1", len(logger.infoCalls))
 	}
-
 	fields := logger.infoCalls[0]
-	if fields["provider"] != "test-provider" {
-		t.Errorf("expected provider test-provider, got %v", fields["provider"])
+	if fields["provider"] != "openai" || fields["model"] != "semantic-model" {
+		t.Fatalf("request metadata fields = %#v", fields)
 	}
-	if fields["model"] != "test-model" {
-		t.Errorf("expected model test-model, got %v", fields["model"])
+	if fields["request_id"] != "baggage-request" {
+		t.Fatalf("request ID precedence = %v, want baggage-request", fields["request_id"])
 	}
 
-	// Test LogResponse
 	usage := core.TokenUsage{
 		PromptTokens:     10,
 		CompletionTokens: 20,
 		TotalTokens:      30,
 	}
-	client.LogResponse(context.Background(), "test-provider", "test-model", usage, 100*time.Millisecond)
+	client.LogResponseMetadata(ctx, ResponseObservation{
+		Provider:      "openai",
+		ProviderAlias: "openai.groq",
+		SemanticModel: "semantic-model",
+		Usage:         usage,
+		Duration:      100 * time.Millisecond,
+	})
 
 	if len(logger.infoCalls) != 2 {
-		t.Errorf("expected 2 info calls, got %d", len(logger.infoCalls))
+		t.Fatalf("expected 2 info calls, got %d", len(logger.infoCalls))
 	}
 
-	fields = logger.infoCalls[1] // Second info call is LogResponse
-	if fields["provider"] != "test-provider" {
-		t.Errorf("expected provider test-provider, got %v", fields["provider"])
+	fields = logger.infoCalls[1]
+	if fields["provider"] != "openai" || fields["model"] != "semantic-model" {
+		t.Fatalf("response metadata fields = %#v", fields)
 	}
 	if fields["total_tokens"] != 30 {
 		t.Errorf("expected total_tokens 30, got %v", fields["total_tokens"])
 	}
 
-	// Test LogError
-	client.LogError("test-provider", errors.New("test error"))
+	client.LogError("openai", errors.New("provider-body-secret"))
 
 	if len(logger.errorCalls) != 1 {
 		t.Errorf("expected 1 error call, got %d", len(logger.errorCalls))
 	}
 
 	fields = logger.errorCalls[0]
-	if fields["provider"] != "test-provider" {
-		t.Errorf("expected provider test-provider, got %v", fields["provider"])
+	if fields["provider"] != "openai" {
+		t.Errorf("expected provider openai, got %v", fields["provider"])
 	}
-	if fields["error"] != "test error" {
-		t.Errorf("expected error 'test error', got %v", fields["error"])
+	if fields["error"] != "AI provider request failed: unknown" || fields["error_type"] != "unknown" {
+		t.Fatalf("legacy error log was not sanitized: %#v", fields)
+	}
+	if strings.Contains(fmt.Sprint(fields), "provider-body-secret") {
+		t.Fatalf("legacy error log leaked provider detail: %#v", fields)
 	}
 }
 
@@ -501,15 +877,27 @@ func TestBaseClient_ContextCancellation(t *testing.T) {
 type mockTelemetry struct {
 	spanStarted bool
 	spanName    string
+	lastSpan    *mockSpan
+	spans       []*mockSpan
 }
 
 func (m *mockTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
 	m.spanStarted = true
 	m.spanName = name
-	return ctx, &mockSpan{}
+	m.lastSpan = &mockSpan{}
+	m.spans = append(m.spans, m.lastSpan)
+	return ctx, m.lastSpan
 }
 
 func (m *mockTelemetry) RecordMetric(name string, value float64, labels map[string]string) {}
+
+type nilReturningTelemetry struct{}
+
+func (nilReturningTelemetry) StartSpan(context.Context, string) (context.Context, core.Span) {
+	return nil, nil
+}
+
+func (nilReturningTelemetry) RecordMetric(string, float64, map[string]string) {}
 
 // mockSpan tracks span operations for testing
 type mockSpan struct {
@@ -619,30 +1007,32 @@ func TestBaseClient_StartSpan(t *testing.T) {
 	}
 }
 
+func TestBaseClient_StartSpanNormalizesNilTelemetryResults(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	client.Telemetry = nilReturningTelemetry{}
+
+	ctx, span := client.StartSpan(nil, "ai.nil_telemetry")
+	if ctx == nil {
+		t.Fatal("StartSpan returned nil context")
+	}
+	if span == nil {
+		t.Fatal("StartSpan returned nil span")
+	}
+	if _, ok := span.(*core.NoOpSpan); !ok {
+		t.Fatalf("span type = %T, want *core.NoOpSpan", span)
+	}
+	span.SetAttribute("safe", true)
+	span.RecordError(errors.New("ignored"))
+	span.End()
+}
+
 func TestBaseClient_LogResponseContent(t *testing.T) {
 	logger := &mockLogger{}
 	client := NewBaseClient(180*time.Second, logger)
 
-	// Call LogResponseContent
 	client.LogResponseContent("test-provider", "test-model", "This is a test response")
-
-	// Verify debug call was made
-	if len(logger.debugCalls) != 1 {
-		t.Errorf("expected 1 debug call, got %d", len(logger.debugCalls))
-	}
-
-	fields := logger.debugCalls[0]
-	if fields["provider"] != "test-provider" {
-		t.Errorf("expected provider test-provider, got %v", fields["provider"])
-	}
-	if fields["model"] != "test-model" {
-		t.Errorf("expected model test-model, got %v", fields["model"])
-	}
-	if fields["response"] != "This is a test response" {
-		t.Errorf("expected response 'This is a test response', got %v", fields["response"])
-	}
-	if fields["response_length"] != 23 {
-		t.Errorf("expected response_length 23, got %v", fields["response_length"])
+	if len(logger.debugCalls) != 0 {
+		t.Fatalf("deprecated content helper emitted debug fields: %#v", logger.debugCalls)
 	}
 }
 

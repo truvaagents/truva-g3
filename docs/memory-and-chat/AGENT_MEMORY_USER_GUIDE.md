@@ -376,7 +376,7 @@ Request 4 (burst of 50 new events):
 
 **Typical steady-state**: 80% cache hits (0ms) + 15% incremental (0.5s) + 5% full (5s) = ~0.3s average.
 
-The cache is shared across all agents in the same domain via Redis — if `event-driven-agent` compacts the digest, `devops-chat-agent` benefits from the cache too.
+The cache is shared across all agents in the same domain via Redis — if `event-driven-agent` compacts the digest, `devops-chat-agent` benefits from the cache too. Each cached digest also stores the stable, secret-free AI policy and route fingerprint. A rule, middleware, resolved-model, provider-surface, or semantic-route change causes a cache miss instead of reusing a digest produced under different semantics. When the request fingerprint is unstable, activity compaction bypasses both cache reads and writes; this is correct but forces full compaction until the policy becomes stable.
 
 Configuration:
 

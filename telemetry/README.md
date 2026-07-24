@@ -1757,7 +1757,9 @@ See the **[Distributed Tracing and Log Correlation Guide](../docs/observability/
 
 ## 20. AI Module Distributed Tracing
 
-The TruvaG3 AI module supports distributed tracing, allowing you to see AI operations (`ai.generate_response`, `ai.http_attempt`) as part of your request traces in Jaeger.
+The TruvaG3 AI module supports distributed tracing. Provider-neutral logical
+operations (`ai.generate`, `ai.stream`), provider execution, request-policy
+preparation, and HTTP attempts appear in the same request trace in Jaeger.
 
 ### Critical: Initialization Order
 
@@ -1839,15 +1841,29 @@ When properly configured, the AI module emits these spans:
 
 | Span Name | Description | Key Attributes |
 |-----------|-------------|----------------|
-| `ai.generate_response` | Overall AI request | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`, `ai.total_tokens` |
+| `ai.generate` / `ai.stream` | Logical normalized AI call | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
+| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider execution attributes |
+| `ai.request.prepared` (event) | Sanitized request-policy report | Purpose, requested/resolved model, adjustment count, stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `http.status_code`, `ai.attempt_duration_ms` |
+
+`ai.NewClient` and `ai.NewRequestClient` always install the common instrumented
+wrapper. Depend on `core.AIClient` and optional capability interfaces instead
+of asserting a constructor result to a concrete provider type. Adding
+`ai.NewInstrumentedClient` around a factory-managed client for debug recording
+collapses the internal wrapper and avoids duplicate common spans. Failover
+chains can still produce nested logical spans because each attempted entry is
+independently observable.
+
+The AI layer reports token usage but does not emit an estimated `ai.cost_usd`.
+Join token usage to the provider's billing export when authoritative cost data
+is required.
 
 ### Viewing AI Traces in Jaeger
 
 1. Open Jaeger UI: `http://localhost:16686`
 2. Select your agent service (e.g., `travel-research-orchestration`)
 3. Find a trace and expand it
-4. Look for `ai.generate_response` and `ai.http_attempt` spans nested under your request spans
+4. Expand `ai.generate` or `ai.stream` to see provider execution and `ai.http_attempt` spans
 5. Click on a span to see detailed attributes (token counts, model, provider, etc.)
 
 ### Complete Example

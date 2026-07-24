@@ -1,11 +1,14 @@
 package ai
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -22,6 +25,8 @@ const maxRetriesUnset = -1
 // nor TRUVAG3_AI_RETRY_ATTEMPTS is set. Matches the historical default the
 // per-provider BaseClient ships with.
 const defaultMaxRetries = 3
+
+const defaultRequestTimeout = 180 * time.Second
 
 // resolveMaxRetries applies the single-client MaxRetries precedence chain.
 // Single clients (no chain failover layer below) absorb transient blips via
@@ -77,33 +82,124 @@ func resolveMaxRetriesWithDefault(current int, fallback int) int {
 	return fallback
 }
 
-// NewClient creates an AI client using registered providers
-func NewClient(opts ...AIOption) (core.AIClient, error) {
-	// Default configuration. MaxRetries starts as the unset sentinel so that
-	// resolveMaxRetries() below can distinguish "explicit override" from
-	// "fall back to env var or default".
-	config := &AIConfig{
-		Provider:    string(ProviderAuto),
-		MaxRetries:  maxRetriesUnset,
-		Timeout:     180 * time.Second, // 3 minutes default for reasoning models
+func newClientConfigWithDefaults() *clientConfig {
+	return &clientConfig{legacy: AIConfig{
+		Provider:   string(ProviderAuto),
+		MaxRetries: maxRetriesUnset,
+		// A non-positive value means no application override. The selected
+		// factory may provide a provider-specific default; otherwise the
+		// framework applies defaultRequestTimeout before construction.
+		Timeout:     0,
 		Temperature: 0.7,
 		MaxTokens:   1000,
 		Logger:      nil, // Will be set by framework or options
+	}}
+}
+
+// NewClient creates an AI client using registered providers.
+func NewClient(opts ...AIOption) (core.AIClient, error) {
+	config := newClientConfigWithDefaults()
+	for _, option := range opts {
+		// Preserve the legacy constructor's direct AIOption invocation behavior.
+		option(&config.legacy)
 	}
 
-	// Apply options
-	for _, opt := range opts {
-		opt(config)
+	factory, err := resolveProviderFactory(&config.legacy)
+	if err != nil {
+		return nil, err
+	}
+	legacy := snapshotAIConfig(&config.legacy)
+	client, err := createFromFactory(factory, legacy)
+	if err != nil {
+		return nil, err
+	}
+	instrumented := instrumentProviderClient(client, legacy)
+	logClientCreated(legacy, instrumented)
+	return instrumented, nil
+}
+
+// NewRequestClient creates a request-capable AI client. Existing AIOption
+// values may be mixed with the advanced ClientOption helpers.
+func NewRequestClient(options ...ClientOption) (core.AIRequestClient, error) {
+	config := newClientConfigWithDefaults()
+	for index, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("client option %d is nil", index)
+		}
+		if err := option.applyClient(config); err != nil {
+			return nil, fmt.Errorf("apply client option %d: %w", index, err)
+		}
 	}
 
-	// Resolve MaxRetries precedence: explicit option → env var → default.
-	// Must run after options so that WithMaxRetries(n) wins over the env var.
+	factory, err := resolveProviderFactory(&config.legacy)
+	if err != nil {
+		return nil, err
+	}
+	integration, err := validateAndSnapshotIntegration(config)
+	if err != nil {
+		return nil, err
+	}
+	legacy := snapshotAIConfig(&config.legacy)
+
+	if requestFactory, ok := factory.(RequestProviderFactory); ok {
+		client, err := requestFactory.CreateRequestClient(legacy, integration)
+		if err != nil {
+			return nil, err
+		}
+		if client == nil {
+			return nil, errors.New("provider factory returned a nil request client")
+		}
+		instrumented := instrumentProviderClient(client, legacy)
+		logClientCreated(legacy, instrumented)
+		return instrumented, nil
+	}
+
+	if !integrationIsZero(integration) {
+		return nil, fmt.Errorf(
+			"%w: provider factory %T cannot accept integration options",
+			core.ErrAIRequestFeatureUnsupported,
+			factory,
+		)
+	}
+	legacyClient, err := createFromFactory(factory, legacy)
+	if err != nil {
+		return nil, err
+	}
+	requestClient, ok := legacyClient.(core.AIRequestClient)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: provider client %T",
+			core.ErrAIRequestFeatureUnsupported,
+			legacyClient,
+		)
+	}
+	instrumented := instrumentProviderClient(requestClient, legacy)
+	logClientCreated(legacy, instrumented)
+	return instrumented, nil
+}
+
+func instrumentProviderClient(
+	client core.AIClient,
+	config *AIConfig,
+) *InstrumentedAIClient {
+	return NewInstrumentedClient(
+		client,
+		nil,
+		WithInstrumentedLogger(config.Logger),
+		WithInstrumentedTelemetry(config.Telemetry),
+		withFactoryInstrumentation(),
+	)
+}
+
+func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {
+	// Resolve MaxRetries precedence after all options so an explicit value wins
+	// over the environment and hard-coded default.
 	config.MaxRetries = resolveMaxRetries(config.MaxRetries)
+	providerWasAutoDetected := config.Provider == string(ProviderAuto)
 
-	// Apply component-specific logging for AI module
 	if config.Logger != nil {
-		if cal, ok := config.Logger.(core.ComponentAwareLogger); ok {
-			config.Logger = cal.WithComponent("framework/ai")
+		if componentLogger, ok := config.Logger.(core.ComponentAwareLogger); ok {
+			config.Logger = componentLogger.WithComponent("framework/ai")
 		}
 		config.Logger.Info("Starting AI client creation", map[string]interface{}{
 			"operation":        "ai_client_creation",
@@ -112,10 +208,8 @@ func NewClient(opts ...AIOption) (core.AIClient, error) {
 		})
 	}
 
-	// Auto-detection logic with enhanced logging
-	// Uses detectBestProviderWithAlias to pass both provider name and alias,
-	// so the factory's resolveCredentials() uses the explicit alias path
-	// and avoids re-running internal auto-detection.
+	// Resolve both provider and alias once so provider factories do not repeat
+	// environment detection with a potentially different result.
 	if config.Provider == string(ProviderAuto) {
 		provider, alias, err := detectBestProviderWithAlias(config.Logger)
 		if err != nil {
@@ -158,18 +252,126 @@ func NewClient(opts ...AIOption) (core.AIClient, error) {
 		return nil, fmt.Errorf("provider '%s' not registered. Import _ \"github.com/truvaagents/truva-g3/ai/providers/%s\"",
 			config.Provider, config.Provider)
 	}
+	if config.Timeout <= 0 {
+		config.Timeout = defaultRequestTimeout
+		if timeoutFactory, ok := factory.(ProviderRequestTimeoutFactory); ok && !providerWasAutoDetected {
+			providerTimeout := timeoutFactory.DefaultRequestTimeout()
+			if providerTimeout <= 0 {
+				return nil, fmt.Errorf(
+					"provider %q returned invalid default request timeout %s",
+					config.Provider,
+					providerTimeout,
+				)
+			}
+			config.Timeout = providerTimeout
+		}
+	}
+	return factory, nil
+}
 
-	client := factory.Create(config)
-	if config.Logger != nil {
-		config.Logger.Info("AI client created successfully", map[string]interface{}{
-			"operation":   "ai_client_creation",
-			"provider":    config.Provider,
-			"client_type": fmt.Sprintf("%T", client),
-			"status":      "success",
-		})
+func createFromFactory(factory ProviderFactory, config *AIConfig) (core.AIClient, error) {
+	if validated, ok := factory.(ValidatedProviderFactory); ok {
+		client, err := validated.CreateValidated(config)
+		if err != nil {
+			return nil, err
+		}
+		if client == nil {
+			return nil, errors.New("provider factory returned a nil client")
+		}
+		return client, nil
 	}
 
+	client := factory.Create(config)
+	if client == nil {
+		return nil, errors.New("provider factory returned a nil client")
+	}
 	return client, nil
+}
+
+func validateAndSnapshotIntegration(config *clientConfig) (ProviderIntegrationConfig, error) {
+	if config == nil {
+		return ProviderIntegrationConfig{}, errors.New("AI client configuration is nil")
+	}
+	integration := config.integration
+	if !integration.CompatibilityMode.Valid() {
+		return ProviderIntegrationConfig{}, fmt.Errorf("invalid AI compatibility mode %d", integration.CompatibilityMode)
+	}
+	if config.credentialSourceSet && isNilIntegrationValue(integration.CredentialSource) {
+		return ProviderIntegrationConfig{}, errors.New("AI credential source is nil")
+	}
+	if config.endpointResolverSet && isNilIntegrationValue(integration.EndpointResolver) {
+		return ProviderIntegrationConfig{}, errors.New("AI endpoint resolver is nil")
+	}
+	if config.httpClientSet && integration.HTTPClient == nil {
+		return ProviderIntegrationConfig{}, errors.New("AI HTTP client is nil")
+	}
+	rules, err := requestpolicy.ClonePatches(integration.RequestRules)
+	if err != nil {
+		return ProviderIntegrationConfig{}, fmt.Errorf("validate AI request rules: %w", err)
+	}
+	middleware := append([]requestpolicy.RequestMiddleware(nil), integration.RequestMiddleware...)
+	if _, err := requestpolicy.NewEngine(requestpolicy.Config{
+		AppRules:   rules,
+		Middleware: middleware,
+		Mode:       integration.CompatibilityMode,
+	}); err != nil {
+		return ProviderIntegrationConfig{}, fmt.Errorf("validate AI request integration: %w", err)
+	}
+	return ProviderIntegrationConfig{
+		RequestRules:      rules,
+		RequestMiddleware: middleware,
+		CompatibilityMode: integration.CompatibilityMode,
+		CredentialSource:  integration.CredentialSource,
+		EndpointResolver:  integration.EndpointResolver,
+		HTTPClient:        integration.HTTPClient,
+	}, nil
+}
+
+func isNilIntegrationValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+func integrationIsZero(config ProviderIntegrationConfig) bool {
+	return len(config.RequestRules) == 0 &&
+		len(config.RequestMiddleware) == 0 &&
+		config.CompatibilityMode == requestpolicy.CompatibilityCompatible &&
+		config.CredentialSource == nil &&
+		config.EndpointResolver == nil &&
+		config.HTTPClient == nil
+}
+
+func snapshotAIConfig(config *AIConfig) *AIConfig {
+	cloned := *config
+	// Reuse Core's compatibility clone so legacy Extra retains opaque leaves by
+	// reference while every map, slice, and array container is isolated.
+	options := core.NewAIRequestFromLegacy("", "", &core.AIOptions{
+		Headers: config.Headers,
+		Extra:   config.Extra,
+	}).LegacyOptions()
+	cloned.Headers = options.Headers
+	cloned.Extra = options.Extra
+	return &cloned
+}
+
+func logClientCreated(config *AIConfig, client core.AIClient) {
+	if config.Logger == nil {
+		return
+	}
+	config.Logger.Info("AI client created successfully", map[string]interface{}{
+		"operation":   "ai_client_creation",
+		"provider":    config.Provider,
+		"client_type": fmt.Sprintf("%T", client),
+		"status":      "success",
+	})
 }
 
 // MustNewClient creates a new AI client and panics on error

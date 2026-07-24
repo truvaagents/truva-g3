@@ -12,6 +12,27 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+type fingerprintActivityCompactor struct {
+	fingerprint string
+	stable      bool
+	compactCt   int
+}
+
+func (c *fingerprintActivityCompactor) aiSemanticFingerprint(context.Context) (string, bool) {
+	return c.fingerprint, c.stable
+}
+
+func (c *fingerprintActivityCompactor) CompactEvents(ctx context.Context, _ []core.AgentEvent, _ int) (string, error) {
+	c.compactCt++
+	captureAIRequestFingerprint(ctx, &core.AIRequestReport{Fingerprint: c.fingerprint, Stable: c.stable})
+	return "fresh-digest", nil
+}
+
+func (c *fingerprintActivityCompactor) UpdateDigest(ctx context.Context, previous string, _ []core.AgentEvent, _ int) (string, error) {
+	captureAIRequestFingerprint(ctx, &core.AIRequestReport{Fingerprint: c.fingerprint, Stable: c.stable})
+	return previous, nil
+}
+
 // --- MemoryEnrichmentHook Tests ---
 
 func TestMemoryEnrichmentHook_InjectsEpisodicContext(t *testing.T) {
@@ -717,6 +738,53 @@ func TestDigestCache_CacheHit_NoNewEvents(t *testing.T) {
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok)
 	assert.Contains(t, ragCtx, "cached-digest-content")
+}
+
+func TestDigestCacheUsesStableAIFingerprintAndBypassesUnstable(t *testing.T) {
+	events := makeEvents(3, time.Now().Add(-time.Hour))
+	episodic := &core.MockEpisodicMemory{
+		QueryRecentEventsFn: func(context.Context, string, time.Time, int) ([]core.AgentEvent, error) {
+			return events, nil
+		},
+	}
+	staleJSON, err := json.Marshal(cachedDigestData{
+		Content:           "stale-digest",
+		LastEventTS:       newestEventTS(events),
+		GeneratedAt:       time.Now(),
+		PolicyFingerprint: "policy-v1",
+	})
+	require.NoError(t, err)
+	cache := &core.MockDigestCache{
+		GetFn: func(context.Context, string) ([]byte, error) { return staleJSON, nil },
+	}
+	compactor := &fingerprintActivityCompactor{fingerprint: "policy-v2", stable: true}
+	hook, err := NewMemoryEnrichmentHook(episodic, nil, "agent", "domain",
+		WithActivityCompactor(compactor), WithDigestCache(cache))
+	require.NoError(t, err)
+	_, err = hook.BeforePlanning(t.Context(), &core.PipelineContext{Enrichments: map[string]interface{}{}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, compactor.compactCt, "changed policy fingerprint must miss the stale digest")
+	assert.Equal(t, 1, cache.SetCt, "fresh digest should be stored under the current fingerprint")
+
+	unstableCache := &core.MockDigestCache{
+		GetFn: func(context.Context, string) ([]byte, error) {
+			t.Fatal("unstable AI policy must bypass digest cache reads")
+			return nil, nil
+		},
+		SetFn: func(context.Context, string, []byte, time.Duration) error {
+			t.Fatal("unstable AI policy must bypass digest cache writes")
+			return nil
+		},
+	}
+	unstableCompactor := &fingerprintActivityCompactor{stable: false}
+	unstableHook, err := NewMemoryEnrichmentHook(episodic, nil, "agent", "domain",
+		WithActivityCompactor(unstableCompactor), WithDigestCache(unstableCache))
+	require.NoError(t, err)
+	_, err = unstableHook.BeforePlanning(t.Context(), &core.PipelineContext{Enrichments: map[string]interface{}{}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, unstableCompactor.compactCt)
+	assert.Equal(t, 0, unstableCache.GetCt)
+	assert.Equal(t, 0, unstableCache.SetCt)
 }
 
 func TestDigestCache_CacheHit_FewNewEvents_IncrementalUpdate(t *testing.T) {

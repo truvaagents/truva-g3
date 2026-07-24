@@ -182,18 +182,6 @@ func (t *TieredCapabilityProvider) GetLLMDebugStore() LLMDebugStore {
 	return t.debugStore
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when this provider will emit a typed
-// tiered_selection record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (t *TieredCapabilityProvider) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if t.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
-}
-
 // SetCircuitBreaker sets the circuit breaker for sophisticated resilience.
 // When set, LLM calls are wrapped with circuit breaker protection.
 func (t *TieredCapabilityProvider) SetCircuitBreaker(cb core.CircuitBreaker) {
@@ -548,15 +536,20 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		var err error
 
 		ctx := telemetry.WithBaggage(ctx, "ai.purpose", "tiered_selection")
-		callCtx := t.deferLLMRecordingIfWeWillRecord(ctx)
+		invocation := aiInvocation{
+			Purpose:        "tiered-selection",
+			Prompt:         prompt,
+			Options:        options,
+			DeferRecording: t.debugStore != nil,
+		}
 		if t.circuitBreaker != nil {
-			err = t.circuitBreaker.Execute(callCtx, func() error {
+			err = t.circuitBreaker.Execute(ctx, func() error {
 				var cbErr error
-				response, cbErr = t.aiClient.GenerateResponse(callCtx, prompt, options)
+				response, _, cbErr = invokeAI(ctx, t.aiClient, invocation)
 				return cbErr
 			})
 		} else {
-			response, err = t.aiClient.GenerateResponse(callCtx, prompt, options)
+			response, _, err = invokeAI(ctx, t.aiClient, invocation)
 		}
 		if err == nil && response != nil {
 			core.RecordTokenUsage(ctx, "tiered_selection", response.Usage)

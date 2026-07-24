@@ -115,18 +115,6 @@ func (d *LLMDistiller) SetLLMDebugStore(store LLMDebugStore) {
 	d.debugStore = store
 }
 
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when LLMDistiller will emit a typed
-// result_distillation record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (d *LLMDistiller) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if d.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
-}
-
 // recordDebugInteraction persists a distillation LLM interaction asynchronously.
 // Baggage is extracted before spawning the goroutine and re-injected inside it,
 // matching the pattern used by ErrorAnalyzer and AISynthesizer.
@@ -159,6 +147,14 @@ func (d *LLMDistiller) recordDebugInteraction(ctx context.Context, requestID str
 // Shutdown waits for in-flight debug recordings to complete.
 func (d *LLMDistiller) Shutdown() {
 	d.debugWg.Wait()
+}
+
+func (d *LLMDistiller) aiSemanticFingerprint(ctx context.Context) (string, bool) {
+	options := mergeAIOptions(&core.AIOptions{Model: d.config.Model}, d.aiOptionsOverride)
+	return fingerprintAI(ctx, d.aiClient, aiInvocation{
+		Purpose: "result-distillation",
+		Options: options,
+	})
 }
 
 // ProcessForPrompt applies two-stage distillation for results exceeding the threshold.
@@ -255,7 +251,7 @@ func (d *LLMDistiller) ProcessForPrompt(
 	baseOptions := &core.AIOptions{Temperature: 0.1, MaxTokens: maxTokens, Model: d.config.Model, SystemPrompt: distillationSystemPrompt}
 	options := mergeAIOptions(baseOptions, d.aiOptionsOverride)
 
-	callCtx := d.deferLLMRecordingIfWeWillRecord(ctx)
+	callCtx := ctx
 	// Bound the single compaction call by the global deadline. A timeout surfaces as an
 	// err, so the existing fail-open below (structural pre-filter) applies — the synthesis
 	// hot path is never blocked past the deadline. (The map-reduce path returns partial
@@ -265,7 +261,12 @@ func (d *LLMDistiller) ProcessForPrompt(
 		callCtx, cancel = context.WithTimeout(callCtx, d.config.CompactionDeadline)
 		defer cancel()
 	}
-	response, err := d.aiClient.GenerateResponse(callCtx, prompt, options)
+	response, _, err := invokeAI(callCtx, d.aiClient, aiInvocation{
+		Purpose:        "result-distillation",
+		Prompt:         prompt,
+		Options:        options,
+		DeferRecording: d.debugStore != nil,
+	})
 	duration := time.Since(distillStart)
 	// Record usage BEFORE the empty-content guard below: an empty 200 response still billed
 	// its prompt tokens, and hiding it from cost telemetry would make a content-filter burst

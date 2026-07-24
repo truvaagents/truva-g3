@@ -1421,26 +1421,6 @@ func (o *AIOrchestrator) SetPropagatedHeaders(headers map[string]string) {
 	o.executor.SetPropagatedHeaders(headers)
 }
 
-// deferLLMRecordingIfWeWillRecord returns a context marked for wrapper
-// deferral (telemetry.WithLLMCallRecordingDeferred) when this orchestrator
-// has a live debug store to record into, and returns ctx unchanged
-// otherwise. Call sites pass the returned context to
-// aiClient.GenerateResponse / StreamResponse.
-//
-// Guards the graceful-fallback invariant from orchestration/ARCHITECTURE.md
-// ("Never fails orchestration if debug store fails"): if our own
-// recordDebugInteraction would no-op due to a nil debugStore, the wrapper
-// must remain the authoritative recorder so the call still produces an
-// agent_llm_call row rather than vanishing entirely.
-//
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md Layer 2.
-func (o *AIOrchestrator) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if o.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
-}
-
 // recordDebugInteraction stores an LLM interaction for debugging.
 // Runs asynchronously to avoid blocking orchestration. Errors are logged, not propagated.
 // extractErrorProviderInfo extracts model and provider from a core.ProviderError if present.
@@ -1626,9 +1606,12 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 
 	// Call LLM for correction. Defer wrapper-side recording — we write
 	// the authoritative `correction`-typed LLMInteraction ourselves below.
-	callCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
-	response, err := o.aiClient.GenerateResponse(callCtx, correctionPrompt, nil)
+	response, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+		Purpose:        "plan-correction",
+		Prompt:         correctionPrompt,
+		DeferRecording: o.debugStore != nil,
+	})
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "correction", response.Usage)
@@ -3308,8 +3291,12 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	// Scope the ai.purpose baggage to the LLM call only — it would otherwise
 	// leak into AfterSynthesis hooks and mis-tag user_memory.extraction spans.
 	streamCtx := telemetry.WithBaggage(ctx, "ai.purpose", "synthesis_streaming")
-	streamCallCtx := o.deferLLMRecordingIfWeWillRecord(streamCtx)
-	aiResponse, err := streamingClient.StreamResponse(streamCallCtx, synthesisPrompt, streamSynthesisOpts, streamCallback)
+	aiResponse, _, err := streamAI(streamCtx, streamingClient, aiInvocation{
+		Purpose:        "synthesis",
+		Prompt:         synthesisPrompt,
+		Options:        streamSynthesisOpts,
+		DeferRecording: o.debugStore != nil,
+	}, streamCallback)
 	if err == nil || err == core.ErrStreamPartiallyCompleted {
 		core.RecordTokenUsage(ctx, "synthesis", aiResponse.Usage)
 	}
@@ -3823,9 +3810,13 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		ctx := telemetry.WithBaggage(ctx, "ai.purpose", "plan_generation")
 		// Defer wrapper-side recording — we emit the authoritative
 		// `plan_generation` typed LLMInteraction below.
-		callCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 		llmStartTime := time.Now()
-		aiResponse, err := o.aiClient.GenerateResponse(callCtx, promptResult.Prompt, planOpts)
+		aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+			Purpose:        "planning",
+			Prompt:         promptResult.Prompt,
+			Options:        planOpts,
+			DeferRecording: o.debugStore != nil,
+		})
 		llmDuration := time.Since(llmStartTime)
 		if err == nil {
 			core.RecordTokenUsage(ctx, "planning", aiResponse.Usage)
@@ -4115,10 +4106,14 @@ STRICT RULES FOR THIS RETRY:
 					// Call LLM with the enhanced prompt (may have NEW tools from tiered selection).
 					// Defer wrapper-side recording — the retry records its own
 					// `plan_generation` typed interaction below.
-					retryCallCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 					retryLLMStartTime := time.Now()
 					retryPlanOpts := o.planAIOptions(0.2, promptResult.SystemPrompt)
-					retryResponse, retryErr := o.aiClient.GenerateResponse(retryCallCtx, hallucinationFeedback, retryPlanOpts)
+					retryResponse, _, retryErr := invokeAI(ctx, o.aiClient, aiInvocation{
+						Purpose:        "planning",
+						Prompt:         hallucinationFeedback,
+						Options:        retryPlanOpts,
+						DeferRecording: o.debugStore != nil,
+					})
 					retryLLMDuration := time.Since(retryLLMStartTime)
 					if retryErr == nil {
 						core.RecordTokenUsage(ctx, "planning", retryResponse.Usage)
@@ -4453,9 +4448,13 @@ func (o *AIOrchestrator) generateContinuationPlan(
 		ctx := telemetry.WithBaggage(ctx, "ai.purpose", "continuation_plan_generation")
 		// Defer wrapper-side recording — we emit the authoritative
 		// `continuation_plan_generation` typed LLMInteraction below.
-		callCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 		llmStartTime := time.Now()
-		aiResponse, err := o.aiClient.GenerateResponse(callCtx, promptResult.Prompt, planOpts)
+		aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+			Purpose:        "continuation-planning",
+			Prompt:         promptResult.Prompt,
+			Options:        planOpts,
+			DeferRecording: o.debugStore != nil,
+		})
 		llmDuration := time.Since(llmStartTime)
 		if err == nil {
 			core.RecordTokenUsage(ctx, "planning", aiResponse.Usage)
@@ -4794,10 +4793,14 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 
 	// Defer wrapper-side recording — we emit the authoritative
 	// `continuation_plan_regeneration` typed LLMInteraction below.
-	callCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
 
-	aiResponse, err := o.aiClient.GenerateResponse(callCtx, prompt, regenOpts)
+	aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+		Purpose:        "continuation-planning",
+		Prompt:         prompt,
+		Options:        regenOpts,
+		DeferRecording: o.debugStore != nil,
+	})
 
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
@@ -6688,9 +6691,13 @@ Please generate a corrected plan that addresses this error.`,
 
 	planOpts := o.planAIOptions(0.2, basePromptResult.SystemPrompt)
 
-	callCtx := o.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
-	aiResponse, err := o.aiClient.GenerateResponse(callCtx, prompt, planOpts)
+	aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+		Purpose:        "planning",
+		Prompt:         prompt,
+		Options:        planOpts,
+		DeferRecording: o.debugStore != nil,
+	})
 	llmDuration := time.Since(llmStartTime)
 
 	if err != nil {

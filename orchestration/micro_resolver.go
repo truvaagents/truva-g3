@@ -422,9 +422,13 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 	}
 
 	// Make the LLM call
-	callCtx := m.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
-	resp, err := m.aiClient.GenerateResponse(callCtx, prompt, opts)
+	resp, _, err := invokeAI(ctx, m.aiClient, aiInvocation{
+		Purpose:        "micro-resolution",
+		Prompt:         prompt,
+		Options:        opts,
+		DeferRecording: m.debugStore != nil,
+	})
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "micro_resolution", resp.Usage)
@@ -643,9 +647,13 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 		requestID = m.generateFallbackRequestID()
 	}
 
-	callCtx := m.deferLLMRecordingIfWeWillRecord(ctx)
 	llmStartTime := time.Now()
-	resp, err := m.aiClient.GenerateResponse(callCtx, prompt, schemaOpts)
+	resp, _, err := invokeAI(ctx, m.aiClient, aiInvocation{
+		Purpose:        "schema-mapping",
+		Prompt:         prompt,
+		Options:        schemaOpts,
+		DeferRecording: m.debugStore != nil,
+	})
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "schema_mapping", resp.Usage)
@@ -1497,18 +1505,6 @@ func (m *MicroResolver) SetSchemaMappingThreshold(threshold int) {
 // SetLLMDebugStore sets the LLM debug store for full payload visibility.
 func (m *MicroResolver) SetLLMDebugStore(store LLMDebugStore) {
 	m.debugStore = store
-}
-
-// deferLLMRecordingIfWeWillRecord marks ctx so InstrumentedAIClient skips
-// its own agent_llm_call emission when MicroResolver will emit a typed
-// micro_resolution record itself. Gated on debugStore presence to preserve
-// the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-func (m *MicroResolver) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
-	if m.debugStore == nil {
-		return ctx
-	}
-	return telemetry.WithLLMCallRecordingDeferred(ctx)
 }
 
 // recordDebugInteraction stores an LLM interaction for debugging.

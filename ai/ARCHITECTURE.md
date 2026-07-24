@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.0
+**Version**: 1.7
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -82,6 +82,8 @@
 | `AIConfig` | Configuration options for clients | `provider.go` |
 | `BaseClient` | Shared functionality (retry, logging) | `providers/base.go` |
 | `ChainClient` | Multi-provider failover | `chain_client.go` |
+| `requestpolicy.Engine` | Deterministic provider-request policy evaluation | `requestpolicy/` |
+| `openaiwire.Codec` | Reusable OpenAI-compatible request/response translation | `providerkit/openaiwire/` |
 | `AIAgent` | Agent with AI + discovery capabilities | `ai_agent.go` |
 | `AITool` | Tool with AI capabilities (no discovery) | `ai_tool.go` |
 
@@ -277,7 +279,7 @@ Valid Dependencies:
 
 **Why `ai` needs `telemetry`**:
 1. **External API calls**: AI providers make external HTTP calls that need latency/error tracking
-2. **Cost visibility**: Token usage directly translates to costs
+2. **Usage visibility**: Normalized token counts support capacity and efficiency analysis
 3. **Failover tracking**: Chain client failovers need metrics
 4. **Consistency**: Matches `resilience` and `orchestration` modules
 
@@ -385,7 +387,6 @@ func DetectAvailableProviders(logger core.Logger) []AliasAvailability {
 ```
 
 The `detectBestProvider()` function delegates to `DetectAvailableProviders()` and returns the highest-priority result. This ensures single-client auto-detection and chain auto-detection share the same logic.
-```
 
 **Provider Priorities** (default):
 | Provider | Alias | Priority | Detection Method |
@@ -477,15 +478,27 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
     // Apply defaults
     options = c.ApplyDefaults(options)
+    semanticModel := ResolveModel("openai", options.Model)
 
-    // Log request
-    c.LogRequest("openai", options.Model, prompt)
+    // Log only context-correlated, sanitized request metadata.
+    c.LogRequestMetadata(ctx, providers.RequestObservation{
+        Provider:      "openai",
+        ProviderAlias: "openai",
+        SemanticModel: semanticModel,
+        PromptLength:  len(prompt),
+    })
     startTime := time.Now()
 
     // Build and execute request...
 
-    // Log response
-    c.LogResponse("openai", result.Model, result.Usage, time.Since(startTime))
+    // Keep provider-reported wire model data out of metric dimensions.
+    c.LogResponseMetadata(ctx, providers.ResponseObservation{
+        Provider:      "openai",
+        ProviderAlias: "openai",
+        SemanticModel: semanticModel,
+        Usage:         result.Usage,
+        Duration:      time.Since(startTime),
+    })
 
     return result, nil
 }
@@ -554,6 +567,67 @@ chain, err := ai.NewChainClient(
 response, err := chain.GenerateResponse(ctx, prompt, opts)
 ```
 
+### Explicit Heterogeneous Entries
+
+`NewChain` is the request-aware construction path for independently configured
+provider instances and application-local clients:
+
+```go
+chain, err := ai.NewChain(
+    ai.ProviderEntry(
+        "anthropic-primary",
+        "anthropic",
+        ai.WithModel("premium"),
+        ai.WithCredentialSource(primaryCredentials),
+        ai.WithEndpointResolver(primaryRoute),
+        ai.WithRequestRules(primaryRules...),
+    ),
+    ai.ProviderEntry(
+        "anthropic-backup",
+        "anthropic",
+        ai.WithModel("fast"),
+        ai.WithCredentialSource(backupCredentials),
+        ai.WithEndpointResolver(backupRoute),
+    ),
+    ai.ClientEntry("local-native-adapter", nativeClient),
+)
+
+result, err := chain.Generate(ctx, request)
+```
+
+Provider entries are framework-managed and are constructed through
+`NewRequestClient`; therefore the selected factory must support request-aware
+construction. OpenAI, Azure OpenAI, and Anthropic support it directly. Bedrock
+supports it when the application is compiled with the `bedrock` build tag.
+Providers without a request-aware factory, currently including Gemini, can
+still be supplied through `ClientEntry` as legacy or application-local clients.
+`ClientEntry` accepts any `core.AIClient`, including application-local
+request-aware or native adapters.
+Injected clients remain caller-owned: the chain invokes them but does not call
+optional logger, telemetry, or lifecycle setters on them.
+
+Entry names must be unique, stable, non-secret operator labels. They appear in
+sanitized chain report adjustments, logs, and spans, but never as metric
+dimensions. Every attempt receives a recursive `core.CloneAIRequest` snapshot,
+so failed providers cannot mutate the request, legacy options, or provider
+patches observed by a later entry. A provider report returned with either
+success or failure is preserved and receives a chain adjustment containing the
+entry name and attempt number.
+
+`GenerateResponse` and `StreamResponse` remain compatible legacy adapters. For
+chains built through `NewChain` or `NewChainClient`, they compile the legacy
+prompt/options into a provider-neutral request and use the same request-aware
+failover loop. A legacy-only entry is called only when it can represent the
+request without dropping advanced semantics; otherwise the entry produces an
+unsupported-capability failure and the chain may continue.
+
+Request-aware streaming follows the same entry order. Failover is allowed only
+before the application callback receives a chunk. Once any chunk is visible,
+the chain returns that entry's partial result and error instead of switching
+providers and corrupting stream semantics. Each attempt delegates request-aware
+versus legacy capability adaptation to `core.StreamAI`, which is the single
+owner of the same lossless representability rules used by `core.GenerateAI`.
+
 ### Auto-Detect Mode
 
 When no `WithProviderChain` is specified, the chain client auto-detects available providers from the environment and orders them by priority:
@@ -592,7 +666,17 @@ chain, err := ai.NewChainClient(
 | **Rate limits (429)** | Try next provider | Provider at capacity |
 | **Network errors** | Try next provider | Transient connectivity |
 
-The two override flags (`IsTransient` and `IsRetryable`) are independent — see godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx classification, but they signal different conditions: `IsTransient` = "this never reached the API" (proxy 4xx), `IsRetryable` = "the API gave a definitive answer that may differ on a different provider" (billing/quota).
+The two override flags (`IsTransient` and `IsRetryable`) are independent — see
+godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx
+classification, but they signal different conditions: `IsTransient` = "this
+never reached the API" (proxy 4xx), `IsRetryable` = "the API gave a definitive
+answer that may differ on a different provider" (billing/quota).
+`IsRetryable` takes precedence over generic HTTP-status classification when the
+chain derives the bounded `failover_reason`, so an `insufficient_quota` response
+reported as HTTP 429 remains `provider_retryable`; an ordinary 429 remains
+`rate_limit`. This bounded reason is the canonical operator-action signal on
+both non-terminal failover and terminal exhaustion events. Operations whose
+names say “failover” are emitted only when another entry actually remains.
 
 ### Per-Provider Retry Budget
 
@@ -625,15 +709,20 @@ When telemetry is initialized, the chain client should emit:
 ```go
 // On failover
 telemetry.Counter("ai.chain.failover",
-    "from_provider", "openai",
-    "to_provider", "anthropic",
+    "module", telemetry.ModuleAI,
+    "status", "attempted",
     "reason", "server_error")
 
 // On complete failure
 telemetry.Counter("ai.chain.exhausted",
-    "providers_tried", "3",
-    "final_error", "rate_limit")
+    "module", telemetry.ModuleAI,
+    "status", "exhausted",
+    "reason", "rate_limit")
 ```
+
+Chain entry names and from/to transitions are recorded on correlated logs and
+spans, not metric labels. Entry names are application-defined and would create
+unbounded time series if used as metric dimensions.
 
 ---
 
@@ -701,18 +790,18 @@ func (t *AITool) ProcessWithAI(ctx context.Context, input string) (string, error
 
 ```go
 // Standard fields for AI operations
-logger.Info("AI request initiated", map[string]interface{}{
+logger.InfoWithContext(ctx, "AI request initiated", map[string]interface{}{
     "operation":     "ai_request",        // Operation type
     "provider":      "openai",            // Provider name
-    "model":         "gpt-4",             // Model used
+    "model":         "gpt-4",             // Semantic model, never a deployment
     "prompt_length": len(prompt),         // Input size
     "max_tokens":    1000,                // Token limit
 })
 
-logger.Info("AI response received", map[string]interface{}{
+logger.InfoWithContext(ctx, "AI response received", map[string]interface{}{
     "operation":         "ai_response",
     "provider":          "openai",
-    "model":             "gpt-4",
+    "model":             "gpt-4", // Semantic model from the request report
     "prompt_tokens":     usage.PromptTokens,
     "completion_tokens": usage.CompletionTokens,
     "duration_ms":       duration.Milliseconds(),
@@ -720,17 +809,38 @@ logger.Info("AI response received", map[string]interface{}{
 })
 ```
 
+Provider request logs are request-scoped and therefore use the context-aware
+logger methods. AI observation helpers also attach a nonempty `request_id` from
+telemetry baggage with core request context as fallback, preserving correlation
+when telemetry is disabled; the logger context supplies trace correlation when
+available. Every log retains a stable `operation`; error logs also use a bounded
+`error_type` and a sanitized `error` value. Provider clients never log
+prompt text, system prompts, generated content, serialized request/response
+bodies, credentials, credential scopes, complete endpoint URLs, query values,
+or route-owned deployment/publisher-model identifiers. Prompt and response
+lengths and token counts are safe metadata. The optional application-controlled
+`LLMCallRecorder` is a separate debug-capture facility and is not permission for
+provider/common logs to record content.
+
 ### Telemetry Guidelines
 
 **Metrics to Emit** (using `telemetry` module):
 
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `ai.request.duration_ms` | Histogram | provider, model, status | Latency tracking |
-| `ai.request.tokens` | Counter | provider, model, token_type | Cost tracking |
+| `ai.request.duration_ms` | Histogram | module, provider, status | Latency tracking |
+| `ai.request.tokens` | Counter | module, provider, token_type | Usage tracking |
 | `ai.request.errors` | Counter | provider, error_type | Error rates |
-| `ai.chain.failover` | Counter | from_provider, to_provider | Failover frequency |
+| `ai.chain.failover` | Counter | module, status/reason | Failover frequency; provider/entry identities remain in logs and spans |
 | `ai.provider.available` | Gauge | provider | Health monitoring |
+
+Metric labels are deliberately bounded. Semantic model identity belongs in
+logs, reports, and spans, where it remains distinguishable from the wire
+deployment. Neither semantic model strings nor provider-reported wire model,
+deployment, route identity, credential scope, endpoint, request ID, or tenant
+identity is added as a provider metric label. This also prevents an Azure
+deployment or Vertex publisher-model ID returned in `AIResponse.Model` from
+silently becoming a time-series dimension.
 
 **Implementation Pattern**:
 
@@ -810,6 +920,360 @@ client, err := ai.NewClient(
     ai.WithLogger(logger),               // Logger instance
 )
 ```
+
+### Request-Capable Construction
+
+`NewRequestClient` is the additive construction path for presence-aware
+`core.AIRequest` calls and provider request policies. Every existing
+`AIOption` also satisfies `ClientOption`, so provider, model, retry, logging,
+and telemetry configuration is shared with `NewClient`:
+
+```go
+requestClient, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithModel("default"),
+    ai.WithRequestRules(core.AIProviderPatch{
+        Name:    "application-anthropic-sampling-policy",
+        Version: "1",
+        Selector: core.AIProviderSelector{
+            Provider: "anthropic",
+            Surface:  "messages",
+            Model:    "claude-sonnet-5-*",
+        },
+        Remove: []string{"/temperature", "/top_p", "/top_k"},
+    }),
+    ai.WithCompatibilityMode(requestpolicy.CompatibilityStrict),
+)
+if err != nil {
+    return err
+}
+
+request := core.NewAIRequest(prompt, "planning")
+request.Generation.MaxTokens = core.SetAIParameter(4000)
+result, err := requestClient.Generate(ctx, request)
+```
+
+Application rules must have stable `Name` and `Version` identities. Patch
+`Set` values are JSON-native, and body paths use RFC 6901 JSON Pointer syntax.
+`WithRequestMiddleware` accepts constrained middleware that may edit only the
+provider draft exposed through `requestpolicy.RequestEditor`. Middleware must
+be concurrency-safe; it produces a reusable policy fingerprint only when it
+implements `requestpolicy.StableRequestMiddleware` and explicitly declares
+stable semantics.
+
+Built-in request-capable clients also implement
+`core.AIRequestFingerprinter`. The capability prepares an isolated request and
+returns the same secret-free policy/route identity carried by a successful
+request report, without acquiring credentials or invoking provider transport.
+An unstable middleware, invalid request, unresolved route, or unavailable
+fingerprint returns `stable=false`; AI-output caches must bypass rather than
+reuse an incomplete namespace. The common instrumentation wrapper delegates
+this capability and supplies a stable adapter namespace for faithfully
+representable legacy clients. A chain fingerprint covers every ordered
+failover entry. Provider-local invocation viability checks that do not change
+semantic policy or route identity run after fingerprint preparation. A
+deterministic failure at that later boundary may therefore return a stable
+request report and permit chain failover without disabling cache identity for
+the healthy entry; a dynamic resolver failure remains fingerprint-unstable.
+
+`NewRequestClient` never silently discards integration behavior. A legacy
+factory may be used only when no integration options are supplied and its
+client already implements `core.AIRequestClient`. OpenAI, Azure OpenAI, and
+Anthropic have built-in request adapters, and Bedrock provides one behind its
+build tag. Providers without a request adapter return
+`core.ErrAIRequestFeatureUnsupported`.
+
+Provider authors can add error-capable construction without breaking the
+legacy `ProviderFactory` contract:
+
+```go
+type ValidatedProviderFactory interface {
+    ProviderFactory
+    CreateValidated(*AIConfig) (core.AIClient, error)
+}
+
+type RequestProviderFactory interface {
+    ProviderFactory
+    CreateRequestClient(
+        *AIConfig,
+        ProviderIntegrationConfig,
+    ) (core.AIRequestClient, error)
+}
+
+type ProviderRequestTimeoutFactory interface {
+    ProviderFactory
+    DefaultRequestTimeout() time.Duration
+}
+```
+
+Factories validate and wire configuration only. They do not invoke middleware
+or take ownership of application-supplied lifecycle components. The timeout
+interface is optional: providers that omit it retain 180 seconds. A positive
+factory value applies only to an explicitly selected standalone provider when
+the application did not supply a positive `WithTimeout`. Auto-detected clients
+and framework-managed chain entries retain the failover-safe 180-second
+framework default; caller-owned `ClientEntry` values remain untouched.
+
+### Enterprise Credentials, Routing, and HTTP Transport
+
+Request-capable providers may also accept application-owned credential,
+endpoint, and HTTP transport integrations:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithCredentialSource(credentials),
+    ai.WithEndpointResolver(routes),
+    ai.WithHTTPClient(httpClient),
+)
+```
+
+`CredentialSource` receives only sanitized request identity plus trusted route
+metadata and returns one complete authentication header. It is called after
+semantic request policy for every transport attempt, allowing token rotation
+without rebuilding the client. An injected credential source takes precedence
+over the static provider API key. Credential values and credential scopes are
+excluded from request reports, fingerprints, spans, and framework logs.
+
+For simple dynamic headers, `WithAuthHeader(name, callback)` adapts a
+concurrency-safe callback into a credential source. Applications that need to
+invalidate cached credentials after early revocation should implement
+`CredentialRejectionObserver`; Anthropic, Azure OpenAI, and OpenAI notify it on
+HTTP 401 and 403 before returning the original provider error. Observer
+failures are diagnostic and do not replace that error. The providers do not
+perform an immediate authentication retry because generation acceptance cannot
+generally be proven from an auth response; ordinary provider retry and chain
+failover semantics remain intact.
+
+`EndpointResolver` runs after portable request identity and concrete semantic
+model resolution, but before provider-draft construction and semantic request
+policy. This is the normative order for every provider that accepts the shared
+resolver, including Anthropic, Azure OpenAI, and OpenAI. It lets a trusted route
+supply a deployment or publisher-model identifier needed to construct
+protected wire structure without treating that identifier as the semantic
+model.
+
+```text
+snapshot and validate portable request identity
+    -> resolve provider alias and concrete semantic model
+    -> validate known semantic capabilities
+    -> resolve deterministic endpoint route and deployment
+    -> select an explicit, versioned wire profile
+    -> build one provider-local policy draft
+    -> apply rules, middleware, and per-request patches
+    -> validate and encode immutable request semantics
+    -> acquire credentials for each transport attempt
+    -> send and decode
+```
+
+Basic portable-intent, model, and capability validation happens before route
+resolution. Application rules, middleware, per-request patches, and final draft
+validation happen after it. Consequently, a resolver can be invoked before a
+later policy failure, and a route failure takes precedence when both routing
+and a downstream policy stage would fail. A resolver receives no policy-edited
+body or headers and must not depend on policy having executed.
+
+AI-output caches may evaluate the resolver during fingerprint preflight and
+again when a cache miss proceeds to provider execution, so resolver
+implementations must be concurrency-safe, side-effect-free, and return a stable
+route identity for the same semantic request. For HTTP-backed providers,
+`ResolvedEndpoint.URL` is the complete HTTP endpoint. An SDK-native provider may
+instead require `URL` to be nil and consume `Deployment` as an opaque SDK
+destination. `RouteIdentity` must be a stable, non-secret identifier suitable
+for a sanitized report and fingerprint. Resolver-owned URLs and query maps are
+cloned before use. Query values, deployment names, and credential scopes are
+available to transport/credential integration but are not reported. A
+deployment affects an SDK input, body, or path only when an explicitly selected,
+typed provider surface consumes it; generic OpenAI and Anthropic routes do not
+silently reinterpret `Deployment` as their body model.
+
+An injected `*http.Client` remains caller-owned. The provider shallow-copies
+it, preserves its transport, redirect, cookie-jar, and timeout policies, and
+uses `http.DefaultTransport` when its transport is nil. The framework request
+timeout is a context deadline and does not overwrite the injected client's
+timeout. The configured transport sees the final serialized body, route,
+eligible application headers, and credential header, so mTLS and signing
+transports compose normally.
+
+Anthropic, Azure OpenAI, and OpenAI support these HTTP integrations. Bedrock
+accepts request rules, middleware, and an SDK-destination endpoint resolver. A
+Bedrock resolver supplies only the opaque Converse `modelId` through
+`Deployment` and a sanitized route identity; it must return no URL, query, or
+credential scope. Bedrock deliberately rejects credential sources, injected
+HTTP clients, and request headers. AWS credentials, SigV4, service endpoint,
+region, and transport remain owned by `aws.Config` and the AWS SDK.
+
+### Reusable Codecs and Native SDK Drafts
+
+Provider policy operates on a logical `requestpolicy.Draft`; it does not require
+every provider to use the same transport or wire format. The draft is prepared
+once per logical call, policy is applied once, and sync and stream execution are
+derived from the resulting semantics.
+
+Provider drafts keep semantic identity separate from wire identity. The
+semantic model remains the input to capability lookup, policy selectors,
+reports, and compatibility rules. An explicitly selected, versioned wire
+profile decides whether a route-owned deployment is emitted as the protected
+body model, placed only in the endpoint path, or ignored by that surface. Wire
+profiles are selected by provider configuration or an exact provider alias,
+never inferred from a hostname or arbitrary URL shape. Credentials remain
+outside both profiles and drafts.
+
+`ai/providerkit/openaiwire` is the public extension package for OpenAI-compatible
+Chat Completions adapters. Its codec owns:
+
+- construction and validation of the policy-editable request draft;
+- encoding the finalized request body;
+- decoding synchronous responses and streaming events; and
+- normalization of content, finish reasons, and token-usage details.
+
+The codec does not own endpoint selection, credentials, retries, provider
+identity, logging, or telemetry. The stock OpenAI provider composes those
+concerns around the codec. Application-local and third-party enterprise adapters
+may reuse the codec with their own routing and authentication without registering
+as, or masquerading as, the stock OpenAI provider. To preserve the module
+dependency direction, `providerkit/openaiwire` imports `core` and
+`ai/requestpolicy` but never the root `ai` package.
+
+The hosted-surface extension uses the same composition rule. Azure OpenAI
+selects the explicit aliases `azureopenai.v1` and
+`azureopenai.classic`. Google-hosted Claude selects `anthropic.vertex` and
+reuses the Anthropic Messages semantics with a provider-local typed profile:
+the publisher model is route-owned and omitted from the body,
+`anthropic_version` is a protected body member, and the Google access token is
+attached later through `CredentialSource`. These profiles are request-aware
+only; Azure OpenAI additionally disables automatic environment selection and
+requires an explicit endpoint resolver.
+
+Bedrock demonstrates the non-HTTP form of the same contract. Its logical
+`bedrock.Draft` is evaluated by the shared policy engine and then translated
+directly into `bedrockruntime.ConverseInput` or
+`bedrockruntime.ConverseStreamInput`. It does not serialize an artificial HTTP
+JSON request merely to reuse request policy. The provider and its tests are
+compiled only with the `bedrock` build tag; CI has a dedicated tagged build,
+race-test, lint, and vulnerability-check path.
+
+Bedrock also follows route-before-draft identity separation. The resolved
+semantic model drives policy selectors, normalized results, logs, and request
+reports. A resolver-owned deployment is the protected wire `ModelId` only and
+may contain a foundation model, inference profile, application inference
+profile, or provisioned-model identifier accepted by Converse. Raw wire IDs and
+ARNs are excluded from reports, fingerprints, logs, and spans; the stable
+sanitized route identity binds the policy fingerprint and may be recorded on the
+provider-local span. Without a resolver, the direct route deliberately uses the
+semantic model as the wire model and never silently adds a geographic or global
+inference-profile prefix. Because the implicit Sonnet 5 default is documented
+for direct in-region use only in `us-east-1`, request preparation outside that
+region rejects an invocation that would use that implicit default after
+per-request model selection. The route-classified viability check runs after
+policy/report preparation, so it does not erase a deterministic fingerprint or
+poison a failover chain's successful report. An explicit framework client
+model, per-request model/profile, or endpoint resolver remains
+application-owned and bypasses that guard. Direct package clients declare the
+same intent with `Client.SetDefaultModel` during construction. Bedrock route
+errors implement the exported, AI-local `AIRequestFailureReasoner` contract and
+return `AIRequestFailureReasonRoute`. The chain accepts only exported bounded
+reasons and never imports a provider package or inspects an error string.
+Generate and streaming attempts, recoveries, aborts, and exhaustion therefore
+report `error_type=route`, `failover_reason=route`, and bounded metric
+`reason=route` consistently without exposing the raw route error. Caller
+cancellation and deadlines retain precedence over a wrapped route marker.
+Exhaustion classification comes from the final attempted error; the joined
+error is reserved for the caller. A failed final entry emits only the terminal
+exhaustion event, never a misleading “trying next” failover event.
+
+One Bedrock-local, boundary-aware, case-insensitive family classifier selects
+both sampling mutation and final validation. Sonnet 5 and Opus 4.7/4.8 remove
+`temperature`, `top_p`, and `top_k`; Fable 5 removes inherited incompatible
+temperature and `top_k` while preserving only `temperature=1` and `top_p` in
+`[0.99,1)`. Converse common sampling belongs in `inference_config`.
+Case-insensitive legacy `Extra` spellings are canonicalized but remain in
+`additional_model_request_fields` while policy runs, so application rules,
+middleware, or per-request patches can remove them or explicitly set the
+canonical common field and remove the legacy copy. Case-insensitive duplicates
+fail closed before policy; final validation rejects every unremediated Fable
+temperature/top-p field in the additional container. JSON-decoder
+`json.Number` values receive bounded validation in common inference fields.
+The complete model-specific additional document is recursively validated
+during final draft validation, before the policy report can be marked stable:
+empty or malformed numbers, structs, `uintptr`, non-string map keys, cycles,
+and non-finite floats fail locally with a path-qualified error. Valid
+`json.Number` values are converted to Smithy document numbers immediately
+before SDK translation; named signed and unsigned native numeric values remain
+numeric. Cycle detection distinguishes legal overlapping slice views from true
+recursive cycles.
+Models exposed only through a different AWS surface, including the current
+Mythos Messages surface, are not classified as Converse models. Resolver
+implementations must preserve semantic equivalence: the semantic model drives
+policy even when the protected wire deployment is an opaque profile or ARN.
+
+Provider factories may implement the additive
+`ProviderRequestTimeoutFactory` contract when their documented operation
+headroom differs from the framework's 180-second default. The root constructor
+applies that factory default only to an explicitly selected standalone
+provider when the application does not provide a positive `WithTimeout`;
+Bedrock declares 60 minutes. Auto-detected clients and framework-managed
+failover entries retain 180 seconds so a long provider default cannot stall
+provider selection. Direct `bedrock.NewClient` construction also retains the
+60-minute default, while caller-owned chain clients remain untouched. This
+keeps provider-specific operation policy in the provider module while explicit
+positive application configuration retains precedence. Zero and negative
+durations mean unset; they do not request an unbounded provider call.
+
+The Bedrock-specific embedding helper defaults to Titan Text Embeddings V2
+(`amazon.titan-embed-text-v2:0`, 1024 dimensions by default). The exported
+`ModelTitanEmbedV1` constant exists only as an explicit migration pin for
+1536-dimensional V1 stores. A per-call V1 pin discards inherited V2-only client
+defaults, while V2 dimensions or normalization explicitly supplied on that
+same call are rejected before SDK invocation (zero dimensions remains an
+explicit omission). Boundary-aware recognition also covers recognizable V1
+variants and foundation-model ARNs. The framework never mixes or migrates
+vector-store dimensions implicitly. `WithoutEmbeddingNormalization` explicitly
+omits an inherited V2 normalization setting for one call. Embedding spans use
+only the bounded V1 or V2 semantic family and never a route-owned model ID or
+ARN.
+
+| Built-in provider | Policy surface | Request rules/middleware | HTTP integration seams |
+|-------------------|----------------|--------------------------|------------------------|
+| Anthropic and `anthropic.vertex` | Messages / Vertex publisher prediction | Yes | Yes |
+| Azure OpenAI v1/classic | Profiled Chat Completions | Yes | Yes; resolver required |
+| OpenAI and compatible aliases | Chat Completions via `openaiwire` | Yes | Yes |
+| Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | SDK destination resolver only; AWS SDK owns HTTP, credentials, signing, and region |
+| Gemini | Legacy client | No | No |
+
+### Common Logical Instrumentation
+
+Clients returned by `NewClient` and `NewRequestClient` are decorated by the
+common `InstrumentedAIClient`. The decorator preserves the stable
+`core.AIClient` surface, exposes the additive request capability, and creates
+one logical parent span for each call:
+
+```text
+ai.generate or ai.stream
+    └── provider-local preparation / execution span
+        └── ai.http_attempt (one per transport attempt)
+```
+
+The logical span owns normalized duration, provider/model/surface identity,
+token usage, and policy adjustment paths. It does not record
+prompts, system prompts, generated content, serialized provider request or
+response bodies, credentials, credential scopes, complete endpoint URLs, query
+values, or route-owned deployments. Provider transports continue to own
+network-attempt spans. A provider-local span may record the resolved semantic
+model, bounded surface, sanitized stable route identity, status code, durations,
+token counts, and a bounded error classification. Errors recorded on common or
+provider-local spans use sanitized messages rather than raw provider response
+material.
+
+Orchestration emits an `ai.request.prepared` event on its active phase span
+when a sanitized report is available. The event contains provider/surface,
+purpose, model identities, adjustment count, stability, and the fingerprint
+only when stable. It never contains prompt, body, endpoint, or credential data.
+
+Because the registered-provider constructors return the common decorator,
+code that needs a concrete provider type should construct that provider
+directly. Ordinary framework code should depend on `core.AIClient` or
+`core.AIRequestClient`.
 
 ### Environment Variable Reference
 
@@ -1083,6 +1547,13 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.7 | 2026-07-23 | Exported the bounded route-failure marker, aligned terminal generate/stream observability and success attributes, removed last-entry failover logs, and moved Bedrock additional-document rejection before stable fingerprinting |
+| 1.6 | 2026-07-23 | Split Bedrock semantic fingerprint preparation from invocation viability, made Fable legacy sampling policy-remediable and fail-closed, normalized Bedrock document numbers, added bounded route failover classification, direct-client model intent, and embedding override/semantic-family controls |
+| 1.5 | 2026-07-23 | Aligned Bedrock family sampling classification, implicit-region validation, failover-safe timeout scoping, and Titan V1 migration support |
+| 1.4 | 2026-07-22 | Added SDK-native Bedrock destination resolution, provider-specific default timeouts, semantic/wire model separation, and bounded route observability |
+| 1.3 | 2026-07-22 | Approved route-before-draft hosted-provider lifecycle, semantic/wire identity separation, and bounded provider observability contracts |
+| 1.2 | 2026-07-20 | Added request fingerprint delegation, chain composition, and orchestration cache-safety guidance |
+| 1.1 | 2026-07-20 | Added request-aware provider status, reusable OpenAI wire codecs, and native Bedrock policy drafts |
 | 1.0 | 2025-12-14 | Initial architecture documentation |
 
 ---

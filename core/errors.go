@@ -46,11 +46,29 @@ var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker open")
 
 	// AI operation errors
-	ErrAIOperationFailed = errors.New("AI operation failed")
+	ErrAIOperationFailed           = errors.New("AI operation failed")
+	ErrAIRequestFeatureUnsupported = errors.New("AI request feature is unsupported by this client")
 
 	// Streaming errors
 	ErrStreamPartiallyCompleted = errors.New("stream partially completed before interruption")
 )
+
+// AIRequestFeatureError reports request semantics that a legacy-only AI client
+// cannot honor without silently degrading them.
+type AIRequestFeatureError struct {
+	ClientType string
+	Feature    string
+}
+
+// Error implements error.
+func (e *AIRequestFeatureError) Error() string {
+	return fmt.Sprintf("%s does not support AI request feature %q", e.ClientType, e.Feature)
+}
+
+// Is supports errors.Is comparisons with ErrAIRequestFeatureUnsupported.
+func (e *AIRequestFeatureError) Is(target error) bool {
+	return target == ErrAIRequestFeatureUnsupported
+}
 
 // IsRetryable checks if an error is retryable.
 // Retryable errors are typically transient network or availability issues

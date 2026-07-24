@@ -1231,6 +1231,13 @@ if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 
 **Always record errors on the span for trace visibility.** This makes errors visible in Jaeger.
 
+At an external-service or AI-provider boundary, record a sanitized derivative
+when the original error may contain response bodies, endpoints, credential
+diagnostics, or other sensitive material. Preserve the original error in the
+caller-visible error chain. The AI module uses
+`providers.RecordObservationError` for this purpose; it records the sanitized
+exception and bounded `ai.error_type` while still marking the span as failed.
+
 ```go
 // From orchestration/executor.go:1228-1235
 agentInfo := e.findAgentByName(step.AgentName)
@@ -2168,8 +2175,36 @@ When properly configured, the AI module emits these spans:
 
 | Span Name | Description | Key Attributes |
 |-----------|-------------|----------------|
-| `ai.generate_response` | Overall AI request | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`, `ai.total_tokens`, `ai.prompt_length`, `ai.response_length` |
+| `ai.generate` | Logical normalized generation | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
+| `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
+| `ai.chain.generate` / `ai.chain.stream` | Ordered provider failover | Shared success attributes `ai.chain.attempt`, `ai.chain.entry_name`, `ai.chain.successful_entry`, and `ai.chain.total_duration_ms`, plus bounded status, `ai.chain.abort_reason` for aborted calls, and `ai.chain.failover_reason`; recovered, aborted, and exhausted local route-resolution or invocation-viability failures use `route` rather than `unknown`. Provider-specific billing/quota failures use `provider_retryable`, including an `IsRetryable` HTTP 429; ordinary 429 responses remain `rate_limit`. Exhaustion classification comes from the final attempted error |
+| `ai.chain.provider_attempt` / `ai.chain.stream_attempt` | One provider entry attempt | Stable non-secret entry name, attempt status/duration, retry marker, and sanitized bounded failure metadata; route failures use `ai.error_type=route` |
+| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Semantic provider/model, optional sanitized route identity, and provider-specific execution attributes |
+| `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, bounded Titan V1/V2 semantic family, `ai.text_length`, embedding dimensions, bounded error classification |
+| `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; the embedding child carries only the bounded Titan V1/V2 semantic family, and raw SDK model/profile IDs are omitted |
+| `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
+
+Every operation span that returns an error is marked failed, including both an
+outer embedding span and its invocation child when the invocation fails. This
+is expected nested observability rather than duplicate logical
+instrumentation. Provider-boundary exception messages are sanitized; the
+original error remains available to the caller through `errors.Is` and
+`errors.As`.
+
+Provider-local spans distinguish the semantic model from a route-owned wire
+deployment. A stable application-sanitized route identity may be attached as
+`ai.request.route_identity`; raw deployment names, publisher-model IDs,
+inference-profile IDs/ARNs, endpoint URLs, query values, and credential scopes
+must not be recorded. Bedrock's public direct `InvokeModel` surface therefore
+omits `ai.model`. When that operation is the child of `GetEmbeddings`, both
+spans record only the bounded Titan V1 or V2 semantic family.
+
+The AI layer reports provider token usage but does not derive or emit an
+`ai.cost_usd` value. Provider prices, discounts, cached-token rules, and billing
+semantics change independently of the framework, so an inferred currency value
+would not be authoritative. Join token usage with the provider's billing export
+when accurate cost reporting is required.
 
 ### Enabling AI Telemetry in Your Agent
 
@@ -2195,6 +2230,18 @@ func NewMyAgent() (*MyAgent, error) {
 }
 ```
 
+`ai.NewClient` and `ai.NewRequestClient` always return the common instrumented
+wrapper, even when telemetry is nil. Depend on `core.AIClient` and optional
+capability interfaces rather than asserting the result to a concrete provider
+client type. If an application wraps that factory-managed client with
+`ai.NewInstrumentedClient` to add debug recording, the constructor collapses
+the internal wrapper so one call does not create duplicate common spans.
+
+Failover chains may still show nested logical AI spans because the chain and
+each attempted entry are independently observable. That is intentional: the
+outer operation represents the logical call, while child operations show which
+entries were attempted.
+
 ### What You'll See in Jaeger
 
 When you expand a trace containing AI operations, you'll see:
@@ -2203,18 +2250,19 @@ When you expand a trace containing AI operations, you'll see:
 travel-research-orchestration: HTTP POST /orchestrate/natural (15.87s)
 └── orchestrator.process_request (15.87s)
     ├── orchestrator.build_prompt (1.4ms)
-    ├── ai.generate_response (2.34s)                    ← AI module span
-    │   └── ai.http_attempt (2.33s)                     ← HTTP-level span
-    │       └── [attributes: ai.provider=openai, ai.model=gpt-4.1-mini, ...]
+    ├── ai.generate (2.34s)                             ← logical normalized call
+    │   └── ai.generate_response (2.34s)                ← provider execution
+    │       └── ai.http_attempt (2.33s)                 ← HTTP attempt/retry
     ├── HTTP POST → geocoding-tool (594ms)
     ├── HTTP POST → weather-tool-v2 (610ms)
-    └── ai.generate_response (1.89s)                    ← Another AI call
-        └── ai.http_attempt (1.88s)
+    └── ai.generate (1.89s)
+        └── ai.generate_response (1.89s)
+            └── ai.http_attempt (1.88s)
 ```
 
 ### Troubleshooting: AI Spans Not Appearing
 
-If you don't see `ai.generate_response` or `ai.http_attempt` spans:
+If you don't see `ai.generate`, provider execution, or `ai.http_attempt` spans:
 
 1. **Check initialization order**: Telemetry MUST be initialized before creating the AI client
 2. **Verify telemetry is enabled**: Check your logs for "Telemetry initialized successfully"

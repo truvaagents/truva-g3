@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -128,8 +128,68 @@ func NewEmbeddingClient(opts ...EmbeddingClientOption) (*EmbeddingClient, error)
 	if c.model == "" {
 		return nil, fmt.Errorf("embedding model cannot be empty: set TRUVAG3_EMBEDDING_MODEL or use WithEmbeddingModel()")
 	}
+	if componentLogger, ok := c.logger.(core.ComponentAwareLogger); ok {
+		c.logger = componentLogger.WithComponent("framework/ai")
+	}
 
 	return c, nil
+}
+
+func embeddingErrorTypeForStatus(statusCode int) string {
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return "provider_rate_limit"
+	case statusCode >= http.StatusInternalServerError:
+		return "provider_server"
+	default:
+		return "provider_client"
+	}
+}
+
+func (c *EmbeddingClient) observeError(
+	ctx context.Context,
+	message string,
+	model string,
+	err error,
+	fallback string,
+	inputCount int,
+	duration time.Duration,
+	statusCode int,
+) {
+	errorType, safeError := providers.SanitizedObservationError(err, fallback)
+	fields := map[string]interface{}{
+		"operation":   "generate_embeddings",
+		"provider":    "openai-compatible",
+		"model":       model,
+		"status":      "error",
+		"error":       safeError.Error(),
+		"error_type":  errorType,
+		"input_count": inputCount,
+		"duration_ms": duration.Milliseconds(),
+	}
+	if statusCode != 0 {
+		fields["status_code"] = statusCode
+	}
+	providers.AddObservationRequestID(ctx, fields)
+	c.logger.WarnWithContext(ctx, message, fields)
+
+	telemetry.Counter("ai.embedding.errors",
+		"module", telemetry.ModuleAI,
+		"error_type", errorType,
+	)
+	requestID, _ := fields["request_id"].(string)
+	attributes := []attribute.KeyValue{
+		attribute.String("request_id", requestID),
+		attribute.String("model", model),
+		attribute.String("error", safeError.Error()),
+		attribute.String("error_type", errorType),
+		attribute.Int64("duration_ms", duration.Milliseconds()),
+		attribute.Int("input_count", inputCount),
+	}
+	if statusCode != 0 {
+		attributes = append(attributes, attribute.Int("status_code", statusCode))
+	}
+	telemetry.AddSpanEvent(ctx, "ai.embedding.error", attributes...)
 }
 
 // GenerateEmbeddings calls the /v1/embeddings endpoint and returns vector embeddings.
@@ -157,6 +217,7 @@ func (c *EmbeddingClient) GenerateEmbeddings(ctx context.Context, texts []string
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
+		c.observeError(ctx, "Embedding request preparation failed", model, err, "invalid_request", len(texts), time.Since(startTime), 0)
 		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
 	}
 
@@ -164,6 +225,7 @@ func (c *EmbeddingClient) GenerateEmbeddings(ctx context.Context, texts []string
 	url := c.baseURL + "/embeddings"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
+		c.observeError(ctx, "Embedding request creation failed", model, err, "invalid_request", len(texts), time.Since(startTime), 0)
 		return nil, fmt.Errorf("failed to create embedding request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -174,64 +236,28 @@ func (c *EmbeddingClient) GenerateEmbeddings(ctx context.Context, texts []string
 	// Make request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		durationMs := time.Since(startTime).Milliseconds()
-		c.logger.WarnWithContext(ctx, "Embedding request failed", map[string]interface{}{
-			"operation":   "generate_embeddings",
-			"model":       model,
-			"error":       err.Error(),
-			"error_type":  "network",
-			"input_count": len(texts),
-			"duration_ms": durationMs,
-		})
-		telemetry.Counter("ai.embedding.errors",
-			"module", telemetry.ModuleAI,
-			"model", model,
-			"error_type", "network",
-		)
-		telemetry.AddSpanEvent(ctx, "ai.embedding.error",
-			attribute.String("model", model),
-			attribute.String("error", err.Error()),
-			attribute.Int64("duration_ms", durationMs),
-			attribute.Int("input_count", len(texts)),
-		)
+		c.observeError(ctx, "Embedding request failed", model, err, "transport", len(texts), time.Since(startTime), 0)
 		return nil, fmt.Errorf("embedding request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.observeError(ctx, "Embedding response read failed", model, err, "decode", len(texts), time.Since(startTime), resp.StatusCode)
 		return nil, fmt.Errorf("failed to read embedding response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		durationMs := time.Since(startTime).Milliseconds()
-		c.logger.WarnWithContext(ctx, "Embedding API error", map[string]interface{}{
-			"operation":   "generate_embeddings",
-			"model":       model,
-			"status_code": resp.StatusCode,
-			"error":       string(respBody),
-			"error_type":  "api_error",
-			"input_count": len(texts),
-			"duration_ms": durationMs,
-		})
-		telemetry.Counter("ai.embedding.errors",
-			"module", telemetry.ModuleAI,
-			"model", model,
-			"error_type", "api_error",
-			"status", strconv.Itoa(resp.StatusCode),
-		)
-		telemetry.AddSpanEvent(ctx, "ai.embedding.error",
-			attribute.String("model", model),
-			attribute.Int("status_code", resp.StatusCode),
-			attribute.Int64("duration_ms", durationMs),
-			attribute.Int("input_count", len(texts)),
-		)
+		fallback := embeddingErrorTypeForStatus(resp.StatusCode)
+		providerErr := fmt.Errorf("embedding provider returned status %d", resp.StatusCode)
+		c.observeError(ctx, "Embedding API error", model, providerErr, fallback, len(texts), time.Since(startTime), resp.StatusCode)
 		return nil, fmt.Errorf("embedding API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	// Parse response (OpenAI-compatible format)
 	var embResp embeddingResponse
 	if err := json.Unmarshal(respBody, &embResp); err != nil {
+		c.observeError(ctx, "Embedding response decode failed", model, err, "decode", len(texts), time.Since(startTime), resp.StatusCode)
 		return nil, fmt.Errorf("failed to parse embedding response: %w", err)
 	}
 
@@ -247,18 +273,22 @@ func (c *EmbeddingClient) GenerateEmbeddings(ctx context.Context, texts []string
 	durationMs := time.Since(startTime).Milliseconds()
 	telemetry.Counter("ai.embedding.success",
 		"module", telemetry.ModuleAI,
-		"model", model,
+		"status", "success",
 	)
 	telemetry.Histogram("ai.embedding.duration_ms", float64(durationMs),
 		"module", telemetry.ModuleAI,
-		"model", model,
+		"status", "success",
 	)
 	if embResp.Usage.TotalTokens > 0 {
 		telemetry.Counter("ai.embedding.tokens_total",
 			"module", telemetry.ModuleAI,
-			"model", model,
+			"type", "input",
 		)
+		completionFields := map[string]interface{}{}
+		providers.AddObservationRequestID(ctx, completionFields)
+		requestID, _ := completionFields["request_id"].(string)
 		telemetry.AddSpanEvent(ctx, "ai.embedding.completed",
+			attribute.String("request_id", requestID),
 			attribute.String("model", model),
 			attribute.Int("input_count", len(texts)),
 			attribute.Int("prompt_tokens", embResp.Usage.PromptTokens),

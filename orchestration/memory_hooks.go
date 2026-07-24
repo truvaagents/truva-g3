@@ -481,16 +481,30 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 
 				// Check digest cache for incremental compaction
 				cacheDecisionStart := time.Now()
-				cached, _ := h.getCachedDigest(ctx)
+				policyFingerprint := ""
+				cacheSafe := true
+				if semantic, hasAI := h.compactor.(aiSemanticCacheFingerprinter); hasAI {
+					policyFingerprint, cacheSafe = semantic.aiSemanticFingerprint(ctx)
+				}
+				var cached *cachedDigestData
+				if cacheSafe {
+					cached, _ = h.getCachedDigest(ctx, policyFingerprint)
+				}
 				var cachePath string
 
 				if cached == nil {
 					// Cache miss (or no cache) — full compaction
 					cachePath = "full"
 					telemetry.Counter("orchestration.digest_cache.miss", "module", telemetry.ModuleOrchestration)
-					d, compactErr := h.compactor.CompactEvents(ctx, recentEvents, h.compactionMaxTokens)
+					compactionCtx := ctx
+					var producedFingerprint *aiFingerprintCapture
+					if policyFingerprint != "" {
+						compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
+					}
+					d, compactErr := h.compactor.CompactEvents(compactionCtx, recentEvents, h.compactionMaxTokens)
 					if compactErr == nil && d != "" {
-						h.storeCachedDigest(ctx, d, newestEventTS(recentEvents))
+						h.storeCachedDigest(ctx, d, newestEventTS(recentEvents), policyFingerprint,
+							cacheSafe && producedFingerprint.matches(policyFingerprint))
 						digest = d
 					} else {
 						// Fail-open: fall back to raw events
@@ -517,9 +531,15 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 					} else if len(newEvents) <= h.incrementalThreshold {
 						// Incremental update
 						cachePath = "incremental"
-						updated, err := h.compactor.UpdateDigest(ctx, cached.Content, newEvents, h.compactionMaxTokens)
+						compactionCtx := ctx
+						var producedFingerprint *aiFingerprintCapture
+						if policyFingerprint != "" {
+							compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
+						}
+						updated, err := h.compactor.UpdateDigest(compactionCtx, cached.Content, newEvents, h.compactionMaxTokens)
 						if err == nil && updated != "" {
-							h.storeCachedDigest(ctx, updated, newestEventTS(newEvents))
+							h.storeCachedDigest(ctx, updated, newestEventTS(newEvents), policyFingerprint,
+								cacheSafe && producedFingerprint.matches(policyFingerprint))
 							digest = updated
 						} else {
 							digest = cached.Content // fallback to stale cache
@@ -528,9 +548,15 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 						// Burst — full recompaction
 						cachePath = "full_recompact"
 						allEvents, _ := h.episodic.QueryRecentEvents(ctx, h.agentDomain, since, h.compactionRawLimit)
-						d, err := h.compactor.CompactEvents(ctx, allEvents, h.compactionMaxTokens)
+						compactionCtx := ctx
+						var producedFingerprint *aiFingerprintCapture
+						if policyFingerprint != "" {
+							compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
+						}
+						d, err := h.compactor.CompactEvents(compactionCtx, allEvents, h.compactionMaxTokens)
 						if err == nil && d != "" {
-							h.storeCachedDigest(ctx, d, newestEventTS(allEvents))
+							h.storeCachedDigest(ctx, d, newestEventTS(allEvents), policyFingerprint,
+								cacheSafe && producedFingerprint.matches(policyFingerprint))
 							digest = d
 						} else {
 							digest = cached.Content // fallback to stale cache
@@ -1329,12 +1355,13 @@ func getParentEventFromContext(ctx context.Context) string {
 // --- Digest caching helpers ---
 
 type cachedDigestData struct {
-	Content     string    `json:"content"`
-	LastEventTS time.Time `json:"last_event_ts"`
-	GeneratedAt time.Time `json:"generated_at"`
+	Content           string    `json:"content"`
+	LastEventTS       time.Time `json:"last_event_ts"`
+	GeneratedAt       time.Time `json:"generated_at"`
+	PolicyFingerprint string    `json:"policy_fingerprint,omitempty"`
 }
 
-func (h *MemoryEnrichmentHook) getCachedDigest(ctx context.Context) (*cachedDigestData, error) {
+func (h *MemoryEnrichmentHook) getCachedDigest(ctx context.Context, policyFingerprint string) (*cachedDigestData, error) {
 	if h.digestCache == nil {
 		return nil, nil
 	}
@@ -1357,14 +1384,28 @@ func (h *MemoryEnrichmentHook) getCachedDigest(ctx context.Context) (*cachedDige
 		telemetry.RecordSpanError(ctx, err)
 		return nil, err
 	}
+	if cached.PolicyFingerprint != policyFingerprint {
+		return nil, nil
+	}
 	return &cached, nil
 }
 
-func (h *MemoryEnrichmentHook) storeCachedDigest(ctx context.Context, content string, lastEventTS time.Time) {
-	if h.digestCache == nil {
+func (h *MemoryEnrichmentHook) storeCachedDigest(
+	ctx context.Context,
+	content string,
+	lastEventTS time.Time,
+	policyFingerprint string,
+	cacheSafe bool,
+) {
+	if h.digestCache == nil || !cacheSafe {
 		return
 	}
-	cached := cachedDigestData{Content: content, LastEventTS: lastEventTS, GeneratedAt: time.Now()}
+	cached := cachedDigestData{
+		Content:           content,
+		LastEventTS:       lastEventTS,
+		GeneratedAt:       time.Now(),
+		PolicyFingerprint: policyFingerprint,
+	}
 	data, err := json.Marshal(cached)
 	if err != nil {
 		return

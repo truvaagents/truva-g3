@@ -452,42 +452,54 @@ General Enterprise:
 #### AI Provider Integration Strategy
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  AI Provider Architecture                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 Agent Layer                                 ││
-│  │  Uses Abstract AIClient Interface                           ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                │                                │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Provider Abstraction Layer                     ││
-│  │                                                             ││
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           ││
-│  │  │ OpenAI      │ │ Anthropic   │ │ Custom      │           ││
-│  │  │ Adapter     │ │ Adapter     │ │ Provider    │           ││
-│  │  │             │ │             │ │ Adapter     │           ││
-│  │  │ • GPT-4     │ │ • Claude-3  │ │ • Local LLM │           ││
-│  │  │ • GPT-3.5   │ │ • Claude-2  │ │ • Fine-tuned│           ││
-│  │  │ • Embeddings│ │ • Instant   │ │ • Specialized│           ││
-│  │  └─────────────┘ └─────────────┘ └─────────────┘           ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                │                                │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 External APIs                               ││
-│  │                                                             ││
-│  │ api.openai.com     api.anthropic.com     custom-llm.local  ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                     AI Provider Architecture                       │
+├────────────────────────────────────────────────────────────────────┤
+│ Application and orchestration                                      │
+│   core.AIClient + optional request-aware capabilities               │
+│   core.GenerateAI / core.StreamAI                                   │
+├────────────────────────────────────────────────────────────────────┤
+│ AI construction, policy, failover, and instrumentation              │
+│   ai.NewClient / ai.NewRequestClient / ai.NewChain                  │
+│   semantic model → policy → route → credentials → transport         │
+├───────────────────────┬───────────────────────┬────────────────────┤
+│ Direct HTTP profiles  │ Hosted profiles       │ SDK/custom adapters│
+│ OpenAI, Anthropic,    │ Azure OpenAI, Claude │ AWS Bedrock        │
+│ Gemini, registered    │ on Vertex AI, Google │ (`bedrock` tag),   │
+│ compatible services   │ OpenAI compatibility │ custom factories   │
+├───────────────────────┴───────────────────────┴────────────────────┤
+│ Provider APIs, enterprise gateways, and self-hosted model services  │
+└────────────────────────────────────────────────────────────────────┘
 
 Benefits of This Architecture:
-├── Provider Independence: Switch providers without agent changes
+├── Provider-Neutral Calls: Keep agent/orchestration call sites stable
 ├── Multi-Provider: Use different providers for different use cases
 ├── Fallback Strategy: Graceful degradation when providers fail
 ├── Cost Optimization: Route to cost-effective providers
 └── Compliance: Meet data residency requirements per provider
 ```
+
+The current provider boundary has two additive capability levels. Legacy
+clients implement `core.AIClient`; request-aware clients also implement
+`core.AIRequestClient` and optionally `core.StreamingAIRequestClient` and
+`core.AIRequestFingerprinter`. High-level modules dispatch through
+`core.GenerateAI` and `core.StreamAI`, so they never need to import provider
+packages and never silently discard presence-aware intent.
+
+Below that boundary, the shared request-policy engine applies provider
+compatibility rules, application rules, middleware, and per-request patches to
+a provider-local logical draft. Dynamic credentials and endpoint routing are
+attached after semantic policy, at the transport boundary, and excluded from
+reports, fingerprints, logs, and traces. OpenAI-compatible adapters can reuse
+the `openaiwire` codec; SDK-native providers use their own draft translation.
+
+`ai.NewChain` composes independently configured provider entries and
+caller-owned clients for heterogeneous failover. Stable, secret-free policy and
+route fingerprints protect orchestration caches from reusing AI-derived output
+after generation semantics change.
+
+See the [Custom AI Providers and Enterprise Integration Guide](../building/CUSTOM_AI_PROVIDER_GUIDE.md)
+and the module [AI Architecture](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md).
 
 #### Enterprise System Integration
 

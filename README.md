@@ -20,7 +20,13 @@ Two coordination layers fall out of the design:
 - **Inside each agent — orchestration.** One AIOrchestrator drives plan → execute → synthesize, returning to plan when fresh data unlocks the next phase. Plans are DAGs of capability invocations executed with parallelism where dependencies allow.
 - **Between participants — decentralized coordination.** Each agent reads the shared registry, resolves capabilities to endpoints, and calls peers directly over HTTP/REST. No process in the middle routes, sequences, or coordinates.
 
-**Vendor-agnostic by design**: integrates with OpenAI, Anthropic, Gemini, Groq, DeepSeek, or any OpenAI-compatible endpoint (including self-hosted models via Ollama, vLLM, llama.cpp). Switching providers does not require agent code changes.
+**Provider-neutral by design**: registered profiles cover OpenAI, Anthropic,
+Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, and several
+OpenAI-compatible services. Other compatible endpoints, including vLLM and
+llama.cpp, can reuse the OpenAI adapter after the application verifies the
+request, response, and streaming fields it depends on. Agent and orchestration
+logic stays on provider-neutral Core interfaces; provider construction may
+still change when a hosted surface requires different routes or credentials.
 
 **Distributed-systems patterns**: capability-based service discovery (Redis/Valkey by default; pluggable behind `core.Discovery`), resilience primitives (circuit breakers, semantic retry, panic recovery), and OpenTelemetry instrumentation with distributed tracing and unified metrics. Written in Go for a small runtime footprint (~15-44MB containers, ~6-45MB runtime memory) and direct use of Kubernetes primitives.
 
@@ -151,21 +157,28 @@ For architects, the practical differentiators are:
 - New tools automatically become available to existing orchestrators via the service registry
 - LLM dynamically selects tools based on discovered capabilities, not hardcoded references
 
-### True Vendor Independence
+### Provider-Neutral AI Integration
 
-Switch LLM providers without changing your agent code:
+Keep agent and orchestration call sites independent of the selected LLM:
 
 ```go
-// Same agent code works with any provider
+// The same provider-neutral call sites work with every configured client.
 client, _ := ai.NewClient(ai.WithProviderAlias("openai")) // or omit options and rely on env auto-detection
 
-// Or explicitly choose providers at runtime
+// Explicitly select registered direct or compatible providers.
 openai, _ := ai.NewClient(ai.WithProviderAlias("openai"))
 anthropic, _ := ai.NewClient(ai.WithProviderAlias("anthropic"))
 selfHosted, _ := ai.NewClient(ai.WithProviderAlias("openai.ollama")) // Your own models
 ```
 
-Supported providers: OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Groq, DeepSeek, xAI Grok, Qwen, Mistral, Together AI, Ollama, vLLM, llama.cpp, and any OpenAI-compatible endpoint. See [ai/README.md](ai/README.md#10-supported-providers) for the full list and auto-detection priorities.
+Registered providers and profiles include OpenAI, Anthropic Claude, Google
+Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, Groq, DeepSeek, xAI
+Grok, Qwen, Mistral, Together AI, and Ollama. Google Cloud's OpenAI-compatible
+endpoint and other compatible services reuse the request-aware OpenAI adapter
+with application-owned routing and credentials. Azure and Vertex profiles are
+explicitly constructed rather than auto-detected, and Bedrock requires the
+`bedrock` build tag. See [ai/README.md](ai/README.md#10-supported-providers)
+for the exact construction and auto-detection matrix.
 
 ### Compile-Time Enforcement of the Tool/Agent Boundary
 
@@ -591,6 +604,8 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [Tool Development Guide](docs/building/TOOL_DEVELOPMENT_GUIDE.md) — building a Tool from scratch
 - [Agent Development Guide](docs/building/AGENT_DEVELOPMENT_GUIDE.md) — building an Agent
 - [AI Providers Setup Guide](docs/building/AI_PROVIDERS_SETUP_GUIDE.md) — provider aliases, model aliases, env-based configuration
+- [Custom AI Providers and Enterprise Integration](docs/building/CUSTOM_AI_PROVIDER_GUIDE.md) — advanced companion to the AI provider setup guide: policy, enterprise routing and credentials, custom factories, and reusable codecs
+- [AI Provider Change Playbook](docs/building/AI_PROVIDER_CHANGE_PLAYBOOK.md) — day-0 responses when providers change: broken parameter contracts, new models and providers, auth/endpoint churn, cache safety
 - [Effective Prompts Guide](docs/building/EFFECTIVE_PROMPTS_GUIDE.md) — capability descriptions and prompt quality
 - [Tool Schema Discovery Guide](docs/building/TOOL_SCHEMA_DISCOVERY_GUIDE.md) — three-phase payload generation
 - [Adding Context to Your Agent](docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — pipeline hooks, RAG, guardrails

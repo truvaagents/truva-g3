@@ -408,7 +408,12 @@ func (d *LLMDistiller) extractChunk(
 		requestID = bag["request_id"]
 	}
 	start := time.Now()
-	resp, err := d.aiClient.GenerateResponse(d.deferLLMRecordingIfWeWillRecord(ctx), prompt, options)
+	resp, _, err := invokeAI(ctx, d.aiClient, aiInvocation{
+		Purpose:        "result-distillation",
+		Prompt:         prompt,
+		Options:        options,
+		DeferRecording: d.debugStore != nil,
+	})
 	durMs := time.Since(start).Milliseconds()
 	if err == nil && resp != nil {
 		// Usage first (the call billed its prompt tokens even when content is unusable),

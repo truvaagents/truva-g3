@@ -15,6 +15,24 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+type chainFailureReasonError struct{ reason string }
+
+func (err chainFailureReasonError) Error() string { return "classified chain failure" }
+func (err chainFailureReasonError) AIRequestFailureReason() AIRequestFailureReason {
+	return AIRequestFailureReason(err.reason)
+}
+
+type wrappedChainFailureReasonError struct {
+	reason AIRequestFailureReason
+	cause  error
+}
+
+func (err *wrappedChainFailureReasonError) Error() string { return "classified wrapped chain failure" }
+func (err *wrappedChainFailureReasonError) Unwrap() error { return err.cause }
+func (err *wrappedChainFailureReasonError) AIRequestFailureReason() AIRequestFailureReason {
+	return err.reason
+}
+
 // ================================
 // Phase 3 Unit Tests: Chain Client (Pure Unit Tests Only)
 // ================================
@@ -595,6 +613,34 @@ func TestPhase3_FailoverBehavior(t *testing.T) {
 	}
 }
 
+func TestClassifyFailoverReasonAcceptsOnlyBoundedProviderReasons(t *testing.T) {
+	if got := classifyFailoverReason(chainFailureReasonError{reason: "route"}); got != "route" {
+		t.Fatalf("route classification = %q", got)
+	}
+	if got := classifyFailoverReason(chainFailureReasonError{reason: "tenant-secret"}); got != "unknown" {
+		t.Fatalf("unrecognized provider classification = %q, want unknown", got)
+	}
+	if got := classifyFailoverReason(&testProviderError{statusCode: 429, retryable: true}); got != "provider_retryable" {
+		t.Fatalf("retryable 429 classification = %q, want provider_retryable", got)
+	}
+	if got := classifyFailoverReason(&testProviderError{statusCode: 429}); got != "rate_limit" {
+		t.Fatalf("ordinary 429 classification = %q, want rate_limit", got)
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		err := &wrappedChainFailureReasonError{
+			reason: AIRequestFailureReasonRoute,
+			cause:  cause,
+		}
+		want := "canceled"
+		if errors.Is(cause, context.DeadlineExceeded) {
+			want = "timeout"
+		}
+		if got := classifyFailoverReason(err); got != want {
+			t.Fatalf("route marker wrapping %v = %q, want %q", cause, got, want)
+		}
+	}
+}
+
 // ================================
 // Helper Functions
 // ================================
@@ -653,205 +699,6 @@ func clearAllChainEnvVars() {
 		if err := os.Unsetenv(v); err != nil {
 			panic(err)
 		}
-	}
-}
-
-// ================================
-// Tests for cloneAIOptions (Options Mutation Bug Fix)
-// ================================
-//
-// These tests verify the cloneAIOptions function that prevents mutation
-// bleeding during chain failover. See: ai/MODEL_ALIAS_CROSS_PROVIDER_PROPOSAL.md
-//
-
-// TestCloneAIOptions_NilInput verifies nil input returns nil output
-func TestCloneAIOptions_NilInput(t *testing.T) {
-	result := cloneAIOptions(nil)
-	if result != nil {
-		t.Errorf("Expected nil output for nil input, got %+v", result)
-	}
-}
-
-// TestCloneAIOptions_CopiesAllFields verifies all fields are copied correctly
-func TestCloneAIOptions_CopiesAllFields(t *testing.T) {
-	original := &core.AIOptions{
-		Model:           "gpt-4",
-		Temperature:     0.7,
-		MaxTokens:       1000,
-		SystemPrompt:    "You are a helpful assistant.",
-		ReasoningEffort: "high",
-		ResponseFormat:  "json",
-		Extra: map[string]interface{}{
-			"provider_flag": true,
-		},
-		Headers: map[string]string{
-			"x-provider-beta": "enabled",
-		},
-	}
-
-	clone := cloneAIOptions(original)
-
-	// Verify clone is not nil
-	if clone == nil {
-		t.Fatal("Expected non-nil clone, got nil")
-	}
-
-	// Verify clone is a different pointer
-	if clone == original {
-		t.Error("Clone should be a different pointer than original")
-	}
-
-	// Verify all fields are copied
-	if clone.Model != original.Model {
-		t.Errorf("Model mismatch: got %q, want %q", clone.Model, original.Model)
-	}
-	if clone.Temperature != original.Temperature {
-		t.Errorf("Temperature mismatch: got %v, want %v", clone.Temperature, original.Temperature)
-	}
-	if clone.MaxTokens != original.MaxTokens {
-		t.Errorf("MaxTokens mismatch: got %d, want %d", clone.MaxTokens, original.MaxTokens)
-	}
-	if clone.SystemPrompt != original.SystemPrompt {
-		t.Errorf("SystemPrompt mismatch: got %q, want %q", clone.SystemPrompt, original.SystemPrompt)
-	}
-	if clone.ReasoningEffort != original.ReasoningEffort {
-		t.Errorf("ReasoningEffort mismatch: got %q, want %q", clone.ReasoningEffort, original.ReasoningEffort)
-	}
-	if clone.ResponseFormat != original.ResponseFormat {
-		t.Errorf("ResponseFormat mismatch: got %q, want %q", clone.ResponseFormat, original.ResponseFormat)
-	}
-	if clone.Extra["provider_flag"] != original.Extra["provider_flag"] {
-		t.Errorf("Extra mismatch: got %#v, want %#v", clone.Extra, original.Extra)
-	}
-	if clone.Headers["x-provider-beta"] != original.Headers["x-provider-beta"] {
-		t.Errorf("Headers mismatch: got %#v, want %#v", clone.Headers, original.Headers)
-	}
-}
-
-// TestCloneAIOptions_MutationIsolation verifies mutation of clone doesn't affect original
-// This is the critical behavior that fixes the chain failover bug
-func TestCloneAIOptions_MutationIsolation(t *testing.T) {
-	original := &core.AIOptions{
-		Model:           "smart",
-		Temperature:     0.5,
-		MaxTokens:       500,
-		SystemPrompt:    "Original prompt",
-		ReasoningEffort: "medium",
-		ResponseFormat:  "json",
-		Extra: map[string]interface{}{
-			"provider_flag": true,
-		},
-		Headers: map[string]string{
-			"x-provider-beta": "enabled",
-		},
-	}
-
-	clone := cloneAIOptions(original)
-
-	// Mutate the clone (simulates what ApplyDefaults does)
-	clone.Model = "gpt-4.1-mini-2025-04-14" // Resolved model name
-	clone.Temperature = 0.8
-	clone.MaxTokens = 2000
-	clone.SystemPrompt = "Modified prompt"
-	clone.ReasoningEffort = "low"
-	clone.ResponseFormat = ""
-	clone.Extra["provider_flag"] = false
-	clone.Headers["x-provider-beta"] = "disabled"
-
-	// Verify original is unchanged
-	if original.Model != "smart" {
-		t.Errorf("Original Model was mutated: got %q, want %q", original.Model, "smart")
-	}
-	if original.Temperature != 0.5 {
-		t.Errorf("Original Temperature was mutated: got %v, want %v", original.Temperature, 0.5)
-	}
-	if original.MaxTokens != 500 {
-		t.Errorf("Original MaxTokens was mutated: got %d, want %d", original.MaxTokens, 500)
-	}
-	if original.SystemPrompt != "Original prompt" {
-		t.Errorf("Original SystemPrompt was mutated: got %q, want %q", original.SystemPrompt, "Original prompt")
-	}
-	if original.ReasoningEffort != "medium" {
-		t.Errorf("Original ReasoningEffort was mutated: got %q, want %q", original.ReasoningEffort, "medium")
-	}
-	if original.ResponseFormat != "json" {
-		t.Errorf("Original ResponseFormat was mutated: got %q, want %q", original.ResponseFormat, "json")
-	}
-	if original.Extra["provider_flag"] != true {
-		t.Errorf("Original Extra was mutated: got %#v", original.Extra)
-	}
-	if original.Headers["x-provider-beta"] != "enabled" {
-		t.Errorf("Original Headers were mutated: got %#v", original.Headers)
-	}
-}
-
-// TestCloneAIOptions_EmptyOptions verifies cloning works with zero-value options
-func TestCloneAIOptions_EmptyOptions(t *testing.T) {
-	original := &core.AIOptions{} // All zero values
-
-	clone := cloneAIOptions(original)
-
-	if clone == nil {
-		t.Fatal("Expected non-nil clone, got nil")
-	}
-	if clone == original {
-		t.Error("Clone should be a different pointer than original")
-	}
-
-	// Verify zero values are preserved
-	if clone.Model != "" {
-		t.Errorf("Expected empty Model, got %q", clone.Model)
-	}
-	if clone.Temperature != 0 {
-		t.Errorf("Expected zero Temperature, got %v", clone.Temperature)
-	}
-	if clone.MaxTokens != 0 {
-		t.Errorf("Expected zero MaxTokens, got %d", clone.MaxTokens)
-	}
-	if clone.SystemPrompt != "" {
-		t.Errorf("Expected empty SystemPrompt, got %q", clone.SystemPrompt)
-	}
-	if clone.ReasoningEffort != "" {
-		t.Errorf("Expected empty ReasoningEffort, got %q", clone.ReasoningEffort)
-	}
-	if clone.ResponseFormat != "" {
-		t.Errorf("Expected empty ResponseFormat, got %q", clone.ResponseFormat)
-	}
-	if clone.Extra != nil {
-		t.Errorf("Expected nil Extra, got %#v", clone.Extra)
-	}
-	if clone.Headers != nil {
-		t.Errorf("Expected nil Headers, got %#v", clone.Headers)
-	}
-}
-
-func TestCloneAIOptions_DeepCopiesExtra(t *testing.T) {
-	original := &core.AIOptions{
-		Extra: map[string]interface{}{
-			"provider_flag": "original",
-		},
-	}
-
-	clone := cloneAIOptions(original)
-	clone.Extra["provider_flag"] = "clone"
-
-	if original.Extra["provider_flag"] != "original" {
-		t.Fatalf("original Extra mutated: %#v", original.Extra)
-	}
-}
-
-func TestCloneAIOptions_DeepCopiesHeaders(t *testing.T) {
-	original := &core.AIOptions{
-		Headers: map[string]string{
-			"x-provider-beta": "original",
-		},
-	}
-
-	clone := cloneAIOptions(original)
-	clone.Headers["x-provider-beta"] = "clone"
-
-	if original.Headers["x-provider-beta"] != "original" {
-		t.Fatalf("original Headers mutated: %#v", original.Headers)
 	}
 }
 

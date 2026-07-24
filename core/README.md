@@ -1363,6 +1363,31 @@ tool.RegisterCapability(core.Capability{
 - Works seamlessly with OpenTelemetry distributed tracing
 - Essential for debugging in production environments
 
+### Provider-Neutral AI Requests
+
+Core owns the optional request-aware AI contracts so orchestration and other
+high-level modules do not need to import the concrete `ai` package.
+
+```go
+request := core.NewAIRequest("Summarize this incident", "incident_summary")
+request.Generation.Temperature = core.SetAIParameter(float32(0))
+request.Generation.TopP = core.OmitAIParameter[float32]()
+
+result, err := core.GenerateAI(ctx, client, request)
+```
+
+`AIParameter` distinguishes inherit, explicit set (including zero), and omit.
+`GenerateAI` and `StreamAI` prefer `AIRequestClient` and
+`StreamingAIRequestClient`, then use a legacy client only when the request can
+be represented without losing intent. Unsupported intent returns a typed
+`AIRequestFeatureError` matching `ErrAIRequestFeatureUnsupported`.
+
+`AIResult.RequestReport` is a sanitized preparation report with a stable,
+secret-free policy fingerprint when the provider can supply one. It must not
+contain prompts, credentials, raw request bodies, or secret values. See the
+[Custom AI Providers and Enterprise Integration Guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)
+for construction, policy, and provider implementation details.
+
 ### 🌊 Streaming Interface: Real-Time AI Responses
 
 For chat agents and real-time AI applications, the core module provides streaming types that enable token-by-token delivery of AI responses.
@@ -1373,10 +1398,11 @@ For chat agents and real-time AI applications, the core module provides streamin
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
     Content      string                 // The text content of this chunk
-    Done         bool                   // True if this is the final chunk
+    Delta        bool                   // True for incremental chunks; false on the final chunk
+    Index        int                    // Zero-based chunk index
     FinishReason string                 // Why generation stopped (e.g., "stop", "length")
-    Usage        *AIUsage               // Token usage (only on final chunk)
-    Error        error                  // Error if streaming failed
+    Model        string                 // Resolved provider model
+    Usage        *TokenUsage            // Token usage (normally on the final chunk)
     Metadata     map[string]interface{} // Provider-specific metadata
 }
 
@@ -1398,12 +1424,8 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Connection", "keep-alive")
 
     // Stream AI response
-    err := h.aiClient.StreamResponse(ctx, prompt, nil,
+    _, err := h.aiClient.StreamResponse(ctx, prompt, nil,
         func(chunk core.StreamChunk) error {
-            if chunk.Error != nil {
-                return chunk.Error
-            }
-
             // Send each token via SSE
             if chunk.Content != "" {
                 fmt.Fprintf(w, "data: %s\n\n", chunk.Content)
@@ -1411,7 +1433,7 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
             }
 
             // Handle completion
-            if chunk.Done {
+            if !chunk.Delta && chunk.FinishReason != "" {
                 fmt.Fprintf(w, "event: done\ndata: complete\n\n")
                 flusher.Flush()
             }
@@ -1436,7 +1458,8 @@ type StreamingAIClient interface {
     AIClient
 
     // StreamResponse generates a streaming response
-    StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) error
+    StreamResponse(ctx context.Context, prompt string, options *AIOptions, callback StreamCallback) (*AIResponse, error)
+    SupportsStreaming() bool
 }
 ```
 

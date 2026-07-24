@@ -203,7 +203,13 @@ Concrete implementations of `core` memory interfaces that require **external cli
 
 The `core` module's dependency footprint must stay minimal (currently: go-redis, uuid, testify). Backend-specific implementations that require heavy client libraries (gRPC for vector DBs, SQL drivers for pgvector, messaging clients for NATS) cannot live in `core` without violating the production-first principle (C8). This module absorbs those dependencies so that `core` stays lightweight and agents that don't use these backends never pull in unnecessary dependencies.
 
-This is the same pattern as the `ai` module: `core` defines `AIClient`, `ai/` provides OpenAI/Anthropic/Gemini implementations with their respective SDKs. Similarly, `core` defines `SharedKnowledge`, `memory/` provides vector DB implementations with their respective clients.
+This is the same pattern as the `ai` module: `core` defines the provider-neutral
+`AIClient` and optional request-aware contracts, while `ai/` supplies
+import-registered implementations. Most built-in AI profiles use direct HTTP
+adapters, OpenAI-compatible profiles can reuse a shared codec, and the
+build-tagged Bedrock provider is SDK-native. Similarly, `core` defines
+`SharedKnowledge`, while `memory/` provides vector-database implementations
+with their respective clients.
 
 ---
 
@@ -286,10 +292,10 @@ TruvaG3 follows a **micro-kernel architecture** where the `core` module is the m
            │              │              │
     ┌──────▼──────┐ ┌─────▼─────┐ ┌──────▼──────┐
     │   memory    │ │    ai     │ │ orchestration│
-    │   (Qdrant)  │ │ (OpenAI)  │ │  (hooks)     │
-    │             │ │ (Anthropic)│ │              │
-    │  +grpc      │ │ +http     │ │  +core only  │
-    │  +protobuf  │ │ +provider │ │              │
+    │   (Qdrant)  │ │ HTTP APIs │ │  (hooks)     │
+    │             │ │ + codecs  │ │              │
+    │  +grpc      │ │ + optional│ │  +core only  │
+    │  +protobuf  │ │ AWS SDK   │ │              │
     └─────────────┘ └───────────┘ └──────────────┘
          PLUGINS (optional, import only what you need)
 ```

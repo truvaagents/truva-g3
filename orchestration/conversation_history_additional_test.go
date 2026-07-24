@@ -78,6 +78,25 @@ type recordingConversationCompactor struct {
 	debugStore     LLMDebugStore
 }
 
+type fingerprintConversationCompactor struct {
+	*recordingConversationCompactor
+	fingerprint string
+	stable      bool
+}
+
+func (c *fingerprintConversationCompactor) aiSemanticFingerprint(context.Context) (string, bool) {
+	return c.fingerprint, c.stable
+}
+
+func (c *fingerprintConversationCompactor) Compact(
+	ctx context.Context,
+	priorSummary string,
+	newTurns []core.ConversationTurn,
+) (string, error) {
+	captureAIRequestFingerprint(ctx, &core.AIRequestReport{Fingerprint: c.fingerprint, Stable: c.stable})
+	return c.recordingConversationCompactor.Compact(ctx, priorSummary, newTurns)
+}
+
 func (c *recordingConversationCompactor) Compact(_ context.Context, priorSummary string, newTurns []core.ConversationTurn) (string, error) {
 	c.callCount++
 	c.priorSummaries = append(c.priorSummaries, priorSummary)
@@ -89,6 +108,64 @@ func (c *recordingConversationCompactor) Compact(_ context.Context, priorSummary
 		return c.responses[c.callCount-1], nil
 	}
 	return priorSummary, nil
+}
+
+func TestConversationSummaryCacheUsesStableAIFingerprint(t *testing.T) {
+	turns := []core.ConversationTurn{
+		{Role: "user", Content: "one"},
+		{Role: "assistant", Content: "two"},
+		{Role: "user", Content: "three"},
+	}
+	cache, err := NewSummaryCache(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingConversationCompactor{responses: []string{"summary-v1", "summary-v2"}}
+	compactor := &fingerprintConversationCompactor{
+		recordingConversationCompactor: recorder,
+		fingerprint:                    "policy-v1",
+		stable:                         true,
+	}
+	processor := &ConversationHistoryProcessor{
+		recentTurnsPreserved: 1,
+		compactor:            compactor,
+		summaryCache:         cache,
+	}
+
+	_, _, _, _, compacted := processor.tryRecursiveCompaction(t.Context(), "session", turns, HistoryPreparationResult{})
+	if !compacted || recorder.callCount != 1 {
+		t.Fatalf("first compaction = %t, calls = %d", compacted, recorder.callCount)
+	}
+	processor.tryRecursiveCompaction(t.Context(), "session", turns, HistoryPreparationResult{})
+	if recorder.callCount != 1 {
+		t.Fatalf("matching fingerprint missed cache; calls = %d", recorder.callCount)
+	}
+
+	compactor.fingerprint = "policy-v2"
+	processor.tryRecursiveCompaction(t.Context(), "session", turns, HistoryPreparationResult{})
+	if recorder.callCount != 2 {
+		t.Fatalf("changed fingerprint reused stale summary; calls = %d", recorder.callCount)
+	}
+	state, ok := cache.Get("session")
+	if !ok || state.PolicyFingerprint != "policy-v2" || state.Summary != "summary-v2" {
+		t.Fatalf("updated summary state = %#v, %t", state, ok)
+	}
+
+	unstableCache, _ := NewSummaryCache(2)
+	unstableRecorder := &recordingConversationCompactor{responses: []string{"first", "second"}}
+	unstableProcessor := &ConversationHistoryProcessor{
+		recentTurnsPreserved: 1,
+		compactor: &fingerprintConversationCompactor{
+			recordingConversationCompactor: unstableRecorder,
+			stable:                         false,
+		},
+		summaryCache: unstableCache,
+	}
+	unstableProcessor.tryRecursiveCompaction(t.Context(), "session", turns, HistoryPreparationResult{})
+	unstableProcessor.tryRecursiveCompaction(t.Context(), "session", turns, HistoryPreparationResult{})
+	if unstableRecorder.callCount != 2 || unstableCache.Len() != 0 {
+		t.Fatalf("unstable request was cached: calls=%d cache_len=%d", unstableRecorder.callCount, unstableCache.Len())
+	}
 }
 
 func (c *recordingConversationCompactor) SetLogger(logger core.Logger) {

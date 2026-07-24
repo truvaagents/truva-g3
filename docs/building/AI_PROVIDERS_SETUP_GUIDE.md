@@ -50,6 +50,9 @@ Welcome to the TruvaG3 AI providers guide! This document explains how to configu
   - [Tracing AI Requests in Jaeger](#tracing-ai-requests-in-jaeger)
 - [Advanced Configuration](#advanced-configuration)
   - [Portable Fields vs Provider-Specific Escape Hatches](#portable-fields-vs-provider-specific-escape-hatches)
+  - [Request-Aware and Custom Integrations](#request-aware-and-custom-integrations)
+  - [AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing)
+  - [Anthropic Sampling Compatibility](#anthropic-sampling-compatibility)
   - [Request Timeouts](#request-timeouts)
   - [Reasoning Model Support](#reasoning-model-support)
   - [Orchestration Model Overrides](#orchestration-model-overrides)
@@ -148,7 +151,8 @@ response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
 2. If it fails with a retryable error, it tries Provider 2 (Anthropic)
 3. If that fails too, it tries Provider 3 (Groq)
 4. Returns the first successful response
-5. If all fail, returns an error with details from the last attempt
+5. If all fail, returns one joined error containing every annotated entry
+   failure (entry name and attempt number)
 
 **Auto-detect provider priorities** (when no explicit chain is specified):
 
@@ -165,6 +169,11 @@ response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
 | Together | `openai.together` | 300 |
 | Bedrock | `bedrock` | 200 |
 | Ollama | `openai.ollama` | 100 |
+
+Bedrock participates only in binaries built with `-tags bedrock`. Ollama
+auto-detection requires an explicitly configured loopback `OLLAMA_BASE_URL`
+whose `/models` endpoint responds; use an explicit alias for a remote Ollama
+endpoint.
 
 **The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `o3`, Anthropic resolves it to `claude-sonnet-4-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
 
@@ -217,12 +226,15 @@ The framework knows that `openai.groq` means:
 
 ### Complete Provider Alias Reference
 
-| Alias | Type | Service | API Key Env Var | Base URL Env Var | Default URL |
+| Alias | Type | Service | Credential configuration | Base URL / route configuration | Default URL |
 |-------|------|---------|-----------------|------------------|-------------|
 | `openai` | Native | OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
-| `anthropic` | Native | Anthropic Claude | `ANTHROPIC_API_KEY` | _(N/A - native API)_ | _(native implementation)_ |
-| `gemini` | Native | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | _(N/A - native API)_ | _(native implementation)_ |
-| `bedrock` | Native | AWS Bedrock | _(configured via `Extra`)_ | _(N/A - native API)_ | _(native implementation)_ |
+| `anthropic` | Native | Anthropic Claude | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` |
+| `gemini` | Native | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` |
+| `azureopenai.v1` | Hosted request-aware profile | Azure OpenAI v1 | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
+| `azureopenai.classic` | Hosted request-aware profile | Azure OpenAI classic | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
+| `anthropic.vertex` | Hosted request-aware profile | Claude on Vertex AI | Google `CredentialSource` or `WithAuthHeader` | Required `EndpointResolver` | Route-owned |
+| `bedrock` | Native SDK | AWS Bedrock | AWS SDK default configuration or `WithAWSCredentials` | AWS region/configuration plus optional SDK-destination `EndpointResolver` | Region-owned |
 | `openai.groq` | OpenAI-compatible | Groq | `GROQ_API_KEY` | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
 | `openai.deepseek` | OpenAI-compatible | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `openai.xai` | OpenAI-compatible | xAI Grok | `XAI_API_KEY` | `XAI_BASE_URL` | `https://api.x.ai/v1` |
@@ -230,6 +242,13 @@ The framework knows that `openai.groq` means:
 | `openai.qwen` | OpenAI-compatible | Alibaba Qwen | `QWEN_API_KEY` | `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | `openai.together` | OpenAI-compatible | Together AI | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` |
 | `openai.ollama` | OpenAI-compatible | Ollama (local) | _(none)_ | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` |
+
+The Azure and Vertex aliases are request-aware-only, never auto-detected, and
+do not accept a static base URL. Their resolver and credential recipes are in
+[CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md#choose-a-hosted-cloud-recipe).
+Bedrock is build-tagged and SDK-native: its optional resolver selects an AWS
+`modelId`, not an HTTP endpoint. See
+[AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing).
 
 ### How Auto-Configuration Works
 
@@ -245,9 +264,9 @@ When you use a provider alias, the framework resolves configuration in this orde
    GROQ_API_KEY=gsk-from-env  # Used if no explicit key
    ```
 
-3. **Base URL overrides** (for proxies, regional endpoints)
+3. **Base URL overrides** (for a provider-documented endpoint or an internal proxy)
    ```bash
-   GROQ_BASE_URL=https://eu.api.groq.com/openai/v1  # Optional override
+   GROQ_BASE_URL=https://ai-proxy.company.internal/groq/openai/v1
    ```
 
 4. **Default values** (built into the framework)
@@ -278,7 +297,7 @@ If you hardcode model names, switching providers means changing code everywhere.
 **Model aliases solve this** by providing portable names:
 
 ```go
-// This code works with ANY provider
+// This code works across providers that define this portable alias.
 client, _ := ai.NewClient(
     ai.WithProviderAlias("openai"),  // or "anthropic", or "openai.groq"
     ai.WithModel("smart"),           // Resolves to the right model for each provider
@@ -289,14 +308,43 @@ client, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | Gemini | Groq | DeepSeek |
 |-------|---------|--------|-----------|--------|------|----------|
-| `default` | General use, balanced cost/quality | `gpt-4.1-mini` | `claude-sonnet-4-5` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `fast` | Speed and cost optimized | `gpt-4.1-mini` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
-| `smart` | Best reasoning quality | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
-| `premium` | Maximum intelligence | _(N/A)_ | `claude-opus-4-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
-| `code` | Code generation | `o3` | `claude-sonnet-4-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `vision` | Image understanding | `gpt-4.1` | `claude-sonnet-4-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
+| `default` | General catalog choice | `gpt-4.1-mini` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
+| `fast` | Latency-oriented catalog choice | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
+| `smart` | Reasoning-oriented catalog choice | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
+| `premium` | Highest-tier catalog choice | _(N/A)_ | `claude-opus-4-5-20251101` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
+| `code` | Code-oriented catalog choice | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
+| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
 
-> **Note**: The `premium` alias is only available for Anthropic and Gemini. For other providers, use `smart` for best reasoning quality.
+> **Note**: The `premium` alias is only available for Anthropic and Gemini.
+> Other built-in catalogs use `smart` for their reasoning-oriented choice.
+
+The table reports the aliases compiled into this branch, not a guarantee that
+every model is enabled in every account or region. Provider lifecycle and
+availability can change independently; verify the current provider docs and
+override an alias with `TRUVAG3_<PROVIDER>_MODEL_<ALIAS>` when needed.
+
+> **Provider lifecycle alert (verified July 22, 2026):** This branch still maps
+> the DeepSeek aliases to `deepseek-chat` and `deepseek-reasoner`. DeepSeek will
+> retire both model names after July 24, 2026 at 15:59 UTC and replaces them
+> with `deepseek-v4-flash` and `deepseek-v4-pro`. Do not treat a model override
+> as a complete migration: the framework capability catalog does not yet model
+> V4's `thinking` object or its reasoning-effort contract. Update and unit-test
+> the model catalog, capability rows, and request translation before using the
+> V4 reasoning controls in production. See DeepSeek's
+> [V4 announcement](https://api-docs.deepseek.com/news/news260424/) and
+> [thinking-mode contract](https://api-docs.deepseek.com/guides/thinking_mode).
+>
+> The compiled Gemini `premium` mapping is also the legacy
+> `gemini-3-pro-preview` name. Google shut that preview down on March 9, 2026
+> and currently redirects the name to `gemini-3.1-pro-preview`; migrate the
+> catalog or use an approved explicit replacement instead of relying on that
+> redirect. See the official [Gemini release notes](https://ai.google.dev/gemini-api/docs/changelog).
+
+Portable aliases are catalog-backed, not universal. The built-in OpenAI,
+Anthropic, Gemini, and registered OpenAI-compatible aliases above resolve them;
+Bedrock and an arbitrary custom provider do not unless that provider implements
+equivalent resolution. In a failover chain, use an alias only when every entry
+can resolve it.
 
 ### Environment Variable Overrides
 
@@ -313,7 +361,9 @@ export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
 
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
-export TRUVAG3_DEEPSEEK_MODEL_SMART=deepseek-reasoner
+
+# Do not override DeepSeek to V4 until the framework's V4 capability and
+# thinking-mode translation has been updated and tested; see the alert above.
 ```
 
 **Why this matters for ops**:
@@ -362,7 +412,14 @@ Result: Use model "o3"
 
 Not all errors should trigger failover. If your request is malformed, trying another provider won't help—you'll just get the same error three times.
 
-Chain Client classifies errors using the `core.ProviderError` interface, which carries structured metadata (HTTP status code, provider name, model, and transient flag) from the AI provider layer. This replaces fragile string matching with type-safe error classification via `errors.As()`.
+Chain Client classifies completed provider failures using the
+`core.ProviderError` interface, which carries structured metadata (HTTP status
+code, provider name, model, transient flag, and provider-retryable flag) from
+the AI provider layer.
+Provider-owned route-resolution or invocation-viability errors may additionally
+implement `ai.AIRequestFailureReasoner` and return the typed
+`ai.AIRequestFailureReasonRoute` constant. This replaces fragile string
+matching with type-safe classification via `errors.As()`.
 
 **Errors that ALLOW failover** (tries next provider):
 
@@ -374,14 +431,18 @@ Chain Client classifies errors using the `core.ProviderError` interface, which c
 | Rate limits (429) | `StatusCode() == 429` | Limits are per-provider |
 | Network errors | Non-`ProviderError` (no HTTP status) | Might be routing/DNS issue |
 | Transient proxy errors | `IsTransient() == true` | Proxy/CDN issue (e.g., Cloudflare HTML 400), not a request problem |
+| Provider-specific terminal errors | `IsRetryable() == true` | Billing, hard quota, or account state may differ on another provider |
+| Provider HTTP timeout (for example 408/504) | Retryable provider status | A different provider may remain healthy |
+| Provider route unavailable | `AIRequestFailureReason() == ai.AIRequestFailureReasonRoute` | Another independently routed entry may remain viable |
 
 **Errors that STOP failover** (fails immediately):
 
 | Error Type | `core.ProviderError` Classification | Why Failover Won't Help |
 |------------|--------------------------------------|-------------------------|
-| Bad request (400) | `StatusCode() == 400 && !IsTransient()` | Same input fails everywhere |
+| Bad request (400) | `StatusCode() == 400 && !IsTransient() && !IsRetryable()` | Same input fails everywhere |
 | Content policy | `StatusCode() == 400` with policy message | Same content fails everywhere |
 | Malformed input | `StatusCode() == 400` with parse error | Structural issue in your code |
+| Caller cancellation or context deadline | `errors.Is(err, context.Canceled)` or `context.DeadlineExceeded` | The caller's stop signal applies to the whole chain |
 
 > **Transient proxy errors**: When a request passes through a CDN or reverse proxy (e.g., Cloudflare) and the proxy itself returns an error (typically an HTML page with a 400 status), the framework marks this as `IsTransient() == true`. These are infrastructure issues, not request problems, so failover to the next provider is appropriate. The `core.ProviderError` interface distinguishes these from genuine API 400 errors.
 
@@ -462,12 +523,13 @@ Understanding the error propagation path is critical for ensuring ChainClient fa
 3. ChainClient.isClientError() inspects via errors.As(err, &pe)
    → 429 is excluded from client errors → FAILOVER to next provider
    ↓
-4. If ALL providers fail, the last error (still a core.ProviderError)
-   propagates up through the orchestrator via fmt.Errorf("...: %w", err)
+4. If ALL providers fail, ChainClient annotates every failure with its entry
+   name and attempt, joins them with errors.Join(), and wraps the joined error
+   with fmt.Errorf("...: %w", joined)
    ↓
 5. Agent handler receives the error from orch.ProcessRequest()
-   → errors.As(err, &pe) finds the ProviderError through the wrapping chain
-   → Handler surfaces pe.StatusCode() as the HTTP response status
+   → errors.As(err, &pe) can find a matching ProviderError through the joined
+     wrapping tree (do not assume that match is the final attempt)
 ```
 
 **The key rule**: Every layer in the stack uses `%w` verb when wrapping errors:
@@ -507,12 +569,12 @@ This section covers real-world deployment scenarios. Find the one that matches y
 ollama serve
 
 # Pull a model
-ollama pull gemma4:26b
+ollama pull llama3.2
 
 # Your .env file
 OLLAMA_BASE_URL=http://localhost:11434/v1
-TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b
-TRUVAG3_OLLAMA_MODEL_SMART=gemma4:26b
+TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
+TRUVAG3_OLLAMA_MODEL_SMART=llama3.2
 ```
 
 **Code**:
@@ -525,7 +587,7 @@ client, err := ai.NewClient(ai.WithProviderAlias("openai.ollama"))
 ```bash
 # Pods need to reach the Ollama server running on your host
 OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
-TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b
+TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
 ```
 
 **If you want Ollama to win over cloud providers**:
@@ -540,7 +602,8 @@ or other higher-priority providers, Ollama will usually be used only as a fallba
 
 **Useful notes**:
 - `openai.ollama` does not require an API key.
-- Use the exact model tag you run with Ollama. If you use `ollama run gemma4:26b`, set `TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b`.
+- Use the exact model tag installed in your Ollama instance. If you use a
+  different tag, set the alias override to that exact value.
 - `openai.ollama` can now accept reasoning controls through TruvaG3, but support is still model-dependent.
 
 **Pro tip**: Create a `make dev` target that starts Ollama:
@@ -557,7 +620,7 @@ dev:
 **Setup**:
 ```bash
 # .env.development
-GROQ_API_KEY=gsk-dev-key  # Groq has generous free tier
+GROQ_API_KEY=gsk-dev-key
 
 # Use smaller/cheaper models in dev
 TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
@@ -566,14 +629,13 @@ TRUVAG3_GROQ_MODEL_SMART=llama-3.1-8b-instant
 
 **Code**:
 ```go
-// Use Groq's free tier for development
+// Use the provider selected for your development latency and cost target.
 client, err := ai.NewClient(ai.WithProviderAlias("openai.groq"))
 ```
 
-**Why Groq for dev?**
-- Free tier with 14,000 tokens/minute
-- Ultra-fast inference (great for iteration)
-- OpenAI-compatible API (easy to switch later)
+Groq exposes an OpenAI-compatible API and is often selected for low-latency
+development. Quotas and prices are provider- and account-specific and change
+independently of TruvaG3; confirm the current terms before choosing it for cost.
 
 ### Scenario 3: Staging Environment
 
@@ -608,14 +670,14 @@ export OPENAI_API_KEY=sk-invalid-key
 # Make a request - should succeed via Anthropic
 curl -X POST http://staging:8080/api/analyze
 
-# Check logs for:
-# {"message": "Provider failed, trying next", "provider": "openai", "error": "401"}
-# {"message": "Request succeeded", "provider": "anthropic"}
+# Check context-aware framework/ai logs for:
+# operation=ai_chain_provider_failed entry_name=openai error_type=credential
+# operation=ai_chain_failover_success successful_entry=anthropic
 ```
 
 ### Scenario 4: Production with High Availability
 
-**Goal**: Maximum uptime, automatic failover, best models
+**Goal**: Maximum uptime, automatic failover, production-approved models
 
 **Setup**:
 ```bash
@@ -624,7 +686,7 @@ OPENAI_API_KEY=sk-prod-key
 ANTHROPIC_API_KEY=sk-ant-prod-key
 GROQ_API_KEY=gsk-prod-key
 
-# Use best models in production
+# Use the models approved for this production workload
 TRUVAG3_OPENAI_MODEL_SMART=o3
 TRUVAG3_ANTHROPIC_MODEL_SMART=claude-sonnet-4-5-20250929
 TRUVAG3_GROQ_MODEL_SMART=openai/gpt-oss-120b
@@ -639,9 +701,10 @@ client, err := ai.NewChainClient(
 
 **Monitoring production failover**:
 ```bash
-# Alert on consistent failover (indicates provider issues)
-# Prometheus query:
-rate(ai_chain_failover_total{from_provider="openai"}[5m]) > 0.1
+# Alert on sustained increases in the exported ai.chain.failover counter.
+# Exported Prometheus names depend on your OpenTelemetry collector/exporter
+# normalization. The framework metric has bounded module/status/reason labels;
+# identify the affected entry from correlated logs or spans, not a metric label.
 ```
 
 ### Scenario 5: Cost-Optimized Production
@@ -651,21 +714,21 @@ rate(ai_chain_failover_total{from_provider="openai"}[5m]) > 0.1
 **Setup**:
 ```bash
 # .env.production-cost-optimized
-# Order providers by cost (cheapest first)
-GROQ_API_KEY=gsk-key      # Free tier / very cheap
-DEEPSEEK_API_KEY=sk-key   # Very affordable
-OPENAI_API_KEY=sk-key     # Premium fallback
+# Supply credentials for providers ordered below by your verified current cost
+GROQ_API_KEY=gsk-key
+OPENAI_API_KEY=sk-key
+ANTHROPIC_API_KEY=sk-ant-key
 
 # Use smaller models where acceptable
 TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
-TRUVAG3_DEEPSEEK_MODEL_DEFAULT=deepseek-chat
 ```
 
 **Code**:
 ```go
-// Cost-optimized chain: try cheapest first
+// Example cost-oriented chain. Validate this order against current contracts,
+// regions, quotas, and measured output quality before deployment.
 client, err := ai.NewChainClient(
-    ai.WithProviderChain("openai.groq", "openai.deepseek", "openai"),
+    ai.WithProviderChain("openai.groq", "openai", "anthropic"),
 )
 ```
 
@@ -673,12 +736,20 @@ client, err := ai.NewChainClient(
 ```go
 // Log token usage per request for cost analysis
 response, err := client.GenerateResponse(ctx, prompt, nil)
+if err != nil {
+    return fmt.Errorf("generate AI response: %w", err)
+}
 logger.Info("Request completed", map[string]interface{}{
     "model":  response.Model,           // Which model was used
     "tokens": response.Usage.TotalTokens,
 })
-// Note: Provider tracking is available via telemetry spans (ai.chain.provider attribute)
+// Chain entry tracking is available on ai.chain.provider_attempt spans and
+// on the parent ai.chain.generate span's ai.chain.successful_entry attribute.
 ```
+
+TruvaG3 records normalized token usage, not an estimated USD amount. For
+authoritative spend reporting, join provider/model/token telemetry with the
+provider's billing export and your negotiated pricing.
 
 ### Scenario 6: Privacy-First Deployment
 
@@ -694,8 +765,8 @@ OLLAMA_BASE_URL=http://gpu-server.internal:11434/v1
 OPENAI_API_KEY=sk-key
 
 # Use capable local model
-TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2:70b
-TRUVAG3_OLLAMA_MODEL_SMART=llama3.2:70b
+TRUVAG3_OLLAMA_MODEL_DEFAULT=your-approved-model:tag
+TRUVAG3_OLLAMA_MODEL_SMART=your-approved-model:tag
 ```
 
 **Code**:
@@ -708,11 +779,11 @@ client, err := ai.NewChainClient(
 
 **Privacy monitoring** (for compliance):
 ```go
-// Track provider usage via telemetry for audit purposes
-// The ai.chain.provider span attribute shows which provider handled each request
-// You can query this in Jaeger/Prometheus:
-//   rate(ai_chain_attempt{provider="openai",status="success"}[5m]) > 0
-// This tells you when requests are being routed to cloud providers
+// Track route use via sanitized framework/ai logs and traces.
+// ai.chain.generate carries ai.chain.successful_entry; each
+// ai.chain.provider_attempt span carries ai.chain.entry_name and status.
+// Entry/provider names are intentionally not metric labels because they are
+// operator-controlled and would create unbounded time series.
 ```
 
 ### Scenario 7: Multi-Region Deployment
@@ -722,23 +793,28 @@ client, err := ai.NewChainClient(
 **Setup**:
 ```bash
 # .env.production-us
-OPENAI_API_KEY=sk-us-key
-OPENAI_BASE_URL=https://api.openai.com/v1  # US endpoint
+OPENAI_API_KEY=internal-us-token
+OPENAI_BASE_URL=https://ai-gateway.us.company.internal/openai/v1
+ANTHROPIC_API_KEY=sk-ant-backup
 
 # .env.production-eu
-OPENAI_API_KEY=sk-eu-key
-OPENAI_BASE_URL=https://eu.api.openai.com/v1  # EU endpoint (if available)
-DEEPSEEK_BASE_URL=https://eu.api.deepseek.com  # EU regional
+OPENAI_API_KEY=internal-eu-token
+OPENAI_BASE_URL=https://ai-gateway.eu.company.internal/openai/v1
+ANTHROPIC_API_KEY=sk-ant-backup
 ```
 
 **Code** (same for all regions):
 ```go
 client, err := ai.NewChainClient(
-    ai.WithProviderChain("openai", "openai.deepseek", "openai.groq"),
+    ai.WithProviderChain("openai", "anthropic"),
 )
 ```
 
-**The key insight**: Same code, different environment variables per region. Kubernetes handles the routing.
+**The key insight**: Same code, different environment variables per region.
+Use only endpoints documented by the provider or owned by your organization;
+do not infer a regional vendor hostname. For Azure OpenAI, Google Cloud OpenAI
+compatibility, and Vertex-hosted Claude, use the validated resolver recipes in
+[CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md#choose-a-hosted-cloud-recipe).
 
 ---
 
@@ -862,9 +938,14 @@ Pods restart one at a time, picking up the new environment variables. Zero downt
 
 ### Issue 1: "No Providers Available" Error
 
-**Symptom**: `NewChainClient` returns "no providers could be initialized" or "no providers detected (check API keys)"
+**Symptom**: Auto-detected `NewChainClient` returns "no providers detected
+(check API keys)", or an explicit chain cannot construct any entry.
 
-**Cause**: None of the providers in your chain (or environment, if using auto-detect) have valid API keys configured.
+**Cause**: Auto-detection found no configured provider. In an explicit chain,
+construction fails only when entries cannot be materialized (for example, an
+unregistered alias or invalid endpoint configuration). Most direct HTTP
+providers do not preflight a missing API key during construction; that error is
+returned when the entry is first called and can then fail over.
 
 **Diagnosis**:
 ```bash
@@ -874,7 +955,8 @@ echo "ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-(not set)}"
 echo "GROQ_API_KEY: ${GROQ_API_KEY:-(not set)}"
 ```
 
-**Fix**: Set at least one API key:
+**Fix**: For auto-detection, set at least one provider credential (or configure
+and start loopback Ollama):
 ```bash
 export OPENAI_API_KEY=sk-your-key
 ```
@@ -976,7 +1058,10 @@ client, err := ai.NewChainClient(
 
 **Cause**: A provider-specific concrete model name was used with `ChainClient`.
 
-**Fix**: Use portable aliases like `default`, `fast`, or `smart` for failover chains.
+**Fix**: Use portable aliases like `default`, `fast`, or `smart` only when every
+entry in the failover chain defines that alias. Bedrock and arbitrary custom
+providers require an explicit strategy because they do not inherit the
+built-in OpenAI/Anthropic/Gemini catalogs.
 
 ### Issue 8: Streaming Text Arrives but the Request Does Not Finish Immediately
 
@@ -1028,17 +1113,20 @@ client, err := ai.NewChainClient(
 
 AI module logs use the component prefix `framework/ai`. Here's what to look for:
 
-**Successful request**:
+**Successful provider response**:
 ```json
 {
   "component": "framework/ai",
   "level": "INFO",
-  "message": "AI request completed",
-  "operation": "ai_request_success",
+  "message": "AI response received",
+  "operation": "ai_response",
   "provider": "openai",
+  "provider_alias": "openai",
   "model": "o3",
   "prompt_tokens": 150,
   "completion_tokens": 200,
+  "total_tokens": 350,
+  "status": "success",
   "duration_ms": 1250
 }
 ```
@@ -1048,10 +1136,14 @@ AI module logs use the component prefix `framework/ai`. Here's what to look for:
 {
   "component": "framework/ai",
   "level": "WARN",
-  "message": "Provider failed, trying next",
-  "provider": "openai",
-  "error": "401 unauthorized",
-  "next_provider": "anthropic"
+  "message": "Provider failed in chain, trying next",
+  "operation": "ai_chain_provider_failed",
+  "entry_name": "openai",
+  "attempt": 1,
+  "remaining": 1,
+  "failover_reason": "auth",
+  "error": "AI provider request failed: provider_client",
+  "error_type": "provider_client"
 }
 ```
 
@@ -1060,11 +1152,24 @@ AI module logs use the component prefix `framework/ai`. Here's what to look for:
 {
   "component": "framework/ai",
   "level": "ERROR",
-  "message": "All providers failed",
-  "providers_tried": ["openai", "anthropic", "openai.groq"],
-  "last_error": "rate limit exceeded"
+  "message": "All chain providers exhausted",
+  "operation": "ai_chain_exhausted",
+  "entries_tried": 3,
+  "failed_entries": ["openai", "anthropic", "openai.groq"],
+  "failover_reason": "rate_limit",
+  "error": "AI provider request failed: provider_rate_limit",
+  "error_type": "provider_rate_limit"
 }
 ```
+
+These observation errors are deliberately sanitized; the original typed error
+is still returned to the caller. `request_id` is included when the supplied
+context carries it (framework handlers and orchestration normally seed it).
+For billing, hard-quota, and account-action alerts, match the bounded
+`failover_reason=provider_retryable` field across generate and stream failover
+and exhaustion operations. A provider may report `insufficient_quota` as HTTP
+429; the provider-retryable classification intentionally takes precedence over
+the generic `rate_limit` failover reason in that case.
 
 ### Tracing AI Requests in Jaeger
 
@@ -1072,12 +1177,14 @@ If you have telemetry enabled, AI requests create spans:
 
 1. Open Jaeger: `http://localhost:16686`
 2. Select your service
-3. Find traces with `ai.generate_response` spans
+3. Find traces with `ai.generate` or `ai.stream` spans
 4. Expand to see:
    - `ai.provider`: Which provider handled the request
    - `ai.model`: Resolved model name
    - `ai.prompt_tokens`, `ai.completion_tokens`: Token usage
-   - `ai.attempt` spans: Each provider attempt during failover
+   - `ai.request.prepared`: Sanitized request-policy preparation event
+   - `ai.generate_response` / `ai.stream_response`: Provider execution
+   - `ai.http_attempt`: Each HTTP retry attempt
 
 ---
 
@@ -1121,20 +1228,292 @@ Precedence rules:
 - Framework-managed request fields win over everything else
 - Per-request `Extra` / `Headers` override client defaults
 - Protected headers such as auth and content type are not user-overridable
+- The same resolved custom headers are applied to sync and streaming requests
 
 Use escape hatches sparingly. If a field is portable, prefer the typed option.
 
+### Request-Aware and Custom Integrations
+
+There are two separate decisions here:
+
+1. **How much request intent must TruvaG3 preserve?** The ordinary API carries
+   portable values such as model, temperature, and max tokens. The
+   request-aware API can also say "send zero," "omit this field," or "apply
+   this named policy."
+2. **Who owns the provider protocol?** A built-in provider can still be used
+   with enterprise credentials and routing. You need a custom provider only
+   when TruvaG3 does not already own the correct provider identity, wire
+   format, SDK integration, or validation rules.
+
+Request-aware does **not** automatically mean custom:
+
+```text
+Ordinary built-in call
+Prompt + AIOptions
+        └── built-in provider
+
+Advanced built-in call
+AIRequest + policy/routing/credentials
+        └── the same built-in provider
+
+New provider integration
+AIRequest + policy/routing/credentials
+        └── your provider factory + adapter
+```
+
+Most applications should stay with the first path. Move to the second or third
+only when the request or integration has behavior that the ordinary setup
+cannot preserve:
+
+| Requirement | Use |
+|---|---|
+| Built-in provider, portable generation options, or homogeneous failover | `NewClient` or `NewChainClient`; continue using this guide |
+| Explicit zero or omission, request policy, rotating credentials, or per-request routing | `NewRequestClient` |
+| Independently configured or caller-owned failover entries | `NewChain` |
+| New provider identity, custom wire contract, or SDK-native adapter | A custom request-aware provider factory |
+
+Here are three concrete examples:
+
+- **You use OpenAI with a normal API key:** stay with `NewClient`.
+- **Your company routes OpenAI through regional gateways and issues a new token
+  for every attempt:** keep the built-in OpenAI provider and use
+  `NewRequestClient` with routing and credential hooks.
+- **Your company has an internal model platform with its own SDK and response
+  format:** implement a custom request-aware provider.
+
+`NewRequestClient` accepts existing options such as `WithProvider`,
+`WithModel`, and `WithTimeout` because every `AIOption` also satisfies
+`ClientOption`:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("openai"),
+    ai.WithModel("smart"),
+)
+
+request := core.NewAIRequest("Extract the entities", "entity_extraction")
+request.Generation.Temperature = core.SetAIParameter(float32(0))
+request.Generation.TopP = core.OmitAIParameter[float32]()
+request.Generation.ResponseFormat = core.SetAIParameter("json")
+
+result, err := core.GenerateAI(ctx, client, request)
+```
+
+The zero value of `AIParameter` means inherit, `SetAIParameter` means send the
+value even when it is zero, and `OmitAIParameter` means the provider field must
+be absent. If a provider or a legacy fallback cannot preserve that intent, the
+call returns `core.ErrAIRequestFeatureUnsupported`; it never silently drops the
+field.
+
+Request-aware built-in construction currently supports direct OpenAI and
+Anthropic, Azure OpenAI (`azureopenai.v1` and `azureopenai.classic`),
+Google-hosted Claude (`anthropic.vertex`), and Bedrock when built with
+`-tags bedrock`. The Azure and Vertex profiles are request-aware-only and
+require endpoint and credential sources; they do not auto-detect. Gemini
+continues to use the legacy API. The legacy `NewClient`, `GenerateResponse`,
+and `NewChainClient` APIs remain supported for existing and simple portable
+calls.
+
+The
+[Custom AI Providers and Enterprise Integration Guide](CUSTOM_AI_PROVIDER_GUIDE.md)
+starts with the second example and shows when it becomes necessary to move to
+the third. It explains policy and middleware, enterprise credential and route
+hooks, heterogeneous chains, custom factories, reusable OpenAI-compatible
+codecs, retry-body requirements, and semantic cache fingerprints.
+
+### AWS Bedrock SDK-Native Routing
+
+Build with `-tags bedrock` and import the provider package so its factory is
+registered. With no model option, Bedrock uses the direct
+`anthropic.claude-sonnet-5` model in the default `us-east-1` region. Because
+AWS currently documents that bare model for direct in-region use only there,
+request preparation in another region rejects an invocation that would
+actually use the implicit default. Client construction remains valid when the
+deployment supplies a model on every request. Supply an explicit supported
+client model, per-request model/profile ID, or endpoint resolver:
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/truvaagents/truva-g3/ai"
+    "github.com/truvaagents/truva-g3/ai/providers/bedrock"
+)
+
+client, err := ai.NewClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+)
+```
+
+For direct package construction with `bedrock.NewClient`, call
+`client.SetDefaultModel(modelID)` before concurrent use. That method records
+that the default was an explicit application routing choice; assigning the
+embedded `DefaultModel` field alone does not.
+
+TruvaG3 never silently changes that direct ID to `us.`, `global.`, or another
+inference profile. AWS documents in-region, geographic cross-region, and global
+cross-region routing as different choices. Select one explicitly when your
+region, throughput, residency, IAM/SCP, or pricing requirements call for it.
+
+For request-aware routing, `ResolvedEndpoint.Deployment` is the exact AWS
+`modelId` supplied to Converse and `RouteIdentity` is a stable, non-secret cache
+identity. Resolver maps are keyed by the post-default semantic model ID:
+
+```go
+type bedrockRoute struct {
+    modelID  string
+    identity string
+}
+
+type bedrockRoutes map[string]bedrockRoute
+
+func (routes bedrockRoutes) ResolveEndpoint(
+    _ context.Context,
+    request ai.EndpointRequest,
+) (ai.ResolvedEndpoint, error) {
+    route, ok := routes[request.ResolvedModel]
+    if !ok {
+        return ai.ResolvedEndpoint{}, fmt.Errorf(
+            "no Bedrock route for semantic model %q",
+            request.ResolvedModel,
+        )
+    }
+    return ai.ResolvedEndpoint{
+        Deployment:    route.modelID,
+        RouteIdentity: route.identity,
+    }, nil
+}
+
+client, err := ai.NewRequestClient(
+    ai.WithProvider("bedrock"),
+    ai.WithRegion("us-east-1"),
+    ai.WithModel(bedrock.ModelClaudeSonnet5),
+    ai.WithEndpointResolver(bedrockRoutes{
+        bedrock.ModelClaudeSonnet5: {
+            modelID:  "us.anthropic.claude-sonnet-5",
+            identity: "bedrock-us-sonnet-primary-v1",
+        },
+    }),
+)
+```
+
+A Bedrock resolver must return no URL, query, or credential scope. AWS SDK
+configuration continues to own the region, credentials, SigV4, service
+endpoint, and HTTP transport. Accordingly, Bedrock rejects
+`WithCredentialSource`, `WithHTTPClient`, and request headers.
+The resolver's deployment must remain semantically equivalent to
+`request.ResolvedModel`: request policy uses the semantic model and never
+reclassifies an opaque deployment/profile ARN.
+
+Current Claude compatibility is provider-owned and shared by sync and stream:
+
+- Sonnet 5 and Opus 4.7/4.8 omit modified `temperature`, `top_p`, and `top_k`.
+- Fable 5 omits incompatible inherited temperature and top-k, preserves
+  temperature `1` or omission and top-p from `0.99` inclusive to `1` exclusive
+  or omission, and rejects other values.
+- Unique legacy Fable `temperature`/`top_p` spellings remain in
+  `additionalModelRequestFields` while policy runs. Application rules,
+  middleware, or per-request patches may remove them, or set the canonical
+  `inferenceConfig` field and remove the legacy copy. Case-insensitive
+  duplicates and unremediated wrong-container fields fail locally.
+- Numeric values decoded with JSON `UseNumber` are accepted and range-checked
+  in common inference fields and remain numeric recursively in model-specific
+  additional fields. The full additional document is validated before its
+  fingerprint becomes stable; empty or malformed numbers, structs, `uintptr`,
+  non-string map keys, cycles, and non-finite floats fail locally. Named signed
+  and unsigned Go numeric values are also accepted.
+- Other model families retain ordinary sampling behavior.
+- Current Mythos model cards expose the Messages surface rather than Converse,
+  so Mythos is not included in this Converse policy table.
+
+`WithMaxRetries(n)` means `n` retries after the first call; the Bedrock adapter
+passes `n+1` total attempts to each AWS SDK operation. Explicitly selected
+standalone Bedrock clients and direct `bedrock.NewClient` values default to 60
+minutes. Auto-detected clients and framework-managed chain entries default to
+180 seconds. Positive `WithTimeout` and `WithChainTimeout` values override
+those defaults; zero and negative values mean unset rather than unbounded.
+
+`GetEmbeddings` now defaults to 1024-dimensional Titan V2. An application with
+an existing 1536-dimensional Titan V1 store must pin
+`bedrock.ModelTitanEmbedV1` through `bedrock.WithEmbeddingModel`. A per-call V1
+pin omits V2-only dimensions/normalization inherited from client defaults, but
+explicit V2 controls on that same call are rejected. Keep the pin until the
+vector store is migrated or rebuilt.
+`bedrock.WithoutEmbeddingNormalization()` explicitly omits an inherited V2
+normalization field for one call.
+
+For the complete resolver and Titan V2 helper contracts, see the
+[Bedrock recipe](CUSTOM_AI_PROVIDER_GUIDE.md#aws-bedrock-sdk-native-routing).
+Confirm changing catalog details against AWS's
+[Claude Sonnet 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html),
+[Claude Opus 4.7 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html),
+[Claude Opus 4.8 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html),
+[Converse API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html),
+and [cross-region inference documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html).
+
+### Anthropic Sampling Compatibility
+
+Some Anthropic model families reject explicit sampling controls. The Anthropic
+adapter resolves the model alias or environment override first, then applies a
+model-family policy shared by sync and streaming requests. For the restricted
+families currently listed in
+[`ai/providers/anthropic/request_policy.go`](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/request_policy.go),
+it removes `temperature`, `top_p`, and `top_k` and records only fields that were
+actually present as adjustments. Matching uses an exact-or-hyphen boundary, so
+a similarly prefixed model name is not classified accidentally.
+
+Known compatible model families retain sampling fields. An unknown model also
+preserves the legacy behavior instead of guessing that sampling is forbidden.
+This protects older and private models, but a newly released restricted family
+must be added to the built-in list. Until the framework is updated, a
+request-aware client can apply an explicit removal rule:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("anthropic"),
+    ai.WithRequestRules(core.AIProviderPatch{
+        Name:    "new-claude-sampling-compatibility",
+        Version: "1",
+        Selector: core.AIProviderSelector{
+            Provider: "anthropic",
+            Surface:  "messages",
+            Model:    "claude-next-*",
+        },
+        Remove: []string{"/temperature", "/top_p", "/top_k"},
+    }),
+)
+```
+
+Use this only after confirming the provider's model contract. Prefer upgrading
+to a framework release with the family in its built-in policy so every caller
+gets the same sync/stream behavior.
+
 ### Request Timeouts
 
-By default, all AI providers use a **180-second (3 minute) timeout**. This accommodates reasoning models (GPT-5, o1, o3, o4) which take longer due to internal chain-of-thought processing.
+Most clients constructed through TruvaG3's built-in provider factories default
+to a **180-second (3 minute) timeout**. An explicitly selected standalone
+SDK-native Bedrock provider declares a **60-minute default** for long-running
+inference; direct `bedrock.NewClient` does the same. Auto-detected clients and
+framework-managed failover entries keep 180 seconds so one provider cannot
+block selection or failover for an hour. An explicit `WithTimeout` wins.
+Application-defined clients and injected chain entries retain their own timeout
+behavior.
 
 #### Single Client Timeout
 
 ```go
 import "time"
 
-// Default timeout (180s) - sufficient for most use cases including reasoning models
+// Auto-detection defaults to 180s, even if it selects Bedrock.
 client, err := ai.NewClient()
+
+// Explicit standalone Bedrock defaults to 60m.
+bedrockClient, err := ai.NewClient(
+    ai.WithProvider("bedrock"),
+)
 
 // Custom timeout for very complex tasks
 client, err := ai.NewClient(
@@ -1156,6 +1535,21 @@ chainClient, err := ai.NewChainClient(
     ai.WithChainTimeout(240 * time.Second),  // 4 minutes
 )
 ```
+
+Without `WithChainTimeout`, every framework-managed chain entry uses 180
+seconds, including Bedrock. `ProviderEntry` follows the same rule. A
+caller-owned `ClientEntry` is never mutated.
+
+Chain clients default each entry to **0 in-provider retries** because moving to
+the next entry is already the retry mechanism. `NewClient` defaults to 3
+transport retries. Use `ai.WithChainMaxRetries(n)` only when you intentionally
+want each entry to retry before the chain advances.
+
+If code does not supply an explicit retry option, a positive
+`TRUVAG3_AI_RETRY_ATTEMPTS` value overrides the relevant default for both
+client types. Explicit `WithMaxRetries(n)` or `WithChainMaxRetries(n)` wins over
+the environment. Zero, negative, and non-integer environment values are
+ignored; disable single-client retries explicitly with `WithMaxRetries(0)`.
 
 #### When to Adjust Timeout
 
@@ -1195,6 +1589,7 @@ Notes:
 - Native `openai` supports `ReasoningEffort` directly.
 - `openai.ollama` now allows reasoning controls to pass through as well.
 - For unsupported OpenAI-compatible aliases, advanced reasoning fields may be stripped conservatively.
+- Anthropic does not expose this portable control. A request-aware `ReasoningEffort` set returns `core.ErrAIRequestFeatureUnsupported` instead of being silently dropped.
 - There is currently no env-var shortcut for `ReasoningEffort`; use code or orchestration overrides.
 
 OpenAI reasoning models (GPT-5, o1, o3, o4) require special handling because they:
@@ -1325,7 +1720,9 @@ orch, _ := orchestration.CreateOrchestratorWithOptions(deps,
 )
 ```
 
-Concrete model names are safe **only** with a single-provider `ai.NewClient()`:
+Concrete model names are normally appropriate for a single-provider
+`ai.NewClient()`. In a chain they are safe only when every entry accepts that
+same literal model ID:
 
 ```go
 // Safe — single provider, no failover chain
@@ -1359,6 +1756,8 @@ TOGETHER_API_KEY=...
 **Base URL Overrides**:
 ```bash
 OPENAI_BASE_URL=https://...
+ANTHROPIC_BASE_URL=https://...
+GEMINI_BASE_URL=https://...
 DEEPSEEK_BASE_URL=https://...
 GROQ_BASE_URL=https://...
 XAI_BASE_URL=https://...
@@ -1374,7 +1773,7 @@ OLLAMA_BASE_URL=http://...
 TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
 TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
 TRUVAG3_GROQ_MODEL_DEFAULT=openai/gpt-oss-120b
-TRUVAG3_OLLAMA_MODEL_DEFAULT=gemma4:26b
+TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
 # For openai.deepseek, strip prefix → TRUVAG3_DEEPSEEK_MODEL_*
 ```
 
@@ -1390,7 +1789,7 @@ Do you need 99.9%+ uptime for AI features?
 │
 └── NO → Use Single Client
          └── Is cost a concern?
-             ├── YES → Use openai.groq (free tier)
+             ├── YES → Compare current provider pricing, quotas, and measured quality
              └── NO → Use your preferred provider
 ```
 
@@ -1406,11 +1805,21 @@ Error classification uses the `core.ProviderError` interface for structured, typ
 | `StatusCode() == 429` | Yes | Per-provider rate limits |
 | `IsTransient() == true` (any status) | Yes | Proxy/CDN issue, not a request problem |
 | Non-`ProviderError` (network error) | Yes | Connection/DNS issue |
+| `errors.Is(err, context.Canceled)` | **No** | Caller canceled the whole operation |
+| `errors.Is(err, context.DeadlineExceeded)` | **No** | Caller deadline applies to the whole operation |
 | `StatusCode() == 400 && !IsTransient()` | **No** | Same input fails everywhere |
 | `StatusCode() >= 400 && < 500` (other 4xx, not 401/403/429) | **No** | Fix your request |
 
-**Implementation** (`ai/chain_client.go`):
+**Implementation** (`ai/chain_request.go` and `ai/chain_client.go`, simplified):
 ```go
+func shouldFailOver(err error) bool {
+    if err == nil || errors.Is(err, context.Canceled) ||
+        errors.Is(err, context.DeadlineExceeded) {
+        return false
+    }
+    return !isClientError(err)
+}
+
 func isClientError(err error) bool {
     var pe core.ProviderError
     if errors.As(err, &pe) {
@@ -1419,7 +1828,7 @@ func isClientError(err error) bool {
         return status >= 400 && status < 500 &&
             status != 401 && status != 403 && status != 429  // Auth/rate-limit → failover
     }
-    return false  // Non-ProviderError (network) → failover
+    return false // Unstructured/network error → failover
 }
 ```
 
@@ -1429,5 +1838,7 @@ func isClientError(err error) bool {
 
 - **[ai/README.md](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)** - AI module overview and quick start
 - **[ai/ARCHITECTURE.md](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md)** - Technical architecture details
+- **[CUSTOM_AI_PROVIDER_GUIDE.md](CUSTOM_AI_PROVIDER_GUIDE.md)** - Request-aware clients, policy, enterprise routing and credentials, custom factories, and codecs
+- **[AI_PROVIDER_CHANGE_PLAYBOOK.md](AI_PROVIDER_CHANGE_PLAYBOOK.md)** - Day-0 responses when providers change: broken parameter contracts, new models and providers, auth/endpoint churn, cache safety
 - **[LOGGING_IMPLEMENTATION_GUIDE.md](../observability/LOGGING_IMPLEMENTATION_GUIDE.md)** - Logging patterns including AI module logging
 - **[DISTRIBUTED_TRACING_GUIDE.md](../observability/DISTRIBUTED_TRACING_GUIDE.md)** - Tracing AI requests in Jaeger

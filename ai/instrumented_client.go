@@ -2,12 +2,16 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -21,12 +25,14 @@ import (
 // Goroutine safety: All async recordings are tracked via WaitGroup.
 // Call Shutdown() before process exit to drain in-flight recordings.
 type InstrumentedAIClient struct {
-	wrapped       core.AIClient
-	recorder      telemetry.LLMCallRecorder
-	logger        core.Logger    // For Warn-level recording failure logs
-	componentName string         // default source component name
-	defaultType   string         // default call type (e.g., "agent_llm_call")
-	debugWg       sync.WaitGroup // tracks in-flight async recordings
+	wrapped        core.AIClient
+	recorder       telemetry.LLMCallRecorder
+	logger         core.Logger    // For Warn-level recording failure logs
+	componentName  string         // default source component name
+	defaultType    string         // default call type (e.g., "agent_llm_call")
+	debugWg        sync.WaitGroup // tracks in-flight async recordings
+	telemetry      core.Telemetry
+	factoryManaged bool
 }
 
 // InstrumentedOption configures an InstrumentedAIClient.
@@ -49,6 +55,16 @@ func WithInstrumentedLogger(logger core.Logger) InstrumentedOption {
 	return func(c *InstrumentedAIClient) { c.logger = logger }
 }
 
+// WithInstrumentedTelemetry enables the logical ai.generate and ai.stream
+// spans emitted by the common wrapper.
+func WithInstrumentedTelemetry(provider core.Telemetry) InstrumentedOption {
+	return func(c *InstrumentedAIClient) { c.telemetry = provider }
+}
+
+func withFactoryInstrumentation() InstrumentedOption {
+	return func(c *InstrumentedAIClient) { c.factoryManaged = true }
+}
+
 func NewInstrumentedClient(client core.AIClient, recorder telemetry.LLMCallRecorder, opts ...InstrumentedOption) *InstrumentedAIClient {
 	c := &InstrumentedAIClient{
 		wrapped:     client,
@@ -56,7 +72,19 @@ func NewInstrumentedClient(client core.AIClient, recorder telemetry.LLMCallRecor
 		defaultType: "agent_llm_call",
 	}
 	for _, opt := range opts {
-		opt(c)
+		if opt != nil {
+			opt(c)
+		}
+	}
+	// NewClient and NewRequestClient already install a no-op-recorder wrapper
+	// for logical spans. When an application adds debug
+	// recording, collapse that internal layer so one logical call produces one
+	// common span.
+	if existing, ok := client.(*InstrumentedAIClient); ok && existing.factoryManaged {
+		c.wrapped = existing.wrapped
+		if c.telemetry == nil {
+			c.telemetry = existing.telemetry
+		}
 	}
 	// Nil-safety: default to NoOp if recorder is nil (Issue 9)
 	if c.recorder == nil {
@@ -73,84 +101,59 @@ func NewInstrumentedClient(client core.AIClient, recorder telemetry.LLMCallRecor
 	return c
 }
 
-// GenerateResponse calls the wrapped client and records the LLM call for debugging.
+// GenerateResponse adapts the legacy call through the request-aware path.
 func (c *InstrumentedAIClient) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
-	start := time.Now()
-
-	// Call the wrapped client — this is the critical path, never block it
-	resp, err := c.wrapped.GenerateResponse(ctx, prompt, options)
-
-	// Extract request_id — try OTel baggage first (if available), then explicit context key (from headers)
-	requestID := c.resolveRequestID(ctx)
-	if requestID == "" {
-		return resp, err // Not called from orchestration — skip recording
+	result, err := c.Generate(ctx, core.NewAIRequestFromLegacy(prompt, "", options))
+	if result != nil {
+		return result.Response, err
 	}
+	return nil, err
+}
 
-	// Skip recording when the caller has deferred it via
-	// telemetry.WithLLMCallRecordingDeferred. The caller takes
-	// responsibility for emitting the record themselves (orchestration's
-	// direct recordDebugInteraction path, which carries richer metadata
-	// like semantic type, attempt, hook phase). Calls without the marker
-	// (reflection job, knowledge extraction hook, custom agent endpoints)
-	// continue to be recorded here as agent_llm_call.
-	//
-	// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-	if telemetry.IsLLMCallRecordingDeferred(ctx) {
-		return resp, err
+// Generate executes one logical generation call and records common telemetry
+// around request-capable or legacy clients.
+func (c *InstrumentedAIClient) Generate(
+	ctx context.Context,
+	request *core.AIRequest,
+) (result *core.AIResult, err error) {
+	if request == nil {
+		return nil, errors.New("AI request is nil")
 	}
+	started := time.Now()
+	ctx, span := c.startLogicalSpan(ctx, "ai.generate", request.Purpose)
+	defer func() {
+		c.finishLogicalSpan(span, result, err, started)
+	}()
 
-	// Build record
-	record := telemetry.LLMCallRecord{
-		CallType:        c.defaultType,
-		SourceComponent: c.componentName,
-		StepID:          c.resolveStepID(ctx),
-		PhaseNumber:     c.resolvePhaseNumber(ctx),
-		Timestamp:       start,
-		DurationMs:      time.Since(start).Milliseconds(),
-		Prompt:          prompt,
-		Success:         err == nil,
-	}
-	// Nil-safe options access — options may be nil (matches ChainClient pattern)
-	if options != nil {
-		record.Temperature = float64(options.Temperature)
-		record.MaxTokens = options.MaxTokens
-		record.SystemPrompt = options.SystemPrompt
-	}
-	if resp != nil {
-		record.Model = resp.Model
-		record.Provider = resp.Provider
-		record.Response = resp.Content
-		record.PromptTokens = resp.Usage.PromptTokens
-		record.CompletionTokens = resp.Usage.CompletionTokens
-		record.TotalTokens = resp.Usage.TotalTokens
-	}
-	if err != nil {
-		record.Error = err.Error()
-		// Extract model/provider from structured error when response is nil
-		// (works through ChainClient clone boundary via %w wrapping)
-		if resp == nil {
-			var pe core.ProviderError
-			if errors.As(err, &pe) {
-				record.Model = pe.Model()
-				record.Provider = pe.Provider()
-			}
-		}
-	}
-
-	// Record asynchronously — never block the LLM call path
-	c.recordAsync(ctx, requestID, record)
-
-	return resp, err
+	result, err = core.GenerateAI(ctx, c.wrapped, request)
+	c.attachLegacyFingerprint(ctx, request, result)
+	c.recordResult(ctx, started, request, result, err)
+	return result, err
 }
 
 // SetLogger updates the logger used for recording failure warnings.
 // Called by core.applyConfigToComponent after framework initialization
 // replaces the NoOpLogger with the real component logger.
 func (c *InstrumentedAIClient) SetLogger(logger core.Logger) {
-	c.logger = logger
+	if logger == nil {
+		c.logger = &core.NoOpLogger{}
+	} else if componentLogger, ok := logger.(core.ComponentAwareLogger); ok {
+		c.logger = componentLogger.WithComponent("framework/ai")
+	} else {
+		c.logger = logger
+	}
 	// Propagate to wrapped client too
 	if loggable, ok := c.wrapped.(interface{ SetLogger(core.Logger) }); ok {
 		loggable.SetLogger(logger)
+	}
+}
+
+// SetTelemetry updates logical tracing and propagates the provider to the
+// wrapped framework client when it supports runtime telemetry configuration.
+func (c *InstrumentedAIClient) SetTelemetry(provider core.Telemetry) {
+	c.telemetry = provider
+	if configurable, ok := c.wrapped.(interface{ SetTelemetry(core.Telemetry) }); ok {
+		configurable.SetTelemetry(provider)
 	}
 }
 
@@ -215,77 +218,307 @@ func (c *InstrumentedAIClient) resolveStepID(ctx context.Context) string {
 	return ""
 }
 
-// Verify interface compliance
-var _ core.AIClient = (*InstrumentedAIClient)(nil)
-
-// StreamResponse delegates to the wrapped client if it supports streaming.
-// The final response (returned after streaming completes) is recorded.
+// StreamResponse adapts the legacy streaming call through the request-aware
+// path. A nil legacy callback remains a no-op for backward compatibility.
 func (c *InstrumentedAIClient) StreamResponse(ctx context.Context, prompt string, options *core.AIOptions, callback core.StreamCallback) (*core.AIResponse, error) {
-	streamer, ok := c.wrapped.(core.StreamingAIClient)
-	if !ok {
-		return nil, fmt.Errorf("wrapped client does not support streaming")
+	if callback == nil {
+		callback = func(core.StreamChunk) error { return nil }
 	}
-
-	start := time.Now()
-	resp, err := streamer.StreamResponse(ctx, prompt, options, callback)
-
-	// Record the final aggregated response (same logic as GenerateResponse).
-	// Skip recording when the caller has deferred via
-	// telemetry.WithLLMCallRecordingDeferred — mirrors the deferral
-	// check in GenerateResponse so both code paths share the same
-	// suppression contract. See
-	// orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
-	requestID := c.resolveRequestID(ctx)
-	if requestID != "" && !telemetry.IsLLMCallRecordingDeferred(ctx) {
-		record := telemetry.LLMCallRecord{
-			CallType:        c.defaultType,
-			SourceComponent: c.componentName,
-			StepID:          c.resolveStepID(ctx),
-			PhaseNumber:     c.resolvePhaseNumber(ctx),
-			Timestamp:       start,
-			DurationMs:      time.Since(start).Milliseconds(),
-			Prompt:          prompt,
-			Success:         err == nil,
-		}
-		// Nil-safe options access — options may be nil (matches ChainClient pattern)
-		if options != nil {
-			record.Temperature = float64(options.Temperature)
-			record.MaxTokens = options.MaxTokens
-			record.SystemPrompt = options.SystemPrompt
-		}
-		if resp != nil {
-			record.Model = resp.Model
-			record.Provider = resp.Provider
-			record.Response = resp.Content
-			record.PromptTokens = resp.Usage.PromptTokens
-			record.CompletionTokens = resp.Usage.CompletionTokens
-			record.TotalTokens = resp.Usage.TotalTokens
-		}
-		if err != nil {
-			record.Error = err.Error()
-			// Extract model/provider from structured error when response is nil
-			// (same pattern as GenerateResponse — ORCH-008 Fix 4)
-			if resp == nil {
-				var pe core.ProviderError
-				if errors.As(err, &pe) {
-					record.Model = pe.Model()
-					record.Provider = pe.Provider()
-				}
-			}
-		}
-		c.recordAsync(ctx, requestID, record)
+	result, err := c.Stream(ctx, core.NewAIRequestFromLegacy(prompt, "", options), callback)
+	if result != nil {
+		return result.Response, err
 	}
+	return nil, err
+}
 
-	return resp, err
+// Stream executes one logical streaming call through the canonical core
+// capability adapter and records the final normalized result.
+func (c *InstrumentedAIClient) Stream(
+	ctx context.Context,
+	request *core.AIRequest,
+	callback core.StreamCallback,
+) (result *core.AIResult, err error) {
+	if request == nil {
+		return nil, errors.New("AI request is nil")
+	}
+	started := time.Now()
+	ctx, span := c.startLogicalSpan(ctx, "ai.stream", request.Purpose)
+	defer func() {
+		c.finishLogicalSpan(span, result, err, started)
+	}()
+
+	result, err = core.StreamAI(ctx, c.wrapped, request, callback)
+	c.attachLegacyFingerprint(ctx, request, result)
+	c.recordResult(ctx, started, request, result, err)
+	return result, err
 }
 
 // SupportsStreaming returns true if the wrapped client supports streaming.
 func (c *InstrumentedAIClient) SupportsStreaming() bool {
+	if _, ok := c.wrapped.(core.StreamingAIRequestClient); ok {
+		return true
+	}
 	if streamer, ok := c.wrapped.(core.StreamingAIClient); ok {
 		return streamer.SupportsStreaming()
 	}
 	return false
 }
+
+// RequestFingerprint delegates cache-safety fingerprinting to the wrapped
+// client. Instrumentation does not change request semantics and therefore does
+// not contribute its own identity.
+func (c *InstrumentedAIClient) RequestFingerprint(
+	ctx context.Context,
+	request *core.AIRequest,
+) (string, bool) {
+	fingerprinter, ok := c.wrapped.(core.AIRequestFingerprinter)
+	if !ok {
+		if request == nil || !request.LegacyRepresentable() {
+			return "", false
+		}
+		if _, requestAware := c.wrapped.(core.AIRequestClient); requestAware {
+			return "", false
+		}
+		// The legacy client has no policy or route report. Preserve its existing
+		// cache behavior under a stable adapter namespace while distinguishing
+		// different concrete client implementations and portable call purposes.
+		model := request.Generation.Model
+		if options := request.LegacyOptions(); model == "" && options != nil {
+			model = options.Model
+		}
+		sum := sha256.Sum256([]byte(fmt.Sprintf(
+			"legacy-instrumented-v1\nclient=%T\npurpose=%s\nmodel=%s",
+			c.wrapped,
+			request.Purpose,
+			model,
+		)))
+		return fmt.Sprintf("%x", sum[:]), true
+	}
+	return fingerprinter.RequestFingerprint(ctx, request)
+}
+
+func (c *InstrumentedAIClient) attachLegacyFingerprint(
+	ctx context.Context,
+	request *core.AIRequest,
+	result *core.AIResult,
+) {
+	if result == nil || result.RequestReport == nil || result.RequestReport.Stable {
+		return
+	}
+	if _, requestAware := c.wrapped.(core.AIRequestClient); requestAware {
+		return
+	}
+	fingerprint, stable := c.RequestFingerprint(ctx, request)
+	if !stable || fingerprint == "" {
+		return
+	}
+	result.RequestReport.Fingerprint = fingerprint
+	result.RequestReport.Stable = true
+}
+
+func (c *InstrumentedAIClient) startLogicalSpan(
+	ctx context.Context,
+	name string,
+	purpose string,
+) (context.Context, core.Span) {
+	if c.telemetry == nil {
+		return ctx, &core.NoOpSpan{}
+	}
+	spanCtx, span := c.telemetry.StartSpan(ctx, name)
+	if spanCtx == nil {
+		spanCtx = ctx
+	}
+	if span == nil {
+		span = &core.NoOpSpan{}
+	}
+	telemetry.SetCommonAttrsOn(spanCtx, span)
+	span.SetAttribute("ai.operation", strings.TrimPrefix(name, "ai."))
+	if purpose != "" {
+		span.SetAttribute("ai.purpose", purpose)
+	}
+	return spanCtx, span
+}
+
+func (c *InstrumentedAIClient) finishLogicalSpan(
+	span core.Span,
+	result *core.AIResult,
+	err error,
+	started time.Time,
+) {
+	if span == nil {
+		return
+	}
+	defer span.End()
+	span.SetAttribute("ai.duration_ms", time.Since(started).Milliseconds())
+	if err != nil {
+		span.SetAttribute("ai.status", "error")
+		errorType := providers.RecordObservationError(span, err, "unknown")
+		span.SetAttribute("ai.error_type", errorType)
+	} else {
+		span.SetAttribute("ai.status", "success")
+	}
+	if result == nil {
+		return
+	}
+	report := result.RequestReport
+	if report != nil {
+		setSpanString(span, "ai.provider", report.Provider)
+		setSpanString(span, "ai.provider_alias", report.ProviderAlias)
+		setSpanString(span, "ai.surface", report.Surface)
+		setSpanString(span, "ai.request.operation", report.Operation)
+		setSpanString(span, "ai.purpose", report.Purpose)
+		setSpanString(span, "ai.requested_model", report.RequestedModel)
+		setSpanString(span, "ai.model", report.ResolvedModel)
+		span.SetAttribute("ai.request.policy_stable", report.Stable)
+		span.SetAttribute("ai.request.adjustment_count", len(report.Adjustments))
+		if report.Stable {
+			setSpanString(span, "ai.request.policy_fingerprint", report.Fingerprint)
+		}
+		setAdjustmentAttributes(span, report.Adjustments)
+	}
+	if response := result.Response; response != nil {
+		if report == nil || report.Provider == "" {
+			setSpanString(span, "ai.provider", response.Provider)
+		}
+		if report == nil || report.ResolvedModel == "" {
+			setSpanString(span, "ai.model", response.Model)
+		}
+		span.SetAttribute("ai.prompt_tokens", response.Usage.PromptTokens)
+		span.SetAttribute("ai.completion_tokens", response.Usage.CompletionTokens)
+		span.SetAttribute("ai.total_tokens", response.Usage.TotalTokens)
+	}
+	if details := result.UsageDetails; details != nil {
+		span.SetAttribute("ai.cached_input_tokens", details.CachedInputTokens)
+		span.SetAttribute("ai.reasoning_tokens", details.ReasoningTokens)
+		span.SetAttribute("ai.audio_input_tokens", details.AudioInputTokens)
+		span.SetAttribute("ai.audio_output_tokens", details.AudioOutputTokens)
+		span.SetAttribute("ai.usage_detail_count", len(details.Counters))
+	}
+}
+
+func setSpanString(span core.Span, key, value string) {
+	if value != "" {
+		span.SetAttribute(key, value)
+	}
+}
+
+func setAdjustmentAttributes(span core.Span, adjustments []core.AIRequestAdjustment) {
+	if len(adjustments) == 0 {
+		return
+	}
+	paths := make(map[string]struct{}, len(adjustments))
+	rules := make(map[string]struct{}, len(adjustments))
+	for _, adjustment := range adjustments {
+		if adjustment.Path != "" {
+			paths[adjustment.Path] = struct{}{}
+		}
+		identity := adjustment.Source
+		if adjustment.Rule != "" {
+			if identity != "" {
+				identity += "/"
+			}
+			identity += adjustment.Rule
+		}
+		if identity != "" {
+			rules[identity] = struct{}{}
+		}
+	}
+	setSortedAttribute(span, "ai.request.adjusted_paths", paths)
+	setSortedAttribute(span, "ai.request.adjustment_rules", rules)
+}
+
+func setSortedAttribute(span core.Span, key string, values map[string]struct{}) {
+	if len(values) == 0 {
+		return
+	}
+	sorted := make([]string, 0, len(values))
+	for value := range values {
+		sorted = append(sorted, value)
+	}
+	sort.Strings(sorted)
+	span.SetAttribute(key, strings.Join(sorted, ","))
+}
+
+func (c *InstrumentedAIClient) recordResult(
+	ctx context.Context,
+	started time.Time,
+	request *core.AIRequest,
+	result *core.AIResult,
+	err error,
+) {
+	requestID := c.resolveRequestID(ctx)
+	if requestID == "" || telemetry.IsLLMCallRecordingDeferred(ctx) {
+		return
+	}
+	record := telemetry.LLMCallRecord{
+		CallType:        c.defaultType,
+		SourceComponent: c.componentName,
+		StepID:          c.resolveStepID(ctx),
+		PhaseNumber:     c.resolvePhaseNumber(ctx),
+		Timestamp:       started,
+		DurationMs:      time.Since(started).Milliseconds(),
+		Prompt:          request.Prompt,
+		Success:         err == nil,
+	}
+	applyDebugRequestOptions(&record, request)
+	if result != nil && result.Response != nil {
+		response := result.Response
+		record.Model = response.Model
+		record.Provider = response.Provider
+		record.Response = response.Content
+		record.PromptTokens = response.Usage.PromptTokens
+		record.CompletionTokens = response.Usage.CompletionTokens
+		record.TotalTokens = response.Usage.TotalTokens
+	}
+	if err != nil {
+		record.Error = err.Error()
+		if result == nil || result.Response == nil {
+			var providerError core.ProviderError
+			if errors.As(err, &providerError) {
+				record.Model = providerError.Model()
+				record.Provider = providerError.Provider()
+			}
+		}
+	}
+	c.recordAsync(ctx, requestID, record)
+}
+
+func applyDebugRequestOptions(record *telemetry.LLMCallRecord, request *core.AIRequest) {
+	if options := request.LegacyOptions(); options != nil {
+		record.Temperature = float64(options.Temperature)
+		record.MaxTokens = options.MaxTokens
+		record.SystemPrompt = options.SystemPrompt
+	}
+	if parameter := request.Generation.Temperature; parameter.Mode != core.AIParameterInherit {
+		if parameter.Mode == core.AIParameterSet {
+			record.Temperature = float64(parameter.Value)
+		} else {
+			record.Temperature = 0
+		}
+	}
+	if parameter := request.Generation.MaxTokens; parameter.Mode != core.AIParameterInherit {
+		if parameter.Mode == core.AIParameterSet {
+			record.MaxTokens = parameter.Value
+		} else {
+			record.MaxTokens = 0
+		}
+	}
+	if parameter := request.Generation.SystemPrompt; parameter.Mode != core.AIParameterInherit {
+		if parameter.Mode == core.AIParameterSet {
+			record.SystemPrompt = parameter.Value
+		} else {
+			record.SystemPrompt = ""
+		}
+	}
+}
+
+// Verify interface compliance.
+var (
+	_ core.AIClient                 = (*InstrumentedAIClient)(nil)
+	_ core.AIRequestClient          = (*InstrumentedAIClient)(nil)
+	_ core.StreamingAIClient        = (*InstrumentedAIClient)(nil)
+	_ core.StreamingAIRequestClient = (*InstrumentedAIClient)(nil)
+)
 
 // recordAsync fires an async recording goroutine tracked by the WaitGroup.
 // Extracted to avoid duplication between GenerateResponse and StreamResponse.
@@ -298,11 +531,14 @@ func (c *InstrumentedAIClient) recordAsync(ctx context.Context, requestID string
 		defer cancel()
 
 		if recErr := c.recorder.RecordLLMCall(recordCtx, requestID, record); recErr != nil {
-			c.logger.Warn("Failed to record LLM debug interaction", map[string]interface{}{
+			errorType, safeError := providers.SanitizedObservationError(recErr, "unknown")
+			c.logger.WarnWithContext(recordCtx, "Failed to record LLM debug interaction", map[string]interface{}{
+				"operation":        "ai_debug_record",
 				"request_id":       requestID,
 				"source_component": c.componentName,
 				"call_type":        c.defaultType,
-				"error":            recErr.Error(),
+				"error":            safeError.Error(),
+				"error_type":       errorType,
 			})
 		}
 	}()
