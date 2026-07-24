@@ -78,12 +78,13 @@ func (p *byteBudgetAgentInputProcessor) ProcessInput(ctx context.Context, params
 		// Deterministic structural trim using the step instruction as keyword context.
 		trimmedJSON := p.trimmer.ProcessForPrompt(ctx, string(serialized), p.maxBytes, stepCtx)
 
-		// Strip whichever disclosure annotation the trimmer appended ("\n[trimmed: ...]",
-		// "\n[severely reduced: ...]", "\n[partial: ...]") so the JSON re-parses.
+		// Strip the trailing disclosure annotation(s) the trimmer appended — any registered
+		// annotationPrefixes form, possibly stacked — so the JSON re-parses.
 		cleanJSON := stripResultAnnotation(trimmedJSON)
 
-		var parsed interface{}
-		if json.Unmarshal([]byte(cleanJSON), &parsed) != nil {
+		// UseNumber so large IDs in the trimmed tool input survive the re-parse verbatim.
+		parsed, perr := unmarshalPreservingNumbers([]byte(cleanJSON))
+		if perr != nil {
 			// Fail open: keep the original value rather than corrupt the tool input.
 			trimmed[key] = val
 			if p.logger != nil {
@@ -128,20 +129,36 @@ func (p *byteBudgetAgentInputProcessor) ProcessInput(ctx context.Context, params
 	return trimmed, nil
 }
 
-// stripResultAnnotation removes a trailing trim/disclosure annotation appended by a ResultProcessor
-// ("\n[trimmed: ...]", "\n[severely reduced: ...]", "\n[partial: ...]") so trimmed output re-parses
-// as JSON. No annotation present → input returned unchanged. A ResultProcessor appends exactly one
-// annotation at the very end, so the cut is the LATEST prefix occurrence across all forms — using the
-// earliest could land on a stray prefix inside the body and corrupt otherwise-valid JSON.
+// stripResultAnnotation removes the trailing trim/disclosure annotations appended by a
+// ResultProcessor so trimmed output re-parses as JSON. No annotation present → input returned
+// unchanged. Disclosures can legally stack (a structural trim note under the degenerate floor
+// note, or the map-reduce combine + partial notes), so ALL trailing annotations are peeled,
+// not just the last one. Each iteration peels ONLY the final line, and only when it is
+// annotation-shaped — starts with a registered annotationPrefixes form (result_processor.go)
+// and ends with "]" — so a cut is never committed before validation: prefix-like text quoted
+// mid-body (a log line citing "[trimmed: …]") can never cause content after it to be deleted.
+// A newly-added disclosure form must be registered or this re-parse fails and the guard
+// fails open with a warn — visible, not silent.
 func stripResultAnnotation(s string) string {
-	cut := -1
-	for _, pfx := range []string{"\n[trimmed:", "\n[severely reduced:", "\n[partial:"} {
-		if idx := strings.LastIndex(s, pfx); idx > cut {
-			cut = idx
+	for {
+		i := strings.LastIndexByte(s, '\n')
+		if i < 0 {
+			return s
 		}
+		line := s[i:]
+		if !strings.HasSuffix(line, "]") {
+			return s
+		}
+		registered := false
+		for _, pfx := range annotationPrefixes {
+			if strings.HasPrefix(line, pfx) {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			return s
+		}
+		s = s[:i]
 	}
-	if cut >= 0 {
-		return s[:cut]
-	}
-	return s
 }

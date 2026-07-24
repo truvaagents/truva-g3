@@ -30,8 +30,10 @@ func TestDeserializeStringValues_NestedJSONStrings(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected data to be deserialized to map, got %T", m["data"])
 	}
-	if dataVal["price"] != 150.5 {
-		t.Errorf("Expected price=150.5, got %v", dataVal["price"])
+	// Numbers inside re-parsed JSON strings decode via unmarshalPreservingNumbers (UseNumber),
+	// so they are json.Number (large-ID preservation), not float64.
+	if dataVal["price"] != json.Number("150.5") {
+		t.Errorf("Expected price=json.Number(150.5), got %v (%T)", dataVal["price"], dataVal["price"])
 	}
 	if dataVal["currency"] != "USD" {
 		t.Errorf("Expected currency=USD, got %v", dataVal["currency"])
@@ -115,8 +117,9 @@ func TestDeserializeStringValues_ShortStringsSkipped(t *testing.T) {
 	// "[1]" has len=3 which IS > 2 and starts with '[', so it gets deserialized
 	if arr, ok := m["three"].([]interface{}); !ok {
 		t.Errorf("Expected '[1]' (len=3) to be deserialized to array, got %T", m["three"])
-	} else if len(arr) != 1 || arr[0] != 1.0 {
-		t.Errorf("Expected deserialized [1], got %v", arr)
+	} else if len(arr) != 1 || arr[0] != json.Number("1") {
+		// json.Number, not float64: re-parsed via unmarshalPreservingNumbers (UseNumber).
+		t.Errorf("Expected deserialized [1] as json.Number, got %v", arr)
 	}
 }
 
@@ -486,7 +489,7 @@ func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
 		Instruction:   "Retrieve the last 5 minutes of logs",
 		OriginalQuery: "tell me if there are PII present in the logs",
 	}
-	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx, 1.0)
 
 	if !strings.Contains(prompt, "User goal: tell me if there are PII present in the logs") {
 		t.Errorf("expected the user goal in the prompt, got:\n%s", prompt)
@@ -501,7 +504,7 @@ func TestLLMDistiller_PromptIncludesUserGoal(t *testing.T) {
 	}
 
 	// When no query is in scope, the "User goal:" line is omitted (no empty label).
-	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"})
+	noQuery := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{Instruction: "x"}, 1.0)
 	if strings.Contains(noQuery, "User goal:") {
 		t.Error("expected no 'User goal:' line when OriginalQuery is empty")
 	}
@@ -517,7 +520,7 @@ func TestLLMDistiller_PromptTaskPrimary(t *testing.T) {
 		Instruction:   "Query container memory usage for all pods to detect OOM pressure",
 		OriginalQuery: "Perform a full cluster health check and send a Slack report",
 	}
-	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx)
+	prompt := d.buildDistillationPrompt("some data", 4096, stepCtx, 1.0)
 
 	taskIdx := strings.Index(prompt, "Downstream task: Query container memory usage")
 	goalIdx := strings.Index(prompt, "User goal: Perform a full cluster health check")
@@ -539,7 +542,7 @@ func TestLLMDistiller_PromptTaskPrimary(t *testing.T) {
 func TestLLMDistiller_PromptEmptyInstruction(t *testing.T) {
 	d := NewLLMDistiller(nil, ResultDistillConfig{}, NewStructuralTrimmer(nil, nil), nil)
 
-	prompt := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{AgentName: "tool"})
+	prompt := d.buildDistillationPrompt("data", 4096, ResultProcessorContext{AgentName: "tool"}, 1.0)
 
 	if strings.Contains(prompt, "Downstream task:") {
 		t.Errorf("expected no 'Downstream task:' line when Instruction is empty, got:\n%s", prompt)
@@ -1168,7 +1171,7 @@ func TestBuildDistillationPrompt(t *testing.T) {
 	result := `{"symbol":"AAPL","price":185.42,"exchange":"NASDAQ"}`
 	maxBytes := 4096
 
-	prompt := d.buildDistillationPrompt(result, maxBytes, stepCtx)
+	prompt := d.buildDistillationPrompt(result, maxBytes, stepCtx, 1.0)
 
 	// --- 1. No fmt.Sprintf type-mismatch garbage ---
 	if strings.Contains(prompt, "%!") {
@@ -1830,8 +1833,8 @@ func TestLLMDistiller_DebugStore_SkipsWhenRequestIDEmpty(t *testing.T) {
 // --- TestWithTrimMetadataCapture ---
 
 func TestWithTrimMetadataCapture_NoOp(t *testing.T) {
-	// captureTrimMetadata on a plain context must not panic and must not write anywhere.
-	captureTrimMetadata(context.Background(), ResultTrimMetadata{
+	// CaptureResultTrimMetadata on a plain context must not panic and must not write anywhere.
+	CaptureResultTrimMetadata(context.Background(), ResultTrimMetadata{
 		OriginalBytes: 100, TrimmedBytes: 50, Method: "structural",
 	})
 	// Reaching here without panic is the assertion.
@@ -1839,7 +1842,7 @@ func TestWithTrimMetadataCapture_NoOp(t *testing.T) {
 
 func TestWithTrimMetadataCapture_RoundTrip(t *testing.T) {
 	ctx, meta := WithTrimMetadataCapture(context.Background())
-	captureTrimMetadata(ctx, ResultTrimMetadata{
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{
 		OriginalBytes: 1024,
 		TrimmedBytes:  512,
 		Method:        "structural",
@@ -1869,10 +1872,10 @@ func TestWithTrimMetadataCapture_RoundTrip(t *testing.T) {
 }
 
 func TestWithTrimMetadataCapture_SecondWriteWins(t *testing.T) {
-	// Second captureTrimMetadata call overwrites the first.
+	// Second CaptureResultTrimMetadata call overwrites the first.
 	ctx, meta := WithTrimMetadataCapture(context.Background())
-	captureTrimMetadata(ctx, ResultTrimMetadata{Method: "structural", OriginalBytes: 100})
-	captureTrimMetadata(ctx, ResultTrimMetadata{Method: "truncate", OriginalBytes: 200})
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{Method: "structural", OriginalBytes: 100})
+	CaptureResultTrimMetadata(ctx, ResultTrimMetadata{Method: "truncate", OriginalBytes: 200})
 
 	if meta.Method != "truncate" {
 		t.Errorf("Expected second capture to win, got Method=%q", meta.Method)
@@ -1988,8 +1991,9 @@ func TestLLMDistiller_CapturesMetadataOnSuccess(t *testing.T) {
 func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 	// On LLM failure the structural preFilter is invoked as fallback.
 	// Metadata must NOT have Method="distill".
-	// Use maxBytes=20 so the fallback trimmer actually trims (37 bytes > 20), which
-	// means captureTrimMetadata is called with the structural method.
+	// The fallback floors its budget at targetSize (min 256 — Tier-1 review fix: a tiny
+	// maxBytes must not re-create the near-empty floor output), so the input must exceed
+	// that floor for the fallback trimmer to actually trim and capture structural metadata.
 	mockAI := &distillerMockAI{err: fmt.Errorf("api error")}
 	trimmer := NewStructuralTrimmer(nil, nil)
 	config := ResultDistillConfig{
@@ -1997,7 +2001,11 @@ func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 	}
 	distiller := NewLLMDistiller(mockAI, config, trimmer, nil)
 
-	largeInput := `{"field1":"value1","field2":"value2"}`
+	largeInput := `{"fields":[` // ~600 bytes: above the 256-byte floored fallback budget
+	for i := 0; i < 20; i++ {
+		largeInput += fmt.Sprintf(`{"k%02d":"value-with-some-content-%02d"},`, i, i)
+	}
+	largeInput = strings.TrimSuffix(largeInput, ",") + `]}`
 	ctx, meta := WithTrimMetadataCapture(context.Background())
 	distiller.ProcessForPrompt(ctx, largeInput, 20, ResultProcessorContext{
 		StepID: "s1", AgentName: "test", Instruction: "summarize",
@@ -2007,7 +2015,7 @@ func TestLLMDistiller_ErrorPath_MetadataNotDistill(t *testing.T) {
 		t.Error("Fallback path must not use Method='distill'")
 	}
 	if meta.Method == "" {
-		t.Error("Expected metadata to be populated by structural fallback (input 37b > budget 20b)")
+		t.Error("Expected metadata to be populated by structural fallback (input ~770b > floored 256b fallback budget)")
 	}
 }
 
@@ -2053,7 +2061,7 @@ func TestBuildDistillationPrompt_Extractive(t *testing.T) {
 	userMsg := d.buildDistillationPrompt(`{"a":1}`, 1024, ResultProcessorContext{
 		AgentName:   "agent",
 		Instruction: "find errors",
-	})
+	}, 1.0)
 
 	// The extractive rules live in the system message (Phase 13 §2.9 split).
 	for _, want := range []string{"VERBATIM", "EVIDENCE", "NARRATIVE", "No matching entries found", "UNKNOWN"} {
@@ -2142,7 +2150,12 @@ func TestLLMDistiller_ZeroBudgetDoesNotZeroTarget(t *testing.T) {
 	if !strings.Contains(mockAI.prompt, "at most 4096 characters") {
 		t.Errorf("expected the target to fall back to TargetSize=4096, prompt head: %.200s", mockAI.prompt)
 	}
-	if out != "DISTILLED-LOG-LINES" {
-		t.Errorf("expected the real distilled output, got %q", out)
+	// Phase 16 — the input pre-filters to a partial sample (~21%), so the framework appends the
+	// partial-source disclosure to the distilled OUTPUT. The real distilled content is still present.
+	if !strings.Contains(out, "DISTILLED-LOG-LINES") {
+		t.Errorf("expected the real distilled output to be present, got %q", out)
+	}
+	if !strings.Contains(out, "partial source") {
+		t.Errorf("expected the partial-source disclosure to be appended, got %q", out)
 	}
 }

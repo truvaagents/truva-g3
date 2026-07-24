@@ -3812,7 +3812,7 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithErrorAnalysisAIOptions(opts)` - Per-phase overrides for error analysis calls
 - `WithResultDistillAIOptions(opts)` - Per-phase overrides for result distillation calls
 - `WithResultTrimming(enabled, maxResultBytes)` - Enable/configure structural result trimming (Layer 1)
-- `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer always keeps
+- `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer prioritizes keeping (a strong preference in its scoring, not a guarantee)
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
 - `WithResultDistillModel(model)` - Model or portable alias for distillation calls; aliases are portable only across catalog-backed entries, so leave it empty for a chain containing Bedrock
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
@@ -4292,7 +4292,7 @@ type ResultTrimConfig struct {
     // Default: 16384 (16 KB) | Env: TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD
     SchemaGuidedMappingThreshold int `json:"schema_guided_mapping_threshold"`
 
-    // PreserveKeys lists JSON keys that should never be trimmed.
+    // PreserveKeys lists JSON keys the trimmer favors keeping (prioritized, not guaranteed).
     PreserveKeys []string `json:"preserve_keys,omitempty"`
 }
 ```
@@ -4353,6 +4353,23 @@ type ResultTrimMetadata struct {
     BudgetAllocated  int      `json:"budget_allocated,omitempty"`  // Per-result budget from BudgetAllocator (multi-result only)
     Degenerate       bool     `json:"degenerate,omitempty"`        // Structural trim kept a non-representative fraction (< 5%); triggers the "severely reduced … treat as UNKNOWN" disclosure
     KeptRatio        float64  `json:"kept_ratio,omitempty"`        // trimmed_bytes / original_bytes
+
+    // Phase 16/17 — coverage accounting. Byte-based values are APPROXIMATE (JSON is parsed
+    // and re-serialized, so byte counts shift); pair them with the exact FieldsKept/FieldsDropped counts.
+    SourceCoverageRatio float64 `json:"source_coverage_ratio,omitempty"` // ~ source represented / original (approximate)
+    LLMInputBytes       int     `json:"llm_input_bytes,omitempty"`       // total DATA bytes sent across LLM calls (chunk/combine payloads — not the full prompts/system messages); can exceed OriginalBytes once map-reduce wrappers replicate per chunk
+    SegmentsAnalyzed    int     `json:"segments_analyzed,omitempty"`     // map-reduce N (single-call: 1)
+    SegmentsTotal       int     `json:"segments_total,omitempty"`        // map-reduce M (single-call: 1)
+    PartialCoverage     bool    `json:"partial_coverage,omitempty"`      // the LLM did not see the full source: a pre-LLM structural drop (single-call pre-filter) OR incomplete map-reduce coverage (failed/timed-out chunks)
+    CombineTruncated    bool    `json:"combine_truncated,omitempty"`     // reduce output was deterministically truncated
+    ChunkStrategy       string  `json:"chunk_strategy,omitempty"`        // map-reduce chunk mode: "array" | "wrapper" | "lines" | "bytes" (lines/bytes are byte-lossless but may tear records mid-JSON)
+
+    // ContentLost is the AUTHORITATIVE loss signal, set by every lossy trim operation (field/item/
+    // sentence drops, threshold skips, value truncation, byte cuts). Disclosure gating keys on it,
+    // never on byte ratios (re-serialization shrinks bytes without losing content). Deliberately
+    // NOT omitempty: an explicit false means "verified lossless", distinct from the key being absent
+    // on legacy records — the registry viewer renders that tri-state.
+    ContentLost bool `json:"content_lost"`
 }
 ```
 
@@ -4369,9 +4386,19 @@ for _, step := range response.Steps {
 }
 ```
 
+### CaptureResultTrimMetadata
+
+```go
+func CaptureResultTrimMetadata(ctx context.Context, meta ResultTrimMetadata)
+```
+
+The supported reporting hook a **custom `ResultProcessor`** calls to record what it trimmed. It is the producer side of the metadata contract: the framework prepares the per-step capture slot before invoking `ProcessForPrompt`, so a custom processor only calls this with its outcome, and the record surfaces on `StepResult.Metadata["result_trim"]` and the `result_trim.completed` span.
+
+> **Honesty contract.** A custom processor that drops, truncates, or samples content **must** call this with `ContentLost: true` — downstream disclosure gating keys exclusively on that signal (a lossy processor that skips it makes real loss read as full coverage). The function folds any specific loss flag (`Degenerate` / `PartialCoverage` / `CombineTruncated`) into `ContentLost`, so a report cannot claim "verified lossless" while flagging a loss. It is a safe no-op outside the framework's capture context. (The framework sets up that context with the companion `WithTrimMetadataCapture(ctx) (context.Context, *ResultTrimMetadata)`, which callers driving `ProcessForPrompt` by hand use to read the metadata back.)
+
 ### ResultDistillConfig
 
-Configures **default-on** LLM-based result distillation — the primary compaction path for over-budget results. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2); results whose estimated token count exceeds `ModelContextTokens` are chunked and map-reduced. Active when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default); without an `AIClient` it falls back to the `StructuralTrimmer` floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. Every distillation is bounded by `CompactionDeadline` (fail-open). Distillation results are **cached only when a `DigestCache` is supplied** via `deps.DistillCache` — there is no cache by default — and `CacheTTL` applies only then.
+Configures **default-on** LLM-based result distillation — the primary compaction path for over-budget results. Uses a two-stage pipeline: structural pre-filtering (Stage 1) followed by LLM-based summarization (Stage 2); results whose estimated token count exceeds `ModelContextTokens` — or, when `MapReduceThresholdBytes` is set, whose byte size exceeds it — are chunked and map-reduced. Active when the orchestrator has an `AIClient` **and** Result Trimming is enabled (both true by default); without an `AIClient` it falls back to the `StructuralTrimmer` floor. Opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`. Every distillation is bounded by `CompactionDeadline` (fail-open). Distillation results are **cached only when a `DigestCache` is supplied** via `deps.DistillCache` — there is no cache by default — and `CacheTTL` applies only then.
 
 ```go
 type ResultDistillConfig struct {
@@ -4426,6 +4453,18 @@ type ResultDistillConfig struct {
     // Default: 150000 | Env: TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS
     ModelContextTokens int `json:"model_context_tokens,omitempty"`
 
+    // MapReduceThresholdBytes routes results larger than this (bytes) to map-reduce
+    // even when they fit the model context — so the WHOLE result reaches an LLM, not
+    // only the pre-filtered head (Phase 17). INDEPENDENT of ModelContextTokens.
+    // 0 = disabled (context-only routing, today's default). A positive value below
+    // PreFilterBudget is ignored with a factory warning — a result that small is a
+    // single chunk, so routing it to map-reduce adds no fan-out over the single-call
+    // path (that lone chunk still runs an LLM extract call when it fits context).
+    // Parsed with >= 0 (not the repo's usual > 0) so an explicit 0 can disable a
+    // future nonzero default.
+    // Default: 0 (disabled) | Env: TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD
+    MapReduceThresholdBytes int `json:"mapreduce_threshold_bytes,omitempty"`
+
     // MapConcurrency caps how many chunks are compacted concurrently in the
     // map-reduce path. <= 0 falls back to the default.
     // Default: 8 | Env: TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY
@@ -4438,10 +4477,13 @@ type ResultDistillConfig struct {
 config := orchestration.DefaultConfig()
 // Distillation is already enabled with sensible defaults — mutate individual
 // fields rather than reassigning the whole struct, which would zero the fields
-// you omit: CompactionDeadline=0 disables the hot-path deadline, and
-// ModelContextTokens=0 disables map-reduce routing. (CacheTTL=0 does NOT cleanly
-// disable caching — see the CacheTTL note above; MapConcurrency=0 self-heals to
-// the default.)
+// you omit. Most self-heal at construction — PreFilterBudget, DistillThreshold,
+// ModelContextTokens, and MapConcurrency all backfill to their defaults when
+// non-positive (so ModelContextTokens=0 becomes 150000, NOT "disabled" — there is
+// no zero-value opt-out for token-based routing). Two do NOT self-heal:
+// CompactionDeadline=0 disables the hot-path deadline, and CacheTTL=0 does NOT
+// cleanly disable caching (a Redis-backed cache treats 0 as no expiration — see
+// the CacheTTL note above).
 config.ResultDistill.DistillThreshold = 65536 // only distill results > 64 KB
 config.ResultDistill.TargetSize = 2048        // tighter ~2 KB summaries
 config.ResultDistill.Model = "fast"           // portable across catalog-backed providers
@@ -4458,16 +4500,27 @@ export TRUVAG3_RESULT_DISTILL_TARGET=4096             # Stage-2 LLM output targe
 export TRUVAG3_RESULT_DISTILL_MODEL=fast              # catalog-backed providers; Bedrock needs a programmatic empty override
 export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m            # distillation cache TTL
 export TRUVAG3_RESULT_DISTILL_DEADLINE=45s            # hot-path compaction bound (positive durations only)
-export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000   # above this, chunk → map-reduce
+export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000   # above this (tokens), chunk → map-reduce
+export TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD=0   # bytes; 0=disabled; above this, route to map-reduce even if it fits context (accepts 0 as a kill switch)
 export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8       # concurrent chunk distillations
 ```
 
 **How the pipeline works:**
 1. **Stage 1 — Structural Pre-Filter**: The `StructuralTrimmer` reduces the large result to `PreFilterBudget` bytes, preserving JSON structure and key data points.
 2. **Stage 2 — LLM Distillation**: An LLM call summarizes the pre-filtered result to approximately `TargetSize` bytes, preserving the most relevant information for the user's query.
-3. **Very large results — map-reduce**: when the result is estimated above `ModelContextTokens`, it is chunked and the chunks are compacted concurrently (`MapConcurrency` at a time), then reduced — instead of being sent in a single call.
+3. **Very large results — map-reduce**: when the result is estimated above `ModelContextTokens` (or exceeds `MapReduceThresholdBytes` bytes, when that opt-in knob is set — independent of the token estimate), it is chunked and the chunks are compacted concurrently (`MapConcurrency` at a time), then reduced — instead of being sent in a single call. This routes the **whole** result through an LLM rather than only its Stage-1 pre-filtered head.
 4. **Bounded & (optionally) cached**: each compaction is bounded by `CompactionDeadline` (fail-open). Results are cached for `CacheTTL` **only when a `DigestCache` is supplied** via `deps.DistillCache` — there is no cache by default.
 5. **Fallback**: if the LLM call fails (or the deadline trips), the Stage 1 pre-filtered structural result is used directly.
+
+### DeserializeStringValues
+
+```go
+func DeserializeStringValues(data interface{}) interface{}
+```
+
+Recursively walks a decoded JSON value (`map[string]interface{}` / `[]interface{}` / `string`) and, wherever a **string field itself contains JSON** (a value starting with `{` or `[` — e.g. a Loki log line that carries JSON as a string), re-parses that inner JSON so downstream code sees structured data instead of an opaque string. Exported for edge-case use by tool handlers that post-process results.
+
+> **Compatibility change (Phase 17).** The inner re-parse now decodes with `UseNumber`, so **numbers inside those decoded JSON-in-string fields are returned as `json.Number`, not `float64`.** This preserves large integer identifiers (snowflake IDs, 64-bit keys) that a `float64` round-trip would corrupt. Callers that type-assert `float64` on such *nested* numbers must instead handle `json.Number` (use `.Int64()` / `.Float64()` / `.String()`). Only numbers that were nested inside a JSON-in-string field are affected — numbers already present in the top-level decoded structure pass through unchanged.
 
 ### ProcessRequestStreaming
 

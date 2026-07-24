@@ -3586,9 +3586,12 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			})
 			trimMeta = meta
 		} else if trimConfig.Enabled && len(response) > trimConfig.MaxTotalPromptBytes {
-			response = truncateResultBytes(response, trimConfig.MaxTotalPromptBytes)
+			// Byte truncation fallback (no result processor ran → no model analyzed the dropped
+			// tail). appendDisclosure cuts + discloses within the budget in one step. (Phase 16)
+			response = appendDisclosure(response, truncationDisclosure(), trimConfig.MaxTotalPromptBytes)
 			trimMeta = &ResultTrimMetadata{
 				OriginalBytes: originalSize, TrimmedBytes: len(response), Method: "truncate",
+				PartialCoverage: true, ContentLost: true,
 			}
 		}
 
@@ -3602,13 +3605,17 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 
 		trimmedSize := len(response)
 
-		// Emit span event for result trim decisions (visible in Jaeger)
-		if trimMeta != nil && trimmedSize != originalSize {
+		// Emit span event for result trim decisions (visible in Jaeger) — see
+		// lossyTrimEvent for why the gate is not byte inequality alone.
+		if lossyTrimEvent(trimMeta, originalSize, trimmedSize) {
 			attrs := []attribute.KeyValue{
 				attribute.String("request_id", promptRequestID),
 				attribute.String("step_id", step.StepID),
 				attribute.String("agent_name", step.AgentName),
 				attribute.String("method", trimMeta.Method),
+				// Unconditional: explicit false = verified lossless, distinct from a
+				// legacy span with no signal — the same tri-state the JSON field carries.
+				attribute.Bool("content_lost", trimMeta.ContentLost),
 				attribute.Int("original_bytes", trimMeta.OriginalBytes),
 				attribute.Int("trimmed_bytes", trimMeta.TrimmedBytes),
 				attribute.Int("fields_kept", trimMeta.FieldsKept),
@@ -3629,19 +3636,38 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			if len(trimMeta.MatchedPaths) > 0 {
 				attrs = append(attrs, attribute.String("matched_paths", strings.Join(trimMeta.MatchedPaths, ",")))
 			}
+			// Phase 16 coverage fields — surfaced so Jaeger can distinguish a 28%-seen
+			// distill from a 100%-seen one without digging into step metadata.
+			if trimMeta.SourceCoverageRatio > 0 {
+				attrs = append(attrs, attribute.Float64("source_coverage_ratio", trimMeta.SourceCoverageRatio))
+			}
+			if trimMeta.LLMInputBytes > 0 {
+				attrs = append(attrs, attribute.Int("llm_input_bytes", trimMeta.LLMInputBytes))
+			}
+			if trimMeta.SegmentsTotal > 0 {
+				attrs = append(attrs,
+					attribute.Int("segments_analyzed", trimMeta.SegmentsAnalyzed),
+					attribute.Int("segments_total", trimMeta.SegmentsTotal))
+			}
+			if trimMeta.PartialCoverage {
+				attrs = append(attrs, attribute.Bool("partial_coverage", true))
+			}
+			if trimMeta.CombineTruncated {
+				attrs = append(attrs, attribute.Bool("combine_truncated", true))
+			}
 			telemetry.AddSpanEvent(ctx, "result_trim.completed", attrs...)
 		}
 
-		// Format response: pretty-print JSON, or use plain text as-is
-		var parsed interface{}
-		if json.Unmarshal([]byte(response), &parsed) == nil {
+		// Format response: pretty-print JSON, or use plain text as-is.
+		// UseNumber so large IDs survive this last re-parse before the streaming synthesis prompt.
+		if parsed, perr := unmarshalPreservingNumbers([]byte(response)); perr == nil {
 			parsed = deserializeStringValues(parsed)
 			if formatted, err := json.MarshalIndent(parsed, "", "  "); err == nil {
 				response = string(formatted)
 			}
 		}
 
-		if o.logger != nil && trimmedSize != originalSize {
+		if o.logger != nil && lossyTrimEvent(trimMeta, originalSize, trimmedSize) {
 			o.logger.DebugWithContext(ctx, "Result trimmed for streaming synthesis", map[string]interface{}{
 				"operation":        "result_trim",
 				"request_id":       promptRequestID,

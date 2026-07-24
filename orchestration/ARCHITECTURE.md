@@ -349,6 +349,7 @@ orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient)
 - **Purpose**: Pre-processes step results before synthesis to fit within LLM token budgets
 - **Interface**: Pluggable via `ResultProcessor` interface; default uses query-conditioned field selection (`StructuralTrimmer`)
 - **Budget**: Multi-result scenarios use proportional allocation with redistribution (`BudgetAllocator`)
+- **Honesty contract (Phase 16)**: A processor that loses content (drops/truncates/samples) reports it by calling the exported `CaptureResultTrimMetadata(ctx, ResultTrimMetadata{... ContentLost: true})`; the framework prepares the per-step capture slot, and downstream disclosure gating keys exclusively on `ContentLost`. Custom processors are first-class here — the reporting hook is public so an extension can honor the same honesty invariant the built-ins do.
 
 #### Routing Cache
 - **Purpose**: Caches routing decisions to reduce LLM calls

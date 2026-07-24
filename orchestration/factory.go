@@ -344,6 +344,17 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		}
 	}
 
+	// Advisory, once per orchestrator, whenever ANY built-in distiller will exist (synthesis
+	// and/or continuation — both fan-out surfaces): CompactionDeadline==0 is a DOCUMENTED
+	// opt-out, so this is informational, never an error, and it deliberately does NOT live in
+	// normalizeResultDistillConfig (which runs per distiller construction and would warn
+	// twice). Distinct operation from the normalization warns so alerting on genuine
+	// misconfiguration is not paged by a documented opt-out.
+	if config.ResultDistill.Enabled && deps.AIClient != nil && config.ResultDistill.CompactionDeadline == 0 {
+		factoryLogger.Warn("CompactionDeadline is disabled (0); map-reduce fan-out has no wall-clock bound",
+			map[string]interface{}{"operation": "result_distill.config_advisory"})
+	}
+
 	// Seam 1 (Phase 8) — SYNTHESIS result processor. Gated by ResultTrim.Enabled (the prompt-trim
 	// feature); the synthesizer/streaming path also checks Enabled at use-time, so a synthesis
 	// processor is meaningless when trimming is off.
@@ -356,22 +367,32 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			})
 		} else if config.ResultDistill.Enabled && deps.AIClient != nil {
 			trimmer := NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger)
+			// NewLLMDistiller normalizes the config at construction and distillKeySalt normalizes
+			// identically before hashing, so cache keys can never diverge from routing behavior.
 			distiller := NewLLMDistiller(deps.AIClient, config.ResultDistill, trimmer, deps.Logger)
 			distiller.SetAIOptionsOverride(config.ResultDistillAIOptions)
 			// Propagate debugStore so distillation LLM calls appear in the LLM Debug tab.
 			if orchestrator.debugStore != nil {
 				distiller.SetLLMDebugStore(orchestrator.debugStore)
 			}
+			// The EFFECTIVE (normalized) config: the cache's minBytes gate and the init log must
+			// describe what the distiller actually runs, not raw knob values — a hand-built
+			// config's zero threshold would otherwise cache every sub-16 KB passthrough while
+			// the distiller runs the backfilled gate. One normalize call, no hand-copied
+			// backfill rules (nil logger: normalization warns already fired inside
+			// NewLLMDistiller above).
+			effDistill := normalizeResultDistillConfig(config.ResultDistill, nil)
 			// Wrap with a content-addressed cache when one is provided (fail-open: a nil
 			// cache returns the bare distiller, so this is a no-op without a cache).
-			processor := NewCachingProcessor(distiller, deps.DistillCache, config.ResultDistill.CacheTTL, config.ResultDistill.DistillThreshold, distillKeySalt(config.ResultDistill, config.ResultDistillAIOptions), deps.Logger)
+			processor := NewCachingProcessor(distiller, deps.DistillCache, config.ResultDistill.CacheTTL, effDistill.DistillThreshold, distillKeySalt(config.ResultDistill, config.ResultDistillAIOptions, config.ResultTrim.PreserveKeys), deps.Logger)
 			orchestrator.SetResultProcessor(processor)
 			factoryLogger.Info("Result processing: LLM distillation (two-stage)", map[string]interface{}{
-				"operation":         "result_trim_initialization",
-				"distill_threshold": config.ResultDistill.DistillThreshold,
-				"prefilter_budget":  config.ResultDistill.PreFilterBudget,
-				"target_size":       config.ResultDistill.TargetSize,
-				"cache_enabled":     deps.DistillCache != nil,
+				"operation":                 "result_trim_initialization",
+				"distill_threshold":         effDistill.DistillThreshold,
+				"prefilter_budget":          effDistill.PreFilterBudget,
+				"target_size":               effDistill.TargetSize,
+				"mapreduce_threshold_bytes": effDistill.MapReduceThresholdBytes,
+				"cache_enabled":             deps.DistillCache != nil,
 			})
 		} else {
 			orchestrator.SetResultProcessor(NewStructuralTrimmer(config.ResultTrim.PreserveKeys, deps.Logger))
@@ -867,7 +888,7 @@ func WithResultTrimming(enabled bool, maxResultBytes int) OrchestratorOption {
 	}
 }
 
-// WithResultPreserveKeys sets keys that should always be preserved during trimming.
+// WithResultPreserveKeys sets keys the trimmer should favor keeping during trimming (a scoring preference, not a guarantee).
 func WithResultPreserveKeys(keys []string) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.ResultTrim.PreserveKeys = keys
@@ -920,8 +941,21 @@ func BuildDistillationEnabledResultProcessor(
 	if ai == nil {
 		return trimmer // fail-open: no model → structural floor only
 	}
+	// NewLLMDistiller normalizes the config at construction and distillKeySalt normalizes
+	// identically before hashing, so cache keys can never diverge from routing behavior.
 	distiller := NewLLMDistiller(ai, cfg, trimmer, logger)
+	// Advisory (matches the factory path; 0 is a documented opt-out, so informational only —
+	// distinct operation from normalization warns so misconfiguration alerting is not paged
+	// by a documented opt-out).
+	if cfg.CompactionDeadline == 0 && logger != nil {
+		logger.Warn("CompactionDeadline is disabled (0); map-reduce fan-out has no wall-clock bound",
+			map[string]interface{}{"operation": "result_distill.config_advisory"})
+	}
+	// The cache's minBytes must be the EFFECTIVE (backfilled) threshold, not the raw value: a
+	// minimal config's zero threshold would otherwise cache every sub-threshold passthrough
+	// while the distiller runs the backfilled 16 KB gate. Derived via the normalizer — never a
+	// hand-copied backfill rule that can drift from it.
 	// This Layer-2 helper does not apply a per-phase AI options override, so the salt has
 	// none. Callers using deps.ResultDistillAIOptions go through the factory path above.
-	return NewCachingProcessor(distiller, cache, cfg.CacheTTL, cfg.DistillThreshold, distillKeySalt(cfg, nil), logger)
+	return NewCachingProcessor(distiller, cache, cfg.CacheTTL, normalizeResultDistillConfig(cfg, nil).DistillThreshold, distillKeySalt(cfg, nil, nil), logger)
 }

@@ -183,14 +183,20 @@ TRUVAG3_AGENT_NAME  // Single source of truth for agent identity
 - Production deployment should require minimal explicit configuration
 - Missing optional dependencies should not break core functionality
 
-#### 5. **Externalize Hardcoded Limits**
-When a numeric limit affects LLM prompt construction, token usage, or execution behavior, it must be:
+#### 5. **Externalize Hardcoded Limits — but only the operational ones**
+Not every number is an operator knob. Distinguish two classes, and treat them differently:
+
+**A. Operational limits** — a number an operator would plausibly tune per deployment because it bounds **capacity or externally-observable behavior**: token/byte budgets, TTLs, timeouts, concurrency caps, retry counts, size thresholds that gate a feature. These **must** be:
 1. Defined as a field in the relevant config struct (e.g., `OrchestratorConfig`)
 2. Set to a sensible default in `DefaultConfig()`
-3. Overridable via a `TRUVAG3_*` environment variable, parsed with `strconv.Atoi` and guarded with `val > 0`
+3. Overridable via a `TRUVAG3_*` environment variable, parsed with `strconv.Atoi` and guarded with `val > 0` — **unless** the limit has a documented zero-valued *disable* sentinel (a value where `0` is a meaningful "off", not "unset"), in which case parse with `val >= 0` so an explicit `0` is accepted and can pin the feature off (e.g. `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD`, where `0` = disabled). The guard's job is to reject a *typo* from silently zeroing a budget; it must not reject a deliberate, documented `0`.
 4. Documented in `docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md` and `docs/reference/LIMITS_CHEATSHEET.md`
 
-Hardcoded limits that seem reasonable at development time can cause production failures when workloads differ from expectations (e.g., prompt truncation hiding critical data, timeout too short for cross-agent delegation). Externalizing them allows deployment-specific tuning without code changes.
+Hardcoded operational limits that seem reasonable at development time can cause production failures when workloads differ from expectations (e.g., prompt truncation hiding critical data, timeout too short for cross-agent delegation). Externalizing them allows deployment-specific tuning without code changes.
+
+**B. Internal algorithmic invariants** — a ratio or constant that governs an algorithm's **internal correctness/quality**, not deployment capacity, and that an operator has no basis to tune: safety ratios, quality thresholds, heuristic weights. These should be **named constants with a unit test pinning the behavior and a one-line rationale in `LIMITS_CHEATSHEET.md`** — **not** environment variables. Making every internal heuristic operator-configurable creates configuration noise and turns invariants into support surface. Examples: `maxWrapperShare` (0.5 — the wrapper-vs-chunk ratio that flips the map-reduce chunker to lossless byte-splitting) and `degenerateKeptRatio` (0.05 — the kept-fraction below which a structural trim is disclosed as "severely reduced"). Changing these changes *what the algorithm does*, not *how much a deployment can handle*; they belong in code, pinned by tests.
+
+**Deciding which class:** ask "would an SRE tuning this deployment's capacity ever set this, and could they reason about a good value from their workload?" Yes → class A (env var). No, it's an internal quality/safety knob → class B (documented const). When in doubt, prefer a documented const with a test; promote to an env var only when a real deployment need appears.
 
 ### Component Lifecycle Rules
 

@@ -1,9 +1,11 @@
 package orchestration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +14,17 @@ import (
 // ResultProcessor transforms step results before they are embedded in prompts.
 // Default implementation: StructuralTrimmer (see structural_trimmer.go).
 // Developers implement this for domain-specific trimming.
+//
+// Contract for custom implementations (Phase 16 honesty pipeline):
+//   - Whenever processing LOSES content (drops, truncation, sampling), call
+//     CaptureResultTrimMetadata with ContentLost: true — downstream disclosure gating (the
+//     distiller's partial-source note, coverage accounting, cache-envelope auditing) keys
+//     exclusively on that signal; an implementation that skips it makes real loss read as
+//     full coverage with no disclosure anywhere.
+//   - Any trailing annotation appended to the output must be a single line, start with a
+//     prefix registered in annotationPrefixes, and end with "]" — the agent-input guard
+//     strips exactly that shape before re-parsing; an unregistered or multi-line note makes
+//     the re-parse fail and the guard fail open with the untrimmed value.
 type ResultProcessor interface {
 	ProcessForPrompt(ctx context.Context, result string, maxBytes int, stepContext ResultProcessorContext) string
 }
@@ -90,6 +103,21 @@ type ResultDistillConfig struct {
 	//
 	// Env: TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS
 	ModelContextTokens int `json:"model_context_tokens,omitempty"`
+	// MapReduceThresholdBytes routes results larger than this (bytes) to map-reduce even when
+	// they fit the model context — so the whole result is represented to an LLM instead of only
+	// the pre-filtered head (P17). It is INDEPENDENT of ModelContextTokens (which also gates the
+	// reduce-fits-context step; lowering that to change routing would back-fire on the combine).
+	//
+	// 0 = DISABLED: context-only routing (today's behavior). A positive value below the effective
+	// PreFilterBudget is ignored with a factory warning and treated as disabled — a result that
+	// small is a single chunk, so routing it to map-reduce adds no fan-out over the single-call
+	// path (that lone chunk still runs an LLM extract call when it fits context — result_mapreduce.go
+	// single-chunk gate). NewLLMDistiller normalizes this at construction for every wiring path.
+	// The canary target is ~1.5–2× PreFilterBudget (~192–256 KB), promoted to the default only
+	// after measurement.
+	//
+	// Env: TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD
+	MapReduceThresholdBytes int `json:"mapreduce_threshold_bytes,omitempty"`
 	// MapConcurrency caps how many chunks are compacted concurrently in the map-reduce
 	// path. <= 0 falls back to the default.
 	//
@@ -112,6 +140,28 @@ type ResultTrimMetadata struct {
 	BudgetAllocated  int      `json:"budget_allocated,omitempty"` // Per-result budget from ProcessMultipleForBudget
 	Degenerate       bool     `json:"degenerate,omitempty"`       // kept too little to be representative of the source
 	KeptRatio        float64  `json:"kept_ratio,omitempty"`       // trimmed_bytes / original_bytes
+
+	// Phase 16 — coverage accounting. Byte-based values are APPROXIMATE: the trimmer parses and
+	// re-serializes JSON (key order, whitespace, annotations all shift byte counts), so a byte
+	// ratio can never be exact. Pair with the exact unit counts above (FieldsKept/FieldsDropped).
+	// "Final output bytes" is the existing TrimmedBytes field.
+	SourceCoverageRatio float64 `json:"source_coverage_ratio,omitempty"` // ~ source represented / original (approximate)
+	LLMInputBytes       int     `json:"llm_input_bytes,omitempty"`       // total data bytes sent across LLM calls; can exceed OriginalBytes once map-reduce wrappers replicate per chunk
+	SegmentsAnalyzed    int     `json:"segments_analyzed,omitempty"`     // map-reduce N (single-call: 1)
+	SegmentsTotal       int     `json:"segments_total,omitempty"`        // map-reduce M (single-call: 1)
+	PartialCoverage     bool    `json:"partial_coverage,omitempty"`      // the LLM did not see the full source: a pre-LLM structural drop (single-call pre-filter) OR incomplete map-reduce coverage (failed/timed-out chunks)
+	CombineTruncated    bool    `json:"combine_truncated,omitempty"`     // reduce output was deterministically truncated
+	ChunkStrategy       string  `json:"chunk_strategy,omitempty"`        // map-reduce chunking mode: array|wrapper|lines|bytes — lines/bytes are byte-lossless but may tear records mid-JSON (degraded extraction quality)
+
+	// ContentLost is the AUTHORITATIVE loss signal, set by every lossy trim operation
+	// (field/item/sentence drops, threshold skips, value truncation, byte cuts). Byte ratios
+	// and unit counts cannot prove loss in either direction — re-serialization shrinks bytes
+	// without losing content, and a backfilled field can be value-truncated with zero fields
+	// dropped — so disclosure gating keys on this flag, never on those proxies.
+	// Deliberately NOT omitempty: an explicit false means "verified lossless", distinct from
+	// the key being absent on legacy records — consumers (the registry viewer) render the
+	// tri-state, which an omitted false would collapse into "unknown".
+	ContentLost bool `json:"content_lost"`
 }
 
 // degenerateKeptRatio is the threshold below which a structural trim is treated
@@ -170,20 +220,36 @@ func cutToBytes(s string, n int) string {
 // load-bearing — it tells the synthesizer to treat omitted content as UNKNOWN rather
 // than infer absence — so when the body already fills the budget the body is shortened
 // to make room for the note, instead of the note being dropped (which would let a
-// degenerate floor reach synthesis behind a coverage-implying silence). A non-degenerate
-// body is returned unchanged.
+// degenerate floor reach synthesis behind a coverage-implying silence).
+//
+// TWO no-op cases return the body unchanged: contentLost == false (a byte-degenerate ratio
+// alone must never fire a loss claim — pure re-serialization shrink can dip below the cliff
+// with nothing omitted; degeneracy means severe LOSS, so it requires the caller's explicit
+// loss signal), and a non-degenerate body.
 //
 // reshrink (when non-nil) re-derives a smaller body that stays STRUCTURALLY VALID for the
 // requested byte room — e.g. re-trimming a JSON array to fewer whole items — so re-parsing
 // consumers (the agent-input guard) are never handed corrupted JSON. When nil, a UTF-8-safe
 // byte cut is used, which suffices for plain-text / already-truncated floors consumed as text.
-func floorWithDisclosure(body string, originalBytes, maxBytes int, reshrink func(room int) string) string {
-	note := degenerateNote(originalBytes, len(body))
+func floorWithDisclosure(body string, originalBytes, maxBytes int, contentLost bool, reshrink func(room int) string) string {
+	// A severe-loss note may only fire when content was actually LOST: on a pure
+	// re-serialization shrink (pretty→compact, escape unwrapping) the byte ratio alone can
+	// dip below the cliff with nothing omitted, and the make-room path below must never get
+	// the chance to cut real content to fit a note about a loss that didn't happen.
+	if !contentLost {
+		return body
+	}
+	// The body may already end with the structural trimmer's own annotation. Degeneracy and
+	// the note's kept-bytes figure are computed against the bare content, and on the
+	// degenerate path the severe note REPLACES the trimmer's note — one authoritative
+	// annotation whose counts cannot contradict a sibling note.
+	base := stripResultAnnotation(body)
+	note := degenerateNote(originalBytes, len(base))
 	if note == "" {
 		return body
 	}
-	if len(body)+len(note) <= maxBytes {
-		return body + note
+	if len(base)+len(note) <= maxBytes {
+		return base + note
 	}
 	// Make room for the note, then recompute it against the shortened body so the reported
 	// byte count/ratio stay accurate; the recomputed note is never longer (fewer kept bytes →
@@ -197,28 +263,184 @@ func floorWithDisclosure(body string, originalBytes, maxBytes int, reshrink func
 	if reshrink != nil {
 		body = reshrink(room)
 	} else {
-		body = cutToBytes(body, room)
+		body = cutToBytes(base, room)
 	}
 	return body + degenerateNote(originalBytes, len(body))
+}
+
+// annotationPrefixes is the single registry of every trailing annotation/disclosure form a
+// ResultProcessor may append to a result. stripResultAnnotation (agent_input_processor.go)
+// iterates THIS slice, so emitters and the stripper can never drift apart — a new disclosure
+// form not listed here would defeat the agent-input guard's re-parse and ship the param
+// untrimmed. SHAPE CONTRACT: every form is a SINGLE line beginning with a registered prefix
+// and ending with "]" — the exact shape stripResultAnnotation peels; a multi-line note would
+// survive the peel and break the re-parse (the registry test asserts this per emitter).
+var annotationPrefixes = []string{
+	"\n[trimmed:",
+	"\n[severely reduced:",
+	"\n" + partialDisclosureMarker, // the map-reduce partial note's const (result_mapreduce.go) — never a second literal
+	"\n[partial source:",
+	"\n[reduced without model analysis:",
+	"\n[findings truncated:",
+}
+
+// The MODEL-emitted "[truncated: …]" form (distillation system prompt, instruction #5) is
+// DELIBERATELY not registered: real tools emit their own "[truncated: …]" trailers, and the
+// registry peel runs on tool-derived text (the trimmer floor, degeneracy accounting, the
+// agent-input re-parse) — peeling would silently delete a TOOL's truncation signal and present
+// visibly-truncated source as complete, the exact false-negative this system exists to block.
+// The cost of the exemption is latent-only: a distiller wired as an agent-input processor
+// (non-default) fails open with a warn when distilled output ends with the model's note.
+
+// sanitizeAnnotationText makes free text (e.g. JSON key names) safe to embed in a
+// single-line annotation: a raw newline would break the registry's shape contract — the
+// stripper peels only single-line notes, so a multi-line note defeats the re-parse and the
+// agent-input guard fails open with the untrimmed param — and a mid-rune cut would embed
+// invalid UTF-8 in the prompt.
+func sanitizeAnnotationText(s string) string {
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	return cutToBytes(s, 200)
+}
+
+// coveragePct renders an approximate coverage ratio as a display percentage, clamped so a
+// partial source never displays as fully covered (or negative). Shared by the appended output
+// disclosure and the distill prompt's secondary signal so the two can never disagree.
+func coveragePct(coverage float64) int {
+	pct := int(coverage*100 + 0.5)
+	if pct >= 100 {
+		pct = 99
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
+}
+
+// partialSourceDisclosure discloses that the distillation model saw only a fraction of the
+// source — a deterministic pre-LLM structural drop. coverage is the approximate kept ratio.
+// Only called when coverage < 1, so it never reports "~100%". (Phase 16)
+func partialSourceDisclosure(coverage float64) string {
+	return fmt.Sprintf("\n[partial source: the model received ~%d%% of the source by bytes; "+
+		"omitted content was not analyzed and is UNKNOWN]", coveragePct(coverage))
+}
+
+// combineTruncationDisclosure discloses that all source segments may have been analyzed but
+// some extracted findings were dropped to fit the budget (map-reduce reduce truncation). This
+// is a different loss than a partial source, so it gets its own wording. (Phase 16)
+func combineTruncationDisclosure() string {
+	return "\n[findings truncated: not all extracted findings are shown; treat unlisted findings as UNKNOWN]"
+}
+
+// truncationDisclosure discloses a deterministic byte-truncation at a presentation seam where NO
+// model analyzed the dropped tail — the synthesis byte-truncation fallback that fires when no result
+// processor is configured. (Phase 16)
+func truncationDisclosure() string {
+	return "\n[reduced without model analysis: output truncated to fit the budget; omitted content is UNKNOWN — do not infer it is absent]"
+}
+
+// truncateBytesWithUnknown is the honest form of truncateResultBytes for presentation seams
+// where a deterministic byte cut is the FINAL word on the result (no model will analyze the
+// dropped tail and no richer disclosure follows): the note carries the UNKNOWN safeguard so an
+// above-cliff cut can never reach synthesis behind a coverage-implying neutral note.
+// truncateResultBytes itself stays neutral — several of its call sites feed content a model
+// DID or WILL analyze.
+func truncateBytesWithUnknown(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const noteFmt = "\n[trimmed: %d → %d bytes; omitted content is UNKNOWN — do not infer it is absent]"
+	note := fmt.Sprintf(noteFmt, len(s), maxBytes)
+	body := cutToBytes(s, maxBytes-len(note))
+	// Re-format with the ACTUAL kept length — an honest note must not overstate the body
+	// (the first format reserved space; digits can only shrink, so body+note stays ≤ maxBytes).
+	return body + fmt.Sprintf(noteFmt, len(s), len(body))
+}
+
+// partialSegmentsDisclosure discloses that only completed of total map-reduce segments were
+// analyzed (deadline, provider failure, or any other per-chunk loss — deliberately no causal
+// claim; see the body comment) and that the remainder is UNKNOWN. A named emitter (not an
+// inline Sprintf at the call site) so the registry round-trip test renders the exact
+// production form.
+func partialSegmentsDisclosure(completed, total int) string {
+	// No causal claim ("within the time budget"): completed<total is also reached on provider
+	// failures with the deadline never firing — disclosures state only what happened.
+	return fmt.Sprintf(
+		"\n%s %d of %d segments analyzed; treat the rest as UNKNOWN, not absent]",
+		partialDisclosureMarker, completed, total)
+}
+
+// appendDisclosure appends note to out, keeping the pair within maxBytes by shortening OUT
+// (UTF-8-safe, via cutToBytes) — never the note. The disclosure is load-bearing, so if the
+// budget cannot fit even the note, the note still wins (a small overshoot beats losing the
+// UNKNOWN signal). note is expected to be one of the annotationPrefixes forms. (Phase 16)
+func appendDisclosure(out, note string, maxBytes int) string {
+	if len(out)+len(note) <= maxBytes {
+		return out + note
+	}
+	return cutToBytes(out, maxBytes-len(note)) + note
 }
 
 // trimMetadataKey is the context key for passing trim metadata out of ProcessForPrompt.
 type trimMetadataKey struct{}
 
 // WithTrimMetadataCapture returns a derived context and a pointer to a ResultTrimMetadata
-// that will be populated by captureTrimMetadata when ProcessForPrompt runs.
+// that will be populated by CaptureResultTrimMetadata when ProcessForPrompt runs.
 // The pointer is safe to read after ProcessForPrompt returns.
 func WithTrimMetadataCapture(ctx context.Context) (context.Context, *ResultTrimMetadata) {
 	meta := &ResultTrimMetadata{}
 	return context.WithValue(ctx, trimMetadataKey{}, meta), meta
 }
 
-// captureTrimMetadata writes metadata into the context slot created by WithTrimMetadataCapture.
-// No-op if the context was not prepared with WithTrimMetadataCapture.
-func captureTrimMetadata(ctx context.Context, meta ResultTrimMetadata) {
+// CaptureResultTrimMetadata is the supported reporting hook a ResultProcessor calls to
+// record what it trimmed. It is the producer side of the metadata contract; the framework
+// prepares the per-step slot (via WithTrimMetadataCapture) before invoking ProcessForPrompt,
+// so a custom processor only needs to call this with the outcome. The record surfaces on the
+// step's Metadata["result_trim"] and the result_trim.completed span.
+//
+// Custom ResultProcessor implementations that drop, truncate, or sample content MUST call this
+// with ContentLost: true (see the ResultProcessor interface contract) — downstream disclosure
+// gating keys exclusively on that signal. This function enforces the invariant defensively:
+// any specific loss flag (Degenerate / PartialCoverage / CombineTruncated) is folded into
+// ContentLost, so a report can never claim "verified lossless" while also flagging a loss.
+//
+// No-op (safe) if the context was not prepared with WithTrimMetadataCapture.
+func CaptureResultTrimMetadata(ctx context.Context, meta ResultTrimMetadata) {
+	// Enforce the ContentLost superset invariant structurally: every specific loss flag
+	// implies the authoritative bit. Without this, a forgetful emitter (in-tree or a custom
+	// ResultProcessor) could record "partial coverage" beside an explicit "verified lossless"
+	// — the contradiction the viewer's chip logic and disclosure gating assume impossible.
+	// Idempotent, so cache-envelope replay through this same choke point is unaffected.
+	meta.ContentLost = meta.ContentLost || meta.Degenerate || meta.PartialCoverage || meta.CombineTruncated
 	if ptr, ok := ctx.Value(trimMetadataKey{}).(*ResultTrimMetadata); ok {
 		*ptr = meta
 	}
+}
+
+// lossyTrimEvent reports whether a trim record warrants the result_trim telemetry: the
+// authoritative ContentLost signal, or any byte change (a lossless re-serialization is still
+// size accounting worth recording). The Go twin of the registry viewer's isLossyTrim — keep
+// the two in step.
+func lossyTrimEvent(meta *ResultTrimMetadata, originalSize, trimmedSize int) bool {
+	return meta != nil && (meta.ContentLost || trimmedSize != originalSize)
+}
+
+// lossyByteCoverage returns kept/total for a KNOWN-lossy trim, clamped so it can never read
+// as full coverage: escape/annotation inflation can push the raw ratio to >= 1 while content
+// was dropped, and 0.99 is the "lossy but nearly full" display floor. Shared by the distiller
+// and the map-reduce chunker so the sentinel and boundary cannot drift between them.
+func lossyByteCoverage(kept, total int) float64 {
+	if total <= 0 {
+		return 0.99
+	}
+	r := float64(kept) / float64(total)
+	if r >= 1 {
+		return 0.99
+	}
+	if r < 0 {
+		return 0
+	}
+	return r
 }
 
 // deserializeStringValues recursively finds string values containing valid JSON
@@ -238,8 +460,9 @@ func deserializeStringValues(data interface{}) interface{} {
 		return v
 	case string:
 		if len(v) > 2 && (v[0] == '{' || v[0] == '[') {
-			var parsed interface{}
-			if json.Unmarshal([]byte(v), &parsed) == nil {
+			// UseNumber so large IDs inside JSON-encoded string fields (the incident's Loki
+			// log-line shape: JSON carried in a string) survive the re-parse verbatim.
+			if parsed, err := unmarshalPreservingNumbers([]byte(v)); err == nil {
 				return parsed
 			}
 		}
@@ -504,6 +727,31 @@ const (
 	defaultDigestMaxKeys = 50
 )
 
+// unmarshalPreservingNumbers decodes JSON with UseNumber so large integers (snowflake IDs,
+// nanosecond timestamps, request IDs beyond float64's 2^53 exact range) survive verbatim as
+// json.Number instead of being mangled into scientific notation on re-serialization. It is a
+// drop-in for json.Unmarshal into an interface{} across the trim pipeline (structural trimmer,
+// map-reduce chunker, embedded JSON-in-string unwrap) AND the final synthesis re-parses — an ID
+// that survives chunking can still be float64-mangled at the last re-parse before the prompt.
+//
+// Strictness matches json.Unmarshal: invalid JSON errors, and trailing content after the
+// top-level value errors. dec.More() is NOT equivalent — it peeks for a next VALUE and returns
+// false on a trailing ']' or '}', so `{"a":1}]` would pass More() while json.Unmarshal rejects
+// it; require io.EOF on a second Decode instead.
+func unmarshalPreservingNumbers(data []byte) (interface{}, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	var trailing interface{}
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("trailing content after top-level JSON value")
+	}
+	return v, nil
+}
+
 // buildDecisionDigest renders the structure-complete skeleton described above. degenerate is true only
 // for a non-JSON blob (no structure to digest): the caller substitutes the structural floor for the
 // body and C escalates to distill it. Valid JSON is never degenerate — the skeleton keeps the structure
@@ -511,34 +759,35 @@ const (
 // resolve from full memory at execution); a narrative-heavy value merely being elided does NOT warrant a
 // fast-model C call (measured: that over-triggered on 8/30 steps of a real run whose data flowed to
 // synthesis, not plan templates).
-func buildDecisionDigest(response string, sampleN, scalarMax, maxKeys int) (digest string, degenerate bool) {
-	// Decode with UseNumber so large integers (snowflake IDs, nanosecond timestamps, request IDs beyond
-	// float64's 2^53 exact range) survive verbatim instead of being mangled into scientific notation.
-	dec := json.NewDecoder(strings.NewReader(response))
-	dec.UseNumber()
-	var v interface{}
-	if err := dec.Decode(&v); err != nil {
-		return "", true // non-JSON / incomplete → caller substitutes the structural floor; C escalates.
-	}
-	if dec.More() {
-		return "", true // trailing content after the JSON value → treat as a blob (not clean JSON).
-	}
-	out, err := json.Marshal(digestValue(v, sampleN, scalarMax, maxKeys))
+// elided reports whether ANY sampling/eliding cut fired while rendering — the explicit loss
+// signal ContentLost keys on. A byte-length comparison cannot stand in for it: omission
+// sentinels ("…N more of M") can make a lossy digest LONGER than a small original.
+func buildDecisionDigest(response string, sampleN, scalarMax, maxKeys int) (digest string, degenerate, elided bool) {
+	// UseNumber decode (large IDs survive verbatim) with the strict trailing-content check:
+	// non-JSON, incomplete, or trailing-garbage input → treat as a blob; the caller substitutes
+	// the structural floor and C escalates. (The old dec.More() guard passed `{"a":1}]` as clean.)
+	v, err := unmarshalPreservingNumbers([]byte(response))
 	if err != nil {
-		return "", true // unreachable in practice (digestValue yields only marshalable types); errcheck guard.
+		return "", true, false
 	}
-	return string(out), false
+	var el bool
+	out, err := json.Marshal(digestValue(v, sampleN, scalarMax, maxKeys, &el))
+	if err != nil {
+		return "", true, false // unreachable in practice (digestValue yields only marshalable types); errcheck guard.
+	}
+	return string(out), false, el
 }
 
 // digestValue recurses producing the skeleton. Objects keep all keys up to maxKeys, then sample (sorted)
 // + a sentinel; arrays stay arrays (head sample + length sentinel) so the planner's {{step-X.field[i]}}
 // model holds; long strings elide to a sentinel.
-func digestValue(v interface{}, sampleN, scalarMax, maxKeys int) interface{} {
+func digestValue(v interface{}, sampleN, scalarMax, maxKeys int, elided *bool) interface{} {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		if len(t) > maxKeys {
 			// Map-shaped object (many dynamic-ID keys): keep maxKeys sorted keys + a sentinel, mirroring
 			// array sampling, so one wide object can't dominate the digest or crowd out other steps.
+			*elided = true
 			keys := make([]string, 0, len(t))
 			for k := range t {
 				keys = append(keys, k)
@@ -546,14 +795,14 @@ func digestValue(v interface{}, sampleN, scalarMax, maxKeys int) interface{} {
 			sort.Strings(keys)
 			m := make(map[string]interface{}, maxKeys+1)
 			for _, k := range keys[:maxKeys] {
-				m[k] = digestValue(t[k], sampleN, scalarMax, maxKeys)
+				m[k] = digestValue(t[k], sampleN, scalarMax, maxKeys, elided)
 			}
 			m["__truncated_keys__"] = fmt.Sprintf("%d more of %d keys", len(t)-maxKeys, len(t))
 			return m
 		}
 		m := make(map[string]interface{}, len(t))
 		for k, child := range t {
-			m[k] = digestValue(child, sampleN, scalarMax, maxKeys)
+			m[k] = digestValue(child, sampleN, scalarMax, maxKeys, elided)
 		}
 		return m
 	case []interface{}:
@@ -563,9 +812,10 @@ func digestValue(v interface{}, sampleN, scalarMax, maxKeys int) interface{} {
 		}
 		sample := make([]interface{}, 0, n+1)
 		for i := 0; i < n; i++ {
-			sample = append(sample, digestValue(t[i], sampleN, scalarMax, maxKeys))
+			sample = append(sample, digestValue(t[i], sampleN, scalarMax, maxKeys, elided))
 		}
 		if len(t) > n {
+			*elided = true
 			sample = append(sample, fmt.Sprintf("…%d more of %d", len(t)-n, len(t)))
 		}
 		return sample
@@ -573,6 +823,7 @@ func digestValue(v interface{}, sampleN, scalarMax, maxKeys int) interface{} {
 		if len(t) > scalarMax {
 			// Parens, not <…>: json.Marshal HTML-escapes < and > to </>, which would make the
 			// planner-facing sentinel noisy.
+			*elided = true
 			return fmt.Sprintf("…(%d chars)", len(t))
 		}
 		return t
@@ -607,14 +858,23 @@ func renderContinuationDigests(steps []StepResult, opts continuationDigestOpts) 
 	meta = make([]*ResultTrimMetadata, len(steps))
 	for i := range steps {
 		resp := steps[i].Response
-		digest, degenerate := buildDecisionDigest(resp, opts.sampleN, opts.scalarMax, opts.maxKeys)
+		digest, degenerate, elided := buildDecisionDigest(resp, opts.sampleN, opts.scalarMax, opts.maxKeys)
 		method := "digest"
+		lost := elided // the digester's explicit signal — never a byte-length proxy
 		if degenerate {
 			digest = truncateRunes(resp, opts.floorChars) // non-JSON floor preview (fail-open body)
 			method = "truncate"
+			// truncateRunes returns its input UNCHANGED when it fits and otherwise cuts and
+			// appends an ellipsis — so inequality is the exact cut condition. A length
+			// comparison would be wrong here: the ellipsis can make a cut preview as long as
+			// (or longer than) its source at the boundary.
+			lost = digest != resp
 		}
 		bodies[i] = digest
-		meta[i] = &ResultTrimMetadata{Method: method, OriginalBytes: len(resp), TrimmedBytes: len(digest)}
+		meta[i] = &ResultTrimMetadata{
+			Method: method, OriginalBytes: len(resp), TrimmedBytes: len(digest),
+			ContentLost: lost,
+		}
 	}
 	return bodies, meta
 }

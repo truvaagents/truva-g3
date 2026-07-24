@@ -15,16 +15,17 @@ import (
 
 // countingAI records how many times GenerateResponse ran and returns a fixed extract.
 type countingAI struct {
-	mu  sync.Mutex
-	n   int
-	out string
+	mu    sync.Mutex
+	n     int
+	out   string
+	usage core.TokenUsage // zero unless a test asserts usage accounting
 }
 
 func (c *countingAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
 	c.mu.Lock()
 	c.n++
 	c.mu.Unlock()
-	return &core.AIResponse{Content: c.out, Usage: core.TokenUsage{}}, nil
+	return &core.AIResponse{Content: c.out, Usage: c.usage}, nil
 }
 
 func (c *countingAI) StreamResponse(ctx context.Context, p string, o *core.AIOptions, _ func(string)) (*core.AIResponse, error) {
@@ -39,6 +40,20 @@ func mapReduceTestArray(n int) string {
 		recs[i] = map[string]interface{}{"id": fmt.Sprintf("r%02d", i), "v": "data"}
 	}
 	raw, _ := json.Marshal(recs)
+	return string(raw)
+}
+
+// prettyMapReduceArray returns an INDENTED JSON array whose raw form is much larger than its
+// compact re-serialization — so a byte-threshold routes it to map-reduce while its compact single
+// chunk still fits the model context. The realistic "mid-band single chunk" shape (raw > compact)
+// the P17 single-chunk path handles; used by tests that must exercise the single-chunk LLM extract
+// with a fitting context (ModelContextTokens huge), not force routing via an impossibly small one.
+func prettyMapReduceArray(n int) string {
+	recs := make([]interface{}, n)
+	for i := range recs {
+		recs[i] = map[string]interface{}{"id": fmt.Sprintf("r%02d", i), "v": "data"}
+	}
+	raw, _ := json.MarshalIndent(recs, "", "        ")
 	return string(raw)
 }
 
@@ -69,6 +84,9 @@ func TestLLMDistiller_MapReduce_FansOut(t *testing.T) {
 	}
 	if meta.Method != "distill_mapreduce" {
 		t.Errorf("expected Method=distill_mapreduce, got %q", meta.Method)
+	}
+	if meta.ChunkStrategy != "array" {
+		t.Errorf("expected chunk_strategy=array for a top-level JSON array, got %q", meta.ChunkStrategy)
 	}
 }
 
@@ -238,7 +256,7 @@ func TestLLMDistiller_MapReduce_PartialOnTimeout(t *testing.T) {
 
 func TestChunkWholeUnits(t *testing.T) {
 	t.Run("small input returns single chunk", func(t *testing.T) {
-		got := chunkWholeUnits("hello", 100)
+		got, _, _, _ := chunkWholeUnits("hello", 100)
 		if len(got) != 1 || got[0] != "hello" {
 			t.Errorf("expected single chunk, got %v", got)
 		}
@@ -246,7 +264,7 @@ func TestChunkWholeUnits(t *testing.T) {
 
 	t.Run("json array splits at element boundaries into valid arrays", func(t *testing.T) {
 		raw := mapReduceTestArray(20)
-		chunks := chunkWholeUnits(raw, 100)
+		chunks, _, _, _ := chunkWholeUnits(raw, 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected multiple chunks, got %d", len(chunks))
 		}
@@ -264,7 +282,7 @@ func TestChunkWholeUnits(t *testing.T) {
 			recs[i] = map[string]interface{}{"line": fmt.Sprintf("entry-%02d-with-some-content", i)}
 		}
 		raw, _ := json.Marshal(map[string]interface{}{"streams": recs})
-		chunks := chunkWholeUnits(string(raw), 100)
+		chunks, _, _, _ := chunkWholeUnits(string(raw), 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected the dominant array to be chunked, got %d chunks", len(chunks))
 		}
@@ -276,7 +294,7 @@ func TestChunkWholeUnits(t *testing.T) {
 			lines = append(lines, fmt.Sprintf("log line number %d with content", i))
 		}
 		raw := strings.Join(lines, "\n")
-		chunks := chunkWholeUnits(raw, 100)
+		chunks, _, _, _ := chunkWholeUnits(raw, 100)
 		if len(chunks) < 2 {
 			t.Fatalf("expected multiple line chunks, got %d", len(chunks))
 		}
@@ -355,7 +373,7 @@ func TestLLMDistiller_MapReduce_HardDeadline(t *testing.T) {
 func TestChunkWholeUnits_SplitsOversizedElement(t *testing.T) {
 	huge := map[string]interface{}{"blob": strings.Repeat("x", 500)}
 	raw, _ := json.Marshal([]interface{}{huge}) // one element ~510B > chunkBytes
-	chunks := chunkWholeUnits(string(raw), 100)
+	chunks, _, _, _ := chunkWholeUnits(string(raw), 100)
 	if len(chunks) < 2 {
 		t.Fatalf("expected an oversized single element to split into multiple chunks, got %d", len(chunks))
 	}
@@ -392,7 +410,7 @@ func TestLLMDistiller_MapReduce_SingleHugeRecordReachesLLM(t *testing.T) {
 func TestChunkByLines_SplitsOversizedLine(t *testing.T) {
 	// One giant line (no JSON), plus a trailing newline.
 	raw := strings.Repeat("L", 500) + "\n"
-	chunks := chunkWholeUnits(raw, 100) // routes to chunkByLines (non-JSON, has '\n')
+	chunks, _, _, _ := chunkWholeUnits(raw, 100) // routes to chunkByLines (non-JSON, has '\n')
 	if len(chunks) < 2 {
 		t.Fatalf("expected the oversized line to be split, got %d chunk(s)", len(chunks))
 	}
@@ -443,8 +461,8 @@ func TestChunkWholeUnits_128KBReducesChunkCount(t *testing.T) {
 		t.Fatalf("test payload too small to exercise chunking: %d bytes", len(payload))
 	}
 
-	chunks32 := chunkWholeUnits(payload, 32768)
-	chunks128 := chunkWholeUnits(payload, defaultPreFilterBudget)
+	chunks32, _, _, _ := chunkWholeUnits(payload, 32768)
+	chunks128, _, _, _ := chunkWholeUnits(payload, defaultPreFilterBudget)
 	if len(chunks32) == 0 || len(chunks128) == 0 {
 		t.Fatalf("unexpected empty chunking: 32K=%d 128K=%d", len(chunks32), len(chunks128))
 	}
@@ -487,7 +505,7 @@ func TestDistillPrompt_128KBChunkFitsFastTierContext(t *testing.T) {
 	}
 
 	// (a) Template overhead alone (empty data) — the "instruction window" — must be small.
-	overheadTokens := estimateTokens(d.buildDistillationPrompt("", cfg.TargetSize, stepCtx))
+	overheadTokens := estimateTokens(d.buildDistillationPrompt("", cfg.TargetSize, stepCtx, 1.0))
 	if overheadTokens > 600 {
 		t.Errorf("prompt template overhead = %d tokens, want < 600 (it should be ~2%% of the chunk)", overheadTokens)
 	}
@@ -520,13 +538,15 @@ func (a *alwaysErrAI) StreamResponse(ctx context.Context, p string, o *core.AIOp
 	return a.GenerateResponse(ctx, p, o)
 }
 
-// failAfterAI succeeds for the first succeedUntil calls then errors — to make the chunk
-// extractions succeed but the final reduce call fail.
+// failAfterAI returns out for the first succeedUntil calls, then errors — or, when afterOut is
+// set, succeeds with afterOut instead (distinguishing the reduce call from the map calls without
+// another single-purpose mock type).
 type failAfterAI struct {
 	mu           sync.Mutex
 	n            int
 	succeedUntil int
 	out          string
+	afterOut     string
 }
 
 func (a *failAfterAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
@@ -536,6 +556,9 @@ func (a *failAfterAI) GenerateResponse(_ context.Context, _ string, _ *core.AIOp
 	a.mu.Unlock()
 	if idx <= a.succeedUntil {
 		return &core.AIResponse{Content: a.out}, nil
+	}
+	if a.afterOut != "" {
+		return &core.AIResponse{Content: a.afterOut}, nil
 	}
 	return nil, fmt.Errorf("reduce failed")
 }
@@ -549,7 +572,7 @@ func (a *failAfterAI) count() int { a.mu.Lock(); defer a.mu.Unlock(); return a.n
 // TestMapReduce_ChunkBytesFallback covers the PreFilterBudget<=0 fallback to defaultPreFilterBudget.
 // It uses a payload LARGER than 128 KB: with the fallback (chunkBytes=128 KB) it splits into
 // multiple chunks and fans out; WITHOUT the fallback, chunkWholeUnits(payload, 0) would return a
-// single chunk and short-circuit with zero LLM calls. So count>=2 proves the fallback set a
+// single chunk, which runs exactly ONE extract call. So count>=2 proves the fallback set a
 // positive chunk size — not just that the line ran.
 func TestMapReduce_ChunkBytesFallback(t *testing.T) {
 	mockAI := &countingAI{out: "EXTRACT"}
@@ -573,29 +596,69 @@ func TestMapReduce_ChunkBytesFallback(t *testing.T) {
 	}
 }
 
-// TestMapReduce_SingleChunkShortCircuit covers the total<=1 path: a result over the token
-// threshold (so it routes to map-reduce) that still fits a single chunk falls back to the
-// structural pre-filter without any LLM call. PreFilterBudget is positive here so the test
-// isolates the short-circuit from the chunkBytes fallback above.
-func TestMapReduce_SingleChunkShortCircuit(t *testing.T) {
+// TestMapReduce_SingleChunkRunsOneExtract: a map-reduce whose payload fits ONE chunk runs a single
+// extract call on it — never the bare structural floor, which makes zero LLM calls and silently
+// guts record-shaped data (the P17 single-chunk hole; review finding, previously asserted as a
+// "short-circuit before any LLM call").
+func TestMapReduce_SingleChunkRunsOneExtract(t *testing.T) {
 	mockAI := &countingAI{out: "EXTRACT"}
 	config := ResultDistillConfig{
-		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100000, TargetSize: 2000,
-		Model: "fast", ModelContextTokens: 10, MapConcurrency: 4, CompactionDeadline: 5 * time.Second,
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
 	}
 	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
-	raw := mapReduceTestArray(4) // ~88B: routes to map-reduce (tokens>10) but is one chunk at 100KB
+	raw := prettyMapReduceArray(4) // pretty ~314B > 200 threshold → map-reduce; compact ~97B → ONE chunk that fits the huge context
 
-	out := distiller.ProcessForPrompt(context.Background(), raw, 2000, ResultProcessorContext{
+	ctx, meta := WithTrimMetadataCapture(context.Background())
+	out := distiller.ProcessForPrompt(ctx, raw, 2000, ResultProcessorContext{
+		StepID: "s1", AgentName: "a", Instruction: "list",
+	})
+
+	if mockAI.count() != 1 {
+		t.Errorf("single-chunk map-reduce must run exactly one extract call, got %d", mockAI.count())
+	}
+	if !strings.Contains(out, "EXTRACT") {
+		t.Errorf("expected the LLM extract in the output, got: %.200s", out)
+	}
+	if meta.Method != "distill_mapreduce" || meta.SegmentsTotal != 1 || meta.SegmentsAnalyzed != 1 {
+		t.Errorf("expected distill_mapreduce with segments 1/1, got %+v", *meta)
+	}
+	if meta.ContentLost {
+		t.Errorf("the lone chunk carries the full compact content — expected ContentLost=false, got %+v", *meta)
+	}
+	// "array" (not "single"): a threshold-routed single chunk has len(result) > chunkBytes, so
+	// it is chunked via the array path. Post-T2a, "single" (result <= chunkBytes) can only reach
+	// the FLOOR, never the LLM extract — a "single"-strategy result that routed via over-context
+	// cannot fit the context, so chunkFitsContext floors it.
+	if meta.ChunkStrategy != "array" {
+		t.Errorf("expected chunk_strategy=array on the threshold-routed lone chunk, got %q", meta.ChunkStrategy)
+	}
+}
+
+// TestMapReduce_SingleChunkFailOpen: when the lone extract call errors, the path falls open to the
+// structural floor and marks the result non-cacheable (degraded output must not be served for the
+// TTL).
+func TestMapReduce_SingleChunkFailOpen(t *testing.T) {
+	mockAI := &failAfterAI{succeedUntil: 0, out: "unused"} // every call errors
+	config := ResultDistillConfig{
+		Enabled: true, DistillThreshold: 10, PreFilterBudget: 200, TargetSize: 2000,
+		Model: "fast", ModelContextTokens: 1_000_000, MapConcurrency: 4,
+		MapReduceThresholdBytes: 200, CompactionDeadline: 5 * time.Second, // route by BYTES; ctx fits the compact single chunk (T2a)
+	}
+	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
+
+	ctx, nonCacheable := withNonCacheableCapture(context.Background())
+	out := distiller.ProcessForPrompt(ctx, prettyMapReduceArray(4), 2000, ResultProcessorContext{
 		StepID: "s1", AgentName: "a", Instruction: "list",
 	})
 
 	if out == "" {
-		t.Fatal("expected the single-chunk path to return the pre-filtered result")
+		t.Fatal("fail-open must return the structural floor, not empty")
 	}
-	if mockAI.count() != 0 {
-		t.Errorf("total<=1 must short-circuit before any LLM call, got %d calls", mockAI.count())
+	if !*nonCacheable {
+		t.Error("a failed single-chunk extract must be marked non-cacheable")
 	}
 }
 
@@ -673,18 +736,23 @@ func TestMapReduce_ReduceTruncatesWhenCombinedExceedsContext(t *testing.T) {
 // TestMapReduce_ReduceCallErrorTruncates covers the truncate branch taken when the reduce LLM
 // call itself fails: chunks succeed, the (total+1)-th reduce call errors, output is truncated.
 func TestMapReduce_ReduceCallErrorTruncates(t *testing.T) {
-	// ModelContextTokens must sit BETWEEN tokens(combined) and tokens(result): below the
-	// result so it routes to map-reduce, above the combined extracts so the reduce is
-	// attempted (not the too-big truncate). Large payload + small per-chunk output gives that.
-	payload := mapReduceTestArray(80) // ~1.8 KB (~527 tok) → routes to map-reduce at ctx=300
-	total := len(chunkWholeUnits(payload, 100))
+	// Route by BYTES (P17 MapReduceThresholdBytes) so ModelContextTokens is free to sit ABOVE
+	// tokens(combined)+reduce-overhead (~973, dominated by the 500-token output reserve, P17.7)
+	// and the reduce is attempted rather than the too-big deterministic truncation. The old
+	// "ModelContextTokens sandwiched between tokens(combined) and tokens(result)" tuning is
+	// impossible once the overhead is accounted, which is exactly what the byte threshold fixes.
+	payload := mapReduceTestArray(80) // ~1.9 KB
+	allChunks, _, _, _ := chunkWholeUnits(payload, 100)
+	total := len(allChunks)
 	mockAI := &failAfterAI{succeedUntil: total, out: strings.Repeat("E", 20)}
 	config := ResultDistillConfig{
 		Enabled: true, DistillThreshold: 10, PreFilterBudget: 100, TargetSize: 100,
-		Model:              "fast",
-		ModelContextTokens: 300, // < tokens(result); >= tokens(combined) → reduce attempted
-		MapConcurrency:     1,   // sequential so call total+1 is the reduce
-		CompactionDeadline: 5 * time.Second,
+		Model: "fast",
+		// threshold == PreFilterBudget: survives normalization and always yields >1 chunk.
+		MapReduceThresholdBytes: 100,
+		ModelContextTokens:      1500, // > tokens(combined)+reduce-overhead → reduce attempted
+		MapConcurrency:          1,    // sequential so call total+1 is the reduce
+		CompactionDeadline:      5 * time.Second,
 	}
 	distiller := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
@@ -699,8 +767,9 @@ func TestMapReduce_ReduceCallErrorTruncates(t *testing.T) {
 	}
 }
 
-// TestChunkWholeUnits_NestedDominantArray covers dominantArray's recursion into a nested object
-// ({"wrapper":{"data":[...]}}) to find the record array to chunk by.
+// TestChunkWholeUnits_NestedDominantArray covers findDominantArray's recursion into a nested
+// object ({"wrapper":{"data":[...]}}) and the P17.6 wrapper-preserving chunker: every chunk is a
+// valid JSON OBJECT that carries the wrapper, and the record array reassembles across chunks.
 func TestChunkWholeUnits_NestedDominantArray(t *testing.T) {
 	inner := make([]interface{}, 30)
 	for i := range inner {
@@ -708,18 +777,34 @@ func TestChunkWholeUnits_NestedDominantArray(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]interface{}{"wrapper": map[string]interface{}{"data": inner}})
 
-	chunks := chunkWholeUnits(string(raw), 100)
+	chunks, dropped, cov, _ := chunkWholeUnits(string(raw), 100)
 	if len(chunks) < 2 {
 		t.Fatalf("expected the nested dominant array to be chunked, got %d", len(chunks))
 	}
-	// Every chunk must be a valid JSON array — this is what distinguishes the dominantArray path
-	// (chunkJSONElements emits valid arrays) from the chunkByBytes fallback (which would emit
-	// arbitrary byte slices). Without this, len(chunks)>=2 alone would pass even if the recursion
-	// had returned nil and the wrapper had been byte-split instead.
+	if dropped || cov != 1 {
+		t.Errorf("wrapper-preserving chunk must report no drop / full coverage, got dropped=%v cov=%v", dropped, cov)
+	}
+	// Every chunk must be a valid JSON OBJECT that preserves the wrapper ("wrapper" key), and the
+	// union of wrapper.data across chunks must reproduce all 30 records — proof the P17.6 chunker
+	// dropped neither wrapper nor record content (the old path emitted bare arrays, losing the
+	// wrapper). A byte-split fallback would fail json.Unmarshal into a map.
+	seen := 0
 	for i, c := range chunks {
-		var arr []interface{}
-		if err := json.Unmarshal([]byte(c), &arr); err != nil {
-			t.Errorf("chunk %d is not a valid JSON array — nested dominant array was not used: %v", i, err)
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(c), &obj); err != nil {
+			t.Fatalf("chunk %d is not a valid JSON object — wrapper not preserved: %v", i, err)
 		}
+		w, ok := obj["wrapper"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("chunk %d dropped the wrapper key, got %v", i, obj)
+		}
+		rows, ok := w["data"].([]interface{})
+		if !ok {
+			t.Fatalf("chunk %d dropped the nested data array, got %v", i, w)
+		}
+		seen += len(rows)
+	}
+	if seen != 30 {
+		t.Errorf("expected all 30 records preserved across chunks, got %d", seen)
 	}
 }

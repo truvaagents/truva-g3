@@ -873,6 +873,7 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call) or returns completed chunks + a "partial" disclosure (map-reduce). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | `8` | **Implemented** | Max chunks compacted concurrently in the map-reduce path. `≤ 0` falls back to the default. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` | `0` | **Implemented** | Routes results larger than this (**bytes**) to map-reduce even when they fit the model context, so the whole result reaches an LLM instead of only the pre-filtered head. Independent of `CONTEXT_TOKENS`. **`0` = disabled** (context-only routing) — a deliberate deviation from the repo-wide `> 0` convention so an explicit `0` can disable a future nonzero default. A positive value below `PREFILTER` is ignored with a factory warning (a result that small is one chunk — no fan-out benefit over the single-call distill). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 For every orchestration model override above, aliases are portable only across
 providers with alias catalogs. Leave the plan, synthesis, and micro-resolution
@@ -1180,12 +1181,13 @@ For results that are extremely large or contain domain-specific content that str
 | `TRUVAG3_RESULT_DISTILL_DEADLINE` | `45s` | **Implemented** | Wall-clock bound on a single compaction in the synthesis hot path. On timeout, fails open to the structural floor (single-call path) or returns the chunks that completed plus a "partial" disclosure (map-reduce path). Go duration format; the env var accepts only positive values — disable the deadline via the programmatic `CompactionDeadline: 0`. Keep it under the HTTP gateway timeout. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` | `150000` | **Implemented** | Usable context (tokens) of the compaction model. Results estimated above this are chunked and map-reduced instead of sent in one call (~525 KB at the default, using the framework's ≈3.5 bytes/token counter). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | `8` | **Implemented** | Max chunks compacted concurrently in the map-reduce path. `≤ 0` falls back to the default. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` | `0` | **Implemented** | Routes results larger than this (**bytes**) to map-reduce even when they fit the model context, so the whole result reaches an LLM instead of only the pre-filtered head. Independent of `CONTEXT_TOKENS`. **`0` = disabled** (context-only routing) — a deliberate deviation from the repo-wide `> 0` convention so an explicit `0` can disable a future nonzero default. A positive value below `PREFILTER` is ignored with a factory warning (a result that small is one chunk — no fan-out benefit over the single-call distill). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 **How the two-stage pipeline works:**
 
 1. **Stage 1 — Structural Pre-Filter**: The `StructuralTrimmer` reduces the large result to `PreFilterBudget` bytes, preserving JSON structure and key data points.
 2. **Stage 2 — LLM Distillation**: An LLM call summarizes the pre-filtered result to approximately `TargetSize` bytes, preserving the most relevant information for the user's query.
-3. **Map-reduce (very large results)**: When a result is estimated above the model's usable context (`ModelContextTokens`), it is chunked and each chunk is distilled concurrently (capped by `MapConcurrency`), then the chunk outputs are reduced into a final distillation.
+3. **Map-reduce (very large results)**: When a result is estimated above the model's usable context (`ModelContextTokens`) — or exceeds the opt-in `MapReduceThresholdBytes` byte threshold (`0`/disabled by default), independent of the token estimate — it is chunked and each chunk is distilled concurrently (capped by `MapConcurrency`), then the chunk outputs are reduced into a final distillation. The byte threshold forces the **whole** result through map-reduce so an LLM sees all of it, not just the pre-filtered head.
 4. **Caching (opt-in)**: When a `DigestCache` is supplied via `deps.DistillCache` — there is no cache by default — identical (result + instruction + query + budget) inputs reuse a prior distillation for `CacheTTL`, so scheduled and repetitive runs become cache hits instead of repeat LLM calls. Failed or partial outputs are not cached. (`CacheTTL=0` does not reliably disable caching — a Redis-backed cache treats 0 as "no expiration"; to disable, don't supply a cache.)
 5. **Deadline & fallback**: Each compaction is bounded by `CompactionDeadline`. On timeout or LLM error, the call fails open — the single-call path uses the Stage 1 pre-filtered result directly; the map-reduce path returns the chunks that completed plus an honest "partial" disclosure.
 
@@ -1216,6 +1218,10 @@ export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000
 
 # Concurrent chunk distillations in the map-reduce path (default 8)
 export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8
+
+# Byte threshold that routes a result to map-reduce even when it fits the model
+# context, so the whole result reaches an LLM (0 = disabled; default 0)
+export TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD=0
 ```
 
 **Programmatic configuration:**
@@ -1230,7 +1236,8 @@ config.ResultDistill = orchestration.ResultDistillConfig{
     Model:              "fast",            // Portable across catalog-backed providers
     CacheTTL:           5 * time.Minute,   // Reuse identical distillations (default 5m)
     CompactionDeadline: 45 * time.Second,  // Hot-path bound; 0 disables (default 45s)
-    ModelContextTokens: 150000,            // Above this, chunk → map-reduce (default)
+    ModelContextTokens: 150000,            // Above this (tokens), chunk → map-reduce (default)
+    MapReduceThresholdBytes: 0,            // Byte threshold → map-reduce even if it fits context; 0 = disabled (default)
     MapConcurrency:     8,                 // Concurrent chunk distillations (default)
 }
 ```
@@ -1312,6 +1319,7 @@ export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m
 export TRUVAG3_RESULT_DISTILL_DEADLINE=45s
 export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000
 export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8
+export TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD=0
 ```
 
 ---
@@ -1810,6 +1818,7 @@ export TRUVAG3_RESULT_DISTILL_CACHE_TTL=5m          # Distillation cache TTL
 export TRUVAG3_RESULT_DISTILL_DEADLINE=45s          # Hot-path compaction bound (positive durations only)
 export TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS=150000 # Above this, chunk → map-reduce
 export TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY=8     # Concurrent chunk distillations
+export TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD=0 # Byte threshold → map-reduce (0 = disabled)
 ```
 
 ### Shared Memory Variables (for Cross-Agent Coordination)

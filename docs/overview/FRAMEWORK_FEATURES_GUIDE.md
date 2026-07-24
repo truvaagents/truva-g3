@@ -545,12 +545,14 @@ Built-in controls include:
 - downstream agent/tool input budget
 - content-aware field scoring and relevance-aware field selection
 - preservation of JSON structure, key names, and representative samples
+- preservation of large integer identifiers through the result-compaction and synthesis JSON round-trips (no float rounding)
+- honest loss disclosure — a deterministic content cut is flagged with `content_lost` and an inline note (`[trimmed: …]`, `[partial source: …]`) that tells the model to treat omitted content as UNKNOWN, not absent
 - trim metadata on step results and `result_trim.completed` span events
 
 For extremely large or domain-specific outputs, default-on result distillation (opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`) adds a two-stage pipeline:
 
 1. structural pre-filtering reduces the source result
-2. an LLM summarizes the pre-filtered content to a target size (results above the model's usable context are chunked and map-reduced)
+2. an LLM summarizes the pre-filtered content to a target size (results above the model's usable context — or, when `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` is set, above that byte threshold — are chunked and map-reduced, so the whole result is analyzed rather than only the pre-filtered head)
 
 The trimming contract is pluggable through the `ResultProcessor` interface, so teams can replace the default `StructuralTrimmer` with a domain-specific implementation.
 
