@@ -1,0 +1,193 @@
+/* ==========================================================================
+   Fixed left scroll-spy rail (#toc-rail)
+   --------------------------------------------------------------------------
+   Shared by every long-form page: www/index.html, the whitepapers and the
+   blog posts. Pair with /assets/js/toc-rail.js.
+
+   ONE attribute configures a page — see www/AGENTS.md for the full contract:
+
+     <aside id="toc-rail" data-rail="section" aria-label="Section navigation">
+     <aside id="toc-rail" data-rail="blog"    aria-label="Section navigation">
+
+   data-rail picks the visual scale here, and the scroll-container the script
+   measures. "section" (whitepapers, homepage) is the default; "blog" is the
+   smaller scale used by blog posts.
+
+   Dots are either authored inside the <aside>, or — on whitepapers — derived
+   at runtime from the page's own .pillrow, so the two can never disagree.
+
+   Colour tokens are read from the host page with fallbacks: blog posts define
+   --rule, whitepapers define --line, and both resolve to #2a3550.
+   ========================================================================== */
+
+#toc-rail {
+  /* Section scale — whitepapers + homepage (the default) */
+  --rail-gap: 10px;
+  --rail-maxh: 88vh;
+  --rail-pad: 9px 13px;
+  --rail-collapsed: 44px;
+  --rail-expanded: 360px;
+  --rail-dot: 17px;
+  --rail-dot-active: 19px;
+  --rail-dot-opacity: .55;
+  --rail-label: 16px;
+
+  --rail-line: var(--rule, var(--line, #2a3550));
+  --rail-ink: var(--ink, #e6edf7);
+  --rail-muted: var(--muted, #9aa6bd);
+
+  position: fixed;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap);
+  padding: 0;
+  background: transparent;
+  border: none;
+  max-height: var(--rail-maxh);
+}
+
+/* Blog scale */
+#toc-rail[data-rail="blog"] {
+  --rail-gap: 9px;
+  --rail-maxh: 90vh;
+  --rail-pad: 8px 12px;
+  --rail-collapsed: 42px;
+  --rail-expanded: 340px;
+  --rail-dot: 15px;
+  --rail-dot-active: 17px;
+  --rail-dot-opacity: .5;
+  --rail-label: 13.5px;
+}
+
+/* An empty rail (derivation found no source) must not paint a stray box. */
+#toc-rail:empty { display: none; }
+
+/* The script hides dots whose target id does not exist. This needs to be
+   explicit: .toc-dot sets display, which would otherwise beat [hidden]. */
+#toc-rail .toc-dot[hidden] { display: none; }
+
+/* Each item is ONE pill holding the dot and the label inside a single
+   boundary. At rest it collapses to just the dot; on hover (whole rail),
+   when active, or on keyboard focus it expands to show the label. */
+#toc-rail .toc-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  line-height: 1;
+  white-space: nowrap;
+  padding: var(--rail-pad);
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  overflow: hidden;
+  max-width: var(--rail-collapsed);
+  flex-shrink: 0;
+  transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+#toc-rail .toc-dot .d {
+  width: var(--rail-dot);
+  height: var(--rail-dot);
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: var(--rail-dot-opacity);
+  transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
+}
+#toc-rail .toc-dot .lbl {
+  font-size: var(--rail-label);
+  color: var(--rail-muted);
+  opacity: 0;
+  transition: opacity .18s ease, color .18s ease;
+}
+
+/* Expanded state — whole rail on hover or keyboard focus, plus the active item at rest */
+#toc-rail:hover .toc-dot,
+#toc-rail:focus-within .toc-dot,
+#toc-rail .toc-dot.active {
+  max-width: var(--rail-expanded);
+  background: #0e1422;
+  border-color: var(--rail-line);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+}
+#toc-rail:hover .toc-dot .lbl,
+#toc-rail:focus-within .toc-dot .lbl,
+#toc-rail .toc-dot.active .lbl { opacity: 1; }
+#toc-rail .toc-dot:hover .d,
+#toc-rail .toc-dot.active .d { opacity: 1; }
+#toc-rail .toc-dot:hover { border-color: #3a4a72; }
+#toc-rail .toc-dot:hover .lbl { color: var(--rail-ink); }
+#toc-rail .toc-dot.active .d {
+  width: var(--rail-dot-active);
+  height: var(--rail-dot-active);
+  box-shadow: 0 0 0 5px rgba(124, 196, 255, .16);
+}
+#toc-rail .toc-dot.active .lbl { color: var(--rail-ink); font-weight: 600; }
+#toc-rail .toc-dot:focus-visible { outline: 2px solid var(--accent, #7cc4ff); outline-offset: 2px; }
+
+/* JS-driven fits for zoom / narrow margins:
+   .no-active-label → collapse the active pill back to a dot when it would cross
+                      into the content (hover still expands it as a transient overlay).
+   .rail-hidden     → not even the dots fit; hide the whole rail. */
+#toc-rail.no-active-label:not(:hover) .toc-dot.active {
+  max-width: var(--rail-collapsed);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+#toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
+#toc-rail.rail-hidden { display: none; }
+
+@media (max-width: 1180px) { #toc-rail { display: none; } }
+
+/* --------------------------------------------------------------------------
+   Sub-items — for a page with one section that dominates the article. Nested
+   dots stay hidden until that section is in view (or the rail is hovered or
+   focused), keeping the resting rail the same height as everywhere else.
+   The .rail-subs marker is applied by the script when .sub dots are present.
+   -------------------------------------------------------------------------- */
+#toc-rail .toc-dot.sub {
+  display: none;
+  margin-left: 15px;
+  padding: 4px 12px;
+  max-width: calc(var(--rail-collapsed) - 11px);
+}
+#toc-rail .toc-dot.sub .d { width: 9px; height: 9px; }
+#toc-rail .toc-dot.sub .lbl { font-size: calc(var(--rail-label) - 1.5px); }
+#toc-rail.show-subs .toc-dot.sub,
+#toc-rail:hover .toc-dot.sub,
+#toc-rail:focus-within .toc-dot.sub { display: inline-flex; animation: railSubIn .18s ease both; }
+#toc-rail:hover .toc-dot.sub,
+#toc-rail:focus-within .toc-dot.sub,
+#toc-rail .toc-dot.sub.active { max-width: calc(var(--rail-expanded) - 16px); }
+#toc-rail .toc-dot.sub.active .d {
+  width: 11px;
+  height: 11px;
+  box-shadow: 0 0 0 4px rgba(124, 196, 255, .16);
+}
+@keyframes railSubIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+
+/* --------------------------------------------------------------------------
+   Short viewports. Pills do not flex-shrink (squashed pills look broken), so
+   a long rail is tightened instead. This applies to EVERY rail, not just the
+   ones with sub-items: a 14-dot whitepaper is ~648px at the section scale and
+   would otherwise spill off a laptop screen.
+     [data-rail] keeps this at the same specificity as the scale block above,
+     and later in source order, so it wins for both scales.
+   -------------------------------------------------------------------------- */
+@media (max-height: 780px) {
+  #toc-rail[data-rail] { --rail-gap: 6px; --rail-pad: 6px 12px; }
+  #toc-rail[data-rail] .toc-dot.sub { padding: 3px 12px; }
+}
+/* Even tightened, sub-items cannot fit here — fall back to the top-level dots. */
+@media (max-height: 600px) {
+  #toc-rail.rail-subs.show-subs .toc-dot.sub,
+  #toc-rail.rail-subs:hover .toc-dot.sub,
+  #toc-rail.rail-subs:focus-within .toc-dot.sub { display: none; }
+}
+
+@media print { #toc-rail { display: none; } }
