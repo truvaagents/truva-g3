@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Too Big to Read: How TruvaG3 Fits a Megabyte of Results Back Into the Prompt</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
+<meta name="description" content="When a plan step returns a megabyte of JSON or hundreds of log streams, that result still has to go back into the model — twice: once for the planner to decide what to do next, and once for the synthesizer to write the final answer. TruvaG3's result compaction shrinks each result to fit a budget while keeping the signal the model needs — three layers, two prompt paths, and one invariant that makes throwing data away safe. Grounded in the open-source TruvaG3 reference implementation, with code as the source of truth.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TruvaG3">
+<meta property="og:title" content="Too Big to Read: How TruvaG3 Fits a Megabyte of Results Back Into the Prompt">
+<meta property="og:description" content="A step returns a megabyte of JSON. It still has to go back into the model — for the planner's next decision and for the final answer. This is how TruvaG3 compacts it without ever failing the request or lying about what it dropped.">
+<meta property="og:url" content="https://truvag3.dev/blogs/truvag3-result-compaction">
+<meta property="og:image" content="https://truvag3.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Too Big to Read: How TruvaG3 Fits a Megabyte of Results Back Into the Prompt">
+<meta name="twitter:description" content="A step returns a megabyte of JSON. It still has to go back into the model — for replanning and for synthesis. This is how TruvaG3 compacts it without failing the request or lying about what it dropped.">
+<meta name="twitter:image" content="https://truvag3.dev/og-image.png">
+<style>
+  :root {
+    /* Dark theme — tokens mirror truvag3-observability-deep-dive / truvag3-agentic-memory
+     * so this article visually continues from the rest of truvag3.dev. */
+    --fg: #9aa6bd;
+    --muted: #9aa6bd;
+    --accent: #7cc4ff;
+    --rule: #2a3550;
+    --code-bg: #1a2236;
+    --aside-bg: #121826;
+    --aside-border: #C56710;
+  }
+  html {
+    background: radial-gradient(1200px 800px at 50% -10%, #1c2541 0%, #0b0f17 60%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    line-height: 1.55;
+    font-weight: 400;
+    margin: 0;
+    background: transparent;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  article {
+    max-width: 760px;
+    margin: 2rem auto;
+    padding: 0 1.25rem;
+    font-size: 17px;
+  }
+  header.article-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2rem;
+  }
+  header.article-header h1 {
+    font-size: 1.85rem;
+    line-height: 1.25;
+    margin: 0 0 0.6rem 0;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 45%, #c4b5fd 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.article-header p.dek {
+    color: var(--muted);
+    font-size: 1.1rem;
+    margin: 0 0 0.8rem 0;
+    line-height: 1.45;
+  }
+  header.article-header .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin-top: 2.4rem;
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+    width: fit-content;
+    max-width: 100%;
+    background: linear-gradient(90deg, #ffffff 0%, #7dd3fc 60%, #c4b5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  h3 {
+    font-size: 1.25rem;
+    margin-top: 1.8rem;
+    margin-bottom: 0.4rem;
+    color: #e6edf7;
+  }
+  p { margin: 0.7rem 0; }
+  strong { color: var(--accent); }
+  p > strong:first-child,
+  li > strong:first-child {
+    font-weight: 600;
+    font-size: 0.95em;
+    color: var(--accent);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* Code blocks — dark IDE-style chrome with a faux titlebar and three
+   * macOS traffic-light dots, matching the other TruvaG3 articles. */
+  pre {
+    background: #0d1117;
+    color: #d4d4d4;
+    padding: 42px 18px 18px 18px;
+    overflow-x: auto;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px solid #1f2937;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset,
+                0 6px 20px rgba(0,0,0,0.35);
+    position: relative;
+    margin: 1.5rem 0;
+  }
+  pre::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 30px;
+    background: linear-gradient(180deg, #21262d 0%, #161b22 100%);
+    border-bottom: 1px solid #1f2937;
+    border-radius: 10px 10px 0 0;
+  }
+  pre::after {
+    content: '';
+    position: absolute;
+    top: 10px; left: 14px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #ff5f57;
+    box-shadow: 18px 0 0 #febc2e, 36px 0 0 #28c840;
+  }
+  code {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: #cfe1ff;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+    color: inherit;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border-bottom: 1px solid var(--rule);
+    padding: 0.55rem 0.7rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+    color: #e6edf7;
+  }
+  aside.callout {
+    background: var(--aside-bg);
+    border-left: 3px solid var(--aside-border);
+    padding: 0.85rem 1.1rem;
+    margin: 1.4rem 0;
+    font-size: 0.95rem;
+    border-radius: 3px;
+  }
+  aside.callout strong { color: var(--accent); }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  a.ref {
+    font-size: 0.78em;
+    vertical-align: super;
+    line-height: 0;
+    margin-left: 1px;
+    text-decoration: none;
+  }
+  figure { margin: 1.6rem 0; }
+  figure svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 0.4rem;
+    line-height: 1.5;
+  }
+  figcaption strong { color: var(--accent); font-weight: 600; }
+  figure img {
+    width: 100%; height: auto; display: block; margin: 0 auto;
+    border: 1px solid var(--rule); border-radius: 10px; background: #0b1220; cursor: zoom-in;
+  }
+  figure:has(> img) { position: relative; }
+  figure:has(> img)::after {
+    content: ""; position: absolute; top: 10px; right: 10px; width: 30px; height: 30px;
+    border-radius: 8px; border: 1px solid var(--rule); background-color: rgba(18, 24, 38, 0.82);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe1ff' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cline x1='15.2' y1='15.2' x2='21' y2='21'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: center; background-size: 16px 16px;
+    opacity: 0; transform: scale(0.92); transition: opacity 0.15s ease, transform 0.15s ease; pointer-events: none;
+  }
+  figure:has(> img):hover::after { opacity: 1; transform: scale(1); }
+  .img-lightbox { position: fixed; inset: 0; z-index: 1000; display: none; align-items: center; justify-content: center; padding: 28px; box-sizing: border-box; background: rgba(6, 10, 18, 0.93); cursor: zoom-out; }
+  .img-lightbox.open { display: flex; }
+  .img-lightbox img { max-width: 96vw; max-height: 90vh; width: auto; height: auto; border: 1px solid var(--rule); border-radius: 10px; background: #0b1220; box-shadow: 0 24px 70px rgba(0,0,0,0.65); cursor: zoom-out; }
+  .img-lightbox .lb-close { position: fixed; top: 14px; right: 20px; width: 38px; height: 38px; border: 1px solid var(--rule); border-radius: 8px; background: #121826; color: #cfe1ff; font-size: 22px; line-height: 1; cursor: pointer; }
+  .img-lightbox .lb-hint { position: fixed; bottom: 16px; left: 0; right: 0; text-align: center; color: #6b7a99; font-size: 12px; pointer-events: none; }
+  ol.references {
+    font-size: 0.95rem;
+    padding-left: 1.4rem;
+  }
+  ol.references li {
+    margin: 0.5rem 0;
+    scroll-margin-top: 1rem;
+    word-break: break-word;
+  }
+  .footer-note {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .cite-as {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    padding: 0.9rem 1.1rem;
+    margin: 2rem 0 1rem 0;
+    font-size: 0.9rem;
+    border-radius: 4px;
+    line-height: 1.5;
+  }
+  .cite-as code { background: transparent; padding: 0; font-size: inherit; }
+  .copyright {
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+  }
+  /* Collapsible table of contents — native <details>/<summary>; no JS. */
+  details.toc { margin: 1.5rem 0 2.5rem; border: 1px solid var(--rule); border-radius: 6px; padding: 0.75rem 1.25rem; background: var(--code-bg); }
+  details.toc summary { font-weight: 700; font-size: 0.95rem; cursor: pointer; color: var(--accent); list-style: none; display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
+  details.toc summary::-webkit-details-marker { display: none; }
+  details.toc summary::before { content: '\25B8'; display: inline-block; transition: transform 0.15s ease; color: var(--accent); font-size: 0.85em; }
+  details.toc[open] summary::before { transform: rotate(90deg); }
+  details.toc ul { list-style: none; padding-left: 0; margin: 0.85rem 0 0.25rem; }
+  details.toc > ul > li { margin: 0.5rem 0; }
+  details.toc > ul > li > a { font-weight: 600; font-size: 0.93rem; color: var(--accent); text-decoration: none; }
+  details.toc ul ul { margin: 0.35rem 0 0.6rem; padding-left: 1.25rem; border-left: 1px solid var(--rule); }
+  details.toc ul ul li { margin: 0.25rem 0 0.25rem 0.5rem; }
+  details.toc ul ul a { color: var(--muted); font-size: 0.88rem; font-weight: 400; text-decoration: none; }
+  details.toc a:hover { text-decoration: underline; color: #e6edf7; }
+  h2[id], h3[id] { scroll-margin-top: 16px; }
+
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="container">
+    <a class="nav-brand" href="/"><span class="brand-truva">Truva</span><span class="brand-g3">G3</span></a>
+    <div class="nav-links">
+      <a href="/blogs/">Blog</a>
+      <a href="/whitepapers/">Whitepapers</a>
+      <a href="https://docs.truvag3.dev/docs/intro/">Docs</a>
+      <a href="https://github.com/truvaagents/truva-g3">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+
+<aside id="toc-rail" data-rail="blog" aria-label="Section navigation">
+  <a class="toc-dot" href="#the-result" data-target="the-result"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The result that doesn't fit</span></a>
+  <a class="toc-dot" href="#lifecycle" data-target="lifecycle"><span class="d" style="background:#8fd0ff"></span><span class="lbl">The life of a query</span></a>
+  <a class="toc-dot" href="#two-paths" data-target="two-paths"><span class="d" style="background:#7cc4ff"></span><span class="lbl">Two paths back into the model</span></a>
+  <a class="toc-dot" href="#the-invariant" data-target="the-invariant"><span class="d" style="background:#7dd3fc"></span><span class="lbl">Why forgetting is safe</span></a>
+  <a class="toc-dot" href="#layer-1" data-target="layer-1"><span class="d" style="background:#67e8f9"></span><span class="lbl">Layer 1 &middot; the floor</span></a>
+  <a class="toc-dot" href="#layer-2" data-target="layer-2"><span class="d" style="background:#34d399"></span><span class="lbl">Layer 2 &middot; distillation</span></a>
+  <a class="toc-dot" href="#map-reduce" data-target="map-reduce"><span class="d" style="background:#a3e635"></span><span class="lbl">When one call isn't enough</span></a>
+  <a class="toc-dot" href="#disclosure" data-target="disclosure"><span class="d" style="background:#fbbf24"></span><span class="lbl">What it admits it dropped</span></a>
+  <a class="toc-dot" href="#layer-3" data-target="layer-3"><span class="d" style="background:#f59e0b"></span><span class="lbl">Layer 3 &middot; digests for replan</span></a>
+  <a class="toc-dot" href="#economics" data-target="economics"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Cache, deadlines, cost</span></a>
+  <a class="toc-dot" href="#the-decision" data-target="the-decision"><span class="d" style="background:#a78bfa"></span><span class="lbl">The whole decision</span></a>
+  <a class="toc-dot" href="#conclusion" data-target="conclusion"><span class="d" style="background:#cfe1ff"></span><span class="lbl">Conclusion</span></a>
+</aside>
+
+<article>
+
+<header class="article-header">
+  <h1>Too Big to Read: How TruvaG3 Fits a Megabyte of Results Back Into the Prompt</h1>
+  <p class="dek">Ask an AI agent to dig through a system's logs and metrics and one tool call can return a megabyte of JSON, another a few hundred log streams. That result does not just get stored — it has to go <em>back into an LLM</em>, twice: once for the agent to decide what to do next, and once to write the final answer. Put the raw payload in a prompt and you can blow the context window or, worse, quietly degrade the model's reasoning. This is TruvaG3's<a class="ref" href="#ref-1">[1]</a> answer: result compaction — three layers, two prompt paths, and one invariant that makes throwing data away safe. It runs automatically, and everything below was checked against the source.</p>
+  <p class="meta">Neelabh Tripathi · July 20, 2026</p>
+</header>
+
+<details class="toc">
+  <summary>Contents</summary>
+  <ul>
+    <li><a href="#the-result">The result that doesn't fit</a></li>
+    <li><a href="#lifecycle">Where synthesis sits: the life of a query</a></li>
+    <li><a href="#two-paths">Two paths back into the model</a></li>
+    <li><a href="#the-invariant">The invariant that makes forgetting safe</a></li>
+    <li><a href="#layer-1">Layer 1: the structural floor</a></li>
+    <li><a href="#layer-2">Layer 2: distillation, the synthesis path</a></li>
+    <li><a href="#map-reduce">When one call isn't enough: map-reduce</a></li>
+    <li><a href="#disclosure">What a shrunk result admits it dropped</a></li>
+    <li><a href="#layer-3">Layer 3: digests, the planning path</a></li>
+    <li><a href="#economics">Cache, deadlines, and what it costs</a></li>
+    <li><a href="#the-decision">The whole decision, in one picture</a></li>
+    <li><a href="#conclusion">Conclusion</a></li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</details>
+
+<section>
+<h2 id="the-result">The result that doesn't fit</h2>
+
+<p>This whole article is built on one real run, so let's start there. <strong>TruvaG3</strong><a class="ref" href="#ref-1">[1]</a> is an open-source framework for building <em>LLM agents</em> — programs that answer a request by writing a plan, calling tools to gather data, and then using an LLM to turn what came back into a final answer. One of its bundled example agents<a class="ref" href="#ref-4">[4]</a>, a DevOps assistant<a class="ref" href="#ref-5">[5]</a>, was asked a broad, data-hungry question — <em>"Analyze the cluster and the pods health. Tell me if there are any issues in the services by checking the logs and other data points that may reveal the details. I want the analysis from the last 6 hours of data."</em> To answer it, the agent wrote a plan and made <strong>28 tool calls</strong> (it calls each one a <em>step</em>), grouped into <strong>4 rounds of plan-then-run</strong> (each round is a <em>phase</em>), using three tools: <code>devops-tool</code> (which runs <code>kubectl</code>, the Kubernetes command-line tool), <code>devops-observability-tool</code> (which fetches logs from Loki, a log database), and <code>prometheus-query-tool</code> (which reads metrics).</p>
+
+<p>The results those tools returned were not small. Together they came to <strong>2.71&nbsp;MB</strong>, and the single biggest — one <code>kubectl</code> dump — was <strong>855&nbsp;KB</strong> on its own; a dozen of the twenty-eight were large enough to need compaction. None of this is unusual — a single broad question routinely returns results this large.</p>
+
+<p>Here is the problem. A step's result is not the end of the line — the plan is not finished. That result has to be read back <em>by an LLM</em> so the run can continue: the agent needs to see what happened in order to plan its next steps, and, at the very end, an LLM call has to read the results to write the final answer (this last call is the one TruvaG3 calls <em>synthesis</em>). Either way, a megabyte of <code>kubectl</code> output has to fit into a prompt — and a prompt has two ceilings, not one.</p>
+
+<p>The first ceiling is hard and obvious: exceed the model's context window and the call simply fails. The second is softer, and it is the one that actually causes the trouble. Reasoning accuracy degrades <em>well before</em> the context is full — the framework's own effective-prompts research<a class="ref" href="#ref-6">[6]</a> shows accuracy on a controlled task falling from roughly 0.92 to 0.68 as inputs grow into the low thousands of tokens. A prompt stuffed with raw payload is not just risky; it is a prompt that <em>reasons worse</em>. The model has to find the two log lines that matter among the two hundred it was handed, and every irrelevant kilobyte makes that harder.</p>
+
+<p>Result compaction is the framework's answer: shrink each result to fit a budget while preserving the signal the model actually needs — and do it automatically, so the people writing agents never have to think about it. Any agent connected to an LLM gets it out of the box; there is nothing to opt into. The payoff, in this run: those 2.71&nbsp;MB of raw results — roughly <strong>812,000 tokens</strong> if you fed them into a prompt whole — were compacted into a synthesis prompt of just <strong>25,090 tokens</strong>, and <strong>87% of all the token-reading happened on a cheap "fast" model</strong>, leaving the expensive reasoning model to see only the compacted result. Here is the entire run, drawn by the <em>registry viewer</em> — a tool bundled with TruvaG3 that renders each run as an inspectable graph:</p>
+
+<figure id="fig-dag">
+<img src="https://assets.truvag3.dev/blogs/result-compaction/registry-execution-dag.png" alt="The registry-viewer Execution DAG for the run. A header reads devops-chat-agent, ID orch-1784568113494162491, 28 steps, Total 378.50s, Success, 30 LLM calls, 4 Phases. Below, a vertical graph flows top-to-bottom: the agent node, a History Prepare hook, a Tier Select and Planning node, then Phase 1 fanning out to devops-tool and prometheus-query-tool and devops-observability-tool nodes, a Phase 1→2 boundary, then Phase 2, Phase 3 and Phase 4 each preceded by a Tier Select and Phase Plan (continuation) node and fanning out to tool nodes. Many of the devops-observability-tool and devops-tool nodes carry a scissors label like '594.1KB→2.3KB' and are wired to purple Distill nodes. The final phase feeds an Event Summary node, then a Synthesis (Stream) node, then Complete.">
+<figcaption><strong>Figure 1.</strong> The whole run as a reasoning graph — request <code>orch-1784568113494162491</code><a class="ref" href="#ref-9">[9]</a>. Four phases of tool calls flow into a final <code>Synthesis (Stream)</code>. The purple <strong>Distill</strong> nodes are result compaction happening: each one is a fast-model call shrinking an oversized tool result (the <code>✂ 594.1KB→2.3KB</code> labels) before it reaches a prompt. One result — a 855&nbsp;KB <code>devops-tool</code> dump in the last phase — fans out into a whole row of Distill nodes; that is map-reduce, which we get to below. Expand the image and the labels blur — but the colors do not, and the key below decodes them.</figcaption>
+</figure>
+
+<div style="border:1px solid var(--rule); border-radius:8px; background:var(--code-bg); padding:0.9rem 1.1rem; margin:1.2rem 0; font-size:0.9rem; line-height:1.5;">
+  <div style="color:#e6edf7; font-weight:700; margin-bottom:0.7rem;">How to read the graph above</div>
+  <div style="display:grid; gap:0.55rem;">
+    <div><span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:#32d74b;vertical-align:middle;margin-right:9px;"></span><strong style="color:#e6edf7;">Green — tool step.</strong> The agent runs a tool (<code>kubectl</code>, Loki, Prometheus) to fetch data. This is the only place the big results are produced.</div>
+    <div><span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:#a064f0;vertical-align:middle;margin-right:9px;"></span><strong style="color:#e6edf7;">Purple — Distill.</strong> A compaction call: an oversized tool result being shrunk before it can enter a prompt. These are what this article is about. (The single purple node at the very top is the agent itself.)</div>
+    <div><span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:#0a84ff;vertical-align:middle;margin-right:9px;"></span><strong style="color:#e6edf7;">Blue — orchestration LLM call.</strong> The model choosing which tools to use, writing the plan, and doing the final synthesis.</div>
+    <div><span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:#f0a030;vertical-align:middle;margin-right:9px;"></span><strong style="color:#e6edf7;">Amber — lifecycle hook.</strong> Memory preparation before planning, and a summary after the answer is written.</div>
+    <div><span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:transparent;border:2px dashed #64d2ff;box-sizing:border-box;vertical-align:middle;margin-right:9px;"></span><strong style="color:#e6edf7;">Teal dashes — phase boundary.</strong> The divider between one round of plan-then-run and the next. This run has four.</div>
+  </div>
+  <div style="color:var(--muted); margin-top:0.7rem; font-size:0.85rem;">Read top to bottom, the shape <em>is</em> the run: prepare (amber) → plan (blue) → a fan of green tool steps, each big result paired with a purple Distill → a phase boundary, then the next round, four times over, ending in the blue synthesis.</div>
+</div>
+
+<figure id="fig-dag-phase3">
+<img src="https://assets.truvag3.dev/blogs/result-compaction/registry-dag-phase3.png" alt="A legible close-up of one phase (Phase 3) in the registry-viewer Execution DAG. A Tier Select node and a Phase Plan node sit above a fan of tool nodes: three green devops-observability-tool nodes labelled with scissors and sizes 98.4KB to 2.1KB, 97.7KB to 2.4KB and 112.5KB to 1.6KB, three green prometheus-query-tool nodes with no size label, and a green devops-observability-tool node labelled 199.2KB to 2.1KB. Each labelled tool node is wired down to a purple Distill node. A dashed Phase 3 to 4 boundary sits below.">
+<figcaption><strong>Figure 2.</strong> One phase, close enough to read — the same graph as Figure 1, zoomed into Phase 3<a class="ref" href="#ref-11">[11]</a>. Now the labels are legible: four <code>devops-observability-tool</code> results (<code>✂ 98.4KB→2.1KB</code>, <code>97.7KB→2.4KB</code>, <code>112.5KB→1.6KB</code>, and <code>199.2KB→2.1KB</code>), each green tool node wired to a purple <strong>Distill</strong> node that shrank it before synthesis. The small <code>prometheus-query-tool</code> results were under the 16&nbsp;KB threshold, so they have no Distill node at all. Below, the dashed <code>Phase 3 → 4</code> boundary starts the next round.</figcaption>
+</figure>
+
+<aside class="callout">
+<strong>The run.</strong> Every number in this article is measured from one execution of the bundled <code>devops-chat-agent</code><a class="ref" href="#ref-5">[5]</a> — request <code>orch-1784568113494162491</code>, captured 2026-07-20: 28 steps over 4 phases, 30 LLM calls, and a total of 784,965 input tokens read. The full execution DAG<a class="ref" href="#ref-9">[9]</a>, the raw Jaeger trace<a class="ref" href="#ref-10">[10]</a>, and the registry-viewer screenshots<a class="ref" href="#ref-11">[11]</a> are published as downloadable artifacts, so you can check every figure below against the source.
+</aside>
+
+<aside class="callout">
+<strong>Code as the source of truth.</strong> Everything in this article — every threshold, every default, every fail-open path — was verified against the <code>orchestration/</code> package<a class="ref" href="#ref-3">[3]</a> of the open-source reference implementation: <code>result_processor.go</code>, <code>result_distiller.go</code>, <code>result_mapreduce.go</code>, <code>structural_trimmer.go</code>, and <code>synthesizer.go</code>. The <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/RESULT_COMPACTION_GUIDE.md">Result Compaction Guide</a><a class="ref" href="#ref-2">[2]</a> is the companion reference; where a configuration value appears below, it is the constant the code actually uses. Those values are <em>defaults</em>, set in <code>DefaultConfig()</code> — the whole configuration surface is tunable per deployment through <code>TRUVAG3_*</code> environment variables or programmatic options, so treat every budget below as a default you can change, not a fixed limit.
+</aside>
+</section>
+
+<section>
+<h2 id="lifecycle">Where synthesis sits: the life of a query</h2>
+
+<p>That run has a shape, and it is worth seeing before we open up the compaction itself — because the word "synthesis" only makes sense once you know where it sits. A TruvaG3 agent answers a request as a short lifecycle, and nearly every stage is an LLM call. The <strong>planner</strong> picks tools and writes a plan; the <strong>executor</strong> runs the steps, and this is the one place the large data is born — a tool returns a result. Completed results are kept whole, in memory. Then, while the plan still has phases to go, the planner re-reads those results and plans the next one (<strong>continuation</strong>, or "replan"); when the plan is finished, one last AI phase — <strong>synthesis</strong> — turns the results into the answer.</p>
+
+<figure id="fig-lifecycle">
+<svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A query's lifecycle, drawn as produce-once then read-twice. Down the middle: a User query enters PLAN (an LLM phase that picks tools and writes the plan), then EXECUTE STEPS (a tool phase where each step calls a tool and returns a result — the one place the data is born), then the results flow into a STEP RESULTS store that keeps every value in full, in memory. From that store the flow fans out to two AI phases that each read the same results but want different things: on the left, CONTINUATION (replan), which reads the results as Layer-3 structure-only digests and loops back to EXECUTE for the next phase; on the right, SYNTHESIS, the terminal phase, which reads the results as Layer-2 distilled summaries and composes the final answer for the user. The replan loop runs once per phase.">
+  <defs><marker id="lah2" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#7a8aa8"/></marker></defs>
+
+  <!-- legend -->
+  <circle cx="95" cy="17" r="6" fill="#a78bfa"/><text x="107" y="21" font-family="-apple-system,sans-serif" font-size="11" fill="#9aa6bd">LLM / AI phase</text>
+  <circle cx="258" cy="17" r="6" fill="#2dd4bf"/><text x="270" y="21" font-family="-apple-system,sans-serif" font-size="11" fill="#9aa6bd">tool / data step</text>
+  <rect x="430" y="11" width="12" height="12" rx="2" fill="#2a2110" stroke="#8a6412"/><text x="448" y="21" font-family="-apple-system,sans-serif" font-size="11" fill="#9aa6bd">compaction hand-off</text>
+
+  <!-- user -->
+  <rect x="265" y="40" width="150" height="26" rx="13" fill="#0e1626" stroke="#3a4a72"/>
+  <text x="340" y="57" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11.5" fill="#c9d4e5">User query</text>
+  <line x1="340" y1="66" x2="340" y2="82" stroke="#7a8aa8" stroke-width="1.5" marker-end="url(#lah2)"/>
+
+  <!-- PLAN -->
+  <rect x="228" y="84" width="224" height="46" rx="8" fill="#0e1626" stroke="#a78bfa"/>
+  <text x="242" y="106" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#e6edf7">① PLAN  ·  LLM</text>
+  <text x="242" y="122" font-family="-apple-system,sans-serif" font-size="10.5" fill="#9aa6bd">pick tools, write the plan</text>
+  <line x1="340" y1="130" x2="340" y2="152" stroke="#7a8aa8" stroke-width="1.5" marker-end="url(#lah2)"/>
+  <text x="347" y="145" font-family="-apple-system,sans-serif" font-size="9.5" fill="#6b7a99">ordered steps</text>
+
+  <!-- EXECUTE -->
+  <rect x="205" y="152" width="270" height="60" rx="8" fill="#0e1626" stroke="#2dd4bf"/>
+  <text x="219" y="172" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#e6edf7">② EXECUTE STEPS  ·  tools</text>
+  <text x="219" y="189" font-family="-apple-system,sans-serif" font-size="10.5" font-weight="700" fill="#7ee0b3">◆ tools run — the data is born here</text>
+  <text x="219" y="204" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">results up to ~855 KB each in the sample run</text>
+  <line x1="340" y1="212" x2="340" y2="238" stroke="#7a8aa8" stroke-width="1.5" marker-end="url(#lah2)"/>
+  <text x="347" y="230" font-family="-apple-system,sans-serif" font-size="9.5" fill="#6b7a99">every result stored</text>
+
+  <!-- STORE -->
+  <rect x="205" y="238" width="270" height="56" rx="8" fill="#0e1626" stroke="#2dd4bf" stroke-dasharray="4 3"/>
+  <text x="219" y="259" font-family="-apple-system,sans-serif" font-size="11.5" font-weight="700" fill="#e6edf7">STEP RESULTS  ·  full, in memory</text>
+  <text x="219" y="276" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">nothing is deleted — {{step-N.field}} resolves here</text>
+  <text x="219" y="289" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">compaction changes only what a PROMPT sees</text>
+
+  <!-- left fan to REPLAN -->
+  <path d="M300 294 C 250 320, 214 338, 190 356" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#lah2)"/>
+  <rect x="168" y="311" width="120" height="20" rx="10" fill="#2a2110" stroke="#8a6412"/>
+  <text x="228" y="325" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9.5" fill="#f0c674">Layer 3 · digest</text>
+  <text x="112" y="350" font-family="-apple-system,sans-serif" font-size="9" fill="#8fa0bd">while more phases</text>
+
+  <!-- right fan to SYNTHESIS -->
+  <path d="M380 294 C 430 320, 466 338, 540 356" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#lah2)"/>
+  <rect x="452" y="311" width="122" height="20" rx="10" fill="#2a2110" stroke="#8a6412"/>
+  <text x="513" y="325" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9.5" fill="#f0c674">Layer 2 · distill</text>
+  <text x="556" y="350" font-family="-apple-system,sans-serif" font-size="9" fill="#8fa0bd">when plan done</text>
+
+  <!-- REPLAN -->
+  <rect x="30" y="358" width="252" height="66" rx="8" fill="#0e1626" stroke="#a78bfa"/>
+  <text x="44" y="379" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#e6edf7">③ CONTINUATION  ·  LLM · replan</text>
+  <text x="44" y="396" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">re-read completed steps as digests,</text>
+  <text x="44" y="410" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">plan the next phase</text>
+
+  <!-- SYNTHESIS -->
+  <rect x="430" y="358" width="290" height="66" rx="8" fill="#0e1626" stroke="#a78bfa"/>
+  <text x="444" y="379" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#e6edf7">④ SYNTHESIS  ·  LLM · terminal</text>
+  <text x="444" y="396" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">read results as distilled summaries,</text>
+  <text x="444" y="410" font-family="-apple-system,sans-serif" font-size="10" fill="#9aa6bd">compose the answer — the last AI phase</text>
+
+  <!-- loop REPLAN -> EXECUTE -->
+  <polyline points="30,391 16,391 16,179 205,179" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#lah2)"/>
+  <text x="23" y="250" font-family="-apple-system,sans-serif" font-size="9.5" fill="#b9a7f5">↺ next phase</text>
+
+  <!-- SYNTHESIS -> answer -->
+  <line x1="575" y1="424" x2="575" y2="452" stroke="#7a8aa8" stroke-width="1.5" marker-end="url(#lah2)"/>
+
+  <!-- answer -->
+  <rect x="500" y="452" width="150" height="26" rx="13" fill="#0e1626" stroke="#3a4a72"/>
+  <text x="575" y="469" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11.5" fill="#c9d4e5">Final answer → user</text>
+</svg>
+<figcaption><strong>Figure 3.</strong> The lifecycle as <em>produce once, read twice</em>. Purple stages are LLM calls; the teal stages are where tools run and where results are held. Everything is produced in one place — EXECUTE — and read back by two AI phases through compaction: the continuation planner mid-run via structure-only <em>digests</em> (Layer 3, left), and synthesis — the terminal phase — via LLM <em>distillation</em> (Layer 2, right). The two readers want different things from the same results, which is why they get different compaction. The replan loop runs once per phase; in the run above it turned four times before synthesis fired.</figcaption>
+</figure>
+
+<p>The picture makes the two facts this whole article rests on visible at a glance. First, the data is born in exactly one place — <strong>step execution</strong> — and everything after it is a <em>consumer</em>. Second, of those consumers, exactly two are AI phases that must read whole step results back into a prompt: the continuation planner between phases (the "replan" path) and the synthesizer at the very end (the "terminal" path). Those two hand-offs are what the rest of this piece is about. The other LLM calls in the run — choosing which tools to use, writing the plan, and <em>micro-resolution</em> (filling in a step's inputs from an earlier step's result) — either produce only small text or read a single result through the same deterministic floor, so they don't drive the design.</p>
+</section>
+
+<section>
+<h2 id="two-paths">Two paths back into the model</h2>
+
+<p>The key to the whole design is a distinction the guide makes up front: a result is compacted differently depending on <em>where it is headed</em>. There are exactly two prompt paths for a step result, and they want completely different things from it.</p>
+
+<p>The first is <strong>synthesis</strong> — the final-answer prompt. Here the model is writing prose for the user, so it wants <em>meaning</em>: of these two hundred log lines, which ones actually bear on the question? The second is <strong>continuation planning</strong> — the prompt used between phases when the planner re-reads the completed steps to decide what to do next. This is the "replan" path, and it is subtly different: the planner does not need the <em>values</em> in a result at all. It needs the result's <em>shape</em> — enough to reference a field in the next step and to avoid re-issuing work it has already done.</p>
+
+<figure id="fig-two-paths">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A single step result, up to about a megabyte, branches into two prompt paths. The upper branch is synthesis, the final-answer prompt, where the result is distilled by an LLM down to about four kilobytes. The lower branch is continuation planning, the replan path, where the result is rendered as a structure-complete JSON digest of about six hundred bytes. A caption notes the full untouched result stays in step memory either way.">
+  <rect x="24" y="118" width="176" height="64" rx="8" fill="#0e1626" stroke="#3a4a72"/>
+  <text x="112" y="144" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="12" font-weight="700" fill="#c9d4e5">one step's result</text>
+  <text x="112" y="163" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#8595b0">up to ~1 MB</text>
+
+  <!-- connectors -->
+  <path d="M200 138 C 300 138, 320 86, 452 86" fill="none" stroke="#34d399" stroke-width="2"/>
+  <path d="M200 162 C 300 162, 320 214, 452 214" fill="none" stroke="#f59e0b" stroke-width="2"/>
+  <polygon points="452,86 442,81 442,91" fill="#34d399"/>
+  <polygon points="452,214 442,209 442,219" fill="#f59e0b"/>
+
+  <!-- path pills -->
+  <rect x="250" y="70" width="150" height="20" rx="10" fill="#12271d" stroke="#2f7a58"/>
+  <text x="325" y="84" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#7ee0b3">Layer 2 · distillation (LLM)</text>
+  <rect x="250" y="210" width="150" height="20" rx="10" fill="#2a2110" stroke="#8a6412"/>
+  <text x="325" y="224" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#f0c674">Layer 3 · digest (no LLM)</text>
+
+  <!-- synthesis box -->
+  <rect x="452" y="52" width="284" height="70" rx="8" fill="#0e1626" stroke="#34d399"/>
+  <text x="470" y="76" font-family="-apple-system,sans-serif" font-size="12.5" font-weight="700" fill="#7ee0b3">SYNTHESIS — the final answer</text>
+  <text x="470" y="96" font-family="-apple-system,sans-serif" font-size="11" fill="#9aa6bd">wants meaning: which lines answer the user?</text>
+  <text x="470" y="113" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#c9d4e5">distilled to ~4 KB on a fast model</text>
+
+  <!-- continuation box -->
+  <rect x="452" y="178" width="284" height="70" rx="8" fill="#0e1626" stroke="#f59e0b"/>
+  <text x="470" y="202" font-family="-apple-system,sans-serif" font-size="12.5" font-weight="700" fill="#f0c674">CONTINUATION — the next plan</text>
+  <text x="470" y="222" font-family="-apple-system,sans-serif" font-size="11" fill="#9aa6bd">wants shape: which fields can I reference?</text>
+  <text x="470" y="239" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#c9d4e5">digested to a ~600 B skeleton</text>
+
+  <text x="380" y="285" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" font-style="italic" fill="#6b7a99">Either way, the full untouched result stays in step memory — compaction only changes what a prompt sees.</text>
+</svg>
+<figcaption><strong>Figure 4.</strong> The same result, two destinations, two mechanisms. Synthesis gets an LLM-selected summary; continuation planning gets a structure-complete skeleton. The split is the whole design — because "the final answer" and "the next decision" need different things, they get different forms of compaction.</figcaption>
+</figure>
+
+<p>Three mechanisms serve those two paths, and it is worth naming them before we walk each one. <strong>Result trimming</strong> (the <code>StructuralTrimmer</code>) is a deterministic, LLM-free floor. <strong>Result distillation</strong> (the <code>LLMDistiller</code>) is the LLM-first primary path for synthesis. <strong>Continuation digests</strong> are the structure-only skeletons for the planning path. The guide lays them out as a grid, and it maps cleanly onto the code:</p>
+
+<table>
+<thead><tr><th>Layer</th><th>Runs on</th><th>LLM?</th><th>What it produces</th></tr></thead>
+<tbody>
+<tr><td><strong>Result Trimming</strong> (<code>StructuralTrimmer</code>)</td><td>synthesis floor; resolution-source and tool-input paths</td><td>No</td><td>a size-bounded subset — a valid JSON body and a <code>[trimmed …]</code> note, or plain-text truncation</td></tr>
+<tr><td><strong>Result Distillation</strong> (<code>LLMDistiller</code>)</td><td>the <strong>synthesis</strong> prompt</td><td>Yes (fast model)</td><td>a query-relevant summary</td></tr>
+<tr><td><strong>Continuation Digests</strong></td><td>the <strong>continuation planning</strong> prompt</td><td>No (rarely yes)</td><td>structure-complete JSON skeletons</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="the-invariant">The invariant that makes forgetting safe</h2>
+
+<p>Before any of the shrinking, one property has to be true, or the whole scheme is reckless: <strong>compaction only ever changes what the LLM sees in a given prompt.</strong> The complete, untouched result stays in memory: the <em>orchestrator</em> — the component that runs the plan-and-execute loop — keeps every step's full result. This is not a detail; it is the foundation the whole design rests on.</p>
+
+<p>Here is why it matters. A TruvaG3 plan wires steps together with templates — a later step can say <code>{{step-9.response.data.streams}}</code> to feed the entire result of step 9 into a tool call. Those templates resolve against the <em>full</em> value at execution time, out of memory, not out of whatever summary a prompt happened to show. So the planner can look at a six-hundred-byte skeleton that merely tells it "there's a <code>data.streams</code> array of 200 entries," write a step that references it, and the executor will bind all 200 entries at run time. The summary is a <em>view for reasoning</em>; it is never a replacement for the data. That is exactly what makes lossy compaction safe: you are never deleting anything the run might still need — you are only deciding how many prompt tokens to spend showing it to a model.</p>
+
+<p>On top of that invariant sit three design principles that recur in every layer of the code:</p>
+
+<ul>
+<li><strong>Fail-open, always.</strong> On failure, every layer falls back to a smaller, safe result rather than failing the request. No <code>AIClient</code>? Fall back to the deterministic floor. Cache error? Recompute. Deadline hit? Return what finished, with an honest note. A compaction step can never be the reason a user's request errors out.</li>
+<li><strong>Default-on.</strong> You get sensible compaction out of the box. You opt <em>out</em>, or you tune it; you never have to opt in.</li>
+<li><strong>Prompt-only.</strong> The full result is never lost — see above. Every summary is a lens, and the framework treats it as one.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="layer-1">Layer 1: the structural floor</h2>
+
+<p>The bottom layer is the <code>StructuralTrimmer</code> — deterministic, LLM-free, and therefore fast, free, and incapable of failing. It never calls a model, which is precisely why it can serve as the fail-open floor for everything above it. When distillation is switched off, or there is no <code>AIClient</code>, or an LLM call times out, this is what runs.</p>
+
+<p>What it does is <em>whole-unit structural selection</em> to fit a byte budget. It inventories the result's fields and array items, then keeps whole units in breadth-first order — shallowest first, and largest-first within a depth — descending into a unit only when it is too big to keep whole. A field that fits is kept intact rather than picked apart. Units that do not fit are dropped and counted (<code>FieldsDropped</code>). In the code, this is a sort by depth ascending, then by size descending; the comment calls it the "whole-unit guard," and it is what keeps the output structurally coherent instead of a scattering of disconnected fragments.</p>
+
+<p>Two details are worth pinning down because they are easy to get wrong. First, a <strong>top-level</strong> array is filled from its head, but a <strong>nested</strong> array is first capped to its first 500 items (<code>maxArrayInventoryItems = 500</code>) and then run through the same whole-unit sort — so its kept items are not a strict head sample. Second, the primary cut is <em>not</em> a relevance ranking. Relevance scoring exists in the trimmer, but it only drives a secondary backfill pass and key ordering; picking the query-relevant content is distillation's job, one layer up. The trimmer preserves <em>shape</em>, not <em>meaning</em>.</p>
+
+<p>On the JSON path, the kept payload is valid JSON, but the trimmer appends a short plain-text annotation after it — so the returned string is a JSON body <em>followed by a note</em>, not a pure-JSON document. A non-JSON input (logs, plain text) skips structure entirely and is reduced as plain text — keyword-scored sentence selection, not a blind head cut — with the same kind of annotation. And there is a safety floor beneath the floor: if a trim keeps under <strong>5%</strong> of the source (<code>degenerateKeptRatio = 0.05</code>), the note escalates to <code>[severely reduced … treat anything NOT shown as UNKNOWN]</code>, because at that point the sample is no longer representative and the synthesizer must not read absence into it.</p>
+
+<p>The trimmer runs in several places, each with its own budget. The two that matter most for synthesis are a 16&nbsp;KB per-result cap and a 32&nbsp;KB total-prompt cap. One default is deliberately surprising:</p>
+
+<table>
+<thead><tr><th>Budget</th><th>Default</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>Per-result cap</td><td>16 KB</td><td>ceiling per result when several share one synthesis prompt</td></tr>
+<tr><td>Total prompt</td><td>32 KB</td><td>all results combined in one synthesis prompt</td></tr>
+<tr><td>Micro-resolution source</td><td>64 KB</td><td>source data fed to parameter resolution / semantic retry</td></tr>
+<tr><td>Agent input (tool→tool)</td><td><strong>0 — no cap</strong></td><td>one tool's output feeding another tool's input</td></tr>
+</tbody>
+</table>
+
+<p>That last row is the surprising one, and it is a design statement. When one tool's output feeds another tool's <em>input</em>, the downstream tool gets the <strong>full</strong> upstream result by default — no cap. The reasoning is fidelity-first: a tool consuming data programmatically usually needs all of it, unlike a model consuming it to reason. Compaction is for prompts, not for pipelines. (You can set a cap or supply a custom processor if you specifically want to bound inter-tool payloads — but you have to ask for it.)</p>
+</section>
+
+<section>
+<h2 id="layer-2">Layer 2: distillation, the synthesis path</h2>
+
+<p>Structural trimming preserves shape, but for the final answer you usually want meaning. That is what distillation does, and it is the <em>primary</em> compaction path for the synthesis prompt. It is on by default; it kicks in when a result exceeds the 16&nbsp;KB <code>DistillThreshold</code> and the agent is connected to an LLM. When it runs, it is a two-stage pipeline.</p>
+
+<p><strong>Stage 1 — structural pre-filter.</strong> The <code>StructuralTrimmer</code> from Layer 1 reduces the raw result to the 128&nbsp;KB <code>PreFilterBudget</code>, so the model is never handed the entire multi-megabyte payload. <strong>Stage 2 — LLM distill.</strong> A <em>fast</em> model — Haiku, gpt-4.1-mini, or gemini-flash-lite, reached through the portable <code>fast</code> alias — summarizes the pre-filtered content down to roughly the 4&nbsp;KB <code>TargetSize</code>, conditioned on the user's original query <em>and</em> the step's task so it keeps what is relevant to both.</p>
+
+<figure id="fig-reduction">
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A logarithmic bar chart of the synthesis reduction. Gridlines mark one kilobyte, ten kilobytes, one hundred kilobytes, and one megabyte, plus a marker at five hundred twenty-five kilobytes labelled as the map-reduce threshold. Three bars, drawn to scale on the log axis: the raw kubectl output at about one megabyte, the Stage-one structural pre-filter at one hundred twenty-eight kilobytes, and the LLM-distilled summary at four kilobytes.">
+  <!-- gridlines: px(v) = 180 + (log10(v)-2.7)*158.8 -->
+  <line x1="229" y1="40" x2="229" y2="176" stroke="#2a3550" stroke-width="1"/>
+  <text x="229" y="34" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9" fill="#6b7a99">1 KB</text>
+  <line x1="388" y1="40" x2="388" y2="176" stroke="#2a3550" stroke-width="1"/>
+  <text x="388" y="34" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9" fill="#6b7a99">10 KB</text>
+  <line x1="547" y1="40" x2="547" y2="176" stroke="#2a3550" stroke-width="1"/>
+  <text x="547" y="34" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9" fill="#6b7a99">100 KB</text>
+  <line x1="707" y1="40" x2="707" y2="176" stroke="#2a3550" stroke-width="1"/>
+  <text x="707" y="34" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9" fill="#6b7a99">1 MB</text>
+  <!-- 525 KB threshold marker -->
+  <line x1="660" y1="46" x2="660" y2="170" stroke="#a3e635" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="660" y="192" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="8.5" fill="#a3e635">525 KB → map-reduce</text>
+
+  <!-- bars from x=180 -->
+  <rect x="180" y="58" width="527" height="16" rx="3" fill="#64748b"/>
+  <text x="180" y="54" font-family="-apple-system,sans-serif" font-size="9.5" fill="#c9d4e5">raw kubectl -o json  ≈ 1 MB</text>
+  <rect x="180" y="94" width="384" height="16" rx="3" fill="#4ea1ff"/>
+  <text x="180" y="90" font-family="-apple-system,sans-serif" font-size="9.5" fill="#c9d4e5">Stage 1 · structural pre-filter  ·  128 KB</text>
+  <rect x="180" y="130" width="145" height="16" rx="3" fill="#34d399"/>
+  <text x="180" y="126" font-family="-apple-system,sans-serif" font-size="9.5" fill="#c9d4e5">Stage 2 · LLM-distilled summary  ·  4 KB</text>
+</svg>
+<figcaption><strong>Figure 5.</strong> The synthesis reduction, on a log scale. A megabyte of raw JSON is pre-filtered to 128&nbsp;KB deterministically, then distilled by a fast model to about 4&nbsp;KB. The dashed marker at 525&nbsp;KB is the boundary where a single distill call is no longer enough — the subject of the next section.</figcaption>
+</figure>
+
+<p>The distiller's system prompt is what makes the 4&nbsp;KB trustworthy. It does not tell the model "summarize this." It tells the model it is a <em>selector, not a paraphraser</em>: first decide whether the data is <strong>evidence</strong> (records, log lines, rows, search hits) or <strong>narrative</strong> (prose). For evidence, copy the matching units <em>verbatim</em> — exact text, identifiers, primary keys, timestamps, numeric values, byte for byte. Only narrative gets paraphrased, and even then identifiers and numbers are preserved exactly. If nothing is relevant, the model must emit a specific sentinel (<code>No matching entries found</code>) rather than inventing an answer, and it may state that something is absent only after inspecting the whole input.</p>
+
+<p>You can watch that play out on a real result from the run<a class="ref" href="#ref-9">[9]</a>. Step-16 asked for error logs from two services and got back <strong>97.7&nbsp;KB</strong> of nested, escaped Loki JSON — this is the shape the fast model had to read (excerpt):</p>
+
+<pre><code>{"data":{"query":"{service_name=~\"arxiv-tool|clinical-trials-tool\"} |~ \"(?i)error|warn|…\"",
+"source":"loki","streams":[{"entries":[
+  {"line":"{\"component\":\"framework/core\",\"key\":\"truvag3:services:clinical-trials-tool\",
+   \"level\":\"WARN\",\"message\":\"Service not found for health update\",
+   \"service\":\"clinical-trials-tool\",\"timestamp\":\"2026-07-20T17:18:17Z\"}"},
+  …(50-plus more entries like it — 97.7 KB in all)…
+]}]}}
+</code></pre>
+
+<p>The fast model returned <strong>2.4&nbsp;KB</strong> — and, crucially, it did not paraphrase. It pulled out the matching WARN lines and <em>copied them verbatim</em>, exact timestamps and full JSON intact (compare the first line here with the input above), then added a health summary and one line of judgement:</p>
+
+<pre><code># Error/Warning Logs: arxiv-tool &amp; clinical-trials-tool (Last 6 Hours)
+
+## WARN Logs (Service Health Update Issues)
+**clinical-trials-tool:**
+- 2026-07-20T17:18:17Z: `{"component":"framework/core","key":"truvag3:services:clinical-trials-tool","level":"WARN","message":"Service not found for health update","service":"clinical-trials-tool","service_id":"clinical-trials-tool","timestamp":"2026-07-20T17:18:17Z"}`
+- 2026-07-20T16:43:15Z: `{…}`
+- 2026-07-20T16:27:19Z: `{…}`
+**arxiv-tool:**
+- 2026-07-20T17:18:24Z: `{…}`   (…and 2 more)
+
+…(then a "Health Status Summary" section — success rates, uptime, failure counts per service)…
+
+## Analysis
+Both services show recurring WARN "Service not found for health update" at regular intervals
+(~15 min apart). However, heartbeat summaries indicate 100% success rates with zero failures,
+suggesting the warnings relate to health-check registration rather than operational failures.
+</code></pre>
+
+<p>The other half of that contract is knowing when there is nothing to report. Step-13 went hunting for <code>OOMKilled</code>, <code>CrashLoopBackOff</code>, and pod-eviction events across every service. The 39&nbsp;KB of logs that came back were only advisory debug chatter — recommendations <em>about</em> monitoring, not actual incidents — so rather than invent a failure, the model said exactly that (its full output, 0.6&nbsp;KB):</p>
+
+<pre><code>No matching entries found
+
+The log query executed against the `truvag3-examples` namespace with the regex pattern
+`(?i)OOMKilled|CrashLoopBackOff|ImagePullBackOff|evict|killed|oom|out of memory` returned only
+DEBUG-level AI response logs from the devops-chat-agent service containing observability
+recommendations and patterns. These are advisory logs about how to monitor for such conditions,
+not actual incident records showing OOMKilled, CrashLoopBackOff, ImagePullBackOff, or pod
+eviction events.
+
+The data contains no direct evidence of these pod failure conditions occurring in the last 6
+hours across the services queried.
+</code></pre>
+
+<p>Those two outputs are the whole trust argument in miniature: when the evidence is there it is <strong>copied, not summarized away</strong>; when it is not, the model reports the absence instead of hallucinating an incident. Both of these — not the 97.7&nbsp;KB and 39&nbsp;KB behind them — are what the synthesizer, and the final answer, were built from.</p>
+
+<aside class="callout">
+<strong>Identifiers survive verbatim.</strong> A subtle failure mode in any JSON round-trip is that a large integer ID — the kind used for database keys or event IDs, anything above 2<sup>53</sup> — gets silently rounded to a float or rewritten in scientific notation. The entire compaction-and-synthesis path decodes JSON in a mode that preserves exact digits (Go's <code>UseNumber</code>), so those identifiers survive exactly through the pre-filter, the map-reduce chunking, and the final synthesis re-parse. The distill prompt also instructs the model to copy identifiers byte-for-byte. (This covers what the <em>LLM</em> sees; the tool→tool template path uses standard decoding, so do not rely on it to carry a 64-bit ID between tools.)
+</aside>
+
+<p>One more piece of cleverness lives in the budget allocator. When several results share one synthesis prompt, the allocator is <em>distillation-aware</em>: a result that <em>will</em> be distilled is budgeted at its post-distill footprint (~4&nbsp;KB), not its raw megabyte. Without this, one large result would grab the whole budget and starve the others; with it, the allocator knows that result is about to shrink and sizes it accordingly. And if there is no <code>AIClient</code> at all, distillation is simply skipped and you get the structural floor at the synthesis budgets — a safe, trimmed result, never a failure.</p>
+</section>
+
+<section>
+<h2 id="map-reduce">When one call isn't enough: map-reduce</h2>
+
+<p>Here is the problem the 128&nbsp;KB pre-filter creates. If you pre-filter a 1&nbsp;MB result down to 128&nbsp;KB and then hand <em>that</em> to the model, you have thrown away seven-eighths of the source before the LLM ever looked at it — and the one log line that proves the incident might have been sitting at byte 500,000, in the part you discarded. Pre-filtering is fine when the result is merely large. It is dangerous when the result is <em>huge</em> and the finding could be anywhere in it.</p>
+
+<p>So when a result's estimated token count exceeds <code>ModelContextTokens</code> — 150,000 tokens, which, at the framework's estimate of ~3.5 bytes per token, is about <strong>525&nbsp;KB</strong> — distillation switches to <strong>map-reduce</strong>, the classic split-into-chunks, summarize-each, then-combine pattern, run over the <em>full</em> result:</p>
+
+<ol>
+<li><strong>Split</strong> the whole result into chunks of at most 128&nbsp;KB, preferring structural boundaries: top-level JSON array elements first, then the elements of the dominant array inside a JSON object, then newline-delimited records, and only as a last resort a raw byte split.</li>
+<li><strong>Map</strong> — distill each chunk concurrently (up to <code>MapConcurrency</code>, default 8) on the fast tier.</li>
+<li><strong>Reduce</strong> — combine the per-chunk extracts into one final summary with a last fast-model call.</li>
+</ol>
+
+<figure id="fig-mapreduce">
+<svg viewBox="0 0 760 276" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Map-reduce over step-28's result, drawn as a waterfall. At the top, the full 855-kilobyte kubectl result is chunked in full into seven segments of at most 128 kilobytes each. The seven chunk distillations run concurrently on the fast tier, in a single wave under the concurrency cap of eight. When they finish, one reduce call combines their extracts into a 3.7-kilobyte summary. A note reads: the whole 855 kilobytes reached an LLM across seven chunks at 100 percent coverage; a positional truncation would miss anything past the first 128 kilobytes.">
+  <!-- input -->
+  <rect x="150" y="44" width="560" height="16" rx="3" fill="#64748b"/>
+  <text x="150" y="40" font-family="-apple-system,sans-serif" font-size="9.5" fill="#c9d4e5">full result · 855 KB — step-28's kubectl dump  (chunked in full — never pre-filtered away)</text>
+
+  <text x="150" y="80" font-family="-apple-system,sans-serif" font-size="9.5" font-style="italic" fill="#9aa6bd">split into chunks ≤ 128 KB  →  7 chunks, all distilled in one concurrent wave (MapConcurrency = 8)</text>
+
+  <!-- 7 concurrent chunk bars (last is the smaller final chunk) -->
+  <rect x="250" y="96"  width="292" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="105" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 1/7</text>
+  <rect x="250" y="112" width="288" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="121" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 2/7</text>
+  <rect x="250" y="128" width="290" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="137" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 3/7</text>
+  <rect x="250" y="144" width="286" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="153" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 4/7</text>
+  <rect x="250" y="160" width="291" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="169" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 5/7</text>
+  <rect x="250" y="176" width="289" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="185" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 6/7</text>
+  <rect x="250" y="192" width="196" height="11" rx="2.5" fill="#a78bfa"/><text x="150" y="201" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">distill chunk 7/7</text>
+
+  <!-- reduce -->
+  <rect x="560" y="224" width="96" height="12" rx="2.5" fill="#34d399"/>
+  <text x="560" y="221" font-family="-apple-system,sans-serif" font-size="9" fill="#c9d4e5">reduce → one summary</text>
+  <text x="662" y="234" font-family="ui-monospace,Menlo,monospace" font-size="9" fill="#7ee0b3">3.7 KB</text>
+
+  <text x="150" y="262" font-family="-apple-system,sans-serif" font-size="9.5" font-style="italic" fill="#6b7a99">The whole 855 KB reached an LLM across 7 chunks — 100% coverage. A positional truncation would miss anything past the first 128 KB.</text>
+</svg>
+<figcaption><strong>Figure 6.</strong> Map-reduce over step-28's 855&nbsp;KB result from the sample run. Seven chunks distilled in parallel on the fast tier — one wave, under the concurrency cap of 8 — then one reduce call combined them into a 3.7&nbsp;KB summary at 100% source coverage. Because the <em>whole</em> result is chunked rather than pre-filtered, nothing is thrown away before the model reads it. (Here the chunker fell back to a byte split — the <code>kubectl</code> JSON had no clean array boundary to cut on — which stays byte-lossless even though it can tear a record mid-JSON.)</figcaption>
+</figure>
+
+<p>The chunker proves its value on the awkward shapes. When a result is an object wrapped around a dominant array — <code>{"data":{"result":[…]},"status":…,"stats":…}</code>, the shape a Loki or Prometheus response takes — it does not just chunk the array and drop the wrapper. Since a recent hardening pass, each grouped chunk <em>replicates</em> the wrapper and sibling fields, so the surrounding context (<code>status</code>, <code>stats</code>) reaches every chunk's model call rather than being dropped with everything outside the array. An array element too big for one chunk is handled as one or more standalone chunks — split recursively, never truncated. And when every element is oversized and split out, the wrapper still gets emitted once with a sentinel marker in place of the array — so an emptied array is never misread by the model as an authoritative "zero records."</p>
+
+<figure id="fig-dag-mapreduce">
+<img src="https://assets.truvag3.dev/blogs/result-compaction/registry-dag-mapreduce.png" alt="A zoomed view of the final phase in the registry-viewer Execution DAG. A Phase Plan node fans out to several tool nodes: four devops-observability-tool nodes labelled with scissors and sizes 98.4KB→2.3KB, 193.2KB→1.3KB, 189.2KB→1.7KB and 192.6KB→1.2KB, two small prometheus-query-tool nodes with no compaction, and one devops-tool node labelled 854.5KB→3.7KB. Each devops-observability-tool node wires to a single purple Distill node, while the 854.5KB devops-tool node wires to a whole row of eight Distill nodes on the right. Below, an Event Summary node feeds a Synthesis (Stream) node and then Complete.">
+<figcaption><strong>Figure 7.</strong> The map-reduce from Figure 6, in the registry viewer<a class="ref" href="#ref-11">[11]</a>. Step-28's <code>devops-tool</code> result (<code>854.5KB→3.7KB</code>) fans out into the row of <strong>Distill</strong> nodes on the right — the seven chunk extracts and one reduce. The other big results in the same phase — the 98–193&nbsp;KB <code>devops-observability-tool</code> results — each took the ordinary single-call distill path, one Distill node apiece (<code>✂ 193.2KB→1.3KB</code>, and so on).</figcaption>
+</figure>
+
+<p>That is not a hypothetical — it is step-28 of the sample run. The 855&nbsp;KB <code>kubectl</code> dump cleared the ~525&nbsp;KB context threshold, so the distiller chunked it into seven segments, ran all seven as concurrent fast-model calls, and reduced them into a single 3.7&nbsp;KB summary with the whole result represented (<code>source_coverage_ratio = 1.0</code>, <code>content_lost = false</code>). That is eight cheap fast-model calls to read most of a megabyte — so the expensive reasoning model never had to.</p>
+
+<aside class="callout">
+<strong>The single-call caveat.</strong> Out of the box, map-reduce engages only <em>above</em> the ~525&nbsp;KB context threshold. A result in the <strong>128&nbsp;KB–525&nbsp;KB</strong> band still takes the single-call path, where Stage 1 pre-filters to 128&nbsp;KB before the LLM — so the model sees the pre-filter, not the whole result. That drop is never hidden: the output carries a <code>[partial source: the model received ~N% of the source by bytes …]</code> note and the trim metadata records it. In the sample run, six results landed in this band and show it plainly: step-6's 389&nbsp;KB result reached the model at only <strong>33%</strong> coverage, step-14's 284&nbsp;KB at 44%, and four more between 64% and 68% — each carrying the <code>[partial source]</code> note into synthesis. If you want the <em>entire</em> result in that band analyzed, there is a second, opt-in trigger — <code>MapReduceThresholdBytes</code> (a byte size, disabled by default) — that routes anything larger through map-reduce even when it comfortably fits the context. At the gigabyte scale, though, the answer changes: those outputs do not belong in a prompt at all — reduce them at the source, or use an extract-then-reference workflow.
+</aside>
+</section>
+
+<section>
+<h2 id="disclosure">What a shrunk result admits it dropped</h2>
+
+<p>A compaction system that quietly discards content is a liability, because the model downstream cannot tell a trimmed result from a complete one — and will happily conclude "there are no errors" when what it means is "there are no errors <em>in the 4&nbsp;KB I was shown.</em>" TruvaG3's answer is a hard rule: whenever any layer <em>deterministically</em> drops content, it appends a single-line note and sets an authoritative <code>content_lost</code> flag in the trim metadata. Every note starts with a <code>[</code> so it is machine-parseable and strippable, and every note tells the downstream model the same thing — treat what is omitted as <strong>UNKNOWN, not absent</strong>.</p>
+
+<p>That flag is the one signal downstream honesty keys on. Not byte ratios — re-serialization can shrink bytes with nothing lost, and escape-unwrapping can grow bytes while content <em>was</em> dropped — but the explicit <code>content_lost</code> bit, which every lossy operation is required to set. The framework even folds any specific loss flag into it defensively, so a report can never claim "verified lossless" while also flagging partial coverage. Here are the notes you can actually see in a result:</p>
+
+<table>
+<thead><tr><th>Note</th><th>Emitted by</th><th>What it means</th></tr></thead>
+<tbody>
+<tr><td><code>[trimmed: …]</code></td><td>Structural trim</td><td>Whole fields, items, or sentences were dropped to fit the budget.</td></tr>
+<tr><td><code>[severely reduced: …]</code></td><td>Structural trim</td><td>Under 5% of the source survived — too little to be representative.</td></tr>
+<tr><td><code>[partial source: ~N% …]</code></td><td>Distillation</td><td>Stage-1 pre-filter dropped content before the LLM (the 128–525&nbsp;KB band).</td></tr>
+<tr><td><code>[partial: N of M segments analyzed …]</code></td><td>Map-reduce</td><td>Only N of M chunks completed — a deadline or a failed chunk call.</td></tr>
+<tr><td><code>[findings truncated: …]</code></td><td>Map-reduce reduce</td><td>The combined extracts were truncated to fit the budget.</td></tr>
+<tr><td><code>[reduced without model analysis: …]</code></td><td>Synthesis floor</td><td>A byte-truncation fallback ran and no LLM analyzed the dropped tail.</td></tr>
+</tbody>
+</table>
+
+<p>There is a nice piece of discipline hiding in what is <em>not</em> on that list. The distiller's system prompt also asks the model to end an over-budget summary with its own <code>[truncated: …]</code> line — but that model-emitted form is deliberately <em>not</em> registered with the framework's annotation stripper. The reason: real tools emit their own <code>[truncated: …]</code> trailers, and if the framework stripped that pattern, it would silently delete a <em>tool's</em> own truncation signal, presenting visibly truncated source as complete. The authoritative, framework-guaranteed disclosure is the <code>[partial source: …]</code> note, not the model's best-effort one. It is the kind of distinction you only make after the alternative has caused a real problem.</p>
+</section>
+
+<section>
+<h2 id="layer-3">Layer 3: digests, the planning path</h2>
+
+<p>Now the other prompt path — the one that fires during replanning. Between phases, the continuation planner re-reads the completed steps to decide what comes next. It would be wasteful to distill each one (an LLM call per step, on a path that runs every phase), and destructive to truncate them (which mangles JSON). So completed-step results are rendered as <strong>structure-complete JSON digests</strong> instead.</p>
+
+<p>A digest is a skeleton of the result that is <em>always valid JSON</em>. An object keeps all its keys up to a 50-key cap; wider "map-shaped" objects are sampled to sorted keys plus a sentinel. Arrays are head-sampled to 3 elements plus a length sentinel. Long strings — anything over 200 characters — are shortened to a placeholder like <code>"…(16384 chars)"</code>. A 519&nbsp;KB Loki result collapses to a roughly 600-byte skeleton that still tells the planner everything it needs to know about the <em>shape</em> of what came back:</p>
+
+<pre><code>{
+  "status": "success",
+  "data": {
+    "resultType": "streams",
+    "streams": [
+      { "stream": { "pod": "tool-abc", "level": "error" },
+        "values": [
+          ["1721000000000000000", "…(16384 chars)"],
+          ["1721000000000000001", "…(12000 chars)"],
+          ["1721000000000000002", "…(8192 chars)"],
+          "…197 more of 200"
+        ]
+      },
+      { "stream": { "pod": "tool-def", "level": "warn" },
+        "values": [["1721000000000000003", "…(4096 chars)"]]
+      },
+      { "stream": { "pod": "tool-ghi", "level": "info" },
+        "values": [["1721000000000000004", "…(2048 chars)"]]
+      },
+      "…197 more of 200"
+    ]
+  },
+  "stats": {
+    "ingester": { "compressedBytes": 123456 },
+    "summary": { "totalLines": 400 }
+  }
+}
+</code></pre>
+
+<p>This is the addressability idea, and it is deliberate: digests are <em>lossy on values but complete on structure</em>. The planner never needs the 200 log streams — it needs to know they exist, and where. It writes a plan that references <code>{{step-9.response.data.streams}}</code>, and, per the invariant from earlier, the executor binds the entire 200-entry array from memory at run time. The planner reasoned over 600 bytes; the next step will act on the full half-megabyte.</p>
+
+<p>The budget for this section is a <em>greedy recency-fill</em>, and it is a soft target (32&nbsp;KB) that drives eviction rather than a hard cap. The rules encode what the planner most needs to see:</p>
+
+<ul>
+<li><strong>Failed steps are always kept.</strong> They carry a lot of signal in very little space — they render as short <code>[FAILED: …]</code> markers — so they count against the budget but are never evicted.</li>
+<li><strong>Successful steps fill newest-first</strong> until the budget is spent; older ones are evicted with a <code>[showing N of M completed steps]</code> note. They stay referenceable by step-ID at execution, so eviction from the prompt is not eviction from the run.</li>
+<li><strong>The newest successful step is always kept</strong>, even if it alone exceeds the budget, so the section is never empty.</li>
+<li>Steps render in <strong>chronological order</strong>, so the newest sits at the end of the prompt — the position models attend to most.</li>
+</ul>
+
+<p>Not every result is JSON, of course — logs, markdown, and CSV have no structure to digest. Those get a plain floor preview (sized by a 10,000-character cap), and a capped number of the newest non-JSON steps (default 8; set 0 to disable) may <em>escalate</em> to a separate continuation distiller for a fast-model summary that replaces the floor preview. This is the "rarely yes" from the table at the top: on an all-JSON workload it almost never fires, and when it does, it is fail-open — an empty summary just leaves the floor preview in place.</p>
+</section>
+
+<section>
+<h2 id="economics">Cache, deadlines, and what it costs</h2>
+
+<p>Distillation makes real LLM calls, so it has a real cost — and the design spends carefully. The reading is done on the <code>fast</code> tier, several times cheaper per token than the reasoning model (roughly 3× on a Sonnet→Haiku stack, more against a frontier reasoning model). A run that distills several megabytes does the bulk of that reading cheaply and reserves the expensive model for the actual answer — in the sample run, distillation accounted for <strong>683,956 of the 784,965 input tokens</strong> the whole request read (87%), all of it on the fast tier, while the reasoning-tier synthesis prompt was just 25,090 tokens. Map-reduce chunks run concurrently, so wall-clock time is the slowest wave plus the reduce, not the sum of all chunks. And below the threshold, nothing happens at all — a small result takes a cheap structural pass, or passes through raw if it already fits.</p>
+
+<p>Two more mechanisms are worth naming, because both are strictly fail-open. The first is caching, which is <strong>opt-in</strong>: there is no cache unless you supply one (a <code>core.DigestCache</code>, such as one backed by Redis), so out of the box every distillation recomputes. When a cache <em>is</em> supplied, matching inputs — the result, the instruction, the user query, and the budget, plus a configuration salt covering the prompt version, model, target size, and routing knobs — reuse a prior distillation for a 5-minute TTL, turning scheduled and repetitive runs into cache hits. Crucially, a failed or partial output is <em>never</em> cached: a deadline cut, or a map-reduce run in which some chunks failed, is marked non-cacheable so a transient error cannot be served for the whole TTL. A nil or erroring cache simply recomputes — it never fails.</p>
+
+<p>The second is the deadline: each compaction is bounded by a 45-second wall-clock limit, which should be set below your gateway timeout. On a timeout, the single-call path falls back to the structural floor, and the map-reduce path returns the chunks that finished plus the honest <code>[partial: …]</code> disclosure. The synthesis hot path is never blocked past the deadline — it degrades to a smaller, labeled result instead. This is the fail-open principle made concrete: every knob that could slow the request down has a defined, disclosed way to give up gracefully.</p>
+
+<p>All of it is observable. Every distillation emits telemetry you can watch in your monitoring stack — trace events (<code>result_distill.mapreduce_route</code>, <code>stage1_complete</code>, <code>stage2_complete</code>, <code>mapreduce_complete</code>, <code>cache_hit</code>, <code>llm_failed</code>) and metrics (<code>triggered</code>, <code>duration_ms</code>, <code>failed</code>, <code>mapreduce</code>, <code>cache_hit</code>/<code>miss</code>) — and every processed step carries a <code>result_trim</code> record with the authoritative <code>content_lost</code> flag and the coverage numbers. Turn on TruvaG3's LLM-debug mode and each distill call is captured in full — prompt, response, tokens — including the individual <code>map-reduce chunk i/N</code> calls, shown next to the planning and synthesis calls in the registry viewer. The companion observability walkthrough<a class="ref" href="#ref-8">[8]</a> shows exactly what those surfaces look like on a real run.</p>
+
+<aside class="callout">
+<strong>Not to be confused with…</strong> Result compaction handles large <em>tool and step results</em>, the subject of this article. It sits next to — but is separate from — <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md">Conversation History Protection</a><a class="ref" href="#ref-7">[7]</a>, which compacts long <em>chat histories</em> across turns. Different inputs, different knobs (<code>TRUVAG3_CONVERSATION_*</code>); the two compose without overlapping.
+</aside>
+</section>
+
+<section>
+<h2 id="the-decision">The whole decision, in one picture</h2>
+
+<p>Put the layers back together and every result a step produces runs through one decision, determined entirely by where it is going next:</p>
+
+<pre><code>result produced by a step
+│
+├─ used as INPUT to another tool ──────────▶ pass through RAW (fidelity-first;
+│                                             cap only if MaxAgentInputBytes > 0)
+│
+├─ used as SOURCE for param resolution ────▶ StructuralTrimmer to 64 KB
+│                                             (deterministic — never the LLM distiller)
+│
+├─ headed to the SYNTHESIS prompt ─────────▶ ≤ 16 KB?  structural trim to the budget
+│                                             > 16 KB + AIClient?  distill (fast model)
+│                                                 └─ > model context (~525 KB)?  map-reduce
+│                                             no AIClient?  StructuralTrimmer floor
+│
+└─ headed to the CONTINUATION prompt ──────▶ valid JSON?  structure-complete digest
+                                              non-JSON?  floor preview (+ rare escalation)
+                                              whole section under a soft 32 KB budget
+                                              (newest-first; failed + newest always kept)
+</code></pre>
+
+<p>Read it top to bottom, and the philosophy is visible in the branching. A tool-to-tool handoff gets the raw truth, because a program needs all of it. A resolution prompt gets a deterministic trim, because it drives its own LLM call and must not be pre-summarized. The final answer gets an LLM that reads for meaning, escalating to map-reduce only when the result is too big to read in one pass. And the planner gets a skeleton, because it is choosing the next move, not writing the answer. Four destinations, four treatments — and behind all of them, the same guarantee that the full result is still sitting in memory, untouched.</p>
+</section>
+
+<section>
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The uncomfortable truth about agentic systems is that the interesting results are big, and the model that has to reason over them has a small window and a shorter attention span. You cannot simply put a megabyte of <code>kubectl</code> output into a prompt and hope it works. You will either exceed the context window outright, or — long before that — quietly degrade the model's reasoning. TruvaG3 treats that as a first-class problem and solves it in the place it belongs — automatically, inside the orchestrator, before a single oversized result ever reaches a prompt.</p>
+
+<p>What makes the solution more than a truncation hack is the shape of it. The split by <em>destination</em> means the planner gets structure and the synthesizer gets meaning, each exactly what it needs. The invariant that the full result never leaves memory means every summary is a safe view of the data, never a permanent deletion. The fail-open discipline means no compaction step can ever be the reason a request errors. And the honesty contract — every loss disclosed, every omission flagged UNKNOWN rather than absent — means the model downstream is never quietly misled about what it is and isn't seeing. A megabyte goes in; a few kilobytes come out — the ones that actually matter — and the request finishes cleanly. That is what result compaction is for.</p>
+</section>
+
+<section>
+<h2 id="references">References</h2>
+<ol class="references">
+  <li id="ref-1"><strong>TruvaG3 — repository.</strong> The open-source reference implementation of the microagents framework and the source of every threshold and code path described here. <a href="https://github.com/truvaagents/truva-g3">https://github.com/truvaagents/truva-g3</a></li>
+  <li id="ref-2"><strong>TruvaG3 — Result Compaction Guide.</strong> The companion conceptual reference: three layers, two prompt paths, the full configuration surface, tuning scenarios, and troubleshooting. <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/orchestration/RESULT_COMPACTION_GUIDE.md">docs/orchestration/RESULT_COMPACTION_GUIDE.md</a></li>
+  <li id="ref-3"><strong>TruvaG3 — <code>orchestration/</code> package.</strong> The code that is the source of truth for this article: <code>result_processor.go</code> (trim metadata, budget allocation, continuation digests), <code>result_distiller.go</code> (the two-stage LLM distiller), <code>result_mapreduce.go</code> (chunking and map-reduce), <code>structural_trimmer.go</code> (the deterministic floor), and <code>synthesizer.go</code> (the synthesis prompt). <a href="https://github.com/truvaagents/truva-g3/tree/main/orchestration">https://github.com/truvaagents/truva-g3/tree/main/orchestration</a></li>
+  <li id="ref-4"><strong>TruvaG3 — <code>examples/</code> directory.</strong> The bundled tools and agents, including the DevOps example agents and tools whose oversized results motivate compaction. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples">https://github.com/truvaagents/truva-g3/tree/main/examples</a></li>
+  <li id="ref-5"><strong>TruvaG3 — <code>examples/devops-chat-agent/</code>.</strong> The data-heavy agent used as the running example. Paired with <code>devops-tool</code> and <code>devops-observability-tool</code>, a single deep-analysis query fans out into the megabyte-scale <code>kubectl</code> and Loki results this article compacts. <a href="https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent">https://github.com/truvaagents/truva-g3/tree/main/examples/devops-chat-agent</a></li>
+  <li id="ref-6"><strong>TruvaG3 — Effective Prompts Guide.</strong> The framework's prompt-engineering reference, including the "bloat threshold" research behind keeping prompts lean — the measured drop in reasoning accuracy as inputs grow into the low thousands of tokens. <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/building/EFFECTIVE_PROMPTS_GUIDE.md">docs/building/EFFECTIVE_PROMPTS_GUIDE.md</a></li>
+  <li id="ref-7"><strong>TruvaG3 — Conversation History Guide.</strong> The adjacent, separate context-management layer that compacts long <em>chat histories</em> across turns. It uses different inputs and knobs, and it composes without overlapping result compaction. <a href="https://github.com/truvaagents/truva-g3/blob/main/docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md">docs/memory-and-chat/CONVERSATION_HISTORY_GUIDE.md</a></li>
+  <li id="ref-8"><strong>TruvaG3 — Observability Deep Dive (companion article).</strong> One request followed through Jaeger traces, correlated Loki logs, and the registry-viewer Execution DAG, where the distillation spans and LLM-debug records described here become visible. <a href="https://truvag3.dev/blogs/truvag3-observability-deep-dive.html">https://truvag3.dev/blogs/truvag3-observability-deep-dive.html</a></li>  <li id="ref-9"><strong>TruvaG3 — execution DAG for this run (JSON).</strong> The complete execution record for request <code>orch-1784568113494162491</code>: the plan, all 28 step results, per-step trim metadata (original bytes, distilled bytes, coverage, chunk strategy), and all 30 LLM interactions with their prompts and token counts. Every number in this article is taken from it. <a href="https://assets.truvag3.dev/blogs/result-compaction/execution-dag.json">https://assets.truvag3.dev/blogs/result-compaction/execution-dag.json</a></li>
+  <li id="ref-10"><strong>TruvaG3 — raw Jaeger trace for this run (JSON).</strong> The distributed trace for the same request, including the <code>result_distill.*</code> span events (map-reduce routing, stage-1/stage-2 completion, per-chunk calls) referenced throughout. <a href="https://assets.truvag3.dev/blogs/result-compaction/jaeger-trace.json">https://assets.truvag3.dev/blogs/result-compaction/jaeger-trace.json</a></li>
+  <li id="ref-11"><strong>TruvaG3 — registry-viewer screenshots for this run (PNG).</strong> The Execution DAG shown in Figures 1, 2 and 7 — the full graph, a legible Phase-3 close-up, and the final-phase map-reduce fan-out — captured from the registry viewer at <code>registry.localhost</code>. <a href="https://assets.truvag3.dev/blogs/result-compaction/registry-execution-dag.png">registry-execution-dag.png</a> · <a href="https://assets.truvag3.dev/blogs/result-compaction/registry-dag-phase3.png">registry-dag-phase3.png</a> · <a href="https://assets.truvag3.dev/blogs/result-compaction/registry-dag-mapreduce.png">registry-dag-mapreduce.png</a></li>
+</ol>
+</section>
+
+<p class="cite-as"><strong>Cite as:</strong> Tripathi, N. (2026). <em>Too Big to Read: How TruvaG3 Fits a Megabyte of Results Back Into the Prompt</em>. <a href="https://truvag3.dev/blogs/truvag3-result-compaction">https://truvag3.dev/blogs/truvag3-result-compaction</a></p>
+
+<p class="footer-note">The TruvaG3 reference implementation<a class="ref" href="#ref-1">[1]</a> is open source. The source code, the example deployments, the design notes, and the registry viewer are all public. Feedback, issues, and contributions are welcome.</p>
+
+<p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+
+</article>
+
+<script>
+(function () {
+  var imgs = document.querySelectorAll('article figure img');
+  if (!imgs.length) return;
+  var lb = document.createElement('div');
+  lb.className = 'img-lightbox';
+  lb.setAttribute('role', 'dialog');
+  lb.setAttribute('aria-modal', 'true');
+  lb.setAttribute('aria-label', 'Expanded image');
+  var btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'lb-close'; btn.setAttribute('aria-label', 'Close'); btn.innerHTML = '&times;';
+  var pic = document.createElement('img'); pic.alt = '';
+  var hint = document.createElement('div'); hint.className = 'lb-hint'; hint.textContent = 'Click anywhere or press Esc to close';
+  lb.appendChild(btn); lb.appendChild(pic); lb.appendChild(hint);
+  document.body.appendChild(lb);
+  function openLb(src, alt) { pic.src = src; pic.alt = alt || ''; lb.classList.add('open'); document.documentElement.style.overflow = 'hidden'; }
+  function closeLb() { lb.classList.remove('open'); pic.removeAttribute('src'); document.documentElement.style.overflow = ''; }
+  imgs.forEach(function (im) { im.addEventListener('click', function () { openLb(im.currentSrc || im.src, im.alt); }); });
+  lb.addEventListener('click', closeLb);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && lb.classList.contains('open')) closeLb(); });
+})();
+</script>
+
+
+<script src="/assets/js/toc-rail.js"></script>
+</body>
+</html>

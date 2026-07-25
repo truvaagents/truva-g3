@@ -24,6 +24,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="/assets/css/code-highlight.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <style>
   :root {
     --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
@@ -200,57 +201,6 @@
   @keyframes dash { to { stroke-dashoffset: -40; } }
   .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
 
-  /* Section rail (left scroll-spy nav) */
-  #toc-rail {
-    position: fixed; left: 12px; top: 50%; transform: translateY(-50%);
-    z-index: 50; display: flex; flex-direction: column; gap: 10px;
-    padding: 0; background: transparent; border: none;
-    max-height: 88vh;
-  }
-  /* Each item is ONE pill that holds the dot and the label inside a single
-     boundary. At rest it collapses to just the dot; on hover (whole rail) or
-     when active it expands to show the label within the same pill. */
-  #toc-rail .toc-dot {
-    display: inline-flex; align-items: center; gap: 12px;
-    text-decoration: none; line-height: 1; white-space: nowrap;
-    padding: 9px 13px; border-radius: 999px;
-    background: transparent; border: 1px solid transparent;
-    box-shadow: none; overflow: hidden; max-width: 44px;
-    transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
-  }
-  #toc-rail .toc-dot .d {
-    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; opacity: .55;
-    transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
-  }
-  #toc-rail .toc-dot .lbl {
-    font-size: 16px; color: var(--muted); opacity: 0;
-    transition: opacity .18s ease, color .18s ease;
-  }
-  /* Expanded state — whole rail on hover, plus the active item at rest */
-  #toc-rail:hover .toc-dot,
-  #toc-rail .toc-dot.active {
-    max-width: 360px;
-    background: #0e1422; border-color: var(--line);
-    box-shadow: 0 6px 20px rgba(0,0,0,.5);
-  }
-  #toc-rail:hover .toc-dot .lbl,
-  #toc-rail .toc-dot.active .lbl { opacity: 1; }
-  #toc-rail .toc-dot:hover .d,
-  #toc-rail .toc-dot.active .d { opacity: 1; }
-  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
-  #toc-rail .toc-dot:hover .lbl { color: var(--ink); }
-  #toc-rail .toc-dot.active .d { width: 19px; height: 19px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
-  #toc-rail .toc-dot.active .lbl { color: var(--ink); font-weight: 600; }
-  /* JS-driven fits for zoom / narrow margins:
-     .no-active-label → collapse the active pill back to a dot when it would cross
-     into the content (hover still expands it as a transient overlay).
-     .rail-hidden     → not even the dots fit; hide the whole rail. */
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active {
-    max-width: 44px; background: transparent; border-color: transparent; box-shadow: none;
-  }
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
-  #toc-rail.rail-hidden { display: none; }
-  @media (max-width: 1180px) { #toc-rail { display: none; } }
 
   /* Back-to-top */
   #to-top {
@@ -318,22 +268,7 @@
 </header>
 
 <!-- Left section rail (scroll-spy) -->
-<aside id="toc-rail" aria-label="Section navigation">
-  <a class="toc-dot" href="#concept"   data-target="concept"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The concept</span></a>
-  <a class="toc-dot" href="#boundary"  data-target="boundary"><span class="d" style="background:var(--runtime)"></span><span class="lbl">The boundary</span></a>
-  <a class="toc-dot" href="#loop"      data-target="loop"><span class="d" style="background:var(--wire)"></span><span class="lbl">The loop</span></a>
-  <a class="toc-dot" href="#openai"    data-target="openai"><span class="d" style="background:var(--oai)"></span><span class="lbl">OpenAI</span></a>
-  <a class="toc-dot" href="#anthropic" data-target="anthropic"><span class="d" style="background:var(--anth)"></span><span class="lbl">Anthropic</span></a>
-  <a class="toc-dot" href="#gemini"    data-target="gemini"><span class="d" style="background:var(--gem)"></span><span class="lbl">Gemini</span></a>
-  <a class="toc-dot" href="#ollama"    data-target="ollama"><span class="d" style="background:var(--olla)"></span><span class="lbl">Ollama</span></a>
-  <a class="toc-dot" href="#mistral"   data-target="mistral"><span class="d" style="background:var(--mis)"></span><span class="lbl">Mistral</span></a>
-  <a class="toc-dot" href="#cohere"    data-target="cohere"><span class="d" style="background:var(--coh)"></span><span class="lbl">Cohere</span></a>
-  <a class="toc-dot" href="#bedrock"   data-target="bedrock"><span class="d" style="background:var(--bed)"></span><span class="lbl">AWS Bedrock</span></a>
-  <a class="toc-dot" href="#groq"      data-target="groq"><span class="d" style="background:var(--groq)"></span><span class="lbl">Groq &amp; xAI</span></a>
-  <a class="toc-dot" href="#compare"   data-target="compare"><span class="d" style="background:#fff"></span><span class="lbl">Side-by-side</span></a>
-  <a class="toc-dot" href="#takeaways" data-target="takeaways"><span class="d" style="background:var(--good)"></span><span class="lbl">Summary</span></a>
-  <a class="toc-dot" href="#glossary"  data-target="glossary"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Glossary</span></a>
-</aside>
+<aside id="toc-rail" data-rail="section" data-rail-extra="glossary:Glossary:#c4b5fd" aria-label="Section navigation"></aside>
 
 <button id="to-top" aria-label="Back to top" title="Back to top">&uarr;</button>
 
@@ -1521,83 +1456,6 @@
 </footer>
 
 <script>
-  // Smooth-scroll for header pills AND the left rail
-  document.querySelectorAll('a.pill, #toc-rail .toc-dot').forEach(a => {
-    a.addEventListener('click', e => {
-      const id = a.getAttribute('href');
-      if (id && id.startsWith('#')) {
-        const el = document.querySelector(id);
-        if (el) {
-          e.preventDefault();
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          history.replaceState(null, '', id);
-        }
-      }
-    });
-  });
-
-  // Scroll-spy: highlight the rail item for the section currently in view
-  const railLinks = Array.from(document.querySelectorAll('#toc-rail .toc-dot'));
-  const sections = railLinks
-    .map(a => document.getElementById(a.dataset.target))
-    .filter(Boolean);
-
-  function syncRail() {
-    if (!sections.length) return;
-    const probe = window.scrollY + window.innerHeight * 0.30;
-    let current = sections[0];
-    for (const s of sections) {
-      if (s.offsetTop <= probe) current = s;
-    }
-    railLinks.forEach(a => a.classList.toggle('active', a.dataset.target === current.id));
-  }
-
-  // Back-to-top button
-  const toTop = document.getElementById('to-top');
-  function syncTop() {
-    if (toTop) toTop.classList.toggle('show', window.scrollY > 600);
-  }
-  if (toTop) {
-    toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
-  }
-
-  // Keep the rail from overlapping content when the page is zoomed/magnified
-  // or the window is narrow. Measures the real left margin at the current zoom.
-  const railEl = document.getElementById('toc-rail');
-  const measureContainer = document.querySelector('section .container');
-  function fitRail() {
-    if (!railEl || !measureContainer) return;
-    if (railEl.matches(':hover')) return; // don't reflow while the user is using it
-    const contentEdge = measureContainer.getBoundingClientRect().left + 24; // text start (24px container padding)
-    railEl.classList.remove('rail-hidden', 'no-active-label');
-    // 1) Does a collapsed dot pill fit in the left margin at all? (non-active items
-    //    stay collapsed, so they measure the bare dot footprint.)
-    const collapsed = railEl.querySelector('.toc-dot:not(.active)');
-    const collapsedRight = (collapsed || railEl).getBoundingClientRect().right;
-    if (collapsedRight + 10 > contentEdge) {
-      railEl.classList.add('rail-hidden');
-      return;
-    }
-    // 2) Does the expanded active pill (dot + label) stay out of the content?
-    const active = railEl.querySelector('.toc-dot.active');
-    if (active) {
-      const r = active.getBoundingClientRect();
-      if (r.right + 10 > contentEdge) railEl.classList.add('no-active-label');
-    }
-  }
-
-  let ticking = false;
-  window.addEventListener('scroll', () => {
-    if (!ticking) {
-      window.requestAnimationFrame(() => { syncRail(); syncTop(); fitRail(); ticking = false; });
-      ticking = true;
-    }
-  }, { passive: true });
-  window.addEventListener('resize', () => { syncRail(); fitRail(); }, { passive: true });
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => { syncRail(); fitRail(); });
-  }
-  syncRail(); syncTop(); fitRail();
 
   // Custom always-visible horizontal scrollbar for the comparison table
   (function () {
@@ -1654,5 +1512,6 @@
 </script>
 <script src="/assets/js/code-highlight.js"></script>
 
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>

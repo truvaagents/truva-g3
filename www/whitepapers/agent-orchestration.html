@@ -24,6 +24,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="/assets/css/code-highlight.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <style>
   :root {
     --bg: #0b0f17;
@@ -304,6 +305,10 @@
     </div>
   </div>
 </header>
+
+<!-- Left section rail (scroll-spy) -->
+<aside id="toc-rail" data-rail="section" data-rail-extra="glossary:Glossary:#c4b5fd" aria-label="Section navigation"></aside>
+
 
 <!-- ================= UNIVERSAL LOOP ================= -->
 <section id="universal">
@@ -1264,23 +1269,8 @@ Observation: 15°C, cloudy
   </div>
 </footer>
 
-<script>
-  // smooth-scroll for the pill nav
-  document.querySelectorAll('a.pill').forEach(a => {
-    a.addEventListener('click', e => {
-      const id = a.getAttribute('href');
-      if (id && id.startsWith('#')) {
-        const el = document.querySelector(id);
-        if (el) {
-          e.preventDefault();
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          history.replaceState(null, '', id);
-        }
-      }
-    });
-  });
-</script>
 
 <script src="/assets/js/code-highlight.js"></script>
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>

@@ -24,6 +24,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="/assets/css/code-highlight.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <style>
   :root {
     --bg: #0b0f17; --bg-2: #121826; --bg-3: #1a2236;
@@ -193,49 +194,6 @@
   @keyframes dash { to { stroke-dashoffset: -40; } }
   .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
 
-  /* Section rail (left scroll-spy nav) */
-  #toc-rail {
-    position: fixed; left: 12px; top: 50%; transform: translateY(-50%);
-    z-index: 50; display: flex; flex-direction: column; gap: 10px;
-    padding: 0; background: transparent; border: none;
-    max-height: 88vh;
-  }
-  #toc-rail .toc-dot {
-    display: inline-flex; align-items: center; gap: 12px;
-    text-decoration: none; line-height: 1; white-space: nowrap;
-    padding: 9px 13px; border-radius: 999px;
-    background: transparent; border: 1px solid transparent;
-    box-shadow: none; overflow: hidden; max-width: 44px;
-    transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
-  }
-  #toc-rail .toc-dot .d {
-    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; opacity: .55;
-    transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease;
-  }
-  #toc-rail .toc-dot .lbl {
-    font-size: 16px; color: var(--muted); opacity: 0;
-    transition: opacity .18s ease, color .18s ease;
-  }
-  #toc-rail:hover .toc-dot,
-  #toc-rail .toc-dot.active {
-    max-width: 360px;
-    background: #0e1422; border-color: var(--line);
-    box-shadow: 0 6px 20px rgba(0,0,0,.5);
-  }
-  #toc-rail:hover .toc-dot .lbl,
-  #toc-rail .toc-dot.active .lbl { opacity: 1; }
-  #toc-rail .toc-dot:hover .d,
-  #toc-rail .toc-dot.active .d { opacity: 1; }
-  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
-  #toc-rail .toc-dot:hover .lbl { color: var(--ink); }
-  #toc-rail .toc-dot.active .d { width: 19px; height: 19px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
-  #toc-rail .toc-dot.active .lbl { color: var(--ink); font-weight: 600; }
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active {
-    max-width: 44px; background: transparent; border-color: transparent; box-shadow: none;
-  }
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
-  #toc-rail.rail-hidden { display: none; }
-  @media (max-width: 1180px) { #toc-rail { display: none; } }
 
   /* Back-to-top */
   #to-top {
@@ -300,19 +258,7 @@
 </header>
 
 <!-- Left section rail (scroll-spy) -->
-<aside id="toc-rail" aria-label="Section navigation">
-  <a class="toc-dot" href="#concept"    data-target="concept"><span class="d" style="background:#9ec5ff"></span><span class="lbl">What a Skill is</span></a>
-  <a class="toc-dot" href="#anatomy"    data-target="anatomy"><span class="d" style="background:var(--skill)"></span><span class="lbl">Anatomy</span></a>
-  <a class="toc-dot" href="#disclosure" data-target="disclosure"><span class="d" style="background:#7dd3fc"></span><span class="lbl">Progressive disclosure</span></a>
-  <a class="toc-dot" href="#lifecycle"  data-target="lifecycle"><span class="d" style="background:var(--good)"></span><span class="lbl">How it runs</span></a>
-  <a class="toc-dot" href="#api"        data-target="api"><span class="d" style="background:var(--api)"></span><span class="lbl">On the API</span></a>
-  <a class="toc-dot" href="#code"       data-target="code"><span class="d" style="background:var(--cc)"></span><span class="lbl">Claude Code &amp; SDK</span></a>
-  <a class="toc-dot" href="#standard"   data-target="standard"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Open standard</span></a>
-  <a class="toc-dot" href="#authoring"  data-target="authoring"><span class="d" style="background:var(--warn)"></span><span class="lbl">Authoring</span></a>
-  <a class="toc-dot" href="#security"   data-target="security"><span class="d" style="background:var(--sec)"></span><span class="lbl">Security</span></a>
-  <a class="toc-dot" href="#takeaways"  data-target="takeaways"><span class="d" style="background:var(--good)"></span><span class="lbl">Summary</span></a>
-  <a class="toc-dot" href="#glossary"   data-target="glossary"><span class="d" style="background:#c4b5fd"></span><span class="lbl">Glossary</span></a>
-</aside>
+<aside id="toc-rail" data-rail="section" data-rail-extra="glossary:Glossary:#c4b5fd" aria-label="Section navigation"></aside>
 
 <button id="to-top" aria-label="Back to top" title="Back to top">&uarr;</button>
 
@@ -981,79 +927,6 @@ Summarize the changes above, then deploy using ${CLAUDE_SKILL_DIR}/scripts/deplo
 </footer>
 
 <script>
-  // Smooth-scroll for header pills AND the left rail
-  document.querySelectorAll('a.pill, #toc-rail .toc-dot').forEach(a => {
-    a.addEventListener('click', e => {
-      const id = a.getAttribute('href');
-      if (id && id.startsWith('#')) {
-        const el = document.querySelector(id);
-        if (el) {
-          e.preventDefault();
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          history.replaceState(null, '', id);
-        }
-      }
-    });
-  });
-
-  // Scroll-spy: highlight the rail item for the section currently in view
-  const railLinks = Array.from(document.querySelectorAll('#toc-rail .toc-dot'));
-  const sections = railLinks
-    .map(a => document.getElementById(a.dataset.target))
-    .filter(Boolean);
-
-  function syncRail() {
-    if (!sections.length) return;
-    const probe = window.scrollY + window.innerHeight * 0.30;
-    let current = sections[0];
-    for (const s of sections) {
-      if (s.offsetTop <= probe) current = s;
-    }
-    railLinks.forEach(a => a.classList.toggle('active', a.dataset.target === current.id));
-  }
-
-  // Back-to-top button
-  const toTop = document.getElementById('to-top');
-  function syncTop() {
-    if (toTop) toTop.classList.toggle('show', window.scrollY > 600);
-  }
-  if (toTop) {
-    toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
-  }
-
-  // Keep the rail from overlapping content when the page is zoomed/magnified
-  const railEl = document.getElementById('toc-rail');
-  const measureContainer = document.querySelector('section .container');
-  function fitRail() {
-    if (!railEl || !measureContainer) return;
-    if (railEl.matches(':hover')) return;
-    const contentEdge = measureContainer.getBoundingClientRect().left + 24;
-    railEl.classList.remove('rail-hidden', 'no-active-label');
-    const collapsed = railEl.querySelector('.toc-dot:not(.active)');
-    const collapsedRight = (collapsed || railEl).getBoundingClientRect().right;
-    if (collapsedRight + 10 > contentEdge) {
-      railEl.classList.add('rail-hidden');
-      return;
-    }
-    const active = railEl.querySelector('.toc-dot.active');
-    if (active) {
-      const r = active.getBoundingClientRect();
-      if (r.right + 10 > contentEdge) railEl.classList.add('no-active-label');
-    }
-  }
-
-  let ticking = false;
-  window.addEventListener('scroll', () => {
-    if (!ticking) {
-      window.requestAnimationFrame(() => { syncRail(); syncTop(); fitRail(); ticking = false; });
-      ticking = true;
-    }
-  }, { passive: true });
-  window.addEventListener('resize', () => { syncRail(); fitRail(); }, { passive: true });
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => { syncRail(); fitRail(); });
-  }
-  syncRail(); syncTop(); fitRail();
 
   // Custom always-visible horizontal scrollbar for the wide table
   (function () {
@@ -1109,5 +982,6 @@ Summarize the changes above, then deploy using ${CLAUDE_SKILL_DIR}/scripts/deplo
 </script>
 <script src="/assets/js/code-highlight.js"></script>
 
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>

@@ -199,8 +199,12 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Agent input per-param | 0 (disabled) | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | — |
 | Schema mapping threshold | 16384 (16 KB) | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | — |
 | Preserve keys | — | — | `WithResultPreserveKeys(keys)` |
+| Degenerate-trim floor (`[severely reduced]` disclosure) | 0.05 (5%) | — (`degenerateKeptRatio`, hardcoded const) | — |
+| Array inventory cap | 500 items | — (`maxArrayInventoryItems`, hardcoded const) | — |
 
 > Agent input per-param defaults to `0` (no cap) — tool→tool data flows raw so downstream steps receive the full upstream output (fidelity-first). Set it `> 0` to cap each parameter value, or supply `deps.AgentInputProcessor` for custom input shaping.
+
+> **Hardcoded structural-trim floors (not env knobs, cf. `maxWrapperShare` under Distillation).** `degenerateKeptRatio` (0.05): when a *deterministic* structural trim keeps under 5% of the source bytes, the result is treated as non-representative — it carries a `[severely reduced … treat anything NOT shown as UNKNOWN]` disclosure and sets `degenerate`/`content_lost` in the trim metadata, so the synthesizer can't misread a near-empty trim as "nothing there." **LLM distillation output is exempt** — a low kept-ratio there is deliberate selection, not loss. `maxArrayInventoryItems` (500): a nested array is inventoried to its first 500 items before whole-unit selection (an O(n·log n) guard for 10K+-item paginated results); items past 500 aren't candidates for keeping.
 
 ## Result Distillation (Default-On LLM Summarization)
 

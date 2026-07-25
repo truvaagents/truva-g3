@@ -9,6 +9,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <meta name="description" content="One agent request, followed all the way down through every layer of observability — a Jaeger distributed trace, OpenTelemetry spans with Gen-AI semantic conventions, correlated Loki logs, and the registry-viewer Execution DAG. The clean answer hid a tool call that failed with a 404, and the agent silently recovered. This is how that becomes visible. Grounded in the open-source TruvaG3 reference implementation.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TruvaG3">
@@ -269,22 +270,6 @@
   details.toc a:hover { text-decoration: underline; color: #e6edf7; }
   h2[id], h3[id] { scroll-margin-top: 16px; }
 
-  /* Fixed left scroll-spy rail — mirrors the homepage / whitepaper side nav. */
-  #toc-rail { position: fixed; left: 12px; top: 50%; transform: translateY(-50%); z-index: 50; display: flex; flex-direction: column; gap: 9px; padding: 0; background: transparent; border: none; max-height: 90vh; }
-  #toc-rail .toc-dot { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; line-height: 1; white-space: nowrap; padding: 8px 12px; border-radius: 999px; background: transparent; border: 1px solid transparent; box-shadow: none; overflow: hidden; max-width: 42px; transition: max-width .2s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease; }
-  #toc-rail .toc-dot .d { width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0; opacity: .5; transition: opacity .18s ease, width .18s ease, height .18s ease, box-shadow .18s ease; }
-  #toc-rail .toc-dot .lbl { font-size: 13.5px; color: var(--muted); opacity: 0; transition: opacity .18s ease, color .18s ease; }
-  #toc-rail:hover .toc-dot, #toc-rail .toc-dot.active { max-width: 340px; background: #0e1422; border-color: var(--rule); box-shadow: 0 6px 20px rgba(0,0,0,.5); }
-  #toc-rail:hover .toc-dot .lbl, #toc-rail .toc-dot.active .lbl { opacity: 1; }
-  #toc-rail .toc-dot:hover .d, #toc-rail .toc-dot.active .d { opacity: 1; }
-  #toc-rail .toc-dot:hover { border-color: #3a4a72; }
-  #toc-rail .toc-dot:hover .lbl { color: #e6edf7; }
-  #toc-rail .toc-dot.active .d { width: 17px; height: 17px; box-shadow: 0 0 0 5px rgba(124,196,255,.16); }
-  #toc-rail .toc-dot.active .lbl { color: #e6edf7; font-weight: 600; }
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active { max-width: 42px; background: transparent; border-color: transparent; box-shadow: none; }
-  #toc-rail.no-active-label:not(:hover) .toc-dot.active .lbl { opacity: 0; }
-  #toc-rail.rail-hidden { display: none; }
-  @media (max-width: 1180px) { #toc-rail { display: none; } }
 
   /* Click-to-expand lightbox for figure screenshots. */
   figure img { cursor: zoom-in; }
@@ -377,7 +362,7 @@
 </nav>
 
 
-<aside id="toc-rail" aria-label="Section navigation">
+<aside id="toc-rail" data-rail="blog" aria-label="Section navigation">
   <a class="toc-dot" href="#the-answer" data-target="the-answer"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The answer</span></a>
   <a class="toc-dot" href="#what-observability-means" data-target="what-observability-means"><span class="d" style="background:#7cc4ff"></span><span class="lbl">What it means</span></a>
   <a class="toc-dot" href="#lens-one" data-target="lens-one"><span class="d" style="background:#7dd3fc"></span><span class="lbl">Lens 1 &middot; the trace</span></a>
@@ -879,47 +864,7 @@ level=ERROR  component=tool/weather-tool  span_id=f7ee82cf…
 })();
 </script>
 
-<script>
-(function () {
-  document.querySelectorAll('#toc-rail .toc-dot, details.toc a[href^="#"]').forEach(function (a) {
-    a.addEventListener('click', function (e) {
-      var id = a.getAttribute('href');
-      if (id && id.charAt(0) === '#') {
-        var el = document.querySelector(id);
-        if (el) { e.preventDefault(); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', id); }
-      }
-    });
-  });
-  var railEl = document.getElementById('toc-rail');
-  if (!railEl) return;
-  var railLinks = Array.prototype.slice.call(railEl.querySelectorAll('.toc-dot'));
-  var railSections = railLinks.map(function (a) { return document.getElementById(a.dataset.target); }).filter(Boolean);
-  function docTop(el) { return el.getBoundingClientRect().top + window.scrollY; }
-  function syncRail() {
-    if (!railSections.length) return;
-    var probe = window.scrollY + window.innerHeight * 0.30;
-    var current = railSections[0];
-    railSections.forEach(function (s) { if (docTop(s) <= probe) current = s; });
-    railLinks.forEach(function (a) { a.classList.toggle('active', a.dataset.target === current.id); });
-  }
-  var railMeasure = document.querySelector('article');
-  function fitRail() {
-    if (!railMeasure || railEl.matches(':hover')) return;
-    var contentEdge = railMeasure.getBoundingClientRect().left + 24;
-    railEl.classList.remove('rail-hidden', 'no-active-label');
-    var collapsed = railEl.querySelector('.toc-dot:not(.active)') || railEl;
-    if (collapsed.getBoundingClientRect().right + 10 > contentEdge) { railEl.classList.add('rail-hidden'); return; }
-    var active = railEl.querySelector('.toc-dot.active');
-    if (active && active.getBoundingClientRect().right + 10 > contentEdge) railEl.classList.add('no-active-label');
-  }
-  var ticking = false;
-  window.addEventListener('scroll', function () {
-    if (!ticking) { window.requestAnimationFrame(function () { syncRail(); fitRail(); ticking = false; }); ticking = true; }
-  }, { passive: true });
-  window.addEventListener('resize', function () { syncRail(); fitRail(); }, { passive: true });
-  syncRail(); fitRail();
-})();
-</script>
 
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>

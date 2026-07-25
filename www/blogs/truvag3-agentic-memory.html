@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <meta name="description" content="A guided tour of TruvaG3's four-tier agentic memory system — the research it came from, the five pipeline hooks that wire it in, and how a fleet of agents stops repeating each other's work.">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="TruvaG3">
@@ -410,6 +411,8 @@
   /* Animated dashed flow lines (whitepaper convention). */
   @keyframes dash { to { stroke-dashoffset: -40; } }
   .flow-line { stroke-dasharray: 6 6; animation: dash 4s linear infinite; }
+  h2[id], h3[id] { scroll-margin-top: 16px; }
+
 </style>
 </head>
 <body>
@@ -424,6 +427,22 @@
     </div>
   </div>
 </nav>
+
+
+<aside id="toc-rail" data-rail="blog" aria-label="Section navigation">
+  <a class="toc-dot" href="#amnesia" data-target="amnesia"><span class="d" style="background:#9ec5ff"></span><span class="lbl">The amnesia problem</span></a>
+  <a class="toc-dot" href="#research" data-target="research"><span class="d" style="background:#8fd0ff"></span><span class="lbl">Where it came from</span></a>
+  <a class="toc-dot" href="#four-tiers" data-target="four-tiers"><span class="d" style="background:#7cc4ff"></span><span class="lbl">Four interfaces</span></a>
+  <a class="toc-dot" href="#pipeline" data-target="pipeline"><span class="d" style="background:#7dd3fc"></span><span class="lbl">Into the pipeline</span></a>
+  <a class="toc-dot" href="#compaction" data-target="compaction"><span class="d" style="background:#67e8f9"></span><span class="lbl">Activity compaction</span></a>
+  <a class="toc-dot" href="#coordination" data-target="coordination"><span class="d" style="background:#34d399"></span><span class="lbl">Coordination signals</span></a>
+  <a class="toc-dot" href="#knowledge" data-target="knowledge"><span class="d" style="background:#a3e635"></span><span class="lbl">Extraction &amp; reflection</span></a>
+  <a class="toc-dot" href="#user-memory" data-target="user-memory"><span class="d" style="background:#fbbf24"></span><span class="lbl">User memory</span></a>
+  <a class="toc-dot" href="#scoping" data-target="scoping"><span class="d" style="background:#f59e0b"></span><span class="lbl">Domain scoping</span></a>
+  <a class="toc-dot" href="#wiring" data-target="wiring"><span class="d" style="background:#c4b5fd"></span><span class="lbl">The wiring</span></a>
+  <a class="toc-dot" href="#cheat" data-target="cheat"><span class="d" style="background:#a78bfa"></span><span class="lbl">Cheat sheet</span></a>
+  <a class="toc-dot" href="#further" data-target="further"><span class="d" style="background:#cfe1ff"></span><span class="lbl">Where to go next</span></a>
+</aside>
 
 
 <article>
@@ -1522,5 +1541,8 @@ hooks, activityCoord := orchestration.BuildMemoryHooks(deps, agent.AI, agent.Log
   // All grammars are now registered — kick off highlighting once.
   if (window.Prism) { Prism.highlightAll(); }
 </script>
+
+
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>
