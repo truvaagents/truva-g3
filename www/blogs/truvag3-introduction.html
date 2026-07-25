@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/assets/css/site-nav.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<link rel="stylesheet" href="/assets/css/toc-rail.css">
 <meta name="description" content="A guided tour of TruvaG3 — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TruvaG3">
@@ -286,6 +287,8 @@
     margin-top: 1.5rem;
     margin-bottom: 0;
   }
+  h2[id], h3[id] { scroll-margin-top: 16px; }
+
 </style>
 </head>
 <body>
@@ -300,6 +303,29 @@
     </div>
   </div>
 </nav>
+
+<aside id="toc-rail" data-rail="blog" aria-label="Section navigation">
+  <a class="toc-dot" href="#two-problems" data-target="two-problems"><span class="d" style="background:#9ec5ff"></span><span class="lbl">Two problems</span></a>
+  <a class="toc-dot" href="#why-truvag3-exists" data-target="why-truvag3-exists"><span class="d" style="background:#7dd3fc"></span><span class="lbl">Why it exists</span></a>
+  <a class="toc-dot" href="#how-it-works" data-target="how-it-works"><span class="d" style="background:#67e8f9"></span><span class="lbl">How it works</span></a>
+  <a class="toc-dot has-subs" href="#what-it-ships-with" data-target="what-it-ships-with"><span class="d" style="background:#34d399"></span><span class="lbl">What ships with it</span></a>
+  <a class="toc-dot sub" href="#component-runtime" data-target="component-runtime"><span class="d" style="background:#3cd79f"></span><span class="lbl">Component runtime</span></a>
+  <a class="toc-dot sub" href="#runtime-discovery" data-target="runtime-discovery"><span class="d" style="background:#45dba5"></span><span class="lbl">Runtime discovery</span></a>
+  <a class="toc-dot sub" href="#capability-contracts" data-target="capability-contracts"><span class="d" style="background:#4ddfab"></span><span class="lbl">Capability contracts</span></a>
+  <a class="toc-dot sub" href="#observability" data-target="observability"><span class="d" style="background:#56e3b1"></span><span class="lbl">Observability</span></a>
+  <a class="toc-dot sub" href="#ai-provider-layer" data-target="ai-provider-layer"><span class="d" style="background:#5ee7b7"></span><span class="lbl">AI provider layer</span></a>
+  <a class="toc-dot sub" href="#orchestration" data-target="orchestration"><span class="d" style="background:#6be9ae"></span><span class="lbl">Orchestration</span></a>
+  <a class="toc-dot sub" href="#reliability" data-target="reliability"><span class="d" style="background:#78eba5"></span><span class="lbl">Reliability</span></a>
+  <a class="toc-dot sub" href="#async-and-scheduling" data-target="async-and-scheduling"><span class="d" style="background:#85ed9c"></span><span class="lbl">Async &amp; scheduling</span></a>
+  <a class="toc-dot sub" href="#hitl" data-target="hitl"><span class="d" style="background:#92ef93"></span><span class="lbl">Human-in-the-loop</span></a>
+  <a class="toc-dot sub" href="#memory-and-context" data-target="memory-and-context"><span class="d" style="background:#9ff18a"></span><span class="lbl">Memory &amp; context</span></a>
+  <a class="toc-dot sub" href="#chat-agents" data-target="chat-agents"><span class="d" style="background:#acf381"></span><span class="lbl">Chat agents</span></a>
+  <a class="toc-dot sub" href="#security" data-target="security"><span class="d" style="background:#b9f578"></span><span class="lbl">Security</span></a>
+  <a class="toc-dot sub" href="#extension-points" data-target="extension-points"><span class="d" style="background:#c6f76f"></span><span class="lbl">Extension points</span></a>
+  <a class="toc-dot" href="#code-examples" data-target="code-examples"><span class="d" style="background:#a3e635"></span><span class="lbl">In code</span></a>
+  <a class="toc-dot" href="#run-it-yourself" data-target="run-it-yourself"><span class="d" style="background:#f59e0b"></span><span class="lbl">Run it on a laptop</span></a>
+  <a class="toc-dot" href="#further-reading" data-target="further-reading"><span class="d" style="background:#a78bfa"></span><span class="lbl">Where to go next</span></a>
+</aside>
 
 
 <article>
@@ -1307,5 +1333,8 @@ response, _ := orchestrator.ProcessRequest(ctx,
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
+
+
+<script src="/assets/js/toc-rail.js"></script>
 </body>
 </html>
