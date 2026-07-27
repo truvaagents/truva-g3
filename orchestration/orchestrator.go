@@ -294,6 +294,7 @@ var reservedPropagationHeaders = map[string]bool{
 	"Content-Type":                  true, // Always application/json (set by executor)
 	"X-Truvag3-Request-Id":          true, // Distributed tracing (set by executor)
 	"X-Truvag3-Original-Request-Id": true, // Original request id across HITL resume (set by executor)
+	"X-Truvag3-Conversation-Id":     true, // Multi-turn conversation correlation (set by executor)
 	"X-Truvag3-Step-Id":             true, // Step correlation (set by executor)
 	"X-Truvag3-Phase-Number":        true, // Phase correlation (set by executor)
 	"X-Truvag3-Plan-Id":             true, // Plan correlation (set by executor)

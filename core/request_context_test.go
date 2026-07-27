@@ -329,3 +329,129 @@ func TestWithoutConversationIDClearsAllConversationState(t *testing.T) {
 	assert.Equal(t, ConversationIDCandidate{}, GetConversationIDCandidate(ctx))
 	assert.Equal(t, "request-1", GetRequestID(ctx))
 }
+
+func TestExtractRequestContext_ConversationIDCandidateStates(t *testing.T) {
+	tests := []struct {
+		name        string
+		setHeader   func(http.Header)
+		want        string
+		wantReason  ConversationIDValidationReason
+		wantSource  ConversationIDCandidateSource
+		wantPresent bool
+	}{
+		{
+			name: "valid",
+			setHeader: func(header http.Header) {
+				header.Set("X-TruvaG3-Conversation-ID", "conversation-header")
+			},
+			want:        "conversation-header",
+			wantSource:  ConversationIDSourceCoreHeader,
+			wantPresent: true,
+		},
+		{
+			name: "invalid",
+			setHeader: func(header http.Header) {
+				header.Set("X-TruvaG3-Conversation-ID", "invalid conversation")
+			},
+			wantReason:  ConversationIDValidationInvalidCharacter,
+			wantSource:  ConversationIDSourceCoreHeader,
+			wantPresent: true,
+		},
+		{
+			name: "explicitly empty",
+			setHeader: func(header http.Header) {
+				header["X-Truvag3-Conversation-Id"] = []string{""}
+			},
+			wantReason:  ConversationIDValidationEmpty,
+			wantSource:  ConversationIDSourceCoreHeader,
+			wantPresent: true,
+		},
+		{
+			name: "present with no values",
+			setHeader: func(header http.Header) {
+				header["x-truvag3-conversation-id"] = nil
+			},
+			wantReason:  ConversationIDValidationEmpty,
+			wantSource:  ConversationIDSourceCoreHeader,
+			wantPresent: true,
+		},
+		{
+			name:      "absent",
+			setHeader: func(http.Header) {},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/execute", nil)
+			test.setHeader(request.Header)
+
+			ctx := ExtractRequestContext(context.Background(), request)
+			candidate := GetConversationIDCandidate(ctx)
+
+			assert.Equal(t, test.wantPresent, candidate.Present)
+			assert.Equal(t, test.want, candidate.Value)
+			assert.Equal(t, test.wantReason, candidate.RejectionReason)
+			assert.Equal(t, test.wantSource, candidate.Source)
+			assert.Equal(t, test.want, GetConversationID(ctx))
+			if test.wantReason != ConversationIDValidationNone {
+				assert.NotContains(t, candidate.Value, "invalid conversation")
+			}
+		})
+	}
+}
+
+func TestExtractRequestContext_ConversationHeaderPrecedenceIsCallOrderIndependent(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/execute", nil)
+	request.Header.Set("X-TruvaG3-Conversation-ID", "conversation-header")
+
+	beforeExtraction := WithConversationID(context.Background(), "conversation-programmatic")
+	beforeExtraction = ExtractRequestContext(beforeExtraction, request)
+
+	afterExtraction := ExtractRequestContext(context.Background(), request)
+	afterExtraction = WithConversationID(afterExtraction, "conversation-programmatic")
+
+	for name, ctx := range map[string]context.Context{
+		"programmatic before extraction": beforeExtraction,
+		"programmatic after extraction":  afterExtraction,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, "conversation-header", GetConversationID(ctx))
+			candidate := GetConversationIDCandidate(ctx)
+			assert.True(t, candidate.Present)
+			assert.Equal(t, ConversationIDSourceCoreHeader, candidate.Source)
+		})
+	}
+}
+
+func TestExtractRequestContext_AbsentHeaderClearsOnlyHeaderCandidate(t *testing.T) {
+	withHeader := httptest.NewRequest(http.MethodPost, "/execute", nil)
+	withHeader.Header.Set("X-TruvaG3-Conversation-ID", "conversation-header")
+
+	ctx := WithConversationID(context.Background(), "conversation-programmatic")
+	ctx = ExtractRequestContext(ctx, withHeader)
+	assert.Equal(t, "conversation-header", GetConversationID(ctx))
+
+	withoutHeader := httptest.NewRequest(http.MethodPost, "/execute", nil)
+	ctx = ExtractRequestContext(ctx, withoutHeader)
+
+	assert.Equal(t, "conversation-programmatic", GetConversationID(ctx))
+	candidate := GetConversationIDCandidate(ctx)
+	assert.True(t, candidate.Present)
+	assert.Equal(t, ConversationIDSourceCoreContext, candidate.Source)
+}
+
+func TestExtractRequestContext_InvalidHeaderBlocksProgrammaticFallback(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/execute", nil)
+	request.Header.Set("X-TruvaG3-Conversation-ID", "invalid conversation")
+
+	ctx := WithConversationID(context.Background(), "conversation-programmatic")
+	ctx = ExtractRequestContext(ctx, request)
+
+	assert.Empty(t, GetConversationID(ctx))
+	candidate := GetConversationIDCandidate(ctx)
+	assert.True(t, candidate.Present)
+	assert.Empty(t, candidate.Value)
+	assert.Equal(t, ConversationIDSourceCoreHeader, candidate.Source)
+	assert.Equal(t, ConversationIDValidationInvalidCharacter, candidate.RejectionReason)
+}

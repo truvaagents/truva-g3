@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -350,5 +351,58 @@ func TestTracedHTTPClient_MultipleRequests(t *testing.T) {
 
 	if requestCount != 5 {
 		t.Errorf("Expected 5 requests, server received %d", requestCount)
+	}
+}
+
+func TestStampTruvaG3HeadersOnSpan_ValidatesConversationID(t *testing.T) {
+	tests := []struct {
+		name             string
+		conversationID   string
+		wantConversation string
+	}{
+		{
+			name:             "valid",
+			conversationID:   "conversation-server-span",
+			wantConversation: "conversation-server-span",
+		},
+		{
+			name:           "malformed",
+			conversationID: "invalid conversation",
+		},
+		{
+			name:           "over limit",
+			conversationID: strings.Repeat("x", 513),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder, tracer := setupTestTracer(t)
+			ctx, span := tracer.Start(context.Background(), "server-span")
+			request := httptest.NewRequest(http.MethodPost, "/execute", nil).WithContext(ctx)
+			request.Header.Set("X-TruvaG3-Request-ID", "request-preserved")
+			request.Header.Set("X-TruvaG3-Conversation-ID", test.conversationID)
+
+			stampTruvaG3HeadersOnSpan(request)
+			span.End()
+
+			ended := recorder.Ended()
+			if len(ended) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(ended))
+			}
+			if got, ok := spanAttributeString(ended[0], "request_id"); !ok || got != "request-preserved" {
+				t.Fatalf("existing request_id attribute = %q, %v", got, ok)
+			}
+			got, present := spanAttributeString(ended[0], "conversation_id")
+			if test.wantConversation == "" {
+				if present {
+					t.Fatalf("invalid conversation_id reached span: %q", got)
+				}
+				return
+			}
+			if !present || got != test.wantConversation {
+				t.Fatalf("conversation_id span attribute = %q, %v", got, present)
+			}
+		})
 	}
 }

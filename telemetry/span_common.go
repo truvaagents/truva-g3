@@ -1,11 +1,12 @@
 // Package telemetry — common span attribute helpers.
 //
 // Distributed traces become navigable when every span carries the small set of
-// identifiers that tie work back to a business request: request_id,
-// original_request_id (HITL resumes), agent_name, user_id. The orchestrator
-// puts these into baggage on every request; this file provides one helper that
-// pulls them off baggage and stamps them onto a span. Call from anywhere a
-// span starts and the span becomes greppable in Jaeger by request_id.
+// identifiers that tie work back to a business request or conversation:
+// request_id, original_request_id (HITL resumes), conversation_id, agent_name,
+// and user_id. The orchestrator puts these into baggage on every request; this
+// file provides one helper that pulls them off baggage and stamps them onto a
+// span. Call from anywhere a span starts and the span becomes greppable in
+// Jaeger by request_id or conversation_id.
 package telemetry
 
 import (
@@ -27,6 +28,7 @@ import (
 var CommonSpanAttrKeys = []string{
 	"request_id",
 	"original_request_id",
+	"conversation_id",
 	"agent_name",
 	"user_id",
 	"session_id",

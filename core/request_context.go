@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -274,9 +275,9 @@ func GetAgentName(ctx context.Context) string {
 }
 
 // ExtractRequestContext extracts TruvaG3 orchestration context from HTTP headers.
-// This is the primary mechanism for receiving request_id and step_id from the orchestrator
-// (Issue 18: executor's httpClient does not use otelhttp transport).
-// Agents using telemetry.NewTracedHTTPHandler may also get OTel baggage as a bonus.
+// This is the telemetry-independent fallback for receiving framework request
+// context. W3C baggage may also carry the same correlation values when
+// OpenTelemetry HTTP propagation is installed.
 //
 // Issue 11 fix: No componentName parameter — the component identity is set at
 // InstrumentedAIClient construction time via WithComponentName(), not per-request.
@@ -302,7 +303,53 @@ func ExtractRequestContext(ctx context.Context, r *http.Request) context.Context
 	if agentName := r.Header.Get("X-TruvaG3-Agent-Name"); agentName != "" {
 		ctx = WithAgentName(ctx, agentName)
 	}
+
+	rawConversationID, present := explicitHeaderValue(
+		r.Header,
+		"X-TruvaG3-Conversation-ID",
+	)
+	if present {
+		candidate := ConversationIDCandidate{
+			Present: true,
+			Source:  ConversationIDSourceCoreHeader,
+		}
+		if reason := ValidateConversationID(rawConversationID); reason != ConversationIDValidationNone {
+			candidate.RejectionReason = reason
+		} else {
+			candidate.Value = rawConversationID
+		}
+		ctx = withConversationIDHeaderCandidate(ctx, candidate)
+	} else {
+		// A reused parent context must not retain header provenance from an
+		// earlier request. Clearing only the header candidate reveals any
+		// separately supplied programmatic candidate.
+		ctx = withoutConversationIDHeaderCandidate(ctx)
+	}
 	return ctx
+}
+
+// explicitHeaderValue distinguishes an absent header from an explicitly empty
+// one. It also tolerates non-canonical map keys supplied by custom transports
+// or tests instead of Header.Set.
+func explicitHeaderValue(header http.Header, name string) (string, bool) {
+	canonicalName := http.CanonicalHeaderKey(name)
+	values, present := header[canonicalName]
+	if !present {
+		for headerName, headerValues := range header {
+			if strings.EqualFold(headerName, name) {
+				values = headerValues
+				present = true
+				break
+			}
+		}
+	}
+	if !present {
+		return "", false
+	}
+	if len(values) == 0 {
+		return "", true
+	}
+	return values[0], true
 }
 
 // WithTokenUsageAccumulator injects a new AggregatedTokenUsage into the context.

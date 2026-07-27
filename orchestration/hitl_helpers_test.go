@@ -2,9 +2,17 @@ package orchestration
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // =============================================================================
@@ -811,4 +819,305 @@ func TestBuildResumeContext_TraceLinking(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildResumeContext_RestoresConversationBeforeLinkedSpan(t *testing.T) {
+	recorder := setupHITLResumeTestTracer(t)
+	checkpoint := &ExecutionCheckpoint{
+		CheckpointID:      "cp-conversation",
+		RequestID:         "request-resume",
+		OriginalRequestID: "request-original",
+		Status:            CheckpointStatusApproved,
+		UserContext: map[string]interface{}{
+			MetadataConversationID: "conversation-resume",
+			"session_id":           "application-session",
+		},
+	}
+
+	resumeCtx, endSpan, err := BuildResumeContext(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("BuildResumeContext() error = %v", err)
+	}
+
+	if got := core.GetConversationID(resumeCtx); got != "conversation-resume" {
+		t.Fatalf("core conversation ID = %q", got)
+	}
+	if got := telemetry.GetBaggage(resumeCtx)[MetadataConversationID]; got != "conversation-resume" {
+		t.Fatalf("baggage conversation ID = %q", got)
+	}
+	if got := GetMetadata(resumeCtx)[MetadataConversationID]; got != "conversation-resume" {
+		t.Fatalf("resume metadata conversation ID = %v", got)
+	}
+	if got := GetMetadata(resumeCtx)["session_id"]; got != "application-session" {
+		t.Fatalf("application metadata was not preserved: %v", GetMetadata(resumeCtx))
+	}
+	if got := telemetry.GetBaggage(resumeCtx)["original_request_id"]; got != "request-original" {
+		t.Fatalf("original request ID = %q", got)
+	}
+
+	orchestrator := &AIOrchestrator{telemetry: &conversationCaptureTelemetry{}}
+	ingressCtx, ingressID, ingressMetadata := orchestrator.resolveConversationContext(
+		resumeCtx,
+		nil,
+	)
+	if ingressID != "conversation-resume" ||
+		core.GetConversationID(ingressCtx) != "conversation-resume" ||
+		ingressMetadata[MetadataConversationID] != "conversation-resume" {
+		t.Fatalf(
+			"resume ingress lost identity: id=%q core=%q metadata=%v",
+			ingressID,
+			core.GetConversationID(ingressCtx),
+			ingressMetadata,
+		)
+	}
+
+	chainedCtx := withCheckpointMetadata(ingressCtx, nil, ingressID)
+	chained := (&DefaultInterruptController{logger: &core.NoOpLogger{}}).createCheckpoint(
+		chainedCtx,
+		&RoutingPlan{OriginalRequest: "resume request"},
+		nil,
+		nil,
+		&InterruptDecision{},
+		InterruptPointPlanGenerated,
+	)
+	if got := chained.UserContext[MetadataConversationID]; got != "conversation-resume" {
+		t.Fatalf("chained checkpoint conversation ID = %v", got)
+	}
+
+	endSpan()
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(ended))
+	}
+	if got, ok := readOnlySpanStringAttribute(ended[0], MetadataConversationID); !ok || got != "conversation-resume" {
+		t.Fatalf("hitl.resume conversation attribute = %q, %v", got, ok)
+	}
+}
+
+func TestBuildResumeContext_RejectedConversationScrubsInheritedIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		base         func(t *testing.T) context.Context
+		conversation interface{}
+	}{
+		{
+			name: "invalid checkpoint metadata",
+			base: func(t *testing.T) context.Context {
+				ctx, err := telemetry.WithBaggageExact(
+					context.Background(),
+					MetadataConversationID,
+					"conversation-inherited",
+				)
+				if err != nil {
+					t.Fatalf("WithBaggageExact() error = %v", err)
+				}
+				return core.WithConversationID(ctx, "conversation-inherited")
+			},
+			conversation: "invalid conversation",
+		},
+		{
+			name: "exact baggage capacity rejection",
+			base: func(t *testing.T) context.Context {
+				ctx := core.WithConversationID(
+					context.Background(),
+					"conversation-inherited",
+				)
+				labels := make([]string, 0, telemetry.MaxBaggageItems*2)
+				for i := 0; i < telemetry.MaxBaggageItems; i++ {
+					labels = append(labels, fmt.Sprintf("item_%02d", i), "value")
+				}
+				ctx = telemetry.WithBaggage(ctx, labels...)
+				if got := len(telemetry.GetBaggage(ctx)); got != telemetry.MaxBaggageItems {
+					t.Fatalf("baggage items = %d, want %d", got, telemetry.MaxBaggageItems)
+				}
+				return ctx
+			},
+			conversation: "conversation-checkpoint",
+		},
+		{
+			name: "over-limit checkpoint metadata",
+			base: func(*testing.T) context.Context {
+				return core.WithConversationID(
+					context.Background(),
+					"conversation-inherited",
+				)
+			},
+			conversation: strings.Repeat("x", core.MaxConversationIDLength+1),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := setupHITLResumeTestTracer(t)
+			baseCtx := WithMetadata(test.base(t), map[string]interface{}{
+				MetadataConversationID: "conversation-inherited",
+				"inherited_only":       true,
+			})
+			checkpoint := &ExecutionCheckpoint{
+				CheckpointID: "cp-rejected-conversation",
+				RequestID:    "request-resume",
+				Status:       CheckpointStatusApproved,
+				UserContext: map[string]interface{}{
+					MetadataConversationID: test.conversation,
+					"checkpoint_only":      true,
+				},
+			}
+
+			resumeCtx, endSpan, err := BuildResumeContext(baseCtx, checkpoint)
+			if err != nil {
+				t.Fatalf("BuildResumeContext() error = %v", err)
+			}
+
+			if got := core.GetConversationID(resumeCtx); got != "" {
+				t.Fatalf("inherited core conversation leaked: %q", got)
+			}
+			if _, present := telemetry.GetBaggage(resumeCtx)[MetadataConversationID]; present {
+				t.Fatal("inherited conversation baggage leaked")
+			}
+			if _, present := GetMetadata(resumeCtx)[MetadataConversationID]; present {
+				t.Fatalf("rejected conversation metadata leaked: %v", GetMetadata(resumeCtx))
+			}
+			if GetMetadata(resumeCtx)["checkpoint_only"] != true {
+				t.Fatalf("checkpoint metadata was not preserved: %v", GetMetadata(resumeCtx))
+			}
+			if _, present := GetMetadata(resumeCtx)["inherited_only"]; present {
+				t.Fatalf("inherited metadata was not shadowed: %v", GetMetadata(resumeCtx))
+			}
+
+			endSpan()
+			ended := recorder.Ended()
+			if len(ended) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(ended))
+			}
+			if got, present := readOnlySpanStringAttribute(ended[0], MetadataConversationID); present {
+				t.Fatalf("rejected conversation reached span: %q", got)
+			}
+			if status := ended[0].Status(); status.Code != codes.Unset {
+				t.Fatalf("span status = %v (%q), want unset", status.Code, status.Description)
+			}
+			for _, event := range ended[0].Events() {
+				if event.Name == "exception" {
+					t.Fatalf("conversation rejection recorded an exception: %+v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareResumeConversationContext_ReportsBoundedRejections(t *testing.T) {
+	tests := []struct {
+		name       string
+		ctx        func(t *testing.T) context.Context
+		metadata   map[string]interface{}
+		wantSource string
+		wantReason string
+	}{
+		{
+			name: "metadata validation",
+			ctx:  func(*testing.T) context.Context { return context.Background() },
+			metadata: map[string]interface{}{
+				MetadataConversationID: "invalid conversation",
+			},
+			wantSource: conversationIDSourceCheckpointMetadata,
+			wantReason: string(core.ConversationIDValidationInvalidCharacter),
+		},
+		{
+			name: "baggage capacity",
+			ctx: func(t *testing.T) context.Context {
+				labels := make([]string, 0, telemetry.MaxBaggageItems*2)
+				for i := 0; i < telemetry.MaxBaggageItems; i++ {
+					labels = append(labels, fmt.Sprintf("item_%02d", i), "value")
+				}
+				return telemetry.WithBaggage(context.Background(), labels...)
+			},
+			metadata: map[string]interface{}{
+				MetadataConversationID: "conversation-checkpoint",
+			},
+			wantSource: conversationIDSourceBaggageExact,
+			wantReason: "item_limit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotSource, gotReason string
+			gotCtx, gotID, gotMetadata := prepareResumeConversationContext(
+				test.ctx(t),
+				test.metadata,
+				func(source, reason string) {
+					gotSource = source
+					gotReason = reason
+				},
+			)
+
+			if gotSource != test.wantSource || gotReason != test.wantReason {
+				t.Fatalf(
+					"diagnostic = (%q, %q), want (%q, %q)",
+					gotSource,
+					gotReason,
+					test.wantSource,
+					test.wantReason,
+				)
+			}
+			if gotID != "" || core.GetConversationID(gotCtx) != "" {
+				t.Fatalf("rejected identity survived: id=%q core=%q", gotID, core.GetConversationID(gotCtx))
+			}
+			if _, present := gotMetadata[MetadataConversationID]; present {
+				t.Fatalf("rejected identity survived in metadata: %v", gotMetadata)
+			}
+		})
+	}
+}
+
+func TestBuildResumeContext_EmptyCheckpointMetadataPreservesOnlyUnrelatedInheritedMetadata(t *testing.T) {
+	ctx, err := telemetry.WithBaggageExact(
+		context.Background(),
+		MetadataConversationID,
+		"conversation-inherited",
+	)
+	if err != nil {
+		t.Fatalf("WithBaggageExact() error = %v", err)
+	}
+	ctx = core.WithConversationID(ctx, "conversation-inherited")
+	ctx = WithMetadata(ctx, map[string]interface{}{
+		MetadataConversationID: "conversation-inherited",
+		"application_key":      "preserved",
+	})
+
+	resumeCtx, endSpan, err := BuildResumeContext(ctx, &ExecutionCheckpoint{
+		CheckpointID: "cp-empty-metadata",
+		RequestID:    "request-resume",
+		Status:       CheckpointStatusApproved,
+	})
+	if err != nil {
+		t.Fatalf("BuildResumeContext() error = %v", err)
+	}
+	defer endSpan()
+
+	if core.GetConversationID(resumeCtx) != "" {
+		t.Fatalf("inherited core conversation leaked: %q", core.GetConversationID(resumeCtx))
+	}
+	if _, present := telemetry.GetBaggage(resumeCtx)[MetadataConversationID]; present {
+		t.Fatal("inherited conversation baggage leaked")
+	}
+	metadata := GetMetadata(resumeCtx)
+	if _, present := metadata[MetadataConversationID]; present {
+		t.Fatalf("inherited conversation metadata leaked: %v", metadata)
+	}
+	if metadata["application_key"] != "preserved" {
+		t.Fatalf("unrelated inherited metadata was lost: %v", metadata)
+	}
+}
+
+func setupHITLResumeTestTracer(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	originalProvider := otel.GetTracerProvider()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(originalProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
 }

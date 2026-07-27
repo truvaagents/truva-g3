@@ -186,13 +186,8 @@ func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Reque
 	// 8. EXECUTE WITH STREAMING (matches handleResumeSSE)
 	// =========================================================================
 
-	// Extract session ID from checkpoint metadata
-	sessionID := ""
-	if checkpoint.UserContext != nil {
-		if sid, ok := checkpoint.UserContext["session_id"].(string); ok {
-			sessionID = sid
-		}
-	}
+	// This example maps its chat-session UUID to the canonical conversation ID.
+	sessionID := sessionIDFromCheckpoint(checkpoint.UserContext)
 	if sessionID == "" {
 		// Generate new session if not found
 		session := t.sessionStore.Create("", nil)

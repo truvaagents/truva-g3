@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -681,11 +682,15 @@ func ExampleNewConfig_production() {
 
 // mockMetricsRegistry is a minimal mock for testing getContextBaggage
 type mockMetricsRegistry struct {
-	baggage map[string]string
+	baggage       map[string]string
+	emittedName   string
+	emittedLabels []string
 }
 
 func (m *mockMetricsRegistry) Counter(name string, labels ...string) {}
 func (m *mockMetricsRegistry) EmitWithContext(ctx context.Context, name string, value float64, labels ...string) {
+	m.emittedName = name
+	m.emittedLabels = append([]string(nil), labels...)
 }
 func (m *mockMetricsRegistry) Gauge(name string, value float64, labels ...string)     {}
 func (m *mockMetricsRegistry) Histogram(name string, value float64, labels ...string) {}
@@ -729,6 +734,49 @@ func TestGetContextBaggage(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.Empty(t, result)
 	})
+}
+
+func TestProductionLogger_ContextConversationIsLoggedButNotExplicitMetricLabel(t *testing.T) {
+	originalRegistry := globalMetricsRegistry
+	t.Cleanup(func() {
+		globalMetricsRegistry = originalRegistry
+	})
+
+	registry := &mockMetricsRegistry{
+		baggage: map[string]string{
+			"conversation_id": "conversation-log",
+		},
+	}
+	globalMetricsRegistry = registry
+
+	var output strings.Builder
+	logger := &ProductionLogger{
+		level:          LogLevelInfo,
+		serviceName:    "logger-test",
+		component:      "framework/orchestration",
+		format:         "json",
+		output:         &output,
+		metricsEnabled: true,
+	}
+	logger.InfoWithContext(context.Background(), "conversation log", map[string]interface{}{
+		"operation": "conversation_test",
+	})
+
+	var entry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output.String())), &entry); err != nil {
+		t.Fatalf("log output is not valid JSON: %v", err)
+	}
+	if got := entry["conversation_id"]; got != "conversation-log" {
+		t.Fatalf("conversation_id log field = %v", got)
+	}
+	if registry.emittedName != "truvag3.framework.operations" {
+		t.Fatalf("emitted metric = %q", registry.emittedName)
+	}
+	for i := 0; i < len(registry.emittedLabels)-1; i += 2 {
+		if registry.emittedLabels[i] == "conversation_id" {
+			t.Fatalf("conversation_id was added as an explicit metric label: %v", registry.emittedLabels)
+		}
+	}
 }
 
 // =============================================================================
