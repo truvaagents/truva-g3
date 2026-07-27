@@ -394,11 +394,17 @@ func conversationTurnsFromMessages(history []Message) []core.ConversationTurn {
 }
 
 func (t *DevOpsChatAgent) addConversationHistoryMetadata(metadata map[string]interface{}, sessionID string, history []Message) {
-	if sessionID == "" || len(history) == 0 {
+	if sessionID == "" {
+		return
+	}
+
+	// This example maps one chat session to exactly one conversation.
+	metadata[orchestration.MetadataConversationID] = sessionID
+
+	if len(history) == 0 {
 		return
 	}
 	metadata[orchestration.MetadataConversationTurns] = conversationTurnsFromMessages(history)
-	metadata[orchestration.MetadataConversationSessionKey] = sessionID
 	if formattedHistory := t.formatConversationHistory(history); formattedHistory != "" {
 		metadata[core.EnrichmentConversationHistory] = formattedHistory
 	}

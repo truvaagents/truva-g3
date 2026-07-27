@@ -48,14 +48,14 @@ func prepareKnownEnrichments(
 	}
 
 	if historyPreparer != nil {
+		conversationID := conversationIDFromMetadata(metadata)
 		if turns, ok := conversationTurnsFromMetadata(metadata[MetadataConversationTurns]); ok {
-			sessionKey, _ := metadata[MetadataConversationSessionKey].(string)
-			prepared, _, _ := historyPreparer.PrepareFromTurns(ctx, sessionKey, turns)
+			prepared, _, _ := historyPreparer.PrepareFromTurns(ctx, conversationID, turns)
 			if prepared != "" {
 				enrichments[core.EnrichmentConversationHistory] = prepared
 			}
 		} else if raw, ok := metadata[core.EnrichmentConversationHistory].(string); ok && raw != "" {
-			prepared, _, _ := historyPreparer.PrepareFromText(ctx, "", raw)
+			prepared, _, _ := historyPreparer.PrepareFromText(ctx, conversationID, raw)
 			if prepared != "" {
 				enrichments[core.EnrichmentConversationHistory] = prepared
 			}

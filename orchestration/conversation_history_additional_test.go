@@ -487,7 +487,7 @@ func TestPrepareKnownEnrichments_UsesPreparedLegacyTextAndIgnoresInvalidTurnPayl
 	enrichments := map[string]interface{}{}
 	metadata := map[string]interface{}{
 		MetadataConversationTurns:          []interface{}{"bad"},
-		MetadataConversationSessionKey:     "session-1",
+		MetadataConversationID:             "conversation-1",
 		core.EnrichmentConversationHistory: "legacy history",
 	}
 
