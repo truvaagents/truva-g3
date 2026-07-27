@@ -24,10 +24,11 @@ type mockLLMDebugStore struct {
 	mu           sync.Mutex
 	interactions []LLMInteraction
 	requestIDs   []string
+	contexts     []context.Context
 	err          error // injected error for failure testing
 }
 
-func (m *mockLLMDebugStore) RecordInteraction(_ context.Context, requestID string, interaction LLMInteraction) error {
+func (m *mockLLMDebugStore) RecordInteraction(ctx context.Context, requestID string, interaction LLMInteraction) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -35,6 +36,7 @@ func (m *mockLLMDebugStore) RecordInteraction(_ context.Context, requestID strin
 	}
 	m.interactions = append(m.interactions, interaction)
 	m.requestIDs = append(m.requestIDs, requestID)
+	m.contexts = append(m.contexts, ctx)
 	return nil
 }
 

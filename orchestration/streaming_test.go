@@ -291,6 +291,67 @@ func TestProcessRequestStreaming_FallbackToSimulated(t *testing.T) {
 	}
 }
 
+func TestProcessRequestStreaming_FallbackDoesNotDuplicateConversationRejection(t *testing.T) {
+	discovery := NewMockDiscovery()
+	aiClient := NewMockAIClient()
+
+	_ = discovery.Register(context.Background(), &core.ServiceRegistration{
+		ID:           "test-conversation-fallback",
+		Name:         "stock-analyzer",
+		Address:      "localhost",
+		Port:         8080,
+		Capabilities: []core.Capability{{Name: "analyze_stock"}},
+	})
+
+	orchestrator := NewAIOrchestrator(DefaultConfig(), discovery, aiClient)
+	orchestrator.catalog.agents = map[string]*AgentInfo{
+		"test-conversation-fallback": {
+			Registration: &core.ServiceRegistration{
+				ID:           "test-conversation-fallback",
+				Name:         "stock-analyzer",
+				Address:      "localhost",
+				Port:         8080,
+				Capabilities: []core.Capability{{Name: "analyze_stock"}},
+			},
+			Capabilities: []EnhancedCapability{
+				{Name: "analyze_stock", Description: "Analyzes stocks"},
+			},
+		},
+	}
+	orchestrator.executor = NewSmartExecutor(orchestrator.catalog)
+	capture := &conversationCaptureTelemetry{}
+	orchestrator.SetTelemetry(capture)
+
+	response, err := orchestrator.ProcessRequestStreaming(
+		context.Background(),
+		"Analyze AAPL stock",
+		map[string]interface{}{
+			MetadataConversationID: "invalid conversation",
+			"application_key":      "preserved",
+		},
+		func(core.StreamChunk) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("ProcessRequestStreaming() error = %v", err)
+	}
+	if response == nil || !response.StreamCompleted {
+		t.Fatalf("fallback business result = %+v, want completed response", response)
+	}
+
+	rejectionCount := 0
+	for _, record := range capture.records {
+		if record.name == conversationIDRejectionMetric {
+			rejectionCount++
+		}
+	}
+	if rejectionCount != 1 {
+		t.Fatalf(
+			"conversation rejection count = %d, want 1 across streaming fallback re-entry",
+			rejectionCount,
+		)
+	}
+}
+
 // TestProcessRequestStreaming_CallbackStop tests callback can stop streaming
 func TestProcessRequestStreaming_CallbackStop(t *testing.T) {
 	discovery := NewMockDiscovery()

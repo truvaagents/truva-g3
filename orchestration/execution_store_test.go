@@ -327,6 +327,36 @@ func TestExecutionStore_SetMetadata(t *testing.T) {
 	}
 }
 
+func TestExecutionStore_SetMetadataRejectsReservedConversationID(t *testing.T) {
+	provider := newMockStorageProvider()
+	store := NewExecutionStoreWithProvider(provider, DefaultExecutionStoreConfig(), nil)
+	execution := sampleExecution("req-reserved-metadata", true)
+	execution.Metadata = map[string]string{
+		MetadataConversationID: "conversation-original",
+	}
+	if err := store.Store(context.Background(), execution); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	err := store.SetMetadata(
+		context.Background(),
+		execution.RequestID,
+		MetadataConversationID,
+		"conversation-replacement",
+	)
+	if err == nil {
+		t.Fatal("expected reserved metadata validation error")
+	}
+
+	got, getErr := store.Get(context.Background(), execution.RequestID)
+	if getErr != nil {
+		t.Fatalf("Get() error = %v", getErr)
+	}
+	if conversationID := ExecutionConversationID(got); conversationID != "conversation-original" {
+		t.Fatalf("conversation ID = %q, want conversation-original", conversationID)
+	}
+}
+
 func TestExecutionStore_ExtendTTL(t *testing.T) {
 	provider := newMockStorageProvider()
 	config := DefaultExecutionStoreConfig()
@@ -386,6 +416,46 @@ func TestExecutionStore_ListRecent(t *testing.T) {
 		if summaries[0].CreatedAt.Before(summaries[1].CreatedAt) {
 			t.Error("ListRecent not sorted by newest first")
 		}
+	}
+}
+
+func TestExecutionStore_ListRecentSummaryParity(t *testing.T) {
+	provider := newMockStorageProvider()
+	store := NewExecutionStoreWithProvider(provider, DefaultExecutionStoreConfig(), nil)
+	execution := sampleExecution("req-summary-parity", false)
+	execution.AgentName = "travel-chat-agent"
+	execution.Interrupted = true
+	execution.OriginalRequestID = "req-summary-root"
+	execution.PhaseCount = 3
+	execution.ForcedTerminal = true
+	execution.Metadata = map[string]string{
+		MetadataConversationID: "conversation-summary",
+		"investigation":        "keep",
+	}
+	if err := store.Store(context.Background(), execution); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	summaries, err := store.ListRecent(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("summary count = %d, want 1", len(summaries))
+	}
+	summary := summaries[0]
+	if summary.AgentName != execution.AgentName ||
+		summary.Interrupted != execution.Interrupted ||
+		summary.OriginalRequestID != execution.OriginalRequestID ||
+		summary.PhaseCount != execution.PhaseCount ||
+		summary.ForcedTerminal != execution.ForcedTerminal {
+		t.Fatalf("summary parity mismatch: %+v", summary)
+	}
+	if got := ExecutionSummaryConversationID(summary); got != "conversation-summary" {
+		t.Fatalf("summary conversation ID = %q", got)
+	}
+	if summary.Metadata["investigation"] != "keep" {
+		t.Fatalf("summary metadata = %v", summary.Metadata)
 	}
 }
 

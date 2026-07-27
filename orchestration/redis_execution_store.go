@@ -382,6 +382,9 @@ func (s *RedisExecutionDebugStore) SetMetadata(ctx context.Context, requestID st
 	if requestID == "" {
 		return fmt.Errorf("request_id is required")
 	}
+	if key == MetadataConversationID {
+		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
+	}
 
 	operation := func() error {
 		// Get existing record

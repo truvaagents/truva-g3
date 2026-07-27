@@ -42,8 +42,8 @@ type ExecutionStore interface {
 	// Useful for correlating with Jaeger traces.
 	GetByTraceID(ctx context.Context, traceID string) (*StoredExecution, error)
 
-	// SetMetadata adds metadata to an existing record.
-	// Useful for adding investigation notes or flags.
+	// SetMetadata adds application investigation metadata to an existing
+	// record. Framework-owned reserved correlation keys are rejected.
 	SetMetadata(ctx context.Context, requestID string, key, value string) error
 
 	// ExtendTTL extends retention for investigation.
@@ -120,7 +120,9 @@ type StoredExecution struct {
 	PhaseCount     int            `json:"phase_count,omitempty"`     // Number of phases executed
 	ForcedTerminal bool           `json:"forced_terminal,omitempty"` // Whether max phases forced termination
 
-	// Optional metadata for investigation notes
+	// Metadata contains framework-owned correlation metadata plus optional
+	// application investigation metadata. MetadataConversationID is reserved
+	// for the immutable conversation identity captured at execution time.
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
@@ -129,20 +131,36 @@ type StoredExecution struct {
 // Note: Named ExecutionSummary (not ExecutionResultSummary) to avoid
 // collision with existing ExecutionRecord type in interfaces.go:150
 type ExecutionSummary struct {
-	RequestID         string            `json:"request_id"`
-	OriginalRequestID string            `json:"original_request_id,omitempty"`
-	TraceID           string            `json:"trace_id"`
-	AgentName         string            `json:"agent_name,omitempty"`
-	OriginalRequest   string            `json:"original_request"`
-	Success           bool              `json:"success"`
-	Interrupted       bool              `json:"interrupted,omitempty"`
-	StepCount         int               `json:"step_count"`
-	FailedSteps       int               `json:"failed_steps"`
-	TotalDuration     time.Duration     `json:"total_duration"`
-	CreatedAt         time.Time         `json:"created_at"`
-	PhaseCount        int               `json:"phase_count,omitempty"`
-	ForcedTerminal    bool              `json:"forced_terminal,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
+	RequestID         string        `json:"request_id"`
+	OriginalRequestID string        `json:"original_request_id,omitempty"`
+	TraceID           string        `json:"trace_id"`
+	AgentName         string        `json:"agent_name,omitempty"`
+	OriginalRequest   string        `json:"original_request"`
+	Success           bool          `json:"success"`
+	Interrupted       bool          `json:"interrupted,omitempty"`
+	StepCount         int           `json:"step_count"`
+	FailedSteps       int           `json:"failed_steps"`
+	TotalDuration     time.Duration `json:"total_duration"`
+	CreatedAt         time.Time     `json:"created_at"`
+	PhaseCount        int           `json:"phase_count,omitempty"`
+	ForcedTerminal    bool          `json:"forced_terminal,omitempty"`
+	// Metadata contains framework-owned correlation metadata plus optional
+	// application investigation metadata. MetadataConversationID is reserved.
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// ExecutionConversationID returns the stored multi-turn correlation ID.
+func ExecutionConversationID(execution *StoredExecution) string {
+	if execution == nil {
+		return ""
+	}
+	return execution.Metadata[MetadataConversationID]
+}
+
+// ExecutionSummaryConversationID returns the summary's multi-turn correlation
+// ID.
+func ExecutionSummaryConversationID(summary ExecutionSummary) string {
+	return summary.Metadata[MetadataConversationID]
 }
 
 // StorageProvider abstracts the underlying storage backend.
@@ -381,6 +399,13 @@ func (s *executionStoreImpl) GetByTraceID(ctx context.Context, traceID string) (
 
 // SetMetadata adds metadata to an existing record.
 func (s *executionStoreImpl) SetMetadata(ctx context.Context, requestID string, key, value string) error {
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	if key == MetadataConversationID {
+		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
+	}
+
 	// Get existing record
 	execution, err := s.Get(ctx, requestID)
 	if err != nil {
@@ -487,8 +512,11 @@ func (s *executionStoreImpl) ListRecent(ctx context.Context, limit int) ([]Execu
 			RequestID:         execution.RequestID,
 			OriginalRequestID: execution.OriginalRequestID,
 			TraceID:           execution.TraceID,
+			AgentName:         execution.AgentName,
 			OriginalRequest:   execution.OriginalRequest,
+			Interrupted:       execution.Interrupted,
 			CreatedAt:         execution.CreatedAt,
+			Metadata:          execution.Metadata,
 		}
 
 		if execution.Result != nil {

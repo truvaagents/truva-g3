@@ -4,7 +4,12 @@ import "github.com/truvaagents/truva-g3/core"
 
 const (
 	MetadataConversationTurns = "conversation_turns"
-	MetadataConversationID    = "conversation_id"
+
+	// MetadataConversationID is the framework-owned canonical correlation key
+	// for all turns and delegated executions in one multi-turn conversation.
+	// Applications may supply it at orchestration ingress, but execution-store
+	// investigation metadata must not mutate it after persistence.
+	MetadataConversationID = "conversation_id"
 )
 
 type conversationIDCandidate struct {
