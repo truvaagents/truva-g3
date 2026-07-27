@@ -188,18 +188,18 @@ func TestExecutionStore_Store(t *testing.T) {
 	}
 
 	// Verify data was stored
-	key := DefaultExecutionKeyPrefix + ":" + execution.RequestID
+	key := DefaultExecutionKeyPrefix + execution.RequestID
 	if provider.data[key] == "" {
 		t.Error("Execution record not stored")
 	}
 
 	// Verify index was updated
-	if len(provider.indexes[DefaultExecutionKeyPrefix+":index"]) != 1 {
-		t.Errorf("Index not updated: got %d entries, want 1", len(provider.indexes[DefaultExecutionKeyPrefix+":index"]))
+	if len(provider.indexes[DefaultExecutionKeyPrefix+"index"]) != 1 {
+		t.Errorf("Index not updated: got %d entries, want 1", len(provider.indexes[DefaultExecutionKeyPrefix+"index"]))
 	}
 
 	// Verify trace mapping was stored
-	traceKey := DefaultExecutionKeyPrefix + ":trace:" + execution.TraceID
+	traceKey := DefaultExecutionKeyPrefix + "trace:" + execution.TraceID
 	if provider.data[traceKey] != execution.RequestID {
 		t.Errorf("Trace mapping not stored: got %q, want %q", provider.data[traceKey], execution.RequestID)
 	}

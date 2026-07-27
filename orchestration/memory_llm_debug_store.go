@@ -52,17 +52,31 @@ func (s *MemoryLLMDebugStore) RecordInteraction(ctx context.Context, requestID s
 			OriginatingAgent:  originatingAgent,
 			Metadata:          make(map[string]string),
 		}
+		if conversationID := llmDebugConversationIDFromContext(ctx); conversationID != "" {
+			record.Metadata[MetadataConversationID] = conversationID
+		}
 		s.records[requestID] = record
-	} else if record.OriginatingAgent == "" {
+	} else {
+		if LLMDebugConversationID(record) == "" {
+			if conversationID := llmDebugConversationIDFromContext(ctx); conversationID != "" {
+				if record.Metadata == nil {
+					record.Metadata = make(map[string]string)
+				}
+				record.Metadata[MetadataConversationID] = conversationID
+			}
+		}
+
 		// "First writer with a value wins" — mirrors RedisLLMDebugStore, which gates
 		// its HSetNX call on non-empty baggage so an empty first write never locks
 		// the field. A later write that carries agent_name baggage backfills it
 		// here; once non-empty, it sticks. See the two
 		// TestXxxLLMDebugStore_OriginatingAgent_BackfillOnLaterWrite tests for the
 		// parity assertion.
-		if bag := telemetry.GetBaggage(ctx); bag != nil {
-			if name := bag["agent_name"]; name != "" {
-				record.OriginatingAgent = name
+		if record.OriginatingAgent == "" {
+			if bag := telemetry.GetBaggage(ctx); bag != nil {
+				if name := bag["agent_name"]; name != "" {
+					record.OriginatingAgent = name
+				}
 			}
 		}
 	}
@@ -98,6 +112,10 @@ func (s *MemoryLLMDebugStore) GetRecord(ctx context.Context, requestID string) (
 
 // SetMetadata adds metadata to an existing record.
 func (s *MemoryLLMDebugStore) SetMetadata(ctx context.Context, requestID string, key, value string) error {
+	if key == MetadataConversationID {
+		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

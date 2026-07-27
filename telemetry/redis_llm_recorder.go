@@ -212,6 +212,7 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		// Extract trace context from baggage (matches orchestration store pattern)
 		traceID := GetTraceContext(ctx).TraceID
 		originalRequestID := requestID
+		conversationID := recorderConversationIDFromContext(ctx)
 		// originatingAgent mirrors the orchestration store's field (see
 		// orchestration/redis_llm_debug_store.go). Sourced from the same
 		// "agent_name" baggage key the orchestrator stamps from o.config.Name.
@@ -245,6 +246,9 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		pipe.HSet(ctx, metaKey, "trace_id", traceID)
 		pipe.HSet(ctx, metaKey, "request_id", requestID)
 		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
+		if conversationID != "" {
+			pipe.HSetNX(ctx, metaKey, "meta:conversation_id", conversationID)
+		}
 		if interaction.SourceComponent != "" {
 			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
 		}
@@ -265,6 +269,23 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 	}
 
 	return r.executeWithRetry(ctx, operation)
+}
+
+func recorderConversationIDFromContext(ctx context.Context) string {
+	coreCandidate := core.GetConversationIDCandidate(ctx)
+	if coreCandidate.Present {
+		if coreCandidate.RejectionReason != core.ConversationIDValidationNone ||
+			core.ValidateConversationID(coreCandidate.Value) != core.ConversationIDValidationNone {
+			return ""
+		}
+		return coreCandidate.Value
+	}
+
+	conversationID := GetBaggage(ctx)["conversation_id"]
+	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
+		return ""
+	}
+	return conversationID
 }
 
 // Close closes the Redis connection.

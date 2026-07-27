@@ -306,6 +306,7 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 	// Auto-configures from environment (same pattern as LLM Debug Store).
 	// Enable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true
 	if config.ExecutionStore.Enabled {
+		config.ExecutionStore = normalizeExecutionStoreConfig(config.ExecutionStore)
 		if config.ExecutionStoreBackend != nil {
 			// Custom backend provided - use it
 			orchestrator.SetExecutionStore(config.ExecutionStoreBackend)
@@ -316,12 +317,10 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			})
 		} else {
 			// Auto-configure Redis store from environment (same pattern as LLM Debug Store)
-			store, err := NewRedisExecutionDebugStore(
+			store, err := NewRedisExecutionDebugStoreWithConfig(
+				config.ExecutionStore,
 				WithExecutionDebugRedisDB(core.RedisDBExecutionDebug),
 				WithExecutionDebugLogger(deps.Logger),
-				WithExecutionDebugTTL(config.ExecutionStore.TTL),
-				WithExecutionDebugErrorTTL(config.ExecutionStore.ErrorTTL),
-				WithExecutionDebugKeyPrefix(config.ExecutionStore.KeyPrefix),
 			)
 			if err != nil {
 				// Resilient behavior - use NoOp store if Redis unavailable
@@ -334,11 +333,13 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			} else {
 				orchestrator.SetExecutionStore(store)
 				factoryLogger.Info("Redis execution debug store initialized", map[string]interface{}{
-					"operation":  "execution_debug_store_initialization",
-					"redis_db":   core.RedisDBExecutionDebug,
-					"key_prefix": config.ExecutionStore.KeyPrefix,
-					"ttl":        config.ExecutionStore.TTL.String(),
-					"error_ttl":  config.ExecutionStore.ErrorTTL.String(),
+					"operation":                     "execution_debug_store_initialization",
+					"redis_db":                      core.RedisDBExecutionDebug,
+					"key_prefix":                    config.ExecutionStore.KeyPrefix,
+					"ttl":                           config.ExecutionStore.TTL.String(),
+					"error_ttl":                     config.ExecutionStore.ErrorTTL.String(),
+					"conversation_query_limit":      config.ExecutionStore.ConversationQueryLimit,
+					"conversation_index_scan_limit": config.ExecutionStore.ConversationIndexScanLimit,
 				})
 			}
 		}

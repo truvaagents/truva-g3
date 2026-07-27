@@ -352,7 +352,7 @@ func TestStore_InterruptedUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug::req-interrupt")
+	got := provider.lastTTL("truvag3:execution:debug:req-interrupt")
 	if got != 24*time.Hour {
 		t.Errorf("interrupted TTL = %v, want 24h (default); got errorTTL-routing regression", got)
 	}
@@ -373,7 +373,7 @@ func TestStore_ErrorUsesErrorTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug::req-error")
+	got := provider.lastTTL("truvag3:execution:debug:req-error")
 	if got != 1*time.Hour {
 		t.Errorf("errored TTL = %v, want 1h (errorTTL)", got)
 	}
@@ -393,7 +393,7 @@ func TestStore_SuccessUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug::req-success")
+	got := provider.lastTTL("truvag3:execution:debug:req-success")
 	if got != 24*time.Hour {
 		t.Errorf("success TTL = %v, want 24h", got)
 	}
@@ -421,7 +421,7 @@ func TestSetMetadata_InterruptedUsesDefaultTTL(t *testing.T) {
 	if err := store.SetMetadata(ctx, "req-sm-interrupt", "note", "approved"); err != nil {
 		t.Fatalf("SetMetadata failed: %v", err)
 	}
-	got := provider.lastTTL("truvag3:execution:debug::req-sm-interrupt")
+	got := provider.lastTTL("truvag3:execution:debug:req-sm-interrupt")
 	if got != 24*time.Hour {
 		t.Errorf("interrupted SetMetadata TTL = %v, want 24h", got)
 	}
@@ -444,7 +444,7 @@ func TestSetMetadata_ErrorUsesErrorTTL(t *testing.T) {
 	if err := store.SetMetadata(ctx, "req-sm-error", "note", "probed"); err != nil {
 		t.Fatalf("SetMetadata failed: %v", err)
 	}
-	got := provider.lastTTL("truvag3:execution:debug::req-sm-error")
+	got := provider.lastTTL("truvag3:execution:debug:req-sm-error")
 	if got != 1*time.Hour {
 		t.Errorf("errored SetMetadata TTL = %v, want 1h (errorTTL)", got)
 	}
@@ -468,7 +468,7 @@ func redisTTLStoreFixture(t *testing.T) (*miniredis.Miniredis, *RedisExecutionDe
 	store := &RedisExecutionDebugStore{
 		client:    client,
 		logger:    &core.NoOpLogger{},
-		keyPrefix: executionDebugKeyPrefix, // "truvag3:execution:debug:" (trailing colon required — recordKey just concatenates)
+		keyPrefix: executionDebugKeyPrefix,
 		ttl:       24 * time.Hour,
 		errorTTL:  1 * time.Hour, // shorter than ttl so carve-out is observable
 	}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -17,15 +16,16 @@ import (
 const (
 	// Redis key patterns for execution debug store
 	executionDebugKeyPrefix = "truvag3:execution:debug:"
-	executionDebugIndexKey  = "truvag3:execution:debug:index"
 
 	// Size thresholds for compression (same as LLM Debug Store)
 	executionCompressionThreshold = 100 * 1024  // 100KB
 	executionMaxPayloadSize       = 1024 * 1024 // 1MB
 
-	// Default TTLs (same as LLM Debug Store)
-	defaultExecutionDebugTTL = 24 * time.Hour
-	errorExecutionDebugTTL   = 7 * 24 * time.Hour
+	// go-redis/v8 preserves the Redis TTL sentinel integers as raw duration
+	// values rather than multiplying them by the command's one-second
+	// precision.
+	redisTTLKeyMissing time.Duration = -2
+	redisTTLPersistent time.Duration = -1
 )
 
 // RedisExecutionDebugStoreOption configures the Redis execution debug store
@@ -39,6 +39,8 @@ type redisExecutionDebugStoreConfig struct {
 	keyPrefix      string
 	ttl            time.Duration
 	errorTTL       time.Duration
+	queryLimit     int
+	indexScanLimit int
 }
 
 // WithExecutionDebugRedisURL sets the Redis connection URL
@@ -108,6 +110,8 @@ type RedisExecutionDebugStore struct {
 	keyPrefix      string
 	ttl            time.Duration
 	errorTTL       time.Duration
+	queryLimit     int
+	indexScanLimit int
 
 	// Layer 1 resilience state (simple failure tracking)
 	failureCount int
@@ -124,6 +128,8 @@ type RedisExecutionDebugStore struct {
 //   - TRUVAG3_EXECUTION_DEBUG_TTL: TTL for successful records (default: 24h)
 //   - TRUVAG3_EXECUTION_DEBUG_ERROR_TTL: TTL for error records (default: 168h)
 //   - TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX: Key prefix (default: truvag3:execution:debug)
+//   - TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT: per-query result ceiling (default: 1000)
+//   - TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT: per-query index scan ceiling (default: 5000)
 //
 // Usage:
 //
@@ -136,20 +142,37 @@ type RedisExecutionDebugStore struct {
 //	    orchestration.WithExecutionDebugTTL(48 * time.Hour),
 //	)
 func NewRedisExecutionDebugStore(opts ...RedisExecutionDebugStoreOption) (*RedisExecutionDebugStore, error) {
-	// Apply intelligent defaults from environment variables
+	return NewRedisExecutionDebugStoreWithConfig(
+		DefaultConfig().ExecutionStore,
+		opts...,
+	)
+}
+
+// NewRedisExecutionDebugStoreWithConfig creates a direct Redis execution
+// store using the same normalized framework configuration as provider-backed
+// stores. Redis connection settings remain configurable through the existing
+// Redis-specific options.
+func NewRedisExecutionDebugStoreWithConfig(
+	config ExecutionStoreConfig,
+	opts ...RedisExecutionDebugStoreOption,
+) (*RedisExecutionDebugStore, error) {
+	config = normalizeExecutionStoreConfig(config)
 	cfg := &redisExecutionDebugStoreConfig{
-		redisURL:  getRedisURLWithFallback(),
-		redisDB:   getEnvInt("TRUVAG3_EXECUTION_DEBUG_REDIS_DB", core.RedisDBExecutionDebug),
-		logger:    &core.NoOpLogger{},
-		keyPrefix: getEnvString("TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX", executionDebugKeyPrefix),
-		ttl:       getEnvDuration("TRUVAG3_EXECUTION_DEBUG_TTL", defaultExecutionDebugTTL),
-		errorTTL:  getEnvDuration("TRUVAG3_EXECUTION_DEBUG_ERROR_TTL", errorExecutionDebugTTL),
+		redisURL:       getRedisURLWithFallback(),
+		redisDB:        getEnvInt("TRUVAG3_EXECUTION_DEBUG_REDIS_DB", core.RedisDBExecutionDebug),
+		logger:         &core.NoOpLogger{},
+		keyPrefix:      config.KeyPrefix,
+		ttl:            config.TTL,
+		errorTTL:       config.ErrorTTL,
+		queryLimit:     config.ConversationQueryLimit,
+		indexScanLimit: config.ConversationIndexScanLimit,
 	}
 
 	// Apply explicit options (override defaults)
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
 
 	// Parse Redis URL and create client
 	redisOpt, err := redis.ParseURL(cfg.redisURL)
@@ -176,13 +199,15 @@ func NewRedisExecutionDebugStore(opts ...RedisExecutionDebugStoreOption) (*Redis
 	// If not provided, built-in Layer 1 resilience (simple retry) is used
 
 	cfg.logger.Info("Redis execution debug store initialized", map[string]interface{}{
-		"redis_addr":      redisOpt.Addr,
-		"redis_db":        cfg.redisDB,
-		"key_prefix":      cfg.keyPrefix,
-		"ttl":             cfg.ttl.String(),
-		"error_ttl":       cfg.errorTTL.String(),
-		"circuit_breaker": cfg.circuitBreaker != nil,
-		"resilience":      "layer1_builtin", // Always has Layer 1
+		"redis_addr":                    redisOpt.Addr,
+		"redis_db":                      cfg.redisDB,
+		"key_prefix":                    cfg.keyPrefix,
+		"ttl":                           cfg.ttl.String(),
+		"error_ttl":                     cfg.errorTTL.String(),
+		"conversation_query_limit":      cfg.queryLimit,
+		"conversation_index_scan_limit": cfg.indexScanLimit,
+		"circuit_breaker":               cfg.circuitBreaker != nil,
+		"resilience":                    "layer1_builtin", // Always has Layer 1
 	})
 
 	return &RedisExecutionDebugStore{
@@ -192,6 +217,8 @@ func NewRedisExecutionDebugStore(opts ...RedisExecutionDebugStoreOption) (*Redis
 		keyPrefix:      cfg.keyPrefix,
 		ttl:            cfg.ttl,
 		errorTTL:       cfg.errorTTL,
+		queryLimit:     cfg.queryLimit,
+		indexScanLimit: cfg.indexScanLimit,
 	}, nil
 }
 
@@ -204,10 +231,11 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 	if execution.RequestID == "" {
 		return fmt.Errorf("request_id is required")
 	}
+	storedExecution, conversationID := sanitizeExecutionConversationMetadata(execution)
 
 	operation := func() error {
 		// Serialize with optional compression
-		data, err := s.serialize(execution)
+		data, err := s.serialize(storedExecution)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
@@ -217,12 +245,14 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 		// pre-fix, bypassing this branch). Carve them out so pending HITL approvals
 		// keep the default TTL rather than the shorter errorTTL.
 		ttl := s.ttl
-		if execution.Result != nil && !execution.Result.Success && !execution.Interrupted {
+		if storedExecution.Result != nil &&
+			!storedExecution.Result.Success &&
+			!storedExecution.Interrupted {
 			ttl = s.errorTTL
 		}
 
 		// Store the main record
-		key := s.recordKey(execution.RequestID)
+		key := s.recordKey(storedExecution.RequestID)
 		if err := s.client.Set(ctx, key, data, ttl).Err(); err != nil {
 			return fmt.Errorf("redis set failed: %w", err)
 		}
@@ -230,25 +260,61 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 		// Update index for listing (sorted set by timestamp) - best effort
 		indexKey := s.indexKey()
 		if err := s.client.ZAdd(ctx, indexKey, &redis.Z{
-			Score:  float64(execution.CreatedAt.UnixNano()),
-			Member: execution.RequestID,
+			Score:  float64(storedExecution.CreatedAt.UnixNano()),
+			Member: storedExecution.RequestID,
 		}).Err(); err != nil {
-			s.logger.Warn("Failed to update execution debug index", map[string]interface{}{
-				"request_id": execution.RequestID,
-				"error":      err.Error(),
-			})
+			if s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to update execution debug index", map[string]interface{}{
+					"operation":  "execution_store_index",
+					"request_id": storedExecution.RequestID,
+					"error_type": "index_write",
+					"error":      safeExecutionStoreError(err),
+				})
+			}
 			// Don't fail - index is for convenience, not critical
 		}
 
-		// Store trace ID mapping if available - best effort
-		if execution.TraceID != "" {
-			traceKey := s.traceKey(execution.TraceID)
-			if err := s.client.Set(ctx, traceKey, execution.RequestID, ttl).Err(); err != nil {
-				s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
-					"request_id": execution.RequestID,
-					"trace_id":   execution.TraceID,
-					"error":      err.Error(),
+		if conversationID != "" {
+			conversationKey := s.conversationIndexKey(conversationID)
+			previousTTL, ttlReadErr := s.client.TTL(ctx, conversationKey).Result()
+			if err := s.client.ZAdd(ctx, conversationKey, &redis.Z{
+				Score:  float64(storedExecution.CreatedAt.UnixNano()),
+				Member: storedExecution.RequestID,
+			}).Err(); err != nil {
+				if s.logger != nil {
+					s.logger.WarnWithContext(ctx, "Failed to update conversation execution index", map[string]interface{}{
+						"operation":  "execution_store_conversation_index",
+						"request_id": storedExecution.RequestID,
+						"error_type": "index_write",
+						"error":      safeExecutionStoreError(err),
+					})
+				}
+			} else if err := s.extendIndexTTLWithoutDowngrade(
+				ctx,
+				conversationKey,
+				ttl,
+				ttlReadErr == nil && previousTTL == redisTTLKeyMissing,
+			); err != nil && s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
+					"operation":  "execution_store_conversation_index_ttl",
+					"request_id": storedExecution.RequestID,
+					"error_type": "ttl_update",
+					"error":      safeExecutionStoreError(err),
 				})
+			}
+		}
+
+		// Store trace ID mapping if available - best effort
+		if storedExecution.TraceID != "" {
+			traceKey := s.traceKey(storedExecution.TraceID)
+			if err := s.client.Set(ctx, traceKey, storedExecution.RequestID, ttl).Err(); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
+						"request_id": storedExecution.RequestID,
+						"trace_id":   storedExecution.TraceID,
+						"error":      err.Error(),
+					})
+				}
 				// Don't fail - trace mapping is for convenience
 			}
 		}
@@ -313,18 +379,23 @@ func (s *RedisExecutionDebugStore) Update(ctx context.Context, requestID string,
 	}
 
 	operation := func() error {
-		// Verify record exists
-		key := s.recordKey(requestID)
-		exists, err := s.client.Exists(ctx, key).Result()
+		existing, err := s.Get(ctx, requestID)
 		if err != nil {
-			return fmt.Errorf("failed to check existence: %w", err)
+			return err
 		}
-		if exists == 0 {
-			return fmt.Errorf("execution not found: %s", requestID)
+
+		storedExecution, _ := sanitizeExecutionConversationMetadata(execution)
+		if existingConversationID := ExecutionConversationID(existing); existingConversationID != "" {
+			if storedExecution.Metadata == nil {
+				storedExecution.Metadata = make(map[string]string)
+			}
+			storedExecution.Metadata[MetadataConversationID] = existingConversationID
+		} else {
+			delete(storedExecution.Metadata, MetadataConversationID)
 		}
 
 		// Serialize with optional compression
-		data, err := s.serialize(execution)
+		data, err := s.serialize(storedExecution)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
@@ -334,11 +405,13 @@ func (s *RedisExecutionDebugStore) Update(ctx context.Context, requestID string,
 		// orchestrator fix — carve them out so pending HITL approvals keep the
 		// default TTL rather than the shorter errorTTL.
 		ttl := s.ttl
-		if execution.Result != nil && !execution.Result.Success && !execution.Interrupted {
+		if storedExecution.Result != nil &&
+			!storedExecution.Result.Success &&
+			!storedExecution.Interrupted {
 			ttl = s.errorTTL
 		}
 
-		return s.client.Set(ctx, key, data, ttl).Err()
+		return s.client.Set(ctx, s.recordKey(requestID), data, ttl).Err()
 	}
 
 	// Layer 2: Use injected circuit breaker if available
@@ -352,24 +425,51 @@ func (s *RedisExecutionDebugStore) Update(ctx context.Context, requestID string,
 
 // ExtendTTL extends retention for investigation.
 func (s *RedisExecutionDebugStore) ExtendTTL(ctx context.Context, requestID string, duration time.Duration) error {
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	if duration <= 0 {
+		return fmt.Errorf("duration must be positive")
+	}
+
+	execution, err := s.Get(ctx, requestID)
+	if err != nil {
+		return err
+	}
 	key := s.recordKey(requestID)
 
-	// Extend main record TTL
-	if err := s.client.Expire(ctx, key, duration).Err(); err != nil {
+	if err := s.extendIndexTTLWithoutDowngrade(ctx, key, duration, false); err != nil {
 		return err
 	}
 
-	// Try to extend trace ID mapping TTL if present
-	execution, err := s.Get(ctx, requestID)
-	if err == nil && execution.TraceID != "" {
+	if execution.TraceID != "" {
 		traceKey := s.traceKey(execution.TraceID)
-		if err := s.client.Expire(ctx, traceKey, duration).Err(); err != nil {
-			s.logger.Warn("Failed to extend trace ID mapping TTL", map[string]interface{}{
-				"request_id": requestID,
-				"trace_id":   execution.TraceID,
-				"error":      err.Error(),
-			})
+		if err := s.extendIndexTTLWithoutDowngrade(ctx, traceKey, duration, false); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("Failed to extend trace ID mapping TTL", map[string]interface{}{
+					"request_id": requestID,
+					"trace_id":   execution.TraceID,
+					"error":      err.Error(),
+				})
+			}
 			// Don't fail - trace mapping TTL extension is best effort
+		}
+	}
+
+	if conversationID := ExecutionConversationID(execution); conversationID != "" {
+		conversationKey := s.conversationIndexKey(conversationID)
+		if err := s.extendIndexTTLWithoutDowngrade(
+			ctx,
+			conversationKey,
+			duration,
+			false,
+		); err != nil && s.logger != nil {
+			s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
+				"operation":  "execution_store_conversation_index_ttl",
+				"request_id": requestID,
+				"error_type": "ttl_update",
+				"error":      safeExecutionStoreError(err),
+			})
 		}
 	}
 
@@ -449,35 +549,99 @@ func (s *RedisExecutionDebugStore) ListRecent(ctx context.Context, limit int) ([
 			continue // Skip missing records (TTL expired)
 		}
 
-		// Build summary
-		summary := ExecutionSummary{
-			RequestID:         execution.RequestID,
-			OriginalRequestID: execution.OriginalRequestID,
-			TraceID:           execution.TraceID,
-			AgentName:         execution.AgentName,
-			OriginalRequest:   execution.OriginalRequest,
-			Interrupted:       execution.Interrupted,
-			CreatedAt:         execution.CreatedAt,
-		}
+		summaries = append(summaries, executionSummaryFromStored(execution))
+	}
 
-		// Extract step count and success from result
-		if execution.Result != nil {
-			summary.Success = execution.Result.Success
-			summary.TotalDuration = execution.Result.TotalDuration
-			summary.StepCount = len(execution.Result.Steps)
-			for _, step := range execution.Result.Steps {
-				if !step.Success {
-					summary.FailedSteps++
-				}
+	return summaries, nil
+}
+
+// ListByConversationID returns a bounded chronological set of executions for
+// one conversation.
+func (s *RedisExecutionDebugStore) ListByConversationID(
+	ctx context.Context,
+	conversationID string,
+	limit int,
+) ([]ExecutionSummary, error) {
+	if err := validateConversationQueryID(conversationID); err != nil {
+		return nil, err
+	}
+
+	limit = normalizeConversationQueryLimit(limit, s.queryLimit)
+	scanLimit := s.indexScanLimit
+	if scanLimit <= 0 {
+		scanLimit = defaultConversationIndexScanLimit
+	}
+	indexKey := s.conversationIndexKey(conversationID)
+	summaries := make([]ExecutionSummary, 0, limit)
+	staleMembers := make([]interface{}, 0)
+
+	var offset int64
+	for scanned := 0; scanned < scanLimit && len(summaries) < limit; {
+		batchSize := conversationIndexReadBatchSize
+		if remaining := scanLimit - scanned; remaining < batchSize {
+			batchSize = remaining
+		}
+		requestIDs, err := s.client.ZRange(
+			ctx,
+			indexKey,
+			offset,
+			offset+int64(batchSize)-1,
+		).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list conversation executions: %w", err)
+		}
+		if len(requestIDs) == 0 {
+			break
+		}
+		offset += int64(len(requestIDs))
+		scanned += len(requestIDs)
+
+		recordKeys := make([]string, len(requestIDs))
+		for i, requestID := range requestIDs {
+			recordKeys[i] = s.recordKey(requestID)
+		}
+		rawRecords, err := s.client.MGet(ctx, recordKeys...).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load conversation executions: %w", err)
+		}
+		for i, rawRecord := range rawRecords {
+			requestID := requestIDs[i]
+			if rawRecord == nil {
+				staleMembers = append(staleMembers, requestID)
+				continue
+			}
+			serialized, ok := rawRecord.(string)
+			if !ok {
+				staleMembers = append(staleMembers, requestID)
+				continue
+			}
+			execution, err := s.deserialize([]byte(serialized))
+			if err != nil || ExecutionConversationID(execution) != conversationID {
+				staleMembers = append(staleMembers, requestID)
+				continue
+			}
+			summaries = append(
+				summaries,
+				executionSummaryFromStored(execution),
+			)
+			if len(summaries) == limit {
+				break
 			}
 		}
+		if len(requestIDs) < batchSize {
+			break
+		}
+	}
 
-		// Multi-phase execution data (Step 16 F1)
-		summary.PhaseCount = execution.PhaseCount
-		summary.ForcedTerminal = execution.ForcedTerminal
-		summary.Metadata = execution.Metadata
-
-		summaries = append(summaries, summary)
+	if len(staleMembers) > 0 {
+		if err := s.client.ZRem(ctx, indexKey, staleMembers...).Err(); err != nil && s.logger != nil {
+			s.logger.WarnWithContext(ctx, "Failed to prune stale conversation index entries", map[string]interface{}{
+				"operation":  "execution_store_conversation_index_cleanup",
+				"request_id": fmt.Sprint(staleMembers[0]),
+				"error_type": "index_write",
+				"error":      safeExecutionStoreError(err),
+			})
+		}
 	}
 
 	return summaries, nil
@@ -491,15 +655,44 @@ func (s *RedisExecutionDebugStore) Close() error {
 // Key building helper methods using configurable keyPrefix
 
 func (s *RedisExecutionDebugStore) recordKey(requestID string) string {
-	return s.keyPrefix + requestID
+	return normalizeExecutionKeyPrefix(s.keyPrefix) + requestID
 }
 
 func (s *RedisExecutionDebugStore) indexKey() string {
-	return s.keyPrefix + "index"
+	return normalizeExecutionKeyPrefix(s.keyPrefix) + "index"
 }
 
 func (s *RedisExecutionDebugStore) traceKey(traceID string) string {
-	return s.keyPrefix + "trace:" + traceID
+	return normalizeExecutionKeyPrefix(s.keyPrefix) + "trace:" + traceID
+}
+
+func (s *RedisExecutionDebugStore) conversationIndexKey(conversationID string) string {
+	return executionConversationIndexKey(s.keyPrefix, conversationID)
+}
+
+func (s *RedisExecutionDebugStore) extendIndexTTLWithoutDowngrade(
+	ctx context.Context,
+	key string,
+	minTTL time.Duration,
+	expirePersistent bool,
+) error {
+	currentTTL, err := s.client.TTL(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	switch {
+	case currentTTL == redisTTLKeyMissing:
+		return nil
+	case currentTTL == redisTTLPersistent:
+		if !expirePersistent {
+			return nil
+		}
+		return s.client.Expire(ctx, key, minTTL).Err()
+	case currentTTL >= minTTL:
+		return nil
+	default:
+		return s.client.Expire(ctx, key, minTTL).Err()
+	}
 }
 
 // Layer 1 Resilience Constants (same as LLM Debug Store)
@@ -639,16 +832,11 @@ func (s *RedisExecutionDebugStore) deserialize(data []byte) (*StoredExecution, e
 	return &execution, nil
 }
 
-// Ensure RedisExecutionDebugStore implements ExecutionStore
-var _ ExecutionStore = (*RedisExecutionDebugStore)(nil)
-
-// getEnvString returns an environment variable value or a default
-func getEnvString(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
-}
+// Ensure RedisExecutionDebugStore implements its framework contracts.
+var (
+	_ ExecutionStore              = (*RedisExecutionDebugStore)(nil)
+	_ ConversationExecutionLister = (*RedisExecutionDebugStore)(nil)
+)
 
 // Deprecated option function aliases for backwards compatibility
 // These will be removed in a future version

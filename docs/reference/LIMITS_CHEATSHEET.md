@@ -375,6 +375,8 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 | Execution store enabled | false | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | — |
 | Execution store TTL | 24h | `TRUVAG3_EXECUTION_DEBUG_TTL` | `WithExecutionStoreTTL(d)` |
 | Execution store error TTL | 7d | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `WithExecutionStoreErrorTTL(d)` |
+| Conversation execution query limit | 1000 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `ExecutionStoreConfig.ConversationQueryLimit` |
+| Conversation index scan limit | 5000 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `ExecutionStoreConfig.ConversationIndexScanLimit` |
 
 ## Capability Provider (Service Mode)
 

@@ -14,8 +14,10 @@ package orchestration
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -53,6 +55,16 @@ type ExecutionStore interface {
 	// ListRecent returns recent records for UI listing.
 	// Results are ordered by creation time, newest first.
 	ListRecent(ctx context.Context, limit int) ([]ExecutionSummary, error)
+}
+
+// ConversationExecutionLister is an optional execution-store capability for
+// querying executions by a stable multi-turn conversation identifier.
+type ConversationExecutionLister interface {
+	ListByConversationID(
+		ctx context.Context,
+		conversationID string,
+		limit int,
+	) ([]ExecutionSummary, error)
 }
 
 // StoredExecution contains everything needed for DAG visualization.
@@ -206,6 +218,17 @@ type StorageProvider interface {
 	RemoveFromIndex(ctx context.Context, key string, members ...string) error
 }
 
+// IndexTTLManager is an optional provider capability. Implementations extend
+// an existing sorted index's expiry to at least minTTL and must never shorten a
+// longer current TTL. A missing index is a no-op.
+type IndexTTLManager interface {
+	ExtendIndexTTL(
+		ctx context.Context,
+		indexKey string,
+		minTTL time.Duration,
+	) error
+}
+
 // ExecutionStoreConfig holds configuration for execution storage.
 // This is embedded in OrchestratorConfig.
 //
@@ -218,29 +241,42 @@ type ExecutionStoreConfig struct {
 	Enabled bool `json:"enabled"`
 
 	// TTL is the retention period for successful records.
-	// Default: 24h. Override via TRUVAG3_EXECUTION_TTL
+	// Default: 24h. Override via TRUVAG3_EXECUTION_DEBUG_TTL.
 	// This is passed to the StorageProvider implementation.
 	TTL time.Duration `json:"ttl"`
 
 	// ErrorTTL is the retention period for records with errors.
-	// Default: 168h (7 days). Override via TRUVAG3_EXECUTION_ERROR_TTL
+	// Default: 168h (7 days). Override via TRUVAG3_EXECUTION_DEBUG_ERROR_TTL.
 	ErrorTTL time.Duration `json:"error_ttl"`
 
 	// KeyPrefix is the prefix for all storage keys.
-	// Default: "truvag3:execution". Override via TRUVAG3_EXECUTION_KEY_PREFIX
+	// Default: "truvag3:execution:debug:".
+	// Override via TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX.
 	// This allows multi-tenant deployments or custom namespacing.
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
 	KeyPrefix string `json:"key_prefix"`
+
+	// ConversationQueryLimit bounds the number of executions returned by one
+	// conversation lookup.
+	// Default: 1000. Override via TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT.
+	ConversationQueryLimit int `json:"conversation_query_limit"`
+
+	// ConversationIndexScanLimit bounds stale-index scanning performed by one
+	// conversation lookup.
+	// Default: 5000. Override via TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT.
+	ConversationIndexScanLimit int `json:"conversation_index_scan_limit"`
 }
 
 // DefaultExecutionStoreConfig returns the default configuration.
 // Feature is disabled by default per FRAMEWORK_DESIGN_PRINCIPLES.md.
 func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 	return ExecutionStoreConfig{
-		Enabled:   false,                      // Disabled by default
-		TTL:       24 * time.Hour,             // 24 hours for success
-		ErrorTTL:  7 * 24 * time.Hour,         // 7 days for errors
-		KeyPrefix: "truvag3:execution:debug:", // Default prefix with trailing colon
+		Enabled:                    false,                      // Disabled by default
+		TTL:                        24 * time.Hour,             // 24 hours for success
+		ErrorTTL:                   7 * 24 * time.Hour,         // 7 days for errors
+		KeyPrefix:                  "truvag3:execution:debug:", // Default prefix with trailing colon
+		ConversationQueryLimit:     defaultConversationQueryLimit,
+		ConversationIndexScanLimit: defaultConversationIndexScanLimit,
 	}
 }
 
@@ -248,6 +284,11 @@ func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 const (
 	// DefaultExecutionKeyPrefix is the default prefix for execution debug storage keys
 	DefaultExecutionKeyPrefix = "truvag3:execution:debug:"
+
+	defaultConversationQueryLimit     = 1000
+	defaultConversationIndexScanLimit = 5000
+	defaultConversationPageSize       = 50
+	conversationIndexReadBatchSize    = 100
 )
 
 // executionStoreImpl is the default implementation of ExecutionStore
@@ -262,10 +303,7 @@ type executionStoreImpl struct {
 // This is the recommended way to create an ExecutionStore - the application provides
 // the storage backend implementation (Redis, PostgreSQL, etc.).
 func NewExecutionStoreWithProvider(provider StorageProvider, config ExecutionStoreConfig, logger core.Logger) ExecutionStore {
-	// Ensure KeyPrefix has a default value
-	if config.KeyPrefix == "" {
-		config.KeyPrefix = DefaultExecutionKeyPrefix
-	}
+	config = normalizeExecutionStoreConfig(config)
 	return &executionStoreImpl{
 		provider: provider,
 		config:   config,
@@ -273,22 +311,125 @@ func NewExecutionStoreWithProvider(provider StorageProvider, config ExecutionSto
 	}
 }
 
-// Key building helper methods using configurable KeyPrefix
-// These follow the pattern: {KeyPrefix}:{suffix}
+func normalizeExecutionStoreConfig(config ExecutionStoreConfig) ExecutionStoreConfig {
+	config.KeyPrefix = normalizeExecutionKeyPrefix(config.KeyPrefix)
+	if config.ConversationQueryLimit <= 0 {
+		config.ConversationQueryLimit = defaultConversationQueryLimit
+	}
+	if config.ConversationIndexScanLimit <= 0 {
+		config.ConversationIndexScanLimit = defaultConversationIndexScanLimit
+	}
+	return config
+}
+
+func normalizeExecutionKeyPrefix(prefix string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(prefix), ":")
+	if trimmed == "" {
+		trimmed = strings.TrimRight(DefaultExecutionKeyPrefix, ":")
+	}
+	return trimmed + ":"
+}
+
+// Key building helper methods use a prefix normalized to exactly one trailing
+// separator.
 
 // recordKey returns the key for storing an execution record
 func (s *executionStoreImpl) recordKey(requestID string) string {
-	return s.config.KeyPrefix + ":" + requestID
+	return s.config.KeyPrefix + requestID
 }
 
 // indexKey returns the key for the sorted index of recent executions
 func (s *executionStoreImpl) indexKey() string {
-	return s.config.KeyPrefix + ":index"
+	return s.config.KeyPrefix + "index"
 }
 
 // traceKey returns the key for trace ID → request ID mapping
 func (s *executionStoreImpl) traceKey(traceID string) string {
-	return s.config.KeyPrefix + ":trace:" + traceID
+	return s.config.KeyPrefix + "trace:" + traceID
+}
+
+func (s *executionStoreImpl) conversationIndexKey(conversationID string) string {
+	return executionConversationIndexKey(s.config.KeyPrefix, conversationID)
+}
+
+func executionConversationIndexKey(prefix, conversationID string) string {
+	digest := sha256.Sum256([]byte(conversationID))
+	return normalizeExecutionKeyPrefix(prefix) + fmt.Sprintf("conversation:%x", digest)
+}
+
+func sanitizeExecutionConversationMetadata(
+	execution *StoredExecution,
+) (*StoredExecution, string) {
+	if execution == nil {
+		return nil, ""
+	}
+
+	cloned := *execution
+	if execution.Metadata != nil {
+		cloned.Metadata = make(map[string]string, len(execution.Metadata))
+		for key, value := range execution.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+
+	conversationID, present := cloned.Metadata[MetadataConversationID]
+	if !present {
+		return &cloned, ""
+	}
+	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
+		delete(cloned.Metadata, MetadataConversationID)
+		return &cloned, ""
+	}
+	return &cloned, conversationID
+}
+
+func executionSummaryFromStored(execution *StoredExecution) ExecutionSummary {
+	summary := ExecutionSummary{
+		RequestID:         execution.RequestID,
+		OriginalRequestID: execution.OriginalRequestID,
+		TraceID:           execution.TraceID,
+		AgentName:         execution.AgentName,
+		OriginalRequest:   execution.OriginalRequest,
+		Interrupted:       execution.Interrupted,
+		CreatedAt:         execution.CreatedAt,
+		PhaseCount:        execution.PhaseCount,
+		ForcedTerminal:    execution.ForcedTerminal,
+		Metadata:          execution.Metadata,
+	}
+	if execution.Result != nil {
+		summary.Success = execution.Result.Success
+		summary.TotalDuration = execution.Result.TotalDuration
+		summary.StepCount = len(execution.Result.Steps)
+		for _, step := range execution.Result.Steps {
+			if !step.Success {
+				summary.FailedSteps++
+			}
+		}
+	}
+	return summary
+}
+
+func normalizeConversationQueryLimit(limit, configuredLimit int) int {
+	if configuredLimit <= 0 {
+		configuredLimit = defaultConversationQueryLimit
+	}
+	if limit <= 0 {
+		if configuredLimit < defaultConversationPageSize {
+			return configuredLimit
+		}
+		return defaultConversationPageSize
+	}
+	if limit > configuredLimit {
+		return configuredLimit
+	}
+	return limit
+}
+
+func validateConversationQueryID(conversationID string) error {
+	if reason := core.ValidateConversationID(conversationID); reason != core.ConversationIDValidationNone {
+		return fmt.Errorf("invalid conversation_id: %s", reason)
+	}
+	return nil
 }
 
 // Store saves a complete execution record (plan + result).
@@ -299,9 +440,10 @@ func (s *executionStoreImpl) Store(ctx context.Context, execution *StoredExecuti
 	if execution.RequestID == "" {
 		return fmt.Errorf("request_id is required")
 	}
+	storedExecution, conversationID := sanitizeExecutionConversationMetadata(execution)
 
 	// Serialize to JSON
-	data, err := json.Marshal(execution)
+	data, err := json.Marshal(storedExecution)
 	if err != nil {
 		return fmt.Errorf("failed to marshal execution: %w", err)
 	}
@@ -312,38 +454,67 @@ func (s *executionStoreImpl) Store(ctx context.Context, execution *StoredExecuti
 	// them out so pending HITL approvals keep the default TTL rather than the
 	// shorter ErrorTTL.
 	ttl := s.config.TTL
-	if execution.Result != nil && !execution.Result.Success && !execution.Interrupted {
+	if storedExecution.Result != nil && !storedExecution.Result.Success && !storedExecution.Interrupted {
 		ttl = s.config.ErrorTTL
 	}
 
 	// Store the main record
-	key := s.recordKey(execution.RequestID)
+	key := s.recordKey(storedExecution.RequestID)
 	if err := s.provider.Set(ctx, key, string(data), ttl); err != nil {
 		return fmt.Errorf("failed to store execution: %w", err)
 	}
 
 	// Add to index (sorted set by timestamp)
-	score := float64(execution.CreatedAt.UnixNano())
-	if err := s.provider.AddToIndex(ctx, s.indexKey(), score, execution.RequestID); err != nil {
+	score := float64(storedExecution.CreatedAt.UnixNano())
+	if err := s.provider.AddToIndex(ctx, s.indexKey(), score, storedExecution.RequestID); err != nil {
 		if s.logger != nil {
-			s.logger.Warn("Failed to add execution to index", map[string]interface{}{
+			s.logger.WarnWithContext(ctx, "Failed to add execution to index", map[string]interface{}{
 				"operation":  "execution_store_index",
-				"request_id": execution.RequestID,
-				"error":      err.Error(),
+				"request_id": storedExecution.RequestID,
+				"error_type": "index_write",
+				"error":      safeExecutionStoreError(err),
 			})
 		}
 		// Continue - main record is stored
 	}
 
+	if conversationID != "" {
+		conversationKey := s.conversationIndexKey(conversationID)
+		if err := s.provider.AddToIndex(
+			ctx,
+			conversationKey,
+			score,
+			storedExecution.RequestID,
+		); err != nil {
+			if s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to update conversation execution index", map[string]interface{}{
+					"operation":  "execution_store_conversation_index",
+					"request_id": storedExecution.RequestID,
+					"error_type": "index_write",
+					"error":      safeExecutionStoreError(err),
+				})
+			}
+		} else if ttlManager, ok := s.provider.(IndexTTLManager); ok {
+			if err := ttlManager.ExtendIndexTTL(ctx, conversationKey, ttl); err != nil && s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
+					"operation":  "execution_store_conversation_index_ttl",
+					"request_id": storedExecution.RequestID,
+					"error_type": "ttl_update",
+					"error":      safeExecutionStoreError(err),
+				})
+			}
+		}
+	}
+
 	// Store trace ID mapping if available
-	if execution.TraceID != "" {
-		traceKey := s.traceKey(execution.TraceID)
-		if err := s.provider.Set(ctx, traceKey, execution.RequestID, ttl); err != nil {
+	if storedExecution.TraceID != "" {
+		traceKey := s.traceKey(storedExecution.TraceID)
+		if err := s.provider.Set(ctx, traceKey, storedExecution.RequestID, ttl); err != nil {
 			if s.logger != nil {
 				s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
 					"operation":  "execution_store_trace",
-					"request_id": execution.RequestID,
-					"trace_id":   execution.TraceID,
+					"request_id": storedExecution.RequestID,
+					"trace_id":   storedExecution.TraceID,
 					"error":      err.Error(),
 				})
 			}
@@ -472,6 +643,20 @@ func (s *executionStoreImpl) ExtendTTL(ctx context.Context, requestID string, du
 		}
 	}
 
+	if conversationID := ExecutionConversationID(execution); conversationID != "" {
+		if ttlManager, ok := s.provider.(IndexTTLManager); ok {
+			conversationKey := s.conversationIndexKey(conversationID)
+			if err := ttlManager.ExtendIndexTTL(ctx, conversationKey, duration); err != nil && s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
+					"operation":  "execution_store_conversation_index_ttl",
+					"request_id": requestID,
+					"error_type": "ttl_update",
+					"error":      safeExecutionStoreError(err),
+				})
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -507,38 +692,95 @@ func (s *executionStoreImpl) ListRecent(ctx context.Context, limit int) ([]Execu
 			continue
 		}
 
-		// Build summary
-		summary := ExecutionSummary{
-			RequestID:         execution.RequestID,
-			OriginalRequestID: execution.OriginalRequestID,
-			TraceID:           execution.TraceID,
-			AgentName:         execution.AgentName,
-			OriginalRequest:   execution.OriginalRequest,
-			Interrupted:       execution.Interrupted,
-			CreatedAt:         execution.CreatedAt,
-			Metadata:          execution.Metadata,
-		}
-
-		if execution.Result != nil {
-			summary.Success = execution.Result.Success
-			summary.TotalDuration = execution.Result.TotalDuration
-			summary.StepCount = len(execution.Result.Steps)
-			for _, step := range execution.Result.Steps {
-				if !step.Success {
-					summary.FailedSteps++
-				}
-			}
-		}
-
-		// Multi-phase execution data (Step 16 F1)
-		summary.PhaseCount = execution.PhaseCount
-		summary.ForcedTerminal = execution.ForcedTerminal
-
-		summaries = append(summaries, summary)
+		summaries = append(summaries, executionSummaryFromStored(execution))
 	}
 
 	return summaries, nil
 }
 
+// ListByConversationID returns a bounded chronological set of executions for
+// one conversation.
+func (s *executionStoreImpl) ListByConversationID(
+	ctx context.Context,
+	conversationID string,
+	limit int,
+) ([]ExecutionSummary, error) {
+	if err := validateConversationQueryID(conversationID); err != nil {
+		return nil, err
+	}
+
+	limit = normalizeConversationQueryLimit(limit, s.config.ConversationQueryLimit)
+	scanLimit := s.config.ConversationIndexScanLimit
+	indexKey := s.conversationIndexKey(conversationID)
+	summariesNewestFirst := make([]ExecutionSummary, 0, limit)
+	staleMembers := make([]string, 0)
+
+	var offset int64
+	for scanned := 0; scanned < scanLimit; {
+		batchSize := conversationIndexReadBatchSize
+		if remaining := scanLimit - scanned; remaining < batchSize {
+			batchSize = remaining
+		}
+		requestIDs, err := s.provider.ListByScoreDesc(
+			ctx,
+			indexKey,
+			"-inf",
+			"+inf",
+			offset,
+			int64(batchSize),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list conversation executions: %w", err)
+		}
+		if len(requestIDs) == 0 {
+			break
+		}
+		offset += int64(len(requestIDs))
+		scanned += len(requestIDs)
+
+		for _, requestID := range requestIDs {
+			execution, err := s.Get(ctx, requestID)
+			if err != nil {
+				staleMembers = append(staleMembers, requestID)
+				continue
+			}
+			if ExecutionConversationID(execution) != conversationID {
+				staleMembers = append(staleMembers, requestID)
+				continue
+			}
+			summariesNewestFirst = append(
+				summariesNewestFirst,
+				executionSummaryFromStored(execution),
+			)
+		}
+		if len(requestIDs) < batchSize {
+			break
+		}
+	}
+
+	if len(staleMembers) > 0 {
+		if err := s.provider.RemoveFromIndex(ctx, indexKey, staleMembers...); err != nil && s.logger != nil {
+			s.logger.WarnWithContext(ctx, "Failed to prune stale conversation index entries", map[string]interface{}{
+				"operation":  "execution_store_conversation_index_cleanup",
+				"request_id": staleMembers[0],
+				"error_type": "index_write",
+				"error":      safeExecutionStoreError(err),
+			})
+		}
+	}
+
+	for left, right := 0, len(summariesNewestFirst)-1; left < right; left, right = left+1, right-1 {
+		summariesNewestFirst[left], summariesNewestFirst[right] =
+			summariesNewestFirst[right], summariesNewestFirst[left]
+	}
+	if len(summariesNewestFirst) > limit {
+		summariesNewestFirst = summariesNewestFirst[:limit]
+	}
+	return summariesNewestFirst, nil
+}
+
 // Ensure executionStoreImpl implements ExecutionStore
-var _ ExecutionStore = (*executionStoreImpl)(nil)
+var (
+	_ ExecutionStore              = (*executionStoreImpl)(nil)
+	_ ConversationExecutionLister = (*executionStoreImpl)(nil)
+)
