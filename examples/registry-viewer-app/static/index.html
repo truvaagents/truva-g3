@@ -106,12 +106,12 @@
                 <div class="filters">
                     <div class="search-box">
                         <span class="search-icon">⌕</span>
-                        <input type="text" id="llmSearchInput" placeholder="Search by request ID, conversation, source agent, or type...">
+                        <input type="text" id="llmSearchInput" placeholder="Search by request ID, request lineage, source agent, or type...">
                     </div>
                     <button class="filter-btn active" data-filter="all">All</button>
                     <button class="filter-btn" data-filter="success">Success</button>
                     <button class="filter-btn" data-filter="error">Errors</button>
-                    <button class="filter-btn" data-filter="grouped" title="Group related HITL records by conversation">Grouped</button>
+                    <button class="filter-btn" data-filter="grouped" title="Group related HITL records by root request">Grouped</button>
                 </div>
                 <div class="error-banner" id="llmErrorBanner">
                     <strong>Error:</strong> <span id="llmErrorMessage"></span>
@@ -121,7 +121,7 @@
                         <thead>
                             <tr>
                                 <th>Request ID</th>
-                                <th>Conversation</th>
+                                <th>Request lineage</th>
                                 <th>Source</th>
                                 <th>Interactions</th>
                                 <th>Tokens</th>

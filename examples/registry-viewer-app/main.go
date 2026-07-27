@@ -135,6 +135,9 @@ type LLMDebugListResponse struct {
 type HITLCheckpoint struct {
 	CheckpointID       string                 `json:"checkpoint_id"`
 	RequestID          string                 `json:"request_id"`
+	OriginalRequestID  string                 `json:"original_request_id,omitempty"`
+	OriginalTraceID    string                 `json:"original_trace_id,omitempty"`
+	OriginalSpanID     string                 `json:"original_span_id,omitempty"`
 	InterruptPoint     string                 `json:"interrupt_point"`
 	Decision           *InterruptDecision     `json:"decision,omitempty"`
 	Plan               *RoutingPlan           `json:"plan,omitempty"`
@@ -255,6 +258,14 @@ const (
 	executionKeyPrefix   = "truvag3:execution:debug:"
 	executionIndexKey    = "truvag3:execution:debug:index"
 	executionTracePrefix = "truvag3:execution:debug:trace:"
+
+	viewerDefaultGroupPageSize          = 50
+	viewerMaxGroupPageSize              = 200
+	viewerGlobalExecutionScanLimit      = 5000
+	viewerDistinctConversationLimit     = 500
+	viewerExecutionHydrationLimit       = 10000
+	viewerConversationMemberReadLimit   = 1000
+	viewerGroupedCursorMaxEncodedLength = 2048
 )
 
 // StoredExecution contains everything needed for DAG visualization
@@ -290,6 +301,7 @@ type ExecutionResult struct {
 type ExecutionSummary struct {
 	RequestID          string            `json:"request_id"`
 	OriginalRequestID  string            `json:"original_request_id,omitempty"`
+	ConversationID     string            `json:"conversation_id,omitempty"`
 	TraceID            string            `json:"trace_id"`
 	AgentName          string            `json:"agent_name,omitempty"`
 	OriginalRequest    string            `json:"original_request"`
@@ -388,6 +400,7 @@ type UnifiedExecutionView struct {
 	// Core execution data
 	RequestID         string           `json:"request_id"`
 	OriginalRequestID string           `json:"original_request_id,omitempty"`
+	ConversationID    string           `json:"conversation_id,omitempty"`
 	TraceID           string           `json:"trace_id,omitempty"`
 	AgentName         string           `json:"agent_name,omitempty"`
 	OriginalRequest   string           `json:"original_request"`
@@ -548,6 +561,7 @@ func main() {
 	mux.HandleFunc("/api/executions", apiMiddleware(handleExecutionList))
 	mux.HandleFunc("/api/executions/search", apiMiddleware(handleExecutionSearch))
 	mux.HandleFunc("/api/executions/", apiMiddleware(handleExecution)) // Handles both /{id} and /{id}/dag
+	mux.HandleFunc("/api/conversations", apiMiddleware(handleConversationTimeline))
 	mux.HandleFunc("/api/analytics/resolution", apiMiddleware(handleResolutionAnalytics))
 
 	// Memory endpoints — all wrapped with apiMiddleware (CORS + gzip + ETag)
@@ -1582,6 +1596,17 @@ func getAgentAddress(agentName string) (string, error) {
 func handleExecutionList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	if values, present := r.URL.Query()["group_conversations"]; present {
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			http.Error(w, "group_conversations must be true or false", http.StatusBadRequest)
+			return
+		}
+		if values[0] == "true" {
+			handleGroupedExecutionList(w, r)
+			return
+		}
+	}
+
 	// Parse query parameters
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
@@ -2321,6 +2346,7 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 	unified := &UnifiedExecutionView{
 		RequestID:         execution.RequestID,
 		OriginalRequestID: execution.OriginalRequestID,
+		ConversationID:    execution.Metadata[orchestration.MetadataConversationID],
 		TraceID:           execution.TraceID,
 		AgentName:         execution.AgentName,
 		OriginalRequest:   execution.OriginalRequest,
@@ -2354,6 +2380,14 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 			llmRecord, err = store.GetRecord(ctx, execution.RequestID)
 		}
 		if err == nil && llmRecord != nil {
+			if unified.TraceID == "" {
+				unified.TraceID = llmRecord.TraceID
+			}
+			if unified.ConversationID == "" {
+				unified.ConversationID =
+					orchestration.LLMDebugConversationID(llmRecord)
+			}
+
 			// Dedupe agent_llm_call shadows before building the summary so
 			// historical records (written before the framework-side Layer 2
 			// landed) and any still-unmigrated call sites produce correct
@@ -2551,46 +2585,13 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 			continue
 		}
 
-		summary := ExecutionSummary{
-			RequestID:         execution.RequestID,
-			OriginalRequestID: execution.OriginalRequestID,
-			TraceID:           execution.TraceID,
-			AgentName:         execution.AgentName,
-			OriginalRequest:   execution.OriginalRequest,
-			Interrupted:       execution.Interrupted,
-			CreatedAt:         execution.CreatedAt,
-			Metadata:          execution.Metadata,
-		}
-
-		if execution.Result != nil {
-			summary.Success = execution.Result.Success
-			summary.TotalDurationMs = execution.Result.TotalDuration / 1_000_000 // ns to ms
-			summary.StepCount = len(execution.Result.Steps)
-			for _, step := range execution.Result.Steps {
-				if !step.Success {
-					summary.FailedSteps++
-				}
-			}
-		}
-
-		summaries = append(summaries, summary)
+		summaries = append(summaries, summarizeExecution(execution))
 	}
 
 	// Batch-fetch LLM debug data for all executions to get LLM durations.
-	// This is a separate store (different Redis DB), so a separate pipeline.
-	store, storeErr := getLLMDebugStore()
-	if storeErr == nil && len(summaries) > 0 {
-		for i := range summaries {
-			llmRecord, _ := store.GetRecord(ctx, summaries[i].RequestID)
-			if llmRecord != nil && len(llmRecord.Interactions) > 0 {
-				var llmTotalMs int64
-				for _, interaction := range llmRecord.Interactions {
-					llmTotalMs += interaction.DurationMs
-				}
-				summaries[i].LLMTotalDurationMs = llmTotalMs
-			}
-		}
-	}
+	// This is a separate store (different Redis DB), so a separate read-only
+	// pipeline. Missing DB 7 data is intentionally fail-open.
+	_, _ = enrichExecutionSummariesFromLLMDebug(ctx, summaries)
 
 	page := &executionPage{Summaries: summaries, HasMore: hasMore}
 	if hasMore {

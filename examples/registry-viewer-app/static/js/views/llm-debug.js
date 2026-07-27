@@ -2,7 +2,7 @@
  * LLM Debug View.
  *
  * Displays LLM interaction records with filtering, detail views,
- * and conversation grouping. Falls back to mock data when the API
+ * and request-lineage grouping. Falls back to mock data when the API
  * is unavailable (e.g., local development without a running backend).
  */
 
@@ -36,7 +36,7 @@ let selected = null;
 let activeTab = 'interactions';
 let typeFilter = 'all';
 let expandedInteractions = new Set();
-let conversationFilter = null;
+let lineageFilter = null;
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -56,7 +56,7 @@ let boundListeners = [];
 
 export function destroy() {
     expandedInteractions = new Set();
-    conversationFilter = null;
+    lineageFilter = null;
     // Remove all event listeners added by setupEventDelegation
     boundListeners.forEach(({ el, type, fn }) => el.removeEventListener(type, fn));
     boundListeners = [];
@@ -80,11 +80,11 @@ function setupEventDelegation() {
     const tbody = document.getElementById('llmTableBody');
     if (tbody) {
         addTrackedListener(tbody, 'click', (e) => {
-            // Check for conversation filter click first
-            const convEl = e.target.closest('[data-conversation-id]');
-            if (convEl) {
+            // Check for request-lineage filter click first
+            const lineageEl = e.target.closest('[data-lineage-request-id]');
+            if (lineageEl) {
                 e.stopPropagation();
-                filterByConversation(convEl.dataset.conversationId);
+                filterByRequestLineage(lineageEl.dataset.lineageRequestId);
                 return;
             }
             const row = e.target.closest('tr[data-request-id]');
@@ -161,10 +161,10 @@ function setupEventDelegation() {
                 return;
             }
 
-            // Conversation filter link in detail view
-            const convLink = e.target.closest('[data-conversation-id]');
-            if (convLink) {
-                filterByConversation(convLink.dataset.conversationId);
+            // Request-lineage filter link in detail view
+            const lineageLink = e.target.closest('[data-lineage-request-id]');
+            if (lineageLink) {
+                filterByRequestLineage(lineageLink.dataset.lineageRequestId);
             }
         });
     }
@@ -197,8 +197,8 @@ function filterLLMRecords() {
             (record.interactions ? record.interactions.some(i => !i.success) : false);
         const origReqId = record.original_request_id || record.request_id;
 
-        // Check conversation filter first
-        if (conversationFilter && origReqId !== conversationFilter) {
+        // Check request-lineage filter first
+        if (lineageFilter && origReqId !== lineageFilter) {
             return false;
         }
 
@@ -228,29 +228,29 @@ function filterLLMRecords() {
     renderLLMTable(filtered);
 }
 
-function countLinkedRecords(conversationId) {
+function countLineageRecords(originalRequestId) {
     return records.filter(r => {
         const origReqId = r.original_request_id || r.request_id;
-        return origReqId === conversationId;
+        return origReqId === originalRequestId;
     }).length;
 }
 
-function filterByConversation(conversationId) {
-    // Don't allow filtering if there's only one record with this conversation ID
-    const linkedCount = countLinkedRecords(conversationId);
-    if (linkedCount <= 1 && conversationFilter !== conversationId) {
+function filterByRequestLineage(originalRequestId) {
+    // Don't allow filtering if this root request has only one record.
+    const linkedCount = countLineageRecords(originalRequestId);
+    if (linkedCount <= 1 && lineageFilter !== originalRequestId) {
         return;
     }
 
-    if (conversationFilter === conversationId) {
+    if (lineageFilter === originalRequestId) {
         // Toggle off - clear the filter
-        conversationFilter = null;
+        lineageFilter = null;
         const input = document.getElementById('llmSearchInput');
-        if (input) input.placeholder = 'Search by request ID, conversation, source agent, or type...';
+        if (input) input.placeholder = 'Search by request ID, request lineage, source agent, or type...';
     } else {
-        conversationFilter = conversationId;
+        lineageFilter = originalRequestId;
         const input = document.getElementById('llmSearchInput');
-        if (input) input.placeholder = `Filtering by conversation: ${truncateText(conversationId, 16)} (click again to clear)`;
+        if (input) input.placeholder = `Filtering by root request: ${truncateText(originalRequestId, 16)} (click again to clear)`;
     }
     filterLLMRecords();
 }
@@ -298,13 +298,13 @@ function renderLLMTable(list) {
         // Original request ID links related HITL records
         const origReqId = record.original_request_id || record.request_id;
         const isResumed = origReqId !== record.request_id;
-        // Check if this conversation has linked records (makes it clickable)
-        const hasLinkedRecords = countLinkedRecords(origReqId) > 1;
+        // Check whether this request lineage has linked records.
+        const hasLinkedRecords = countLineageRecords(origReqId) > 1;
         return `
         <tr data-request-id="${record.request_id}" class="${selected?.request_id === record.request_id ? 'selected' : ''}">
             <td><span class="request-id" title="${record.request_id}">${record.request_id}</span></td>
             <td>
-                <span class="request-id" title="${origReqId}${hasLinkedRecords ? ' (click to filter linked records)' : ''}" style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-conversation-id="${origReqId}"` : ''}>
+                <span class="request-id" title="${origReqId}${hasLinkedRecords ? ' (click to filter linked records)' : ''}" style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${origReqId}"` : ''}>
                     ${isResumed ? '🔗 ' : ''}${origReqId}
                 </span>
             </td>
@@ -448,15 +448,15 @@ function renderLLMInteractionsView(record) {
     // Determine if this is a resumed request
     const origReqId = record.original_request_id || record.request_id;
     const isResumed = origReqId !== record.request_id;
-    // Check if this conversation has linked records
-    const hasLinkedRecords = countLinkedRecords(origReqId) > 1;
+    // Check whether this root request has linked records.
+    const hasLinkedRecords = countLineageRecords(origReqId) > 1;
 
     // Record Info
     html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">📊</span> Record Info</div><div class="info-grid">
         <div class="info-label">Request ID</div><div class="info-value mono">${record.request_id}</div>
-        <div class="info-label">Conversation ID</div><div class="info-value mono" style="display: flex; align-items: center; gap: 8px;">
+        <div class="info-label">Root request ID</div><div class="info-value mono" style="display: flex; align-items: center; gap: 8px;">
             ${isResumed ? '<span title="This is a resumed HITL request">🔗</span>' : ''}
-            <span style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-conversation-id="${origReqId}" title="Click to filter linked records (${countLinkedRecords(origReqId)} total)"` : ''}>${origReqId}</span>
+            <span style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${origReqId}" title="Click to filter linked records (${countLineageRecords(origReqId)} total)"` : ''}>${origReqId}</span>
             ${isResumed ? '<span style="font-size: 11px; color: var(--text-muted);">(HITL resume)</span>' : ''}
         </div>
         ${record.trace_id ? `<div class="info-label">Trace ID</div><div class="info-value mono">${record.trace_id}</div>` : ''}
