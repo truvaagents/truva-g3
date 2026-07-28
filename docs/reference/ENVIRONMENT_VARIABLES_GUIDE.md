@@ -1398,7 +1398,29 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
 The two conversation limits accept only positive integers. Missing, malformed,
-zero, or negative values retain the safe defaults.
+zero, or negative values retain the safe defaults. Environment values populate
+`DefaultOrchestratorConfig`. A positive programmatic value applied after
+default construction, or passed directly in `ExecutionStoreConfig`, is
+authoritative. The per-call `limit` passed to `ListByConversationID` is clamped
+to `ConversationQueryLimit`; stale-index work is independently bounded by
+`ConversationIndexScanLimit`.
+
+### Correlation and baggage protocol limits
+
+These limits are protocol constants rather than environment settings:
+
+| Value | Limit | Contract |
+|---|---:|---|
+| `conversation_id` | 1–512 bytes | Visible-ASCII W3C-safe subset validated by `core.ValidateConversationID` |
+| W3C baggage members | 64 | `telemetry.MaxBaggageItems` |
+| Baggage key | 128 bytes | `telemetry.MaxBaggageKeyLength` |
+| Baggage value | 512 bytes | `telemetry.MaxBaggageValueLength` |
+| Complete serialized W3C baggage value | 8192 bytes | Includes separators, encoding, and member properties |
+
+`conversation_id` is framework correlation metadata, not an application
+`session_id`. A chat application may deliberately use the same opaque value
+for both, but the framework does not infer that mapping. Conversation identity
+is established on the first turn even when `conversation_turns` is empty.
 
 ### Features (Same as LLM Debug Store)
 
@@ -1426,6 +1448,10 @@ The execution debug store uses configurable key patterns based on `TRUVAG3_EXECU
 | `{prefix}index` | Sorted index for listing recent executions |
 | `{prefix}trace:{trace_id}` | Trace ID → Request ID mapping |
 | `{prefix}conversation:{sha256(conversation_id)}` | Chronological execution membership for one conversation |
+
+The execution record's `metadata.conversation_id` is authoritative. The hashed
+conversation index is a bounded lookup accelerator and may be lazily cleaned
+when records expire; index maintenance never changes the execution record.
 
 With the default prefix `truvag3:execution:debug:`:
 - `truvag3:execution:debug:req-001` - Execution record

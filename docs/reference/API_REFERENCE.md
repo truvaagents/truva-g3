@@ -1405,7 +1405,21 @@ func GetRequestID(ctx context.Context) string
 // Store and retrieve step ID in context
 func WithStepID(ctx context.Context, id string) context.Context
 func GetStepID(ctx context.Context) string
+
+// Validate and carry opaque multi-turn correlation.
+func ValidateConversationID(id string) ConversationIDValidationReason
+func WithConversationID(ctx context.Context, id string) context.Context
+func GetConversationID(ctx context.Context) string
+func GetConversationIDCandidate(ctx context.Context) ConversationIDCandidate
+func WithoutConversationID(ctx context.Context) context.Context
 ```
+
+`ValidateConversationID` accepts 1–512 bytes from the documented
+W3C-baggage-safe visible-ASCII subset and returns a bounded reason enum.
+`WithConversationID` records a programmatic candidate. An explicit
+`X-TruvaG3-Conversation-ID` candidate has precedence regardless of call order;
+invalid raw values are not retained. `WithoutConversationID` shadows inherited
+conversation identity while preserving unrelated context values.
 
 #### ExtractRequestContext
 
@@ -1421,6 +1435,7 @@ func ExtractRequestContext(ctx context.Context, r *http.Request) context.Context
 |--------|-------------|---------|
 | `X-TruvaG3-Request-ID` | `truvag3_request_id` | Correlates agent LLM calls to orchestration request |
 | `X-TruvaG3-Step-ID` | `truvag3_step_id` | Identifies which plan step triggered the call |
+| `X-TruvaG3-Conversation-ID` | validated conversation candidate | Correlates multiple top-level turns without assigning application session semantics |
 
 **Example — Agent HTTP Handler:**
 ```go
@@ -3338,7 +3353,29 @@ func GetBaggage(ctx context.Context) Baggage
 // WithBaggage attaches W3C baggage labels to the context. Pass flat
 // key-value pairs (variadic), not a map.
 func WithBaggage(ctx context.Context, labels ...string) context.Context
+
+// WithBaggageExact adds/replaces one untruncated member or returns a bounded
+// typed rejection while leaving ctx unchanged.
+func WithBaggageExact(
+    ctx context.Context,
+    key string,
+    rawValue string,
+    options ...BaggageMemberOption,
+) (context.Context, error)
+
+func WithMetricLabelEligibility(eligible bool) BaggageMemberOption
+func BaggageExactErrorReasonOf(err error) (BaggageExactErrorReason, bool)
+func WithoutBaggageMember(ctx context.Context, key string) context.Context
+func CopyBaggage(dst, src context.Context) context.Context
 ```
+
+Both baggage construction paths enforce 64 members, 128-byte keys, 512-byte
+values, and an 8192-byte complete serialized W3C baggage value (including
+separators, encoding, and member properties). `WithBaggage` keeps its
+truncation/silent-drop convenience behavior. `WithBaggageExact` never
+truncates. `WithMetricLabelEligibility(false)` preserves the member for
+propagation, traces, and structured logs while excluding it from automatic
+metric labels.
 
 Span creation is **not** a top-level function. Spans are started through a
 `core.Telemetry` instance — typically the one stored on your component
@@ -3884,7 +3921,21 @@ deps := orchestration.OrchestratorDependencies{
 }
 ```
 
-For chat agents, the preferred conversation-history path is request metadata, not a hook. Pass raw turns in `metadata[orchestration.MetadataConversationTurns]` plus the stable session key in `metadata[orchestration.MetadataConversationSessionKey]`, and let the shared `ConversationHistoryPreparer` build the `<conversation_history>` enrichment before planning. `ConversationHistoryHook` remains available as an adapter for memory-backed integrations that cannot supply raw turns directly. For Tier 2 recursive compaction, the ergonomic Layer 2 path is `BuildCompactionEnabledConversationHistoryPreparer(config, aiClient, ...options)`, which installs the default cache and LLM compactor while still allowing `WithConversationSummaryCache(...)` and `WithConversationCompactor(...)` overrides.
+For chat agents, the preferred conversation-history path is request metadata,
+not a hook. Pass raw turns in
+`metadata[orchestration.MetadataConversationTurns]` and the stable canonical
+identity in `metadata[orchestration.MetadataConversationID]`, then let the
+shared `ConversationHistoryPreparer` build the `<conversation_history>`
+enrichment before planning. Set `MetadataConversationID` on the first turn
+even when the turns slice is empty. Application `session_id` remains a separate
+concept, although an application may deliberately map the same opaque UUID to
+both. `ConversationHistoryHook` remains available as an adapter for
+memory-backed integrations that cannot supply raw turns directly. For Tier 2
+recursive compaction, the ergonomic Layer 2 path is
+`BuildCompactionEnabledConversationHistoryPreparer(config, aiClient,
+...options)`, which installs the default cache and LLM compactor while still
+allowing `WithConversationSummaryCache(...)` and
+`WithConversationCompactor(...)` overrides.
 
 For detailed pipeline hook implementation patterns, see [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md). For the conversation-history metadata path plus Tier 2 / Layer 3 reference implementations, see [Conversation History Guide](../memory-and-chat/CONVERSATION_HISTORY_GUIDE.md).
 
@@ -4866,6 +4917,59 @@ type LLMDebugRecordSummary struct {
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful records |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error records (7 days) |
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index |
+
+### Execution Debug Store
+
+`ExecutionStore` remains the required request-oriented persistence contract.
+Conversation lookup is additive capability discovery:
+
+```go
+type ConversationExecutionLister interface {
+    ListByConversationID(
+        ctx context.Context,
+        conversationID string,
+        limit int,
+    ) ([]ExecutionSummary, error)
+}
+
+type IndexTTLManager interface {
+    ExtendIndexTTL(
+        ctx context.Context,
+        indexKey string,
+        minTTL time.Duration,
+    ) error
+}
+```
+
+Use `lister, ok := store.(ConversationExecutionLister)`; the NoOp store does
+not advertise the capability. Provider-backed stores may implement
+`IndexTTLManager`, but its absence is supported through bounded lazy index
+cleanup.
+
+`StoredExecution.Metadata` and `ExecutionSummary.Metadata` carry the
+framework-owned `MetadataConversationID`. Read it with
+`ExecutionConversationID` or `ExecutionSummaryConversationID`. Record metadata
+is authoritative; the SHA-256 conversation index is an accelerator.
+
+```go
+type ExecutionStoreConfig struct {
+    Enabled                    bool
+    TTL                        time.Duration
+    ErrorTTL                   time.Duration
+    KeyPrefix                  string
+    ConversationQueryLimit     int // default 1000
+    ConversationIndexScanLimit int // default 5000
+}
+```
+
+Positive programmatic values are authoritative. Per-call result limits are
+clamped to `ConversationQueryLimit`, and stale-index work is bounded by
+`ConversationIndexScanLimit`.
+
+| Variable | Default |
+|---|---:|
+| `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` |
+| `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` |
 
 ### Human-in-the-Loop (HITL)
 

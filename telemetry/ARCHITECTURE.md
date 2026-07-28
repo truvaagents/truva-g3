@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.0
+**Version**: 1.1
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -16,13 +16,17 @@
    - [Progressive Disclosure API Design](#3-progressive-disclosure-api-design)
    - [Module Boundaries for Metrics](#4-module-boundaries-for-metrics)
    - [HTTP Middleware Extensibility](#5-http-middleware-extensibility-generic-mechanisms)
-3. [Global Singleton Pattern](#global-singleton-pattern)
-4. [OpenTelemetry Integration](#opentelemetry-integration)
-5. [Integration Patterns](#integration-patterns)
-6. [OTLP Pipeline Architecture](#otlp-pipeline-architecture)
-7. [Production Deployment](#production-deployment)
-8. [Common Pitfalls](#common-pitfalls)
-9. [Troubleshooting Guide](#troubleshooting-guide)
+3. [LLM Call Recording](#llm-call-recording)
+4. [Baggage Correlation Contract](#baggage-correlation-contract)
+5. [Global Singleton Pattern](#global-singleton-pattern)
+6. [OpenTelemetry Integration](#opentelemetry-integration)
+7. [Integration Patterns](#integration-patterns)
+8. [OTLP Pipeline Architecture](#otlp-pipeline-architecture)
+9. [Production Deployment](#production-deployment)
+10. [Common Pitfalls](#common-pitfalls)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Performance Characteristics](#performance-characteristics)
+13. [Version History](#version-history)
 
 ---
 
@@ -366,7 +370,7 @@ By placing the recorder interface and Redis implementation in telemetry, agents 
 │  3. Builds telemetry.LLMCallRecord                           │
 │  4. Fires async goroutine → recorder.RecordLLMCall()         │
 └──────────────────────┬───────────────────────────────────────┘
-                       │ RPUSH (atomic, async)
+                       │ Pipeline: RPUSH interaction + HSETNX metadata + index
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ Redis DB 7                                                   │
@@ -387,15 +391,27 @@ created by those factories are wrapped normally.
 
 ### Key Design Decisions
 
-1. **Write-only**: `RedisLLMCallRecorder` only appends interactions (RPUSH). Reading is done by `orchestration.RedisLLMDebugStore.GetRecord()` via the registry-viewer.
+1. **Write-only**: `RedisLLMCallRecorder` writes interactions and their
+   format-compatible metadata/index entries. Reading is done by
+   `orchestration.RedisLLMDebugStore.GetRecord()` via the registry-viewer.
 
 2. **Format-compatible**: The JSON structure written by `RedisLLMCallRecorder` matches `orchestration.LLMInteraction` exactly. Both writers produce records that the registry-viewer can read seamlessly.
 
-3. **Atomic writes**: Uses Redis RPUSH (no read-modify-write), safe for concurrent writes from multiple processes (orchestrator + agents writing to the same request's record).
+3. **No read-modify-write**: A Redis pipeline appends the interaction and
+   performs first-valid metadata backfill with `HSETNX`, then updates the
+   listing index and TTLs. Concurrent orchestration and agent writers share the
+   same format without replacing an established conversation ID.
 
 4. **Layer 1 resilience**: Built-in retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures in 30s triggers 30s pause). Recording failures never impact the LLM call path.
 
-5. **Request ID propagation**: The orchestrator's executor sends `X-TruvaG3-Request-ID` and `X-TruvaG3-Step-ID` as HTTP headers. Agents extract these via `core.ExtractRequestContext()`, making them available to `InstrumentedAIClient.resolveRequestID()`.
+5. **Request context propagation**: The orchestrator's executor sends
+   framework-managed request, step, plan, phase, original-request,
+   conversation, agent, and investigation headers. Agents extract the request,
+   step, plan, phase, original-request, conversation, and agent headers via
+   `core.ExtractRequestContext()`; investigation-owner propagation is not part
+   of that helper. An initialized `otelhttp` transport also carries standard
+   W3C Trace Context and W3C Baggage; the explicit conversation header is a
+   framework fallback, not a replacement for standard propagation.
 
 6. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
 
@@ -419,9 +435,55 @@ type NoOpLLMCallRecorder struct{}
 | `telemetry` | Defines `LLMCallRecorder` interface; provides `RedisLLMCallRecorder` (write-only) and `NoOpLLMCallRecorder` |
 | `ai` | `InstrumentedAIClient` wraps any `core.AIClient` and calls `RecordLLMCall()` after each LLM call |
 | `orchestration` | `LLMCallRecorderAdapter` bridges `LLMDebugStore` → `LLMCallRecorder`; `RedisLLMDebugStore` reads what both writers produce |
-| `core` | `ExtractRequestContext()` extracts request/step IDs from HTTP headers into context |
+| `core` | `ExtractRequestContext()` extracts framework-managed request, lineage, conversation, and agent headers into context |
 
 ---
+
+## Baggage Correlation Contract
+
+`WithBaggage` remains the convenience API for ordinary telemetry enrichment.
+It accepts multiple key/value pairs, truncates an overlong key or value,
+silently skips invalid members, and applies the 64-member limit to each
+candidate as it is added. `WithBaggageExact` is the lossless API for identity:
+it adds or replaces one member, never truncates, and returns the original
+context plus a bounded `BaggageExactError` on rejection.
+
+Both construction paths enforce the same limits:
+
+| Limit | Value |
+|---|---:|
+| Members | 64 |
+| Key length | 128 bytes |
+| Value length | 512 bytes |
+| Complete serialized W3C baggage value | 8192 bytes |
+
+The total includes separators, encoding, and member properties; it is not a
+loose sum of raw key/value lengths. Replacing a member is allowed at the item
+limit when the complete serialized value remains within the total limit.
+
+`WithMetricLabelEligibility(false)` stores a generic W3C member property.
+That property propagates across standard inject/extract and tells
+context-aware metric enrichment to omit the member. It does not remove the
+member from traces, structured logs, or downstream context. The framework uses
+this for `conversation_id` because conversation identity is high-cardinality.
+Unmarked baggage retains existing metric-enrichment behavior.
+
+`CopyBaggage(dst, src)` copies the complete OpenTelemetry baggage object,
+including member properties, while preserving destination cancellation,
+deadlines, and values. `WithoutBaggageMember` removes one member while
+preserving all other properties. These helpers do not rebuild individual
+members. Exact-helper rejection updates bounded baggage statistics; removal and
+copy do not increment add/drop counters.
+
+HTTP middleware validates an explicit `X-TruvaG3-Conversation-ID` header before
+setting it on the server span. Baggage-sourced common span enrichment propagates
+the member as provided; framework orchestration places `conversation_id` into
+baggage only after canonical validation. Applications that add
+`conversation_id` through generic baggage APIs are responsible for supplying a
+valid value. JSON context-aware logging may include the framework-validated
+value; text logging keeps its existing format. Metric enrichment honors the
+metric-eligibility property, so correlation can remain available to traces and
+logs without creating a metric series per conversation.
 
 ## Global Singleton Pattern
 
@@ -1560,6 +1622,7 @@ BenchmarkBaggagePropagation-10          5000000   234.1 ns/op    128 B/op    3 a
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1 | 2026-07-27 | Established exact/property-preserving baggage, metric-eligibility, conversation propagation, and format-twin LLM-recording contracts |
 | 1.0 | 2025-09-28 | Initial architecture documentation |
 
 ---

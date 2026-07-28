@@ -2498,10 +2498,11 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
     }
 
     // 2. Build resume context — single call, full contract
-    resumeCtx, err := orchestration.BuildResumeContext(ctx, checkpoint)
+    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
     if err != nil {
         return fmt.Errorf("invalid checkpoint state: %w", err)
     }
+    defer endResumeSpan()
 
     // 3. Re-enter the orchestrator with the original request
     result, err := a.orchestrator.ProcessRequest(
@@ -2519,7 +2520,13 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 - **Restores plan** — the stored plan with matching step IDs, so the orchestrator skips re-planning
 - **Restores completed steps** — already-executed step results, so the executor skips them
 - **Restores parameters** — human-approved parameter values for step-level resume
-- **Preserves metadata** — request mode, session info, user context
+- **Preserves metadata** — request mode, application session info, and user
+  context
+- **Restores conversation correlation** — validates any canonical
+  `conversation_id`, scrubs rejected identity, and restores accepted identity
+  to core context, checkpoint metadata, and metric-ineligible W3C Baggage
+- **Links traces** — starts `hitl.resume` linked to the original trace; callers
+  must invoke the returned cleanup function
 
 **Do not manually call individual `With*` helpers** (`WithResumeMode`, `WithPlanOverride`, `WithCompletedSteps`, etc.) in your resume handler. The resume contract has grown from 3 to 6 context values, and missing any one of them causes the orchestrator to replay the entire pipeline from scratch. `BuildResumeContext` is the single source of truth and will automatically include new helpers as the framework evolves.
 

@@ -199,6 +199,40 @@ telemetry.Counter("api.request",
 
 **Why does cardinality matter?** Each unique combination of labels creates a new metric series. Too many series = memory explosion!
 
+### Exact correlation baggage
+
+Use `WithBaggageExact` when an identifier must never be truncated:
+
+```go
+ctx, err := telemetry.WithBaggageExact(
+    ctx,
+    "conversation_id",
+    conversationID,
+    telemetry.WithMetricLabelEligibility(false),
+)
+if err != nil {
+    reason, _ := telemetry.BaggageExactErrorReasonOf(err)
+    // Treat optional correlation as absent; do not log the rejected value.
+    log.Printf("conversation correlation rejected: %s", reason)
+}
+```
+
+The metric-eligibility option is stored as a W3C baggage-member property, so
+it survives inject/extract. The member remains available for traces,
+context-aware JSON logs, and downstream correlation, but is omitted from
+automatic metric labels. Unmarked baggage retains the existing metric
+behavior.
+
+Both `WithBaggage` and `WithBaggageExact` enforce 64 members, 128-byte keys,
+512-byte values, and an 8192-byte complete serialized W3C baggage value.
+`WithBaggage` keeps its convenience semantics (per-item truncation and silent
+drop); `WithBaggageExact` rejects atomically with a typed bounded error.
+
+Use `WithoutBaggageMember(ctx, key)` to remove one member without disturbing
+other member properties. Use `CopyBaggage(dst, src)` to preserve the entire
+baggage object while retaining the destination context's cancellation,
+deadline, and ordinary values.
+
 ## 5. Progressive Disclosure: From Simple to Advanced
 
 The telemetry module follows the principle of progressive disclosure - start simple, add complexity only when needed.
@@ -1296,6 +1330,15 @@ telemetry.Duration("metric.name", startTime, "label", "value")
 ```go
 ctx = telemetry.WithBaggage(ctx, "key", "value")
 telemetry.EmitWithContext(ctx, "metric.name", 123.45)
+
+ctx, err := telemetry.WithBaggageExact(
+    ctx,
+    "conversation_id",
+    conversationID,
+    telemetry.WithMetricLabelEligibility(false),
+)
+detached := telemetry.CopyBaggage(context.Background(), ctx)
+ctx = telemetry.WithoutBaggageMember(ctx, "conversation_id")
 ```
 
 ### Health Check

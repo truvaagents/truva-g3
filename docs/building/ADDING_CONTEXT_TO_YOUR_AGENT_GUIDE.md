@@ -316,14 +316,24 @@ func addConversationHistoryMetadata(
     if metadata == nil {
         metadata = make(map[string]interface{})
     }
+    // This application maps one chat session to one conversation. Establish
+    // identity independently of history so turn 1 is correlated.
+    if sessionID != "" {
+        metadata[orchestration.MetadataConversationID] = sessionID
+    }
     if len(turns) == 0 {
         return metadata
     }
     metadata[orchestration.MetadataConversationTurns] = turns
-    metadata[orchestration.MetadataConversationSessionKey] = sessionID
     return metadata
 }
 ```
+
+`sessionID` is application state; `MetadataConversationID` is framework
+correlation. Reusing the value is an explicit one-session-to-one-conversation
+mapping in this example, not a framework assumption. Keep the identity
+assignment outside the history guard so the first turn and delegation paths
+with empty history still carry it.
 
 If your integration cannot pass raw turns in metadata and only has a memory backend, `ConversationHistoryHook` remains available as a thin adapter:
 

@@ -161,6 +161,11 @@ The checkpoint includes:
 - **Current step**: What we're pausing before (for step-level approval)
 - **Resolved parameters**: The actual values that will be sent to tools
 - **Original request**: The user's query (needed to re-process on resume)
+- **User context**: Application metadata needed by the resume handler, including
+  `session_id` and the canonical `conversation_id` when the request belongs to
+  a multi-turn conversation
+- **Trace lineage**: Original request, trace, and span identifiers used to link
+  the resumed execution
 - **Expiration time**: When the checkpoint times out
 
 Checkpoints are stored in Redis and automatically expire after the configured timeout.
@@ -845,11 +850,12 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
     }
 
     // 2. Build resume context (handles all the plumbing)
-    resumeCtx, err := orchestration.BuildResumeContext(ctx, checkpoint)
+    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
     if err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
     }
+    defer endResumeSpan()
 
     // 3. Re-process the original request
     err = a.ProcessRequest(resumeCtx, checkpoint.OriginalRequest, callback)
@@ -872,6 +878,10 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 - Injects completed step results (`WithCompletedSteps`)
 - Injects pre-resolved parameters for step-level resume (`WithPreResolvedParams`)
 - Preserves request mode and user context
+- Validates and restores canonical `conversation_id` to core context,
+  checkpoint metadata, and metric-ineligible W3C Baggage when present
+- Starts a `hitl.resume` span linked to the original trace; the caller must
+  invoke the returned cleanup function
 
 **Option 2: Manual Context Building**
 
@@ -910,7 +920,7 @@ if checkpoint.RequestMode != "" {
 
 | Helper | Purpose |
 |--------|---------|
-| `BuildResumeContext(ctx, checkpoint)` | One-call context setup (recommended) |
+| `BuildResumeContext(ctx, checkpoint)` | Returns the resume context, linked-span cleanup function, and error (recommended) |
 | `WithResumeMode(ctx, checkpointID)` | Marks context as resume, prevents re-interrupt |
 | `WithPlanOverride(ctx, plan)` | Injects stored plan (critical for step ID matching) |
 | `WithCompletedSteps(ctx, results)` | Skips already-executed steps |
@@ -923,7 +933,7 @@ if checkpoint.RequestMode != "" {
 |--------|---------|
 | `WithRequestID(ctx, requestID)` | Sets request ID for trace correlation |
 | `GetRequestID(ctx)` | Retrieves request ID from context |
-| `WithMetadata(ctx, metadata)` | Attaches user context (session_id, user_id) to checkpoint |
+| `WithMetadata(ctx, metadata)` | Attaches application user context such as `session_id` and `user_id`; canonical multi-turn identity uses `conversation_id` |
 | `GetMetadata(ctx)` | Retrieves metadata from context |
 
 *Error Handling Helpers* ([hitl_errors.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_errors.go))

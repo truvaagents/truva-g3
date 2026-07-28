@@ -179,7 +179,7 @@ Chat session turns
     │
     ▼
 metadata[orchestration.MetadataConversationTurns]
-metadata[orchestration.MetadataConversationSessionKey]
+metadata[orchestration.MetadataConversationID]
     │
     ▼
 ConversationHistoryPreparer
@@ -197,7 +197,15 @@ Planning → Continuation → Synthesis
 Two important details:
 
 - The preferred path is **raw turns in request metadata**.
+- `MetadataConversationID` is correlation identity, not history. Set it
+  whenever a conversation exists, including the first turn when
+  `MetadataConversationTurns` is empty.
 - `ConversationHistoryHook` still exists, but it is now an **adapter** for memory-backed integrations that cannot supply raw turns directly.
+
+An application may map one `session_id` to one `conversation_id`, as the
+reference chat agents do, but that is an application decision. Session IDs own
+transcript persistence and TTL semantics; conversation IDs join framework
+executions and provide the Tier 2 compaction-cache namespace.
 
 ---
 
@@ -210,7 +218,7 @@ If you are skimming, this is the recommended path for most teams:
 1. store conversation turns in your session store
 2. pass them in metadata using:
    - `orchestration.MetadataConversationTurns`
-   - `orchestration.MetadataConversationSessionKey`
+   - `orchestration.MetadataConversationID`
 3. create the orchestrator with `CreateOrchestrator(...)`
 
 That gives you **Tier 1** automatically.
@@ -269,7 +277,7 @@ If you want the shortest path:
 1. Store your chat history as `[]core.ConversationTurn`
 2. Pass it in request metadata under:
    - `orchestration.MetadataConversationTurns`
-   - `orchestration.MetadataConversationSessionKey`
+   - `orchestration.MetadataConversationID`
 3. Create the orchestrator normally with `CreateOrchestrator(...)`
 
 That gives you **Tier 1 automatically**.
@@ -339,6 +347,10 @@ func (a *YourChatAgent) addConversationHistoryMetadata(
     if metadata == nil {
         metadata = make(map[string]interface{})
     }
+    // This example maps one application session to one conversation.
+    if sessionID != "" {
+        metadata[orchestration.MetadataConversationID] = sessionID
+    }
     if len(history) == 0 {
         return metadata
     }
@@ -352,7 +364,6 @@ func (a *YourChatAgent) addConversationHistoryMetadata(
     }
 
     metadata[orchestration.MetadataConversationTurns] = turns
-    metadata[orchestration.MetadataConversationSessionKey] = sessionID
     return metadata
 }
 ```
@@ -377,7 +388,7 @@ It has the cleanest small example of:
 
 - converting `[]Message` to `[]core.ConversationTurn`
 - storing `MetadataConversationTurns`
-- storing `MetadataConversationSessionKey`
+- storing `MetadataConversationID` independently of history presence
 - keeping the legacy formatted-history fallback during rollout
 
 ---
@@ -966,7 +977,7 @@ Check these first:
 
 - Are you injecting `ConversationHistoryPreparer` explicitly with `BuildCompactionEnabledConversationHistoryPreparer(...)`?
 - Is `agent.AI` available when the preparer is built?
-- Are you passing `MetadataConversationTurns` and `MetadataConversationSessionKey`?
+- Are you passing `MetadataConversationTurns` and `MetadataConversationID`?
 
 If you are only passing `core.EnrichmentConversationHistory` as a formatted string, that is expected to stay on the Tier 1-style text path.
 

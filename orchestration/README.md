@@ -1241,6 +1241,8 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful debug records |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error debug records (7 days) |
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index for debug storage |
+| `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
+| `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | Enable multi-phase iterative planning. When enabled, the LLM planner can generate partial plans that execute in phases. Uses a tiered approach: Phase 1 discovers, Phase 2+ acts on results with context-aware tool re-selection. |
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | Maximum planning phases per request. Most queries need at most 2. |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | Maximum total steps across all phases. Prevents runaway plan generation. |
@@ -1738,6 +1740,10 @@ These features are not yet implemented but could be added:
 - `LLMInteraction` - Single LLM call record with `SourceComponent` and `CallDescription` attribution
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
+- `ExecutionStore` - Required request-oriented execution persistence contract
+- `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
+- `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
+- `ExecutionStoreConfig` - Includes conversation query and stale-index scan limits
 
 ### Key Functions
 - `CreateOrchestrator(config, deps)` - Create orchestrator with dependencies
@@ -1753,6 +1759,35 @@ These features are not yet implemented but could be added:
 - `ExecuteWorkflow(ctx, workflow, inputs)` - Execute defined workflow
 - `ParseWorkflowYAML(data)` - Parse workflow from YAML
 - `NewLLMCallRecorderAdapter(store)` - Bridge `LLMDebugStore` to `telemetry.LLMCallRecorder`
+- `ExecutionConversationID(execution)` - Read canonical conversation metadata
+- `ExecutionSummaryConversationID(summary)` - Read canonical conversation metadata from a summary
+
+### Conversation-aware execution stores
+
+Conversation identity is canonical metadata, not a new field on
+`StoredExecution`:
+
+```go
+if lister, ok := store.(orchestration.ConversationExecutionLister); ok {
+    turns, err := lister.ListByConversationID(ctx, conversationID, 50)
+    // turns are chronological and bounded by ExecutionStoreConfig
+}
+```
+
+Do capability discovery with a type assertion. `ExecutionStore` and
+`StorageProvider` deliberately keep their existing required method sets, and
+the NoOp store does not claim conversation lookup support.
+
+Provider-backed stores may additionally implement `IndexTTLManager`. If they
+do not, writes and queries still work; bounded lazy cleanup removes stale
+membership as records expire. Execution record metadata is the source of truth
+and the hashed conversation index is only an accelerator. Optional
+conversation-index or TTL failures never fail the orchestration request.
+
+`MetadataConversationID` should be supplied whenever a conversation exists,
+including the first turn when `MetadataConversationTurns` is empty. It is
+separate from application `session_id`; an application may intentionally map
+the same opaque UUID to both concepts.
 
 ### Configuration Options
 - `WithCapabilityProvider(type, url)` - Configure capability provider type and URL

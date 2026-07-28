@@ -685,6 +685,10 @@ func (t *TravelChatAgent) addConversationHistoryMetadata(
     if metadata == nil {
         metadata = make(map[string]interface{})
     }
+    // This reference agent maps one chat session to one conversation.
+    if sessionID != "" {
+        metadata[orchestration.MetadataConversationID] = sessionID
+    }
     if len(history) == 0 {
         return metadata
     }
@@ -698,7 +702,6 @@ func (t *TravelChatAgent) addConversationHistoryMetadata(
     }
 
     metadata[orchestration.MetadataConversationTurns] = turns
-    metadata[orchestration.MetadataConversationSessionKey] = sessionID
     return metadata
 }
 ```
@@ -706,11 +709,16 @@ func (t *TravelChatAgent) addConversationHistoryMetadata(
 **What the framework does with that metadata:**
 ```
 metadata[orchestration.MetadataConversationTurns] = []core.ConversationTurn{...}
-metadata[orchestration.MetadataConversationSessionKey] = "session-123"
+metadata[orchestration.MetadataConversationID] = "session-123" // explicit app mapping
 orchestrator.ProcessRequestStreaming(ctx, "What's the population?", metadata, ...)
 ```
 
 The shared conversation-history preparer then builds the `<conversation_history>` enrichment before planning, so the LLM still understands that "the population" refers to Paris without you having to bake old turns into the query text yourself.
+
+The canonical ID is assigned before checking `history`, so a new session's
+first turn is correlated even when no previous messages exist. The example
+uses the session UUID as its conversation ID by design; `session_id` and
+`conversation_id` remain distinct concepts.
 
 If you want the full Tier 1 / Tier 2 / Layer 3 story in one place, see [CONVERSATION_HISTORY_GUIDE.md](CONVERSATION_HISTORY_GUIDE.md).
 
