@@ -55,6 +55,30 @@ func executionWithConversation(
 	return execution
 }
 
+func TestFilterUnseenConversationMembersDeduplicatesOverlappingScanBatches(
+	t *testing.T,
+) {
+	seen := make(map[string]struct{})
+	first := filterUnseenConversationMembers(
+		[]string{"turn-4", "turn-3", "turn-2"},
+		seen,
+	)
+	second := filterUnseenConversationMembers(
+		[]string{"turn-2", "turn-1"},
+		seen,
+	)
+
+	if got := strings.Join(first, ","); got != "turn-4,turn-3,turn-2" {
+		t.Fatalf("first batch = %q", got)
+	}
+	if got := strings.Join(second, ","); got != "turn-1" {
+		t.Fatalf("overlapping second batch = %q, want only unseen member", got)
+	}
+	if len(seen) != 4 {
+		t.Fatalf("seen member count = %d, want 4", len(seen))
+	}
+}
+
 func TestExecutionStoresSanitizeInvalidConversationWithoutMutatingCaller(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -342,6 +366,68 @@ func TestConversationExecutionListerClampsLimits(t *testing.T) {
 	}
 }
 
+func TestConversationExecutionListerReturnsMostRecentWindowConsistently(t *testing.T) {
+	tests := []struct {
+		name  string
+		store func(t *testing.T, config ExecutionStoreConfig) ExecutionStore
+	}{
+		{
+			name: "provider",
+			store: func(_ *testing.T, config ExecutionStoreConfig) ExecutionStore {
+				return NewExecutionStoreWithProvider(newMockStorageProvider(), config, nil)
+			},
+		},
+		{
+			name: "direct redis",
+			store: func(t *testing.T, config ExecutionStoreConfig) ExecutionStore {
+				_, store := newRedisExecutionConversationTestStore(t, config)
+				return store
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := DefaultExecutionStoreConfig()
+			config.ConversationQueryLimit = 2
+			config.ConversationIndexScanLimit = 3
+			store := test.store(t, config)
+			lister := store.(ConversationExecutionLister)
+			base := time.Now().Add(-time.Hour)
+			for i := 0; i < 4; i++ {
+				if err := store.Store(
+					context.Background(),
+					executionWithConversation(
+						fmt.Sprintf("turn-%d", i),
+						"conversation-most-recent",
+						base.Add(time.Duration(i)*time.Minute),
+					),
+				); err != nil {
+					t.Fatalf("Store: %v", err)
+				}
+			}
+
+			summaries, err := lister.ListByConversationID(
+				context.Background(),
+				"conversation-most-recent",
+				2,
+			)
+			if err != nil {
+				t.Fatalf("ListByConversationID: %v", err)
+			}
+			want := []string{"turn-2", "turn-3"}
+			if len(summaries) != len(want) {
+				t.Fatalf("summary count = %d, want %d", len(summaries), len(want))
+			}
+			for i, summary := range summaries {
+				if summary.RequestID != want[i] {
+					t.Fatalf("summary[%d] = %q, want %q", i, summary.RequestID, want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestProviderConversationIndexStaleCleanupHonorsScanCeiling(t *testing.T) {
 	provider := newMockStorageProvider()
 	config := DefaultExecutionStoreConfig()
@@ -458,7 +544,7 @@ func TestDirectConversationIndexStaleCleanupHonorsScanCeiling(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		if err := store.client.ZAdd(context.Background(), indexKey, &redis.Z{
-			Score:  float64(base.Add(-time.Duration(10-i) * time.Minute).UnixNano()),
+			Score:  float64(base.Add(time.Duration(10+i) * time.Minute).UnixNano()),
 			Member: fmt.Sprintf("direct-stale-%d", i),
 		}).Err(); err != nil {
 			t.Fatalf("seed stale member: %v", err)
@@ -507,7 +593,7 @@ func TestDirectConversationIndexStaleCleanupHonorsScanCeiling(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		_ = limitedStore.client.ZAdd(context.Background(), limitedIndexKey, &redis.Z{
-			Score:  float64(base.Add(-time.Duration(10-i) * time.Minute).UnixNano()),
+			Score:  float64(base.Add(time.Duration(10+i) * time.Minute).UnixNano()),
 			Member: fmt.Sprintf("direct-limited-stale-%d", i),
 		}).Err()
 	}
@@ -1108,10 +1194,12 @@ func (h conversationZAddFailureHook) BeforeProcess(
 	ctx context.Context,
 	cmd redis.Cmder,
 ) (context.Context, error) {
-	if cmd.Name() == "zadd" &&
-		len(cmd.Args()) > 1 &&
-		strings.Contains(fmt.Sprint(cmd.Args()[1]), ":conversation:") {
-		return ctx, h.err
+	if cmd.Name() == "eval" || cmd.Name() == "evalsha" {
+		for _, arg := range cmd.Args() {
+			if strings.Contains(fmt.Sprint(arg), ":conversation:") {
+				return ctx, h.err
+			}
+		}
 	}
 	return ctx, nil
 }
@@ -1470,38 +1558,35 @@ func (conversationTTLFailureHook) AfterProcessPipeline(
 	return nil
 }
 
-func TestDirectConversationIndexTTLFailureIsNonFatalAndSanitized(t *testing.T) {
+func TestDirectConversationIndexStoreDoesNotUseRacyTTLProbe(t *testing.T) {
 	config := DefaultExecutionStoreConfig()
-	_, store := newRedisExecutionConversationTestStore(t, config)
-	conversationID := "conversation-direct-ttl-error"
+	mr, store := newRedisExecutionConversationTestStore(t, config)
+	conversationID := "conversation-direct-atomic-ttl"
 	conversationKey := store.conversationIndexKey(conversationID)
 	store.client.AddHook(conversationTTLFailureHook{
 		conversationKey: conversationKey,
-		err: errors.New(
-			"redis://user:password@host/8?conversation=" + conversationID,
-		),
+		err:             errors.New("standalone TTL probe must not run"),
 	})
 	logger := &recordingLogger{}
 	store.logger = logger
 
 	if err := store.Store(
 		context.Background(),
-		executionWithConversation("request-direct-ttl-error", conversationID, time.Now()),
+		executionWithConversation("request-direct-atomic-ttl", conversationID, time.Now()),
 	); err != nil {
-		t.Fatalf("TTL failure became fatal: %v", err)
+		t.Fatalf("Store: %v", err)
 	}
-	if len(logger.warns) != 1 {
-		t.Fatalf("warnings = %d, want 1", len(logger.warns))
+	if len(logger.warns) != 0 {
+		t.Fatalf("unexpected warnings = %+v", logger.warns)
 	}
-	fields := logger.warns[0].fields
-	if fields["operation"] != "execution_store_conversation_index_ttl" ||
-		fields["request_id"] != "request-direct-ttl-error" ||
-		fields["error_type"] != "ttl_update" ||
-		fields["error"] != "execution store backend write failed" {
-		t.Fatalf("warning fields = %v", fields)
+	if got := mr.TTL(conversationKey); got != config.TTL {
+		t.Fatalf("conversation index TTL = %v, want %v", got, config.TTL)
 	}
-	if strings.Contains(fmt.Sprint(fields), conversationID) ||
-		strings.Contains(fmt.Sprint(fields), "password") {
-		t.Fatalf("warning leaked sensitive fields: %v", fields)
+	if _, err := store.client.ZScore(
+		context.Background(),
+		conversationKey,
+		"request-direct-atomic-ttl",
+	).Result(); err != nil {
+		t.Fatalf("conversation member missing after atomic upsert: %v", err)
 	}
 }

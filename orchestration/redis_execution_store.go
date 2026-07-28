@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,6 +28,16 @@ const (
 	redisTTLKeyMissing time.Duration = -2
 	redisTTLPersistent time.Duration = -1
 )
+
+var conversationIndexUpsertScript = redis.NewScript(`
+local previous_ttl = redis.call("PTTL", KEYS[1])
+redis.call("ZADD", KEYS[1], ARGV[1], ARGV[2])
+local requested_ttl = tonumber(ARGV[3])
+if previous_ttl == -2 or (previous_ttl >= 0 and previous_ttl < requested_ttl) then
+	redis.call("PEXPIRE", KEYS[1], requested_ttl)
+end
+return previous_ttl
+`)
 
 // RedisExecutionDebugStoreOption configures the Redis execution debug store
 type RedisExecutionDebugStoreOption func(*redisExecutionDebugStoreConfig)
@@ -276,11 +287,13 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 
 		if conversationID != "" {
 			conversationKey := s.conversationIndexKey(conversationID)
-			previousTTL, ttlReadErr := s.client.TTL(ctx, conversationKey).Result()
-			if err := s.client.ZAdd(ctx, conversationKey, &redis.Z{
-				Score:  float64(storedExecution.CreatedAt.UnixNano()),
-				Member: storedExecution.RequestID,
-			}).Err(); err != nil {
+			if err := s.upsertConversationIndex(
+				ctx,
+				conversationKey,
+				float64(storedExecution.CreatedAt.UnixNano()),
+				storedExecution.RequestID,
+				ttl,
+			); err != nil {
 				if s.logger != nil {
 					s.logger.WarnWithContext(ctx, "Failed to update conversation execution index", map[string]interface{}{
 						"operation":  "execution_store_conversation_index",
@@ -289,18 +302,6 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 						"error":      safeExecutionStoreError(err),
 					})
 				}
-			} else if err := s.extendIndexTTLWithoutDowngrade(
-				ctx,
-				conversationKey,
-				ttl,
-				ttlReadErr == nil && previousTTL == redisTTLKeyMissing,
-			); err != nil && s.logger != nil {
-				s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
-					"operation":  "execution_store_conversation_index_ttl",
-					"request_id": storedExecution.RequestID,
-					"error_type": "ttl_update",
-					"error":      safeExecutionStoreError(err),
-				})
 			}
 		}
 
@@ -555,8 +556,8 @@ func (s *RedisExecutionDebugStore) ListRecent(ctx context.Context, limit int) ([
 	return summaries, nil
 }
 
-// ListByConversationID returns a bounded chronological set of executions for
-// one conversation.
+// ListByConversationID returns the most recent bounded window of executions for
+// one conversation, ordered chronologically within that window.
 func (s *RedisExecutionDebugStore) ListByConversationID(
 	ctx context.Context,
 	conversationID string,
@@ -574,6 +575,7 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 	indexKey := s.conversationIndexKey(conversationID)
 	summaries := make([]ExecutionSummary, 0, limit)
 	staleMembers := make([]interface{}, 0)
+	seenMembers := make(map[string]struct{})
 
 	var offset int64
 	for scanned := 0; scanned < scanLimit && len(summaries) < limit; {
@@ -581,7 +583,7 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 		if remaining := scanLimit - scanned; remaining < batchSize {
 			batchSize = remaining
 		}
-		requestIDs, err := s.client.ZRange(
+		requestIDs, err := s.client.ZRevRange(
 			ctx,
 			indexKey,
 			offset,
@@ -593,42 +595,46 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 		if len(requestIDs) == 0 {
 			break
 		}
-		offset += int64(len(requestIDs))
-		scanned += len(requestIDs)
+		batchCount := len(requestIDs)
+		offset += int64(batchCount)
+		scanned += batchCount
+		requestIDs = filterUnseenConversationMembers(requestIDs, seenMembers)
 
-		recordKeys := make([]string, len(requestIDs))
-		for i, requestID := range requestIDs {
-			recordKeys[i] = s.recordKey(requestID)
+		if len(requestIDs) > 0 {
+			recordKeys := make([]string, len(requestIDs))
+			for i, requestID := range requestIDs {
+				recordKeys[i] = s.recordKey(requestID)
+			}
+			rawRecords, err := s.client.MGet(ctx, recordKeys...).Result()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load conversation executions: %w", err)
+			}
+			for i, rawRecord := range rawRecords {
+				requestID := requestIDs[i]
+				if rawRecord == nil {
+					staleMembers = append(staleMembers, requestID)
+					continue
+				}
+				serialized, ok := rawRecord.(string)
+				if !ok {
+					staleMembers = append(staleMembers, requestID)
+					continue
+				}
+				execution, err := s.deserialize([]byte(serialized))
+				if err != nil || ExecutionConversationID(execution) != conversationID {
+					staleMembers = append(staleMembers, requestID)
+					continue
+				}
+				summaries = append(
+					summaries,
+					executionSummaryFromStored(execution),
+				)
+				if len(summaries) == limit {
+					break
+				}
+			}
 		}
-		rawRecords, err := s.client.MGet(ctx, recordKeys...).Result()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load conversation executions: %w", err)
-		}
-		for i, rawRecord := range rawRecords {
-			requestID := requestIDs[i]
-			if rawRecord == nil {
-				staleMembers = append(staleMembers, requestID)
-				continue
-			}
-			serialized, ok := rawRecord.(string)
-			if !ok {
-				staleMembers = append(staleMembers, requestID)
-				continue
-			}
-			execution, err := s.deserialize([]byte(serialized))
-			if err != nil || ExecutionConversationID(execution) != conversationID {
-				staleMembers = append(staleMembers, requestID)
-				continue
-			}
-			summaries = append(
-				summaries,
-				executionSummaryFromStored(execution),
-			)
-			if len(summaries) == limit {
-				break
-			}
-		}
-		if len(requestIDs) < batchSize {
+		if batchCount < batchSize {
 			break
 		}
 	}
@@ -644,6 +650,9 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 		}
 	}
 
+	for left, right := 0, len(summaries)-1; left < right; left, right = left+1, right-1 {
+		summaries[left], summaries[right] = summaries[right], summaries[left]
+	}
 	return summaries, nil
 }
 
@@ -668,6 +677,27 @@ func (s *RedisExecutionDebugStore) traceKey(traceID string) string {
 
 func (s *RedisExecutionDebugStore) conversationIndexKey(conversationID string) string {
 	return executionConversationIndexKey(s.keyPrefix, conversationID)
+}
+
+func (s *RedisExecutionDebugStore) upsertConversationIndex(
+	ctx context.Context,
+	key string,
+	score float64,
+	requestID string,
+	minTTL time.Duration,
+) error {
+	ttlMilliseconds := minTTL.Milliseconds()
+	if ttlMilliseconds <= 0 {
+		ttlMilliseconds = 1
+	}
+	return conversationIndexUpsertScript.Run(
+		ctx,
+		s.client,
+		[]string{key},
+		strconv.FormatFloat(score, 'g', -1, 64),
+		requestID,
+		strconv.FormatInt(ttlMilliseconds, 10),
+	).Err()
 }
 
 func (s *RedisExecutionDebugStore) extendIndexTTLWithoutDowngrade(

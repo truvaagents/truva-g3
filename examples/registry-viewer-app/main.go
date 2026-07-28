@@ -265,6 +265,9 @@ const (
 	viewerDistinctConversationLimit     = 500
 	viewerExecutionHydrationLimit       = 10000
 	viewerConversationMemberReadLimit   = 1000
+	viewerLLMEnrichmentExecutionLimit   = 200
+	viewerLLMInteractionLimit           = 100
+	viewerLLMInteractionBytesLimit      = 4 * 1024 * 1024
 	viewerGroupedCursorMaxEncodedLength = 2048
 )
 
@@ -2591,7 +2594,7 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 	// Batch-fetch LLM debug data for all executions to get LLM durations.
 	// This is a separate store (different Redis DB), so a separate read-only
 	// pipeline. Missing DB 7 data is intentionally fail-open.
-	_, _ = enrichExecutionSummariesFromLLMDebug(ctx, summaries)
+	_, _, _ = enrichExecutionSummariesFromLLMDebug(ctx, summaries)
 
 	page := &executionPage{Summaries: summaries, HasMore: hasMore}
 	if hasMore {

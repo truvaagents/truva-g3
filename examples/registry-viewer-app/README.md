@@ -188,11 +188,14 @@ Viewer implementation limits, not `TRUVAG3_*` framework configuration:
 | Distinct conversations expanded | 500 |
 | Execution records hydrated | 10000 |
 | Members read from one conversation index | 1000 |
+| Executions enriched from LLM Debug per response | 200 |
+| LLM Debug interactions accepted per execution | 100 |
+| LLM Debug interaction bytes accepted per execution | 4 MiB |
 | Maximum encoded grouped cursor length | 2048 bytes |
 
-When a relevant bound is reached, the response sets `partial=true` and omits a
-grouped continuation cursor. The existing flat execution list remains
-available for request-by-request troubleshooting.
+When a DB 8 membership or grouping bound is reached, the response sets
+`partial=true` and omits a grouped continuation cursor. The existing flat
+execution list remains available for request-by-request troubleshooting.
 
 Combined duration sorting (`sort=total_duration_ms`) includes LLM duration read
 from mutable DB 7 data. It is therefore a bounded point-in-time sort: when more
@@ -201,10 +204,13 @@ provide a continuation cursor. A supplied duration-sort cursor is rejected.
 Created and request-text sorts use immutable DB 8 values and retain grouped
 keyset pagination.
 
-If a DB 7 enrichment read fails, timeline and grouped responses set
-`llm_enrichment_incomplete=true`. Grouped responses also set `partial=true` and
-omit `next_cursor`; execution membership still comes from DB 8 and remains
-available.
+If a DB 7 enrichment read fails or reaches any enrichment bound, timeline and
+grouped responses set `llm_enrichment_incomplete=true`. Created and request-text
+sorts paginate from DB 8 first and enrich only the returned page, so incomplete
+optional DB 7 details do not suppress their valid `next_cursor`. Combined
+duration sorting sets `partial=true` when enrichment is incomplete because DB 7
+contributes to its ordering. The Viewer does not publish a partial per-execution
+LLM duration or call count as though it were complete.
 
 ## Service Data Structure
 

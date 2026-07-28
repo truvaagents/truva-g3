@@ -58,7 +58,8 @@ type ExecutionStore interface {
 }
 
 // ConversationExecutionLister is an optional execution-store capability for
-// querying executions by a stable multi-turn conversation identifier.
+// querying executions by a stable multi-turn conversation identifier. Results
+// are the most recent bounded window, ordered chronologically within it.
 type ConversationExecutionLister interface {
 	ListByConversationID(
 		ctx context.Context,
@@ -256,8 +257,8 @@ type ExecutionStoreConfig struct {
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
 	KeyPrefix string `json:"key_prefix"`
 
-	// ConversationQueryLimit bounds the number of executions returned by one
-	// conversation lookup.
+	// ConversationQueryLimit bounds the most recent execution window returned
+	// by one conversation lookup.
 	// Default: 1000. Override via TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT.
 	ConversationQueryLimit int `json:"conversation_query_limit"`
 
@@ -328,6 +329,21 @@ func normalizeExecutionKeyPrefix(prefix string) string {
 		trimmed = strings.TrimRight(DefaultExecutionKeyPrefix, ":")
 	}
 	return trimmed + ":"
+}
+
+func filterUnseenConversationMembers(
+	members []string,
+	seen map[string]struct{},
+) []string {
+	unseen := make([]string, 0, len(members))
+	for _, member := range members {
+		if _, alreadySeen := seen[member]; alreadySeen {
+			continue
+		}
+		seen[member] = struct{}{}
+		unseen = append(unseen, member)
+	}
+	return unseen
 }
 
 // Key building helper methods use a prefix normalized to exactly one trailing
@@ -698,8 +714,8 @@ func (s *executionStoreImpl) ListRecent(ctx context.Context, limit int) ([]Execu
 	return summaries, nil
 }
 
-// ListByConversationID returns a bounded chronological set of executions for
-// one conversation.
+// ListByConversationID returns the most recent bounded window of executions for
+// one conversation, ordered chronologically within that window.
 func (s *executionStoreImpl) ListByConversationID(
 	ctx context.Context,
 	conversationID string,
@@ -714,9 +730,10 @@ func (s *executionStoreImpl) ListByConversationID(
 	indexKey := s.conversationIndexKey(conversationID)
 	summariesNewestFirst := make([]ExecutionSummary, 0, limit)
 	staleMembers := make([]string, 0)
+	seenMembers := make(map[string]struct{})
 
 	var offset int64
-	for scanned := 0; scanned < scanLimit; {
+	for scanned := 0; scanned < scanLimit && len(summariesNewestFirst) < limit; {
 		batchSize := conversationIndexReadBatchSize
 		if remaining := scanLimit - scanned; remaining < batchSize {
 			batchSize = remaining
@@ -735,8 +752,10 @@ func (s *executionStoreImpl) ListByConversationID(
 		if len(requestIDs) == 0 {
 			break
 		}
-		offset += int64(len(requestIDs))
-		scanned += len(requestIDs)
+		batchCount := len(requestIDs)
+		offset += int64(batchCount)
+		scanned += batchCount
+		requestIDs = filterUnseenConversationMembers(requestIDs, seenMembers)
 
 		for _, requestID := range requestIDs {
 			execution, err := s.Get(ctx, requestID)
@@ -752,8 +771,11 @@ func (s *executionStoreImpl) ListByConversationID(
 				summariesNewestFirst,
 				executionSummaryFromStored(execution),
 			)
+			if len(summariesNewestFirst) == limit {
+				break
+			}
 		}
-		if len(requestIDs) < batchSize {
+		if batchCount < batchSize {
 			break
 		}
 	}
@@ -772,9 +794,6 @@ func (s *executionStoreImpl) ListByConversationID(
 	for left, right := 0, len(summariesNewestFirst)-1; left < right; left, right = left+1, right-1 {
 		summariesNewestFirst[left], summariesNewestFirst[right] =
 			summariesNewestFirst[right], summariesNewestFirst[left]
-	}
-	if len(summariesNewestFirst) > limit {
-		summariesNewestFirst = summariesNewestFirst[:limit]
 	}
 	return summariesNewestFirst, nil
 }

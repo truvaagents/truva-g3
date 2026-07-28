@@ -397,7 +397,7 @@ func loadConversationTimeline(
 	for _, summary := range verified {
 		summaries = append(summaries, summary)
 	}
-	enrichment, enrichmentErr :=
+	enrichment, enrichmentIncomplete, enrichmentErr :=
 		enrichExecutionSummariesFromLLMDebug(ctx, summaries)
 	return buildConversationTimelineResponse(
 		conversationID,
@@ -405,7 +405,7 @@ func loadConversationTimeline(
 		enrichment,
 		reverseMore || globalMore || hydrationPartial,
 		indexIncomplete,
-		enrichmentErr != nil,
+		enrichmentIncomplete || enrichmentErr != nil,
 	), nil
 }
 
@@ -786,13 +786,21 @@ func loadGroupedExecutions(
 	for _, summary := range summariesByID {
 		summaries = append(summaries, summary)
 	}
-	enrichment, enrichmentErr :=
-		enrichExecutionSummariesFromLLMDebug(ctx, summaries)
-	if enrichmentErr != nil {
-		// DB 7 enrichment is fail-open, but an incomplete enrichment cannot
-		// support an atomic grouped continuation. Mark the response partial so
-		// pagination is suppressed and the UI can fall back to Flat mode.
-		partial = true
+
+	var (
+		enrichment           map[string]llmDebugEnrichment
+		enrichmentIncomplete bool
+		enrichmentErr        error
+	)
+	if query.Sort == "total_duration_ms" {
+		// Combined duration ordering depends on mutable DB 7 data, so it must
+		// be enriched before grouping. An incomplete read makes this bounded
+		// point-in-time result partial; duration cursors are rejected.
+		enrichment, enrichmentIncomplete, enrichmentErr =
+			enrichExecutionSummariesFromLLMDebug(ctx, summaries)
+		if enrichmentIncomplete || enrichmentErr != nil {
+			partial = true
+		}
 	}
 	groups := buildGroupedExecutionUnits(
 		summaries,
@@ -800,14 +808,28 @@ func loadGroupedExecutions(
 		indexIncomplete,
 		query,
 	)
-	return paginateGroupedExecutionUnits(
+	response := paginateGroupedExecutionUnits(
 		groups,
 		query,
 		snapshotScore,
 		snapshotMember,
 		partial,
-		enrichmentErr != nil,
-	), nil
+		enrichmentIncomplete || enrichmentErr != nil,
+	)
+	if query.Sort == "total_duration_ms" {
+		return response, nil
+	}
+
+	// Created-at and request-text ordering depend only on immutable DB 8
+	// fields. Paginate first, then enrich just the returned page so optional
+	// DB 7 bounds or failures cannot suppress a valid DB 8 continuation.
+	pageSummaries := groupedExecutionPageSummaries(response.Groups)
+	enrichment, enrichmentIncomplete, enrichmentErr =
+		enrichExecutionSummariesFromLLMDebug(ctx, pageSummaries)
+	applyGroupedExecutionEnrichment(response.Groups, enrichment)
+	response.LLMEnrichmentIncomplete =
+		enrichmentIncomplete || enrichmentErr != nil
+	return response, nil
 }
 
 func readGroupedGlobalSnapshot(
@@ -829,7 +851,7 @@ func readGroupedGlobalSnapshot(
 		&redis.ZRangeBy{
 			Min:   "-inf",
 			Max:   maxScore,
-			Count: int64(viewerGlobalExecutionScanLimit + 1),
+			Count: int64(viewerGlobalExecutionScanLimit) + 1,
 		},
 	).Result()
 	if err != nil {
@@ -1221,6 +1243,67 @@ func compareGroupedSortValue(left, right groupedSortValue) int {
 	}
 }
 
+func groupedExecutionPageSummaries(
+	groups []GroupedExecutionGroup,
+) []ExecutionSummary {
+	seen := make(map[string]struct{})
+	summaries := make([]ExecutionSummary, 0)
+	appendSummary := func(summary ExecutionSummary) {
+		if summary.RequestID == "" {
+			return
+		}
+		if _, exists := seen[summary.RequestID]; exists {
+			return
+		}
+		seen[summary.RequestID] = struct{}{}
+		summaries = append(summaries, summary)
+	}
+
+	for _, group := range groups {
+		for _, turn := range group.Turns {
+			appendSummary(turn.Execution)
+			for _, related := range turn.RelatedExecutions {
+				appendSummary(related)
+			}
+		}
+		for _, orphan := range group.Orphans {
+			appendSummary(orphan)
+		}
+	}
+	return summaries
+}
+
+func applyGroupedExecutionEnrichment(
+	groups []GroupedExecutionGroup,
+	enrichment map[string]llmDebugEnrichment,
+) {
+	applySummary := func(summary *ExecutionSummary) {
+		item, exists := enrichment[summary.RequestID]
+		if !exists {
+			return
+		}
+		summary.LLMTotalDurationMs = item.TotalDurationMs
+	}
+
+	for groupIndex := range groups {
+		group := &groups[groupIndex]
+		for turnIndex := range group.Turns {
+			turn := &group.Turns[turnIndex]
+			applySummary(&turn.Execution)
+			if item, exists := enrichment[turn.Execution.RequestID]; exists {
+				turn.LLMCallCount = item.CallCount
+				turn.HistoryStatus = item.HistoryStatus
+			}
+			for relatedIndex := range turn.RelatedExecutions {
+				applySummary(&turn.RelatedExecutions[relatedIndex])
+			}
+		}
+		for orphanIndex := range group.Orphans {
+			applySummary(&group.Orphans[orphanIndex])
+		}
+	}
+}
+
 func paginateGroupedExecutionUnits(
 	groups []GroupedExecutionGroup,
 	query *groupedExecutionQuery,
@@ -1297,60 +1380,122 @@ func encodeGroupedExecutionCursor(cursor groupedExecutionCursor) (string, error)
 func enrichExecutionSummariesFromLLMDebug(
 	ctx context.Context,
 	summaries []ExecutionSummary,
-) (map[string]llmDebugEnrichment, error) {
+) (map[string]llmDebugEnrichment, bool, error) {
 	enrichment := make(map[string]llmDebugEnrichment, len(summaries))
 	if len(summaries) == 0 || useMock {
-		return enrichment, nil
+		return enrichment, false, nil
 	}
 	client, err := getLLMDebugReadClient()
 	if err != nil {
-		return enrichment, err
+		return enrichment, false, err
+	}
+
+	// Prefer the newest executions when a bounded grouped/timeline request
+	// contains more candidates than the DB 7 enrichment budget. The DB 8
+	// membership remains complete up to its independent bounds, while callers
+	// receive an explicit incomplete signal for optional LLM-derived fields.
+	summaryIndexes := make([]int, len(summaries))
+	for i := range summaries {
+		summaryIndexes[i] = i
+	}
+	sort.SliceStable(summaryIndexes, func(i, j int) bool {
+		left := summaries[summaryIndexes[i]]
+		right := summaries[summaryIndexes[j]]
+		if left.CreatedAt.Equal(right.CreatedAt) {
+			return left.RequestID < right.RequestID
+		}
+		return left.CreatedAt.After(right.CreatedAt)
+	})
+	incomplete := len(summaryIndexes) > viewerLLMEnrichmentExecutionLimit
+	if incomplete {
+		summaryIndexes = summaryIndexes[:viewerLLMEnrichmentExecutionLimit]
 	}
 
 	pipe := client.Pipeline()
-	interactionCommands := make(map[string]*redis.StringSliceCmd, len(summaries))
-	metaCommands := make(map[string]*redis.IntCmd, len(summaries))
-	legacyCommands := make(map[string]*redis.StringCmd, len(summaries))
-	for _, summary := range summaries {
+	interactionCommands := make(map[string]*redis.StringSliceCmd, len(summaryIndexes))
+	metaCommands := make(map[string]*redis.IntCmd, len(summaryIndexes))
+	legacyCommands := make(map[string]*redis.StringCmd, len(summaryIndexes))
+	for _, summaryIndex := range summaryIndexes {
+		summary := summaries[summaryIndex]
 		requestID := summary.RequestID
 		interactionCommands[requestID] = pipe.LRange(
 			ctx,
 			viewerLLMDebugKeyPrefix+requestID+viewerLLMDebugInterSuffix,
 			0,
-			-1,
+			viewerLLMInteractionLimit,
 		)
 		metaCommands[requestID] = pipe.Exists(
 			ctx,
 			viewerLLMDebugKeyPrefix+requestID+viewerLLMDebugMetaSuffix,
 		)
-		legacyCommands[requestID] = pipe.Get(
+		legacyCommands[requestID] = pipe.GetRange(
 			ctx,
 			viewerLLMDebugKeyPrefix+requestID,
+			0,
+			viewerLLMInteractionBytesLimit,
 		)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-		return enrichment, err
+		return enrichment, incomplete, err
 	}
 
-	for i := range summaries {
-		requestID := summaries[i].RequestID
+	for _, summaryIndex := range summaryIndexes {
+		requestID := summaries[summaryIndex].RequestID
 		var interactions []orchestration.LLMInteraction
+		recordIncomplete := false
 		serialized, listErr := interactionCommands[requestID].Result()
 		if listErr == nil {
-			for _, raw := range serialized {
-				var interaction orchestration.LLMInteraction
-				if json.Unmarshal([]byte(raw), &interaction) == nil {
+			if len(serialized) > viewerLLMInteractionLimit {
+				incomplete = true
+				recordIncomplete = true
+			}
+			if !recordIncomplete {
+				serializedBytes := 0
+				for _, raw := range serialized {
+					if len(raw) > viewerLLMInteractionBytesLimit-serializedBytes {
+						incomplete = true
+						recordIncomplete = true
+						break
+					}
+					serializedBytes += len(raw)
+					var interaction orchestration.LLMInteraction
+					if json.Unmarshal([]byte(raw), &interaction) != nil {
+						incomplete = true
+						recordIncomplete = true
+						break
+					}
 					interactions = append(interactions, interaction)
 				}
 			}
 		}
-		if len(interactions) == 0 {
+		if len(interactions) == 0 && !recordIncomplete {
 			if legacy, legacyErr := legacyCommands[requestID].Bytes(); legacyErr == nil {
-				var record orchestration.LLMDebugRecord
-				if decodeViewerStoredJSON(legacy, &record) == nil {
-					interactions = record.Interactions
+				if len(legacy) > viewerLLMInteractionBytesLimit {
+					incomplete = true
+					recordIncomplete = true
+				} else if len(legacy) > 0 {
+					var record orchestration.LLMDebugRecord
+					if decodeViewerStoredJSON(
+						legacy,
+						&record,
+						viewerLLMInteractionBytesLimit,
+					) != nil {
+						incomplete = true
+						recordIncomplete = true
+					} else {
+						interactions = record.Interactions
+						if len(interactions) > viewerLLMInteractionLimit {
+							incomplete = true
+							recordIncomplete = true
+						}
+					}
 				}
 			}
+		}
+		if recordIncomplete {
+			// Do not publish partial duration/count values as exact enrichment.
+			// Callers still receive DB 8 membership plus the incomplete signal.
+			continue
 		}
 		if len(interactions) == 0 {
 			if metaCount, metaErr := metaCommands[requestID].Result(); metaErr == nil &&
@@ -1374,12 +1519,12 @@ func enrichExecutionSummariesFromLLMDebug(
 			}
 		}
 		enrichment[requestID] = item
-		summaries[i].LLMTotalDurationMs = item.TotalDurationMs
+		summaries[summaryIndex].LLMTotalDurationMs = item.TotalDurationMs
 	}
-	return enrichment, nil
+	return enrichment, incomplete, nil
 }
 
-func decodeViewerStoredJSON(data []byte, target interface{}) error {
+func decodeViewerStoredJSON(data []byte, target interface{}, maxBytes int) error {
 	if len(data) == 0 {
 		return fmt.Errorf("empty data")
 	}
@@ -1393,10 +1538,13 @@ func decodeViewerStoredJSON(data []byte, target interface{}) error {
 			return err
 		}
 		defer func() { _ = reader.Close() }()
-		payload, err = io.ReadAll(reader)
+		payload, err = io.ReadAll(io.LimitReader(reader, int64(maxBytes)+1))
 		if err != nil {
 			return err
 		}
+	}
+	if len(payload) > maxBytes {
+		return fmt.Errorf("decoded payload exceeds limit")
 	}
 	return json.Unmarshal(payload, target)
 }
