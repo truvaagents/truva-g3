@@ -360,18 +360,20 @@ function handleDagListPanelClick(e) {
     }
 }
 
+function handleDagListPanelKeydown(e) {
+    if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
+    const timelineExecution = e.target.closest(
+        '[data-view-timeline-execution][role="button"]',
+    );
+    if (!timelineExecution) return;
+    e.preventDefault();
+    void selectExecution(
+        timelineExecution.dataset.viewTimelineExecution,
+        { restoreTimelineActionFocus: true },
+    );
+}
+
 function handleDagDetailPanelClick(e) {
-    const conversationNav = e.target.closest('[data-selected-conversation-nav]');
-    if (conversationNav) {
-        navigateConversationTurn(conversationNav.dataset.selectedConversationNav);
-        return;
-    }
-    const openConversation = e.target.closest('[data-open-selected-conversation]');
-    if (openConversation) {
-        const conversationID = selected?.conversation_id;
-        if (conversationID) openConversationTimeline(conversationID, openConversation);
-        return;
-    }
     const tab = e.target.closest('.detail-tab[data-tab]');
     if (tab) {
         setDagDetailTab(tab.dataset.tab);
@@ -447,6 +449,7 @@ function handleDagSearchInput() {
 function bindDelegatedEvents() {
     addTrackedListener(document.getElementById('dagTableBody'), 'click', handleDagTableClick);
     addTrackedListener(document.getElementById('dagListPanel'), 'click', handleDagListPanelClick);
+    addTrackedListener(document.getElementById('dagListPanel'), 'keydown', handleDagListPanelKeydown);
     addTrackedListener(document.getElementById('dagDetailPanel'), 'click', handleDagDetailPanelClick);
     addTrackedListener(document.getElementById('dagDetailContent'), 'click', handleDagDetailContentClick);
     addTrackedListener(document.getElementById('dagSearchInput'), 'input', handleDagSearchInput);
@@ -1220,14 +1223,9 @@ function closeConversationTimeline() {
     const refreshedGroupTrigger = Array.from(document.querySelectorAll(
         '[data-open-conversation]',
     )).find(button => button.dataset.openConversation === activeConversationID);
-    const conversationControls = document.getElementById('dagConversationControls');
-    const selectedConversationPill = conversationControls?.classList.contains('hidden')
-        ? null
-        : document.getElementById('dagConversationPill');
     const focusTarget = timelineReturnFocus?.isConnected
         ? timelineReturnFocus
         : (refreshedGroupTrigger ||
-            selectedConversationPill ||
             document.getElementById('dagSearchInput'));
     timelineReturnFocus = null;
     focusTarget?.focus({ preventScroll: true });
@@ -1262,7 +1260,6 @@ async function loadConversationTimeline(
     if (!conversationID) return null;
     const cached = conversationCache.get(conversationID);
     if (!force && cached?.data) {
-        updateConversationAffordance(selected, cached.data);
         if (activeConversationID === conversationID && listPanelMode === 'timeline') {
             renderConversationTimeline(cached.data, selectedRequestID);
         }
@@ -1270,16 +1267,12 @@ async function loadConversationTimeline(
     }
     if (!force && cached?.promise) return cached.promise;
 
-    updateConversationAffordance(selected, null, true);
     const endpoint = `/api/conversations?${new URLSearchParams({
         conversation_id: conversationID,
     }).toString()}`;
     const promise = fetchAPI(endpoint)
         .then(({ data }) => {
             conversationCache.set(conversationID, { data });
-            if (selected?.conversation_id === conversationID) {
-                updateConversationAffordance(selected, data);
-            }
             if (activeConversationID === conversationID && listPanelMode === 'timeline') {
                 renderConversationTimeline(
                     data,
@@ -1292,9 +1285,6 @@ async function loadConversationTimeline(
             console.error('Failed to fetch conversation timeline:', error);
             if (cached?.data) {
                 conversationCache.set(conversationID, { data: cached.data });
-                if (selected?.conversation_id === conversationID) {
-                    updateConversationAffordance(selected, cached.data);
-                }
                 if (activeConversationID === conversationID && listPanelMode === 'timeline') {
                     renderConversationTimeline(cached.data, selected?.request_id);
                     appendTimelineDiagnostic('The latest refresh failed; showing the cached timeline.');
@@ -1302,9 +1292,6 @@ async function loadConversationTimeline(
                 return cached.data;
             }
             conversationCache.set(conversationID, { error });
-            if (selected?.conversation_id === conversationID) {
-                updateConversationAffordance(selected);
-            }
             if (activeConversationID === conversationID && listPanelMode === 'timeline') {
                 renderTimelineError();
             }
@@ -1312,45 +1299,6 @@ async function loadConversationTimeline(
         });
     conversationCache.set(conversationID, { promise });
     return promise;
-}
-
-function updateConversationAffordance(execution, timeline = null, loading = false) {
-    const controls = document.getElementById('dagConversationControls');
-    const pill = document.getElementById('dagConversationPill');
-    if (!controls || !pill) return;
-    const conversationID = execution?.conversation_id;
-    controls.classList.toggle('hidden', !conversationID);
-    if (!conversationID) {
-        pill.textContent = '';
-        pill.removeAttribute('title');
-        return;
-    }
-
-    const cachedTimeline = timeline || conversationCache.get(conversationID)?.data;
-    const turnIndex = cachedTimeline
-        ? findConversationTurnIndex(cachedTimeline, execution.request_id)
-        : -1;
-    if (turnIndex >= 0) {
-        const count = cachedTimeline.turn_count || cachedTimeline.turns?.length || 0;
-        pill.textContent = `💬 Turn ${turnIndex + 1} of ${count} · Timeline`;
-    } else if (loading) {
-        pill.textContent = '💬 Conversation · Loading turns…';
-    } else {
-        pill.textContent = '💬 View conversation';
-    }
-    pill.title = `Open conversation ${conversationID}`;
-
-    const previous = document.getElementById('dagConversationPrevious');
-    const next = document.getElementById('dagConversationNext');
-    if (previous) {
-        previous.disabled = loading || turnIndex <= 0;
-        previous.title = 'Previous conversation turn';
-    }
-    if (next) {
-        const turnCount = cachedTimeline?.turns?.length || 0;
-        next.disabled = loading || turnIndex < 0 || turnIndex >= turnCount - 1;
-        next.title = 'Next conversation turn';
-    }
 }
 
 function renderConversationTimeline(timeline, selectedRequestID = selected?.request_id) {
@@ -1432,26 +1380,37 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
                 <span>${index + 1}</span>
             </div>
             <div class="dag-timeline-card-body">
-                <div class="dag-timeline-card-header">
-                    <div>
-                        <span class="dag-turn-label">Turn ${index + 1} of ${totalTurns}</span>
-                        <time datetime="${escapeHtmlAttribute(execution.created_at || '')}">${formatDateTime(execution.created_at)}</time>
+                <div
+                    class="dag-timeline-card-action"
+                    role="button"
+                    tabindex="0"
+                    data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
+                    aria-label="View DAG for turn ${index + 1}: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+                    ${execution.request_id === selectedRequestID ? 'aria-current="true"' : ''}
+                >
+                    <div class="dag-timeline-card-header">
+                        <div>
+                            <span class="dag-turn-label">Turn ${index + 1} of ${totalTurns}</span>
+                            <time datetime="${escapeHtmlAttribute(execution.created_at || '')}">${formatDateTime(execution.created_at)}</time>
+                        </div>
+                        <span class="status-badge ${statusClass}">${statusLabel}</span>
                     </div>
-                    <span class="status-badge ${statusClass}">${statusLabel}</span>
+                    <div class="dag-timeline-request">${escapeHtml(execution.original_request || 'Unknown request')}</div>
+                    <div class="dag-timeline-meta">
+                        ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
+                        <span>${execution.step_count || 0} steps</span>
+                        ${execution.failed_steps ? `<span class="dag-error-text">${execution.failed_steps} failed</span>` : ''}
+                        <span>${formatDuration(duration)}</span>
+                        ${turn.llm_call_count ? `<span>${turn.llm_call_count} LLM call${turn.llm_call_count === 1 ? '' : 's'}</span>` : ''}
+                        ${turn.history_status ? `<span>${escapeHtml(turn.history_status)}</span>` : ''}
+                    </div>
+                    <div class="dag-timeline-card-footer">
+                        <span class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</span>
+                        <span class="dag-view-dag-btn" aria-hidden="true">
+                            ${execution.request_id === selectedRequestID ? 'Viewing DAG' : 'View DAG'}
+                        </span>
+                    </div>
                 </div>
-                <div class="dag-timeline-request">${escapeHtml(execution.original_request || 'Unknown request')}</div>
-                <div class="dag-timeline-meta">
-                    ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
-                    <span>${execution.step_count || 0} steps</span>
-                    ${execution.failed_steps ? `<span class="dag-error-text">${execution.failed_steps} failed</span>` : ''}
-                    <span>${formatDuration(duration)}</span>
-                    ${turn.llm_call_count ? `<span>${turn.llm_call_count} LLM call${turn.llm_call_count === 1 ? '' : 's'}</span>` : ''}
-                    ${turn.history_status ? `<span>${escapeHtml(turn.history_status)}</span>` : ''}
-                </div>
-                <div class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</div>
-                <button class="dag-view-dag-btn" type="button" data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}" ${execution.request_id === selectedRequestID ? 'aria-current="true"' : ''}>
-                    ${execution.request_id === selectedRequestID ? 'Viewing DAG' : 'View DAG'}
-                </button>
                 ${related.length > 0 ? `
                     <div class="dag-timeline-related-list">
                         <div class="dag-related-heading">${related.length} related execution${related.length === 1 ? '' : 's'}</div>
@@ -1471,7 +1430,14 @@ function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = f
         ? 'Unattached'
         : (execution.metadata?.resume_checkpoint_id ? 'HITL resume' : 'Delegated / related');
     return `
-        <div class="dag-timeline-related ${current ? 'current' : ''}" ${current ? 'aria-current="true"' : ''}>
+        <div
+            class="dag-timeline-related ${current ? 'current' : ''}"
+            role="button"
+            tabindex="0"
+            data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
+            aria-label="View DAG for ${escapeHtmlAttribute(relation.toLowerCase())} execution: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+            ${current ? 'aria-current="true"' : ''}
+        >
             <span class="dag-related-branch" aria-hidden="true">↳</span>
             <div>
                 <span class="dag-relation-label">${relation}</span>
@@ -1485,9 +1451,9 @@ function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = f
                 </div>
                 <div class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</div>
             </div>
-            <button class="dag-view-dag-btn" type="button" data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}" ${current ? 'aria-current="true"' : ''}>
+            <span class="dag-view-dag-btn" aria-hidden="true">
                 ${current ? 'Viewing DAG' : 'View DAG'}
-            </button>
+            </span>
         </div>`;
 }
 
@@ -1580,17 +1546,6 @@ async function selectExecution(
         }
         applyPendingSelectedGroupAutoExpansion();
         renderExecutionList();
-        updateConversationAffordance(
-            selected,
-            null,
-            Boolean(selected.conversation_id),
-        );
-        if (selected.conversation_id) {
-            void loadConversationTimeline(
-                selected.conversation_id,
-                selected.request_id,
-            );
-        }
         const activeTimeline = conversationCache.get(activeConversationID)?.data;
         if (activeTimeline && listPanelMode === 'timeline') {
             renderConversationTimeline(activeTimeline, selected.request_id);
@@ -2265,7 +2220,10 @@ function initCytoscape() {
                     const resInfoFull = getResolutionInfo(result);
                     const baseLabelFull = step.agent_name || stepCapability;
                     const trimMetaFull = result?.metadata?.result_trim;
-                    const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                    // A step can be compacted without deterministic source loss
+                    // (for example, a distiller that analyzed the full source).
+                    // Keep compaction visibility separate from the loss warning.
+                    const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
                     const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                     nodes.push({
                         data: {
@@ -2393,7 +2351,9 @@ function initCytoscape() {
                 const resInfoFull = getResolutionInfo(result);
                 const baseLabelFull = step.agent_name || stepCapability;
                 const trimMetaFull = result?.metadata?.result_trim;
-                const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                // Mirror the multi-phase path: show every recorded compaction,
+                // while isLossyTrim remains the authoritative loss check.
+                const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
                 const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                 nodes.push({
                     data: {
@@ -4255,8 +4215,9 @@ function hasTrimDisplay(trim) {
     return !!(trim && trim.original_bytes > 0 && (isLossyTrim(trim) || trim.original_bytes !== trim.trimmed_bytes));
 }
 
-// trimNodeLabel renders the node's scissors marker for a lossy trim; ' lossy' disambiguates
-// when the byte pair alone would read as a no-op or growth.
+// trimNodeLabel renders the node's scissors marker whenever compaction changed the result.
+// 'lossy' disambiguates the unusual case where known content loss still produced an
+// equal-sized or larger output because disclosure annotations added bytes.
 function trimNodeLabel(trim) {
     const marker = trim.content_lost === true && trim.trimmed_bytes >= trim.original_bytes ? ' lossy' : '';
     return `\n✂ ${formatBytes(trim.original_bytes)}→${formatBytes(trim.trimmed_bytes)}${marker}`;
