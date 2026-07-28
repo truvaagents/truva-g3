@@ -656,7 +656,7 @@ The `WithContext` methods enable trace-log correlation. Here's how it works:
 
 1. **TracingMiddleware** extracts/creates trace context from incoming requests
 2. **Context** carries the trace ID and span ID through your code
-3. **WithContext methods** extract and include these IDs in log output
+3. **WithContext methods** enrich telemetry-enabled logs from that context
 
 > **Source**: Trace context extraction is handled by [`telemetry/trace_context.go`](https://github.com/truvaagents/truva-g3/blob/main/telemetry/trace_context.go) and [`telemetry/framework_integration.go`](https://github.com/truvaagents/truva-g3/blob/main/telemetry/framework_integration.go)
 
@@ -696,17 +696,47 @@ When using JSON format (production), trace context appears as **top-level fields
 
 > **Design Principle**: TruvaG3 uses standard OpenTelemetry field names (`trace_id`, `span_id`) at the root level for vendor-agnostic compatibility with any OTel-compliant observability backend (SigNoz, Grafana Loki, Datadog, Elastic, etc.).
 
+For a telemetry-enabled `ProductionLogger`, context-aware JSON output includes
+the W3C baggage map plus `trace_id` and `span_id`. That is how a validated
+`conversation_id` becomes a top-level structured field without every call
+site adding it manually. Explicit log fields are applied afterward and may
+override an automatically enriched key, so framework code should not reuse
+reserved correlation names for unrelated values.
+
+Text output intentionally retains its existing request-oriented prefix and
+adds only `[req=<request_id>]`; it does not render the complete baggage map.
+Detached or non-context logging cannot depend on automatic enrichment and must
+carry any captured correlation fields explicitly.
+
 ---
 
 ## 9. HITL (Human-in-the-Loop) Request Tracing
 
-HITL workflows present a unique logging challenge: a single user conversation may span **multiple HTTP requests** with **different `request_id` values**. This section explains how to correlate logs across the entire HITL conversation.
+HITL workflows present a unique logging challenge: one interrupted execution
+and its later resume span multiple HTTP requests with different `request_id`
+values. That request family is narrower than a multi-turn conversation.
 
-### The Challenge: Multiple Requests, One Conversation
+### Correlation Taxonomy
+
+| Identifier | Scope | Logging use |
+|------------|-------|-------------|
+| `request_id` | One orchestration execution/request | Required on request-scoped framework logs |
+| `original_request_id` | One interrupt/resume or delegation request family | Follow causally related execution siblings |
+| `conversation_id` | Multiple top-level turns in one application conversation | Troubleshoot the complete multi-turn interaction |
+| `trace_id` | One distributed trace | Join logs to the span waterfall |
+
+`checkpoint_id` narrows an HITL investigation to one checkpoint. An
+application `session_id` remains generic: a reference chat agent may map its
+session UUID to `conversation_id`, but the framework does not assign that
+meaning to every session. Registry Viewer reads the validated conversation
+value from execution DB 8 and LLM-debug DB 7; it does not infer the value from
+session metadata.
+
+### The Challenge: Multiple Requests, One Request Family
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ HITL CONVERSATION FLOW                                                   │
+│ HITL REQUEST FAMILY                                                      │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  Request 1 (Parent)         Request 2 (Child/Resume)                    │
@@ -726,111 +756,62 @@ HITL workflows present a unique logging challenge: a single user conversation ma
 │                                                                          │
 │  HOW DO WE CORRELATE THESE TWO REQUESTS?                                │
 │  Answer: original_request_id = "req-abc123" (same for both!)            │
+│  Broader thread: conversation_id = "chat-456"                           │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### The Solution: `original_request_id`
+### The Two Correlation Axes
 
-TruvaG3 uses `original_request_id` to link all requests in a HITL conversation:
-
-| Field | Initial Request | Resume Request | Purpose |
+| Field | Initial request | Resume request | Purpose |
 |-------|-----------------|----------------|---------|
-| `request_id` | `req-abc123` | `req-def456` | Unique per HTTP request |
-| `original_request_id` | `req-abc123` | `req-abc123` | Same across conversation |
+| `request_id` | `req-abc123` | `req-def456` | Unique per execution |
+| `original_request_id` | `req-abc123` | `req-abc123` | Same within this request family |
+| `conversation_id` | `chat-456` | `chat-456` | Same across this and other turns in the conversation |
 | `trace_id` | `trace-111` | `trace-222` | Unique per distributed trace |
-| `checkpoint_id` | `cp-xyz789` | `cp-xyz789` | Links interrupt to resume |
+| `checkpoint_id` | `cp-xyz789` | `cp-xyz789` | Identifies the checkpoint |
 
-**Key insight**: `original_request_id` is the **correlation key** for the entire HITL conversation.
+Use `original_request_id` to troubleshoot the interrupt and resume together.
+Use `conversation_id` when the investigation spans other top-level turns.
 
-### How `original_request_id` Flows Through the System
+### Framework-Owned Resume Correlation
 
-#### 1. Initial Request (Parent)
+The HITL controller stores the original request, trace, and span IDs in
+`ExecutionCheckpoint`, together with a framework-owned shallow metadata copy.
+`orchestration.BuildResumeContext` is the single resume authority: it restores
+`original_request_id`, validates and restores `conversation_id`, marks that
+baggage member metric-ineligible, creates the linked `hitl.resume` span, and
+restores plan/resume state.
 
-```go
-// orchestrator.go - ProcessRequest
-requestID := generateRequestID()  // e.g., "req-abc123"
-
-// For initial requests, original_request_id == request_id
-ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
-// original_request_id defaults to request_id when not set in baggage
-```
-
-When a HITL checkpoint is created, `hitl_controller.go` captures:
+Application handlers load the checkpoint and call the helper. They do not
+manually call `StartLinkedSpan` or rebuild baggage:
 
 ```go
-// hitl_controller.go - createCheckpoint
-originalRequestID := requestID  // Default to current request_id
-if bag := telemetry.GetBaggage(ctx); bag != nil {
-    if origID := bag["original_request_id"]; origID != "" {
-        originalRequestID = origID  // Use preserved original for resume
-    }
+checkpoint, err := checkpointStore.LoadCheckpoint(ctx, checkpointID)
+if err != nil {
+    return err
 }
 
-checkpoint := &ExecutionCheckpoint{
-    RequestID:         requestID,          // "req-abc123"
-    OriginalRequestID: originalRequestID,  // "req-abc123" (same for initial)
-    // ...
+resumeCtx, endResumeSpan, err :=
+    orchestration.BuildResumeContext(ctx, checkpoint)
+if err != nil {
+    return err
 }
+defer endResumeSpan()
+
+_, err = orchestrator.ProcessRequest(
+    resumeCtx,
+    checkpoint.OriginalRequest,
+    nil,
+)
+return err
 ```
 
-#### 2. Resume Request (Child)
-
-When the agent resumes from a checkpoint, it **must** set `original_request_id` in baggage. The reference implementation in `agent-with-human-approval` uses this priority logic:
-
-```go
-// handlers.go - handleResumeSSE (from agent-with-human-approval)
-checkpoint, _ := checkpointStore.LoadCheckpoint(ctx, checkpointID)
-
-// Determine original_request_id for trace correlation across HITL conversation
-// Priority: 1) Header from UI, 2) Checkpoint's OriginalRequestID, 3) Checkpoint's RequestID (fallback)
-// NOTE: For step checkpoints, RequestID is the resume request's ID, not the original.
-// OriginalRequestID preserves the first request's ID across the entire HITL conversation.
-originalRequestID := originalRequestIDFromHeader  // From X-Original-Request-ID header
-if originalRequestID == "" {
-    if checkpoint.OriginalRequestID != "" {
-        originalRequestID = checkpoint.OriginalRequestID
-    } else {
-        originalRequestID = checkpoint.RequestID  // Fallback for legacy checkpoints
-    }
-}
-
-// Log the trace correlation setup
-t.Logger.InfoWithContext(ctx, "Trace correlation IDs determined", map[string]interface{}{
-    "operation":                       "hitl_resume_trace_setup",
-    "checkpoint_id":                   checkpointID,
-    "checkpoint_request_id":           checkpoint.RequestID,
-    "checkpoint_original_request_id":  checkpoint.OriginalRequestID,
-    "original_request_id_used":        originalRequestID,
-})
-
-// Set in baggage BEFORE calling orchestrator
-ctx = telemetry.WithBaggage(ctx, "original_request_id", originalRequestID)
-
-// Now call orchestrator - it will generate a NEW request_id
-// but original_request_id will be preserved via baggage
-result, err := orchestrator.ProcessRequestStreaming(ctx, checkpoint.OriginalRequest, ...)
-```
-
-#### 3. Execution Storage
-
-The `storeExecutionAsync` helper extracts `original_request_id` from baggage:
-
-```go
-// orchestrator.go - storeExecutionAsync
-originalRequestID := requestID  // Default
-if bag != nil {
-    if origID, ok := bag["original_request_id"]; ok && origID != "" {
-        originalRequestID = origID  // Links to parent request
-    }
-}
-
-stored := &StoredExecution{
-    RequestID:         requestID,          // "req-def456" (new)
-    OriginalRequestID: originalRequestID,  // "req-abc123" (preserved)
-    // ...
-}
-```
+The helper falls back from `checkpoint.OriginalRequestID` to
+`checkpoint.RequestID`. If an application accepts a trusted
+`X-TruvaG3-Original-Request-ID` override, it may update the typed checkpoint
+field before calling the helper; link and baggage setup remain
+framework-owned.
 
 ### Logging Fields for HITL
 
@@ -838,9 +819,10 @@ When logging in HITL-related code, include these fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `request_id` | **YES** | Current request's unique ID |
-| `original_request_id` | For HITL | Links to the conversation's first request |
-| `checkpoint_id` | For HITL | Links interrupt to resume |
+| `request_id` | **YES** for request-scoped logs | Current execution's unique ID |
+| `original_request_id` | For HITL/delegation | Links one causal request family |
+| `conversation_id` | When validated conversation context exists | Links multiple top-level turns |
+| `checkpoint_id` | For HITL | Identifies the interrupt/resume checkpoint |
 | `interrupted` | For HITL | Boolean indicating if this request was interrupted |
 
 **Example: HITL checkpoint creation log** (from orchestrator.go)
@@ -856,7 +838,9 @@ if o.logger != nil {
 }
 ```
 
-> **Note**: The `original_request_id` is captured in the `ExecutionCheckpoint` struct and persisted to the checkpoint store. The checkpoint's `OriginalRequestID` field is then used during resume to correlate the conversation.
+> **Note**: `ExecutionCheckpoint.OriginalRequestID` preserves request-family
+> lineage. The validated `conversation_id` is carried independently in the
+> checkpoint’s framework-owned metadata.
 
 **Example: Resume execution log**
 
@@ -866,6 +850,7 @@ if a.Logger != nil {
         "operation":           "hitl_resume",
         "request_id":          newRequestID,        // New request_id
         "original_request_id": originalRequestID,  // Preserved from parent
+        "conversation_id":     conversationID,     // Preserved across turns
         "checkpoint_id":       checkpoint.CheckpointID,
         "checkpoint_status":   checkpoint.Status,
     })
@@ -874,44 +859,53 @@ if a.Logger != nil {
 
 ### Filtering Logs by `original_request_id`
 
-To see the **entire HITL conversation** across all requests:
+Use this field to see one HITL request family:
 
 #### JSON Format (with jq)
 
 ```bash
-# Find all logs for a HITL conversation
+# Find all logs for one interrupt/resume family
 kubectl logs -n truvag3-examples -l app=agent-with-human-approval | \
   jq 'select(.original_request_id == "req-abc123" or .request_id == "req-abc123")'
 
-# Show the conversation timeline
+# Show the request-family timeline
 kubectl logs -n truvag3-examples -l app=agent-with-human-approval | \
   jq 'select(.original_request_id == "req-abc123")' | \
   jq -s 'sort_by(.timestamp) | .[] | {timestamp, operation, request_id, message}'
+
+# Show every logged turn in the broader conversation
+kubectl logs -n truvag3-examples -l app=agent-with-human-approval | \
+  jq 'select(.conversation_id == "chat-456")'
 ```
 
 #### Grafana Loki (LogQL)
 
 ```logql
-# All logs in a HITL conversation
-{namespace="truvag3-examples", app="agent-with-human-approval"}
+# One HITL request family
+{service_name="agent-with-human-approval"}
   | json
   | original_request_id="req-abc123"
 
+# All top-level turns and related executions in the conversation
+{service_name="agent-with-human-approval"}
+  | json
+  | conversation_id="chat-456"
+
 # HITL interrupts only
-{namespace="truvag3-examples"}
+{k8s_namespace_name="truvag3-examples"}
   | json
   | interrupted="true"
 
 # Correlation: find resume logs for a checkpoint
-{namespace="truvag3-examples"}
+{k8s_namespace_name="truvag3-examples"}
   | json
   | checkpoint_id="cp-xyz789"
   | operation="hitl_resume"
 ```
 
-### Example: Complete HITL Conversation Logs
+### Example: Complete HITL Request-Family Logs
 
-Here's what a full HITL conversation looks like in logs:
+Here is an interrupt and resume within conversation `chat-456`:
 
 ```json
 // === INITIAL REQUEST (Parent) ===
@@ -922,6 +916,8 @@ Here's what a full HITL conversation looks like in logs:
   "message": "Starting request processing",
   "operation": "process_request",
   "request_id": "req-abc123",
+  "original_request_id": "req-abc123",
+  "conversation_id": "chat-456",
   "request_length": 45
 }
 
@@ -943,6 +939,8 @@ Here's what a full HITL conversation looks like in logs:
   "message": "Plan execution interrupted for human approval",
   "operation": "hitl_plan_approval",
   "request_id": "req-abc123",
+  "original_request_id": "req-abc123",
+  "conversation_id": "chat-456",
   "plan_id": "plan-001",
   "checkpoint_id": "cp-xyz789"
 }
@@ -967,6 +965,7 @@ Here's what a full HITL conversation looks like in logs:
   "operation": "hitl_resume",
   "request_id": "req-def456",
   "original_request_id": "req-abc123",
+  "conversation_id": "chat-456",
   "checkpoint_id": "cp-xyz789"
 }
 
@@ -988,78 +987,111 @@ Here's what a full HITL conversation looks like in logs:
   "message": "Plan execution completed",
   "operation": "plan_execution",
   "request_id": "req-def456",
+  "original_request_id": "req-abc123",
+  "conversation_id": "chat-456",
   "plan_id": "plan-001",
   "success": true,
   "duration_ms": 3000
 }
 ```
 
-**Observation**: Notice how `original_request_id: "req-abc123"` appears in both the initial interrupt log and the resume logs, allowing you to trace the entire conversation.
+**Observation**: `original_request_id` joins the interrupt and resume.
+`conversation_id` can also find other turns that are not part of this request
+family.
 
-### DAG Visualization and `original_request_id`
+### DAG Visualization: Conversation vs Request Family
 
-The DAG visualization in the Registry Viewer uses `original_request_id` to group related executions:
+Registry Viewer uses the two keys at different levels:
+
+- `conversation_id` groups top-level turns into a conversation unit and powers
+  the chronological timeline.
+- `original_request_id` nests resume/delegation executions beneath the
+  appropriate top-level turn.
+
+```
+Conversation chat-456
+├─ Turn 1: req-abc123 (interrupted)
+│  └─ Related resume: req-def456 (original_request_id=req-abc123)
+└─ Turn 2: req-ghi789
+```
+
+### Detached Execution-Storage Logging
+
+`storeExecutionAsync` captures correlation before launching the goroutine,
+retains context values with `context.WithoutCancel`, applies a bounded timeout,
+and uses a non-context logger with explicit captured fields:
 
 ```go
-// ExecutionSummary in redis_execution_store.go
-type ExecutionSummary struct {
-    RequestID         string    `json:"request_id"`
-    OriginalRequestID string    `json:"original_request_id,omitempty"`
-    Interrupted       bool      `json:"interrupted,omitempty"`
-    // ...
+bag := telemetry.GetBaggage(ctx)
+traceID := telemetry.GetTraceContext(ctx).TraceID
+conversationID := core.GetConversationID(ctx)
+if core.ValidateConversationID(conversationID) !=
+    core.ConversationIDValidationNone {
+    conversationID = ""
 }
-```
+originalRequestID := requestID
+if bag != nil && bag["original_request_id"] != "" {
+    originalRequestID = bag["original_request_id"]
+}
 
-In the UI, executions with the same `original_request_id` are grouped as parent-child:
+go func() {
+    storeCtx, cancel := context.WithTimeout(
+        context.WithoutCancel(ctx),
+        5*time.Second,
+    )
+    defer cancel()
 
-```
-Execution DAG
-├─ req-abc123 (Parent, Interrupted: true)
-│  └─ Checkpoint: cp-xyz789 (Plan Approval)
-│
-└─ req-def456 (Child, OriginalRequestID: req-abc123)
-   └─ Steps: weather → currency → response
-```
-
-### Background Goroutine Logging for HITL
-
-When storing HITL executions asynchronously, use **non-context logging methods** since the goroutine runs with `context.Background()`:
-
-```go
-// orchestrator.go - storeExecutionAsync
-// This runs in a goroutine with context.Background()
-// so we use o.logger.Warn() NOT o.logger.WarnWithContext()
-
-if storeErr := store.Store(storeCtx, stored); storeErr != nil {
-    if o.logger != nil {
-        logFields := map[string]interface{}{
-            "operation":   "execution_store",
-            "request_id":  requestID,
-            "interrupted": checkpoint != nil,
-            "error":       storeErr.Error(),
-        }
-        if traceID != "" {
-            logFields["trace_id"] = traceID
-        }
-        if checkpoint != nil && checkpoint.CheckpointID != "" {
-            logFields["checkpoint_id"] = checkpoint.CheckpointID
-        }
-        o.logger.Warn("Failed to store execution for DAG visualization", logFields)
+    stored := &StoredExecution{
+        RequestID:         requestID,
+        OriginalRequestID: originalRequestID,
+        TraceID:           traceID,
+        // ... immutable values captured before the goroutine
     }
-}
+
+    if storeErr := store.Store(storeCtx, stored); storeErr != nil {
+        if o.logger != nil {
+            fields := map[string]interface{}{
+                "operation":   "execution_store",
+                "request_id":  requestID,
+                "interrupted": checkpoint != nil,
+                "error_type":  "store_write",
+                "error":       safeExecutionStoreError(storeErr),
+            }
+            if traceID != "" {
+                fields["trace_id"] = traceID
+            }
+            if conversationID != "" {
+                fields["conversation_id"] = conversationID
+            }
+            o.logger.Warn(
+                "Failed to store execution for DAG visualization",
+                fields,
+            )
+        }
+    }
+}()
 ```
 
-**Why non-context method?** The parent HTTP request context may be canceled after the handler returns, but we still want the async storage to complete. Using `context.Background()` ensures the operation isn't canceled prematurely.
+`safeExecutionStoreError` emits a bounded message and never exposes a Redis
+URL, credentials, payload, or raw backend error. The non-context logger avoids
+depending on a canceled request while the explicitly captured correlation
+fields retain troubleshooting value.
+
+Execution-store index and TTL failures use the same sanitized-error rule with
+bounded `error_type=index_write` and `error_type=ttl_update`. Observation error
+text must not include Redis connection material, payloads, or raw conversation
+identifiers.
 
 ### HITL Logging Checklist
 
 When implementing HITL-related logging:
 
 - [ ] Include `request_id` in all logs (current request's unique ID)
-- [ ] Include `original_request_id` when in a HITL flow (links to conversation start)
+- [ ] Include `original_request_id` for the interrupt/resume request family
+- [ ] Preserve validated `conversation_id` independently across turns
 - [ ] Include `checkpoint_id` when creating or resuming from checkpoints
 - [ ] Include `interrupted: true` when storing interrupted executions
-- [ ] Set `original_request_id` in baggage **before** calling orchestrator during resume
+- [ ] Call `BuildResumeContext` and use its returned context and cleanup function
 - [ ] Use non-context logging methods in background goroutines
 - [ ] Log both the interrupt (parent) and resume (child) with matching `original_request_id`
 
@@ -1069,22 +1101,22 @@ The [`examples/agent-with-human-approval`](https://github.com/truvaagents/truva-
 
 | File | Purpose |
 |------|---------|
-| [`handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) | `handleResumeSSE` - Shows complete trace correlation setup with priority-based `original_request_id` resolution |
-| [`handlers_auto_resume.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go) | `handleAutoResumeSSE` - Expiry-triggered auto-resume with same trace correlation patterns |
+| [`handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) | Manual and synchronous resume handlers using `BuildResumeContext` |
+| [`handlers_auto_resume.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go) | Expiry-triggered resume using the same helper |
 | [`hitl_setup.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
 
 **Key patterns demonstrated:**
 
-1. **Trace correlation setup** with `StartLinkedSpan` for Jaeger trace linking
-2. **Priority-based `original_request_id`** resolution (header → checkpoint → fallback)
-3. **Detailed logging** of trace correlation decisions for debugging
-4. **Baggage propagation** before orchestrator calls
+1. **Single-call resume setup** with `BuildResumeContext`
+2. **Typed checkpoint lineage** with an optional trusted header override
+3. **Framework-owned linked span and validated conversation restoration**
+4. **Direct logging of bounded correlation fields**
 
 To run the example and observe the logging:
 
 ```bash
 cd examples/agent-with-human-approval
-./setup.sh  # Deploys to Kubernetes
+./setup.sh deploy
 
 # Port forward and test
 kubectl port-forward -n truvag3-examples svc/agent-with-human-approval 8352:8352
@@ -1159,6 +1191,22 @@ metadata — filterable with `| key="value"` pipe syntax, not `{key="value"}`):
 |-----------|--------|---------|
 | `k8s_node_name` | pod metadata | `truvag3-demo-kind-control-plane` |
 
+Application JSON fields such as `request_id`, `original_request_id`,
+`conversation_id`, `checkpoint_id`, `operation`, and `level` are not Loki
+stream labels in the repository’s reference deployment. Parse and filter them
+after selecting a bounded stream:
+
+```logql
+{service_name="travel-chat-agent"}
+  | json
+  | conversation_id="chat-456"
+```
+
+This description is specific to
+`examples/k8-deployment/otel-collector-logs.yaml` and the supplied Loki
+configuration. External deployments may choose a different label policy, but
+high-cardinality correlation values should not be promoted to stream labels.
+
 ### Standard Field Names
 
 Use these field names across all your services:
@@ -1166,9 +1214,15 @@ Use these field names across all your services:
 | Field Name | Type | Description | Example |
 |------------|------|-------------|---------|
 | `operation` | string | The operation being performed | "research_topic", "get_weather" |
+| `request_id` | string | One orchestration execution/request | "orch-1785207229452819002" |
+| `original_request_id` | string | HITL/delegation request-family root | "orch-1785207229452819002" |
+| `conversation_id` | string | Optional validated multi-turn conversation identity; high-cardinality and metric-ineligible in framework flows | "chat-456" |
+| `trace_id` | string | Active W3C trace identity | "5b54aa1e7925acb809e77479b5797f5d" |
+| `span_id` | string | Active W3C span identity | "e75ad960517fa8fe" |
+| `checkpoint_id` | string | HITL checkpoint identity | "cp-abc123" |
 | `status` | string | Result status | "success", "error", "retry" |
 | `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
-| `error_type` | string | Error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
 | `path` | string | Request path | "/api/capabilities/get_weather" |
@@ -1347,7 +1401,10 @@ if o.logger != nil {
 // In any component that receives the context
 func (c *Component) doWork(ctx context.Context) error {
     // Retrieve request_id from context baggage
-    requestID := telemetry.GetBaggage(ctx, "request_id")
+    requestID := ""
+    if baggage := telemetry.GetBaggage(ctx); baggage != nil {
+        requestID = baggage["request_id"]
+    }
 
     if c.logger != nil {
         c.logger.InfoWithContext(ctx, "Doing work", map[string]interface{}{
@@ -1542,25 +1599,68 @@ func initTelemetry(serviceName string) {
 
 ### Metric Emission from Logs
 
-When telemetry is enabled, logs automatically emit metrics. Only specific low-cardinality fields are used as metric labels to prevent metric explosion:
+When telemetry is enabled, framework logs emit
+`truvag3.framework.operations`. Labels have two sources:
 
-**Allowed label fields** (defined in [`core/config.go`](https://github.com/truvaagents/truva-g3/blob/main/core/config.go)):
-- `operation`
-- `status`
-- `error_type`
-- `service_type`
-- `provider`
+1. `ProductionLogger.emitFrameworkMetric` always adds `level`, `service`, and
+   `component`, then allowlists only these explicit log fields:
+   `operation`, `status`, `error_type`, `service_type`, and `provider`.
+2. Context-aware emission appends every W3C baggage member that is
+   metric-eligible.
+
+The five explicit fields are therefore not a closed list of all possible
+labels. Generic baggage is metric-eligible unless the member carries the
+framework’s exclusion property. Existing unmarked `request_id`, `user_id`, and
+`session_id` behavior is tracked separately for a broader cardinality cleanup.
 
 ```go
-// This log statement...
-agent.Logger.Error("Request failed", map[string]interface{}{
+// Canonical conversation correlation remains available to logs, spans, and
+// propagation but is excluded from metric labels.
+ctx, err := telemetry.WithBaggageExact(
+    ctx,
+    "conversation_id",
+    conversationID,
+    telemetry.WithMetricLabelEligibility(false),
+)
+if err != nil {
+    // Treat optional correlation rejection as fail-open.
+}
+
+agent.Logger.ErrorWithContext(ctx, "Request failed", map[string]interface{}{
     "operation": "get_weather",
     "error_type": "timeout",
 })
 
-// ...also emits this metric (automatically):
+// The emitted metric includes operation and error_type, but not conversation_id:
 // truvag3.framework.operations{level="ERROR", service="my-agent", operation="get_weather", error_type="timeout"}
 ```
+
+The orchestration ingress performs this exact construction after validating
+the canonical ID. A rejected optional conversation ID increments the bounded
+`orchestration.conversation_id.rejected.total` counter; it does not require a
+DEBUG log, record a span error, or change the business result.
+
+### Baggage Construction Limits
+
+Both baggage construction paths enforce the same limits:
+
+| Limit | Value |
+|-------|------:|
+| Members | 64 |
+| Key length | 128 bytes |
+| Value length | 512 bytes |
+| Complete serialized W3C baggage value | 8192 bytes |
+
+The total is the serialized wire value, including separators, encoding, and
+member properties.
+
+- `telemetry.WithBaggage` accepts multiple key/value pairs. It applies the
+  64-member cap to each candidate as it is added, truncates overlong key/value
+  input to its per-item limits, and silently skips invalid or over-limit
+  candidates.
+- `telemetry.WithBaggageExact` adds or replaces one member without truncation.
+  It either returns the updated context or returns the original context plus a
+  typed `BaggageExactError`.
 
 ---
 
@@ -1914,15 +2014,25 @@ If using Grafana Loki for log aggregation:
 # Trace a request across all components using trace_id
 {k8s_namespace_name="truvag3-examples"} | json | trace_id="abc123def456"
 
-# All logs for a given orchestration request_id (finds the tool side too)
-{k8s_namespace_name="truvag3-examples"} |= "orch-1776904450804389754"
+# One orchestration execution
+{k8s_namespace_name="truvag3-examples"} | json | request_id="orch-1776904450804389754"
+
+# All turns and related executions in a conversation
+{k8s_namespace_name="truvag3-examples"} | json | conversation_id="chat-456"
+
+# One interrupt/resume or delegation request family
+{k8s_namespace_name="truvag3-examples"} | json | original_request_id="orch-1776904450804389754"
+
+# One HITL checkpoint
+{service_name="agent-with-human-approval"} | json | checkpoint_id="cp-abc123"
 ```
 
 **Why `{service_name="…"}` and `{k8s_namespace_name="…"}`?** These are the indexed
 stream labels Loki actually exposes for this pipeline. `service_name` comes from the
 pod's `app:` label (set per-record by `k8sattributes`), and `k8s_namespace_name` comes
 from pod metadata. Filtering by either is cheap. The old `{namespace="…"}` idiom does
-not work — that label is not indexed.
+not work — that label is not indexed. Correlation fields after `| json` are
+parsed application fields, not stream selectors.
 
 ### Identifying Log Origins
 
@@ -2047,23 +2157,36 @@ logger.Info("API call", map[string]interface{}{
 })
 ```
 
-### Mistake 3: High-Cardinality Fields
+### Mistake 3: Turning Correlation Fields into Metric Labels
 
 ```go
-// BAD - creates too many unique metric labels
-logger.Info("Request", map[string]interface{}{
-    "user_id": "user-12345",     // High cardinality
-    "request_id": uuid.New(),    // Unique every time
-    "timestamp": time.Now(),     // Always different
-})
+// BAD - explicitly creates one metric series per conversation
+telemetry.Counter(
+    "conversation.request",
+    "conversation_id", conversationID,
+)
 
-// GOOD - low cardinality fields as labels
-logger.Info("Request", map[string]interface{}{
-    "operation": "get_weather",  // Fixed set of values
-    "status": "success",         // Fixed set of values
-    "duration_ms": 125,          // Not a label, just a value
+// GOOD - preserve correlation for context-aware JSON logs and spans while
+// excluding it from context-aware metric labels.
+ctx, err := telemetry.WithBaggageExact(
+    ctx,
+    "conversation_id",
+    conversationID,
+    telemetry.WithMetricLabelEligibility(false),
+)
+if err != nil {
+    // Optional correlation is fail-open.
+}
+
+logger.InfoWithContext(ctx, "Request", map[string]interface{}{
+    "operation":   "get_weather",
+    "status":      "success",
+    "duration_ms": 125,
 })
 ```
+
+High-cardinality identifiers are useful structured log fields. The problem is
+promoting them to metric or Loki stream labels.
 
 ### Mistake 4: Not Logging Errors Properly
 
@@ -2154,6 +2277,10 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 |-------|----------|---------|
 | `operation` | **YES** | What action is being performed (MUST be in every log) |
 | `request_id` | **YES** | Request identifier (for request-scoped logs) |
+| `original_request_id` | HITL/delegation | One causal request family |
+| `conversation_id` | When available | Multiple top-level turns; validated and metric-ineligible in framework flows |
+| `trace_id` / `span_id` | Automatic in context-aware JSON | Log-to-trace correlation |
+| `checkpoint_id` | HITL | One checkpoint |
 | `error` | On errors | Error message; sanitize external/provider errors before logging |
 | `duration_ms` | Recommended | How long it took |
 | `status` | Recommended | success, error, retry |
@@ -2219,7 +2346,10 @@ For complete distributed tracing setup including infrastructure (Jaeger, OTEL Co
 2. **Always use `WithContext` methods** in HTTP handlers for trace correlation
 3. **Be consistent with field names** across all services
 4. **Log both success and failure** with duration metrics
-5. **Initialize telemetry first** to enable all three observability layers
+5. **Use the right correlation scope**: request, request family, conversation, or trace
+6. **Keep `conversation_id` out of metrics and Loki stream labels** while retaining it in structured logs and spans
+7. **Resume HITL through `BuildResumeContext`** instead of rebuilding links or baggage in handlers
+8. **Initialize telemetry first** to enable all three observability layers
 
 Following these guidelines ensures your logs are useful in production, easy to search, and properly correlated across your distributed system.
 

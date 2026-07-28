@@ -8,6 +8,7 @@ Welcome to the complete guide on distributed tracing in TruvaG3! Think of this a
 2. [The Problem Without Tracing](#2-the-problem-without-tracing)
 3. [The Solution: Context Propagation](#3-the-solution-context-propagation)
 4. [Understanding Trace IDs, Span IDs, and Parent Spans](#4-understanding-trace-ids-span-ids-and-parent-spans)
+    - [Correlation Taxonomy](#correlation-taxonomy)
 5. [Trace-Log Correlation: The Magic Glue](#5-trace-log-correlation-the-magic-glue)
 6. [Implementation: Server-Side (TracingMiddleware)](#6-implementation-server-side-tracingmiddleware)
 7. [Implementation: Client-Side (TracedHTTPClient)](#7-implementation-client-side-tracedhttpclient)
@@ -116,7 +117,8 @@ Service C: "Returned response"       ← No idea!
 
 ## 3. The Solution: Context Propagation
 
-The solution is elegantly simple: **pass a unique identifier with every request**.
+The solution is elegantly simple: propagate the active trace plus the
+framework correlation identifiers needed to find related work.
 
 ### How It Works
 
@@ -152,11 +154,15 @@ The solution is elegantly simple: **pass a unique identifier with every request*
 └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
-### The W3C TraceContext Standard
+### The W3C Trace Context and Baggage Standards
 
-TruvaG3 uses the **W3C TraceContext** standard, which is supported by all major tracing systems (Jaeger, Zipkin, Datadog, etc.).
+TruvaG3 installs a composite OpenTelemetry propagator containing both
+**W3C Trace Context** and **W3C Baggage**:
 
-The magic happens through HTTP headers:
+- Trace Context carries `traceparent` and `tracestate`, preserving the
+  distributed trace.
+- Baggage carries framework and application correlation values such as
+  `request_id`, `original_request_id`, and the validated `conversation_id`.
 
 ```http
 # Outgoing request from agent to tool
@@ -164,7 +170,16 @@ POST /api/capabilities/get_weather HTTP/1.1
 Host: weather-tool:8080
 traceparent: 00-abc123def456789-span001-01
 tracestate: truvag3=research-agent
+baggage: request_id=orch-123,conversation_id=chat-456
+X-TruvaG3-Conversation-ID: chat-456
 ```
+
+The explicit `X-TruvaG3-*` headers are a telemetry-independent framework
+fallback used by orchestration receivers. They complement standard W3C
+propagation; they do not replace it. In particular,
+`X-TruvaG3-Conversation-ID` allows the canonical conversation identity to
+reach a framework receiver even when OpenTelemetry HTTP propagation is not
+initialized.
 
 **The `traceparent` header contains:**
 - `00` - Version (always 00)
@@ -229,6 +244,26 @@ research-agent: HTTP POST /api/research ─────────────�
 ```
 
 **Now you can instantly see:** The stock tool is the bottleneck (180ms vs 150ms for weather).
+
+### Correlation Taxonomy
+
+These identifiers answer different questions and must not be used
+interchangeably:
+
+| Identifier | Scope | Use it to answer |
+|------------|-------|------------------|
+| `request_id` | One orchestration execution/request. A top-level chat turn gets one ID; delegated and resumed executions get their own IDs. | “What happened in this execution?” |
+| `original_request_id` | One request family, such as an interrupt plus its resume or a parent plus delegated execution. | “Which related executions belong to this causal request family?” |
+| `conversation_id` | Multiple top-level turns in one application conversation. Related resume/delegation executions inherit it. | “What happened across this multi-turn conversation?” |
+| `trace_id` | One distributed trace. Synchronous delegation can remain in the same trace; a later HITL resume normally starts a new linked trace. | “Which spans participated in this distributed operation?” |
+
+`session_id` is application-defined and intentionally absent from this
+taxonomy. An application may map one chat-session UUID to
+`conversation_id`, as the reference chat agents do, but a session may instead
+represent authentication, browser state, or another lifecycle. The framework
+therefore does not infer conversation identity from `session_id`.
+Framework-created `conversation_id` baggage is metric-ineligible; existing
+unmarked `session_id` baggage retains the generic baggage metric behavior.
 
 ---
 
@@ -311,9 +346,11 @@ Now let's get practical. Here's how to add distributed tracing to your TruvaG3 t
 
 The `TracingMiddleware` wraps your HTTP handlers and automatically:
 1. **Extracts** trace context from incoming `traceparent` headers
-2. **Creates** a new span for this request
-3. **Records** HTTP metrics (status codes, latency)
-4. **Propagates** context to your handler code via `r.Context()`
+2. **Extracts** W3C baggage when the composite propagator is initialized
+3. **Creates** a new span for this request
+4. **Validates and stamps** supported `X-TruvaG3-*` correlation headers on the server span
+5. **Records** HTTP metrics (status codes, latency)
+6. **Propagates** context to your handler code via `r.Context()`
 
 ### Basic Usage (Recommended)
 
@@ -442,7 +479,7 @@ Server-side tracing is only half the story. When your **agent calls a tool**, yo
 ### What TracedHTTPClient Does
 
 The `NewTracedHTTPClient()` creates an HTTP client that automatically:
-1. **Injects** `traceparent` header into all outgoing requests
+1. **Injects** W3C Trace Context and W3C Baggage into outgoing requests
 2. **Creates** client-side spans for each HTTP call
 3. **Records** request/response metrics
 4. **Propagates** the trace context to downstream services
@@ -498,7 +535,7 @@ func (a *ResearchAgent) callWeatherTool(ctx context.Context, city string) (*Weat
     }
     req.Header.Set("Content-Type", "application/json")
 
-    // The traced client automatically adds traceparent header!
+    // The traced client automatically adds W3C trace and baggage headers.
     resp, err := a.httpClient.Do(req)
     if err != nil {
         return nil, err
@@ -529,8 +566,9 @@ Agent's httpClient.Do(req)
 │    Parent: span-001                                              │
 │    New span_id: span-002                                         │
 │                                                                  │
-│ 3. Inject traceparent header into request                       │
+│ 3. Inject W3C headers into request                              │
 │    traceparent: 00-abc123-span002-01                            │
+│    baggage: request_id=orch-123,...                             │
 │                                                                  │
 │ 4. Make the actual HTTP request                                 │
 │                                                                  │
@@ -538,7 +576,7 @@ Agent's httpClient.Do(req)
 └─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Weather Tool receives request with traceparent header
+Weather Tool receives the request with W3C trace context and baggage
 ```
 
 ### Important: Always Pass Context!
@@ -696,7 +734,7 @@ func (r *ResearchAgent) callTool(ctx context.Context, url string, params interfa
     }
     req.Header.Set("Content-Type", "application/json")
 
-    // TracedHTTPClient adds traceparent header automatically
+    // TracedHTTPClient adds W3C trace and baggage headers automatically.
     resp, err := r.httpClient.Do(req)
     if err != nil {
         return nil, err
@@ -926,7 +964,7 @@ env:
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     value: "http://otel-collector:4318"
   - name: APP_ENV
-    value: "production"  # or "development" for 100% sampling
+    value: "production"  # Selects safety/cardinality defaults, not trace sampling
 ```
 
 ### OTEL Collector Configuration
@@ -1044,7 +1082,7 @@ http://localhost:16686/trace/fee30b72efcbefd21fddf9cd56d2c8c9
    kubectl logs -n truvag3-examples deployment/stock-tool | grep "fee30b72efcbefd21fddf9cd56d2c8c9"
 
    # Or in Grafana Loki
-   {app="stock-tool"} |= "fee30b72efcbefd21fddf9cd56d2c8c9"
+   {service_name="stock-tool"} | json | trace_id="fee30b72efcbefd21fddf9cd56d2c8c9"
    ```
 
 ### Using request_id for Troubleshooting
@@ -1060,7 +1098,10 @@ When you make an orchestration request, the API response includes a `request_id`
 }
 ```
 
-**The `request_id` is your primary troubleshooting key** - it connects API responses to distributed traces and logs.
+**The `request_id` is the primary key for troubleshooting one execution.** It
+connects an API response to its execution record, distributed trace, and logs.
+Use `conversation_id` when the question spans multiple top-level turns, and
+`original_request_id` for an interrupt/resume or delegation family.
 
 #### How request_id Relates to Traces
 
@@ -1137,9 +1178,32 @@ Each span shows:
 | What You Have | How to Find the Trace |
 |---------------|----------------------|
 | `request_id` from API response | Search Jaeger by tag: `request_id=<value>` |
+| `conversation_id` from execution metadata | Search Jaeger by tag: `conversation_id=<value>` |
+| `original_request_id` from a resume/delegation | Search Jaeger by tag: `original_request_id=<value>` |
 | `trace_id` from logs | Direct URL: `http://localhost:16686/trace/<trace_id>` |
 | Time range of issue | Filter by service + time in Jaeger UI |
 | Error message | Search by tag: `error=true` |
+
+### Using `conversation_id` Across Turns
+
+When an application supplies a canonical `conversation_id`, orchestration
+validates and persists it from the first turn even when no prior history
+exists. It is available in execution metadata, LLM-debug metadata, validated
+structured logs, the explicit framework header, and instrumented span
+attributes. In the reference deployment, Registry Viewer reads the same value
+from execution DB 8 and LLM-debug DB 7.
+
+In Jaeger, search a service with:
+
+```
+conversation_id=chat-456
+```
+
+A recording server span created by `TracingMiddleware` carries the explicit
+conversation header as an attribute when the value is valid. Meaningful
+framework child spans that call the common enrichment helpers also carry it,
+but the framework does not promise identical attributes on every internal or
+third-party span.
 
 ---
 
@@ -1152,7 +1216,6 @@ This section documents the **required patterns** used throughout the TruvaG3 fra
 **Always check for nil before logging.** This ensures graceful degradation when logging is not configured.
 
 ```go
-// From orchestration/orchestrator.go:573-580
 if o.logger != nil {
     o.logger.InfoWithContext(ctx, "Starting request processing", map[string]interface{}{
         "operation":      "process_request",
@@ -1172,7 +1235,6 @@ if o.logger != nil {
 **Every log entry MUST include an `operation` field.** This enables filtering and analysis across distributed systems.
 
 ```go
-// From orchestration/orchestrator.go:598-604
 if o.logger != nil {
     o.logger.ErrorWithContext(ctx, "Plan generation failed", map[string]interface{}{
         "operation":   "plan_generation",  // REQUIRED
@@ -1195,8 +1257,6 @@ if o.logger != nil {
 **Generate request_id early and propagate via context baggage.** This enables end-to-end request tracking.
 
 ```go
-// From orchestration/orchestrator.go:567-571
-
 // Step 1: Generate unique request_id
 requestID := generateRequestID()
 
@@ -1227,9 +1287,73 @@ if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 }
 ```
 
+### Framework Header Inventory
+
+Header names are case-insensitive on the wire; documentation and new code use
+the canonical `X-TruvaG3-*` spelling below. The executor sends these headers
+when their source value is present:
+
+| Header | Source | `core.ExtractRequestContext` | Tool-side server-span attribute |
+|--------|--------|------------------------------|---------------------------------|
+| `X-TruvaG3-Request-ID` | W3C baggage `request_id` | `core.GetRequestID` | `request_id` |
+| `X-TruvaG3-Original-Request-ID` | W3C baggage `original_request_id` | `core.GetOriginalRequestID` | `original_request_id` |
+| `X-TruvaG3-Conversation-ID` | validated canonical core context | validated conversation candidate | validated `conversation_id` |
+| `X-TruvaG3-Step-ID` | core step context | `core.GetStepID` | `step_id` |
+| `X-TruvaG3-Phase-Number` | W3C baggage `phase_number` | `core.GetPhaseNumber` | `phase_number` |
+| `X-TruvaG3-Plan-ID` | W3C baggage `plan_id` | `core.GetPlanID` | `plan_id` |
+| `X-TruvaG3-Agent-Name` | W3C baggage `agent_name` | `core.GetAgentName` | `caller_agent_name` |
+| `X-TruvaG3-Investigation-Owner` | W3C baggage `investigation_owner` | not extracted by this helper | not stamped by tracing middleware |
+
+HITL webhook delivery separately uses `X-TruvaG3-Event`,
+`X-TruvaG3-Checkpoint-ID`, and `X-TruvaG3-Request-ID`. Those webhook-control
+headers are not the executor’s normal agent/tool call inventory.
+
+### Conversation Correlation Is Optional and Fail-Open
+
+`resolveConversationContext` is the orchestration-ingress authority. It
+validates the selected identity and promotes it to metadata, core context, and
+exact W3C baggage. The baggage member is marked with
+`telemetry.WithMetricLabelEligibility(false)`.
+
+If correlation is rejected, business execution continues without a
+conversation identity. The framework increments the bounded
+`orchestration.conversation_id.rejected.total` diagnostic counter using only
+bounded `source`, `reason`, and `module` labels. Rejection does not record a
+span exception, set error status, or require a DEBUG log.
+
+### Common Span Attributes
+
+The common span helpers mirror these baggage members when present:
+`request_id`, `original_request_id`, `conversation_id`, `agent_name`,
+`user_id`, `session_id`, and `ai.purpose`.
+
+HTTP middleware validates the explicit conversation header before stamping the
+server span. Baggage-sourced helpers propagate members as provided; normal
+framework flows are safe because orchestration validates `conversation_id`
+before adding it to baggage. Applications using generic baggage APIs are
+responsible for validating values they add themselves.
+
+Common enrichment is best-effort for meaningful framework child spans. Do not
+require attribute parity on every third-party or internal span.
+
+### Baggage Construction Limits
+
+Both construction paths enforce 64 members, 128-byte keys, 512-byte values,
+and an 8192-byte complete serialized W3C baggage value. The total includes
+separators, encoding, and member properties.
+
+`telemetry.WithBaggage` accepts multiple pairs, enforces the member cap for
+each candidate as it is added, truncates overlong key/value input to the
+per-item limits, and silently skips invalid or over-limit candidates.
+`telemetry.WithBaggageExact` adds or replaces one member without truncation and
+returns the original context plus a typed `BaggageExactError` if the complete
+update is invalid or over limit.
+
 ### Pattern 4: telemetry.RecordSpanError for All Errors
 
-**Always record errors on the span for trace visibility.** This makes errors visible in Jaeger.
+**Record business-operation errors on the span for trace visibility.** This
+makes failures visible in Jaeger. Optional correlation rejection is not a
+business-operation failure and follows the fail-open rule above.
 
 At an external-service or AI-provider boundary, record a sanitized derivative
 when the original error may contain response bodies, endpoints, credential
@@ -1239,7 +1363,6 @@ caller-visible error chain. The AI module uses
 exception and bounded `ai.error_type` while still marking the span as failed.
 
 ```go
-// From orchestration/executor.go:1228-1235
 agentInfo := e.findAgentByName(step.AgentName)
 if agentInfo == nil {
     err := fmt.Errorf("agent %s not found in catalog", step.AgentName)
@@ -1264,7 +1387,6 @@ if agentInfo == nil {
 **Include the `module` label in all counter metrics.** This enables per-module metric analysis.
 
 ```go
-// From orchestration/orchestrator.go:1123-1124
 telemetry.Counter("plan_generation.total",
     "module", telemetry.ModuleOrchestration,  // REQUIRED
     "status", "error",
@@ -1288,7 +1410,6 @@ telemetry.Counter("orchestration.hybrid_resolution.success",
 **When calling `telemetry.AddSpanEvent()`, always put `request_id` as the first attribute.** This ensures consistent attribute ordering in Jaeger.
 
 ```go
-// From orchestration/orchestrator.go:1092-1099
 telemetry.AddSpanEvent(ctx, "llm.plan_generation.request",
     attribute.String("request_id", requestID),  // FIRST attribute
     attribute.String("prompt", truncateString(prompt, 2000)),
@@ -1530,13 +1651,17 @@ log.Printf("Processing request trace_id=%s span_id=%s", tc.TraceID, tc.SpanID)
 
 **Symptoms:** Millions of traces, hard to find important ones.
 
-**Fix 1: Reduce sampling rate for production**
-```go
-// In telemetry initialization
-config := telemetry.UseProfile(telemetry.ProfileProduction)  // 0.1% sampling
-```
+**Current behavior:** The built-in tracer provider uses
+`sdktrace.AlwaysSample()` for every telemetry profile. Selecting
+`ProfileProduction` changes endpoint, cardinality, circuit-breaker, and
+redaction defaults; it does not reduce trace sampling.
 
-**Fix 2: Exclude health endpoints**
+If trace-volume reduction is required, treat it as an explicit deployment or
+framework design decision and validate that it preserves the investigation and
+HITL traces your operators need. There is currently no sampling-rate field in
+`telemetry.Config`.
+
+**Reduce noise by excluding health endpoints:**
 ```go
 config := &telemetry.TracingMiddlewareConfig{
     ExcludedPaths: []string{"/health", "/metrics", "/ready", "/live"},
@@ -1595,7 +1720,7 @@ log.Printf("Message trace_id=%s span_id=%s", tc.TraceID, tc.SpanID)
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTEL Collector endpoint | `http://otel-collector:4318` |
-| `APP_ENV` | Environment (affects sampling) | `production`, `development` |
+| `APP_ENV` | Application profile selection used by example initialization code | `production`, `development` |
 
 ### Key Types and Functions
 
@@ -1614,11 +1739,14 @@ log.Printf("Message trace_id=%s span_id=%s", tc.TraceID, tc.SpanID)
 
 ### Telemetry Profiles
 
-| Profile | Sampling | Use Case |
-|---------|----------|----------|
-| `ProfileDevelopment` | 100% | Local development, see everything |
-| `ProfileStaging` | 10% | Testing environments |
-| `ProfileProduction` | 0.1% | High-traffic production |
+All profiles currently use 100% trace sampling through
+`sdktrace.AlwaysSample()`. Their differences are operational defaults:
+
+| Profile | Trace sampling | Other defaults |
+|---------|----------------|----------------|
+| `ProfileDevelopment` | 100% | Local endpoint, high cardinality limit, no circuit breaker, no PII redaction |
+| `ProfileStaging` | 100% | Staging endpoint, lower cardinality limit, circuit breaker and PII redaction |
+| `ProfileProduction` | 100% | Production endpoint, strictest cardinality limits, circuit breaker and PII redaction |
 
 ---
 
@@ -1919,21 +2047,16 @@ This automatic visibility into AI decision-making makes debugging orchestration 
 
 ## 16. HITL Cross-Trace Correlation
 
-Human-in-the-Loop (HITL) flows present a unique distributed tracing challenge: the original request trace ends when execution pauses for human approval, and a completely new trace begins when the user resumes. Without special handling, these traces appear disconnected in Jaeger, making it difficult to understand the full request lifecycle.
+Human-in-the-Loop (HITL) flows cross an asynchronous boundary: the interrupt
+trace normally ends while a human reviews the checkpoint, and a later resume
+request starts a new trace. TruvaG3 links those traces while retaining two
+different forms of correlation:
 
-### The Problem: Disconnected Traces
+- `original_request_id` identifies the interrupt/resume request family.
+- `conversation_id` identifies the broader multi-turn conversation and remains
+  the same across unrelated top-level turns in that conversation.
 
-```
-Request A: User sends query → Plan generated → HITL pauses (trace ends)
-                          [minutes/hours pass - human reviews]
-Request B: User approves → Resume → Execution continues (new trace)
-
-In Jaeger, these appear as TWO UNRELATED traces:
-- Trace A: "chat.process_request" (stops at checkpoint)
-- Trace B: "hitl.resume" (starts fresh, no connection to Trace A)
-```
-
-### The Solution: Linked Spans with Baggage
+### Framework-Owned Resume Contract
 
 TruvaG3 uses **trace links** (not parent-child relationships) to connect resume traces to their original requests. This is the correct semantic model because:
 
@@ -1941,93 +2064,59 @@ TruvaG3 uses **trace links** (not parent-child relationships) to connect resume 
 2. The original trace may have already ended
 3. Resume can happen long after the original request
 
-#### How It Works
+The HITL controller stores `OriginalTraceID`, `OriginalSpanID`, and
+`OriginalRequestID` in `ExecutionCheckpoint`. Its framework-owned shallow
+metadata copy also carries a valid canonical `conversation_id` when one is
+present.
 
-**Step 1: Store Trace Context in Checkpoint**
-
-When HITL creates a checkpoint, it automatically stores the current trace context:
-
-```go
-// orchestration/hitl_controller.go (lines 797-800)
-tc := telemetry.GetTraceContext(ctx)
-if tc.TraceID != "" {
-    userContext["original_trace_id"] = tc.TraceID
-    userContext["original_span_id"] = tc.SpanID
-}
-```
-
-**Step 2: Create Linked Span on Resume**
-
-When execution resumes, create a linked span that references the original trace:
+Applications resume through `orchestration.BuildResumeContext`. They must not
+duplicate trace-link creation or manually reconstruct the resume baggage:
 
 ```go
-// examples/agent-with-human-approval/handlers.go (lines 330-358)
-// Extract trace context from checkpoint
-originalTraceID := ""
-originalSpanID := ""
-originalRequestID := checkpoint.RequestID
-
-if checkpoint.UserContext != nil {
-    if tid, ok := checkpoint.UserContext["original_trace_id"].(string); ok {
-        originalTraceID = tid
-    }
-    if sid, ok := checkpoint.UserContext["original_span_id"].(string); ok {
-        originalSpanID = sid
-    }
+checkpoint, err := checkpointStore.LoadCheckpoint(ctx, checkpointID)
+if err != nil {
+    return err
 }
 
-// Create linked span (NOT a child span)
-ctx, endLinkedSpan := telemetry.StartLinkedSpan(
-    ctx,
-    "hitl.resume",
-    originalTraceID,
-    originalSpanID,
-    map[string]string{
-        "checkpoint_id":       checkpointID,
-        "request_id":          checkpoint.RequestID,
-        "original_request_id": originalRequestID,
-        "link.type":           "hitl_resume",
-    },
+resumeCtx, endResumeSpan, err :=
+    orchestration.BuildResumeContext(ctx, checkpoint)
+if err != nil {
+    return err
+}
+defer endResumeSpan()
+
+_, err = orchestrator.ProcessRequest(
+    resumeCtx,
+    checkpoint.OriginalRequest,
+    nil,
 )
-defer endLinkedSpan()
+return err
 ```
 
-**Step 3: Propagate Original Request ID**
+`BuildResumeContext`:
 
-Use W3C Baggage to propagate the original request ID through all downstream spans:
+1. validates that the checkpoint is resumable;
+2. resolves `original_request_id`, falling back from
+   `checkpoint.OriginalRequestID` to `checkpoint.RequestID`;
+3. scrubs inherited conversation identity and restores only a valid
+   checkpoint `conversation_id`;
+4. places that conversation ID into exact, metric-ineligible W3C baggage
+   before the resume span starts;
+5. creates the linked `hitl.resume` span using the stored original trace/span;
+6. sets `checkpoint_id`, `interrupt_point`, `request_id`,
+   `original_request_id`, `link.type=hitl_resume`, and the validated
+   `conversation_id` on that span;
+7. propagates `original_request_id` and restores resume mode, plan, completed
+   steps, pre-resolved parameters, request mode, and sanitized metadata.
 
-```go
-// Propagate original_request_id through all downstream operations
-ctx = telemetry.WithBaggage(ctx, "original_request_id", originalRequestID)
-```
+An invalid or capacity-rejected checkpoint conversation ID is omitted and
+increments the bounded rejection counter. It does not fail the resume or mark
+the span as failed.
 
-This ensures that every span created during the resumed execution has access to `original_request_id`, making correlation searches possible.
-
-### Frontend Integration for Trace Correlation
-
-The frontend should send the original request ID on resume calls:
-
-```javascript
-// examples/chat-ui/hitl.html
-// Store original request_id from first checkpoint
-if (data.request_id && !originalRequestId) {
-    originalRequestId = data.request_id;
-}
-
-// Send on all resume requests
-const headers = {
-    'Content-Type': 'application/json',
-    'Accept': 'text/event-stream'
-};
-if (originalRequestId) {
-    headers['X-Truvag3-Original-Request-ID'] = originalRequestId;
-}
-
-fetch(`${backendUrl}/hitl/resume/${checkpointId}`, {
-    method: 'POST',
-    headers: headers
-});
-```
+If an application accepts a trusted
+`X-TruvaG3-Original-Request-ID` override, apply it to
+`checkpoint.OriginalRequestID` before calling `BuildResumeContext`. The helper
+still owns link and baggage construction.
 
 ### Understanding Trace Links vs Parent-Child
 
@@ -2049,6 +2138,7 @@ Jaeger View:
 │ Tags:                                                           │
 │   checkpoint_id: cp-abc123                                      │
 │   original_request_id: req-xyz789                               │
+│   conversation_id: chat-456                                     │
 │   link.type: hitl_resume                                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -2067,7 +2157,13 @@ Service: agent-with-human-approval
 Tags: checkpoint_id=cp-abc123
 ```
 
-**Method 3: Follow Links from Original Trace**
+**Method 3: Search the Whole Conversation**
+```
+Service: agent-with-human-approval
+Tags: conversation_id=chat-456
+```
+
+**Method 4: Follow Links from Original Trace**
 1. Find the original trace that created the checkpoint
 2. Look for spans with `hitl_checkpoint_created` events
 3. Note the `checkpoint_id`
@@ -2082,6 +2178,8 @@ Tags: checkpoint_id=cp-abc123
 
 TRACE A: Original Request (trace_id: aaa111)
 ├── chat.process_request (span_id: bbb222)
+│   conversation_id: chat-456
+│   request_id: req-xyz789
 │   ├── orchestrator.process_request
 │   │   ├── orchestrator.generate_plan
 │   │   └── [HITL checkpoint created]
@@ -2096,8 +2194,10 @@ TRACE B: Resume Request (trace_id: ccc333)
 │   │   References: FOLLOWS_FROM trace_id=aaa111, span_id=bbb222
 │   │   Tags: original_request_id=req-xyz789
 │   │         checkpoint_id=cp-abc123
+│   │         conversation_id=chat-456
 │   │         link.type=hitl_resume
 │   │   Baggage: original_request_id=req-xyz789
+│   │            conversation_id=chat-456 (metric-ineligible)
 │   │
 │   ├── orchestrator.process_request  ← Baggage propagated
 │   │   ├── HTTP POST → weather-tool  ← Baggage propagated
@@ -2109,36 +2209,34 @@ In Jaeger:
 - Find Trace A by request_id or time
 - See "hitl_checkpoint_created" event with checkpoint_id
 - Search for Trace B using checkpoint_id or original_request_id
+- Search all turns and related executions using conversation_id
 - Click "References" in Trace B to jump to Trace A
 ```
 
 ### Key Functions for HITL Tracing
 
-| Function | Purpose | Location |
-|----------|---------|----------|
-| `telemetry.StartLinkedSpan` | Create span with trace link to another trace | `telemetry/async_span.go:84` |
-| `telemetry.WithBaggage` | Propagate key-value through all downstream spans | `telemetry/context.go:76` |
-| `telemetry.GetTraceContext` | Extract current trace/span IDs for storage | `telemetry/trace_context.go:78` |
+| Function | Purpose |
+|----------|---------|
+| `orchestration.BuildResumeContext` | Validate the checkpoint, restore correlation/resume state, and create the linked resume span |
+| `telemetry.StartLinkedSpan` | Low-level linked-span primitive used by the framework helper |
+| `telemetry.GetTraceContext` | Capture the active trace/span IDs when creating a checkpoint |
 
 ### Best Practices for HITL Tracing
 
-1. **Always store trace context in checkpoints** - The controller does this automatically via `userContext`
+1. **Use the controller-created checkpoint** — It captures typed trace and
+   request-lineage fields automatically.
 
-2. **Use linked spans, not child spans** - Resume operations are semantically "follows from", not "child of"
+2. **Always call `BuildResumeContext`** — Call its cleanup function and use the
+   returned context for resumed processing.
 
-3. **Propagate original_request_id via baggage** - This enables searching by the user-visible request ID
+3. **Do not duplicate link or baggage setup** — The framework helper owns both.
 
-4. **Include checkpoint_id in all HITL spans** - Essential for correlating approval commands with execution
+4. **Choose the correct search key** — Use `checkpoint_id` or
+   `original_request_id` for one resume family; use `conversation_id` across
+   top-level turns.
 
-5. **Log cross-trace correlation in span events** - Add events when creating links for debugging:
-   ```go
-   import "go.opentelemetry.io/otel/attribute"
-
-   telemetry.AddSpanEvent(ctx, "hitl.trace_link_created",
-       attribute.String("original_trace_id", originalTraceID),
-       attribute.String("checkpoint_id", checkpointID),
-   )
-   ```
+5. **Treat missing trace context as graceful degradation** — The helper creates
+   an unlinked root span when the stored original trace/span is absent.
 
 ---
 
@@ -2267,7 +2365,9 @@ If you don't see `ai.generate`, provider execution, or `ai.http_attempt` spans:
 1. **Check initialization order**: Telemetry MUST be initialized before creating the AI client
 2. **Verify telemetry is enabled**: Check your logs for "Telemetry initialized successfully"
 3. **Confirm AI client has telemetry**: Ensure you pass `ai.WithTelemetry(telemetry.GetTelemetryProvider())`
-4. **Check sampling rate**: In production profile (0.1% sampling), most traces won't be captured
+4. **Check exporter and collector health**: All built-in profiles currently
+   use `sdktrace.AlwaysSample()`, so a missing span is not explained by profile
+   sampling
 
 ### Framework-Driven Logger Propagation
 
@@ -2317,11 +2417,13 @@ See these examples for production-ready AI telemetry patterns:
 Distributed tracing transforms debugging from guesswork into science. Here's what you've learned:
 
 1. **The Problem:** Without tracing, logs from different services have no common identifier
-2. **The Solution:** Trace IDs propagate through HTTP headers (W3C TraceContext)
+2. **The Solution:** Trace IDs propagate through HTTP headers (W3C Trace Context)
 3. **Server-Side:** `TracingMiddleware` extracts/creates traces for incoming requests
-4. **Client-Side:** `TracedHTTPClient` propagates traces to downstream services
+4. **Client-Side:** `TracedHTTPClient` propagates W3C Trace Context and Baggage to downstream services
 5. **Log Correlation:** Extract trace IDs from context to include in your logs
-6. **Infrastructure:** OTEL Collector + Jaeger + Grafana for collection and visualization
+6. **Conversation Correlation:** Use `conversation_id` across turns and `original_request_id` only for a resume/delegation family
+7. **HITL Ownership:** Resume through `BuildResumeContext`; the framework creates the trace link and restores validated correlation
+8. **Infrastructure:** OTEL Collector + Jaeger + Grafana for collection and visualization
 
 **Remember:** Tracing is like having GPS for your requests. You always know where they are, where they've been, and why they're stuck in traffic!
 
