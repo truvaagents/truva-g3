@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 func newRedisExecutionConversationTestStore(
-	t *testing.T,
+	t testing.TB,
 	config ExecutionStoreConfig,
 ) (*miniredis.Miniredis, *RedisExecutionDebugStore) {
 	t.Helper()
@@ -37,6 +38,8 @@ func newRedisExecutionConversationTestStore(
 		indexScanLimit: config.ConversationIndexScanLimit,
 	}
 }
+
+var benchmarkConversationSummariesSink []ExecutionSummary
 
 func executionWithConversation(
 	requestID string,
@@ -1174,6 +1177,262 @@ func TestDirectConversationIndexFailureIsNonFatalNilSafeAndSanitized(t *testing.
 	if err := store.Store(context.Background(), execution); err != nil {
 		t.Fatalf("nil logger made optional index failure fatal: %v", err)
 	}
+}
+
+type benchmarkCountingStorageProvider struct {
+	*mockStorageProvider
+	commandCount  uint64
+	preserveStale bool
+}
+
+func (p *benchmarkCountingStorageProvider) Get(
+	ctx context.Context,
+	key string,
+) (string, error) {
+	p.commandCount++
+	return p.mockStorageProvider.Get(ctx, key)
+}
+
+func (p *benchmarkCountingStorageProvider) ListByScoreDesc(
+	ctx context.Context,
+	key string,
+	min string,
+	max string,
+	offset int64,
+	count int64,
+) ([]string, error) {
+	p.commandCount++
+	return p.mockStorageProvider.ListByScoreDesc(
+		ctx,
+		key,
+		min,
+		max,
+		offset,
+		count,
+	)
+}
+
+func (p *benchmarkCountingStorageProvider) RemoveFromIndex(
+	ctx context.Context,
+	key string,
+	members ...string,
+) error {
+	p.commandCount++
+	if p.preserveStale {
+		return nil
+	}
+	return p.mockStorageProvider.RemoveFromIndex(ctx, key, members...)
+}
+
+type benchmarkRedisCommandHook struct {
+	commandCount  atomic.Uint64
+	preserveStale bool
+}
+
+func (h *benchmarkRedisCommandHook) BeforeProcess(
+	ctx context.Context,
+	cmd redis.Cmder,
+) (context.Context, error) {
+	h.commandCount.Add(1)
+	h.redirectStaleCleanup(cmd)
+	return ctx, nil
+}
+
+func (*benchmarkRedisCommandHook) AfterProcess(context.Context, redis.Cmder) error {
+	return nil
+}
+
+func (h *benchmarkRedisCommandHook) BeforeProcessPipeline(
+	ctx context.Context,
+	cmds []redis.Cmder,
+) (context.Context, error) {
+	h.commandCount.Add(uint64(len(cmds)))
+	for _, cmd := range cmds {
+		h.redirectStaleCleanup(cmd)
+	}
+	return ctx, nil
+}
+
+func (*benchmarkRedisCommandHook) AfterProcessPipeline(
+	context.Context,
+	[]redis.Cmder,
+) error {
+	return nil
+}
+
+func (h *benchmarkRedisCommandHook) redirectStaleCleanup(cmd redis.Cmder) {
+	if !h.preserveStale || cmd.Name() != "zrem" {
+		return
+	}
+	args := cmd.Args()
+	if len(args) > 1 {
+		args[1] = fmt.Sprint(args[1]) + ":benchmark-noop"
+	}
+}
+
+func BenchmarkConversationExecutionLookup(b *testing.B) {
+	b.Run("provider/query_limit", benchmarkProviderConversationQueryLimit)
+	b.Run("provider/stale_scan_ceiling", benchmarkProviderConversationStaleScanCeiling)
+	b.Run("direct_redis/query_limit", benchmarkDirectConversationQueryLimit)
+	b.Run("direct_redis/stale_scan_ceiling", benchmarkDirectConversationStaleScanCeiling)
+}
+
+func benchmarkProviderConversationQueryLimit(b *testing.B) {
+	config := DefaultExecutionStoreConfig()
+	provider := &benchmarkCountingStorageProvider{
+		mockStorageProvider: newMockStorageProvider(),
+	}
+	store := NewExecutionStoreWithProvider(provider, config, nil)
+	lister := store.(ConversationExecutionLister)
+	conversationID := "conversation-provider-query-benchmark"
+	base := time.Unix(1_700_000_000, 0)
+	for i := 0; i < config.ConversationQueryLimit; i++ {
+		if err := store.Store(
+			context.Background(),
+			executionWithConversation(
+				fmt.Sprintf("provider-live-%04d", i),
+				conversationID,
+				base.Add(time.Duration(i)*time.Second),
+			),
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+	provider.commandCount = 0
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(config.ConversationQueryLimit), "records/op")
+	b.ResetTimer()
+	var got []ExecutionSummary
+	for i := 0; i < b.N; i++ {
+		var err error
+		got, err = lister.ListByConversationID(
+			context.Background(),
+			conversationID,
+			config.ConversationQueryLimit,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkConversationSummariesSink = got
+	b.ReportMetric(float64(provider.commandCount)/float64(b.N), "provider_cmds/op")
+}
+
+func benchmarkProviderConversationStaleScanCeiling(b *testing.B) {
+	config := DefaultExecutionStoreConfig()
+	provider := &benchmarkCountingStorageProvider{
+		mockStorageProvider: newMockStorageProvider(),
+		preserveStale:       true,
+	}
+	store := NewExecutionStoreWithProvider(provider, config, nil)
+	lister := store.(ConversationExecutionLister)
+	conversationID := "conversation-provider-stale-benchmark"
+	indexKey := executionConversationIndexKey(config.KeyPrefix, conversationID)
+	for i := 0; i < config.ConversationIndexScanLimit; i++ {
+		if err := provider.AddToIndex(
+			context.Background(),
+			indexKey,
+			float64(i),
+			fmt.Sprintf("provider-stale-%04d", i),
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(config.ConversationIndexScanLimit), "records_scanned/op")
+	b.ResetTimer()
+	var got []ExecutionSummary
+	for i := 0; i < b.N; i++ {
+		var err error
+		got, err = lister.ListByConversationID(
+			context.Background(),
+			conversationID,
+			config.ConversationQueryLimit,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkConversationSummariesSink = got
+	b.ReportMetric(float64(provider.commandCount)/float64(b.N), "provider_cmds/op")
+}
+
+func benchmarkDirectConversationQueryLimit(b *testing.B) {
+	config := DefaultExecutionStoreConfig()
+	_, store := newRedisExecutionConversationTestStore(b, config)
+	conversationID := "conversation-direct-query-benchmark"
+	base := time.Unix(1_700_000_000, 0)
+	for i := 0; i < config.ConversationQueryLimit; i++ {
+		if err := store.Store(
+			context.Background(),
+			executionWithConversation(
+				fmt.Sprintf("direct-live-%04d", i),
+				conversationID,
+				base.Add(time.Duration(i)*time.Second),
+			),
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+	hook := &benchmarkRedisCommandHook{}
+	store.client.AddHook(hook)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(config.ConversationQueryLimit), "records/op")
+	b.ResetTimer()
+	var got []ExecutionSummary
+	for i := 0; i < b.N; i++ {
+		var err error
+		got, err = store.ListByConversationID(
+			context.Background(),
+			conversationID,
+			config.ConversationQueryLimit,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkConversationSummariesSink = got
+	b.ReportMetric(float64(hook.commandCount.Load())/float64(b.N), "redis_cmds/op")
+}
+
+func benchmarkDirectConversationStaleScanCeiling(b *testing.B) {
+	config := DefaultExecutionStoreConfig()
+	_, store := newRedisExecutionConversationTestStore(b, config)
+	conversationID := "conversation-direct-stale-benchmark"
+	indexKey := store.conversationIndexKey(conversationID)
+	members := make([]*redis.Z, 0, config.ConversationIndexScanLimit)
+	for i := 0; i < config.ConversationIndexScanLimit; i++ {
+		members = append(members, &redis.Z{
+			Score:  float64(i),
+			Member: fmt.Sprintf("direct-stale-%04d", i),
+		})
+	}
+	if err := store.client.ZAdd(context.Background(), indexKey, members...).Err(); err != nil {
+		b.Fatal(err)
+	}
+	hook := &benchmarkRedisCommandHook{preserveStale: true}
+	store.client.AddHook(hook)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(config.ConversationIndexScanLimit), "records_scanned/op")
+	b.ResetTimer()
+	var got []ExecutionSummary
+	for i := 0; i < b.N; i++ {
+		var err error
+		got, err = store.ListByConversationID(
+			context.Background(),
+			conversationID,
+			config.ConversationQueryLimit,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkConversationSummariesSink = got
+	b.ReportMetric(float64(hook.commandCount.Load())/float64(b.N), "redis_cmds/op")
 }
 
 type conversationTTLFailureHook struct {

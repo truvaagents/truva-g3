@@ -14,6 +14,12 @@ import (
 
 type baggageContextTestKey struct{}
 
+var (
+	benchmarkBaggageContextSink context.Context
+	benchmarkBaggageCarrierSink propagation.MapCarrier
+	benchmarkBaggageIntSink     int
+)
+
 func TestBaggageExactError_ErrorIsBounded(t *testing.T) {
 	var nilError *BaggageExactError
 	if got := nilError.Error(); got != "exact baggage rejected" {
@@ -459,6 +465,219 @@ func TestBaggageContextHelpers_NilAndEmptyInputs(t *testing.T) {
 	if got := GetBaggage(CopyBaggage(nil, src))["key"]; got != "value" {
 		t.Fatalf("nil destination copy value = %q", got)
 	}
+}
+
+func BenchmarkWithBaggageExact(b *testing.B) {
+	base := WithBaggage(
+		context.Background(),
+		"agent_name", "travel-chat-agent",
+		"phase_number", "2",
+		"ai.purpose", "conversation",
+	)
+
+	b.Run("generic", func(b *testing.B) {
+		b.ReportAllocs()
+		var got context.Context
+		for i := 0; i < b.N; i++ {
+			got = WithBaggage(base, "conversation_id", "conversation-benchmark")
+		}
+		benchmarkBaggageContextSink = got
+	})
+
+	b.Run("exact_default_metric_eligible", func(b *testing.B) {
+		b.ReportAllocs()
+		var got context.Context
+		for i := 0; i < b.N; i++ {
+			var err error
+			got, err = WithBaggageExact(base, "conversation_id", "conversation-benchmark")
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchmarkBaggageContextSink = got
+	})
+
+	b.Run("exact_metric_ineligible", func(b *testing.B) {
+		b.ReportAllocs()
+		var got context.Context
+		for i := 0; i < b.N; i++ {
+			var err error
+			got, err = WithBaggageExact(
+				base,
+				"conversation_id",
+				"conversation-benchmark",
+				WithMetricLabelEligibility(false),
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchmarkBaggageContextSink = got
+	})
+}
+
+func BenchmarkAppendBaggageMetricEligibility(b *testing.B) {
+	base := WithBaggage(
+		context.Background(),
+		"agent_name", "travel-chat-agent",
+		"phase_number", "2",
+		"ai.purpose", "conversation",
+	)
+	generic := WithBaggage(base, "conversation_id", "conversation-benchmark")
+	exactEligible, err := WithBaggageExact(
+		base,
+		"conversation_id",
+		"conversation-benchmark",
+		WithMetricLabelEligibility(true),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exactIneligible, err := WithBaggageExact(
+		base,
+		"conversation_id",
+		"conversation-benchmark",
+		WithMetricLabelEligibility(false),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "generic", ctx: generic},
+		{name: "exact_metric_eligible", ctx: exactEligible},
+		{name: "exact_metric_ineligible", ctx: exactIneligible},
+	}
+	for _, test := range cases {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			count := 0
+			for i := 0; i < b.N; i++ {
+				labels := appendBaggageToLabels(test.ctx, []string{"explicit", "label"})
+				count = len(labels)
+				returnLabelSlice(labels)
+			}
+			benchmarkBaggageIntSink = count
+		})
+	}
+}
+
+func BenchmarkCopyBaggage(b *testing.B) {
+	src := WithBaggage(
+		context.Background(),
+		"agent_name", "travel-chat-agent",
+		"phase_number", "2",
+		"ai.purpose", "conversation",
+	)
+	var err error
+	src, err = WithBaggageExact(
+		src,
+		"conversation_id",
+		"conversation-benchmark",
+		WithMetricLabelEligibility(false),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := context.WithValue(context.Background(), baggageContextTestKey{}, "preserved")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var got context.Context
+	for i := 0; i < b.N; i++ {
+		got = CopyBaggage(dst, src)
+	}
+	benchmarkBaggageContextSink = got
+}
+
+func BenchmarkW3CBaggagePropagation(b *testing.B) {
+	representative := WithBaggage(
+		context.Background(),
+		"agent_name", "travel-chat-agent",
+		"phase_number", "2",
+		"ai.purpose", "conversation",
+	)
+	var err error
+	representative, err = WithBaggageExact(
+		representative,
+		"conversation_id",
+		"550e8400-e29b-41d4-a716-446655440000",
+		WithMetricLabelEligibility(false),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	contexts := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "representative", ctx: representative},
+		{name: "maximum_allowed", ctx: baggageContextAtSerializedLimit(b)},
+	}
+	propagator := propagation.Baggage{}
+
+	for _, test := range contexts {
+		b.Run(test.name+"/inject", func(b *testing.B) {
+			b.ReportAllocs()
+			var carrier propagation.MapCarrier
+			for i := 0; i < b.N; i++ {
+				carrier = propagation.MapCarrier{}
+				propagator.Inject(test.ctx, carrier)
+			}
+			benchmarkBaggageCarrierSink = carrier
+		})
+
+		carrier := propagation.MapCarrier{}
+		propagator.Inject(test.ctx, carrier)
+		b.Run(test.name+"/extract", func(b *testing.B) {
+			b.ReportAllocs()
+			var got context.Context
+			for i := 0; i < b.N; i++ {
+				got = propagator.Extract(context.Background(), carrier)
+			}
+			benchmarkBaggageContextSink = got
+		})
+	}
+}
+
+func baggageContextAtSerializedLimit(tb testing.TB) context.Context {
+	tb.Helper()
+
+	ctx := context.Background()
+	for i := 0; i < MaxBaggageItems; i++ {
+		bag := baggage.FromContext(ctx)
+		currentSize := serializedBaggageSize(bag)
+		key := fmt.Sprintf("bench_%02d", i)
+		memberOverhead := len(key) + 1
+		if currentSize > 0 {
+			memberOverhead++
+		}
+		valueLength := MaxBaggageTotalSize - currentSize - memberOverhead
+		if valueLength <= 0 {
+			break
+		}
+		if valueLength > MaxBaggageValueLength {
+			valueLength = MaxBaggageValueLength
+		}
+
+		var err error
+		ctx, err = WithBaggageExact(ctx, key, strings.Repeat("x", valueLength))
+		if err != nil {
+			tb.Fatalf("build maximum baggage member %d: %v", i, err)
+		}
+		if serializedBaggageSize(baggage.FromContext(ctx)) == MaxBaggageTotalSize {
+			break
+		}
+	}
+
+	if got := serializedBaggageSize(baggage.FromContext(ctx)); got != MaxBaggageTotalSize {
+		tb.Fatalf("maximum baggage size = %d, want %d", got, MaxBaggageTotalSize)
+	}
+	return ctx
 }
 
 func labelsContainKey(labels []string, key string) bool {
