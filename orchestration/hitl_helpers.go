@@ -6,6 +6,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
@@ -177,18 +178,32 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 		originalRequestID = checkpoint.RequestID
 	}
 
+	spanBaseCtx, conversationID, resumeMetadata := prepareResumeConversationContext(
+		ctx,
+		checkpoint.UserContext,
+		emitResumeConversationIDRejection,
+	)
+
+	linkedSpanAttributes := map[string]string{
+		"checkpoint_id":       checkpoint.CheckpointID,
+		"interrupt_point":     string(checkpoint.InterruptPoint),
+		"request_id":          checkpoint.RequestID,
+		"original_request_id": originalRequestID,
+		"link.type":           "hitl_resume",
+	}
+	if conversationID != "" {
+		linkedSpanAttributes[MetadataConversationID] = conversationID
+	}
+
 	// StartLinkedSpan creates a new span linked (not child) to the original trace.
 	// Degrades gracefully when traceID/spanID are empty — creates an unlinked root span.
 	// SpanKindInternal is correct here; queue workers use SpanKindConsumer upstream (RC6).
 	resumeCtx, endSpan := telemetry.StartLinkedSpan(
-		ctx, "hitl.resume", traceID, spanID,
-		map[string]string{
-			"checkpoint_id":       checkpoint.CheckpointID,
-			"interrupt_point":     string(checkpoint.InterruptPoint),
-			"request_id":          checkpoint.RequestID,
-			"original_request_id": originalRequestID,
-			"link.type":           "hitl_resume",
-		},
+		spanBaseCtx,
+		"hitl.resume",
+		traceID,
+		spanID,
+		linkedSpanAttributes,
 	)
 	// Fire a span event so the trace link is visible in the Jaeger event timeline.
 	telemetry.AddSpanEvent(resumeCtx, "hitl.trace_link_created",
@@ -226,10 +241,83 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 		resumeCtx = WithRequestMode(resumeCtx, checkpoint.RequestMode)
 	}
 
-	// Preserve metadata if set
-	if len(checkpoint.UserContext) > 0 {
-		resumeCtx = WithMetadata(resumeCtx, checkpoint.UserContext)
+	// Preserve the sanitized checkpoint metadata. The inherited metadata
+	// context was shadowed before the span started so a rejected checkpoint
+	// identity cannot reappear in chained checkpoints.
+	if len(resumeMetadata) > 0 {
+		resumeCtx = WithMetadata(resumeCtx, resumeMetadata)
 	}
 
 	return resumeCtx, endSpan, nil
+}
+
+type conversationIDRejectionEmitter func(source, reason string)
+
+func prepareResumeConversationContext(
+	ctx context.Context,
+	checkpointMetadata map[string]interface{},
+	emitRejection conversationIDRejectionEmitter,
+) (context.Context, string, map[string]interface{}) {
+	resumeMetadata := cloneMetadata(checkpointMetadata)
+	if len(checkpointMetadata) == 0 {
+		// Preserve the prior behavior for checkpoints without application
+		// metadata: unrelated metadata already on the resume context survives.
+		resumeMetadata = cloneMetadata(GetMetadata(ctx))
+	}
+	delete(resumeMetadata, MetadataConversationID)
+
+	spanBaseCtx := core.WithoutConversationID(ctx)
+	spanBaseCtx = telemetry.WithoutBaggageMember(
+		spanBaseCtx,
+		MetadataConversationID,
+	)
+	// Shadow inherited application metadata. Only the checkpoint copy below
+	// is authoritative for a resumed execution.
+	spanBaseCtx = WithMetadata(spanBaseCtx, map[string]interface{}{})
+
+	candidate := conversationIDCandidateFromMetadata(checkpointMetadata)
+	if !candidate.Present {
+		return spanBaseCtx, "", resumeMetadata
+	}
+	if candidate.Reason != core.ConversationIDValidationNone {
+		if emitRejection != nil {
+			emitRejection(conversationIDSourceCheckpointMetadata, string(candidate.Reason))
+		}
+		return spanBaseCtx, "", resumeMetadata
+	}
+
+	baggageCtx, err := telemetry.WithBaggageExact(
+		spanBaseCtx,
+		MetadataConversationID,
+		candidate.Value,
+		telemetry.WithMetricLabelEligibility(false),
+	)
+	if err != nil {
+		if emitRejection != nil {
+			emitRejection(
+				conversationIDSourceBaggageExact,
+				conversationIDBaggageRejectionReason(err),
+			)
+		}
+		return spanBaseCtx, "", resumeMetadata
+	}
+
+	if resumeMetadata == nil {
+		resumeMetadata = make(map[string]interface{})
+	}
+	resumeMetadata[MetadataConversationID] = candidate.Value
+	return core.WithConversationID(baggageCtx, candidate.Value),
+		candidate.Value,
+		resumeMetadata
+}
+
+const conversationIDSourceCheckpointMetadata = "checkpoint_metadata"
+
+func emitResumeConversationIDRejection(source, reason string) {
+	telemetry.Counter(
+		conversationIDRejectionMetric,
+		"source", source,
+		"reason", reason,
+		"module", telemetry.ModuleOrchestration,
+	)
 }

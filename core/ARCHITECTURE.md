@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.0  
+**Version**: 1.1
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -19,6 +19,7 @@ The **core module** is the foundation of the TruvaG3 framework. It defines all f
 4. **Configuration Intelligence**: Smart configuration with environment awareness and auto-injection
 5. **Service Discovery Abstraction**: Platform-agnostic discovery with Redis and mock implementations
 6. **Deployment Abstractions**: Kubernetes-aware address resolution and health checks
+7. **Opaque Correlation Carriers**: Validate and transport request-scoped identifiers without owning application session semantics
 
 ---
 
@@ -182,6 +183,43 @@ func WithDiscovery(enabled bool, provider string) Option {
 2. Standard environment variables (`REDIS_URL`, `OPENAI_API_KEY`)
 3. TruvaG3-specific variables (`TRUVAG3_REDIS_URL`, etc.)
 4. Sensible defaults (lowest)
+
+---
+
+## Conversation Correlation Context Contract
+
+Core owns the transport-safe representation of a multi-turn conversation
+identifier; it does not decide what an application session means. An
+application may deliberately use the same opaque value for `session_id` and
+`conversation_id`, but that mapping belongs to the application. Core never
+loads sessions, groups executions, or derives conversation identity from
+history, timestamps, users, or agents.
+
+The public contract in `request_context.go` is:
+
+- `ValidateConversationID` accepts an opaque, non-empty identifier of at most
+  `MaxConversationIDLength` (512 bytes). Its allowed visible-ASCII ranges are a
+  protocol invariant chosen so the value can be propagated exactly as W3C
+  baggage. It returns a bounded `ConversationIDValidationReason` and never
+  includes the rejected value.
+- `WithConversationID` records a programmatic candidate.
+  `ExtractRequestContext` records a separate
+  `X-TruvaG3-Conversation-ID` header candidate. Keeping the two slots separate
+  makes effective precedence independent of call order.
+- A present explicit-header candidate has precedence over a programmatic
+  candidate, including when the header is invalid. Therefore an invalid
+  higher-precedence value cannot reveal or inherit a lower-precedence value.
+- `GetConversationIDCandidate` preserves source, presence, and bounded
+  rejection reason for the orchestration ingress resolver.
+  `GetConversationID` exposes only the effective validated value.
+- Invalid candidates are represented without retaining their raw value.
+  `WithoutConversationID` shadows both candidate slots and the effective value
+  while preserving every unrelated context value. This is the supported
+  defense against identity leakage when a context is reused.
+
+This is intentionally a small value/helper API rather than a new interface or
+session abstraction. It keeps core dependency-free and leaves resolution,
+storage, telemetry, and UI behavior to the modules that own those concerns.
 
 ---
 
@@ -879,6 +917,7 @@ func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
 - Kubernetes-aware address resolution
 - CORS support for web integration
 - Framework dependency injection (fixed September 2025)
+- Opaque, bounded, call-order-independent conversation correlation context
 
 ### ⚠️ **Needs Review/Refinement**
 - Performance optimization for high-throughput scenarios
@@ -895,5 +934,12 @@ func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
 ---
 
 **Core Module Philosophy**: *"Provide everything other modules need, depend on nothing they provide. Enable architectural correctness through type system constraints, not documentation."*
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1 | 2026-07-27 | Established the pre-release opaque conversation-correlation context and validation contract |
+| 1.0 | 2025-09-28 | Initial architecture documentation |
 
 **Remember**: Every change to core affects all other modules. Prioritize backward compatibility, interface stability, and architectural consistency above implementation convenience.

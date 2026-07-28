@@ -1394,6 +1394,33 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Retention period for failed execution records (longer for troubleshooting) | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | `truvag3:execution:debug` | **Implemented** | Key prefix for all storage keys. Allows multi-tenant deployments or custom namespacing. | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_REDIS_DB` | `8` | **Implemented** | Redis database number (uses `core.RedisDBExecutionDebug`) | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+
+The two conversation limits accept only positive integers. Missing, malformed,
+zero, or negative values retain the safe defaults. Environment values populate
+`DefaultOrchestratorConfig`. A positive programmatic value applied after
+default construction, or passed directly in `ExecutionStoreConfig`, is
+authoritative. The per-call `limit` passed to `ListByConversationID` is clamped
+to `ConversationQueryLimit`; stale-index work is independently bounded by
+`ConversationIndexScanLimit`.
+
+### Correlation and baggage protocol limits
+
+These limits are protocol constants rather than environment settings:
+
+| Value | Limit | Contract |
+|---|---:|---|
+| `conversation_id` | 1–512 bytes | Visible-ASCII W3C-safe subset validated by `core.ValidateConversationID` |
+| W3C baggage members | 64 | `telemetry.MaxBaggageItems` |
+| Baggage key | 128 bytes | `telemetry.MaxBaggageKeyLength` |
+| Baggage value | 512 bytes | `telemetry.MaxBaggageValueLength` |
+| Complete serialized W3C baggage value | 8192 bytes | Includes separators, encoding, and member properties |
+
+`conversation_id` is framework correlation metadata, not an application
+`session_id`. A chat application may deliberately use the same opaque value
+for both, but the framework does not infer that mapping. Conversation identity
+is established on the first turn even when `conversation_turns` is empty.
 
 ### Features (Same as LLM Debug Store)
 
@@ -1420,11 +1447,17 @@ The execution debug store uses configurable key patterns based on `TRUVAG3_EXECU
 | `{prefix}{request_id}` | Main execution record (plan + result) |
 | `{prefix}index` | Sorted index for listing recent executions |
 | `{prefix}trace:{trace_id}` | Trace ID → Request ID mapping |
+| `{prefix}conversation:{sha256(conversation_id)}` | Chronological execution membership for one conversation |
+
+The execution record's `metadata.conversation_id` is authoritative. The hashed
+conversation index is a bounded lookup accelerator and may be lazily cleaned
+when records expire; index maintenance never changes the execution record.
 
 With the default prefix `truvag3:execution:debug:`:
 - `truvag3:execution:debug:req-001` - Execution record
 - `truvag3:execution:debug:index` - Recent executions index
 - `truvag3:execution:debug:trace:abc123` - Trace mapping
+- `truvag3:execution:debug:conversation:<sha256>` - Conversation execution index
 
 ### Example: Enable Execution Debug Storage
 
@@ -1436,6 +1469,10 @@ export TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true
 # Or customize retention:
 export TRUVAG3_EXECUTION_DEBUG_TTL=48h
 export TRUVAG3_EXECUTION_DEBUG_ERROR_TTL=336h  # 14 days
+
+# Optional bounded conversation lookup limits
+export TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT=1000
+export TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT=5000
 ```
 
 ### Example: Multi-Tenant Deployment
@@ -1465,6 +1502,10 @@ env:
   # Custom key prefix for namespace isolation (optional)
   - name: TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX
     value: "myteam:execution:debug:"
+  - name: TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT
+    value: "1000"
+  - name: TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT
+    value: "5000"
 ```
 
 ### Viewing Execution Records

@@ -352,13 +352,8 @@ func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request) 
 	}
 	telemetry.AddSpanEvent(ctx, "hitl.checkpoint.loaded", loadedAttrs...)
 
-	// Extract session ID from checkpoint metadata
-	sessionID := ""
-	if checkpoint.UserContext != nil {
-		if sid, ok := checkpoint.UserContext["session_id"].(string); ok {
-			sessionID = sid
-		}
-	}
+	// This example maps its chat-session UUID to the canonical conversation ID.
+	sessionID := sessionIDFromCheckpoint(checkpoint.UserContext)
 	if sessionID == "" {
 		// Generate new session if not found
 		session := t.sessionStore.Create("", nil)
@@ -950,13 +945,8 @@ func (t *HITLChatAgent) handleResumeSyncJSON(w http.ResponseWriter, r *http.Requ
 	}
 	telemetry.AddSpanEvent(ctx, "hitl.checkpoint.loaded", loadedAttrs...)
 
-	// Extract session ID from checkpoint metadata
-	sessionID := ""
-	if checkpoint.UserContext != nil {
-		if sid, ok := checkpoint.UserContext["session_id"].(string); ok {
-			sessionID = sid
-		}
-	}
+	// This example maps its chat-session UUID to the canonical conversation ID.
+	sessionID := sessionIDFromCheckpoint(checkpoint.UserContext)
 	if sessionID == "" {
 		// Create new session if not found
 		session := t.sessionStore.Create("", nil)
@@ -1025,4 +1015,15 @@ func (t *HITLChatAgent) handleResumeSyncJSON(w http.ResponseWriter, r *http.Requ
 	response.OriginalRequestID = checkpoint.OriginalRequestID
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func sessionIDFromCheckpoint(metadata map[string]interface{}) string {
+	if conversationID, ok := metadata[orchestration.MetadataConversationID].(string); ok &&
+		core.ValidateConversationID(conversationID) == core.ConversationIDValidationNone {
+		return conversationID
+	}
+	if sessionID, ok := metadata["session_id"].(string); ok && sessionID != "" {
+		return sessionID
+	}
+	return ""
 }

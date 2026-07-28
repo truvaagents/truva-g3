@@ -2,9 +2,11 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/baggage"
 )
@@ -31,7 +33,63 @@ const (
 
 	// MaxBaggageTotalSize is the maximum total size (8KB) for all baggage
 	MaxBaggageTotalSize = 8192
+
+	metricLabelEligibilityProperty = "truvag3_metric_label"
+	metricLabelExcludedValue       = "false"
 )
+
+// BaggageExactErrorReason is a bounded classification for exact-baggage
+// validation and capacity failures. It never contains the rejected key or
+// value.
+type BaggageExactErrorReason string
+
+const (
+	BaggageExactInvalidUTF8  BaggageExactErrorReason = "invalid_utf8"
+	BaggageExactInvalidKey   BaggageExactErrorReason = "invalid_baggage_key"
+	BaggageExactKeyTooLong   BaggageExactErrorReason = "key_too_long"
+	BaggageExactValueTooLong BaggageExactErrorReason = "value_too_long"
+	BaggageExactItemLimit    BaggageExactErrorReason = "item_limit"
+	BaggageExactTotalSize    BaggageExactErrorReason = "total_size"
+)
+
+// BaggageExactError reports why WithBaggageExact rejected a member without
+// retaining or exposing the rejected data.
+type BaggageExactError struct {
+	Reason BaggageExactErrorReason
+}
+
+func (e *BaggageExactError) Error() string {
+	if e == nil {
+		return "exact baggage rejected"
+	}
+	return "exact baggage rejected: " + string(e.Reason)
+}
+
+// BaggageExactErrorReasonOf returns the bounded reason carried by an exact
+// baggage error.
+func BaggageExactErrorReasonOf(err error) (BaggageExactErrorReason, bool) {
+	var exactErr *BaggageExactError
+	if !errors.As(err, &exactErr) {
+		return "", false
+	}
+	return exactErr.Reason, true
+}
+
+type baggageMemberOptions struct {
+	metricLabelEligible *bool
+}
+
+// BaggageMemberOption configures generic baggage-member behavior.
+type BaggageMemberOption func(*baggageMemberOptions)
+
+// WithMetricLabelEligibility controls whether a baggage member may
+// automatically enrich context-aware metric labels. The decision is stored as
+// a W3C baggage-member property so it survives standard propagation.
+func WithMetricLabelEligibility(eligible bool) BaggageMemberOption {
+	return func(options *baggageMemberOptions) {
+		options.metricLabelEligible = &eligible
+	}
+}
 
 // Metrics for baggage usage (internal telemetry).
 // These help identify when limits are being hit in production.
@@ -86,18 +144,12 @@ func WithBaggage(ctx context.Context, labels ...string) context.Context {
 	currentSize := len(members)
 	if currentSize >= MaxBaggageItems {
 		baggageOverLimit.Add(1)
+		updateBaggageTotalSize(bag)
 		// Could log warning here, but keeping it silent as per original design
 		return ctx // Return unchanged context when at limit
 	}
 
-	// Track total size
-	totalSize := 0
-	for _, m := range members {
-		totalSize += len(m.Key()) + len(m.Value())
-	}
-
-	// Process new labels
-	var newMembers []baggage.Member
+	newBag := bag
 	for i := 0; i < len(labels)-1; i += 2 {
 		key := labels[i]
 		value := labels[i+1]
@@ -115,13 +167,6 @@ func WithBaggage(ctx context.Context, labels ...string) context.Context {
 			value = value[:MaxBaggageValueLength]
 		}
 
-		// Check total size
-		newItemSize := len(key) + len(value)
-		if totalSize+newItemSize > MaxBaggageTotalSize {
-			baggageItemsDropped.Add(1)
-			continue // Skip items that would exceed total size
-		}
-
 		// Create baggage member
 		member, err := baggage.NewMember(key, value)
 		if err != nil {
@@ -129,27 +174,170 @@ func WithBaggage(ctx context.Context, labels ...string) context.Context {
 			continue
 		}
 
-		newMembers = append(newMembers, member)
-		totalSize += newItemSize
-		baggageItemsAdded.Add(1)
-	}
-
-	// Create new baggage with all members
-	newBag := bag
-	for _, member := range newMembers {
-		var err error
-		newBag, err = newBag.SetMember(member)
+		replacing := newBag.Member(key).Key() != ""
+		if !replacing && newBag.Len() >= MaxBaggageItems {
+			baggageItemsDropped.Add(1)
+			baggageOverLimit.Add(1)
+			continue
+		}
+		candidateBag, err := newBag.SetMember(member)
 		if err != nil {
 			// Skip members that fail to set
 			continue
 		}
+		if serializedBaggageSize(candidateBag) > MaxBaggageTotalSize {
+			baggageItemsDropped.Add(1)
+			continue
+		}
+
+		newBag = candidateBag
+		baggageItemsAdded.Add(1)
 	}
 
-	// Safe conversion: totalSize is bounded by MaxBaggageTotalSize (8192)
-	if totalSize >= 0 {
-		baggageTotalSize.Store(uint64(totalSize))
-	}
+	updateBaggageTotalSize(newBag)
 	return baggage.ContextWithBaggage(ctx, newBag)
+}
+
+// WithBaggageExact adds or replaces one baggage member without truncation.
+// It validates the complete result against the framework's baggage limits and
+// returns the original context with a typed error on rejection.
+func WithBaggageExact(
+	ctx context.Context,
+	key string,
+	rawValue string,
+	options ...BaggageMemberOption,
+) (context.Context, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	bag := baggage.FromContext(ctx)
+	reject := func(reason BaggageExactErrorReason, overLimit bool) (context.Context, error) {
+		baggageItemsDropped.Add(1)
+		if overLimit {
+			baggageOverLimit.Add(1)
+		}
+		updateBaggageTotalSize(bag)
+		return ctx, &BaggageExactError{Reason: reason}
+	}
+
+	if !utf8.ValidString(key) || !utf8.ValidString(rawValue) {
+		return reject(BaggageExactInvalidUTF8, false)
+	}
+	if key == "" {
+		return reject(BaggageExactInvalidKey, false)
+	}
+	if len(key) > MaxBaggageKeyLength {
+		return reject(BaggageExactKeyTooLong, false)
+	}
+	if len(rawValue) > MaxBaggageValueLength {
+		return reject(BaggageExactValueTooLong, false)
+	}
+	if _, err := baggage.NewMember(key, ""); err != nil {
+		return reject(BaggageExactInvalidKey, false)
+	}
+
+	memberOptions := baggageMemberOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&memberOptions)
+		}
+	}
+
+	properties := make([]baggage.Property, 0, 1)
+	if memberOptions.metricLabelEligible != nil {
+		propertyValue := "true"
+		if !*memberOptions.metricLabelEligible {
+			propertyValue = metricLabelExcludedValue
+		}
+		property, err := baggage.NewKeyValueProperty(
+			metricLabelEligibilityProperty,
+			propertyValue,
+		)
+		if err != nil {
+			return reject(BaggageExactInvalidKey, false)
+		}
+		properties = append(properties, property)
+	}
+
+	member, err := baggage.NewMemberRaw(key, rawValue, properties...)
+	if err != nil {
+		return reject(BaggageExactInvalidKey, false)
+	}
+
+	replacing := bag.Member(key).Key() != ""
+	if !replacing && bag.Len() >= MaxBaggageItems {
+		return reject(BaggageExactItemLimit, true)
+	}
+
+	updatedBag, err := bag.SetMember(member)
+	if err != nil {
+		return reject(BaggageExactInvalidKey, false)
+	}
+	updatedSize := serializedBaggageSize(updatedBag)
+	if updatedSize > MaxBaggageTotalSize {
+		return reject(BaggageExactTotalSize, true)
+	}
+
+	if !replacing {
+		baggageItemsAdded.Add(1)
+	}
+	updateBaggageTotalSize(updatedBag)
+	return baggage.ContextWithBaggage(ctx, updatedBag), nil
+}
+
+// WithoutBaggageMember removes one member while preserving every other member
+// and its W3C properties.
+func WithoutBaggageMember(ctx context.Context, key string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if key == "" {
+		return ctx
+	}
+
+	bag := baggage.FromContext(ctx).DeleteMember(key)
+	updateBaggageTotalSize(bag)
+	return baggage.ContextWithBaggage(ctx, bag)
+}
+
+// CopyBaggage copies the complete OTel baggage object, including member
+// properties, from src to dst. It preserves destination cancellation and
+// deadlines and does not change baggage usage counters.
+func CopyBaggage(dst, src context.Context) context.Context {
+	if dst == nil {
+		dst = context.Background()
+	}
+	if src == nil {
+		return dst
+	}
+	bag := baggage.FromContext(src)
+	if bag.Len() == 0 {
+		return dst
+	}
+	return baggage.ContextWithBaggage(dst, bag)
+}
+
+func serializedBaggageSize(bag baggage.Baggage) int {
+	return len(bag.String())
+}
+
+func updateBaggageTotalSize(bag baggage.Baggage) {
+	size := serializedBaggageSize(bag)
+	if size >= 0 {
+		baggageTotalSize.Store(uint64(size))
+	}
+}
+
+func metricLabelEligible(member baggage.Member) bool {
+	for _, property := range member.Properties() {
+		if property.Key() != metricLabelEligibilityProperty {
+			continue
+		}
+		value, hasValue := property.Value()
+		return !hasValue || value != metricLabelExcludedValue
+	}
+	return true
 }
 
 // GetBaggage retrieves the current baggage from context as a map.
@@ -201,6 +389,9 @@ func appendBaggageToLabels(ctx context.Context, labels []string) []string {
 
 	// Add baggage (overrides explicit labels with same key)
 	for _, m := range members {
+		if !metricLabelEligible(m) {
+			continue
+		}
 		labelMap[m.Key()] = m.Value()
 	}
 

@@ -13,6 +13,9 @@ package orchestration
 import (
 	"context"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 // LLMDebugStore stores LLM interaction payloads for debugging.
@@ -74,8 +77,36 @@ type LLMDebugRecord struct {
 	// first writer wins. Empty for records written before this field was added.
 	OriginatingAgent string `json:"originating_agent,omitempty"`
 
-	// Metadata contains additional key-value pairs for investigation
+	// Metadata contains framework-owned correlation metadata plus optional
+	// application investigation metadata. MetadataConversationID is reserved
+	// for the immutable conversation identity captured by the first valid
+	// writer.
 	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// LLMDebugConversationID returns the record's multi-turn correlation ID.
+func LLMDebugConversationID(record *LLMDebugRecord) string {
+	if record == nil {
+		return ""
+	}
+	return record.Metadata[MetadataConversationID]
+}
+
+func llmDebugConversationIDFromContext(ctx context.Context) string {
+	coreCandidate := core.GetConversationIDCandidate(ctx)
+	if coreCandidate.Present {
+		if coreCandidate.RejectionReason != core.ConversationIDValidationNone ||
+			core.ValidateConversationID(coreCandidate.Value) != core.ConversationIDValidationNone {
+			return ""
+		}
+		return coreCandidate.Value
+	}
+
+	conversationID := telemetry.GetBaggage(ctx)[MetadataConversationID]
+	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
+		return ""
+	}
+	return conversationID
 }
 
 // Hook execution phases used in LLMInteraction.HookPhase.

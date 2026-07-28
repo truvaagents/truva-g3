@@ -6,23 +6,24 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 type stubConversationHistoryPreparer struct {
-	lastSessionKey string
-	lastTurns      []core.ConversationTurn
-	lastText       string
-	prepared       string
+	lastConversationID string
+	lastTurns          []core.ConversationTurn
+	lastText           string
+	prepared           string
 }
 
 func (s *stubConversationHistoryPreparer) PrepareFromText(ctx context.Context, sessionKey string, formatted string) (string, HistoryPreparationResult, error) {
-	s.lastSessionKey = sessionKey
+	s.lastConversationID = sessionKey
 	s.lastText = formatted
 	return s.prepared, HistoryPreparationResult{Path: "metadata_text"}, nil
 }
 
 func (s *stubConversationHistoryPreparer) PrepareFromTurns(ctx context.Context, sessionKey string, turns []core.ConversationTurn) (string, HistoryPreparationResult, error) {
-	s.lastSessionKey = sessionKey
+	s.lastConversationID = sessionKey
 	s.lastTurns = turns
 	return s.prepared, HistoryPreparationResult{Path: "metadata_turns"}, nil
 }
@@ -221,7 +222,7 @@ func TestPrepareKnownEnrichments_PreparesConversationTurns(t *testing.T) {
 		MetadataConversationTurns: []core.ConversationTurn{
 			{Role: "user", Content: "hello"},
 		},
-		MetadataConversationSessionKey: "session-123",
+		MetadataConversationID: "conversation-123",
 	}
 
 	prepareKnownEnrichments(context.Background(), metadata, enrichments, preparer)
@@ -229,11 +230,76 @@ func TestPrepareKnownEnrichments_PreparesConversationTurns(t *testing.T) {
 	if enrichments[core.EnrichmentConversationHistory] != "prepared history" {
 		t.Fatalf("expected prepared conversation history, got %v", enrichments[core.EnrichmentConversationHistory])
 	}
-	if preparer.lastSessionKey != "session-123" {
-		t.Fatalf("expected session key to be forwarded, got %q", preparer.lastSessionKey)
+	if preparer.lastConversationID != "conversation-123" {
+		t.Fatalf("expected conversation ID to be forwarded, got %q", preparer.lastConversationID)
 	}
 	if len(preparer.lastTurns) != 1 {
 		t.Fatalf("expected turns to be forwarded, got %d", len(preparer.lastTurns))
+	}
+}
+
+func TestPrepareKnownEnrichments_PreparesConversationTextWithCanonicalID(t *testing.T) {
+	preparer := &stubConversationHistoryPreparer{prepared: "prepared text"}
+	enrichments := map[string]interface{}{}
+	metadata := map[string]interface{}{
+		MetadataConversationID:             "conversation-text-1",
+		core.EnrichmentConversationHistory: "User: hello\nAssistant: hi",
+	}
+
+	prepareKnownEnrichments(context.Background(), metadata, enrichments, preparer)
+
+	if enrichments[core.EnrichmentConversationHistory] != "prepared text" {
+		t.Fatalf("expected prepared conversation history, got %v", enrichments[core.EnrichmentConversationHistory])
+	}
+	if preparer.lastConversationID != "conversation-text-1" {
+		t.Fatalf("expected canonical ID to be forwarded, got %q", preparer.lastConversationID)
+	}
+	if preparer.lastText != "User: hello\nAssistant: hi" {
+		t.Fatalf("expected formatted history to be forwarded, got %q", preparer.lastText)
+	}
+}
+
+func TestPrepareKnownEnrichments_DoesNotUseInvalidConversationID(t *testing.T) {
+	preparer := &stubConversationHistoryPreparer{prepared: "prepared text"}
+	enrichments := map[string]interface{}{}
+	metadata := map[string]interface{}{
+		MetadataConversationID:             "invalid conversation",
+		core.EnrichmentConversationHistory: "User: hello",
+	}
+
+	prepareKnownEnrichments(context.Background(), metadata, enrichments, preparer)
+
+	if preparer.lastConversationID != "" {
+		t.Fatalf("expected invalid conversation ID to be omitted, got %q", preparer.lastConversationID)
+	}
+}
+
+func TestPrepareKnownEnrichments_KeepsConversationCacheKeysSeparate(t *testing.T) {
+	preparer := &stubConversationHistoryPreparer{prepared: "prepared text"}
+
+	for _, conversationID := range []string{"conversation-a", "conversation-b"} {
+		prepareKnownEnrichments(
+			context.Background(),
+			map[string]interface{}{
+				MetadataConversationID:             conversationID,
+				core.EnrichmentConversationHistory: "User: hello",
+			},
+			map[string]interface{}{},
+			preparer,
+		)
+		if preparer.lastConversationID != conversationID {
+			t.Fatalf("cache key = %q, want %q", preparer.lastConversationID, conversationID)
+		}
+	}
+}
+
+func TestMaxConversationIDLengthMatchesBaggageValueLimit(t *testing.T) {
+	if core.MaxConversationIDLength != telemetry.MaxBaggageValueLength {
+		t.Fatalf(
+			"core.MaxConversationIDLength = %d, telemetry.MaxBaggageValueLength = %d",
+			core.MaxConversationIDLength,
+			telemetry.MaxBaggageValueLength,
+		)
 	}
 }
 
@@ -264,7 +330,7 @@ func TestPrepareKnownEnrichments_DecodesJSONRoundTrippedConversationTurns(t *tes
 				"content": "welcome back",
 			},
 		},
-		MetadataConversationSessionKey: "session-resume-1",
+		MetadataConversationID: "conversation-resume-1",
 	}
 
 	prepareKnownEnrichments(context.Background(), metadata, enrichments, preparer)
@@ -272,8 +338,8 @@ func TestPrepareKnownEnrichments_DecodesJSONRoundTrippedConversationTurns(t *tes
 	if enrichments[core.EnrichmentConversationHistory] != "prepared from decoded turns" {
 		t.Fatalf("expected decoded conversation turns to be prepared, got %v", enrichments[core.EnrichmentConversationHistory])
 	}
-	if preparer.lastSessionKey != "session-resume-1" {
-		t.Fatalf("expected session key to survive resume decoding, got %q", preparer.lastSessionKey)
+	if preparer.lastConversationID != "conversation-resume-1" {
+		t.Fatalf("expected conversation ID to survive resume decoding, got %q", preparer.lastConversationID)
 	}
 	if len(preparer.lastTurns) != 2 {
 		t.Fatalf("expected 2 decoded turns, got %d", len(preparer.lastTurns))

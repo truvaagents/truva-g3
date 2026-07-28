@@ -87,7 +87,7 @@ Chat Agent
   | convert []Message -> []ConversationTurn
   | attach metadata:
   |   - conversation_turns
-  |   - conversation_session_key
+  |   - conversation_id
   v
 Orchestrator
   |
@@ -157,9 +157,11 @@ If you are skimming, this is the behavior today:
 5. `POST /chat/stream` can also create a session automatically if no `session_id` is provided.
 6. Each incoming user message is saved before orchestration begins.
 7. The full retained message list is converted into `ConversationTurn` values and passed into orchestration metadata.
-8. The orchestration layer prepares prompt-safe `conversation_history` from those turns.
-9. The assistant response is saved back into the same session.
-10. The DevOps example also carries session context across HITL interruption and resume.
+8. The session UUID is deliberately mapped to canonical `conversation_id`,
+   including on the first turn when no prior history exists.
+9. The orchestration layer prepares prompt-safe `conversation_history` from those turns.
+10. The assistant response is saved back into the same session.
+11. The DevOps example also carries session and conversation context across HITL interruption and resume.
 
 If you want the deeper version, keep going.
 
@@ -341,7 +343,13 @@ Inside `ProcessWithStreaming()`, both agents do the same core work:
 The metadata keys are:
 
 - `orchestration.MetadataConversationTurns`
-- `orchestration.MetadataConversationSessionKey`
+- `orchestration.MetadataConversationID`
+
+These examples deliberately use the same UUID for the application session and
+framework conversation. They are not synonyms: `session_id` addresses the
+Redis transcript and TTL lifecycle; `conversation_id` correlates framework
+executions, traces, logs, and debug records. An application with different
+session semantics can use different values.
 
 Both agents also populate:
 
@@ -376,9 +384,13 @@ This is where [`CONVERSATION_HISTORY_GUIDE.md`](CONVERSATION_HISTORY_GUIDE.md) t
 The orchestrator sees metadata like:
 
 - `conversation_turns`
-- `conversation_session_key`
+- `conversation_id`
 
 and feeds it into the shared `ConversationHistoryPreparer`.
+
+The agent assigns `conversation_id` before checking whether history is empty.
+This is why a first turn or delegation path with a valid session is correlated
+even when there are no stored prior messages.
 
 Both example agents explicitly inject a preparer built with:
 
@@ -570,7 +582,8 @@ When the DevOps chat agent enters orchestration, it stores session-related conte
 If orchestration gets interrupted for approval:
 
 - the SSE flow emits a `checkpoint` event
-- the checkpoint carries user context, including `session_id`
+- the checkpoint carries framework-owned `conversation_id` plus application
+  metadata such as `session_id`
 
 Later, when execution resumes through:
 
@@ -581,19 +594,25 @@ the handler:
 
 1. loads the checkpoint
 2. rebuilds resume context
-3. reads `session_id` from `checkpoint.UserContext`
-4. reuses that session if it exists
-5. creates a new session only if no session ID is available
+3. reads a valid `conversation_id` from `checkpoint.UserContext`, with
+   `session_id` as the compatibility fallback for older local checkpoints
+4. reuses that value as the session ID because this example maps the two
+   concepts one-to-one
+5. creates a new session only if neither identity is available
 6. calls `ProcessWithStreaming()` again using the original request
 
 This is the crucial point:
 
-the DevOps agent does not treat resume as a brand-new chat. It tries to continue the same conversation thread by reusing the checkpoint's `session_id`.
+the DevOps agent does not treat resume as a brand-new chat. It continues the
+same correlated conversation and, because of the example's explicit mapping,
+reuses that value to load the chat session.
 
 There is one important edge case to know:
 
-- the resume handlers create a new session only when the checkpoint has no `session_id`
-- if the checkpoint does have a `session_id` but that session record has already expired, the handler still passes that same ID into `ProcessWithStreaming()`
+- the resume handlers create a new session only when the checkpoint has neither
+  a valid `conversation_id` nor a `session_id`
+- if the checkpoint identity exists but that session record has already
+  expired, the handler still passes that same ID into `ProcessWithStreaming()`
 - in that case the resumed execution keeps orchestration context from the checkpoint, but it does not recreate the expired session record automatically
 
 That is what keeps approval-driven workflows coherent from the user's point of view.
@@ -668,7 +687,8 @@ And if you want the slightly longer version:
 
 1. the app owns persistence, session IDs, TTLs, listing, and resume behavior
 2. the orchestration layer owns prompt preparation, budgeting, and compaction
-3. the two are connected by `conversation_turns` and `conversation_session_key`
+3. `conversation_turns` carries prompt history, while canonical
+   `conversation_id` correlates framework executions independently of history
 
 That separation is the design.
 

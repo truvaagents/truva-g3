@@ -106,12 +106,12 @@
                 <div class="filters">
                     <div class="search-box">
                         <span class="search-icon">⌕</span>
-                        <input type="text" id="llmSearchInput" placeholder="Search by request ID, conversation, source agent, or type...">
+                        <input type="text" id="llmSearchInput" placeholder="Search by request ID, request lineage, source agent, or type...">
                     </div>
                     <button class="filter-btn active" data-filter="all">All</button>
                     <button class="filter-btn" data-filter="success">Success</button>
                     <button class="filter-btn" data-filter="error">Errors</button>
-                    <button class="filter-btn" data-filter="grouped" title="Group related HITL records by conversation">Grouped</button>
+                    <button class="filter-btn" data-filter="grouped" title="Group related HITL records by root request">Grouped</button>
                 </div>
                 <div class="error-banner" id="llmErrorBanner">
                     <strong>Error:</strong> <span id="llmErrorMessage"></span>
@@ -121,7 +121,7 @@
                         <thead>
                             <tr>
                                 <th>Request ID</th>
-                                <th>Conversation</th>
+                                <th>Request lineage</th>
                                 <th>Source</th>
                                 <th>Interactions</th>
                                 <th>Tokens</th>
@@ -229,36 +229,77 @@
 
             <!-- Execution DAG View -->
             <div class="list-panel hidden" id="dagListPanel">
-                <div class="filters">
-                    <div class="search-box">
-                        <span class="search-icon">⌕</span>
-                        <input type="text" id="dagSearchInput" placeholder="Search by request ID or query...">
+                <div class="dag-panel-mode" id="dagListMode">
+                    <div class="filters">
+                        <div class="search-box">
+                            <span class="search-icon">⌕</span>
+                            <input type="text" id="dagSearchInput" placeholder="Search by request ID, conversation, or query...">
+                        </div>
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="success">Success</button>
+                        <button class="filter-btn" data-filter="failed">Failed</button>
+                        <button class="filter-btn" data-filter="interrupted">Interrupted</button>
                     </div>
-                    <button class="filter-btn active" data-filter="all">All</button>
-                    <button class="filter-btn" data-filter="success">Success</button>
-                    <button class="filter-btn" data-filter="failed">Failed</button>
-                    <button class="filter-btn" data-filter="interrupted">Interrupted</button>
+                    <div class="dag-list-toolbar">
+                        <div class="dag-grouping-hint" id="dagGroupingHint">Conversations stay together · sorted by latest turn</div>
+                        <div class="dag-mode-toggle" role="group" aria-label="Execution list grouping">
+                            <button class="dag-mode-btn active" type="button" data-grouping-mode="grouped" aria-pressed="true">Grouped</button>
+                            <button class="dag-mode-btn" type="button" data-grouping-mode="flat" aria-pressed="false">Flat</button>
+                        </div>
+                    </div>
+                    <div class="dag-list-diagnostic hidden" id="dagListDiagnostic" role="status" aria-live="polite"></div>
+                    <div class="table-container" id="dagTableContainer">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th class="sortable" data-sort="original_request">Request</th>
+                                    <th>Steps</th>
+                                    <th class="sortable" data-sort="total_duration_ms">Duration</th>
+                                    <th class="sortable desc" data-sort="created_at">Created</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dagTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="dag-list-footer">
+                        <button class="dag-load-more hidden" id="dagLoadMore" type="button" data-load-more-groups>Load more groups</button>
+                        <div class="last-updated" id="dagLastUpdated">Loading...</div>
+                    </div>
                 </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th class="sortable" data-sort="original_request">Request</th>
-                                <th>Steps</th>
-                                <th class="sortable" data-sort="total_duration_ms">Duration</th>
-                                <th class="sortable desc" data-sort="created_at">Created</th>
-                            </tr>
-                        </thead>
-                        <tbody id="dagTableBody"></tbody>
-                    </table>
+                <div class="dag-panel-mode dag-conversation-timeline-mode hidden" id="dagConversationMode" aria-live="polite">
+                    <div class="dag-timeline-header">
+                        <button class="dag-back-btn" type="button" data-close-conversation-timeline>← All executions</button>
+                        <div class="dag-timeline-heading-row">
+                            <div>
+                                <h2 class="dag-timeline-heading" id="dagTimelineHeading" tabindex="-1">Conversation timeline</h2>
+                                <div class="dag-timeline-summary" id="dagTimelineSummary">Loading conversation…</div>
+                            </div>
+                            <div class="dag-timeline-actions">
+                                <button class="dag-timeline-nav-btn" id="dagTimelinePrevious" type="button" data-timeline-nav="previous" aria-label="Previous conversation turn">←</button>
+                                <button class="dag-timeline-nav-btn" id="dagTimelineNext" type="button" data-timeline-nav="next" aria-label="Next conversation turn">→</button>
+                            </div>
+                        </div>
+                        <div class="dag-timeline-id-row">
+                            <code id="dagTimelineConversationID"></code>
+                            <button class="dag-copy-id-btn" id="dagCopyConversationID" type="button" data-copy-conversation-id>Copy ID</button>
+                        </div>
+                    </div>
+                    <div class="dag-timeline-diagnostic hidden" id="dagTimelineDiagnostic" role="status"></div>
+                    <div class="dag-timeline-content" id="dagTimelineContent">
+                        <div class="empty-detail">
+                            <div class="empty-detail-icon">💬</div>
+                            <div>Loading conversation timeline…</div>
+                        </div>
+                    </div>
                 </div>
-                <div class="last-updated" id="dagLastUpdated">Loading...</div>
             </div>
             <div class="resize-handle hidden" id="dagResizeHandle"></div>
             <div class="detail-panel hidden" id="dagDetailPanel">
                 <div class="detail-header">
-                    <span class="detail-title" id="dagDetailTitle">Select an execution</span>
+                    <div class="dag-detail-heading">
+                        <span class="detail-title" id="dagDetailTitle">Select an execution</span>
+                    </div>
                     <div class="detail-tabs">
                         <button class="detail-tab active" data-tab="dag-viz">DAG Visualization</button>
                         <button class="detail-tab" data-tab="dag-pre" style="display: none;">Pre-Execution</button>

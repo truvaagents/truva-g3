@@ -1346,6 +1346,16 @@ func DefaultConfig() *OrchestratorConfig {
 	if keyPrefix := os.Getenv("TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX"); keyPrefix != "" {
 		config.ExecutionStore.KeyPrefix = keyPrefix
 	}
+	if value := os.Getenv("TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT"); value != "" {
+		if limit, err := strconv.Atoi(value); err == nil && limit > 0 {
+			config.ExecutionStore.ConversationQueryLimit = limit
+		}
+	}
+	if value := os.Getenv("TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT"); value != "" {
+		if limit, err := strconv.Atoi(value); err == nil && limit > 0 {
+			config.ExecutionStore.ConversationIndexScanLimit = limit
+		}
+	}
 
 	// Agent name from environment (for DAG visualization and HITL isolation)
 	// Falls back to RequestIDPrefix if Name is not set, then "orchestrator"

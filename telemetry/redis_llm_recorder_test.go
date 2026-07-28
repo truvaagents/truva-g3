@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,17 @@ func TestRedisLLMCallRecorder_ImplementsLLMCallRecorder(t *testing.T) {
 	// Compile-time check already exists in redis_llm_recorder.go (line 318).
 	// This test makes the assertion explicit and visible in test output.
 	var _ LLMCallRecorder = (*RedisLLMCallRecorder)(nil)
+}
+
+func TestNoOpLLMCallRecorder_RemainsSafe(t *testing.T) {
+	var recorder LLMCallRecorder = &NoOpLLMCallRecorder{}
+	if err := recorder.RecordLLMCall(
+		core.WithConversationID(context.Background(), "conversation-noop"),
+		"request-noop",
+		LLMCallRecord{CallType: "agent_llm_call"},
+	); err != nil {
+		t.Fatalf("RecordLLMCall: %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -437,5 +449,105 @@ func TestRecordLLMCall_EmptyBaggage_NoOriginatingAgent(t *testing.T) {
 	metaKey := recorderKeyPrefix + "req-no-bag" + recorderMetaSuffix
 	if got := mr.HGet(metaKey, "originating_agent"); got != "" {
 		t.Errorf("originating_agent must be empty when baggage carries no agent_name; got %q", got)
+	}
+}
+
+func TestRecordLLMCall_ConversationIDResolution(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  func() context.Context
+		want string
+	}{
+		{
+			name: "core candidate wins",
+			ctx: func() context.Context {
+				ctx := WithBaggage(
+					context.Background(),
+					"conversation_id",
+					"conversation-baggage",
+				)
+				return core.WithConversationID(ctx, "conversation-core")
+			},
+			want: "conversation-core",
+		},
+		{
+			name: "validated baggage fallback",
+			ctx: func() context.Context {
+				return WithBaggage(
+					context.Background(),
+					"conversation_id",
+					"conversation-baggage",
+				)
+			},
+			want: "conversation-baggage",
+		},
+		{
+			name: "invalid core blocks fallback",
+			ctx: func() context.Context {
+				ctx := WithBaggage(
+					context.Background(),
+					"conversation_id",
+					"conversation-baggage",
+				)
+				return core.WithConversationID(ctx, "invalid conversation")
+			},
+		},
+		{
+			name: "invalid baggage omitted",
+			ctx: func() context.Context {
+				return WithBaggage(
+					context.Background(),
+					"conversation_id",
+					"invalid conversation",
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mr, recorder := setupRedisLLMRecorderTest(t)
+			requestID := "request-" + strings.ReplaceAll(test.name, " ", "-")
+			if err := recorder.RecordLLMCall(
+				test.ctx(),
+				requestID,
+				LLMCallRecord{CallType: "agent_llm_call", Success: true},
+			); err != nil {
+				t.Fatalf("RecordLLMCall: %v", err)
+			}
+			metaKey := recorderKeyPrefix + requestID + recorderMetaSuffix
+			if got := mr.HGet(metaKey, "meta:conversation_id"); got != test.want {
+				t.Fatalf("conversation field = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecordLLMCall_ConversationFirstValidWriterWins(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	requestID := "request-conversation-first-writer"
+	record := LLMCallRecord{CallType: "agent_llm_call", Success: true}
+
+	if err := recorder.RecordLLMCall(context.Background(), requestID, record); err != nil {
+		t.Fatalf("empty first write: %v", err)
+	}
+	if err := recorder.RecordLLMCall(
+		core.WithConversationID(context.Background(), "conversation-first"),
+		requestID,
+		record,
+	); err != nil {
+		t.Fatalf("valid backfill: %v", err)
+	}
+	if err := recorder.RecordLLMCall(
+		core.WithConversationID(context.Background(), "conversation-different"),
+		requestID,
+		record,
+	); err != nil {
+		t.Fatalf("later write: %v", err)
+	}
+
+	metaKey := recorderKeyPrefix + requestID + recorderMetaSuffix
+	if got := mr.HGet(metaKey, "meta:conversation_id"); got != "conversation-first" {
+		t.Fatalf("conversation field = %q", got)
 	}
 }

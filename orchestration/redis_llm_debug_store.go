@@ -189,6 +189,7 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		// Extract trace context from baggage
 		traceID := telemetry.GetTraceContext(ctx).TraceID
 		originalRequestID := requestID
+		conversationID := llmDebugConversationIDFromContext(ctx)
 		// originatingAgent is the agent whose orchestrator (or background job) initiated
 		// this request. The orchestrator stamps this into baggage as "agent_name" from
 		// o.config.Name (orchestrator.go). HSetNX below ensures first writer wins, so when
@@ -223,6 +224,9 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		pipe.HSet(ctx, metaKey, "trace_id", traceID)
 		pipe.HSet(ctx, metaKey, "request_id", requestID)
 		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
+		if conversationID != "" {
+			pipe.HSetNX(ctx, metaKey, "meta:"+MetadataConversationID, conversationID)
+		}
 		if interaction.SourceComponent != "" {
 			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
 		}
@@ -348,6 +352,10 @@ func (s *RedisLLMDebugStore) getRecordFromString(ctx context.Context, requestID,
 // SetMetadata adds metadata to an existing record.
 // Uses Layer 2 circuit breaker if injected, otherwise falls back to Layer 1 simple retry.
 func (s *RedisLLMDebugStore) SetMetadata(ctx context.Context, requestID string, key, value string) error {
+	if key == MetadataConversationID {
+		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
+	}
+
 	operation := func() error {
 		metaKey := llmDebugKeyPrefix + requestID + llmDebugMetaSuffix
 

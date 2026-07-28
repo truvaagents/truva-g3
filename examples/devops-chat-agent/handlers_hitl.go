@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -117,13 +118,8 @@ func (t *DevOpsChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request
 	}
 	telemetry.AddSpanEvent(ctx, "hitl.checkpoint.loaded", loadedAttrs...)
 
-	// Extract session ID from checkpoint metadata
-	sessionID := ""
-	if checkpoint.UserContext != nil {
-		if sid, ok := checkpoint.UserContext["session_id"].(string); ok {
-			sessionID = sid
-		}
-	}
+	// This example maps its chat-session UUID to the canonical conversation ID.
+	sessionID := sessionIDFromCheckpoint(checkpoint.UserContext)
 	if sessionID == "" {
 		session := t.sessionStore.Create("", nil)
 		sessionID = session.ID
@@ -356,13 +352,8 @@ func (t *DevOpsChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Req
 
 	callback.SendStatus("resuming", "Auto-approved - resuming execution...")
 
-	// Extract session ID
-	sessionID := ""
-	if checkpoint.UserContext != nil {
-		if sid, ok := checkpoint.UserContext["session_id"].(string); ok {
-			sessionID = sid
-		}
-	}
+	// This example maps its chat-session UUID to the canonical conversation ID.
+	sessionID := sessionIDFromCheckpoint(checkpoint.UserContext)
 	if sessionID == "" {
 		session := t.sessionStore.Create("", nil)
 		sessionID = session.ID
@@ -421,3 +412,14 @@ func (t *DevOpsChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Req
 }
 
 // extractPathParam is defined in handlers.go
+
+func sessionIDFromCheckpoint(metadata map[string]interface{}) string {
+	if conversationID, ok := metadata[orchestration.MetadataConversationID].(string); ok &&
+		core.ValidateConversationID(conversationID) == core.ConversationIDValidationNone {
+		return conversationID
+	}
+	if sessionID, ok := metadata["session_id"].(string); ok && sessionID != "" {
+		return sessionID
+	}
+	return ""
+}

@@ -4400,13 +4400,16 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 		}
 	}
 
-	// Propagate orchestration context as explicit headers.
-	// The executor's httpClient does not use otelhttp.NewTransport(), so OTel baggage
-	// is NOT automatically set as HTTP headers. These explicit headers are required.
+	// Propagate orchestration context as explicit framework headers. The traced
+	// HTTP client also propagates W3C baggage; these headers are the
+	// telemetry-independent fallback for framework receivers.
 	if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 		if reqID := baggage["request_id"]; reqID != "" {
 			req.Header.Set("X-TruvaG3-Request-ID", reqID)
 		}
+	}
+	if conversationID := conversationIDForOutboundHeader(ctx); conversationID != "" {
+		req.Header.Set("X-TruvaG3-Conversation-ID", conversationID)
 	}
 	if stepID := core.GetStepID(ctx); stepID != "" {
 		req.Header.Set("X-TruvaG3-Step-ID", stepID)
@@ -4489,6 +4492,25 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 	}
 
 	return string(responseBytes), respBodyStr, nil
+}
+
+func conversationIDForOutboundHeader(ctx context.Context) string {
+	coreCandidate := core.GetConversationIDCandidate(ctx)
+	if coreCandidate.Present {
+		if coreCandidate.RejectionReason != core.ConversationIDValidationNone {
+			return ""
+		}
+		if core.ValidateConversationID(coreCandidate.Value) != core.ConversationIDValidationNone {
+			return ""
+		}
+		return coreCandidate.Value
+	}
+
+	conversationID := telemetry.GetBaggage(ctx)[MetadataConversationID]
+	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
+		return ""
+	}
+	return conversationID
 }
 
 // callTool sends an HTTP request to a tool with raw parameters.

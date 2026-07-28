@@ -365,6 +365,22 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 | Max signals in prompt | 10 | `TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT` | — |
 | Query max length | 200 | `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `WithAnnouncementQueryMaxLen(n)` |
 
+## Correlation and W3C Baggage
+
+| What | Limit | Configuration |
+|------|------:|---------------|
+| Conversation ID | 512 bytes, non-empty visible-ASCII W3C-safe subset | Protocol invariant: `core.MaxConversationIDLength` |
+| Baggage members | 64 | `telemetry.MaxBaggageItems` |
+| Baggage key | 128 bytes | `telemetry.MaxBaggageKeyLength` |
+| Baggage value | 512 bytes | `telemetry.MaxBaggageValueLength` |
+| Complete serialized baggage header | 8192 bytes | `telemetry.MaxBaggageTotalSize` |
+
+The 8192-byte limit covers the complete serialized W3C baggage value,
+including separators, encoding, and member properties. `WithBaggage` applies
+member limits per candidate and keeps its truncation/silent-drop contract.
+`WithBaggageExact` never truncates and rejects the candidate atomically with a
+typed bounded reason.
+
 ## Debug Stores
 
 | What | Default | Env Var | `With*` Option |
@@ -375,6 +391,12 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 | Execution store enabled | false | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | — |
 | Execution store TTL | 24h | `TRUVAG3_EXECUTION_DEBUG_TTL` | `WithExecutionStoreTTL(d)` |
 | Execution store error TTL | 7d | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `WithExecutionStoreErrorTTL(d)` |
+| Conversation execution query limit | 1000 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `ExecutionStoreConfig.ConversationQueryLimit` |
+| Conversation index scan limit | 5000 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `ExecutionStoreConfig.ConversationIndexScanLimit` |
+
+Both conversation store limits accept positive integers. A request-level
+lookup limit is additionally clamped to `ConversationQueryLimit`; stale-member
+work never exceeds `ConversationIndexScanLimit`.
 
 ## Capability Provider (Service Mode)
 

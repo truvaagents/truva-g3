@@ -126,13 +126,7 @@ func (c *LLMConversationCompactor) recordDebugInteraction(
 
 	recordCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if bag := telemetry.GetBaggage(ctx); bag != nil {
-		pairs := make([]string, 0, len(bag)*2)
-		for k, v := range bag {
-			pairs = append(pairs, k, v)
-		}
-		recordCtx = telemetry.WithBaggage(recordCtx, pairs...)
-	}
+	recordCtx = telemetry.CopyBaggage(recordCtx, ctx)
 
 	interaction := LLMInteraction{
 		Type:            "conversation_history_compaction",

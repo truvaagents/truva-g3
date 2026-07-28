@@ -847,6 +847,8 @@ For streaming agents, the orchestration logic lives in the agent struct (not in 
 // addConversationHistoryMetadata passes raw turns to orchestration.
 // The framework builds <conversation_history> before planning and reuses
 // the prepared value across continuation and synthesis phases.
+// This example intentionally maps its application session UUID to the
+// framework conversation ID; applications may choose a different mapping.
 func (a *YourChatAgent) addConversationHistoryMetadata(
     metadata map[string]interface{},
     sessionID string,
@@ -854,6 +856,10 @@ func (a *YourChatAgent) addConversationHistoryMetadata(
 ) map[string]interface{} {
     if metadata == nil {
         metadata = make(map[string]interface{})
+    }
+    // This example deliberately maps one session UUID to one conversation.
+    if sessionID != "" {
+        metadata[orchestration.MetadataConversationID] = sessionID
     }
     if len(history) == 0 {
         return metadata
@@ -868,9 +874,11 @@ func (a *YourChatAgent) addConversationHistoryMetadata(
     }
 
     metadata[orchestration.MetadataConversationTurns] = turns
-    metadata[orchestration.MetadataConversationSessionKey] = sessionID
     return metadata
 }
+
+// Conversation identity is set before the history guard so the first turn is
+// correlated even when no earlier messages exist.
 
 // ProcessWithStreaming processes a query and streams progress via SSE callback.
 func (a *YourChatAgent) ProcessWithStreaming(
@@ -1979,11 +1987,12 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
     }
 
     // 2. Build resume context — single call handles the full contract
-    resumeCtx, err := orchestration.BuildResumeContext(ctx, checkpoint)
+    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
     if err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
     }
+    defer endResumeSpan()
 
     // 3. Re-enter the orchestrator with the original request
     result, err := a.orchestrator.ProcessRequest(resumeCtx, checkpoint.OriginalRequest, checkpoint.UserContext)
@@ -2000,6 +2009,8 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 | `WithCompletedSteps(ctx, results)` | Skips already-executed steps |
 | `WithPreResolvedParams(ctx, params, stepID)` | Uses the human-approved parameter values |
 | `WithRequestMode(ctx, mode)` | Preserves streaming/non-streaming expiry behavior |
+| Linked `hitl.resume` span | Links the resumed execution to the original trace; the returned cleanup function must be called |
+| Validated conversation context | Restores canonical `conversation_id` to core context, checkpoint metadata, and metric-ineligible W3C Baggage when present |
 | `WithMetadata(ctx, userContext)` | Preserves session metadata (session ID, user info, etc.) |
 
 It also validates that the checkpoint has a resumable status (`approved`, `edited`, or `expired_approved`), returning an error for terminal or pending checkpoints.

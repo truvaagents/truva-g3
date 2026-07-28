@@ -41,9 +41,49 @@ let viewMode = 'full';
 let sortColumn = 'created_at';
 let sortDirection = 'desc';
 
+const DAG_GROUP_PAGE_SIZE = 50;
+const DAG_GROUPING_STORAGE_KEY = 'truvag3.dag.groupingMode';
+
+let groupingMode = readGroupingPreference();
+let groupedExecutionGroups = [];
+let groupedNextCursor = '';
+let groupedQueryFingerprint = '';
+let groupedResponsePartial = false;
+let groupedRequestVersion = 0;
+let groupedLoading = false;
+let expandedGroupKeys = new Set();
+let pendingAutoExpandRequestID = '';
+let conversationCache = new Map();
+let activeConversationID = '';
+let listPanelMode = 'list';
+let timelineReturnFocus = null;
+let dagSearchTimer = null;
+
 // LRU cache for Cytoscape instances — avoids rebuild on tab switch.
 // Key: "requestId:viewMode", Value: { cy, container (child div), requestId }
 const dagCache = new Map();
+
+function readGroupingPreference() {
+    try {
+        return sessionStorage.getItem(DAG_GROUPING_STORAGE_KEY) === 'flat'
+            ? 'flat'
+            : 'grouped';
+    } catch (_) {
+        return 'grouped';
+    }
+}
+
+function storeGroupingPreference(mode) {
+    try {
+        sessionStorage.setItem(DAG_GROUPING_STORAGE_KEY, mode);
+    } catch (_) {
+        // Private browsing and embedded viewers may disable web storage.
+    }
+}
+
+function escapeHtmlAttribute(value) {
+    return escapeHtml(String(value ?? '')).replace(/"/g, '&quot;');
+}
 
 // ---------------------------------------------------------------------------
 // Hook-phase classification
@@ -192,12 +232,17 @@ function unbindAllListeners() {
 }
 
 export function init() {
+    updateGroupingModeControls();
+    showExecutionListMode();
     bindDelegatedEvents();
     fetchExecutions();
 }
 
 export function refresh() {
-    fetchExecutions();
+    fetchExecutions({ preserveExpansion: true });
+    if (listPanelMode === 'timeline' && activeConversationID) {
+        void loadConversationTimeline(activeConversationID, selected?.request_id, { force: true });
+    }
 }
 
 export function destroy() {
@@ -210,6 +255,22 @@ export function destroy() {
     }
     dagCache.clear();
     cyInstance = null;
+    if (dagSearchTimer) {
+        clearTimeout(dagSearchTimer);
+        dagSearchTimer = null;
+    }
+    groupedRequestVersion++;
+    groupedExecutionGroups = [];
+    groupedNextCursor = '';
+    groupedQueryFingerprint = '';
+    groupedResponsePartial = false;
+    groupedLoading = false;
+    expandedGroupKeys.clear();
+    pendingAutoExpandRequestID = '';
+    conversationCache.clear();
+    activeConversationID = '';
+    listPanelMode = 'list';
+    timelineReturnFocus = null;
     // Remove every event listener registered by bindDelegatedEvents() so a
     // subsequent init() (when the user comes back to this view) starts clean.
     unbindAllListeners();
@@ -224,6 +285,7 @@ export function destroy() {
 // removeEventListener. Inline closures cannot be removed and would leak.
 
 function handleDagTableClick(e) {
+    if (e.target.closest('button')) return;
     const row = e.target.closest('tr[data-request-id]');
     if (row) {
         selectExecution(row.dataset.requestId);
@@ -231,14 +293,84 @@ function handleDagTableClick(e) {
 }
 
 function handleDagListPanelClick(e) {
+    const groupingBtn = e.target.closest('[data-grouping-mode]');
+    if (groupingBtn) {
+        setGroupingMode(groupingBtn.dataset.groupingMode);
+        return;
+    }
+    const groupToggle = e.target.closest('[data-toggle-conversation-group]');
+    if (groupToggle) {
+        toggleConversationGroup(
+            groupToggle.dataset.toggleConversationGroup,
+            groupToggle.classList.contains('dag-group-title-btn')
+                ? 'title'
+                : 'expand',
+        );
+        return;
+    }
+    const openTimeline = e.target.closest('[data-open-conversation]');
+    if (openTimeline) {
+        openConversationTimeline(
+            openTimeline.dataset.openConversation,
+            openTimeline,
+        );
+        return;
+    }
+    const closeTimeline = e.target.closest('[data-close-conversation-timeline]');
+    if (closeTimeline) {
+        closeConversationTimeline();
+        return;
+    }
+    const loadMore = e.target.closest('[data-load-more-groups]');
+    if (loadMore) {
+        if (!groupedLoading) void loadExecutionGroups({ reset: false });
+        return;
+    }
+    const timelineExecution = e.target.closest('[data-view-timeline-execution]');
+    if (timelineExecution) {
+        void selectExecution(
+            timelineExecution.dataset.viewTimelineExecution,
+            { restoreTimelineActionFocus: true },
+        );
+        return;
+    }
+    const timelineNav = e.target.closest('[data-timeline-nav]');
+    if (timelineNav) {
+        navigateConversationTurn(timelineNav.dataset.timelineNav);
+        return;
+    }
+    const copyConversation = e.target.closest('[data-copy-conversation-id]');
+    if (copyConversation) {
+        void copyConversationID(copyConversation);
+        return;
+    }
+    const flatFallback = e.target.closest('[data-use-flat-list]');
+    if (flatFallback) {
+        setGroupingMode('flat');
+        return;
+    }
     const filterBtn = e.target.closest('.filter-btn[data-filter]');
     if (filterBtn) {
         setDagFilter(filterBtn.dataset.filter);
+        return;
     }
     const sortTh = e.target.closest('th[data-sort]');
     if (sortTh) {
         sortDagTable(sortTh.dataset.sort);
     }
+}
+
+function handleDagListPanelKeydown(e) {
+    if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
+    const timelineExecution = e.target.closest(
+        '[data-view-timeline-execution][role="button"]',
+    );
+    if (!timelineExecution) return;
+    e.preventDefault();
+    void selectExecution(
+        timelineExecution.dataset.viewTimelineExecution,
+        { restoreTimelineActionFocus: true },
+    );
 }
 
 function handleDagDetailPanelClick(e) {
@@ -303,12 +435,21 @@ function handleDagDetailContentClick(e) {
 }
 
 function handleDagSearchInput() {
-    renderExecutionList();
+    if (dagSearchTimer) clearTimeout(dagSearchTimer);
+    dagSearchTimer = setTimeout(() => {
+        dagSearchTimer = null;
+        if (groupingMode === 'grouped') {
+            void loadExecutionGroups({ reset: true });
+        } else {
+            renderExecutionList();
+        }
+    }, 250);
 }
 
 function bindDelegatedEvents() {
     addTrackedListener(document.getElementById('dagTableBody'), 'click', handleDagTableClick);
     addTrackedListener(document.getElementById('dagListPanel'), 'click', handleDagListPanelClick);
+    addTrackedListener(document.getElementById('dagListPanel'), 'keydown', handleDagListPanelKeydown);
     addTrackedListener(document.getElementById('dagDetailPanel'), 'click', handleDagDetailPanelClick);
     addTrackedListener(document.getElementById('dagDetailContent'), 'click', handleDagDetailContentClick);
     addTrackedListener(document.getElementById('dagSearchInput'), 'input', handleDagSearchInput);
@@ -318,44 +459,220 @@ function bindDelegatedEvents() {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchExecutions() {
+async function fetchExecutions({ preserveExpansion = false } = {}) {
+    if (groupingMode === 'grouped') {
+        await loadExecutionGroups({
+            reset: true,
+            preserveExpansion,
+            withLoadingOverlay: listPanelMode === 'list',
+        });
+        return;
+    }
+    await loadFlatExecutions({ withLoadingOverlay: listPanelMode === 'list' });
+}
+
+async function loadFlatExecutions({ withLoadingOverlay = true } = {}) {
     const listPanel = document.getElementById('dagListPanel');
-    showLoading(listPanel, 'Loading executions...');
+    const requestVersion = ++groupedRequestVersion;
+    if (withLoadingOverlay) showLoading(listPanel, 'Loading executions...');
     try {
         const { data } = await fetchAPI('/api/executions?limit=50');
+        if (requestVersion !== groupedRequestVersion || groupingMode !== 'flat') return;
         executions = data.executions || [];
+        setDagListDiagnostic('');
         renderExecutionList();
         updateDagStats();
+        updateDagLastUpdated(data.timestamp);
     } catch (error) {
+        if (requestVersion !== groupedRequestVersion) return;
         console.error('Failed to fetch executions:', error);
+        setDagListDiagnostic(
+            'The execution list could not be loaded. Refresh to try again.',
+            'error',
+        );
     } finally {
-        hideLoading(listPanel);
+        if (requestVersion === groupedRequestVersion && withLoadingOverlay) {
+            hideLoading(listPanel);
+        }
     }
 }
 
-function updateDagStats() {
-    const total = executions.length;
-    const successful = executions.filter(e => e.success).length;
+async function loadExecutionGroups({
+    reset,
+    withLoadingOverlay = true,
+    preserveExpansion = false,
+}) {
+    const listPanel = document.getElementById('dagListPanel');
+    const requestVersion = ++groupedRequestVersion;
+    if (reset && !preserveExpansion) {
+        requestSelectedGroupAutoExpansion();
+    }
+    groupedLoading = true;
+    updateGroupedLoadMoreControl();
+    if (withLoadingOverlay && reset) showLoading(listPanel, 'Loading conversation groups...');
+
+    const query = new URLSearchParams({
+        group_conversations: 'true',
+        q: document.getElementById('dagSearchInput')?.value.trim() || '',
+        status: filter,
+        sort: sortColumn,
+        direction: sortDirection,
+        limit: String(DAG_GROUP_PAGE_SIZE),
+    });
+    if (!reset && groupedNextCursor) query.set('cursor', groupedNextCursor);
+
+    try {
+        const { data } = await fetchAPI(`/api/executions?${query.toString()}`);
+        if (requestVersion !== groupedRequestVersion || groupingMode !== 'grouped') return;
+
+        if (!Array.isArray(data.groups)) {
+            setDagListDiagnostic(
+                'This Registry Viewer server does not support conversation grouping, so the flat list is shown.',
+                'warning',
+                false,
+            );
+            groupedExecutionGroups = [];
+            groupedNextCursor = '';
+            pendingAutoExpandRequestID = '';
+            groupingMode = 'flat';
+            updateGroupingModeControls();
+            executions = Array.isArray(data.executions) ? data.executions : [];
+            renderExecutionList();
+            updateDagStats(executions);
+            updateDagLastUpdated(data.timestamp);
+            return;
+        }
+
+        if (reset) {
+            groupedExecutionGroups = data.groups;
+            if (!preserveExpansion) {
+                expandedGroupKeys.clear();
+            }
+        } else if (
+            !groupedQueryFingerprint ||
+            groupedQueryFingerprint === data.query_fingerprint
+        ) {
+            groupedExecutionGroups = groupedExecutionGroups.concat(data.groups);
+        } else {
+            throw new Error('grouped response fingerprint changed during pagination');
+        }
+
+        groupedQueryFingerprint = data.query_fingerprint || '';
+        groupedNextCursor = data.next_cursor || '';
+        groupedResponsePartial = Boolean(data.partial);
+        applyPendingSelectedGroupAutoExpansion();
+        renderExecutionList();
+
+        const materialized = flattenGroupedExecutions(groupedExecutionGroups);
+        executions = materialized;
+        updateDagStats(materialized);
+        updateDagLastUpdated(data.timestamp);
+        updateGroupedDiagnostics(data);
+    } catch (error) {
+        if (requestVersion !== groupedRequestVersion) return;
+        console.error('Failed to fetch conversation groups:', error);
+        if (reset && !preserveExpansion) {
+            groupedExecutionGroups = [];
+            groupedNextCursor = '';
+            renderServerExecutionGroups([]);
+        }
+        setDagListDiagnostic(
+            'Conversation grouping is temporarily unavailable. The flat execution list remains available.',
+            'error',
+            true,
+        );
+    } finally {
+        if (requestVersion === groupedRequestVersion) {
+            groupedLoading = false;
+            updateGroupedLoadMoreControl();
+            if (withLoadingOverlay && reset) hideLoading(listPanel);
+        }
+    }
+}
+
+function updateGroupedLoadMoreControl() {
+    const loadMore = document.getElementById('dagLoadMore');
+    if (!loadMore) return;
+    loadMore.disabled =
+        groupedLoading ||
+        !groupedNextCursor ||
+        groupedResponsePartial;
+    loadMore.textContent = groupedLoading ? 'Loading…' : 'Load more groups';
+}
+
+function updateDagStats(sourceExecutions = executions) {
+    const unique = new Map();
+    sourceExecutions.forEach(execution => {
+        if (execution?.request_id) unique.set(execution.request_id, execution);
+    });
+    const values = Array.from(unique.values());
+    const total = values.length;
+    const successful = values.filter(e => e.success).length;
     const rate = total > 0 ? Math.round((successful / total) * 100) : 0;
 
     document.getElementById('executionCount').textContent = total;
     document.getElementById('successRate').textContent = `${rate}%`;
 }
 
+function flattenGroupedExecutions(groups) {
+    const result = [];
+    (groups || []).forEach(group => {
+        (group.turns || []).forEach(turn => {
+            if (turn.execution) result.push(turn.execution);
+            result.push(...(turn.related_executions || []));
+        });
+        result.push(...(group.orphans || []));
+    });
+    return result;
+}
+
+function updateDagLastUpdated(timestamp) {
+    const value = timestamp ? new Date(timestamp) : new Date();
+    const label = Number.isNaN(value.getTime()) ? new Date() : value;
+    const target = document.getElementById('dagLastUpdated');
+    if (target) target.textContent = `Last updated: ${label.toLocaleTimeString()}`;
+}
+
+function updateGroupedDiagnostics(data) {
+    const messages = [];
+    if (data.llm_enrichment_incomplete) {
+        messages.push('LLM duration and call counts are incomplete because DB 7 could not be fully read.');
+    }
+    if (data.partial) {
+        messages.push('This grouped result reached a safety bound; some groups may not be shown.');
+    }
+    if (messages.length > 0) {
+        setDagListDiagnostic(messages.join(' '), 'warning', true);
+    } else {
+        setDagListDiagnostic('');
+    }
+}
+
+function setDagListDiagnostic(message, tone = 'warning', offerFlat = false) {
+    const target = document.getElementById('dagListDiagnostic');
+    if (!target) return;
+    target.classList.toggle('hidden', !message);
+    target.classList.toggle('error', tone === 'error');
+    target.classList.toggle('warning', tone === 'warning');
+    target.innerHTML = message
+        ? `<span>${escapeHtml(message)}</span>${offerFlat ? '<button type="button" data-use-flat-list>Use flat list</button>' : ''}`
+        : '';
+}
+
 // ---------------------------------------------------------------------------
 // Filters and sorting
 // ---------------------------------------------------------------------------
-
-function filterExecutions() {
-    renderExecutionList();
-}
 
 function setDagFilter(f) {
     filter = f;
     document.querySelectorAll('#dagListPanel .filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === f);
     });
-    renderExecutionList();
+    if (groupingMode === 'grouped') {
+        void loadExecutionGroups({ reset: true });
+    } else {
+        renderExecutionList();
+    }
 }
 
 function sortDagTable(column) {
@@ -374,7 +691,11 @@ function sortDagTable(column) {
     const th = document.querySelector(`#dagListPanel th[data-sort="${column}"]`);
     if (th) th.classList.add(sortDirection);
 
-    renderExecutionList();
+    if (groupingMode === 'grouped') {
+        void loadExecutionGroups({ reset: true });
+    } else {
+        renderExecutionList();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +703,299 @@ function sortDagTable(column) {
 // ---------------------------------------------------------------------------
 
 function renderExecutionList() {
+    if (groupingMode === 'grouped') {
+        renderServerExecutionGroups(groupedExecutionGroups);
+        return;
+    }
+    renderLegacyExecutionList();
+}
+
+function setGroupingMode(mode) {
+    if (mode !== 'grouped' && mode !== 'flat') return;
+    if (groupingMode === mode) return;
+
+    groupingMode = mode;
+    storeGroupingPreference(mode);
+    groupedRequestVersion++;
+    groupedLoading = false;
+    groupedExecutionGroups = [];
+    groupedNextCursor = '';
+    groupedQueryFingerprint = '';
+    groupedResponsePartial = false;
+    expandedGroupKeys.clear();
+    pendingAutoExpandRequestID = mode === 'grouped'
+        ? (selected?.request_id || '')
+        : '';
+    setDagListDiagnostic('');
+    updateGroupingModeControls();
+    showExecutionListMode();
+    void fetchExecutions();
+}
+
+function updateGroupingModeControls() {
+    document.querySelectorAll('[data-grouping-mode]').forEach(button => {
+        const active = button.dataset.groupingMode === groupingMode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
+    const hint = document.getElementById('dagGroupingHint');
+    if (hint) {
+        hint.textContent = groupingMode === 'grouped'
+            ? 'Conversations stay together · sorted by latest matching turn'
+            : 'One row per execution · legacy list behavior';
+    }
+    const loadMore = document.getElementById('dagLoadMore');
+    if (loadMore && groupingMode === 'flat') loadMore.classList.add('hidden');
+}
+
+function showExecutionListMode() {
+    listPanelMode = 'list';
+    document.getElementById('dagListMode')?.classList.remove('hidden');
+    document.getElementById('dagConversationMode')?.classList.add('hidden');
+}
+
+function toggleConversationGroup(groupKey, triggerKind = 'expand') {
+    if (!groupKey) return;
+    if (expandedGroupKeys.has(groupKey)) {
+        expandedGroupKeys.delete(groupKey);
+    } else {
+        expandedGroupKeys.add(groupKey);
+    }
+    renderServerExecutionGroups(groupedExecutionGroups);
+    requestAnimationFrame(() => {
+        const trigger = Array.from(document.querySelectorAll(
+            '[data-toggle-conversation-group]',
+        )).find(button =>
+            button.dataset.toggleConversationGroup === groupKey &&
+            (triggerKind === 'title'
+                ? button.classList.contains('dag-group-title-btn')
+                : button.classList.contains('dag-group-expand-btn'))
+        );
+        trigger?.focus({ preventScroll: true });
+    });
+}
+
+function groupContainsRequest(group, requestID) {
+    if (!requestID) return false;
+    return (group.turns || []).some(turn =>
+        turn.execution?.request_id === requestID ||
+        (turn.related_executions || []).some(item => item.request_id === requestID)
+    ) || (group.orphans || []).some(item => item.request_id === requestID);
+}
+
+function requestSelectedGroupAutoExpansion() {
+    pendingAutoExpandRequestID = selected?.request_id || '';
+}
+
+function applyPendingSelectedGroupAutoExpansion() {
+    if (!pendingAutoExpandRequestID) return;
+    const group = groupedExecutionGroups.find(candidate =>
+        groupContainsRequest(candidate, pendingAutoExpandRequestID)
+    );
+    if (!group) return;
+
+    // The selected record is now represented by the current server page, so
+    // this one-shot request has been consumed. Standalone units have nothing
+    // to expand; conversation units open once and can then be collapsed by
+    // the user without a later render overriding that choice.
+    pendingAutoExpandRequestID = '';
+    if (group.conversation_id) {
+        expandedGroupKeys.add(group.group_key);
+    }
+}
+
+function renderServerExecutionGroups(groups) {
+    const container = document.getElementById('dagTableBody');
+    if (!container) return;
+
+    if (groups.length === 0) {
+        container.innerHTML = `
+            <tr>
+                <td colspan="5" class="dag-list-empty">
+                    <div class="empty-state-icon">💬</div>
+                    <div>No matching conversation groups found</div>
+                </td>
+            </tr>`;
+    } else {
+        const rows = [];
+        groups.forEach(group => {
+            if (!group.conversation_id) {
+                (group.turns || []).forEach(turn => {
+                    rows.push(renderGroupedExecutionRow(turn.execution, {
+                        llmCallCount: turn.llm_call_count,
+                        historyStatus: turn.history_status,
+                    }));
+                    (turn.related_executions || []).forEach(related => {
+                        rows.push(renderGroupedExecutionRow(related, {
+                            related: true,
+                            relationLabel: 'Related',
+                        }));
+                    });
+                });
+                (group.orphans || []).forEach(orphan => {
+                    rows.push(renderGroupedExecutionRow(orphan, {
+                        related: true,
+                        relationLabel: 'Related record',
+                    }));
+                });
+                return;
+            }
+
+            const expanded = expandedGroupKeys.has(group.group_key);
+            rows.push(renderConversationGroupHeader(group, expanded));
+            if (!expanded) return;
+
+            (group.turns || []).forEach(turn => {
+                rows.push(renderGroupedExecutionRow(turn.execution, {
+                    conversationTurn: true,
+                    llmCallCount: turn.llm_call_count,
+                    historyStatus: turn.history_status,
+                }));
+                (turn.related_executions || []).forEach(related => {
+                    rows.push(renderGroupedExecutionRow(related, {
+                        related: true,
+                        relationLabel: 'Related execution',
+                    }));
+                });
+            });
+            (group.orphans || []).forEach(orphan => {
+                rows.push(renderGroupedExecutionRow(orphan, {
+                    related: true,
+                    relationLabel: 'Unattached related record',
+                    orphan: true,
+                }));
+            });
+        });
+        container.innerHTML = rows.join('');
+    }
+
+    const loadMore = document.getElementById('dagLoadMore');
+    if (loadMore) {
+        loadMore.classList.toggle(
+            'hidden',
+            !groupedNextCursor || groupedResponsePartial,
+        );
+        updateGroupedLoadMoreControl();
+    }
+}
+
+function renderConversationGroupHeader(group, expanded) {
+    const turns = group.turns || [];
+    const anchor = turns[0]?.execution || group.orphans?.[0] || {};
+    const executionCount = turns.reduce(
+        (count, turn) => count + 1 + (turn.related_executions || []).length,
+        (group.orphans || []).length,
+    );
+    const visibleExecutions = flattenGroupedExecutions([group]);
+    const totalDuration =
+        (anchor.total_duration_ms || 0) +
+        (anchor.llm_total_duration_ms || 0);
+    const successful = visibleExecutions.every(item => item.success);
+    const interrupted = visibleExecutions.some(item => item.interrupted);
+    const statusClass = interrupted ? 'interrupted' : (successful ? 'success' : 'error');
+    const statusLabel = interrupted ? '⏸ Interrupted' : (successful ? '✓ Success' : '⚠ Mixed');
+    const shortConversationID = truncateText(group.conversation_id, 28);
+    const matchingTurnCount = group.matching_turn_count ?? turns.length;
+    const totalTurnCount = group.total_turn_count || turns.length;
+    const turnCountLabel = matchingTurnCount === totalTurnCount
+        ? `${totalTurnCount} turn${totalTurnCount === 1 ? '' : 's'}`
+        : `${matchingTurnCount} matching · ${totalTurnCount} total`;
+
+    return `
+        <tr class="dag-conversation-group-row ${expanded ? 'expanded' : ''}">
+            <td>
+                <button
+                    class="dag-group-expand-btn"
+                    type="button"
+                    data-toggle-conversation-group="${escapeHtmlAttribute(group.group_key)}"
+                    aria-expanded="${expanded}"
+                    aria-label="${expanded ? 'Collapse' : 'Expand'} conversation ${escapeHtmlAttribute(shortConversationID)}"
+                >${expanded ? '▾' : '▸'}</button>
+                <span class="status-badge ${statusClass}">${statusLabel}</span>
+            </td>
+            <td>
+                <button
+                    class="dag-group-title-btn"
+                    type="button"
+                    data-toggle-conversation-group="${escapeHtmlAttribute(group.group_key)}"
+                    aria-expanded="${expanded}"
+                >
+                    <span class="dag-group-kicker">Conversation · ${turnCountLabel}</span>
+                    <span class="dag-group-title">${escapeHtml(truncateText(anchor.original_request || 'Untitled conversation', 62))}</span>
+                    <span class="dag-group-id">${escapeHtml(shortConversationID)}</span>
+                </button>
+                <button
+                    class="dag-open-timeline-btn"
+                    type="button"
+                    data-open-conversation="${escapeHtmlAttribute(group.conversation_id)}"
+                >View timeline</button>
+                ${group.index_incomplete ? '<span class="dag-data-warning">Index incomplete</span>' : ''}
+            </td>
+            <td><span class="dag-group-count">${executionCount} execution${executionCount === 1 ? '' : 's'}</span></td>
+            <td><span class="dag-mono">${formatDuration(totalDuration)}</span></td>
+            <td>
+                <span class="time-ago">${formatTimeAgo(group.anchor_created_at || anchor.created_at)}</span>
+                <span class="dag-group-sort-note">latest match</span>
+            </td>
+        </tr>`;
+}
+
+function renderGroupedExecutionRow(exec, options = {}) {
+    if (!exec) return '';
+    const {
+        conversationTurn = false,
+        related = false,
+        relationLabel = '',
+        orphan = false,
+        llmCallCount = 0,
+        historyStatus = '',
+    } = options;
+    const isSelected = selected?.request_id === exec.request_id;
+    const rowClasses = [
+        isSelected ? 'selected' : '',
+        conversationTurn ? 'dag-conversation-turn-row' : '',
+        related ? 'child-row dag-related-execution-row' : '',
+        orphan ? 'dag-orphan-execution-row' : '',
+    ].filter(Boolean).join(' ');
+    const requestID = exec.request_id || '';
+    const originalRequestID = exec.original_request_id || requestID;
+    const statusClass = exec.interrupted ? 'interrupted' : (exec.success ? 'success' : 'error');
+    const statusLabel = exec.interrupted ? '⏸ Interrupted' : (exec.success ? '✓ Success' : '✗ Failed');
+    const duration = (exec.total_duration_ms || 0) + (exec.llm_total_duration_ms || 0);
+
+    return `
+        <tr class="${rowClasses}"
+            data-request-id="${escapeHtmlAttribute(requestID)}"
+            data-original-request-id="${escapeHtmlAttribute(originalRequestID)}">
+            <td>
+                <span class="status-badge ${statusClass}">${statusLabel}</span>
+            </td>
+            <td>
+                <div class="dag-execution-title-row">
+                    ${related ? '<span class="child-indicator">↳</span>' : (conversationTurn ? '<span class="dag-turn-dot" aria-hidden="true"></span>' : '')}
+                    <div class="dag-execution-title">
+                        ${relationLabel ? `<span class="dag-relation-label">${escapeHtml(relationLabel)}</span>` : ''}
+                        <div class="service-name">${escapeHtml(truncateText(exec.original_request || 'Unknown request', related ? 48 : 58))}</div>
+                        <span class="request-id">${escapeHtml(requestID)}</span>
+                        ${exec.interrupted ? '<span class="hitl-resume-badge">HITL Interrupted</span>' : ''}
+                        ${exec.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge dag-hitl-resume">HITL Resume</span>' : ''}
+                        ${llmCallCount ? `<span class="dag-row-meta">${llmCallCount} LLM call${llmCallCount === 1 ? '' : 's'}</span>` : ''}
+                        ${historyStatus ? `<span class="dag-row-meta">${escapeHtml(historyStatus)}</span>` : ''}
+                    </div>
+                </div>
+            </td>
+            <td>
+                <div class="step-progress">
+                    <span>${exec.step_count || 0} steps</span>
+                    ${exec.failed_steps > 0 ? `<span class="dag-failed-steps">(${exec.failed_steps} failed)</span>` : ''}
+                </div>
+            </td>
+            <td><span class="dag-mono">${formatDuration(duration)}</span></td>
+            <td><span class="time-ago">${formatTimeAgo(exec.created_at)}</span></td>
+        </tr>`;
+}
+
+function renderLegacyExecutionList() {
     const container = document.getElementById('dagTableBody');
     const searchInput = document.getElementById('dagSearchInput');
     const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
@@ -587,16 +1201,332 @@ function renderExecutionList() {
 }
 
 // ---------------------------------------------------------------------------
+// Conversation timeline
+// ---------------------------------------------------------------------------
+
+function openConversationTimeline(conversationID, trigger) {
+    if (!conversationID) return;
+    if (listPanelMode !== 'timeline') {
+        timelineReturnFocus = trigger || document.activeElement;
+    }
+    activeConversationID = conversationID;
+    listPanelMode = 'timeline';
+    document.getElementById('dagListMode')?.classList.add('hidden');
+    document.getElementById('dagConversationMode')?.classList.remove('hidden');
+    renderConversationTimelineState(conversationID);
+    document.getElementById('dagTimelineHeading')?.focus({ preventScroll: true });
+    void loadConversationTimeline(conversationID, selected?.request_id);
+}
+
+function closeConversationTimeline() {
+    showExecutionListMode();
+    const refreshedGroupTrigger = Array.from(document.querySelectorAll(
+        '[data-open-conversation]',
+    )).find(button => button.dataset.openConversation === activeConversationID);
+    const focusTarget = timelineReturnFocus?.isConnected
+        ? timelineReturnFocus
+        : (refreshedGroupTrigger ||
+            document.getElementById('dagSearchInput'));
+    timelineReturnFocus = null;
+    focusTarget?.focus({ preventScroll: true });
+}
+
+function renderConversationTimelineState(conversationID) {
+    const cached = conversationCache.get(conversationID);
+    if (cached?.data) {
+        renderConversationTimeline(cached.data);
+        return;
+    }
+    const idTarget = document.getElementById('dagTimelineConversationID');
+    if (idTarget) idTarget.textContent = conversationID;
+    const summary = document.getElementById('dagTimelineSummary');
+    if (summary) summary.textContent = 'Loading conversation…';
+    setTimelineDiagnostic('');
+    const content = document.getElementById('dagTimelineContent');
+    if (content) {
+        content.innerHTML = `
+            <div class="empty-detail">
+                <div class="empty-detail-icon">💬</div>
+                <div>Loading conversation timeline…</div>
+            </div>`;
+    }
+}
+
+async function loadConversationTimeline(
+    conversationID,
+    selectedRequestID,
+    { force = false } = {},
+) {
+    if (!conversationID) return null;
+    const cached = conversationCache.get(conversationID);
+    if (!force && cached?.data) {
+        if (activeConversationID === conversationID && listPanelMode === 'timeline') {
+            renderConversationTimeline(cached.data, selectedRequestID);
+        }
+        return cached.data;
+    }
+    if (!force && cached?.promise) return cached.promise;
+
+    const endpoint = `/api/conversations?${new URLSearchParams({
+        conversation_id: conversationID,
+    }).toString()}`;
+    const promise = fetchAPI(endpoint)
+        .then(({ data }) => {
+            conversationCache.set(conversationID, { data });
+            if (activeConversationID === conversationID && listPanelMode === 'timeline') {
+                renderConversationTimeline(
+                    data,
+                    selected?.request_id || selectedRequestID,
+                );
+            }
+            return data;
+        })
+        .catch(error => {
+            console.error('Failed to fetch conversation timeline:', error);
+            if (cached?.data) {
+                conversationCache.set(conversationID, { data: cached.data });
+                if (activeConversationID === conversationID && listPanelMode === 'timeline') {
+                    renderConversationTimeline(cached.data, selected?.request_id);
+                    appendTimelineDiagnostic('The latest refresh failed; showing the cached timeline.');
+                }
+                return cached.data;
+            }
+            conversationCache.set(conversationID, { error });
+            if (activeConversationID === conversationID && listPanelMode === 'timeline') {
+                renderTimelineError();
+            }
+            return null;
+        });
+    conversationCache.set(conversationID, { promise });
+    return promise;
+}
+
+function renderConversationTimeline(timeline, selectedRequestID = selected?.request_id) {
+    if (!timeline || activeConversationID !== timeline.conversation_id) return;
+    const turns = timeline.turns || [];
+    const turnCount = timeline.turn_count || turns.length;
+    const executionCount = timeline.execution_count || 0;
+    const idTarget = document.getElementById('dagTimelineConversationID');
+    if (idTarget) idTarget.textContent = timeline.conversation_id;
+    const summary = document.getElementById('dagTimelineSummary');
+    if (summary) {
+        summary.textContent = `${turnCount} turn${turnCount === 1 ? '' : 's'} · ${executionCount} execution${executionCount === 1 ? '' : 's'} · chronological`;
+    }
+
+    const diagnosticMessages = [];
+    if (timeline.index_incomplete) {
+        diagnosticMessages.push('The reverse index is incomplete; verified DB 8 records are still shown.');
+    }
+    if (timeline.llm_enrichment_incomplete) {
+        diagnosticMessages.push('LLM call counts and history status are incomplete.');
+    }
+    if (timeline.partial) {
+        diagnosticMessages.push('The timeline reached a safety bound and may omit records.');
+    }
+    setTimelineDiagnostic(diagnosticMessages.join(' '));
+
+    const currentTurnIndex = findConversationTurnIndex(timeline, selectedRequestID);
+    const previous = document.getElementById('dagTimelinePrevious');
+    const next = document.getElementById('dagTimelineNext');
+    if (previous) previous.disabled = currentTurnIndex <= 0;
+    if (next) next.disabled = currentTurnIndex < 0 || currentTurnIndex >= turns.length - 1;
+
+    const content = document.getElementById('dagTimelineContent');
+    if (!content) return;
+    if (turns.length === 0 && (timeline.orphans || []).length === 0) {
+        content.innerHTML = `
+            <div class="empty-detail">
+                <div class="empty-detail-icon">💬</div>
+                <div>No verified executions are available for this conversation.</div>
+            </div>`;
+        return;
+    }
+
+    const cards = turns.map((turn, index) =>
+        renderTimelineTurn(turn, index, turns.length, selectedRequestID)
+    );
+    if ((timeline.orphans || []).length > 0) {
+        cards.push(`
+            <section class="dag-timeline-orphans">
+                <h3>Unattached related records</h3>
+                <p>These executions carry the conversation ID, but their top-level owner was not available.</p>
+                ${(timeline.orphans || []).map(orphan =>
+                    renderTimelineRelatedExecution(orphan, selectedRequestID, true)
+                ).join('')}
+            </section>`);
+    }
+    content.innerHTML = cards.join('');
+    content.querySelector('.dag-timeline-card.current, .dag-timeline-related.current')
+        ?.scrollIntoView({ block: 'nearest' });
+}
+
+function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
+    const execution = turn.execution || {};
+    const related = turn.related_executions || [];
+    const containsSelected = execution.request_id === selectedRequestID ||
+        related.some(item => item.request_id === selectedRequestID);
+    const statusClass = execution.interrupted
+        ? 'interrupted'
+        : (execution.success ? 'success' : 'error');
+    const statusLabel = execution.interrupted
+        ? '⏸ Interrupted'
+        : (execution.success ? '✓ Success' : '✗ Failed');
+    const duration = (execution.total_duration_ms || 0) +
+        (execution.llm_total_duration_ms || 0);
+
+    return `
+        <article class="dag-timeline-card ${containsSelected ? 'contains-current' : ''} ${execution.request_id === selectedRequestID ? 'current' : ''}" ${containsSelected ? 'aria-current="true"' : ''}>
+            <div class="dag-timeline-rail" aria-hidden="true">
+                <span>${index + 1}</span>
+            </div>
+            <div class="dag-timeline-card-body">
+                <div
+                    class="dag-timeline-card-action"
+                    role="button"
+                    tabindex="0"
+                    data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
+                    aria-label="View DAG for turn ${index + 1}: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+                    ${execution.request_id === selectedRequestID ? 'aria-current="true"' : ''}
+                >
+                    <div class="dag-timeline-card-header">
+                        <div>
+                            <span class="dag-turn-label">Turn ${index + 1} of ${totalTurns}</span>
+                            <time datetime="${escapeHtmlAttribute(execution.created_at || '')}">${formatDateTime(execution.created_at)}</time>
+                        </div>
+                        <span class="status-badge ${statusClass}">${statusLabel}</span>
+                    </div>
+                    <div class="dag-timeline-request">${escapeHtml(execution.original_request || 'Unknown request')}</div>
+                    <div class="dag-timeline-meta">
+                        ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
+                        <span>${execution.step_count || 0} steps</span>
+                        ${execution.failed_steps ? `<span class="dag-error-text">${execution.failed_steps} failed</span>` : ''}
+                        <span>${formatDuration(duration)}</span>
+                        ${turn.llm_call_count ? `<span>${turn.llm_call_count} LLM call${turn.llm_call_count === 1 ? '' : 's'}</span>` : ''}
+                        ${turn.history_status ? `<span>${escapeHtml(turn.history_status)}</span>` : ''}
+                    </div>
+                    <div class="dag-timeline-card-footer">
+                        <span class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</span>
+                        <span class="dag-view-dag-btn" aria-hidden="true">
+                            ${execution.request_id === selectedRequestID ? 'Viewing DAG' : 'View DAG'}
+                        </span>
+                    </div>
+                </div>
+                ${related.length > 0 ? `
+                    <div class="dag-timeline-related-list">
+                        <div class="dag-related-heading">${related.length} related execution${related.length === 1 ? '' : 's'}</div>
+                        ${related.map(item =>
+                            renderTimelineRelatedExecution(item, selectedRequestID)
+                        ).join('')}
+                    </div>` : ''}
+            </div>
+        </article>`;
+}
+
+function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = false) {
+    const current = execution.request_id === selectedRequestID;
+    const duration = (execution.total_duration_ms || 0) +
+        (execution.llm_total_duration_ms || 0);
+    const relation = orphan
+        ? 'Unattached'
+        : (execution.metadata?.resume_checkpoint_id ? 'HITL resume' : 'Delegated / related');
+    return `
+        <div
+            class="dag-timeline-related ${current ? 'current' : ''}"
+            role="button"
+            tabindex="0"
+            data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
+            aria-label="View DAG for ${escapeHtmlAttribute(relation.toLowerCase())} execution: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+            ${current ? 'aria-current="true"' : ''}
+        >
+            <span class="dag-related-branch" aria-hidden="true">↳</span>
+            <div>
+                <span class="dag-relation-label">${relation}</span>
+                <div>${escapeHtml(truncateText(execution.original_request || 'Unknown request', 72))}</div>
+                <div class="dag-timeline-meta">
+                    ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
+                    <span>${formatDateTime(execution.created_at)}</span>
+                    <span>${execution.step_count || 0} steps</span>
+                    <span>${formatDuration(duration)}</span>
+                    <span class="${execution.success ? 'dag-success-text' : 'dag-error-text'}">${execution.interrupted ? 'Interrupted' : (execution.success ? 'Success' : 'Failed')}</span>
+                </div>
+                <div class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</div>
+            </div>
+            <span class="dag-view-dag-btn" aria-hidden="true">
+                ${current ? 'Viewing DAG' : 'View DAG'}
+            </span>
+        </div>`;
+}
+
+function findConversationTurnIndex(timeline, requestID) {
+    if (!timeline || !requestID) return -1;
+    return (timeline.turns || []).findIndex(turn =>
+        turn.execution?.request_id === requestID ||
+        (turn.related_executions || []).some(item => item.request_id === requestID)
+    );
+}
+
+function navigateConversationTurn(direction) {
+    const conversationID = listPanelMode === 'timeline'
+        ? activeConversationID
+        : selected?.conversation_id;
+    const timeline = conversationCache.get(conversationID)?.data;
+    if (!timeline) return;
+    const currentIndex = findConversationTurnIndex(timeline, selected?.request_id);
+    const targetIndex = direction === 'previous' ? currentIndex - 1 : currentIndex + 1;
+    const target = timeline.turns?.[targetIndex]?.execution?.request_id;
+    if (target) void selectExecution(target);
+}
+
+function copyConversationID(button) {
+    if (activeConversationID) copyToClipboard(activeConversationID, button);
+}
+
+function setTimelineDiagnostic(message) {
+    const target = document.getElementById('dagTimelineDiagnostic');
+    if (!target) return;
+    target.classList.toggle('hidden', !message);
+    target.textContent = message || '';
+}
+
+function appendTimelineDiagnostic(message) {
+    const target = document.getElementById('dagTimelineDiagnostic');
+    if (!target || !message) return;
+    const combined = [target.textContent.trim(), message]
+        .filter(Boolean)
+        .join(' ');
+    target.classList.remove('hidden');
+    target.textContent = combined;
+}
+
+function renderTimelineError() {
+    const summary = document.getElementById('dagTimelineSummary');
+    if (summary) summary.textContent = 'Conversation unavailable';
+    setTimelineDiagnostic('The conversation timeline could not be loaded. Refresh to try again.');
+    const content = document.getElementById('dagTimelineContent');
+    if (content) {
+        content.innerHTML = `
+            <div class="empty-detail">
+                <div class="empty-detail-icon">⚠</div>
+                <div>The selected execution remains available in the DAG panel.</div>
+            </div>`;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Execution selection & detail
 // ---------------------------------------------------------------------------
 
-async function selectExecution(requestId) {
+async function selectExecution(
+    requestId,
+    { restoreTimelineActionFocus = false } = {},
+) {
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
     const detailPanel = document.getElementById('dagDetailPanel');
     showLoading(detailPanel, 'Loading execution...');
     try {
         // Use unified endpoint to get execution, LLM debug, and HITL data in one call
         const { data } = await fetchAPI(`/api/executions/${requestId}/unified`);
+        const selectionChanged = selected?.request_id !== data.request_id;
         selected = data;
         // Multi-phase support: merge all phase plan steps into plan.steps
         // so existing rendering code works unchanged
@@ -611,9 +1541,25 @@ async function selectExecution(requestId) {
         // matching suffixes on iterative call types (tiered_selection,
         // etc.) where the base label collides across iterations.
         annotateCallLabels(selected.llm_interactions);
+        if (selectionChanged) {
+            requestSelectedGroupAutoExpansion();
+        }
+        applyPendingSelectedGroupAutoExpansion();
         renderExecutionList();
+        const activeTimeline = conversationCache.get(activeConversationID)?.data;
+        if (activeTimeline && listPanelMode === 'timeline') {
+            renderConversationTimeline(activeTimeline, selected.request_id);
+        }
         updateDetailTabs(); // Update tab visibility based on available data
         renderExecutionDetail();
+        if (restoreTimelineActionFocus && listPanelMode === 'timeline') {
+            requestAnimationFrame(() => {
+                const action = Array.from(document.querySelectorAll(
+                    '[data-view-timeline-execution]',
+                )).find(button => button.dataset.viewTimelineExecution === requestId);
+                action?.focus({ preventScroll: true });
+            });
+        }
     } catch (error) {
         console.error('Failed to fetch execution:', error);
     } finally {
@@ -1274,7 +2220,10 @@ function initCytoscape() {
                     const resInfoFull = getResolutionInfo(result);
                     const baseLabelFull = step.agent_name || stepCapability;
                     const trimMetaFull = result?.metadata?.result_trim;
-                    const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                    // A step can be compacted without deterministic source loss
+                    // (for example, a distiller that analyzed the full source).
+                    // Keep compaction visibility separate from the loss warning.
+                    const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
                     const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                     nodes.push({
                         data: {
@@ -1402,7 +2351,9 @@ function initCytoscape() {
                 const resInfoFull = getResolutionInfo(result);
                 const baseLabelFull = step.agent_name || stepCapability;
                 const trimMetaFull = result?.metadata?.result_trim;
-                const wasTrimmedFull = isLossyTrim(trimMetaFull);
+                // Mirror the multi-phase path: show every recorded compaction,
+                // while isLossyTrim remains the authoritative loss check.
+                const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
                 const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
                 nodes.push({
                     data: {
@@ -3264,8 +4215,9 @@ function hasTrimDisplay(trim) {
     return !!(trim && trim.original_bytes > 0 && (isLossyTrim(trim) || trim.original_bytes !== trim.trimmed_bytes));
 }
 
-// trimNodeLabel renders the node's scissors marker for a lossy trim; ' lossy' disambiguates
-// when the byte pair alone would read as a no-op or growth.
+// trimNodeLabel renders the node's scissors marker whenever compaction changed the result.
+// 'lossy' disambiguates the unusual case where known content loss still produced an
+// equal-sized or larger output because disclosure annotations added bytes.
 function trimNodeLabel(trim) {
     const marker = trim.content_lost === true && trim.trimmed_bytes >= trim.original_bytes ? ' lossy' : '';
     return `\n✂ ${formatBytes(trim.original_bytes)}→${formatBytes(trim.trimmed_bytes)}${marker}`;

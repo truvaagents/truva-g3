@@ -8,6 +8,7 @@ import (
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 type conversationCompactorTestAIClient struct {
@@ -65,6 +66,51 @@ func TestLLMConversationCompactor_RecordsDebugInteractionOnSuccess(t *testing.T)
 	}
 	if interaction.Response != "short summary" {
 		t.Fatalf("expected debug interaction response to be recorded, got %q", interaction.Response)
+	}
+}
+
+func TestLLMConversationCompactor_PreservesBaggageMemberPropertiesForDebugStore(t *testing.T) {
+	client := &conversationCompactorTestAIClient{
+		response: &core.AIResponse{Content: "short summary"},
+	}
+	compactor, err := NewLLMConversationCompactor(client, nil)
+	if err != nil {
+		t.Fatalf("NewLLMConversationCompactor() error = %v", err)
+	}
+	debugStore := &mockLLMDebugStore{}
+	compactor.SetLLMDebugStore(debugStore)
+
+	ctx, err := telemetry.WithBaggageExact(
+		context.Background(),
+		MetadataConversationID,
+		"conversation-debug",
+		telemetry.WithMetricLabelEligibility(false),
+	)
+	if err != nil {
+		t.Fatalf("WithBaggageExact() error = %v", err)
+	}
+	ctx = telemetry.WithBaggage(ctx, "request_id", "request-debug")
+
+	if _, err := compactor.Compact(ctx, "", []core.ConversationTurn{
+		{Role: "user", Content: "new turn"},
+	}); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	debugStore.mu.Lock()
+	if len(debugStore.contexts) != 1 {
+		debugStore.mu.Unlock()
+		t.Fatalf("captured context count = %d, want 1", len(debugStore.contexts))
+	}
+	recordCtx := debugStore.contexts[0]
+	debugStore.mu.Unlock()
+
+	member := baggage.FromContext(recordCtx).Member(MetadataConversationID)
+	if member.Value() != "conversation-debug" {
+		t.Fatalf("copied conversation ID = %q", member.Value())
+	}
+	if !hasMetricExclusionProperty(member) {
+		t.Fatalf("copied baggage properties = %v, want metric exclusion", member.Properties())
 	}
 }
 

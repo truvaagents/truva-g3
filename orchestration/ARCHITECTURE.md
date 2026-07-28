@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.0
+**Version**: 1.1
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -23,6 +23,8 @@
 12. [Common Patterns & Examples](#common-patterns--examples)
 13. [Troubleshooting Guide](#troubleshooting-guide)
 14. [Future Considerations](#future-considerations)
+15. [Summary](#summary)
+16. [Version History](#version-history)
 
 ---
 
@@ -464,6 +466,37 @@ When a step reaches a HITL checkpoint, parameters are presented to a human for a
 ---
 
 ## Execution Models
+
+### Conversation correlation ingress
+
+`resolveConversationContext` is the single orchestration-ingress authority for
+canonical multi-turn correlation. It applies this presence-aware precedence:
+
+1. `metadata[MetadataConversationID]`
+2. the effective core candidate (`X-TruvaG3-Conversation-ID` before
+   programmatic `core.WithConversationID`)
+3. W3C baggage member `conversation_id`
+
+The resolver first clones metadata and removes inherited conversation identity
+from core context and baggage. A present higher-precedence candidate therefore
+blocks all lower-precedence candidates even when it is invalid. Valid identity
+is promoted atomically to sanitized request metadata, core context, and exact
+W3C baggage. The baggage member is marked metric-ineligible. Rejection is
+fail-open for business execution: it records only a bounded diagnostic reason,
+does not mark a span failed, does not expose the raw value, and leaves no
+conversation identity in the resulting request context.
+
+`MetadataConversationID` is canonical correlation metadata and is independent
+of `MetadataConversationTurns`. Producers must set it whenever an application
+has a conversation identity, including the first turn and delegation paths
+with no stored history. `session_id` remains application metadata; an example
+may map a session UUID to the canonical conversation ID, but the framework
+does not assign session semantics.
+
+Both structured-turn and formatted-history compaction caches use the resolved
+conversation ID. Changing that identifier during an in-flight conversation
+causes a cache miss and re-compaction; it never joins content from two
+conversations.
 
 ### 1. AI-Driven Orchestration
 
@@ -1590,6 +1623,46 @@ The orchestration module includes a debug store that captures complete LLM reque
 
 The store name is historical: it now carries both true LLM calls and selected non-LLM hook interactions when they materially improve production debugging. Examples include `conversation_history_prepare` (`Category: "logic"`), `user_memory_similarity_search` (`Category: "vector_db"`), and persistence-policy decisions (`Category: "logic"`). The registry viewer uses `HookPhase` plus `Category` to route these uniformly into LLM Debug, Pre-Execution, and Post-Execution views.
 
+#### Conversation-aware execution storage
+
+Conversation identity is stored in the existing `StoredExecution.Metadata` and
+`ExecutionSummary.Metadata` maps. `ExecutionConversationID` and
+`ExecutionSummaryConversationID` are the canonical accessors; the exported
+record field sets remain unchanged.
+
+`ExecutionStore` keeps its minimal required method set.
+`ConversationExecutionLister` is a separate optional capability discovered by
+type assertion. `NoOpExecutionStore` intentionally does not advertise it.
+Similarly, `StorageProvider` remains backend-neutral and unchanged;
+`IndexTTLManager` is an optional capability for providers that can extend a
+sorted index TTL without shortening it. A provider without that capability
+remains supported and relies on bounded lazy stale-member cleanup.
+
+Both the provider-backed store and direct Redis store:
+
+- validate `conversation_id` before any conversation-index command;
+- store records even when optional index or index-TTL maintenance fails;
+- use canonical single-colon keys and a SHA-256 digest rather than exposing the
+  raw ID in the key;
+- treat record metadata as authoritative and the index as an accelerator;
+- verify loaded record membership and prune stale or mismatched index members
+  without deleting live execution records;
+- return conversation results chronologically.
+
+`ExecutionStoreConfig.ConversationQueryLimit` defaults to 1000 and bounds
+returned records. `ConversationIndexScanLimit` defaults to 5000 and bounds
+work when stale entries are encountered. Explicit positive config values win;
+otherwise environment values are normalized by the factory and invalid or
+non-positive values fall back to defaults.
+
+HITL checkpoints use a framework-owned shallow clone of top-level application
+metadata. Framework additions, including `conversation_id` and
+`original_trace_id`, are read from `checkpoint.UserContext`; the caller's
+original top-level map is not mutated. Nested application values retain normal
+Go reference semantics. Resume context restores the validated canonical
+conversation ID before the `hitl.resume` linked span starts. Missing or invalid
+identity is scrubbed rather than inherited.
+
 **Configuration:**
 ```bash
 # Enable debug capture (default: false)
@@ -2223,3 +2296,12 @@ The orchestration module is the brain of the TruvaG3 framework, coordinating too
 The module follows the framework's design principles religiously, ensuring that it remains modular, testable, and maintainable while providing powerful orchestration capabilities.
 
 Remember: **The orchestrator never imports other modules directly** - it only depends on core interfaces. This is not a limitation but a strength that enables true modularity and flexibility.
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1 | 2026-07-27 | Established the pre-release conversation-resolution, checkpoint, and optional execution-store capability contracts |
+| 1.0 | 2025-09-28 | Initial architecture documentation |

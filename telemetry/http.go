@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/truvaagents/truva-g3/core"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -173,19 +174,29 @@ func stampTruvaG3HeadersOnSpan(r *http.Request) {
 		return
 	}
 	headerToAttr := []struct {
-		header string
-		attr   string
+		header                 string
+		attr                   string
+		validateConversationID bool
 	}{
-		{"X-TruvaG3-Request-ID", "request_id"},
-		{"X-TruvaG3-Original-Request-ID", "original_request_id"},
-		{"X-TruvaG3-Step-ID", "step_id"},
-		{"X-TruvaG3-Phase-Number", "phase_number"},
-		{"X-TruvaG3-Plan-ID", "plan_id"},
-		{"X-TruvaG3-Agent-Name", "caller_agent_name"},
+		{header: "X-TruvaG3-Request-ID", attr: "request_id"},
+		{header: "X-TruvaG3-Original-Request-ID", attr: "original_request_id"},
+		{
+			header:                 "X-TruvaG3-Conversation-ID",
+			attr:                   "conversation_id",
+			validateConversationID: true,
+		},
+		{header: "X-TruvaG3-Step-ID", attr: "step_id"},
+		{header: "X-TruvaG3-Phase-Number", attr: "phase_number"},
+		{header: "X-TruvaG3-Plan-ID", attr: "plan_id"},
+		{header: "X-TruvaG3-Agent-Name", attr: "caller_agent_name"},
 	}
 	attrs := make([]attribute.KeyValue, 0, len(headerToAttr))
 	for _, m := range headerToAttr {
 		if v := r.Header.Get(m.header); v != "" {
+			if m.validateConversationID &&
+				core.ValidateConversationID(v) != core.ConversationIDValidationNone {
+				continue
+			}
 			attrs = append(attrs, attribute.String(m.attr, v))
 		}
 	}

@@ -2225,6 +2225,32 @@ productionAgents, _ := agent.Discover(ctx, core.DiscoveryFilter{
 })
 ```
 
+### Conversation Correlation Context
+
+Core carries an opaque multi-turn correlation ID without assigning meaning to
+an application's `session_id`:
+
+```go
+if reason := core.ValidateConversationID(conversationID); reason != core.ConversationIDValidationNone {
+    return fmt.Errorf("invalid conversation ID: %s", reason)
+}
+
+ctx = core.WithConversationID(ctx, conversationID)
+validatedID := core.GetConversationID(ctx)
+candidate := core.GetConversationIDCandidate(ctx) // source/presence/rejection
+
+// Before reusing a context for an unrelated conversation:
+ctx = core.WithoutConversationID(ctx)
+```
+
+Valid IDs are 1–512 bytes and use the visible-ASCII subset documented by
+`ValidateConversationID`, allowing exact W3C baggage propagation. The explicit
+`X-TruvaG3-Conversation-ID` header has precedence over a programmatic
+candidate, regardless of whether extraction happens before or after
+`WithConversationID`. Invalid raw values are not retained. The orchestration
+module performs final source resolution and storage; core remains a
+dependency-free context/header carrier.
+
 ## 10. Best Practices
 
 ### 1. Choose the Right Component Type

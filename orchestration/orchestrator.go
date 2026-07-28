@@ -294,6 +294,7 @@ var reservedPropagationHeaders = map[string]bool{
 	"Content-Type":                  true, // Always application/json (set by executor)
 	"X-Truvag3-Request-Id":          true, // Distributed tracing (set by executor)
 	"X-Truvag3-Original-Request-Id": true, // Original request id across HITL resume (set by executor)
+	"X-Truvag3-Conversation-Id":     true, // Multi-turn conversation correlation (set by executor)
 	"X-Truvag3-Step-Id":             true, // Step correlation (set by executor)
 	"X-Truvag3-Phase-Number":        true, // Phase correlation (set by executor)
 	"X-Truvag3-Plan-Id":             true, // Plan correlation (set by executor)
@@ -1283,6 +1284,17 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	// The parent context may be canceled after the HTTP handler returns,
 	// but we still want the async recording to complete.
 	bag := telemetry.GetBaggage(ctx)
+	traceID := telemetry.GetTraceContext(ctx).TraceID
+	conversationID := core.GetConversationID(ctx)
+	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
+		conversationID = ""
+	}
+	originalRequestID := requestID
+	if bag != nil {
+		if origID := bag["original_request_id"]; origID != "" {
+			originalRequestID = origID
+		}
+	}
 
 	// Capture agentName now (accesses o.config which should be immutable)
 	agentName := o.getAgentName()
@@ -1297,18 +1309,6 @@ func (o *AIOrchestrator) storeExecutionAsync(
 		storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 
-		// Extract trace correlation from baggage
-		traceID := ""
-		originalRequestID := requestID
-		if bag != nil {
-			if tid, ok := bag["trace_id"]; ok {
-				traceID = tid
-			}
-			if origID, ok := bag["original_request_id"]; ok && origID != "" {
-				originalRequestID = origID
-			}
-		}
-
 		stored := &StoredExecution{
 			RequestID:         requestID,
 			OriginalRequestID: originalRequestID,
@@ -1320,6 +1320,12 @@ func (o *AIOrchestrator) storeExecutionAsync(
 			Interrupted:       checkpoint != nil,
 			Checkpoint:        checkpoint,
 			CreatedAt:         createdAt,
+		}
+
+		if conversationID != "" {
+			stored.Metadata = map[string]string{
+				MetadataConversationID: conversationID,
+			}
 		}
 
 		// Tag resumed executions so the registry viewer can link them to the interrupted one.
@@ -1366,10 +1372,14 @@ func (o *AIOrchestrator) storeExecutionAsync(
 					"operation":   "execution_store",
 					"request_id":  requestID,
 					"interrupted": checkpoint != nil,
-					"error":       storeErr.Error(),
+					"error_type":  "store_write",
+					"error":       safeExecutionStoreError(storeErr),
 				}
 				if traceID != "" {
 					logFields["trace_id"] = traceID
+				}
+				if conversationID != "" {
+					logFields[MetadataConversationID] = conversationID
 				}
 				if checkpoint != nil && checkpoint.CheckpointID != "" {
 					logFields["checkpoint_id"] = checkpoint.CheckpointID
@@ -1378,6 +1388,19 @@ func (o *AIOrchestrator) storeExecutionAsync(
 			}
 		}
 	}()
+}
+
+func safeExecutionStoreError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded):
+		return "execution store write timed out"
+	case errors.Is(err, context.Canceled):
+		return "execution store write canceled"
+	default:
+		return "execution store backend write failed"
+	}
 }
 
 // SetInterruptController sets the HITL interrupt controller.
@@ -2741,6 +2764,9 @@ func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, met
 	// can access it via telemetry.GetBaggage() and include it in their logs
 	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
 
+	ctx, conversationID, requestMetadata := o.resolveConversationContext(ctx, metadata)
+	metadata = requestMetadata
+
 	// Propagate agent name so downstream tool calls can identify the
 	// requesting agent (used by schedule_task to default target_agent).
 	if o.config.Name != "" {
@@ -2758,17 +2784,25 @@ func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, met
 	// when creating checkpoints during execution (e.g., step-level interrupts)
 	ctx = WithRequestID(ctx, requestID)
 
-	// Store metadata in context for HITL checkpoint creation
-	// This preserves session_id, user_id, etc. when creating checkpoints
-	ctx = WithMetadata(ctx, metadata)
+	// Store a merged clone for HITL checkpoint creation. Existing resume
+	// metadata survives nil request metadata, and only the validated canonical
+	// conversation ID is restored under the framework-owned key.
+	ctx = withCheckpointMetadata(ctx, metadata, conversationID)
 
 	// CRITICAL: Add request_id to the PARENT span (HTTP span) for trace searchability
 	// This must be done BEFORE creating the child orchestrator span, while the HTTP span
 	// is still the current span in context. This enables searching by request_id in distributed
 	// tracing tools to show the correct root operation name (e.g., "HTTP POST /chat/stream")
-	telemetry.SetSpanAttributes(ctx,
+	parentSpanAttributes := []attribute.KeyValue{
 		attribute.String("request_id", requestID),
-	)
+	}
+	if conversationID != "" {
+		parentSpanAttributes = append(
+			parentSpanAttributes,
+			attribute.String(MetadataConversationID, conversationID),
+		)
+	}
+	telemetry.SetSpanAttributes(ctx, parentSpanAttributes...)
 	// Also set original_request_id on parent span for trace correlation
 	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
 		telemetry.SetSpanAttributes(ctx,
@@ -2798,6 +2832,9 @@ func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, met
 	if span != nil {
 		span.SetAttribute("request_id", requestID)
 		span.SetAttribute("request_length", len(request))
+		if conversationID != "" {
+			span.SetAttribute(MetadataConversationID, conversationID)
+		}
 		// Set original_request_id for trace correlation - will be same as request_id on initial,
 		// or the original value on resumes (preserved from baggage set by handler)
 		if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
@@ -2991,6 +3028,9 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	// can access it via telemetry.GetBaggage() and include it in their logs
 	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
 
+	ctx, conversationID, requestMetadata := o.resolveConversationContext(ctx, metadata)
+	metadata = requestMetadata
+
 	// Propagate agent name so downstream tool calls can identify the
 	// requesting agent (used by schedule_task to default target_agent).
 	if o.config.Name != "" {
@@ -3008,17 +3048,25 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	// when creating checkpoints during execution (e.g., step-level interrupts)
 	ctx = WithRequestID(ctx, requestID)
 
-	// Store metadata in context for HITL checkpoint creation
-	// This preserves session_id, user_id, etc. when creating checkpoints
-	ctx = WithMetadata(ctx, metadata)
+	// Store a merged clone for HITL checkpoint creation. Existing resume
+	// metadata survives nil request metadata, and only the validated canonical
+	// conversation ID is restored under the framework-owned key.
+	ctx = withCheckpointMetadata(ctx, metadata, conversationID)
 
 	// CRITICAL: Add request_id to the PARENT span (HTTP span) for trace searchability
 	// This must be done BEFORE creating the child orchestrator span, while the HTTP span
 	// is still the current span in context. This enables searching by request_id in distributed
 	// tracing tools to show the correct root operation name (e.g., "HTTP POST /chat/stream")
-	telemetry.SetSpanAttributes(ctx,
+	parentSpanAttributes := []attribute.KeyValue{
 		attribute.String("request_id", requestID),
-	)
+	}
+	if conversationID != "" {
+		parentSpanAttributes = append(
+			parentSpanAttributes,
+			attribute.String(MetadataConversationID, conversationID),
+		)
+	}
+	telemetry.SetSpanAttributes(ctx, parentSpanAttributes...)
 	// Also set original_request_id on parent span for trace correlation
 	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
 		telemetry.SetSpanAttributes(ctx,
@@ -3037,6 +3085,9 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 
 	span.SetAttribute("request_id", requestID)
 	span.SetAttribute("streaming", true)
+	if conversationID != "" {
+		span.SetAttribute(MetadataConversationID, conversationID)
+	}
 	// Set original_request_id for trace correlation - will be same as request_id on initial,
 	// or the original value on resumes (preserved from baggage set by handler)
 	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {

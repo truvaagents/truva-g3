@@ -283,11 +283,17 @@ func hitlConversationTurnsFromMessages(history []Message) []core.ConversationTur
 }
 
 func (t *HITLChatAgent) addConversationHistoryMetadata(metadata map[string]interface{}, sessionID string, history []Message) {
-	if sessionID == "" || len(history) == 0 {
+	if sessionID == "" {
+		return
+	}
+
+	// This example maps one chat session to exactly one conversation.
+	metadata[orchestration.MetadataConversationID] = sessionID
+
+	if len(history) == 0 {
 		return
 	}
 	metadata[orchestration.MetadataConversationTurns] = hitlConversationTurnsFromMessages(history)
-	metadata[orchestration.MetadataConversationSessionKey] = sessionID
 	if formattedHistory := t.formatConversationHistory(history); formattedHistory != "" {
 		metadata[core.EnrichmentConversationHistory] = formattedHistory
 	}
