@@ -2664,11 +2664,14 @@ func deserializeExecution(data []byte) (*StoredExecution, error) {
 // getMockExecutionSummaries returns mock execution summaries for development
 func getMockExecutionSummaries() []ExecutionSummary {
 	now := time.Now()
+	const mockConversationID = "demo-travel-conversation"
 	return []ExecutionSummary{
 		{
 			RequestID:         "orch-1705312800123456789",
 			OriginalRequestID: "orch-1705312800123456789",
+			ConversationID:    mockConversationID,
 			TraceID:           "abc123def456",
+			AgentName:         "travel-chat-agent",
 			OriginalRequest:   "What's the weather in Tokyo and convert to Celsius?",
 			Success:           true,
 			StepCount:         2,
@@ -2679,7 +2682,9 @@ func getMockExecutionSummaries() []ExecutionSummary {
 		{
 			RequestID:         "orch-1705312700987654321",
 			OriginalRequestID: "orch-1705312700987654321",
+			ConversationID:    mockConversationID,
 			TraceID:           "xyz789abc012",
+			AgentName:         "travel-chat-agent",
 			OriginalRequest:   "Book a flight from NYC to London and check the weather",
 			Success:           false,
 			StepCount:         3,
@@ -2704,6 +2709,7 @@ func getMockExecutionSummaries() []ExecutionSummary {
 // getMockExecution returns a mock execution for development
 func getMockExecution(requestID string) *StoredExecution {
 	now := time.Now()
+	const mockConversationID = "demo-travel-conversation"
 
 	switch requestID {
 	case "orch-1705312800123456789":
@@ -2717,7 +2723,11 @@ func getMockExecution(requestID string) *StoredExecution {
 			RequestID:         requestID,
 			OriginalRequestID: requestID,
 			TraceID:           "abc123def456",
+			AgentName:         "travel-chat-agent",
 			OriginalRequest:   "What's the weather in Tokyo and convert to Celsius?",
+			Metadata: map[string]string{
+				orchestration.MetadataConversationID: mockConversationID,
+			},
 			Plan: &RoutingPlan{
 				PlanID:          requestID,
 				OriginalRequest: "What's the weather in Tokyo and convert to Celsius?",
@@ -2785,7 +2795,11 @@ func getMockExecution(requestID string) *StoredExecution {
 			RequestID:         requestID,
 			OriginalRequestID: requestID,
 			TraceID:           "xyz789abc012",
+			AgentName:         "travel-chat-agent",
 			OriginalRequest:   "Book a flight from NYC to London and check the weather",
+			Metadata: map[string]string{
+				orchestration.MetadataConversationID: mockConversationID,
+			},
 			Plan: &RoutingPlan{
 				PlanID:          requestID,
 				OriginalRequest: "Book a flight from NYC to London and check the weather",
