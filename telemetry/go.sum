@@ -37,8 +37,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/truvaagents/truva-g3/core v0.2.0 h1:EStsfUSsoMRWKyspFvN1Csg7W5H6HWmr8DLJMA1PHlc=
-github.com/truvaagents/truva-g3/core v0.2.0/go.mod h1:htx9LSkj39jVTDhE8e/i5C3+xOrkzCsXYgbdMEcBhEg=
+github.com/truvaagents/truva-g3/core v0.3.0 h1:zcEXqYR0tEY0b7NvAPbGovwPWwNG8eU3D4mHmwzOpB8=
+github.com/truvaagents/truva-g3/core v0.3.0/go.mod h1:WvvKpYHzhCmifaDNNJjZPUmNAy5m5CSDuD5PVxY5lKY=
 github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
 github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
