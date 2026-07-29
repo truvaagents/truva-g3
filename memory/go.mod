@@ -43,8 +43,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// Temporary release bootstrap; remove after core/v0.3.0 and telemetry/v0.3.0 are published.
-replace github.com/truvaagents/truva-g3/core => ../core
-
-replace github.com/truvaagents/truva-g3/telemetry => ../telemetry
