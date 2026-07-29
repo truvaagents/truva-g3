@@ -2,7 +2,7 @@ module github.com/truvaagents/truva-g3
 
 go 1.26.4
 
-require github.com/truvaagents/truva-g3/core v0.2.0
+require github.com/truvaagents/truva-g3/core v0.3.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -18,3 +18,6 @@ require (
 // unresolvable core requirement, so external consumers cannot build it. It is
 // superseded by v0.2.0.
 retract v0.1.0
+
+// Temporary release bootstrap; remove after core/v0.3.0 is published.
+replace github.com/truvaagents/truva-g3/core => ./core

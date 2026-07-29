@@ -3,10 +3,10 @@ module github.com/truvaagents/truva-g3/examples/my-streaming-agent
 go 1.26.4
 
 require (
-	github.com/truvaagents/truva-g3/ai v0.2.0
-	github.com/truvaagents/truva-g3/core v0.2.0
-	github.com/truvaagents/truva-g3/orchestration v0.2.0
-	github.com/truvaagents/truva-g3/telemetry v0.2.0
+	github.com/truvaagents/truva-g3/ai v0.3.0
+	github.com/truvaagents/truva-g3/core v0.3.0
+	github.com/truvaagents/truva-g3/orchestration v0.3.0
+	github.com/truvaagents/truva-g3/telemetry v0.3.0
 )
 
 // Use local workspace modules for development
