@@ -4,10 +4,10 @@ go 1.26.4
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/truvaagents/truva-g3/core v0.2.0
-	github.com/truvaagents/truva-g3/memory v0.2.0
-	github.com/truvaagents/truva-g3/orchestration v0.2.0
-	github.com/truvaagents/truva-g3/telemetry v0.2.0
+	github.com/truvaagents/truva-g3/core v0.3.0
+	github.com/truvaagents/truva-g3/memory v0.3.0
+	github.com/truvaagents/truva-g3/orchestration v0.3.0
+	github.com/truvaagents/truva-g3/telemetry v0.3.0
 )
 
 require (

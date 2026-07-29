@@ -8,8 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.30
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.56.0
 	github.com/stretchr/testify v1.11.1
-	github.com/truvaagents/truva-g3/core v0.2.0
-	github.com/truvaagents/truva-g3/telemetry v0.2.0
+	github.com/truvaagents/truva-g3/core v0.3.0
+	github.com/truvaagents/truva-g3/telemetry v0.3.0
 	go.opentelemetry.io/otel v1.44.0
 )
 
@@ -56,3 +56,8 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary release bootstrap; remove after core/v0.3.0 and telemetry/v0.3.0 are published.
+replace github.com/truvaagents/truva-g3/core => ../core
+
+replace github.com/truvaagents/truva-g3/telemetry => ../telemetry

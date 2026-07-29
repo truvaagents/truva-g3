@@ -3,8 +3,8 @@ module github.com/truvaagents/truva-g3/resilience
 go 1.26.4
 
 require (
-	github.com/truvaagents/truva-g3/core v0.2.0
-	github.com/truvaagents/truva-g3/telemetry v0.2.0
+	github.com/truvaagents/truva-g3/core v0.3.0
+	github.com/truvaagents/truva-g3/telemetry v0.3.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0
 )
@@ -38,3 +38,8 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// Temporary release bootstrap; remove after core/v0.3.0 and telemetry/v0.3.0 are published.
+replace github.com/truvaagents/truva-g3/core => ../core
+
+replace github.com/truvaagents/truva-g3/telemetry => ../telemetry
