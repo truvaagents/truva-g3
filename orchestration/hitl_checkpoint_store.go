@@ -3,9 +3,12 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,10 +46,10 @@ import (
 
 // RedisCheckpointStore implements CheckpointStore using Redis.
 type RedisCheckpointStore struct {
-	client    *redis.Client
-	keyPrefix string
-	ttl       time.Duration
-	redisURL  string // For error messages
+	client     redis.UniversalClient
+	ownsClient bool
+	keyPrefix  string
+	ttl        time.Duration
 
 	// Optional dependencies (injected per framework patterns)
 	logger    core.Logger    // Defaults to NoOp
@@ -57,14 +60,15 @@ type RedisCheckpointStore struct {
 	agentAddress string // from core.ResolveServiceAddress; empty if address cannot be resolved
 
 	// Expiry processor state
-	expiryCtx      context.Context
-	expiryCancel   context.CancelFunc
-	expiryCallback ExpiryCallback
-	expiryWg       sync.WaitGroup
-	expiryStarted  bool
-	expiryMu       sync.Mutex // Protects expiry processor state
-	instanceID     string     // For distributed claim mechanism
-	config         ExpiryProcessorConfig
+	expiryCtx       context.Context
+	expiryCancel    context.CancelFunc
+	expiryCallback  ExpiryCallback
+	expiryWg        sync.WaitGroup
+	expiryStarted   bool
+	expiryMu        sync.Mutex // Protects expiry processor state
+	expiryProcessor *CheckpointExpiryProcessor
+	instanceID      string // For distributed claim mechanism
+	config          ExpiryProcessorConfig
 }
 
 // redisCheckpointConfig holds configuration for the checkpoint store
@@ -76,6 +80,62 @@ type redisCheckpointConfig struct {
 	logger     core.Logger
 	telemetry  core.Telemetry
 	instanceID string // For distributed claim mechanism
+}
+
+type redisCheckpointIdentity struct {
+	basePrefix         string
+	basePrefixExplicit bool
+	agentName          string
+	agentNameSource    string
+	keyPrefix          string
+	agentAddress       string
+}
+
+func resolveRedisCheckpointIdentity() redisCheckpointIdentity {
+	identity := redisCheckpointIdentity{
+		basePrefix:         getEnvOrDefault("TRUVAG3_HITL_KEY_PREFIX", "truvag3:hitl"),
+		basePrefixExplicit: os.Getenv("TRUVAG3_HITL_KEY_PREFIX") != "",
+		agentName:          getEnvOrDefault("TRUVAG3_AGENT_NAME", ""),
+		agentNameSource:    "TRUVAG3_AGENT_NAME",
+	}
+	if identity.agentName == "" {
+		identity.agentName = getEnvOrDefault(core.EnvServiceName, "")
+		identity.agentNameSource = core.EnvServiceName
+	}
+	if identity.agentName == "" {
+		identity.agentNameSource = "none"
+	}
+	identity.keyPrefix = identity.basePrefix
+	if identity.agentName != "" {
+		identity.keyPrefix = fmt.Sprintf("%s:%s", identity.basePrefix, identity.agentName)
+	}
+
+	config := core.DefaultConfig()
+	_ = config.LoadFromEnv()
+	address, port := core.ResolveServiceAddress(config, nil)
+	if address != "" && port != 0 {
+		identity.agentAddress = fmt.Sprintf("http://%s:%d", address, port)
+	}
+	return identity
+}
+
+func logRedisCheckpointIdentity(config *redisCheckpointConfig, identity redisCheckpointIdentity) {
+	if config.logger != nil {
+		config.logger.Debug("Checkpoint store key prefix resolved", map[string]interface{}{
+			"operation":  "checkpoint_store_init",
+			"key_prefix": config.keyPrefix,
+			"source":     identity.agentNameSource,
+		})
+	}
+	if identity.agentName == "" && !identity.basePrefixExplicit &&
+		config.keyPrefix == identity.basePrefix && config.logger != nil {
+		config.logger.Warn("HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME (or TRUVAG3_K8S_SERVICE_NAME) to isolate per-agent state", map[string]interface{}{
+			"operation":   "checkpoint_store_init",
+			"key_prefix":  config.keyPrefix,
+			"impact":      "multiple agents sharing this Redis will share the pending index; viewer may show duplicate HITL checkpoints",
+			"remediation": "set TRUVAG3_AGENT_NAME, TRUVAG3_K8S_SERVICE_NAME, TRUVAG3_HITL_KEY_PREFIX, or pass WithCheckpointKeyPrefix",
+		})
+	}
 }
 
 // RedisCheckpointStoreOption configures the checkpoint store
@@ -160,32 +220,13 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	// basePrefixExplicit tracks whether the operator explicitly set TRUVAG3_HITL_KEY_PREFIX
 	// — used by the shared-prefix warning below to suppress false positives when the
 	// operator has already chosen an isolating prefix via that env var.
-	basePrefixExplicit := os.Getenv("TRUVAG3_HITL_KEY_PREFIX") != ""
-	basePrefix := getEnvOrDefault("TRUVAG3_HITL_KEY_PREFIX", "truvag3:hitl")
-	agentName := getEnvOrDefault("TRUVAG3_AGENT_NAME", "")
-	agentNameSource := "TRUVAG3_AGENT_NAME"
-	if agentName == "" {
-		// Fall back to K8s service name — semantically equivalent in K8s deployments.
-		// Uses core.EnvServiceName constant — single source of truth per design principles §3.3.
-		agentName = getEnvOrDefault(core.EnvServiceName, "")
-		agentNameSource = core.EnvServiceName
-	}
-	if agentName == "" {
-		// Neither env var supplied a value. Mark the source as "none" so the
-		// startup log doesn't falsely attribute the prefix to an env var that
-		// was checked but empty.
-		agentNameSource = "none"
-	}
-	keyPrefix := basePrefix
-	if agentName != "" {
-		keyPrefix = fmt.Sprintf("%s:%s", basePrefix, agentName)
-	}
+	identity := resolveRedisCheckpointIdentity()
 
 	// Initialize config with defaults
 	config := &redisCheckpointConfig{
 		redisURL:  getEnvOrDefault("REDIS_URL", "redis://localhost:6379"),
 		redisDB:   getEnvIntOrDefault("TRUVAG3_HITL_REDIS_DB", 6), // Default to DB 6 for HITL
-		keyPrefix: keyPrefix,
+		keyPrefix: identity.keyPrefix,
 		ttl:       24 * time.Hour,
 		logger:    &core.NoOpLogger{},
 	}
@@ -201,13 +242,7 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	// Read from config.keyPrefix (not the local keyPrefix) so WithCheckpointKeyPrefix
 	// overrides are reflected accurately. Emit unconditionally — operators should be
 	// able to confirm which prefix this process is actually using.
-	if config.logger != nil {
-		config.logger.Debug("Checkpoint store key prefix resolved", map[string]interface{}{
-			"operation":  "checkpoint_store_init",
-			"key_prefix": config.keyPrefix,
-			"source":     agentNameSource,
-		})
-	}
+	logRedisCheckpointIdentity(config, identity)
 
 	// Warn when no isolating identifier has been supplied through any of the
 	// available paths. Multiple agents that all land in this branch share a single
@@ -218,19 +253,10 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	//   - TRUVAG3_AGENT_NAME / TRUVAG3_K8S_SERVICE_NAME (covered by agentName != "")
 	//   - TRUVAG3_HITL_KEY_PREFIX (covered by basePrefixExplicit — they made a deliberate choice)
 	//   - WithCheckpointKeyPrefix option (covered by config.keyPrefix != basePrefix)
-	if agentName == "" && !basePrefixExplicit && config.keyPrefix == basePrefix && config.logger != nil {
-		config.logger.Warn("HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME (or TRUVAG3_K8S_SERVICE_NAME) to isolate per-agent state", map[string]interface{}{
-			"operation":   "checkpoint_store_init",
-			"key_prefix":  config.keyPrefix,
-			"impact":      "multiple agents sharing this Redis will share the pending index; viewer may show duplicate HITL checkpoints",
-			"remediation": "set TRUVAG3_AGENT_NAME, TRUVAG3_K8S_SERVICE_NAME, TRUVAG3_HITL_KEY_PREFIX, or pass WithCheckpointKeyPrefix",
-		})
-	}
-
 	// Parse Redis URL and create options
 	redisOpts, err := redis.ParseURL(config.redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Redis URL %s: %w (check REDIS_URL environment variable)", config.redisURL, err)
+		return nil, fmt.Errorf("failed to parse Redis configuration: %w (check REDIS_URL environment variable)", core.ErrInvalidConfiguration)
 	}
 	redisOpts.DB = config.redisDB
 
@@ -242,7 +268,8 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis at %s: %w (check REDIS_URL and Redis connectivity)", config.redisURL, err)
+		_ = client.Close()
+		return nil, fmt.Errorf("failed to connect to Redis: %w (check REDIS_URL and Redis connectivity)", core.RedactSensitiveError(err))
 	}
 
 	// Generate instance ID if not provided
@@ -251,27 +278,45 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 		instanceID = generateInstanceID()
 	}
 
-	// Resolve agent address for checkpoint stamping (RC3-Backend).
-	// DefaultConfig + LoadFromEnv does NOT call Validate — safe even when
-	// TRUVAG3_AGENT_NAME / TRUVAG3_K8S_SERVICE_NAME are unset in the environment.
-	cfg := core.DefaultConfig()
-	_ = cfg.LoadFromEnv() // returns nil on success; no validation called
-	resolvedAddr, resolvedPort := core.ResolveServiceAddress(cfg, nil)
-	agentAddress := ""
-	if resolvedAddr != "" && resolvedPort != 0 {
-		agentAddress = fmt.Sprintf("http://%s:%d", resolvedAddr, resolvedPort)
-	}
-
 	return &RedisCheckpointStore{
 		client:       client,
+		ownsClient:   true,
 		keyPrefix:    config.keyPrefix,
 		ttl:          config.ttl,
-		redisURL:     config.redisURL,
 		logger:       config.logger,
 		telemetry:    config.telemetry,
 		instanceID:   instanceID,
-		agentName:    agentName,
-		agentAddress: agentAddress,
+		agentName:    identity.agentName,
+		agentAddress: identity.agentAddress,
+	}, nil
+}
+
+// NewRedisCheckpointStoreWithClient creates a checkpoint store using an
+// application-owned Redis client. Close leaves the supplied client open.
+func NewRedisCheckpointStoreWithClient(client redis.UniversalClient, opts ...RedisCheckpointStoreOption) (*RedisCheckpointStore, error) {
+	if client == nil {
+		return nil, fmt.Errorf("redis checkpoint client is required")
+	}
+	identity := resolveRedisCheckpointIdentity()
+	config := &redisCheckpointConfig{
+		keyPrefix: identity.keyPrefix,
+		ttl:       24 * time.Hour,
+		logger:    &core.NoOpLogger{},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(config)
+		}
+	}
+	logRedisCheckpointIdentity(config, identity)
+	instanceID := config.instanceID
+	if instanceID == "" {
+		instanceID = generateInstanceID()
+	}
+	return &RedisCheckpointStore{
+		client: client, keyPrefix: config.keyPrefix, ttl: config.ttl,
+		logger: config.logger, telemetry: config.telemetry, instanceID: instanceID,
+		agentName: identity.agentName, agentAddress: identity.agentAddress,
 	}, nil
 }
 
@@ -310,7 +355,7 @@ func (s *RedisCheckpointStore) SaveCheckpoint(ctx context.Context, cp *Execution
 				"error":         err.Error(),
 			})
 		}
-		return fmt.Errorf("failed to save checkpoint %s to Redis: %w (check REDIS_URL=%s and Redis connectivity)", cp.CheckpointID, err, s.redisURL)
+		return fmt.Errorf("failed to save checkpoint %s to Redis: %w (check REDIS_URL and Redis connectivity)", cp.CheckpointID, err)
 	}
 
 	// Add to pending index if status is pending
@@ -399,7 +444,7 @@ func (s *RedisCheckpointStore) LoadCheckpoint(ctx context.Context, checkpointID 
 				"error":         err.Error(),
 			})
 		}
-		return nil, fmt.Errorf("failed to load checkpoint %s from Redis: %w (check REDIS_URL=%s)", checkpointID, err, s.redisURL)
+		return nil, fmt.Errorf("failed to load checkpoint %s from Redis: %w (check REDIS_URL and Redis connectivity)", checkpointID, err)
 	}
 
 	var cp ExecutionCheckpoint
@@ -644,6 +689,10 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 //	TRUVAG3_HITL_EXPIRY_BATCH_SIZE - Max checkpoints per scan (default: 100)
 //	TRUVAG3_HITL_EXPIRY_DELIVERY  - Delivery semantics: "at_most_once" or "at_least_once" (default: at_most_once)
 //
+// Claim-lease tuning is processor runtime configuration rather than expiry
+// behavior. Load it separately with
+// LoadCheckpointExpiryRuntimeConfigFromEnvironment.
+//
 // Usage:
 //
 //	// Load from environment variables
@@ -678,6 +727,9 @@ func ExpiryProcessorConfigFromEnv() ExpiryProcessorConfig {
 
 // Close closes the Redis connection
 func (s *RedisCheckpointStore) Close() error {
+	if !s.ownsClient {
+		return nil
+	}
 	return s.client.Close()
 }
 
@@ -754,6 +806,28 @@ func (s *RedisCheckpointStore) StartExpiryProcessor(ctx context.Context, config 
 	if s.instanceID == "" {
 		s.instanceID = generateInstanceID()
 	}
+	runtimeConfig, err := LoadCheckpointExpiryRuntimeConfigFromEnvironment(
+		DefaultCheckpointExpiryRuntimeConfig(), os.LookupEnv,
+	)
+	if err != nil {
+		s.expiryStarted = false
+		s.expiryCancel = nil
+		return err
+	}
+	processor, err := NewCheckpointExpiryProcessor(
+		s, s, s.expiryCallback, config,
+		WithCheckpointExpiryOwner(s.instanceID),
+		WithCheckpointExpiryRuntimeConfig(runtimeConfig),
+		WithCheckpointExpiryLogger(s.logger),
+		WithCheckpointExpiryTelemetry(s.telemetry),
+		WithCheckpointExpiryPolicy(legacyCheckpointExpiryPolicyFromEnvironment()),
+	)
+	if err != nil {
+		s.expiryStarted = false
+		s.expiryCancel = nil
+		return err
+	}
+	s.expiryProcessor = processor
 
 	s.expiryWg.Add(1)
 	go s.expiryProcessorLoop()
@@ -769,6 +843,29 @@ func (s *RedisCheckpointStore) StartExpiryProcessor(ctx context.Context, config 
 	}
 
 	return nil
+}
+
+func legacyCheckpointExpiryPolicyFromEnvironment() CheckpointExpiryPolicy {
+	policy := DefaultCheckpointExpiryPolicy()
+	switch os.Getenv("TRUVAG3_HITL_DEFAULT_REQUEST_MODE") {
+	case "streaming":
+		policy.DefaultRequestMode = RequestModeStreaming
+	case "non_streaming":
+		policy.DefaultRequestMode = RequestModeNonStreaming
+	}
+	switch os.Getenv("TRUVAG3_HITL_STREAMING_EXPIRY") {
+	case "apply_default":
+		policy.StreamingBehavior = StreamingExpiryApplyDefault
+	case "implicit_deny":
+		policy.StreamingBehavior = StreamingExpiryImplicitDeny
+	}
+	switch os.Getenv("TRUVAG3_HITL_NON_STREAMING_EXPIRY") {
+	case "apply_default":
+		policy.NonStreamingBehavior = NonStreamingExpiryApplyDefault
+	case "implicit_deny":
+		policy.NonStreamingBehavior = NonStreamingExpiryImplicitDeny
+	}
+	return policy
 }
 
 // StopExpiryProcessor stops the expiry processor gracefully.
@@ -819,21 +916,17 @@ func (s *RedisCheckpointStore) SetExpiryCallback(callback ExpiryCallback) error 
 // expiryProcessorLoop runs the background expiry processor.
 func (s *RedisCheckpointStore) expiryProcessorLoop() {
 	defer s.expiryWg.Done()
-
-	ticker := time.NewTicker(s.config.ScanInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			s.processExpiredCheckpoints()
-		case <-s.expiryCtx.Done():
-			return
-		}
+	if s.expiryProcessor == nil {
+		return
 	}
+	_ = s.expiryProcessor.Start(s.expiryCtx)
 }
 
-// processExpiredCheckpoints processes all expired checkpoints.
+// processExpiredCheckpoints is the legacy store-owned scan implementation.
+// New lifecycle composition delegates to CheckpointExpiryProcessor; retain
+// this internal fallback during the source-compatibility window.
+//
+//nolint:unused // compatibility fallback while public Start/Stop adapters remain supported
 func (s *RedisCheckpointStore) processExpiredCheckpoints() {
 	// Track scan duration for metrics
 	scanStartTime := time.Now()
@@ -936,7 +1029,10 @@ func (s *RedisCheckpointStore) processExpiredCheckpoints() {
 	}
 }
 
-// processExpiredCheckpoint handles a single expired checkpoint.
+// processExpiredCheckpoint is the single-record half of the legacy
+// store-owned expiry fallback described above.
+//
+//nolint:unused // compatibility fallback while public Start/Stop adapters remain supported
 func (s *RedisCheckpointStore) processExpiredCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) {
 	var newStatus CheckpointStatus
 	var appliedAction CommandType
@@ -1326,6 +1422,164 @@ func (s *RedisCheckpointStore) claimExpiredCheckpoint(ctx context.Context, check
 	return success, nil
 }
 
+// ClaimExpiredCheckpoints implements the provider-neutral, atomic expiry claim
+// capability. Eligibility is checked before each Redis SETNX lease; only
+// successfully claimed pending checkpoints are returned.
+func (s *RedisCheckpointStore) ClaimExpiredCheckpoints(
+	ctx context.Context,
+	request ExpiredCheckpointClaimRequest,
+) ([]*ExecutionCheckpoint, error) {
+	if request.Before.IsZero() {
+		return nil, fmt.Errorf("expired checkpoint claim before time is required")
+	}
+	if request.Limit <= 0 || request.Limit > 10000 {
+		return nil, fmt.Errorf("expired checkpoint claim limit must be between 1 and 10000")
+	}
+	if request.Lease <= 0 {
+		return nil, fmt.Errorf("expired checkpoint claim lease must be positive")
+	}
+	owner := strings.TrimSpace(request.Owner)
+	if owner == "" || len(owner) > maxCheckpointClaimOwnerLen {
+		return nil, fmt.Errorf("expired checkpoint claim owner must contain 1-%d characters", maxCheckpointClaimOwnerLen)
+	}
+	request.Owner = owner
+
+	pendingKey := fmt.Sprintf("%s:pending", s.keyPrefix)
+	checkpointIDs, err := s.client.SMembers(ctx, pendingKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("read pending checkpoint index: %w", err)
+	}
+	sort.Strings(checkpointIDs)
+	claimed := make([]*ExecutionCheckpoint, 0, request.Limit)
+	for _, checkpointID := range checkpointIDs {
+		if len(claimed) >= request.Limit {
+			break
+		}
+		checkpoint, acquired, claimErr := s.claimEligibleExpiredCheckpoint(ctx, pendingKey, checkpointID, request)
+		if claimErr != nil {
+			return nil, s.releaseClaimBatchAfterFailure(ctx, claimed, owner,
+				fmt.Errorf("claim expired checkpoint %s: %w", checkpointID, claimErr))
+		}
+		if acquired {
+			claimed = append(claimed, checkpoint)
+			RecordClaimSuccess()
+		} else {
+			RecordClaimSkipped()
+		}
+	}
+	return claimed, nil
+}
+
+var (
+	errExpiredCheckpointMissing    = errors.New("expired checkpoint is missing")
+	errExpiredCheckpointIneligible = errors.New("checkpoint is not eligible for expiry")
+)
+
+func (s *RedisCheckpointStore) claimEligibleExpiredCheckpoint(
+	ctx context.Context,
+	pendingKey string,
+	checkpointID string,
+	request ExpiredCheckpointClaimRequest,
+) (*ExecutionCheckpoint, bool, error) {
+	checkpointKey := fmt.Sprintf("%s:checkpoint:%s", s.keyPrefix, checkpointID)
+	claimKey := fmt.Sprintf("%s:expiry:claim:%s", s.keyPrefix, checkpointID)
+	var checkpoint *ExecutionCheckpoint
+	var acquired bool
+	err := s.client.Watch(ctx, func(transaction *redis.Tx) error {
+		pending, err := transaction.SIsMember(ctx, pendingKey, checkpointID).Result()
+		if err != nil {
+			return err
+		}
+		if !pending {
+			return errExpiredCheckpointIneligible
+		}
+
+		raw, err := transaction.Get(ctx, checkpointKey).Bytes()
+		if errors.Is(err, redis.Nil) {
+			if _, cleanupErr := transaction.TxPipelined(ctx, func(pipeline redis.Pipeliner) error {
+				pipeline.SRem(ctx, pendingKey, checkpointID)
+				return nil
+			}); cleanupErr != nil {
+				return cleanupErr
+			}
+			return errExpiredCheckpointMissing
+		}
+		if err != nil {
+			return err
+		}
+		candidate := new(ExecutionCheckpoint)
+		if err := json.Unmarshal(raw, candidate); err != nil {
+			return fmt.Errorf("decode checkpoint: %w", err)
+		}
+		if candidate.Status != CheckpointStatusPending || candidate.ExpiresAt.After(request.Before) {
+			return errExpiredCheckpointIneligible
+		}
+
+		var command *redis.BoolCmd
+		if _, err := transaction.TxPipelined(ctx, func(pipeline redis.Pipeliner) error {
+			command = pipeline.SetNX(ctx, claimKey, request.Owner, request.Lease)
+			return nil
+		}); err != nil {
+			return err
+		}
+		acquired, err = command.Result()
+		if err != nil {
+			return err
+		}
+		checkpoint = candidate
+		return nil
+	}, pendingKey, checkpointKey, claimKey)
+	switch {
+	case errors.Is(err, errExpiredCheckpointMissing),
+		errors.Is(err, errExpiredCheckpointIneligible),
+		errors.Is(err, redis.TxFailedErr):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, err
+	default:
+		return checkpoint, acquired, nil
+	}
+}
+
+func (s *RedisCheckpointStore) releaseClaimBatchAfterFailure(
+	ctx context.Context,
+	claimed []*ExecutionCheckpoint,
+	owner string,
+	cause error,
+) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	errorsToJoin := []error{cause}
+	for _, checkpoint := range claimed {
+		if checkpoint == nil {
+			continue
+		}
+		if err := s.ReleaseExpiredCheckpointClaim(cleanupCtx, checkpoint.CheckpointID, owner); err != nil {
+			errorsToJoin = append(errorsToJoin, err)
+		}
+	}
+	return errors.Join(errorsToJoin...)
+}
+
+// ReleaseExpiredCheckpointClaim atomically releases a claim only when owner
+// still owns it.
+func (s *RedisCheckpointStore) ReleaseExpiredCheckpointClaim(ctx context.Context, checkpointID, owner string) error {
+	if checkpointID == "" || strings.TrimSpace(owner) == "" {
+		return fmt.Errorf("checkpoint ID and claim owner are required")
+	}
+	claimKey := fmt.Sprintf("%s:expiry:claim:%s", s.keyPrefix, checkpointID)
+	const releaseScript = `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		end
+		return 0
+	`
+	if _, err := s.client.Eval(ctx, releaseScript, []string{claimKey}, owner).Result(); err != nil {
+		return fmt.Errorf("release expired checkpoint claim %s: %w", checkpointID, err)
+	}
+	return nil
+}
+
 // releaseExpiredCheckpointClaim releases the claim after processing.
 // Only releases if this instance holds the claim (atomic check-and-delete using Lua script).
 func (s *RedisCheckpointStore) releaseExpiredCheckpointClaim(ctx context.Context, checkpointID string) error {
@@ -1356,3 +1610,5 @@ func (s *RedisCheckpointStore) releaseExpiredCheckpointClaim(ctx context.Context
 
 // Compile-time interface compliance check
 var _ CheckpointStore = (*RedisCheckpointStore)(nil)
+var _ CheckpointPersistence = (*RedisCheckpointStore)(nil)
+var _ ExpiredCheckpointSource = (*RedisCheckpointStore)(nil)

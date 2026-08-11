@@ -210,12 +210,18 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 	// Call LLM for synthesis
 	ctx = telemetry.WithBaggage(ctx, "ai.purpose", "synthesis")
 	llmStartTime := time.Now()
-	aiResponse, _, err := invokeAI(ctx, s.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "synthesis",
 		Prompt:         prompt,
 		Options:        synthesisOpts,
 		DeferRecording: s.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, s.aiClient, invocation)
+	var aiResponse *core.AIResponse
+	if invocationResult != nil {
+		aiResponse = invocationResult.Response
+	}
+	effective := effectiveAIRequestForDebug(invocationResult, invocation)
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "synthesis", aiResponse.Usage)
@@ -227,16 +233,18 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 			attribute.Int64("duration_ms", llmDuration.Milliseconds()),
 		)
 
-		// LLM Debug: Record failed synthesis attempt
+		// LLM Debug: Record failed synthesis attempt from the prepared request.
+		model, provider := effectiveAIIdentity(invocationResult, aiResponse, err)
 		s.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:         "synthesis",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
-			Prompt:       prompt,
-			SystemPrompt: systemPrompt,
-			Temperature:  roundLegacyFloat(float64(synthesisOpts.Temperature)),
-			MaxTokens:    synthesisOpts.MaxTokens,
-			Model:        synthesisOpts.Model,
+			Prompt:       effective.Prompt,
+			SystemPrompt: effective.SystemPrompt,
+			Temperature:  effectiveAITemperature(effective, synthesisOpts.Temperature),
+			MaxTokens:    effectiveAIMaxTokens(effective, synthesisOpts.MaxTokens),
+			Model:        model,
+			Provider:     provider,
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
@@ -270,16 +278,17 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 	)
 
 	// LLM Debug: Record successful synthesis
+	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 	s.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "synthesis",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		SystemPrompt:     systemPrompt,
-		Temperature:      roundLegacyFloat(float64(synthesisOpts.Temperature)),
-		MaxTokens:        synthesisOpts.MaxTokens,
-		Model:            aiResponse.Model,
-		Provider:         aiResponse.Provider,
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, synthesisOpts.Temperature),
+		MaxTokens:        effectiveAIMaxTokens(effective, synthesisOpts.MaxTokens),
+		Model:            model,
+		Provider:         provider,
 		Response:         aiResponse.Content,
 		PromptTokens:     aiResponse.Usage.PromptTokens,
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
@@ -410,7 +419,7 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				if results.Steps[i].Metadata == nil {
 					results.Steps[i].Metadata = make(map[string]interface{})
 				}
-				results.Steps[i].Metadata["result_trim"] = trimMeta
+				results.Steps[i].Metadata["result_trim"] = cloneResultTrimMetadata(trimMeta)
 			}
 
 			trimmedSize := len(response)

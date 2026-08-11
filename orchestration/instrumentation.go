@@ -3,6 +3,29 @@ package orchestration
 import "github.com/truvaagents/truva-g3/telemetry"
 
 func init() {
+	telemetry.DeclareMetrics("orchestration_config", telemetry.ModuleConfig{
+		Metrics: []telemetry.MetricDefinition{
+			{
+				Name:   "orchestration.construction.rejected",
+				Type:   "counter",
+				Help:   "Public operations rejected by a poisoned compatibility orchestrator",
+				Labels: []string{"module", "operation"},
+			},
+			{
+				Name:   configFallbackMetric,
+				Type:   "counter",
+				Help:   "Bounded orchestration configuration fallbacks",
+				Labels: []string{"module", "variable", "reason", "action"},
+			},
+			{
+				Name:   "orchestration.checkpoint.enrichment",
+				Type:   "counter",
+				Help:   "Authoritative orchestration checkpoint enrichment outcomes",
+				Labels: []string{"module", "site", "status"},
+			},
+		},
+	})
+
 	// Declare workflow executor metrics
 	telemetry.DeclareMetrics("workflow", telemetry.ModuleConfig{
 		Metrics: []telemetry.MetricDefinition{
@@ -59,10 +82,22 @@ func init() {
 	telemetry.DeclareMetrics("pipeline", telemetry.ModuleConfig{
 		Metrics: []telemetry.MetricDefinition{
 			{
+				Name:   pipelineShortCircuitDecisionMetric,
+				Type:   "counter",
+				Help:   "Pipeline short-circuit decisions by bounded provenance result",
+				Labels: []string{"module", "reason", "kind", "status"},
+			},
+			{
 				Name:   "pipeline.executions",
 				Type:   "counter",
 				Help:   "Pipeline executions",
 				Labels: []string{"pipeline_name"},
+			},
+			{
+				Name:   "orchestration.pipeline.after_planning",
+				Type:   "counter",
+				Help:   "Validated after-planning hook mutation outcomes",
+				Labels: []string{"module", "reason", "status"},
 			},
 			{
 				Name:    "pipeline.stage.duration_ms",

@@ -20,7 +20,7 @@ import (
 // It uses LPUSH for enqueue and BRPOP for dequeue, providing
 // reliable FIFO processing with blocking wait support.
 type RedisTaskQueue struct {
-	client *redis.Client
+	client redis.Cmdable
 	config RedisTaskQueueConfig
 	logger core.Logger
 }
@@ -73,6 +73,12 @@ func DefaultRedisTaskQueueConfig() RedisTaskQueueConfig {
 // NewRedisTaskQueue creates a new Redis-backed task queue.
 // The client should already be connected to Redis.
 func NewRedisTaskQueue(client *redis.Client, config *RedisTaskQueueConfig) *RedisTaskQueue {
+	return NewRedisTaskQueueWithClient(client, config)
+}
+
+// NewRedisTaskQueueWithClient creates a task queue using an
+// application-owned Redis-compatible client.
+func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueConfig) *RedisTaskQueue {
 	if config == nil {
 		defaultConfig := DefaultRedisTaskQueueConfig()
 		config = &defaultConfig

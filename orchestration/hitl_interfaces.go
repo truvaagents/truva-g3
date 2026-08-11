@@ -60,23 +60,40 @@ type InterruptPolicy interface {
 // Checkpoint Storage Interface
 // -----------------------------------------------------------------------------
 
+// CheckpointPersistence is the provider-neutral persistence subset used by
+// orchestration request processing. Background expiry lifecycle is composed
+// separately through ExpiredCheckpointSource and core.Runnable.
+//
+// Existing CheckpointStore implementations satisfy this interface without
+// modification.
+type CheckpointPersistence interface {
+	SaveCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) error
+	LoadCheckpoint(ctx context.Context, checkpointID string) (*ExecutionCheckpoint, error)
+	UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error
+	ListPendingCheckpoints(ctx context.Context, filter CheckpointFilter) ([]*ExecutionCheckpoint, error)
+	DeleteCheckpoint(ctx context.Context, checkpointID string) error
+}
+
+// ExpiredCheckpointClaimRequest bounds one atomic expiry claim operation.
+type ExpiredCheckpointClaimRequest struct {
+	Before time.Time
+	Limit  int
+	Owner  string
+	Lease  time.Duration
+}
+
+// ExpiredCheckpointSource atomically discovers and leases expired pending
+// checkpoints. A claim is exclusive until released by its owner or its lease
+// expires.
+type ExpiredCheckpointSource interface {
+	ClaimExpiredCheckpoints(ctx context.Context, request ExpiredCheckpointClaimRequest) ([]*ExecutionCheckpoint, error)
+	ReleaseExpiredCheckpointClaim(ctx context.Context, checkpointID, owner string) error
+}
+
 // CheckpointStore persists workflow state for interrupt/resume.
 // Implementations: Redis (default), PostgreSQL, S3, Memory (testing)
 type CheckpointStore interface {
-	// SaveCheckpoint persists execution state at an interrupt point
-	SaveCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) error
-
-	// LoadCheckpoint retrieves a checkpoint by ID
-	LoadCheckpoint(ctx context.Context, checkpointID string) (*ExecutionCheckpoint, error)
-
-	// UpdateCheckpointStatus updates the status of a pending checkpoint
-	UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error
-
-	// ListPendingCheckpoints returns checkpoints awaiting human response
-	ListPendingCheckpoints(ctx context.Context, filter CheckpointFilter) ([]*ExecutionCheckpoint, error)
-
-	// DeleteCheckpoint removes a checkpoint after completion
-	DeleteCheckpoint(ctx context.Context, checkpointID string) error
+	CheckpointPersistence
 
 	// Expiry processor methods (agent calls these during setup)
 
@@ -412,6 +429,10 @@ const (
 	CheckpointStatusEdited    CheckpointStatus = "edited"    // Human edited, ready to resume
 	CheckpointStatusCompleted CheckpointStatus = "completed" // Execution completed
 	CheckpointStatusAborted   CheckpointStatus = "aborted"   // User aborted
+	// CheckpointStatusPreparing is a transient framework-owned state used while
+	// orchestration attaches durable run state. It is never resumable or exposed
+	// as pending human work.
+	CheckpointStatusPreparing CheckpointStatus = "preparing"
 
 	// Expiry status for STREAMING requests (implicit deny - no action applied)
 	// User must manually resume if desired
@@ -694,6 +715,17 @@ func WithControllerTelemetry(telemetry core.Telemetry) InterruptControllerOption
 func WithControllerCommandStore(cs CommandStore) InterruptControllerOption {
 	return func(c *DefaultInterruptController) {
 		c.commandStore = cs
+	}
+}
+
+// WithControllerCheckpointPersistence supplies the narrow persistence
+// capability without requiring the legacy expiry lifecycle methods carried by
+// CheckpointStore.
+func WithControllerCheckpointPersistence(store CheckpointPersistence) InterruptControllerOption {
+	return func(c *DefaultInterruptController) {
+		if store != nil {
+			c.store = store
+		}
 	}
 }
 

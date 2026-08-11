@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestSamplingPolicyForModel(t *testing.T) {
@@ -71,6 +72,10 @@ func TestRequestPolicyEngine_RemovesCaseFoldedSamplingKeys(t *testing.T) {
 	}
 	if len(report.Adjustments) != 3 {
 		t.Fatalf("adjustment count = %d, want 3", len(report.Adjustments))
+	}
+	if report.EffectiveTemperature.Mode != core.AIParameterOmit ||
+		report.EffectiveMaxTokens.Mode != core.AIParameterSet || report.EffectiveMaxTokens.Value != 100 {
+		t.Fatalf("effective generation report = %#v / %#v", report.EffectiveTemperature, report.EffectiveMaxTokens)
 	}
 }
 

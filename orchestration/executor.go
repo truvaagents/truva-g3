@@ -145,7 +145,55 @@ type SmartExecutor struct {
 
 // NewSmartExecutor creates a new smart executor
 func NewSmartExecutor(catalog *AgentCatalog) *SmartExecutor {
-	maxConcurrency := 5
+	backoff := core.DefaultBackoffConfig()
+	resolver := configEnvResolver{mode: EnvironmentCompatible, lookup: os.LookupEnv}
+	// The standalone compatibility constructor retains its historical allowance
+	// for zero/negative delays (which make timers fire immediately). Canonical
+	// orchestrator configuration intentionally validates positive delays.
+	if value, set, _ := resolver.duration("TRUVAG3_STEP_RETRY_INITIAL_DELAY", false); set {
+		backoff.InitialDelay = value
+	}
+	if value, set, _ := resolver.duration("TRUVAG3_STEP_RETRY_MAX_DELAY", false); set {
+		backoff.MaxDelay = value
+	}
+	maxAttempts := 3
+	if value, set, _ := resolver.integer("TRUVAG3_STEP_RETRY_MAX_ATTEMPTS", 1); set {
+		maxAttempts = value
+	}
+	timeout := 600 * time.Second
+	if value, set, _ := resolver.duration("TRUVAG3_ORCHESTRATION_TIMEOUT", true); set {
+		timeout = value
+	}
+	emitConfigFallbackMetrics(resolver.diagnostics)
+	return newSmartExecutor(catalog, 5, timeout, maxAttempts, backoff)
+}
+
+// newSmartExecutor is the environment-free construction primitive used by the
+// orchestrator. NewSmartExecutor remains the process-global compatibility
+// adapter for applications that construct the executor directly.
+func newSmartExecutor(
+	catalog *AgentCatalog,
+	maxConcurrency int,
+	timeout time.Duration,
+	maxAttempts int,
+	backoff core.BackoffConfig,
+) *SmartExecutor {
+	// NewAIOrchestrator remains source compatible with callers that pass a
+	// partial config struct. Preserve the executor's historical defaults when
+	// those legacy inputs omit fields; fully resolved canonical configs have
+	// already been validated before reaching this constructor.
+	if maxConcurrency <= 0 {
+		maxConcurrency = 5
+	}
+	if timeout <= 0 {
+		timeout = 600 * time.Second
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 3
+	}
+	if backoff.InitialDelay == 0 && backoff.MaxDelay == 0 && backoff.BackoffFactor == 0 && !backoff.JitterEnabled {
+		backoff = core.DefaultBackoffConfig()
+	}
 
 	// Create a traced HTTP client that automatically propagates trace context
 	// to downstream services via W3C TraceContext headers.
@@ -153,14 +201,6 @@ func NewSmartExecutor(catalog *AgentCatalog) *SmartExecutor {
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md, orchestration is allowed to import telemetry.
 	tracedClient := telemetry.NewTracedHTTPClient(nil)
 
-	// Configurable timeout: TRUVAG3_ORCHESTRATION_TIMEOUT (default: 600s)
-	// AI workflows with large data or multi-step orchestration need generous timeouts.
-	timeout := 600 * time.Second
-	if envTimeout := os.Getenv("TRUVAG3_ORCHESTRATION_TIMEOUT"); envTimeout != "" {
-		if parsed, err := time.ParseDuration(envTimeout); err == nil {
-			timeout = parsed
-		}
-	}
 	tracedClient.Timeout = timeout
 
 	e := &SmartExecutor{
@@ -173,30 +213,9 @@ func NewSmartExecutor(catalog *AgentCatalog) *SmartExecutor {
 		maxValidationRetries:      2,    // Up to 2 correction attempts
 		// Retry defaults. 3 attempts = initial + 2 retries, enough to ride out
 		// brief upstream blips without burning the orchestration budget.
-		maxAttempts:      3,
-		stepRetryBackoff: core.DefaultBackoffConfig(),
+		maxAttempts:      maxAttempts,
+		stepRetryBackoff: backoff,
 	}
-
-	// Env var overrides for step retry behavior (per FRAMEWORK_DESIGN_PRINCIPLES.md).
-	// Invalid values are silently ignored (default kept). Zero or negative durations
-	// are accepted — time.NewTimer(≤0) fires immediately, producing no backoff.
-	// This matches the TRUVAG3_ORCHESTRATION_TIMEOUT pattern (line 146).
-	if v := os.Getenv("TRUVAG3_STEP_RETRY_INITIAL_DELAY"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			e.stepRetryBackoff.InitialDelay = d
-		}
-	}
-	if v := os.Getenv("TRUVAG3_STEP_RETRY_MAX_DELAY"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			e.stepRetryBackoff.MaxDelay = d
-		}
-	}
-	if v := os.Getenv("TRUVAG3_STEP_RETRY_MAX_ATTEMPTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			e.maxAttempts = n
-		}
-	}
-
 	return e
 }
 
@@ -812,7 +831,8 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 					}
 
 					// Update checkpoint with completed steps (if interrupt controller is available)
-					if e.interruptController != nil && len(completedStepResults) > 0 {
+					if e.interruptController != nil && len(completedStepResults) > 0 &&
+						!checkpointEnrichmentRequired(ctx) {
 						if err := e.interruptController.UpdateCheckpointProgress(ctx, checkpoint.CheckpointID, completedStepResults); err != nil {
 							if e.logger != nil {
 								e.logger.WarnWithContext(ctx, "Failed to update checkpoint progress", map[string]interface{}{
@@ -835,6 +855,17 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 								step := &completedStepResults[i]
 								checkpoint.StepResults[step.StepID] = step
 							}
+						}
+					} else if len(completedStepResults) > 0 {
+						// The lifecycle coordinator will persist one authoritative
+						// checkpoint. Keep current-batch progress local until then.
+						checkpoint.CompletedSteps = completedStepResults
+						if checkpoint.StepResults == nil {
+							checkpoint.StepResults = make(map[string]*StepResult)
+						}
+						for i := range completedStepResults {
+							step := &completedStepResults[i]
+							checkpoint.StepResults[step.StepID] = step
 						}
 					}
 
@@ -3321,6 +3352,14 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			break
 		}
 
+		// Component errors and error bodies are untrusted external text. Sanitize
+		// them once at the execution boundary before they can reach retry prompts,
+		// step state, logs, traces, HITL checkpoints, or execution debug records.
+		// This preserves diagnostic structure while preventing credentials embedded
+		// in an upstream URL or error body from spreading through the lifecycle.
+		responseBody = core.RedactSensitiveText(responseBody)
+		err = sanitizeExecutionError(err)
+
 		// Layer 3: LLM-based Error Analysis (Phase 4 Enhancement)
 		// When ErrorAnalyzer is configured, use LLM to determine if error can be fixed
 		// with different parameters. This replaces the need for tools to set Retryable flags.
@@ -4335,6 +4374,14 @@ func extractHTTPStatusFromError(err error) int {
 	}
 
 	return 0
+}
+
+// sanitizeExecutionError protects the observable error message while retaining
+// the original cause for in-process errors.Is/errors.As control flow. The
+// lifecycle intentionally serializes only the sanitized message when the error
+// is normalized into StepResult and persisted execution state.
+func sanitizeExecutionError(err error) error {
+	return core.RedactSensitiveError(err)
 }
 
 // ============================================================================

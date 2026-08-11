@@ -17,7 +17,7 @@ import (
 // RedisTaskStore implements core.TaskStore using Redis hashes.
 // Each task is stored as a JSON string in a key with pattern: {prefix}:task:{task_id}
 type RedisTaskStore struct {
-	client *redis.Client
+	client redis.Cmdable
 	config RedisTaskStoreConfig
 	logger core.Logger
 }
@@ -57,6 +57,12 @@ func DefaultRedisTaskStoreConfig() RedisTaskStoreConfig {
 // NewRedisTaskStore creates a new Redis-backed task store.
 // The client should already be connected to Redis.
 func NewRedisTaskStore(client *redis.Client, config *RedisTaskStoreConfig) *RedisTaskStore {
+	return NewRedisTaskStoreWithClient(client, config)
+}
+
+// NewRedisTaskStoreWithClient creates a task store using an
+// application-owned Redis-compatible client.
+func NewRedisTaskStoreWithClient(client redis.Cmdable, config *RedisTaskStoreConfig) *RedisTaskStore {
 	if config == nil {
 		defaultConfig := DefaultRedisTaskStoreConfig()
 		config = &defaultConfig

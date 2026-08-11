@@ -137,6 +137,10 @@ func TestCodecPolicyApplicationAndProtectedFields(t *testing.T) {
 	if report == nil || !report.Stable || report.Provider != "openai" || len(report.Adjustments) != 2 {
 		t.Fatalf("request report = %#v", report)
 	}
+	if report.EffectiveTemperature.Mode != core.AIParameterSet || report.EffectiveTemperature.Value != 0 ||
+		report.EffectiveMaxTokens.Mode != core.AIParameterSet || report.EffectiveMaxTokens.Value != 100 {
+		t.Fatalf("effective generation report = %#v / %#v", report.EffectiveTemperature, report.EffectiveMaxTokens)
+	}
 	if value, exists := draft.Get("/top_p"); !exists || value != 0.25 {
 		t.Fatalf("top_p = %#v, %v", value, exists)
 	}

@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -452,14 +453,19 @@ func TestCreateOrchestrator_WiresPerPhaseAIOptions(t *testing.T) {
 	if !ok {
 		t.Fatal("expected TieredCapabilityProvider")
 	}
-	if tiered.aiOptionsOverride != config.TieredSelectionAIOptions {
+	if tiered.aiOptionsOverride == config.TieredSelectionAIOptions ||
+		tiered.aiOptionsOverride == nil || tiered.aiOptionsOverride.Model == nil ||
+		*tiered.aiOptionsOverride.Model != "tiered-model" {
 		t.Fatal("expected tiered selection override to be wired to TieredCapabilityProvider")
 	}
 
 	if orchestrator.executor.errorAnalyzer == nil {
 		t.Fatal("expected error analyzer to be wired")
 	}
-	if orchestrator.executor.errorAnalyzer.aiOptionsOverride != config.ErrorAnalysisAIOptions {
+	if orchestrator.executor.errorAnalyzer.aiOptionsOverride == config.ErrorAnalysisAIOptions ||
+		orchestrator.executor.errorAnalyzer.aiOptionsOverride == nil ||
+		orchestrator.executor.errorAnalyzer.aiOptionsOverride.Model == nil ||
+		*orchestrator.executor.errorAnalyzer.aiOptionsOverride.Model != "error-model" {
 		t.Fatal("expected error analysis override to be wired to ErrorAnalyzer")
 	}
 
@@ -467,7 +473,9 @@ func TestCreateOrchestrator_WiresPerPhaseAIOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected LLMDistiller result processor, got %T", orchestrator.resultProcessor)
 	}
-	if distiller.aiOptionsOverride != config.ResultDistillAIOptions {
+	if distiller.aiOptionsOverride == config.ResultDistillAIOptions ||
+		distiller.aiOptionsOverride == nil || distiller.aiOptionsOverride.Model == nil ||
+		*distiller.aiOptionsOverride.Model != "distill-model" {
 		t.Fatal("expected result distill override to be wired to LLMDistiller")
 	}
 }
@@ -1043,6 +1051,81 @@ func TestCreateOrchestrator_PromptBuilder_DependencyInjection(t *testing.T) {
 	// Prompt should include finance domain section
 	if !stringContains(prompt, "FINANCE DOMAIN") {
 		t.Error("Expected finance domain section in prompt")
+	}
+}
+
+func TestCreateOrchestrator_PromptBuilderValidationFailureReturnsErrorInBothFactoryBranches(t *testing.T) {
+	invalidRule := TypeRule{JsonType: "JSON strings", Example: `"value"`}
+	tests := []struct {
+		name   string
+		prompt PromptConfig
+	}{
+		{
+			name: "default builder branch",
+			prompt: PromptConfig{
+				AdditionalTypeRules: []TypeRule{invalidRule},
+			},
+		},
+		{
+			name: "template fallback branch",
+			prompt: PromptConfig{
+				Template:            "{{.Invalid syntax",
+				AdditionalTypeRules: []TypeRule{invalidRule},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := DefaultConfig()
+			config.EnableTelemetry = false
+			config.PromptConfig = test.prompt
+			orchestrator, err := CreateOrchestrator(config, OrchestratorDependencies{
+				Discovery: NewMockDiscovery(),
+				AIClient:  NewMockAIClient(),
+			})
+			if err == nil || orchestrator != nil {
+				t.Fatalf("CreateOrchestrator() = (%v, %v), want nil orchestrator and validation error", orchestrator, err)
+			}
+			if !strings.Contains(err.Error(), "invalid additional type rule") {
+				t.Fatalf("CreateOrchestrator() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateOrchestrator_ConfiguredSynthesisStrategyIsApplied(t *testing.T) {
+	for _, strategy := range []SynthesisStrategy{StrategySimple, StrategyTemplate} {
+		t.Run(string(strategy), func(t *testing.T) {
+			config := DefaultConfig()
+			config.EnableTelemetry = false
+			config.SynthesisStrategy = strategy
+			orchestrator, err := CreateOrchestrator(config, OrchestratorDependencies{
+				Discovery: NewMockDiscovery(),
+				AIClient:  NewMockAIClient(),
+			})
+			if err != nil {
+				t.Fatalf("CreateOrchestrator() error = %v", err)
+			}
+			if orchestrator.synthesizer.strategy != strategy {
+				t.Fatalf("live synthesizer strategy = %q, want %q", orchestrator.synthesizer.strategy, strategy)
+			}
+
+			beforeCalls := len(orchestrator.aiClient.(*MockAIClient).calls)
+			response, err := orchestrator.ExecutePlanWithSynthesis(context.Background(), &RoutingPlan{
+				PlanID: "strategy-live-path",
+				Steps:  []RoutingStep{},
+			}, "summarize the result")
+			if err != nil {
+				t.Fatalf("ExecutePlanWithSynthesis() error = %v", err)
+			}
+			if response == nil || response.Response == "" {
+				t.Fatalf("live synthesis response = %#v", response)
+			}
+			if got := len(orchestrator.aiClient.(*MockAIClient).calls); got != beforeCalls {
+				t.Fatalf("strategy %q unexpectedly used LLM synthesis: calls %d -> %d", strategy, beforeCalls, got)
+			}
+		})
 	}
 }
 
@@ -2822,4 +2905,14 @@ func TestBuildDistillationEnabledResultProcessor(t *testing.T) {
 			t.Errorf("expected *StructuralTrimmer floor, got %T", p)
 		}
 	})
+}
+
+func TestSafeBackendInitializationErrorDoesNotExposeBackendDetails(t *testing.T) {
+	got := safeBackendInitializationError(errors.New("redis://user:secret@backend unavailable"))
+	if got != "backend initialization failed" || strings.Contains(got, "secret") {
+		t.Fatalf("safeBackendInitializationError() = %q", got)
+	}
+	if got := safeBackendInitializationError(nil); got != "" {
+		t.Fatalf("safeBackendInitializationError(nil) = %q", got)
+	}
 }

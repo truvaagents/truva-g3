@@ -237,12 +237,17 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 		Temperature: 0.0, // Deterministic for analysis
 		MaxTokens:   500,
 	}, e.aiOptionsOverride)
-	resp, _, err := invokeAI(ctx, e.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "error-analysis",
 		Prompt:         prompt,
 		Options:        opts,
 		DeferRecording: e.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, e.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	if err == nil {
 		core.RecordTokenUsage(ctx, "error_analysis", resp.Usage)
 	}
@@ -274,19 +279,15 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 		// LLM Debug: Record failed error analysis attempt.
 		// opts.Model is populated by the client's ApplyDefaults even on failure.
 		// Provider is not recoverable without an AIClient.GetProvider() interface method.
-		e.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		e.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:            "error_analysis",
 			Timestamp:       llmStart,
 			DurationMs:      llmDuration.Milliseconds(),
-			Prompt:          prompt,
-			Temperature:     0.0,
-			MaxTokens:       500,
-			Model:           opts.Model,
 			Success:         false,
 			Error:           err.Error(),
 			StepID:          errCtx.StepID,
 			CallDescription: fmt.Sprintf("Error analysis for %s (HTTP %d)", errCtx.CapabilityName, errCtx.HTTPStatus),
-		})
+		}, invocationResult, invocation, resp, err))
 
 		return nil, fmt.Errorf("LLM error analysis failed: %w", err)
 	}
@@ -309,15 +310,10 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 		})
 
 		// LLM Debug: Record parse-failure — the LLM responded but output was malformed
-		e.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		e.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:             "error_analysis",
 			Timestamp:        llmStart,
 			DurationMs:       llmDuration.Milliseconds(),
-			Prompt:           prompt,
-			Temperature:      0.0,
-			MaxTokens:        500,
-			Model:            resp.Model,
-			Provider:         resp.Provider,
 			Response:         resp.Content,
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
@@ -326,7 +322,7 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 			Error:            fmt.Sprintf("parse failure: %s", err.Error()),
 			StepID:           errCtx.StepID,
 			CallDescription:  fmt.Sprintf("Error analysis for %s (HTTP %d)", errCtx.CapabilityName, errCtx.HTTPStatus),
-		})
+		}, invocationResult, invocation, resp, nil))
 
 		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
 	}
@@ -348,15 +344,10 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 	})
 
 	// LLM Debug: Record successful error analysis
-	e.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	e.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "error_analysis",
 		Timestamp:        llmStart,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		Temperature:      0.0,
-		MaxTokens:        500,
-		Model:            resp.Model,
-		Provider:         resp.Provider,
 		Response:         resp.Content,
 		PromptTokens:     resp.Usage.PromptTokens,
 		CompletionTokens: resp.Usage.CompletionTokens,
@@ -364,7 +355,7 @@ func (e *ErrorAnalyzer) analyzeWithLLM(ctx context.Context, errCtx *ErrorAnalysi
 		Success:          true,
 		StepID:           errCtx.StepID,
 		CallDescription:  fmt.Sprintf("Error analysis for %s (HTTP %d)", errCtx.CapabilityName, errCtx.HTTPStatus),
-	})
+	}, invocationResult, invocation, resp, nil))
 
 	return result, nil
 }

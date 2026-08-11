@@ -261,12 +261,17 @@ func (d *LLMDistiller) ProcessForPrompt(
 		callCtx, cancel = context.WithTimeout(callCtx, d.config.CompactionDeadline)
 		defer cancel()
 	}
-	response, _, err := invokeAI(callCtx, d.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "result-distillation",
 		Prompt:         prompt,
 		Options:        options,
 		DeferRecording: d.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(callCtx, d.aiClient, invocation)
+	var response *core.AIResponse
+	if invocationResult != nil {
+		response = invocationResult.Response
+	}
 	duration := time.Since(distillStart)
 	// Record usage BEFORE the empty-content guard below: an empty 200 response still billed
 	// its prompt tokens, and hiding it from cost telemetry would make a content-filter burst
@@ -309,21 +314,16 @@ func (d *LLMDistiller) ProcessForPrompt(
 		}
 		// Record failed distillation attempt in LLM Debug tab.
 		// options.Model is populated by the AI client's ApplyDefaults before the network call.
-		d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		d.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:            "result_distillation",
 			Timestamp:       distillStart,
 			DurationMs:      duration.Milliseconds(),
-			Prompt:          prompt,
-			SystemPrompt:    distillationSystemPrompt,
 			Response:        fmt.Sprintf("[DISTILLATION FAILED: %s — fell back to StructuralTrimmer]", err.Error()),
-			Model:           options.Model,
-			Temperature:     float64(options.Temperature),
-			MaxTokens:       options.MaxTokens,
 			Success:         false,
 			Error:           err.Error(),
 			StepID:          stepCtx.StepID,
 			CallDescription: fmt.Sprintf("Distill %s result FAILED: %s", stepCtx.AgentName, err.Error()),
-		})
+		}, invocationResult, invocation, response, err))
 		// This output is a structural fallback, not a successful distillation. Flag it so
 		// the cache does not store a degraded result from a transient LLM/provider failure.
 		// Budget = max(maxBytes, targetSize): the targetSize FLOOR protects tiny/zero budgets
@@ -367,24 +367,18 @@ func (d *LLMDistiller) ProcessForPrompt(
 	}
 
 	// Record successful distillation in LLM Debug tab.
-	d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	d.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "result_distillation",
 		Timestamp:        distillStart,
 		DurationMs:       duration.Milliseconds(),
-		Prompt:           prompt,
-		SystemPrompt:     distillationSystemPrompt,
 		Response:         response.Content,
-		Model:            response.Model,
-		Provider:         response.Provider,
-		Temperature:      float64(options.Temperature),
-		MaxTokens:        options.MaxTokens,
 		PromptTokens:     response.Usage.PromptTokens,
 		CompletionTokens: response.Usage.CompletionTokens,
 		TotalTokens:      response.Usage.TotalTokens,
 		Success:          true,
 		StepID:           stepCtx.StepID,
 		CallDescription:  fmt.Sprintf("Distill %s result: %d→%d bytes (stage1: %d bytes)", stepCtx.AgentName, len(result), len(response.Content), len(preFiltered)),
-	})
+	}, invocationResult, invocation, response, nil))
 
 	// Phase 16 — deterministically append the partial-source disclosure to the OUTPUT (what reaches
 	// synthesis) when stage-1 dropped content. Framework-guaranteed; never relies on the model obeying

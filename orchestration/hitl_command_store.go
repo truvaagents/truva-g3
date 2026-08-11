@@ -40,9 +40,9 @@ import (
 
 // RedisCommandStore implements CommandStore using Redis Pub/Sub.
 type RedisCommandStore struct {
-	client    *redis.Client
-	keyPrefix string
-	redisURL  string // For error messages
+	client     redis.UniversalClient
+	ownsClient bool
+	keyPrefix  string
 
 	// Optional dependencies (injected per framework patterns)
 	logger    core.Logger    // Defaults to NoOp
@@ -132,7 +132,7 @@ func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, 
 	// Parse Redis URL and create options
 	redisOpts, err := redis.ParseURL(config.redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Redis URL %s: %w (check REDIS_URL environment variable)", config.redisURL, err)
+		return nil, fmt.Errorf("failed to parse Redis configuration: %w (check REDIS_URL environment variable)", core.ErrInvalidConfiguration)
 	}
 	redisOpts.DB = config.redisDB
 
@@ -144,16 +144,39 @@ func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, 
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis at %s: %w (check REDIS_URL and Redis connectivity)", config.redisURL, err)
+		_ = client.Close()
+		return nil, fmt.Errorf("failed to connect to Redis: %w (check REDIS_URL and Redis connectivity)", core.RedactSensitiveError(err))
 	}
 
 	return &RedisCommandStore{
 		client:        client,
+		ownsClient:    true,
 		keyPrefix:     config.keyPrefix,
-		redisURL:      config.redisURL,
 		logger:        config.logger,
 		telemetry:     config.telemetry,
 		subscriptions: make(map[string]context.CancelFunc),
+	}, nil
+}
+
+// NewRedisCommandStoreWithClient creates a command store using an
+// application-owned client. Close cancels subscriptions but leaves the client
+// open.
+func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisCommandStoreOption) (*RedisCommandStore, error) {
+	if client == nil {
+		return nil, fmt.Errorf("redis command client is required")
+	}
+	config := &redisCommandStoreConfig{
+		keyPrefix: "truvag3:hitl",
+		logger:    &core.NoOpLogger{},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(config)
+		}
+	}
+	return &RedisCommandStore{
+		client: client, keyPrefix: config.keyPrefix, logger: config.logger,
+		telemetry: config.telemetry, subscriptions: make(map[string]context.CancelFunc),
 	}, nil
 }
 
@@ -189,7 +212,7 @@ func (s *RedisCommandStore) PublishCommand(ctx context.Context, command *Command
 				"error":         err.Error(),
 			})
 		}
-		return fmt.Errorf("failed to publish command to Redis: %w (check REDIS_URL=%s)", err, s.redisURL)
+		return fmt.Errorf("failed to publish command to Redis: %w (check REDIS_URL and Redis connectivity)", err)
 	}
 
 	// Add span event for tracing visibility
@@ -230,7 +253,7 @@ func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID s
 	if err != nil {
 		cancel()
 		telemetry.RecordSpanError(ctx, err)
-		return nil, nil, fmt.Errorf("failed to subscribe to command channel: %w (check REDIS_URL=%s)", err, s.redisURL)
+		return nil, nil, fmt.Errorf("failed to subscribe to command channel: %w (check REDIS_URL and Redis connectivity)", err)
 	}
 
 	// Create command channel
@@ -316,6 +339,9 @@ func (s *RedisCommandStore) Close() error {
 	s.subscriptions = make(map[string]context.CancelFunc)
 	s.subMu.Unlock()
 
+	if !s.ownsClient {
+		return nil
+	}
 	return s.client.Close()
 }
 

@@ -408,12 +408,17 @@ func (d *LLMDistiller) extractChunk(
 		requestID = bag["request_id"]
 	}
 	start := time.Now()
-	resp, _, err := invokeAI(ctx, d.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "result-distillation",
 		Prompt:         prompt,
 		Options:        options,
 		DeferRecording: d.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, d.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	durMs := time.Since(start).Milliseconds()
 	if err == nil && resp != nil {
 		// Usage first (the call billed its prompt tokens even when content is unusable),
@@ -427,41 +432,30 @@ func (d *LLMDistiller) extractChunk(
 		err = fmt.Errorf("empty extraction result")
 	}
 	if err != nil {
-		d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		d.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:            "result_distillation",
 			Timestamp:       start,
 			DurationMs:      durMs,
-			Prompt:          prompt,
-			SystemPrompt:    distillationSystemPrompt,
 			Response:        fmt.Sprintf("[%s FAILED: %s]", callDesc, err.Error()),
-			Model:           options.Model,
-			Temperature:     float64(options.Temperature),
-			MaxTokens:       options.MaxTokens,
 			Success:         false,
 			Error:           err.Error(),
 			StepID:          stepCtx.StepID,
 			CallDescription: fmt.Sprintf("Distill %s (%s)", stepCtx.AgentName, callDesc),
-		})
+		}, invocationResult, invocation, resp, err))
 		return "", err
 	}
-	d.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	d.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "result_distillation",
 		Timestamp:        start,
 		DurationMs:       durMs,
-		Prompt:           prompt,
-		SystemPrompt:     distillationSystemPrompt,
 		Response:         resp.Content,
-		Model:            resp.Model,
-		Provider:         resp.Provider,
-		Temperature:      float64(options.Temperature),
-		MaxTokens:        options.MaxTokens,
 		PromptTokens:     resp.Usage.PromptTokens,
 		CompletionTokens: resp.Usage.CompletionTokens,
 		TotalTokens:      resp.Usage.TotalTokens,
 		Success:          true,
 		StepID:           stepCtx.StepID,
 		CallDescription:  fmt.Sprintf("Distill %s (%s)", stepCtx.AgentName, callDesc),
-	})
+	}, invocationResult, invocation, resp, nil))
 	return resp.Content, nil
 }
 

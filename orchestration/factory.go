@@ -75,11 +75,72 @@ type OrchestratorDependencies struct {
 	ActivityCoordinator core.ActivityCoordinator
 }
 
-// CreateOrchestrator creates an orchestrator with proper module integration and dependency injection
+// CreateOrchestrator is the compatibility constructor. A nil config preserves
+// the legacy environment-enabled default layer; a non-nil config remains an
+// explicit application-owned value. Legacy capability and telemetry bootstrap
+// adapters are confined to this wrapper family.
 func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencies) (*AIOrchestrator, error) {
+	diagnostics := []ConfigDiagnostic(nil)
 	if config == nil {
-		config = DefaultConfig()
+		resolved := DefaultConfigWithDiagnostics()
+		config = resolved.Config
+		diagnostics = resolved.Diagnostics
+	} else {
+		config = cloneOrchestratorConfig(config)
+		normalizeOrchestratorConfig(config)
+		if config.SynthesisStrategy == "" {
+			config.SynthesisStrategy = StrategyLLM
+		}
+		if err := validateSynthesisStrategy(config.SynthesisStrategy); err != nil {
+			return nil, err
+		}
+		if err := validatePromptInvariantConfig(config); err != nil {
+			return nil, err
+		}
 	}
+	return createOrchestrator(config, deps, true, diagnostics)
+}
+
+// CreateResolvedOrchestrator constructs from a complete code-owned config. It
+// performs no environment reads and never initializes telemetry.
+func CreateResolvedOrchestrator(
+	config *OrchestratorConfig,
+	deps OrchestratorDependencies,
+) (*AIOrchestrator, error) {
+	if config == nil {
+		return nil, fmt.Errorf("%w: config is nil", ErrInvalidOrchestratorConfig)
+	}
+	resolved := cloneOrchestratorConfig(config)
+	normalizeOrchestratorConfig(resolved)
+	if err := ValidateOrchestratorConfig(resolved); err != nil {
+		return nil, err
+	}
+	return createOrchestrator(resolved, deps, false, nil)
+}
+
+// CreateOrchestratorFromEnvironment resolves all documented orchestration and
+// prompt variables strictly, applies code options last, and then uses the
+// environment-free canonical constructor.
+func CreateOrchestratorFromEnvironment(
+	deps OrchestratorDependencies,
+	options ...OrchestratorOption,
+) (*AIOrchestrator, error) {
+	resolved, err := ResolveOrchestratorConfig(ConfigResolution{
+		Environment: EnvironmentStrict,
+		Options:     options,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return CreateResolvedOrchestrator(resolved.Config, deps)
+}
+
+func createOrchestrator(
+	config *OrchestratorConfig,
+	deps OrchestratorDependencies,
+	compatibilityBootstrap bool,
+	diagnostics []ConfigDiagnostic,
+) (*AIOrchestrator, error) {
 
 	var factoryLogger core.Logger
 	if deps.Logger != nil {
@@ -98,6 +159,7 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		factoryLogger = &core.NoOpLogger{}
 	}
 	deps.Logger = factoryLogger
+	emitConfigDiagnostics(factoryLogger, diagnostics)
 
 	factoryLogger.Info("Creating orchestrator instance", map[string]interface{}{
 		"operation":                "orchestrator_creation",
@@ -113,6 +175,18 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		config.CapabilityService.Logger = deps.Logger
 		config.CapabilityService.Telemetry = deps.Telemetry
 	}
+	if config.CapabilityProviderType == "service" && config.CapabilityService.Endpoint == "" {
+		if compatibilityBootstrap {
+			endpoint := os.Getenv("CAPABILITY_SERVICE_URL")
+			if endpoint == "" {
+				endpoint = os.Getenv("TRUVAG3_CAPABILITY_SERVICE_URL")
+			}
+			config.CapabilityService.Endpoint = endpoint
+		}
+		if config.CapabilityService.Endpoint == "" {
+			return nil, fmt.Errorf("capability service URL required: set CapabilityService.Endpoint in config or a documented compatibility environment variable")
+		}
+	}
 
 	// Create orchestrator
 	orchestrator := NewAIOrchestrator(config, deps.Discovery, deps.AIClient)
@@ -126,41 +200,47 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 	}
 	orchestrator.SetConversationHistoryPreparer(deps.ConversationHistoryPreparer)
 
-	// Validate service configuration if using service provider
-	if config.CapabilityProviderType == "service" && config.CapabilityService.Endpoint == "" {
-		// Check if auto-configuration found it
-		if endpoint := os.Getenv("TRUVAG3_CAPABILITY_SERVICE_URL"); endpoint == "" {
-			return nil, fmt.Errorf("capability service URL required: set CapabilityService.Endpoint in config or TRUVAG3_CAPABILITY_SERVICE_URL environment variable")
-		}
-	}
-
-	// Set up telemetry if provided or create one if enabled
+	// Resolve telemetry without ever leaving the dependency nil. Canonical
+	// construction is application-owned and never initializes a provider.
 	if deps.Telemetry != nil {
 		orchestrator.SetTelemetry(deps.Telemetry)
-	} else if config.EnableTelemetry {
-		// Check for telemetry endpoint in environment
-		endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-		if endpoint == "" {
-			endpoint = os.Getenv("TRUVAG3_TELEMETRY_ENDPOINT")
-		}
-
-		// Use the framework's telemetry module
-		otelProvider, err := telemetry.NewOTelProvider("orchestrator", "orchestrator", endpoint)
-		if err != nil {
-			// Resilient runtime behavior - continue without telemetry
-			if factoryLogger != nil {
-				factoryLogger.Warn("Failed to initialize telemetry", map[string]interface{}{
-					"operation": "telemetry_initialization",
-					"error":     err.Error(),
-					"endpoint":  endpoint,
+	} else if compatibilityBootstrap {
+		if globalProvider := telemetry.GetTelemetryProvider(); globalProvider != nil {
+			orchestrator.SetTelemetry(globalProvider)
+		} else if config.EnableTelemetry {
+			endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+			if endpoint == "" {
+				endpoint = os.Getenv("TRUVAG3_TELEMETRY_ENDPOINT")
+			}
+			if endpoint != "" {
+				otelProvider, err := telemetry.NewOTelProvider("orchestrator", "orchestrator", endpoint)
+				if err != nil {
+					emitConstructionDiagnostic(factoryLogger, ConfigDiagnostic{
+						Variable: "telemetry",
+						Reason:   ConfigReasonTelemetryBootstrapFailed,
+						Action:   ConfigActionDefaulted,
+					})
+				} else {
+					orchestrator.SetTelemetry(otelProvider)
+				}
+			} else {
+				emitConstructionDiagnostic(factoryLogger, ConfigDiagnostic{
+					Variable: "telemetry",
+					Reason:   ConfigReasonTelemetryDependencyMissing,
+					Action:   ConfigActionDefaulted,
 				})
 			}
-		} else {
-			orchestrator.SetTelemetry(otelProvider)
 		}
+	} else if config.EnableTelemetry {
+		emitConstructionDiagnostic(factoryLogger, ConfigDiagnostic{
+			Variable: "telemetry",
+			Reason:   ConfigReasonTelemetryDependencyMissing,
+			Action:   ConfigActionDefaulted,
+		})
 	}
 
 	orchestrator.SetLogger(deps.Logger)
+	orchestrator.synthesizer.SetStrategy(config.SynthesisStrategy)
 
 	// Initialize prompt builder based on configuration
 	// Priority: 1) Injected builder (Layer 3), 2) Template (Layer 2), 3) Default (Layer 1)
@@ -178,10 +258,22 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			// Graceful degradation to DefaultPromptBuilder
 			factoryLogger.Warn("Failed to create TemplatePromptBuilder, using default", map[string]interface{}{
 				"operation":     "prompt_builder_initialization",
+				"status":        "fallback",
+				"error_type":    "preparation",
 				"error":         err.Error(),
 				"template_file": config.PromptConfig.TemplateFile,
 			})
-			defaultBuilder, _ := NewDefaultPromptBuilder(&config.PromptConfig)
+			defaultBuilder, defaultErr := NewDefaultPromptBuilder(&config.PromptConfig)
+			if defaultErr != nil {
+				factoryLogger.Warn("Failed to create fallback DefaultPromptBuilder", map[string]interface{}{
+					"operation":  "prompt_builder_initialization",
+					"status":     "error",
+					"reason":     "invalid_default_config",
+					"error_type": "preparation",
+					"error":      defaultErr.Error(),
+				})
+				return nil, fmt.Errorf("create fallback default prompt builder: %w", defaultErr)
+			}
 			defaultBuilder.SetLogger(deps.Logger)
 			defaultBuilder.SetTelemetry(deps.Telemetry)
 			orchestrator.SetPromptBuilder(defaultBuilder)
@@ -197,7 +289,17 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		}
 	} else {
 		// Layer 1: Default with optional type rule extensions
-		defaultBuilder, _ := NewDefaultPromptBuilder(&config.PromptConfig)
+		defaultBuilder, err := NewDefaultPromptBuilder(&config.PromptConfig)
+		if err != nil {
+			factoryLogger.Warn("Failed to create DefaultPromptBuilder", map[string]interface{}{
+				"operation":  "prompt_builder_initialization",
+				"status":     "error",
+				"reason":     "invalid_default_config",
+				"error_type": "preparation",
+				"error":      err.Error(),
+			})
+			return nil, fmt.Errorf("create default prompt builder: %w", err)
+		}
 		defaultBuilder.SetLogger(deps.Logger)
 		defaultBuilder.SetTelemetry(deps.Telemetry)
 		orchestrator.SetPromptBuilder(defaultBuilder)
@@ -265,29 +367,39 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 	// Disabled by default - enable via TRUVAG3_LLM_DEBUG_ENABLED=true or WithLLMDebug(true)
 	if config.LLMDebug.Enabled {
 		if config.LLMDebugStore == nil {
-			// Auto-configure Redis store from environment
-			store, err := NewRedisLLMDebugStore(
-				WithDebugRedisDB(config.LLMDebug.RedisDB),
-				WithDebugLogger(deps.Logger),
-				WithDebugTTL(config.LLMDebug.TTL),
-				WithDebugErrorTTL(config.LLMDebug.ErrorTTL),
-			)
-			if err != nil {
-				// Resilient behavior - use NoOp store if Redis unavailable
-				factoryLogger.Warn("Failed to initialize Redis LLM debug store, using NoOp", map[string]interface{}{
-					"operation": "llm_debug_store_initialization",
-					"error":     err.Error(),
-					"hint":      "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_LLM_DEBUG_ENABLED=false",
-				})
+			if !compatibilityBootstrap {
 				config.LLMDebugStore = NewNoOpLLMDebugStore()
-			} else {
-				config.LLMDebugStore = store
-				factoryLogger.Info("Redis LLM debug store initialized", map[string]interface{}{
-					"operation": "llm_debug_store_initialization",
-					"redis_db":  config.LLMDebug.RedisDB,
-					"ttl":       config.LLMDebug.TTL.String(),
-					"error_ttl": config.LLMDebug.ErrorTTL.String(),
+				factoryLogger.Warn("LLM debug enabled without an injected backend, using NoOp", map[string]interface{}{
+					"operation": "llm_debug_store_initialization", "status": "fallback",
+					"reason": "backend_dependency_missing",
 				})
+			} else {
+				// Compatibility constructors retain the historical Redis default.
+				store, err := NewRedisLLMDebugStore(
+					WithDebugRedisDB(config.LLMDebug.RedisDB),
+					WithDebugLogger(deps.Logger),
+					WithDebugTTL(config.LLMDebug.TTL),
+					WithDebugErrorTTL(config.LLMDebug.ErrorTTL),
+				)
+				if err != nil {
+					// Resilient behavior - use NoOp store if Redis unavailable
+					factoryLogger.Warn("Failed to initialize Redis LLM debug store, using NoOp", map[string]interface{}{
+						"operation":  "llm_debug_store_initialization",
+						"status":     "fallback",
+						"error_type": "preparation",
+						"error":      safeBackendInitializationError(err),
+						"hint":       "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_LLM_DEBUG_ENABLED=false",
+					})
+					config.LLMDebugStore = NewNoOpLLMDebugStore()
+				} else {
+					config.LLMDebugStore = store
+					factoryLogger.Info("Redis LLM debug store initialized", map[string]interface{}{
+						"operation": "llm_debug_store_initialization",
+						"redis_db":  config.LLMDebug.RedisDB,
+						"ttl":       config.LLMDebug.TTL.String(),
+						"error_ttl": config.LLMDebug.ErrorTTL.String(),
+					})
+				}
 			}
 		} else {
 			factoryLogger.Info("Using custom LLM debug store", map[string]interface{}{
@@ -316,31 +428,41 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 				"error_ttl": config.ExecutionStore.ErrorTTL.String(),
 			})
 		} else {
-			// Auto-configure Redis store from environment (same pattern as LLM Debug Store)
-			store, err := NewRedisExecutionDebugStoreWithConfig(
-				config.ExecutionStore,
-				WithExecutionDebugRedisDB(core.RedisDBExecutionDebug),
-				WithExecutionDebugLogger(deps.Logger),
-			)
-			if err != nil {
-				// Resilient behavior - use NoOp store if Redis unavailable
-				factoryLogger.Warn("Failed to initialize Redis execution debug store, using NoOp", map[string]interface{}{
-					"operation": "execution_debug_store_initialization",
-					"error":     err.Error(),
-					"hint":      "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=false",
-				})
+			if !compatibilityBootstrap {
 				orchestrator.SetExecutionStore(NewNoOpExecutionStore())
-			} else {
-				orchestrator.SetExecutionStore(store)
-				factoryLogger.Info("Redis execution debug store initialized", map[string]interface{}{
-					"operation":                     "execution_debug_store_initialization",
-					"redis_db":                      core.RedisDBExecutionDebug,
-					"key_prefix":                    config.ExecutionStore.KeyPrefix,
-					"ttl":                           config.ExecutionStore.TTL.String(),
-					"error_ttl":                     config.ExecutionStore.ErrorTTL.String(),
-					"conversation_query_limit":      config.ExecutionStore.ConversationQueryLimit,
-					"conversation_index_scan_limit": config.ExecutionStore.ConversationIndexScanLimit,
+				factoryLogger.Warn("Execution debug enabled without an injected backend, using NoOp", map[string]interface{}{
+					"operation": "execution_debug_store_initialization", "status": "fallback",
+					"reason": "backend_dependency_missing",
 				})
+			} else {
+				// Compatibility constructors retain the historical Redis default.
+				store, err := NewRedisExecutionDebugStoreWithConfig(
+					config.ExecutionStore,
+					WithExecutionDebugRedisDB(core.RedisDBExecutionDebug),
+					WithExecutionDebugLogger(deps.Logger),
+				)
+				if err != nil {
+					// Resilient behavior - use NoOp store if Redis unavailable
+					factoryLogger.Warn("Failed to initialize Redis execution debug store, using NoOp", map[string]interface{}{
+						"operation":  "execution_debug_store_initialization",
+						"status":     "fallback",
+						"error_type": "preparation",
+						"error":      safeBackendInitializationError(err),
+						"hint":       "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=false",
+					})
+					orchestrator.SetExecutionStore(NewNoOpExecutionStore())
+				} else {
+					orchestrator.SetExecutionStore(store)
+					factoryLogger.Info("Redis execution debug store initialized", map[string]interface{}{
+						"operation":                     "execution_debug_store_initialization",
+						"redis_db":                      core.RedisDBExecutionDebug,
+						"key_prefix":                    config.ExecutionStore.KeyPrefix,
+						"ttl":                           config.ExecutionStore.TTL.String(),
+						"error_ttl":                     config.ExecutionStore.ErrorTTL.String(),
+						"conversation_query_limit":      config.ExecutionStore.ConversationQueryLimit,
+						"conversation_index_scan_limit": config.ExecutionStore.ConversationIndexScanLimit,
+					})
+				}
 			}
 		}
 	}
@@ -506,6 +628,33 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 	})
 
 	return orchestrator, nil
+}
+
+func emitConfigDiagnostics(logger core.Logger, diagnostics []ConfigDiagnostic) {
+	for _, diagnostic := range diagnostics {
+		emitConstructionDiagnostic(logger, diagnostic)
+	}
+}
+
+func emitConstructionDiagnostic(logger core.Logger, diagnostic ConfigDiagnostic) {
+	emitConfigFallbackMetrics([]ConfigDiagnostic{diagnostic})
+	if logger == nil {
+		return
+	}
+	logger.Warn("Orchestrator construction used a safe fallback", map[string]interface{}{
+		"operation": "orchestrator_construction_fallback",
+		"status":    "fallback",
+		"variable":  diagnostic.Variable,
+		"reason":    string(diagnostic.Reason),
+		"action":    string(diagnostic.Action),
+	})
+}
+
+func safeBackendInitializationError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "backend initialization failed"
 }
 
 // OrchestratorOption is a function that configures the orchestrator
@@ -705,6 +854,25 @@ func WithTotalTimeout(timeout time.Duration) OrchestratorOption {
 	}
 }
 
+// WithStepRetryBackoff configures retry timing without requiring process-wide
+// environment variables. Invalid non-positive durations are rejected later by
+// canonical configuration validation.
+func WithStepRetryBackoff(initialDelay, maxDelay time.Duration) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.stepRetryBackoff.InitialDelay = initialDelay
+		c.stepRetryBackoff.MaxDelay = maxDelay
+	}
+}
+
+// WithExecutionStoreWriteTimeout overrides the per-write timeout used by the
+// asynchronous execution-debug recorder. Zero selects the framework default;
+// negative values are rejected by canonical configuration validation.
+func WithExecutionStoreWriteTimeout(timeout time.Duration) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.executionStoreWriteTimeout = timeout
+	}
+}
+
 // WithHallucinationRetry creates an option for configuring hallucination retry behavior.
 // When enabled, the orchestrator will retry LLM plan generation if the LLM hallucinates
 // agent names that were not in the allowed list provided in the prompt.
@@ -724,14 +892,14 @@ func WithHallucinationRetry(enabled bool, maxRetries int) OrchestratorOption {
 
 // CreateOrchestratorWithOptions creates an orchestrator with option functions
 func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...OrchestratorOption) (*AIOrchestrator, error) {
-	config := DefaultConfig()
-
-	// Apply all options
-	for _, opt := range opts {
-		opt(config)
+	resolved, err := ResolveOrchestratorConfig(ConfigResolution{
+		Environment: EnvironmentCompatible,
+		Options:     opts,
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return CreateOrchestrator(config, deps)
+	return createOrchestrator(resolved.Config, deps, true, resolved.Diagnostics)
 }
 
 // CreateSimpleOrchestrator creates an orchestrator with zero configuration
@@ -742,20 +910,31 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 // - Not require any external services
 // - Use NoOpLogger by default (pass Logger in dependencies for logging)
 func CreateSimpleOrchestrator(discovery core.Discovery, aiClient core.AIClient) *AIOrchestrator {
-	// Use proper dependency injection to ensure all framework features work
-	deps := OrchestratorDependencies{
+	orchestrator, err := CreateSimpleOrchestratorWithError(discovery, aiClient)
+	if err != nil {
+		failed := NewAIOrchestrator(NewDefaultOrchestratorConfig(), discovery, aiClient)
+		failed.SetLogger(nil)
+		failed.constructionErr = fmt.Errorf("%w: %v", ErrOrchestratorConstruction, err)
+		emitConstructionDiagnostic(failed.logger, ConfigDiagnostic{
+			Variable: "orchestrator",
+			Reason:   ConfigReasonInvalidConfiguration,
+			Action:   ConfigActionDefaulted,
+		})
+		return failed
+	}
+	return orchestrator
+}
+
+// CreateSimpleOrchestratorWithError is the error-returning compatibility
+// convenience for callers that do not want deferred construction errors.
+func CreateSimpleOrchestratorWithError(
+	discovery core.Discovery,
+	aiClient core.AIClient,
+) (*AIOrchestrator, error) {
+	return CreateOrchestrator(nil, OrchestratorDependencies{
 		Discovery: discovery,
 		AIClient:  aiClient,
-		// Logger, Telemetry, CircuitBreaker will be auto-created with smart defaults
-	}
-
-	orchestrator, err := CreateOrchestrator(nil, deps)
-	if err != nil {
-		// This should never happen with default config, but follow fail-safe principles
-		return NewAIOrchestrator(nil, discovery, aiClient)
-	}
-
-	return orchestrator
+	})
 }
 
 // WithCircuitBreaker creates an option for injecting a circuit breaker

@@ -238,30 +238,30 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 		aiOpts.Model = c.model
 	}
 
-	aiResp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "activity-compaction",
 		Prompt:         prompt,
 		Options:        aiOpts,
 		DeferRecording: c.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, c.aiClient, invocation)
+	var aiResp *core.AIResponse
+	if invocationResult != nil {
+		aiResp = invocationResult.Response
+	}
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)
 
-		c.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:         "activity_compaction",
-			HookPhase:    HookPhasePre,
-			Timestamp:    startTime,
-			DurationMs:   int64(durationMs),
-			Prompt:       prompt,
-			SystemPrompt: activityCompactorSystemPrompt,
-			Temperature:  float64(aiOpts.Temperature),
-			MaxTokens:    aiOpts.MaxTokens,
-			Model:        aiOpts.Model,
-			Success:      false,
-			Error:        err.Error(),
-			Attempt:      1,
-		})
+		c.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
+			Type:       "activity_compaction",
+			HookPhase:  HookPhasePre,
+			Timestamp:  startTime,
+			DurationMs: int64(durationMs),
+			Success:    false,
+			Error:      err.Error(),
+			Attempt:    1,
+		}, invocationResult, invocation, aiResp, err))
 
 		if c.logger != nil {
 			c.logger.WarnWithContext(ctx, "Activity compaction LLM call failed, using raw events fallback", map[string]interface{}{
@@ -284,24 +284,18 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 
 	core.RecordTokenUsage(ctx, "activity_compaction", aiResp.Usage)
 
-	c.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	c.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "activity_compaction",
 		HookPhase:        HookPhasePre,
 		Timestamp:        startTime,
 		DurationMs:       int64(durationMs),
-		Prompt:           prompt,
-		SystemPrompt:     activityCompactorSystemPrompt,
-		Temperature:      float64(aiOpts.Temperature),
-		MaxTokens:        aiOpts.MaxTokens,
-		Model:            aiResp.Model,
-		Provider:         aiResp.Provider,
 		Response:         aiResp.Content,
 		PromptTokens:     aiResp.Usage.PromptTokens,
 		CompletionTokens: aiResp.Usage.CompletionTokens,
 		TotalTokens:      aiResp.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	})
+	}, invocationResult, invocation, aiResp, nil))
 
 	telemetry.AddSpanEvent(ctx, "llm.activity_compaction.response",
 		attribute.String("request_id", requestID),
@@ -379,22 +373,25 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 		aiOpts.Model = c.model
 	}
 
-	aiResp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "activity-compaction",
 		Prompt:         prompt,
 		Options:        aiOpts,
 		DeferRecording: c.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, c.aiClient, invocation)
+	var aiResp *core.AIResponse
+	if invocationResult != nil {
+		aiResp = invocationResult.Response
+	}
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)
-		c.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		c.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type: "activity_compaction_incremental", HookPhase: HookPhasePre,
 			Timestamp: startTime, DurationMs: int64(durationMs),
-			Prompt: prompt, SystemPrompt: activityCompactorSystemPrompt,
-			Temperature: float64(aiOpts.Temperature), MaxTokens: aiOpts.MaxTokens,
-			Model: aiOpts.Model, Success: false, Error: err.Error(), Attempt: 1,
-		})
+			Success: false, Error: err.Error(), Attempt: 1,
+		}, invocationResult, invocation, aiResp, err))
 		if c.logger != nil {
 			c.logger.WarnWithContext(ctx, "Incremental digest update failed, returning previous digest", map[string]interface{}{
 				"operation":       "activity_compaction_incremental",
@@ -413,15 +410,13 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 	durationMs := float64(time.Since(startTime).Milliseconds())
 	core.RecordTokenUsage(ctx, "activity_compaction_incremental", aiResp.Usage)
 
-	c.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	c.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type: "activity_compaction_incremental", HookPhase: HookPhasePre,
 		Timestamp: startTime, DurationMs: int64(durationMs),
-		Prompt: prompt, SystemPrompt: activityCompactorSystemPrompt,
-		Temperature: float64(aiOpts.Temperature), MaxTokens: aiOpts.MaxTokens,
-		Model: aiResp.Model, Provider: aiResp.Provider, Response: aiResp.Content,
+		Response:     aiResp.Content,
 		PromptTokens: aiResp.Usage.PromptTokens, CompletionTokens: aiResp.Usage.CompletionTokens,
 		TotalTokens: aiResp.Usage.TotalTokens, Success: true, Attempt: 1,
-	})
+	}, invocationResult, invocation, aiResp, nil))
 
 	telemetry.AddSpanEvent(ctx, "llm.activity_compaction.incremental_response",
 		attribute.String("request_id", requestID),

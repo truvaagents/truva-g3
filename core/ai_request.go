@@ -148,9 +148,14 @@ type AIRequestReport struct {
 	Purpose        string
 	RequestedModel string
 	ResolvedModel  string
-	Adjustments    []AIRequestAdjustment
-	Fingerprint    string
-	Stable         bool
+	// EffectiveTemperature and EffectiveMaxTokens describe the provider body
+	// after all compatibility rules, middleware, and request patches. Inherit
+	// means the provider could not report the field; Omit means it was absent.
+	EffectiveTemperature AIParameter[float32]
+	EffectiveMaxTokens   AIParameter[int]
+	Adjustments          []AIRequestAdjustment
+	Fingerprint          string
+	Stable               bool
 }
 
 // AIRequestAdjustment records a sanitized change to effective request intent.

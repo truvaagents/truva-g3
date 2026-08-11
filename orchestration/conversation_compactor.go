@@ -74,14 +74,19 @@ func (c *LLMConversationCompactor) Compact(ctx context.Context, priorSummary str
 	prompt := buildConversationCompactionPrompt(priorSummary, newTurns)
 	opts := mergeAIOptions(&core.AIOptions{}, c.aiOptions)
 	ctx = telemetry.WithBaggage(ctx, "ai.purpose", "conversation_history_compaction")
-	resp, _, err := invokeAI(ctx, c.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "conversation-compaction",
 		Prompt:         prompt,
 		Options:        opts,
 		DeferRecording: c.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, c.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	if err != nil {
-		c.recordDebugInteraction(ctx, startTime, prompt, opts, nil, err)
+		c.recordDebugInteraction(ctx, startTime, invocationResult, invocation, resp, err)
 		telemetry.RecordSpanError(ctx, err)
 		if c.logger != nil {
 			c.logger.WarnWithContext(ctx, "Conversation compaction failed; falling back to Tier 1", map[string]interface{}{
@@ -102,7 +107,7 @@ func (c *LLMConversationCompactor) Compact(ctx context.Context, priorSummary str
 	}
 
 	content := strings.TrimSpace(resp.Content)
-	c.recordDebugInteraction(ctx, startTime, prompt, opts, resp, nil)
+	c.recordDebugInteraction(ctx, startTime, invocationResult, invocation, resp, nil)
 	span.SetAttribute("result_chars", len(content))
 	return content, nil
 }
@@ -110,8 +115,8 @@ func (c *LLMConversationCompactor) Compact(ctx context.Context, priorSummary str
 func (c *LLMConversationCompactor) recordDebugInteraction(
 	ctx context.Context,
 	startTime time.Time,
-	prompt string,
-	opts *core.AIOptions,
+	invocationResult *aiInvocationResult,
+	invocation aiInvocation,
 	resp *core.AIResponse,
 	callErr error,
 ) {
@@ -128,24 +133,17 @@ func (c *LLMConversationCompactor) recordDebugInteraction(
 	defer cancel()
 	recordCtx = telemetry.CopyBaggage(recordCtx, ctx)
 
-	interaction := LLMInteraction{
+	interaction := withEffectiveAIRequest(LLMInteraction{
 		Type:            "conversation_history_compaction",
 		HookPhase:       HookPhasePre,
 		Timestamp:       startTime,
 		DurationMs:      time.Since(startTime).Milliseconds(),
-		Prompt:          prompt,
-		SystemPrompt:    opts.SystemPrompt,
-		Temperature:     float64(opts.Temperature),
-		MaxTokens:       opts.MaxTokens,
-		Model:           opts.Model,
 		CallDescription: "Recursive conversation history compaction",
 		Success:         callErr == nil,
 		Attempt:         1,
-	}
+	}, invocationResult, invocation, resp, callErr)
 	if resp != nil {
 		interaction.Response = resp.Content
-		interaction.Model = resp.Model
-		interaction.Provider = resp.Provider
 		interaction.PromptTokens = resp.Usage.PromptTokens
 		interaction.CompletionTokens = resp.Usage.CompletionTokens
 		interaction.TotalTokens = resp.Usage.TotalTokens

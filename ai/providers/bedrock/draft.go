@@ -227,6 +227,12 @@ func (d *Draft) PolicyFingerprintIdentity() string {
 	return bedrockConverseAdapterVersion + "|route=" + d.routeIdentity
 }
 
+// EffectiveGenerationPaths maps Bedrock Converse inference fields to the
+// sanitized provider-neutral request report.
+func (d *Draft) EffectiveGenerationPaths() (string, string) {
+	return "/inference_config/temperature", "/inference_config/max_tokens"
+}
+
 // Adjustments returns portable preparation adjustments made before policy.
 func (d *Draft) Adjustments() []core.AIRequestAdjustment {
 	if d == nil {

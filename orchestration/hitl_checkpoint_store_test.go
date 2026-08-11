@@ -2,6 +2,10 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +13,64 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/truvaagents/truva-g3/core"
 )
+
+func TestRedisCheckpointStoreInvalidURLDoesNotExposeCredentials(t *testing.T) {
+	const rawURL = "redis://:super-secret@%zz"
+	_, err := NewRedisCheckpointStore(WithCheckpointRedisURL(rawURL))
+	if err == nil {
+		t.Fatal("invalid Redis URL was accepted")
+	}
+	if strings.Contains(err.Error(), rawURL) || strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("Redis configuration error exposed credentials: %q", err)
+	}
+}
+
+func TestRedisCommandStoreInvalidURLDoesNotExposeCredentials(t *testing.T) {
+	const rawURL = "redis://:super-secret@%zz"
+	_, err := NewRedisCommandStore(WithCommandStoreRedisURL(rawURL))
+	if err == nil {
+		t.Fatal("invalid Redis URL was accepted")
+	}
+	if strings.Contains(err.Error(), rawURL) || strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("Redis command configuration error exposed credentials: %q", err)
+	}
+}
+
+type checkpointApprovalRaceHook struct {
+	once          sync.Once
+	checkpointKey string
+	pendingKey    string
+	checkpointID  string
+	approved      []byte
+	client        *redis.Client
+	err           error
+}
+
+func (hook *checkpointApprovalRaceHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (hook *checkpointApprovalRaceHook) AfterProcess(ctx context.Context, command redis.Cmder) error {
+	if command.Name() != "get" || len(command.Args()) < 2 || fmt.Sprint(command.Args()[1]) != hook.checkpointKey {
+		return nil
+	}
+	hook.once.Do(func() {
+		if err := hook.client.Set(ctx, hook.checkpointKey, hook.approved, time.Hour).Err(); err != nil {
+			hook.err = err
+			return
+		}
+		hook.err = hook.client.SRem(ctx, hook.pendingKey, hook.checkpointID).Err()
+	})
+	return hook.err
+}
+
+func (hook *checkpointApprovalRaceHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (hook *checkpointApprovalRaceHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
 
 // =============================================================================
 // Checkpoint Store Unit Tests (with miniredis)
@@ -44,9 +106,61 @@ func newCheckpointTestStore(t *testing.T, client *redis.Client) *RedisCheckpoint
 		client:     client,
 		keyPrefix:  "test:hitl",
 		ttl:        24 * time.Hour,
-		redisURL:   "miniredis://test",
 		logger:     &core.NoOpLogger{},
 		instanceID: "test-instance",
+	}
+}
+
+func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	t.Setenv("TRUVAG3_HITL_KEY_PREFIX", "legacy:hitl")
+	t.Setenv("TRUVAG3_AGENT_NAME", "travel-agent")
+	t.Setenv(core.EnvServiceName, "travel-service")
+	t.Setenv("TRUVAG3_PORT", "9090")
+
+	checkpoints, err := NewRedisCheckpointStoreWithClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoints.keyPrefix != "legacy:hitl:travel-agent" || checkpoints.agentName != "travel-agent" {
+		t.Fatalf("checkpoint identity = prefix %q, agent %q", checkpoints.keyPrefix, checkpoints.agentName)
+	}
+	if checkpoints.agentAddress == "" {
+		t.Fatal("application-owned checkpoint store did not resolve the agent address")
+	}
+	cp := &ExecutionCheckpoint{CheckpointID: "identity", Status: CheckpointStatusPending}
+	if err := checkpoints.SaveCheckpoint(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.AgentName != checkpoints.agentName || cp.AgentAddress != checkpoints.agentAddress ||
+		!mr.Exists("legacy:hitl:travel-agent:checkpoint:identity") {
+		t.Fatalf("saved checkpoint identity = %#v", cp)
+	}
+	legacyCommands, err := NewRedisCommandStore(WithCommandStoreRedisURL("redis://" + mr.Addr()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = legacyCommands.Close() })
+	if legacyCommands.keyPrefix != "legacy:hitl" {
+		t.Fatalf("legacy command prefix = %q, want environment value", legacyCommands.keyPrefix)
+	}
+
+	commands, err := NewRedisCommandStoreWithClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commands.keyPrefix != "truvag3:hitl" {
+		t.Fatalf("application-owned command prefix = %q, want deterministic default", commands.keyPrefix)
+	}
+
+	explicitCommands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyPrefix("explicit:hitl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicitCommands.keyPrefix != "explicit:hitl" {
+		t.Fatalf("explicit command prefix = %q, want explicit:hitl", explicitCommands.keyPrefix)
 	}
 }
 
@@ -93,6 +207,165 @@ func TestSaveCheckpoint_Success(t *testing.T) {
 	// Verify checkpoint was added to pending index
 	if !isMember(mr, "test:hitl:pending", "cp-123") {
 		t.Error("Checkpoint was not added to pending index")
+	}
+}
+
+func TestClaimExpiredCheckpointsPrunesOrphanedPendingIDs(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	store := newCheckpointTestStore(t, client)
+	if err := client.SAdd(t.Context(), "test:hitl:pending", "missing").Err(); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimExpiredCheckpoints(t.Context(), ExpiredCheckpointClaimRequest{
+		Before: time.Now(), Limit: 10, Owner: "owner", Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 0 || isMember(mr, "test:hitl:pending", "missing") {
+		t.Fatalf("claimed = %#v; orphan remained in pending index", claimed)
+	}
+}
+
+func TestClaimExpiredCheckpointsPrunesTTLExpiredPendingReference(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	store := newCheckpointTestStore(t, client)
+	store.ttl = time.Second
+	checkpoint := &ExecutionCheckpoint{
+		CheckpointID: "ttl-expired", Status: CheckpointStatusPending,
+		CreatedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
+	}
+	if err := store.SaveCheckpoint(t.Context(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if !mr.Exists("test:hitl:checkpoint:ttl-expired") ||
+		!isMember(mr, "test:hitl:pending", checkpoint.CheckpointID) {
+		t.Fatal("checkpoint fixture was not persisted with its pending reference")
+	}
+	mr.FastForward(2 * time.Second)
+	if mr.Exists("test:hitl:checkpoint:ttl-expired") ||
+		!isMember(mr, "test:hitl:pending", checkpoint.CheckpointID) {
+		t.Fatal("TTL fixture did not leave the expected orphaned pending reference")
+	}
+
+	claimed, err := store.ClaimExpiredCheckpoints(t.Context(), ExpiredCheckpointClaimRequest{
+		Before: time.Now(), Limit: 10, Owner: "owner", Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 0 || isMember(mr, "test:hitl:pending", checkpoint.CheckpointID) {
+		t.Fatalf("claimed = %#v; TTL-expired reference remained in pending index", claimed)
+	}
+}
+
+func TestClaimExpiredCheckpointsReleasesPartialBatchOnError(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	store := newCheckpointTestStore(t, client)
+	checkpoint := &ExecutionCheckpoint{
+		CheckpointID: "a-good", Status: CheckpointStatusPending,
+		CreatedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
+	}
+	if err := store.SaveCheckpoint(t.Context(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Set(t.Context(), "test:hitl:checkpoint:b-bad", "{", time.Hour).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SAdd(t.Context(), "test:hitl:pending", "b-bad").Err(); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimExpiredCheckpoints(t.Context(), ExpiredCheckpointClaimRequest{
+		Before: time.Now(), Limit: 10, Owner: "owner", Lease: time.Minute,
+	})
+	if err == nil || len(claimed) != 0 {
+		t.Fatalf("partial claim result = %#v, %v", claimed, err)
+	}
+	if mr.Exists("test:hitl:expiry:claim:a-good") {
+		t.Fatal("partial-batch error leaked an acquired expiry lease")
+	}
+}
+
+func TestClaimExpiredCheckpointsSkipsStatusChangedBeforeClaim(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	store := newCheckpointTestStore(t, client)
+	checkpoint := &ExecutionCheckpoint{
+		CheckpointID: "approved", Status: CheckpointStatusApproved,
+		CreatedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
+	}
+	raw, err := json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Set(t.Context(), "test:hitl:checkpoint:approved", raw, time.Hour).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SAdd(t.Context(), "test:hitl:pending", "approved").Err(); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimExpiredCheckpoints(t.Context(), ExpiredCheckpointClaimRequest{
+		Before: time.Now(), Limit: 10, Owner: "owner", Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 0 || mr.Exists("test:hitl:expiry:claim:approved") {
+		t.Fatalf("approved checkpoint was claimed: %#v", claimed)
+	}
+}
+
+func TestClaimExpiredCheckpointsDoesNotRacePastConcurrentApproval(t *testing.T) {
+	mr, claimClient := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = claimClient.Close() }()
+	approvalClient := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = approvalClient.Close() }()
+	store := newCheckpointTestStore(t, claimClient)
+	pending := &ExecutionCheckpoint{
+		CheckpointID: "racing", Status: CheckpointStatusPending,
+		CreatedAt: time.Now().Add(-time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
+	}
+	if err := store.SaveCheckpoint(t.Context(), pending); err != nil {
+		t.Fatal(err)
+	}
+	approved := *pending
+	approved.Status = CheckpointStatusApproved
+	raw, err := json.Marshal(&approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := &checkpointApprovalRaceHook{
+		checkpointKey: "test:hitl:checkpoint:racing",
+		pendingKey:    "test:hitl:pending",
+		checkpointID:  "racing",
+		approved:      raw,
+		client:        approvalClient,
+	}
+	claimClient.AddHook(hook)
+
+	claimed, err := store.ClaimExpiredCheckpoints(t.Context(), ExpiredCheckpointClaimRequest{
+		Before: time.Now(), Limit: 10, Owner: "owner", Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hook.err != nil {
+		t.Fatal(hook.err)
+	}
+	if len(claimed) != 0 || mr.Exists("test:hitl:expiry:claim:racing") {
+		t.Fatalf("concurrently approved checkpoint was claimed: %#v", claimed)
+	}
+	loaded, err := store.LoadCheckpoint(t.Context(), "racing")
+	if err != nil || loaded.Status != CheckpointStatusApproved {
+		t.Fatalf("checkpoint after approval race = %#v, %v", loaded, err)
 	}
 }
 

@@ -42,6 +42,39 @@ type TaskConsumerFactory func(t *testing.T) (
 	cleanup func(),
 )
 
+// TaskDeliveryProfile makes transport delivery semantics explicit. The base
+// TaskConsumer contract deliberately supports both profiles; providers opt in
+// to the additional assertions that match their advertised implementation.
+type TaskDeliveryProfile string
+
+const (
+	TaskDeliveryAtMostOnce  TaskDeliveryProfile = "at_most_once"
+	TaskDeliveryAtLeastOnce TaskDeliveryProfile = "at_least_once"
+)
+
+// TaskDeliveryFixture supplies neutral observation seams for behavior that is
+// not visible through core.TaskConsumer alone. Provider test packages retain
+// ownership of transport inspection and abandoned-claim recovery.
+type TaskDeliveryFixture struct {
+	Consumer   core.TaskConsumer
+	Dispatcher core.TaskDispatcher
+	Cleanup    func()
+
+	DeadLetterContains func(
+		ctx context.Context,
+		queueName string,
+		taskID string,
+		reason string,
+	) (bool, error)
+	RecoverAbandoned func(
+		ctx context.Context,
+		queueName string,
+		abandoned core.TaskHandle,
+	) (core.TaskHandle, error)
+}
+
+type TaskDeliveryFactory func(t *testing.T) TaskDeliveryFixture
+
 // RunTaskConsumerConformance runs the full contract test suite.
 func RunTaskConsumerConformance(t *testing.T, factory TaskConsumerFactory) {
 	t.Helper()
@@ -55,6 +88,87 @@ func RunTaskConsumerConformance(t *testing.T, factory TaskConsumerFactory) {
 	t.Run("HandleAckIsIdempotent", func(t *testing.T) { testAckIdempotent(t, factory) })
 	t.Run("HandleTaskAccessorStable", func(t *testing.T) { testTaskAccessorStable(t, factory) })
 	t.Run("NackThenAckReturnsError", func(t *testing.T) { testNackThenAck(t, factory) })
+}
+
+// RunTaskDeliveryProfileConformance runs the universal TaskConsumer contract
+// and the assertions for one declared delivery profile. A profile fixture is
+// recreated for every sub-test so state and cleanup remain deterministic.
+func RunTaskDeliveryProfileConformance(
+	t *testing.T,
+	profile TaskDeliveryProfile,
+	factory TaskDeliveryFactory,
+) {
+	t.Helper()
+	if profile != TaskDeliveryAtMostOnce && profile != TaskDeliveryAtLeastOnce {
+		t.Fatalf("unknown task delivery profile %q", profile)
+	}
+	RunTaskConsumerConformance(t, func(t *testing.T) (core.TaskConsumer, core.TaskDispatcher, func()) {
+		fixture := factory(t)
+		return fixture.Consumer, fixture.Dispatcher, fixture.Cleanup
+	})
+
+	t.Run("TerminalNackPersistsDeadLetter", func(t *testing.T) {
+		fixture := factory(t)
+		if fixture.Cleanup != nil {
+			t.Cleanup(fixture.Cleanup)
+		}
+		if fixture.DeadLetterContains == nil {
+			t.Fatal("delivery profile requires DeadLetterContains")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+		defer cancel()
+		const reason = "terminal_conformance_failure"
+		task := makeTestTask("profile-dead-letter")
+		if err := fixture.Dispatcher.Dispatch(ctx, QueueName, task); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		handle, err := fixture.Consumer.Consume(ctx, QueueName)
+		if err != nil || handle == nil {
+			t.Fatalf("Consume: handle=%v err=%v", handle, err)
+		}
+		if err := handle.Nack(ctx, reason); err != nil {
+			t.Fatalf("Nack: %v", err)
+		}
+		found, err := fixture.DeadLetterContains(ctx, QueueName, task.ID, reason)
+		if err != nil {
+			t.Fatalf("inspect dead letter: %v", err)
+		}
+		if !found {
+			t.Fatal("terminal Nack was not persisted in the dead-letter destination")
+		}
+	})
+
+	if profile == TaskDeliveryAtLeastOnce {
+		t.Run("AbandonedClaimRecoversAcrossConsumer", func(t *testing.T) {
+			fixture := factory(t)
+			if fixture.Cleanup != nil {
+				t.Cleanup(fixture.Cleanup)
+			}
+			if fixture.RecoverAbandoned == nil {
+				t.Fatal("at-least-once profile requires RecoverAbandoned")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+			defer cancel()
+			task := makeTestTask("profile-abandoned")
+			if err := fixture.Dispatcher.Dispatch(ctx, QueueName, task); err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			abandoned, err := fixture.Consumer.Consume(ctx, QueueName)
+			if err != nil || abandoned == nil {
+				t.Fatalf("initial Consume: handle=%v err=%v", abandoned, err)
+			}
+			recovered, err := fixture.RecoverAbandoned(ctx, QueueName, abandoned)
+			if err != nil || recovered == nil {
+				t.Fatalf("recover abandoned claim: handle=%v err=%v", recovered, err)
+			}
+			if recovered.Task() == nil || recovered.Task().ID != task.ID {
+				t.Fatalf("recovered task = %#v, want ID %q", recovered.Task(), task.ID)
+			}
+			if err := recovered.Ack(ctx); err != nil {
+				t.Fatalf("Ack recovered task: %v", err)
+			}
+		})
+	}
 }
 
 func makeTestTask(id string) *core.Task {

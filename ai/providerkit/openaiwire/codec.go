@@ -165,6 +165,12 @@ func (d *Draft) HasExplicitIntent(path string) bool {
 // PolicyFingerprintIdentity supplies the versioned codec identity.
 func (d *Draft) PolicyFingerprintIdentity() string { return d.profileIdentity }
 
+// EffectiveGenerationPaths maps provider-local wire fields to the sanitized
+// provider-neutral request report.
+func (d *Draft) EffectiveGenerationPaths() (string, string) {
+	return "/temperature", tokenLimitPath(d.tokenLimit)
+}
+
 // Validate checks invariants after every policy layer has run.
 func (d *Draft) Validate() error {
 	if d == nil || d.Document == nil {
