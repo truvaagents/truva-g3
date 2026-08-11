@@ -115,12 +115,12 @@ func (c *LokiClient) QueryRange(ctx context.Context, query, start, end, step, di
 
 	var queryData lokiQueryData
 	if err := json.Unmarshal(apiResp.Data, &queryData); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse query data: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse query data: %w", err)
 	}
 
 	var streams []lokiStream
 	if err := json.Unmarshal(queryData.Result, &streams); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse streams: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse streams: %w", err)
 	}
 
 	return streams, nil
@@ -144,7 +144,7 @@ func (c *LokiClient) Labels(ctx context.Context, start, end string) ([]string, e
 
 	var labels []string
 	if err := json.Unmarshal(apiResp.Data, &labels); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse labels: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse labels: %w", err)
 	}
 
 	return labels, nil
@@ -171,7 +171,7 @@ func (c *LokiClient) LabelValues(ctx context.Context, label, start, end, query s
 
 	var values []string
 	if err := json.Unmarshal(apiResp.Data, &values); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse label values: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse label values: %w", err)
 	}
 
 	return values, nil
@@ -196,23 +196,23 @@ func (c *LokiClient) DetectedFields(ctx context.Context, query, start, end strin
 	// detected_fields returns a different envelope: {"fields": [...]}
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to create request: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 502): %w", err)
+		return nil, fmt.Errorf("loki API error (status 502): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 502): failed to read response: %w", err)
+		return nil, fmt.Errorf("loki API error (status 502): failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Loki API error (status %d): %s", resp.StatusCode, truncateBody(body))
+		return nil, fmt.Errorf("loki API error (status %d): %s", resp.StatusCode, truncateBody(body))
 	}
 
 	// Parse the detected_fields-specific response format
@@ -220,7 +220,7 @@ func (c *LokiClient) DetectedFields(ctx context.Context, query, start, end strin
 		Fields []lokiDetectedField `json:"fields"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse detected fields: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse detected fields: %w", err)
 	}
 
 	return result.Fields, nil
@@ -232,32 +232,32 @@ func (c *LokiClient) DetectedFields(ctx context.Context, query, start, end strin
 func (c *LokiClient) doRequest(ctx context.Context, reqURL string) (*lokiAPIResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to create request: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 502): %w", err)
+		return nil, fmt.Errorf("loki API error (status 502): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Loki API error (status 502): failed to read response: %w", err)
+		return nil, fmt.Errorf("loki API error (status 502): failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Loki API error (status %d): %s", resp.StatusCode, truncateBody(body))
+		return nil, fmt.Errorf("loki API error (status %d): %s", resp.StatusCode, truncateBody(body))
 	}
 
 	var apiResp lokiAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("Loki API error (status 500): failed to parse response envelope: %w", err)
+		return nil, fmt.Errorf("loki API error (status 500): failed to parse response envelope: %w", err)
 	}
 
 	if apiResp.Status == "error" {
-		return nil, fmt.Errorf("Loki API error (status 400): %s", apiResp.Error)
+		return nil, fmt.Errorf("loki API error (status 400): %s", apiResp.Error)
 	}
 
 	return &apiResp, nil

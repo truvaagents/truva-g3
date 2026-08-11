@@ -112,7 +112,7 @@ func main() {
 func validateConfig() error {
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
+		return fmt.Errorf("missing required REDIS_URL environment variable")
 	}
 	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
 		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
