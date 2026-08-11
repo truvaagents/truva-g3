@@ -23,6 +23,10 @@ import {
 import { fetchAPI } from '../api.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
+    getLLMInteractionContent,
+    getLLMPromptSections,
+} from '../utils/llm-content.js';
+import {
     getLLMType,
     isPlanningType,
     isPhaseClosingType,
@@ -4720,7 +4724,7 @@ function copyTextWithFeedback(text, btn) {
 function copyDAGLLMContent(index, type, evt) {
     if (!selected?.llm_interactions?.[index]) return;
     const interaction = selected.llm_interactions[index];
-    const text = type === 'prompt' ? interaction.prompt : interaction.response;
+    const text = getLLMInteractionContent(interaction, type);
     copyTextWithFeedback(text, evt?.target || evt);
 }
 
@@ -4735,8 +4739,8 @@ function toggleLLMInteraction(idx, type) {
     if (isHidden && content.dataset.deferred && !content.dataset.rendered) {
         const interaction = selected?.llm_interactions?.[parseInt(content.dataset.llmIdx)];
         if (interaction) {
-            if (type === 'prompt') {
-                content.innerHTML = `<pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 11px; color: var(--text-secondary);">${escapeHtml(interaction.prompt || '')}</pre>`;
+            if (type === 'system_prompt' || type === 'prompt') {
+                content.innerHTML = `<pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 11px; color: var(--text-secondary);">${escapeHtml(getLLMInteractionContent(interaction, type))}</pre>`;
             } else if (type === 'response') {
                 content.innerHTML = formatResponseJson(interaction.response || '');
             }
@@ -5058,6 +5062,19 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
     };
     const pColors = providerColors[provider] || providerColors['default'];
     const providerBadge = '<span style="display: inline-block; padding: 3px 10px; background: linear-gradient(135deg, ' + pColors.bg + ' 0%, rgba(255,255,255,0.05) 100%); border: 1px solid ' + pColors.border + '; border-radius: 5px; font-size: 12px; font-weight: 600; color: ' + pColors.color + '; letter-spacing: 0.3px;">' + (interaction.provider || 'Unknown') + '</span>';
+    const promptSections = getLLMPromptSections(interaction).map((section) => `
+                <div class="dag-step-response" style="background: rgba(0, 0, 0, 0.15); border-radius: 12px; margin-top: 8px; overflow: hidden;">
+                    <div class="dag-step-response-header" data-toggle-llm="${idx}" data-llm-type="${section.type}" style="background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+                        <span><span class="expand-arrow" id="llm-${section.type}-arrow-${idx}">▶</span> View ${section.label}</span>
+                        <span style="display: flex; align-items: center; gap: 8px;">
+                            <button class="copy-inline-btn" data-copy-llm="${idx}" data-copy-type="${section.type}">Copy</button>
+                            ${section.type === 'prompt' ? `<span style="color: var(--text-muted); font-size: 10px;">${(interaction.prompt_tokens || 0).toLocaleString()} total input tokens</span>` : ''}
+                        </span>
+                    </div>
+                    <div id="llm-${section.type}-${idx}" class="dag-step-response-content" style="display: none; background: rgba(0, 0, 0, 0.2);" data-deferred="${section.type}" data-llm-idx="${idx}">
+                    </div>
+                </div>
+    `).join('');
 
     return `
         <div class="dag-step-card" style="background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid ${config.border}; box-shadow: ${baseShadow};" onmouseenter="this.style.boxShadow='${hoverShadow}'; this.style.borderColor='rgba(${_r}, 0.4)';" onmouseleave="this.style.boxShadow='${baseShadow}'; this.style.borderColor='${config.border}';">
@@ -5102,17 +5119,7 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
                         <strong>Note:</strong> ${interaction.error}
                     </div>
                 ` : ''}
-                <div class="dag-step-response" style="background: rgba(0, 0, 0, 0.15); border-radius: 12px; margin-top: 12px; overflow: hidden;">
-                    <div class="dag-step-response-header" data-toggle-llm="${idx}" data-llm-type="prompt" style="background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
-                        <span><span class="expand-arrow" id="llm-prompt-arrow-${idx}">▶</span> View Prompt</span>
-                        <span style="display: flex; align-items: center; gap: 8px;">
-                            <button class="copy-inline-btn" data-copy-llm="${idx}" data-copy-type="prompt">Copy</button>
-                            <span style="color: var(--text-muted); font-size: 10px;">${(interaction.prompt_tokens || 0).toLocaleString()} tokens</span>
-                        </span>
-                    </div>
-                    <div id="llm-prompt-${idx}" class="dag-step-response-content" style="display: none; background: rgba(0, 0, 0, 0.2);" data-deferred="prompt" data-llm-idx="${idx}">
-                    </div>
-                </div>
+                ${promptSections}
                 <div class="dag-step-response" style="background: rgba(0, 0, 0, 0.15); border-radius: 12px; margin-top: 8px; overflow: hidden;">
                     <div class="dag-step-response-header" data-toggle-llm="${idx}" data-llm-type="response" style="background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
                         <span><span class="expand-arrow" id="llm-response-arrow-${idx}">▶</span> View Response</span>

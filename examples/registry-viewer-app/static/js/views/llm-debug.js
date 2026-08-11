@@ -22,6 +22,10 @@ import {
 import { fetchAPI } from '../api.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
+    getLLMInteractionContent,
+    getLLMPromptSections,
+} from '../utils/llm-content.js';
+import {
     isRetryType,
     getListLabel,
     getListStyledColors,
@@ -565,10 +569,12 @@ function renderLLMInteractionsView(record) {
                     <span style="color: var(--text-muted); margin-left: 6px;">${escapeHtml(interaction.call_description)}</span>
                 </div>
                 ` : ''}
+                ${getLLMPromptSections(interaction).map((section) => `
                 <div class="prompt-section">
-                    <div class="prompt-label">📥 Prompt <button class="copy-inline-btn" data-copy-index="${index}" data-copy-type="prompt">Copy</button></div>
-                    <div class="prompt-content">${escapeHtml(interaction.prompt)}</div>
+                    <div class="prompt-label">${section.icon} ${section.label} <button class="copy-inline-btn" data-copy-index="${index}" data-copy-type="${section.type}">Copy</button></div>
+                    <div class="prompt-content">${escapeHtml(section.text)}</div>
                 </div>
+                `).join('')}
 
                 ${interaction.success ? `
                 <div class="response-section">
@@ -668,7 +674,7 @@ function copyLLMJson(evt) {
 function copyLLMInteractionContent(index, type, evt) {
     if (!selected?.interactions?.[index]) return;
     const interaction = selected.interactions[index];
-    const text = type === 'prompt' ? interaction.prompt : interaction.response;
+    const text = getLLMInteractionContent(interaction, type);
     copyTextWithFeedback(text, evt?.target || evt);
 }
 

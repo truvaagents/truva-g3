@@ -14,6 +14,7 @@
  */
 
 import { formatDuration, escapeHtml, formatResponseJson } from '../utils/format.js';
+import { getLLMPromptSections } from '../utils/llm-content.js';
 import { LLM_TYPES, getLLMType } from '../llm-types.js';
 
 /**
@@ -120,6 +121,17 @@ function renderFullCard(interaction, index, config, label, expanded) {
         : '';
 
     const display = expanded ? 'block' : 'none';
+    const promptSections = getLLMPromptSections(interaction).map((section) => `
+            <div style="border-top: 1px solid rgba(255,255,255,0.06);">
+                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
+                        style="width: 100%; padding: 8px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
+                    ▶ ${section.label}
+                </button>
+                <div style="display: ${display}; padding: 0 16px 12px;">
+                    <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--text-secondary); max-height: 300px; overflow-y: auto;">${escapeHtml(section.text)}</pre>
+                </div>
+            </div>
+    `).join('');
 
     return `
         <div class="llm-interaction-card" data-interaction-type="${interaction.type}"
@@ -140,15 +152,7 @@ function renderFullCard(interaction, index, config, label, expanded) {
             </div>
             ${!status && interaction.error ? `<div style="padding: 8px 16px; color: var(--accent-red); font-size: 12px; background: rgba(255,107,107,0.08);">${escapeHtml(interaction.error)}</div>` : ''}
             ${nonFatalNote ? `<div style="padding: 8px 16px; color: #ffb340; font-size: 12px; background: rgba(255,179,64,0.08);">Semantic note: ${escapeHtml(interaction.error)}</div>` : ''}
-            <div style="border-top: 1px solid rgba(255,255,255,0.06);">
-                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
-                        style="width: 100%; padding: 8px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
-                    ▶ Prompt
-                </button>
-                <div style="display: ${display}; padding: 0 16px 12px;">
-                    <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--text-secondary); max-height: 300px; overflow-y: auto;">${escapeHtml(interaction.prompt || '')}</pre>
-                </div>
-            </div>
+            ${promptSections}
             <div style="border-top: 1px solid rgba(255,255,255,0.06);">
                 <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
                         style="width: 100%; padding: 8px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
