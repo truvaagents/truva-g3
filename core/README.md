@@ -1312,7 +1312,7 @@ func main() {
             // Process...
             if err := processData(); err != nil {
                 tool.Logger.Error("Processing failed", map[string]interface{}{
-                    "error":    err.Error(),
+                    "error":    core.RedactSensitiveText(err.Error()),
                     "duration": time.Since(startTime),
                 })
                 http.Error(w, "Processing failed", 500)
@@ -1346,7 +1346,7 @@ tool.RegisterCapability(core.Capability{
 
         if err := processData(ctx); err != nil {
             tool.Logger.ErrorWithContext(ctx, "Processing failed", map[string]interface{}{
-                "error": err.Error(),
+                "error": core.RedactSensitiveText(err.Error()),
             })
             http.Error(w, "Processing failed", 500)
             return
@@ -1362,6 +1362,16 @@ tool.RegisterCapability(core.Capability{
 - Logs from the same request are correlated via trace/request IDs
 - Works seamlessly with OpenTelemetry distributed tracing
 - Essential for debugging in production environments
+
+Keep original errors for control flow, but sanitize external/provider/backend
+errors before placing them in logs, traces, debug records, or tool responses.
+`core.RedactSensitiveText` removes common credential assignments,
+authorization values, and secret-bearing URL components while preserving useful
+diagnostic structure. It is defense in depth, so avoid putting raw prompts,
+payloads, endpoints, or credentials into errors in the first place.
+When returning an error across a framework boundary, use
+`core.RedactSensitiveError(err)` to sanitize its observable message without
+breaking `errors.Is` or `errors.As` inspection of the original cause.
 
 ### Provider-Neutral AI Requests
 
@@ -1383,10 +1393,30 @@ be represented without losing intent. Unsupported intent returns a typed
 `AIRequestFeatureError` matching `ErrAIRequestFeatureUnsupported`.
 
 `AIResult.RequestReport` is a sanitized preparation report with a stable,
-secret-free policy fingerprint when the provider can supply one. It must not
-contain prompts, credentials, raw request bodies, or secret values. See the
+secret-free policy fingerprint when the provider can supply one. Its
+`EffectiveTemperature` and `EffectiveMaxTokens` fields describe post-policy
+provider-body presence: `Set` means sent, `Omit` means absent, and `Inherit`
+means unreported. It must not contain prompts, credentials, raw request bodies,
+or secret values. See the
 [Custom AI Providers and Enterprise Integration Guide](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)
 for construction, policy, and provider implementation details.
+
+### Pipeline Short-Circuit Provenance
+
+Core keeps the original `BeforePlanningHook` and `PipelineShortCircuit`
+contracts source compatible. New response-cache hooks should implement
+`BeforePlanningDecisionHook`, which labels a result as `authoritative` or
+`cache` and receives a `PipelineGate` containing defensive request-local cache
+variation dimensions. A cache decision must return the dimensions stored with
+the entry; it must never echo the gate's current values at lookup time.
+
+Core deliberately gives dimension names no feature semantics. The
+orchestration consumer decides which dimensions are reserved and enforces
+symmetric presence/value matching. This makes the seam reusable by skills,
+memory, compaction, routing, and other features without adding those concepts
+to core. See the
+[Pipeline Hooks Guide](../docs/orchestration/PIPELINE_HOOKS_GUIDE.md) for the
+complete lifecycle and compatibility rules.
 
 ### 🌊 Streaming Interface: Real-Time AI Responses
 
@@ -1443,7 +1473,7 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     )
 
     if err != nil {
-        fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+        fmt.Fprint(w, "event: error\ndata: upstream request failed\n\n")
     }
 }
 ```
@@ -1592,7 +1622,7 @@ func (t *DataTool) fetchData(ctx context.Context, id string) error {
         // Log retry attempt
         t.Logger.Warn("Retrying fetch", map[string]interface{}{
             "attempt": i + 1,
-            "error":   err.Error(),
+            "error":   core.RedactSensitiveText(err.Error()),
         })
         
         time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
@@ -1668,10 +1698,14 @@ result, err := h.externalClient.Search(ctx, params)
 if err != nil {
     info := core.ClassifyUpstreamError(err) // Extracts status from error message
     // info.HTTPStatus=400, info.Category=CategoryInputError, info.Retryable=false
-    h.sendUpstreamError(rw, "Search failed: "+err.Error(), info)
+    safeError := core.RedactSensitiveText(err.Error())
+    h.sendUpstreamError(rw, "Search failed: "+safeError, info)
     return
 }
 ```
+
+Classify the original error first so routing retains its status signal, then
+sanitize the diagnostic text before returning or observing it.
 
 See [API Reference — Upstream Error Classification](../docs/reference/API_REFERENCE.md#upstream-error-classification) for the full classification mapping.
 
@@ -1835,7 +1869,7 @@ agent.RegisterCapability(core.Capability{
             w.WriteHeader(http.StatusServiceUnavailable)
             json.NewEncoder(w).Encode(map[string]interface{}{
                 "status": "unhealthy",
-                "error":  err.Error(),
+                "error":  "database unavailable",
             })
             return
         }

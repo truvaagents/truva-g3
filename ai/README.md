@@ -1729,8 +1729,11 @@ without loss. Unsupported intent returns
 Application policy is configured with `WithRequestRules`,
 `WithRequestMiddleware`, and `WithCompatibilityMode`; per-request patches live
 on `AIRequest.Patches`. `AIResult.RequestReport` contains sanitized preparation
-facts and a secret-free semantic fingerprint. It never contains prompt text,
-credentials, or raw request bodies.
+facts, provider-effective temperature/max-token presence, and a secret-free
+semantic fingerprint. For those effective fields, `Set(value)` means the value
+was present in the final provider body, `Omit` means it was absent, and
+`Inherit` means the adapter could not report it reliably. The report never
+contains prompt text, credentials, or raw request bodies.
 
 Use `NewChain` with `ProviderEntry` and `ClientEntry` when failover entries need
 independent policy, credentials, routes, or client implementations. The legacy

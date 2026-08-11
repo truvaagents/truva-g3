@@ -15,7 +15,7 @@ Welcome to the complete guide on async tasks in TruvaG3! Think of this as your f
    - 3.2 [Data Flow](#32-data-flow)
 4. [Quick Start: Your First Async Agent](#4-quick-start-your-first-async-agent)
    - 4.1 [Step 1: Create Project Structure](#41-step-1-create-project-structure)
-   - 4.2 [Step 2: Initialize Redis-Backed Infrastructure](#42-step-2-initialize-redis-backed-infrastructure)
+   - 4.2 [Step 2: Compose Async Backends](#42-step-2-compose-async-backends)
    - 4.3 [Step 3: Create Worker Pool and Register Handlers](#43-step-3-create-worker-pool-and-register-handlers)
    - 4.4 [Step 4: Set Up HTTP API](#44-step-4-set-up-http-api)
    - 4.5 [Step 5: Implement Task Handler](#45-step-5-implement-task-handler)
@@ -225,9 +225,9 @@ Before diving into code, let's understand the components.
 
 > **Note: Pluggable Backend Design**
 >
-> TruvaG3's async task system uses an **interface-first design**. The `TaskQueue` and `TaskStore` interfaces are defined in the `core` module, while **Redis implementations are provided as defaults**. You can implement these interfaces for other backends (PostgreSQL, in-memory for testing, etc.) if needed.
+> TruvaG3's async task system uses an **interface-first design**. The `TaskQueue` and `TaskStore` interfaces are defined in the `core` module. `orchestration.OrchestrationBackends` composes implementations behind those contracts, while `orchestration/redisprovider` supplies the included Redis preset. You can replace either capability independently.
 >
-> This guide uses the Redis implementations throughout. See [Configuration Reference](#11-configuration-reference) for Redis configuration details, or [Implementing Custom Backends](#116-implementing-custom-backends) for guidance on creating your own implementations.
+> This guide uses the included Redis preset for concrete examples while keeping runtime wiring provider-neutral. See [Configuration Reference](#11-configuration-reference) for Redis adapter settings, or [Implementing Custom Backends](#116-implementing-custom-backends) for another provider.
 
 ### 3.1 Component Overview
 
@@ -237,21 +237,21 @@ Before diving into code, let's understand the components.
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐    │
-│  │ core.TaskQueue interface → orchestration.RedisTaskQueue     │    │
+│  │ core.TaskQueue interface → backends.TaskQueue()             │    │
 │  │ ─────────────────────────────────────────────────────────── │    │
 │  │ • Enqueue(task) - Add task to processing queue              │    │
 │  │ • Dequeue()     - Blocking pop from queue                   │    │
-│  │ • Default impl uses Redis LIST for reliable queuing         │    │
+│  │ • Included Redis adapter uses a Redis LIST                  │    │
 │  └─────────────────────────────────────────────────────────────┘    │
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐    │
-│  │ core.TaskStore interface → orchestration.RedisTaskStore     │    │
+│  │ core.TaskStore interface → backends.Tasks()                 │    │
 │  │ ─────────────────────────────────────────────────────────── │    │
 │  │ • Create(task)  - Persist new task                          │    │
 │  │ • Get(id)       - Retrieve task by ID                       │    │
 │  │ • Update(task)  - Update progress/result                    │    │
 │  │ • Cancel(id)    - Mark task as cancelled                    │    │
-│  │ • Default impl uses Redis STRING for JSON storage           │    │
+│  │ • Included Redis adapter uses Redis JSON records            │    │
 │  └─────────────────────────────────────────────────────────────┘    │
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐    │
@@ -307,7 +307,7 @@ my-async-agent/
 └── setup.sh          # Deployment helper script
 ```
 
-### 4.2 Step 2: Initialize Redis-Backed Infrastructure
+### 4.2 Step 2: Compose Async Backends
 
 ```go
 // main.go
@@ -317,9 +317,12 @@ import (
     "context"
     "log"
     "os"
+    "time"
 
     "github.com/go-redis/redis/v8"
+    "github.com/truvaagents/truva-g3/core"
     "github.com/truvaagents/truva-g3/orchestration"
+    "github.com/truvaagents/truva-g3/orchestration/redisprovider"
 )
 
 func main() {
@@ -327,7 +330,7 @@ func main() {
     redisURL := os.Getenv("REDIS_URL")
     redisOpt, err := redis.ParseURL(redisURL)
     if err != nil {
-        log.Fatalf("Failed to parse REDIS_URL: %v", err)
+        log.Fatalf("Failed to parse REDIS_URL: %s", core.RedactSensitiveText(err.Error()))
     }
     redisClient := redis.NewClient(redisOpt)
 
@@ -335,14 +338,41 @@ func main() {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     if err := redisClient.Ping(ctx).Err(); err != nil {
         cancel()
-        log.Fatalf("Failed to connect to Redis: %v", err)
+        log.Fatalf("Failed to connect to Redis: %s", core.RedactSensitiveText(err.Error()))
     }
     cancel()
     log.Println("Connected to Redis")
 
-    // Create async task infrastructure
-    taskQueue := orchestration.NewRedisTaskQueue(redisClient, nil)
-    taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
+    // The application composes provider adapters; orchestration consumes only
+    // core interfaces. Redis is the included preset, not a runtime dependency.
+    clients, err := redisprovider.NewClientSet(redisClient)
+    if err != nil {
+        log.Fatal(err)
+    }
+    providerOptions, err := redisprovider.NewOptions(
+        redisprovider.WithNamespace("my-async-agent"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    backends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
+    if err != nil {
+        log.Fatal(err)
+    }
+    requirements, err := orchestration.RequirementsForFeatures(
+        nil,
+        orchestration.BackendFeatureTaskQueue,
+        orchestration.BackendFeatureTaskStorage,
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := backends.ValidateFor(requirements); err != nil {
+        log.Fatal(err)
+    }
+
+    taskQueue := backends.TaskQueue()
+    taskStore := backends.Tasks()
 
     // ... continue with worker pool and API setup
 }
@@ -1761,14 +1791,21 @@ type RedisTaskStoreConfig struct {
 
 ### 11.5 Utility Methods (Beyond the Interface)
 
-The Redis implementations provide additional methods useful for monitoring and administration:
+The Redis adapters provide additional methods useful for monitoring and
+administration. These are provider-specific extensions, so downcast only in
+adapter-owned operational code; ordinary orchestration should retain the
+`core.TaskQueue` and `core.TaskStore` contracts.
 
 #### RedisTaskQueue Extra Methods
 
 ```go
 // QueueLength returns the current number of tasks in the queue.
 // Useful for monitoring queue depth and triggering scaling.
-length, err := taskQueue.QueueLength(ctx)
+redisQueue, ok := taskQueue.(*orchestration.RedisTaskQueue)
+if !ok {
+    return fmt.Errorf("queue-length inspection requires the Redis adapter")
+}
+length, err := redisQueue.QueueLength(ctx)
 if err != nil {
     log.Printf("Failed to get queue length: %v", err)
 }
@@ -1781,7 +1818,11 @@ fmt.Printf("Queue depth: %d\n", length)
 // ListByStatus returns all tasks with the given status.
 // Useful for monitoring and admin operations.
 // Note: This scans all keys with the prefix, so use sparingly in production.
-runningTasks, err := taskStore.ListByStatus(ctx, core.TaskStatusRunning)
+redisStore, ok := taskStore.(*orchestration.RedisTaskStore)
+if !ok {
+    return fmt.Errorf("status listing requires the Redis adapter")
+}
+runningTasks, err := redisStore.ListByStatus(ctx, core.TaskStatusRunning)
 if err != nil {
     log.Printf("Failed to list running tasks: %v", err)
 }
@@ -2152,14 +2193,32 @@ if err != nil {
     log.Fatalf("Failed to create SQS queue: %v", err)
 }
 
-// Redis for store (existing infrastructure)
-redisClient := redis.NewClient(&redis.Options{
-    Addr: "redis:6379",
-})
-redisStore := orchestration.NewRedisTaskStore(redisClient, nil)
+// Start with the included Redis preset, then replace only the queue capability.
+redisBackends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
+if err != nil {
+    log.Fatal(err)
+}
+backends, err := redisBackends.With(
+    orchestration.WithTaskQueueBackend(sqsQueue),
+)
+if err != nil {
+    log.Fatal(err)
+}
+requirements, _ := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureTaskQueue,
+    orchestration.BackendFeatureTaskStorage,
+)
+if err := backends.ValidateFor(requirements); err != nil {
+    log.Fatal(err)
+}
 
 // Create worker pool with hybrid backends
-workerPool := orchestration.NewTaskWorkerPool(sqsQueue, redisStore, workerConfig)
+workerPool := orchestration.NewTaskWorkerPool(
+    backends.TaskQueue(),
+    backends.Tasks(),
+    workerConfig,
+)
 ```
 
 #### Example: AWS DynamoDB Implementation (for AWS-Native Deployments)
@@ -2420,9 +2479,24 @@ workerPool := orchestration.NewTaskWorkerPool(sqsQueue, dynamoStore, workerConfi
 #### Using Custom Implementations
 
 ```go
-// Use your custom implementations instead of the defaults
-taskQueue := NewMyCustomTaskQueue()  // Your custom queue implementation
-taskStore := NewMyCustomTaskStore()  // Your custom store implementation
+// Compose custom implementations through the same provider-neutral root.
+backends, err := orchestration.NewOrchestrationBackends(
+    orchestration.WithTaskQueueBackend(NewMyCustomTaskQueue()),
+    orchestration.WithTaskBackend(NewMyCustomTaskStore()),
+)
+if err != nil {
+    log.Fatal(err)
+}
+requirements, _ := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureTaskQueue,
+    orchestration.BackendFeatureTaskStorage,
+)
+if err := backends.ValidateFor(requirements); err != nil {
+    log.Fatal(err)
+}
+taskQueue := backends.TaskQueue()
+taskStore := backends.Tasks()
 
 // Create worker pool with custom backends
 workerPool := orchestration.NewTaskWorkerPool(taskQueue, taskStore, workerConfig)
@@ -2436,8 +2510,8 @@ apiHandler := orchestration.NewTaskAPIHandler(taskQueue, taskStore, logger)
 | Use Case | Recommended Backend |
 |----------|---------------------|
 | **Production** | Redis (default) - battle-tested, horizontally scalable |
-| **Unit tests** | Mock the interfaces or use Redis with testcontainers |
-| **Integration tests** | Redis (testcontainers) |
+| **Unit tests** | Mock the provider-neutral interfaces; no external service is required |
+| **Integration tests** | Run the selected provider's conformance suite; use a container only when validating the real adapter |
 | **AWS-heavy infrastructure** | SQS queue + Redis store (hybrid example above) |
 | **Fully AWS-native** | SQS queue + DynamoDB store (examples above) |
 | **PostgreSQL shop** | Custom PostgreSQL implementation for both interfaces |
@@ -2535,8 +2609,8 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 1. **Enable HITL in your `.env`** — set `TRUVAG3_HITL_ENABLED=true` and list sensitive capabilities in `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES`
 2. **Always use `BuildResumeContext`** — never manually assemble the resume context
 3. **Handle chained interrupts** — a resumed execution may hit another sensitive step, producing a new checkpoint
-4. **Expiry callbacks** — configure auto-approve or auto-reject behavior for unattended checkpoints via `SetExpiryCallback`
-5. **Redis DB isolation** — HITL checkpoints use DB 6, execution debug uses DB 8, keep them separate
+4. **Expiry callbacks** — pass auto-approve or auto-reject behavior to `NewCheckpointExpiryProcessor`, then register that `core.Runnable` with the framework
+5. **Backend isolation** — use distinct provider clients or key namespaces when HITL and execution-debug data need separate operational boundaries; orchestration runtime does not assume Redis DB numbers
 
 > **Complete guide:** For checkpoint store setup, expiry policies, SSE streaming integration, status lifecycle, and configuration reference, see [HUMAN_IN_THE_LOOP_USER_GUIDE.md](HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 >

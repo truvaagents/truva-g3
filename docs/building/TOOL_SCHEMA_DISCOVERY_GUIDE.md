@@ -591,7 +591,7 @@ func main() {
     if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
         redisOpt, err := redis.ParseURL(redisURL)
         if err != nil {
-            log.Printf("⚠️  Warning: Failed to parse REDIS_URL: %v", err)
+            log.Printf("⚠️  Warning: Failed to parse REDIS_URL")
             log.Println("   Schema caching will be disabled")
         } else {
             redisClient := redis.NewClient(redisOpt)
@@ -1292,7 +1292,7 @@ func main() {
     if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
         redisOpt, err := redis.ParseURL(redisURL)
         if err != nil {
-            log.Printf("⚠️  Warning: Failed to parse REDIS_URL: %v", err)
+            log.Printf("⚠️  Warning: Failed to parse REDIS_URL")
         } else {
             redisClient := redis.NewClient(redisOpt)
 

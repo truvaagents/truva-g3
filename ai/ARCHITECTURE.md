@@ -983,6 +983,42 @@ Anthropic have built-in request adapters, and Bedrock provides one behind its
 build tag. Providers without a request adapter return
 `core.ErrAIRequestFeatureUnsupported`.
 
+### Effective Request-Report Contract
+
+The AI module owns population of provider-effective request evidence. Every
+successfully prepared request-aware invocation must expose a sanitized
+`core.AIRequestReport`, including when transport or provider execution later
+fails. The report describes the logical provider request after built-in
+compatibility rules, application rules, middleware, and per-request patches
+have run. Orchestration and other consumers must not infer sent values by
+interpreting provider-local adjustment paths.
+
+For the portable fields currently consumed by framework debugging:
+
+- `EffectiveTemperature=Set(value)` means that exact value was present in the
+  final provider request, including an explicit zero;
+- `EffectiveTemperature=Omit` means the final provider request contained no
+  temperature field;
+- `EffectiveMaxTokens` uses the same `Set`/`Omit` semantics for the provider's
+  selected token-limit field; and
+- `Inherit` means the adapter cannot report the final field reliably. It is not
+  a synonym for absence and must not be used merely because policy changed the
+  caller's requested value.
+
+Provider drafts identify their provider-local logical paths through the shared
+request-policy projection seam; `requestpolicy.Engine` reads those paths only
+after final policy validation and populates the provider-neutral report. A
+provider may use different wire names or nesting, but those details remain
+inside its adapter. Reports must never contain prompts, system instructions,
+raw bodies, credentials, endpoints, query values, or secret adjustment values.
+
+Provider tests must cover exact sent values, explicit zero, removal by policy,
+and any model behavior that routinely changes field presence—for example,
+Anthropic adaptive-thinking sampling removal. OpenAI-compatible, Azure OpenAI,
+Anthropic, Bedrock, and every future request-aware provider are subject to this
+contract. A provider-parity plan must name these report fields explicitly in
+its implementation and verification scope.
+
 Provider authors can add error-capable construction without breaking the
 legacy `ProviderFactory` contract:
 

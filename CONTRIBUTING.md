@@ -203,9 +203,16 @@ PRs that violate these will be flagged in review.
 
 ### Coverage and Style
 
+- Add unit tests in the same change for every new production behavior that can
+  be isolated. Include small public adapters and defaulting wrappers—their
+  contract is still production behavior. Do not manufacture tests for
+  declarations or platform-unreachable branches; record that rationale in the
+  review instead.
 - Aim for at least 80% test coverage on new code
 - Cover both positive and negative paths, plus edge cases
 - Use table-driven tests for parameterized logic
+- Treat coverage percentages as supporting evidence, not a replacement for an
+  assertion that fails when the intended behavior regresses.
 
 ```go
 func TestFunctionName(t *testing.T) {
@@ -260,7 +267,14 @@ These typically expect Redis on `localhost:6379`. Override with `REDIS_URL=redis
 
 ### Conformance Suites
 
-Some interfaces ship with executable conformance test suites under [`core/conformance/`](core/conformance/) (e.g., `RunTaskConsumerConformance`). If you implement one of these interfaces in a new backend, run the conformance suite against your implementation.
+Provider-neutral interfaces ship with executable conformance suites. Task
+delivery contracts live under [`core/conformance/`](core/conformance/) (for
+example, `RunTaskConsumerConformance` and
+`RunTaskDeliveryProfileConformance`). Orchestration persistence, coordination,
+and lock contracts live in the test-only
+[`orchestration/backendconformance/`](orchestration/backendconformance/). If you
+implement a new backend, run every suite that corresponds to the capabilities
+it supplies. Provider tests may import these packages; runtime code must not.
 
 ## Pre-commit Gates
 

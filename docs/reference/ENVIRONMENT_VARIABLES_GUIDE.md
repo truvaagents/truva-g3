@@ -646,7 +646,7 @@ Configure per-user private memory for personal assistant agents. User memory sto
 
 ## Framework Runnable Lifecycle
 
-Background components implementing `core.Runnable` are registered with the framework via `framework.RegisterRunnable(r)`. They start in goroutines when `Run(ctx)` is called and shut down when ctx is cancelled (typically by SIGTERM in Kubernetes). The only in-tree consumer today is [`memory.ReflectionJob`](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go); the interface is general-purpose and any long-running background work an agent needs can implement it.
+Background components implementing `core.Runnable` are registered with the framework via `framework.RegisterRunnable(r)`. They start in goroutines when `Run(ctx)` is called and shut down when ctx is cancelled (typically by SIGTERM in Kubernetes). In-tree consumers include memory reflection/sweeping, schedulers and queue workers, Redis Streams reaping, and the provider-neutral HITL checkpoint-expiry processor. Any long-running background work an agent needs can implement the same lifecycle contract.
 
 Because Go provides no mechanism for forcibly terminating goroutines, the framework gives each runnable a bounded grace period to honour `ctx.Done()` and exit cleanly. After the grace period, the framework logs a warning, returns from `Run`, and lets the OS reap any remaining goroutines on process exit. **Buggy runnables that ignore ctx will leak until process exit** — the framework cannot recover from this.
 
@@ -814,7 +814,7 @@ Configure the AI orchestrator for multi-agent coordination.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `120s` | **Implemented** | HTTP client timeout for tool/agent calls | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | **Implemented** | HTTP client timeout for tool/agent calls | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `25` | **Implemented** | Max parallel step executions in DAG. Controls goroutine concurrency during plan execution. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `120s` | **Implemented** | Per-step execution timeout. Each individual step must complete within this duration. Go duration format. For `CapabilityOrchestrator` steps, the effective timeout is `TRUVAG3_HITL_DEFAULT_TIMEOUT` + this value. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_TOKEN_BUDGET` | `48000` | **Implemented** | Maximum estimated tokens allowed for prepared `<conversation_history>` before Tier 1 truncation/elision. Default-on safety net for metadata and hook ingress paths. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1396,6 +1396,7 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_REDIS_DB` | `8` | **Implemented** | Redis database number (uses `core.RedisDBExecutionDebug`) | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | **Implemented** | Per-write timeout for asynchronous execution-debug persistence. Code configuration through `WithExecutionStoreWriteTimeout` has higher precedence. | [orchestration/config_resolution.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/config_resolution.go) |
 
 The two conversation limits accept only positive integers. Missing, malformed,
 zero, or negative values retain the safe defaults. Environment values populate
@@ -1519,9 +1520,17 @@ Use the Registry Viewer App to visualize execution DAGs:
 
 ### Storage Provider
 
-The execution debug store uses the `StorageProvider` interface for backend abstraction:
-- **Redis**: Use `NewRedisExecutionDebugStore()` (auto-configures from environment)
-- **Other backends**: Implement the `StorageProvider` interface for PostgreSQL, DynamoDB, etc.
+The provider-neutral request-path contract is `ExecutionStore`. New application
+bootstrap code should supply that capability through `OrchestrationBackends`;
+the included `redisprovider` package is the default Redis composition, while a
+PostgreSQL, DynamoDB, or other provider implements the same narrow contract.
+
+`NewRedisExecutionDebugStore()` remains an environment-aware compatibility
+constructor. `NewExecutionStoreWithProvider()` is a separate adapter for the
+older generic `StorageProvider` interface; the direct Redis store does not use
+that interface. Applications that already own Redis connection routing can use
+`NewRedisExecutionDebugStoreWithClient`, which does not read Redis connection or
+database environment variables and leaves the supplied client open.
 
 ---
 
@@ -1553,7 +1562,7 @@ Configure Human-in-the-Loop (HITL) checkpoints for human oversight of AI-generat
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_HITL_REDIS_DB` | `6` | **Implemented** | Redis database number for HITL checkpoint/command data | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | **Implemented** | Redis key prefix for HITL data | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | **Implemented** | Base prefix used by both checkpoint constructors before agent identity is appended. The URL-owning `NewRedisCommandStore` also reads it but uses it as the final prefix without an agent suffix. `NewRedisCommandStoreWithClient` intentionally does not read it; configure that store with `WithCommandStoreKeyPrefix` | [checkpoint store](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go), [command store](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_command_store.go) |
 
 ### HITL Handler Variables
 
@@ -1583,14 +1592,19 @@ These variables control what happens when a checkpoint times out (expires) witho
 
 ### HITL Expiry Processor Variables
 
-The expiry processor is a background goroutine that scans for expired checkpoints and processes them according to the configured action. See [HITL User Guide: Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#auto-resume-timeout-auto-approval) for the auto-approval flow.
+The expiry processor is a lifecycle-owned `core.Runnable` that scans a
+provider-neutral `ExpiredCheckpointSource` and processes claimed checkpoints
+according to the configured action. Register it before `Framework.Run()`. See
+[HITL User Guide: Auto-Resume](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md#auto-resume-timeout-auto-approval)
+for the auto-approval flow.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HITL_EXPIRY_ENABLED` | `true` | **Implemented** | Enable/disable the background expiry processor. Set to `false` to disable automatic checkpoint expiration. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
-| `TRUVAG3_HITL_EXPIRY_INTERVAL` | `10s` | **Implemented** | How often the processor scans Redis for expired checkpoints. Lower values = faster detection but more Redis load. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_ENABLED` | `true` | **Implemented** | Enable/disable the lifecycle-owned expiry processor. Set to `false` to disable automatic checkpoint expiration. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_INTERVAL` | `10s` | **Implemented** | How often the processor scans the configured expiry source. Lower values mean faster detection but more backend load. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
 | `TRUVAG3_HITL_EXPIRY_BATCH_SIZE` | `100` | **Implemented** | Maximum checkpoints processed per scan cycle. Prevents overwhelming the system when many expire simultaneously. | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
 | `TRUVAG3_HITL_EXPIRY_DELIVERY` | `at_most_once` | **Implemented** | Callback delivery guarantee: `at_most_once` (safe default, no retries) or `at_least_once` (may retry, callback must be idempotent). | [orchestration/hitl_checkpoint_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go) |
+| `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `30s` | **Implemented** | Positive lease duration for an atomic expired-checkpoint claim. Load with `LoadCheckpointExpiryRuntimeConfigFromEnvironment`; a later `WithCheckpointExpiryRuntimeConfig` option wins. | [orchestration/checkpoint_expiry_processor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/checkpoint_expiry_processor.go) |
 
 ### HITL Approval Modes
 
@@ -1705,6 +1719,18 @@ The async task system uses these core framework types (no additional env vars re
 - `orchestration.TaskAPIHandler` - HTTP API handler for task endpoints
 
 See [Async Orchestration Guide](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md) for detailed usage.
+
+### Default Redis orchestration preset limits
+
+These variables are read only when the application explicitly calls
+`redisprovider.LoadOptionsFromEnvironment`. Apply
+`redisprovider.ConfigureOptions` afterward when code configuration must win.
+
+| Variable | Default | Status | Description | Source |
+|----------|---------|--------|-------------|--------|
+| `TRUVAG3_WORKFLOW_STATE_TTL` | `24h` | **Implemented** | Retention for workflow execution state composed by the default Redis backend preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `3` | **Implemented** | Positive number of Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_TASK_QUEUE_RETRY_DELAY` | `100ms` | **Implemented** | Positive delay between Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 
 ---
 

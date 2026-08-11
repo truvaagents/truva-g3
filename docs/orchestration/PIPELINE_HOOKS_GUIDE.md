@@ -65,13 +65,13 @@ There are four stage interfaces. A single hook type can implement as many as it 
 | Hook Stage | When It Runs | Can Mutate? | Can Short-Circuit? | Wired in live path? |
 |---|---|---|---|---|
 | `BeforePlanningHook` | Before the planning phase begins | Enrichments | **Yes** — skips the entire pipeline | Yes |
-| `AfterPlanningHook` | After the LLM produces an execution plan | The plan | No | **No — see §4.2** |
+| `AfterPlanningHook` | After each phase reaches one final validated planner-produced plan | The plan | No | Yes |
 | `AfterExecutionHook` | After all tools finish executing | No (observe-only) | No | Yes |
 | `AfterSynthesisHook` | After the LLM synthesizes the final response | Response text | No | Yes |
 
 Two properties define the whole system and are worth committing to memory:
 
-- **Hooks fail open.** If a hook returns an error, the orchestrator logs a warning and continues. A failing hook never aborts the request. This is deliberate: context injection is an enhancement, not a dependency.
+- **Hook callback failures fail open.** If a hook returns an error, the orchestrator logs a warning and continues. Invalid provenance-aware short-circuit contracts (missing payload or unknown kind) are configuration/programming errors and fail the request instead of silently bypassing cache enforcement.
 - **Hooks run sequentially, in registration order.** There is no concurrent access to the shared context object, so hooks can read and write it without locking.
 
 ---
@@ -91,7 +91,7 @@ Request
                         ▼
 ┌─────────────────────────────────────────────┐
 │  BeforePlanningHook(s)                        │  ← inject RAG / memory / history into Enrichments
-│  ▶ may return PipelineShortCircuit ───────────┼──▶ skip everything, return cached Response
+│  ▶ may return a short-circuit decision ───────┼──▶ skip everything, return accepted Response
 └───────────────────────┬───────────────────────┘
                         │  Enrichments copied into ctx via WithPipelineEnrichments()
                         ▼
@@ -99,7 +99,9 @@ Request
 │  Planning (LLM call)                          │  ← prompt builder reads enrichments back out
 └───────────────────────┬───────────────────────┘
                         ▼
-              [ AfterPlanningHook(s) ]             ← DEFINED but NOT invoked (see §4.2)
+┌─────────────────────────────────────────────┐
+│  AfterPlanningHook(s)                        │  ← copy-on-write mutation; full plan revalidation
+└───────────────────────┬───────────────────────┘
                         ▼
 ┌─────────────────────────────────────────────┐
 │  Execution (tool calls, possibly multi-phase) │
@@ -120,7 +122,10 @@ Request
                      Response
 ```
 
-The call sites live in `orchestration/orchestrator.go`: the non-streaming path runs `BeforePlanning` → `AfterExecution` → `AfterSynthesis` around lines 2956–3018, and the streaming path mirrors it around lines 3271–3513. The runners themselves are in `orchestration/pipeline_hooks.go`.
+All public request modes enter the shared lifecycle in
+`orchestration/request_lifecycle.go`. Phase planning and the
+`AfterPlanningHook` boundary live in `orchestration/orchestrator.go`; the hook
+runners and validation logic live in `orchestration/pipeline_hooks.go`.
 
 > **Streaming caveat**
 >
@@ -142,7 +147,12 @@ type BeforePlanningHook interface {
 }
 ```
 
-Runs before the planner sees the prompt. This is the **only** stage that can both **enrich** (write into `pctx.Enrichments`) and **short-circuit** (return a non-nil `*PipelineShortCircuit` to skip the rest of the pipeline). It is where RAG retrieval, memory recall, conversation-history injection, and semantic-cache lookups belong.
+Runs before the planner sees the prompt. This is the **only** stage that can both
+**enrich** (write into `pctx.Enrichments`) and **short-circuit** (through the
+legacy payload or the provenance-aware decision contract). It is where RAG
+retrieval, memory recall, conversation-history injection, and semantic-cache
+lookups belong. New cache hooks should use `BeforePlanningDecisionHook`; legacy
+short-circuits are interpreted as authoritative responses.
 
 Return `(nil, nil)` for the common "I added some context, carry on" case. Return a non-nil short-circuit only when you have a complete answer and want to bypass planning, execution, and synthesis entirely (§6).
 
@@ -156,11 +166,17 @@ type AfterPlanningHook interface {
 }
 ```
 
-> **Not yet wired into the live request path**
->
-> `AfterPlanningHook` is a defined, type-checkable contract, and the runner `runAfterPlanningHooks` exists in `orchestration/pipeline_hooks.go:188` — but it has **zero call sites in the production execution path** (it is retained for tests, hence the `//nolint:unused` marker above it). A hook implementing `AfterPlanning` will compile and register without error, but **it will never be invoked during a real request today**. Don't build behavior that depends on it. We document it here so the contract is discoverable and so you aren't surprised when your `AfterPlanning` hook appears dead.
+Runs exactly once for the final planner-produced plan in each phase, after the
+normalization/validation fixpoint and before HITL, persistence, or execution.
+HITL resume plans do not run this hook because they are approved checkpoint
+state rather than newly produced plans.
 
-When/if it is wired, the design intent is plan inspection and mutation: each hook receives the current plan and returns a possibly-modified one, chained hook-to-hook.
+Mutation is copy-on-write and chained in registration order. Each hook must
+return a non-nil `*orchestration.RoutingPlan`. The framework normalizes and
+runs the complete plan-validation gauntlet after each mutation. A hook error,
+wrong return type, clone failure, or invalid mutation is rejected with bounded
+diagnostics and the last valid plan continues; it never triggers LLM
+regeneration and cannot corrupt that prior plan.
 
 ### 4.3 AfterExecutionHook
 
@@ -258,38 +274,84 @@ Before any hook runs, the orchestrator calls `prepareKnownEnrichments` (`orchest
 
 ## 6. Short-Circuiting the Pipeline
 
-A `BeforePlanning` hook can end the request immediately by returning a non-nil `*PipelineShortCircuit`:
+A provenance-aware `BeforePlanningDecisionHook` can end the request immediately:
 
 ```go
-// core/interfaces.go:298-301
-type PipelineShortCircuit struct {
-    Response string // the pre-computed answer to return to the caller
-    Source   string // a label for metrics, e.g. "semantic_cache"
+type BeforePlanningDecisionHook interface {
+    PipelineHook
+    BeforePlanningDecision(
+        ctx context.Context,
+        pctx *PipelineContext,
+        gate PipelineGate,
+    ) (*PipelineShortCircuitDecision, error)
+}
+
+type PipelineShortCircuitDecision struct {
+    ShortCircuit  *PipelineShortCircuit
+    Kind          PipelineShortCircuitKind // authoritative or cache
+    CachedAgainst map[string]string         // variation map stored with a cache entry
 }
 ```
 
-When a hook returns one:
+Use `PipelineShortCircuitAuthoritative` for policy denials, rate limits, and
+other answers that remain valid regardless of cache state. Use
+`PipelineShortCircuitCache` only for a cache entry. For cache decisions,
+`CachedAgainst` must be the variation map persisted when that entry was written,
+not `gate.CacheVary()` read at lookup time. Echoing current values would make
+the freshness check meaningless.
+
+The framework accepts a cached response only when cache reads are enabled and
+every orchestration-reserved dimension matches symmetrically: a value present
+on only one side is also a mismatch. The foundation exposes the generic gate;
+its variation map can be empty until an installed orchestration feature owns a
+reserved dimension. Unknown kinds and missing payloads fail the request as hook
+contract errors. Other rejected cache decisions continue through planning.
+
+When a decision is accepted:
 
 - The orchestrator **stops running further `BeforePlanning` hooks** — the first short-circuit wins.
 - Planning, execution, and synthesis are **all skipped**.
 - A complete `OrchestratorResponse` is built from the short-circuit, with `Confidence: 1.0` and any already-injected enrichments merged into the response metadata (`buildShortCircuitResponse`, `pipeline_hooks.go:13-35`).
-- A `pipeline.hook.short_circuit` metric is recorded with your `Source` label.
+- A bounded `orchestration.pipeline.short_circuit.decision` metric records the
+  provenance kind, decision reason, and status. Hook names and `Source` values
+  are intentionally excluded from metric labels; accepted decisions remain
+  identifiable through the correlated `pipeline.short_circuit.decision` trace
+  event.
 - On the streaming path, the cached response is chunked and streamed to preserve the streaming contract (`orchestrator.go:3273-3294`).
 
-The canonical use case is a **semantic cache**: hash or embed the request, look for a hit, and return the cached answer without paying for an LLM round trip. None of the *shipped* hooks short-circuit — it's a capability reserved for your caches.
+The canonical cache use case is a **semantic cache**: hash or embed the request,
+look for a hit, and return the cached answer without paying for an LLM round
+trip. None of the shipped hooks short-circuit.
 
 ```go
-func (h *SemanticCacheHook) BeforePlanning(ctx context.Context, pctx *core.PipelineContext) (*core.PipelineShortCircuit, error) {
-    hit, ok, err := h.cache.Lookup(ctx, pctx.Request)
+func (h *SemanticCacheHook) BeforePlanningDecision(
+    ctx context.Context,
+    pctx *core.PipelineContext,
+    gate core.PipelineGate,
+) (*core.PipelineShortCircuitDecision, error) {
+    entry, ok, err := h.cache.Lookup(ctx, pctx.Request)
     if err != nil {
         return nil, err // fail open — logged & skipped, pipeline continues normally
     }
-    if !ok {
+    if !ok || gate.ResponseCacheReadDisabled() {
         return nil, nil // cache miss — carry on with planning
     }
-    return &core.PipelineShortCircuit{Response: hit, Source: "semantic_cache"}, nil
+    return &core.PipelineShortCircuitDecision{
+        ShortCircuit: &core.PipelineShortCircuit{
+            Response: entry.Response,
+            Source:   "semantic_cache",
+        },
+        Kind:          core.PipelineShortCircuitCache,
+        CachedAgainst: entry.VariationDimensions, // stored alongside Response
+    }, nil
 }
 ```
+
+The legacy `BeforePlanningHook` remains source-compatible. A legacy
+`PipelineShortCircuit` is treated as authoritative and emits a diagnostic when
+reserved cache dimensions exist. Cache implementations should migrate to the
+decision hook; policy/guardrail hooks may remain legacy or declare
+`PipelineShortCircuitAuthoritative` explicitly.
 
 ---
 
@@ -458,7 +520,7 @@ The runners in `orchestration/pipeline_hooks.go` all share one shape: iterate `p
 
 **Fail-open resilience.** Every runner handles a hook error identically: log `"Pipeline hook failed, skipping"` with the hook name and `continue`. One bad hook never aborts the request and never prevents later hooks from running. If your hook's work is *mandatory* (e.g. a hard compliance gate), a hook is the wrong place — enforce it at a layer that can reject the request.
 
-**Mutation chaining.** `AfterSynthesis` (and the not-yet-wired `AfterPlanning`) chain: the output of hook *N* is the input to hook *N+1*. Order matters. `AfterExecution` is observe-only and `BeforePlanning` accumulates into the shared `Enrichments` map, so neither "chains" a return value.
+**Mutation chaining.** `AfterSynthesis` and `AfterPlanning` chain: the accepted output of hook *N* is the input to hook *N+1*. Order matters. Invalid after-planning output leaves the last valid plan in place. `AfterExecution` is observe-only and `BeforePlanning` accumulates into the shared `Enrichments` map, so neither "chains" a return value.
 
 **Short-circuit precedence.** The first `BeforePlanning` hook to return a non-nil short-circuit wins; subsequent `BeforePlanning` hooks are not called. Put your cache hook early if you want it to pre-empt expensive enrichment hooks.
 
@@ -538,7 +600,7 @@ There is no exported NoOp hook in non-test code; if you want one for tests, the 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Hook never runs | Not in `deps.PipelineHooks`, or doesn't implement the stage interface you expect | Confirm it's in the slice and that the method signature exactly matches the interface (pointer vs value receiver matters for the type assertion) |
-| `AfterPlanning` hook never fires | `AfterPlanning` is not wired into the live path (§4.2) | Use a different stage; don't depend on `AfterPlanning` today |
+| `AfterPlanning` hook never fires | Request short-circuited, no planner-produced plan was accepted, the request is a HITL resume, or the hook signature does not match | Confirm the request reached planning and look for `pipeline.hook.after_planning.<name>` plus `after_planning_hook` diagnostics |
 | Enrichment set but LLM ignores it | Wrong key, or a custom `PromptBuilder` that doesn't read enrichments | Use a well-known key (§5) with the default builder, or have your custom builder call `core.GetPipelineEnrichments(ctx)` |
 | Guardrail didn't block streamed text | `AfterSynthesis` runs after tokens stream | Move the check to `BeforePlanning`, a guarded prompt builder, or the non-streaming path |
 | Hook error silently swallowed | Fail-open by design — errors are logged at WARN and skipped | Check logs for `"Pipeline hook failed, skipping"`; enforce mandatory logic outside the hook layer |

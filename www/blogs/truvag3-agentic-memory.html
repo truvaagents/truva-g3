@@ -450,7 +450,7 @@
 <header class="article-header">
   <h1>Agentic Memory in TruvaG3: A Team With a Shared Notebook</h1>
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3's</a> four-tier shared memory system — the academic research it came from, the five pipeline hooks that wire it into the orchestrator, how a fleet of agents stops repeating each other's work, and how a single chat agent finally remembers what a user said last week.</p>
-  <p class="meta">Neelabh Tripathi · May 27, 2026</p>
+  <p class="meta">Neelabh Tripathi · May 27, 2026 · Updated August 10, 2026</p>
 </header>
 
 <details class="toc">
@@ -1461,7 +1461,7 @@ deps := &amp;core.SharedMemoryDeps{
 }
 hooks, activityCoord := orchestration.BuildMemoryHooks(deps, agent.AI, agent.Logger)</code></pre>
 
-<p>The rest of the framework — the five hooks, the activity compactor, the reflection job, the LLM prompt builders — never knows the backend changed. The same applies to every <code>core</code> memory interface: <code>EpisodicMemory</code> can be swapped for a NATS JetStream implementation, <code>DigestCache</code> for any KV cache, <code>UserMemory</code> for a Postgres-backed implementation. The conformance package (<code>core/conformance</code>) ships a test suite that validates a custom backend against the same contract the bundled defaults pass.</p>
+<p>The rest of the framework — the five hooks, the activity compactor, the reflection job, the LLM prompt builders — never knows the backend changed. The same applies to every <code>core</code> memory interface: <code>EpisodicMemory</code> can be swapped for a NATS JetStream implementation, <code>DigestCache</code> for any KV cache, <code>UserMemory</code> for a Postgres-backed implementation. What does <em>not</em> ship yet is one shared conformance suite for memory backends. A custom implementation should carry its own contract tests for the guarantees its interface needs — round trips and retention, cross-instance visibility, atomic ownership where coordination is involved, and the documented failure behavior. The framework's existing reusable suites cover task delivery and orchestration state, not these memory interfaces.</p>
 
 <p>One subtle wiring property is worth pulling out. <span class="highlight-amber">The orchestration module does not import the memory module.</span> The dependency graph is <code>orchestration → core</code> (interfaces only), <code>memory → core + telemetry</code> (default implementations), and <code>main.go → orchestration + memory + ai</code> (wiring). This means a Phase-1 deployment that does not import the memory module's vector backend never pulls in gRPC or protobuf, and a deployment that wires only custom backends does not need to import the bundled <code>memory</code> module at all.</p>
 </section>

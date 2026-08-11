@@ -1091,7 +1091,7 @@ When you make an orchestration request, the API response includes a `request_id`
 
 ```json
 {
-  "request_id": "1765636433370038463-370038546",
+  "request_id": "orch-1765636433370038463",
   "response": "Here's the weather in Tokyo...",
   "tools_used": ["weather-tool", "currency-tool"],
   "confidence": 1.0
@@ -1102,6 +1102,11 @@ When you make an orchestration request, the API response includes a `request_id`
 connects an API response to its execution record, distributed trace, and logs.
 Use `conversation_id` when the question spans multiple top-level turns, and
 `original_request_id` for an interrupt/resume or delegation family.
+
+Buffered, native-streaming, simulated-streaming, and direct-plan entry points
+all use the same format: `<RequestIDPrefix>-<unix-nanoseconds>`. The default
+prefix is `orch`; set `OrchestratorConfig.RequestIDPrefix` in code when an
+application needs a stable, low-cardinality prefix of its own.
 
 #### How request_id Relates to Traces
 
@@ -1117,7 +1122,7 @@ This means you can search for traces using the `request_id` from your API respon
 
 1. Open Jaeger: `http://localhost:16686`
 2. Select service: `travel-research-orchestration` (or your agent's service name)
-3. In the **Tags** field, enter: `request_id=1765636433370038463-370038546`
+3. In the **Tags** field, enter: `request_id=orch-1765636433370038463`
 4. Click **Find Traces**
 5. Click on the trace to see the full waterfall view
 
@@ -1125,7 +1130,7 @@ This means you can search for traces using the `request_id` from your API respon
 
 ```bash
 # Search traces by request_id tag
-curl -s "http://localhost:16686/api/traces?service=travel-research-orchestration&tags=%7B%22request_id%22%3A%221765636433370038463-370038546%22%7D" | jq '.data[0].traceID'
+curl -s "http://localhost:16686/api/traces?service=travel-research-orchestration&tags=%7B%22request_id%22%3A%22orch-1765636433370038463%22%7D" | jq '.data[0].traceID'
 
 # Get the full trace once you have the trace_id
 curl -s "http://localhost:16686/api/traces/cd41f5a1a12afa1158f3e666a340d543" | jq '.data[0]'
@@ -1145,10 +1150,10 @@ The `request_id` also appears in all structured logs throughout the request life
 
 ```bash
 # Search pod logs
-kubectl logs -n truvag3-examples deploy/travel-research-agent | grep "1765636433370038463-370038546"
+kubectl logs -n truvag3-examples deploy/travel-research-agent | grep "orch-1765636433370038463"
 
 # Search across all pods
-kubectl logs -n truvag3-examples -l app.kubernetes.io/part-of=truvag3 --all-containers | grep "1765636433370038463-370038546"
+kubectl logs -n truvag3-examples -l app.kubernetes.io/part-of=truvag3 --all-containers | grep "orch-1765636433370038463"
 ```
 
 #### What You'll See in the Trace
@@ -1805,11 +1810,15 @@ The orchestration module emits span events for every LLM interaction:
 | `user_memory.summary.stored` | Session summary fact stored | `request_id`, `user_id` |
 | `activity.coordination.complete` | Activity signals discovered and formatted | `request_id`, `signals_discovered`, `signals_shown` |
 | `activity.cleanup.complete` | Activity signal cleaned up after synthesis | `request_id` |
+| `pipeline.short_circuit.decision` | A before-planning hook proposed a short-circuit and the framework accepted or rejected it | `request_id` first, hook name, bounded provenance kind, bounded reason, and status. Accepted decisions also mark the parent request span with `pipeline.short_circuit=true` |
+| `orchestrator.streaming.fallback` | A caller requested streaming but the configured AI client lacked native streaming capability | `request_id` first and bounded `reason=client_streaming_unsupported` |
+| `orchestrator.construction.rejected` | A public operation was rejected because a source-compatible convenience constructor produced a poisoned orchestrator | `request_id` first when available, bounded operation, and `reason=invalid_configuration`; paired with a sanitized span error and counter |
 | `orchestrator.remediation.triggered` | Phase loop forced a remediation continuation after one or more steps were skipped because their template-referenced dependencies failed; the next phase runs even if the current plan marked itself terminal. Rare — at most once per orchestration. `has_failure_pattern` records whether a shared-error pattern summary was embedded into the remediation prompt. | `request_id`, `phase_number`, `plan_id`, `skipped_count`, `skipped_step_ids`, `has_failure_pattern` |
 | `orchestrator.clarification_short_circuit` | Planner emitted `needs_user_input` and the phase loop terminated early instead of starting another phase. Conditional — only present on clarification turns. | `request_id`, `phase_number`, `question`, `missing_field_count`, `prior_completed_steps` |
 | `orchestrator.synthesis.clarification_mode` | Synthesizer entered clarification mode and used the augmented system prompt to weave the planner's question into a conversational reply. Conditional — only on clarification turns. | `request_id`, `question`, `missing_field_count`, `has_partial_progress` |
 | `orchestrator.terminal_synthesis.normalized` | Acceptance-time normalizer stripped a terminal synthesis pseudo-step and collapsed the plan toward a zero-step terminal plan (the framework synthesizes the final answer). NOT an error — no `RecordSpanError`. Paired counter: `orchestration.plan.terminal_synthesis_normalized`. | `request_id`, `plan_id`, `dropped_agent`, `dropped_capability`, `remaining_steps` |
 | `orchestrator.plan_validation.exhausted` | Plan still failed validation after `MaxValidationRounds` regenerations; the phase fails explicitly rather than dispatching a known-bad plan. Paired with `RecordSpanError` and counter `orchestration.plan.validation_exhausted` (`error_type=plan_validation_exhausted`). | `request_id`, `phase_number`, `rounds` |
+| `hitl.notification.failed` | A framework-owned authoritative checkpoint was saved, but the application notification handler failed. The checkpoint remains durable and the request is not failed; this diagnostic intentionally does not record the raw handler error | `request_id` first, `checkpoint_id`, `original_request_id`, `error_type=notification` |
 | `llm.tiered_selection.empty_recovered` | Tiered selector returned `[]`; defensive recovery used `prior_tool_ids` from phase context instead of the all-agents fallback, preserving tiered selection's token-saving purpose. Rare — only fires when the selector returns empty in a continuation phase. | `request_id`, `prior_count`, `attempt` |
 | `llm.tiered_selection.semantic_empty_phase1` | Phase 1 (or continuation without prior tools) saw a semantic-empty `[]` selector response; retries are short-circuited and the sentinel error is returned so `selectTools` falls back to all-agents after exactly one LLM call. Common for memory-recall and conversational queries. | `request_id`, `attempt` |
 
@@ -1822,13 +1831,15 @@ The orchestration module emits span events for every LLM interaction:
 
 Most orchestration instrumentation in the table above is **span events** attached to a parent span that already exists for the user request. Background jobs are different: they run detached from any user request (no inbound HTTP call), so there is no pre-existing parent span to attach events to. Instead each background `core.Runnable` creates its own dedicated root spans so each pass appears as a self-contained trace tree in Jaeger.
 
-In-tree background jobs that follow this pattern: `memory.ReflectionJob` (LLM-driven Tier 2→3 reflection — bridging episodic events to semantic knowledge; distinct from Tier 2 `compact` maintenance) and `core.MemoryStoreSweeper` (periodic eviction of expired `*core.MemoryStore` entries).
+In-tree background jobs that follow this pattern: `memory.ReflectionJob` (LLM-driven Tier 2→3 reflection — bridging episodic events to semantic knowledge; distinct from Tier 2 `compact` maintenance), `core.MemoryStoreSweeper` (periodic eviction of expired `*core.MemoryStore` entries), and `orchestration.CheckpointExpiryProcessor` (provider-neutral HITL expiry polling and delivery).
 
 | Span Name | Created By | Typical Lifetime | Attributes |
 |-----------|-----------|------------------|------------|
 | `memory.reflection_pass` | `ReflectionJob.RunOnce` ([memory/reflection_job.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflection_job.go)) — root span covering one entire pass | Tens of seconds to a few minutes per pass, depending on how many entities qualify and how fast the LLM responds | `pass_id`, `domain`, `age_threshold` |
 | `memory.reflection` | `LLMMemoryReflector.Reflect` ([memory/reflector.go](https://github.com/truvaagents/truva-g3/blob/main/memory/reflector.go)) — child span per entity processed in the pass | A few seconds per entity (one LLM call) | `request_id`, `entity_type`, `entity_id` |
 | `memory.sweep_pass` | `MemoryStoreSweeper.runSweepPass` ([core/memory_store.go](https://github.com/truvaagents/truva-g3/blob/main/core/memory_store.go)) — root span covering one eviction-sweep tick. Created only when `WithMemoryStoreSweeperTelemetry` is set; otherwise the sweeper emits metrics + logs without spans | Sub-millisecond to a few milliseconds per pass for typical per-agent caches (~10³ entries) | `sweep_id`, `interval`, `deleted_count`, `duration_ms` |
+| `hitl.expiry_scan` | `CheckpointExpiryProcessor.processBatch` ([orchestration/checkpoint_expiry_processor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/checkpoint_expiry_processor.go)) — root span covering one bounded polling pass. Created through the optional provider supplied by `WithCheckpointExpiryTelemetry`; the no-op default keeps telemetry optional | Up to the processor's bounded scan timeout (currently 30 seconds) | `request_id` (`hitl-expiry-*`), `batch_limit`, `claimed_count`, `processed_count`, `failed_count`, `status`, `duration_ms` |
+| `hitl.expiry_process` | `CheckpointExpiryProcessor.processCheckpoint` — one span per claimed checkpoint, created under the scan context and linked to the stored original request trace when its trace/span IDs are valid | Usually milliseconds plus callback delivery time | `request_id`, `original_request_id`, `checkpoint_id`, `original_trace_id`, `link.type=hitl_expiry`, `trigger=expiry_processor`, `status` |
 
 **Span tree** for a pass that processes 3 entities:
 
@@ -1851,6 +1862,14 @@ memory.reflection_pass                           pass_id=reflect-19e210c3
 - On the `memory.reflection_pass` span: one `memory.reflection.entity_processed` event per entity that produced ≥1 fragment (so 0 to N events per pass, where N is the entity count)
 
 **Trace correlation with user requests**: `pass_id` is also injected into OTel baggage as `request_id`, so both the orchestration `request_id` filter in Jaeger and the `request_id` field in agent logs find reflection-pass traces alongside user-request traces. Reflection passes sort into the same timeline as user activity with IDs of the form `reflect-XXXXXXXX`. See [AGENT_MEMORY_USER_GUIDE.md — Long-Term Knowledge Retention](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#long-term-knowledge-retention-the-reflection-job) for the broader context.
+
+Checkpoint-expiry scans use the same convention with synthetic request IDs of
+the form `hitl-expiry-*`. Scan logs and the `hitl.expiry_scan` root span carry
+that ID. Each `hitl.expiry_process` span additionally carries the checkpoint's
+request-family identifiers and an OTel link to the suspended request when the
+stored trace context is valid. Backend error text is not placed on these spans
+or framework logs; bounded sentinel errors mark failures, while provider-owned
+diagnostics remain the place for backend-specific detail.
 
 ### What Developers See in Jaeger
 
@@ -1974,6 +1993,15 @@ For **shared memory scenarios**, you'll see pipeline hooks and LLM compaction as
     signals_discovered: 2
     signals_shown: 1
 ```
+
+`AfterPlanningHook` invocations appear as
+`pipeline.hook.after_planning.<hook-name>` after a phase reaches its final
+validated planner-produced plan and before HITL or execution. Hook-returned plan
+bodies are never span attributes or events. Accepted/rejected outcomes are
+counted by `orchestration.pipeline.after_planning`; rejected mutations also
+emit the bounded `after_planning_hook` WARN documented in the logging guide.
+HITL resume plans do not emit this span because they restore approved checkpoint
+state rather than a new planner-produced plan.
 
 For **conversation-history preparation**, the orchestration request trace now includes a dedicated prepare span, and optionally a nested compaction span on Tier 2 paths:
 
@@ -2280,7 +2308,8 @@ When properly configured, the AI module emits these spans:
 | `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Semantic provider/model, optional sanitized route identity, and provider-specific execution attributes |
 | `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, bounded Titan V1/V2 semantic family, `ai.text_length`, embedding dimensions, bounded error classification |
 | `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; the embedding child carries only the bounded Titan V1/V2 semantic family, and raw SDK model/profile IDs are omitted |
-| `ai.request.prepared` (event) | Sanitized orchestration request report | Provider/surface, purpose, requested/resolved model, adjustment count, stability, and stable policy fingerprint |
+| `ai.request.prepared` (event) | Single metadata-only evidence event for the effective orchestration request, including the no-report/provider-failure path | `request_id` first, purpose, requested/resolved model, report presence, adjustment count, policy stability, optional provider/surface/operation, and stable policy fingerprint. Prompt/system bodies, provider patches, credentials, and adjustment details are excluded |
+| `ai.request.rejected` (event) | AI dispatch rejected before a provider call | `request_id` first, purpose, and bounded rejection reason such as `prompt_assembly`; prompt bodies and raw error text are excluded |
 | `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
 
 Every operation span that returns an error is marked failed, including both an

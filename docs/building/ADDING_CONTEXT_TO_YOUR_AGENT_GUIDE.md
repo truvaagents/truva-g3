@@ -44,11 +44,14 @@ Every hook implements the base `core.PipelineHook` interface (just a `Name()` me
 | Hook Stage | When It Runs | Can Mutate? | Can Short-Circuit? |
 |---|---|---|---|
 | `BeforePlanningHook` | Before the planning phase begins | Enrichments | Yes — skip entire pipeline |
-| `AfterPlanningHook` | After the LLM generates an execution plan | Plan | No |
+| `AfterPlanningHook` | After each phase reaches a final validated planner-produced plan | Plan (copy-on-write and revalidated) | No |
 | `AfterExecutionHook` | After all tools finish executing | No (observe-only) | No |
 | `AfterSynthesisHook` | After the LLM synthesizes the final response | Response text | No |
 
-Hooks are **resilient by design**: if a hook returns an error, the orchestrator logs a warning and continues. A failing hook never aborts the pipeline.
+Hook callbacks are **resilient by design**: if a hook returns an error, the
+orchestrator logs a warning and continues. Invalid provenance-aware
+short-circuit contracts—an unknown kind or missing payload—are programming
+errors and fail the request rather than bypassing cache enforcement.
 
 ---
 
@@ -60,7 +63,7 @@ Request
   ▼
 ┌─────────────────────────────┐
 │  BeforePlanningHook(s)      │  ← Inject RAG context, conversation history
-│  Can short-circuit here     │  ← Return cached response (skip everything)
+│  Can short-circuit here     │  ← Return an authoritative or fresh cached response
 └─────────────┬───────────────┘
               │ PipelineContext.Enrichments → ctx via WithPipelineEnrichments()
               ▼
@@ -69,7 +72,7 @@ Request
 └─────────────┬───────────────┘
               ▼
 ┌─────────────────────────────┐
-│  AfterPlanningHook(s)       │  ← Mutate/validate the plan
+│  AfterPlanningHook(s)       │  ← Copy-on-write mutation + full revalidation
 └─────────────┬───────────────┘
               ▼
 ┌─────────────────────────────┐
@@ -179,14 +182,16 @@ func (h *RAGHook) BeforePlanning(ctx context.Context, pctx *core.PipelineContext
 
 **Problem**: Many users ask similar questions. You want to skip the entire LLM pipeline when a semantically similar query was already answered, saving cost and latency.
 
-**Solution**: Implement a `BeforePlanningHook` that checks a Redis-backed semantic cache. If a match is found, return a `PipelineShortCircuit` to skip planning, execution, and synthesis entirely.
+**Solution**: Implement a provenance-aware `BeforePlanningDecisionHook` that
+checks a semantic cache. If a fresh match is found, return a cache-kind
+`PipelineShortCircuitDecision` to skip planning, execution, and synthesis.
 
 ```go
 package hooks
 
 import (
     "context"
-    "fmt"
+    "encoding/json"
 
     "github.com/truvaagents/truva-g3/core"
     "github.com/redis/go-redis/v9"
@@ -212,7 +217,20 @@ func NewSemanticCacheHook(redis *redis.Client, embedder core.EmbeddingClient) *S
 
 func (h *SemanticCacheHook) Name() string { return "semantic_cache" }
 
-func (h *SemanticCacheHook) BeforePlanning(ctx context.Context, pctx *core.PipelineContext) (*core.PipelineShortCircuit, error) {
+type cacheEntry struct {
+    Response            string            `json:"response"`
+    VariationDimensions map[string]string `json:"variation_dimensions"`
+}
+
+func (h *SemanticCacheHook) BeforePlanningDecision(
+    ctx context.Context,
+    pctx *core.PipelineContext,
+    gate core.PipelineGate,
+) (*core.PipelineShortCircuitDecision, error) {
+    if gate.ResponseCacheReadDisabled() {
+        return nil, nil
+    }
+
     // 1. Generate embedding for the incoming query
     embResp, err := h.embedder.GenerateEmbeddings(ctx, []string{pctx.Request}, nil)
     if err != nil {
@@ -221,7 +239,7 @@ func (h *SemanticCacheHook) BeforePlanning(ctx context.Context, pctx *core.Pipel
 
     // 2. Search Redis for a similar cached query (using RediSearch FT.SEARCH with vector similarity)
     // This is a simplified example — production code would use Redis Vector Similarity Search (VSS)
-    cached, err := h.redis.Get(ctx, h.cachePrefix+hashVector(embResp.Embeddings[0])).Result()
+    cached, err := h.redis.Get(ctx, h.cachePrefix+hashVector(embResp.Embeddings[0])).Bytes()
     if err == redis.Nil {
         return nil, nil // Cache miss — continue with normal pipeline
     }
@@ -229,18 +247,32 @@ func (h *SemanticCacheHook) BeforePlanning(ctx context.Context, pctx *core.Pipel
         return nil, err
     }
 
-    // 3. Cache hit — short-circuit the entire pipeline
-    return &core.PipelineShortCircuit{
-        Response: cached,
-        Source:   "semantic_cache",
+    var entry cacheEntry
+    if err := json.Unmarshal(cached, &entry); err != nil {
+        return nil, err
+    }
+
+    // 3. Cache hit — CachedAgainst is the map persisted when the entry was
+    // written. Never replace it with gate.CacheVary() during lookup.
+    return &core.PipelineShortCircuitDecision{
+        ShortCircuit: &core.PipelineShortCircuit{
+            Response: entry.Response,
+            Source:   "semantic_cache",
+        },
+        Kind:          core.PipelineShortCircuitCache,
+        CachedAgainst: entry.VariationDimensions,
     }, nil
 }
 ```
 
-When a `PipelineShortCircuit` is returned:
+When writing an entry, persist the then-current defensive copy returned by
+`gate.CacheVary()` beside the response. When a decision is returned:
 - `ProcessRequest` immediately builds a response without calling the LLM
 - `ProcessRequestStreaming` chunks the cached response and delivers it via the stream callback
-- The orchestrator records a `pipeline.hook.short_circuit` telemetry metric with the hook name and source
+- The orchestrator records the bounded
+  `orchestration.pipeline.short_circuit.decision` metric and a correlated
+  `pipeline.short_circuit.decision` trace event. Hook names and source values
+  are not Prometheus labels.
 
 ---
 
@@ -824,6 +856,13 @@ type BeforePlanningHook interface {
     BeforePlanning(ctx context.Context, pctx *PipelineContext) (*PipelineShortCircuit, error)
 }
 
+// Opt-in alternative for authoritative/cache provenance and freshness checks.
+// If a hook implements both interfaces, orchestration invokes this one.
+type BeforePlanningDecisionHook interface {
+    PipelineHook
+    BeforePlanningDecision(ctx context.Context, pctx *PipelineContext, gate PipelineGate) (*PipelineShortCircuitDecision, error)
+}
+
 // After plan generation — can mutate the plan
 type AfterPlanningHook interface {
     PipelineHook
@@ -876,6 +915,8 @@ type EmbeddingClient interface {
 |---|---|---|
 | `PipelineContext` | `Request`, `Metadata`, `Enrichments` | Shared state flowing through all hooks |
 | `PipelineShortCircuit` | `Response`, `Source` | Skip the pipeline with a pre-computed response |
+| `PipelineShortCircuitDecision` | `ShortCircuit`, `Kind`, `CachedAgainst` | Distinguish authoritative answers from cache entries and enforce reserved cache dimensions |
+| `PipelineGate` | `CacheVary()`, `ResponseCacheReadDisabled()` | Defensive request-local view of cache policy supplied to decision hooks |
 | `ConversationTurn` | `Role`, `Content`, `Timestamp`, `Metadata` | A single turn in a conversation |
 | `MemoryResult` | `Content`, `Score`, `Metadata`, `Timestamp` | A semantic search result |
 | `EmbeddingOptions` | `Model`, `Dimensions` | Provider-specific embedding configuration |
