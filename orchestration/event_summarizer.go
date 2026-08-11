@@ -366,31 +366,31 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		aiOpts.Model = s.model
 	}
 
-	aiResp, _, err := invokeAI(ctx, s.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "event-summarization",
 		Prompt:         prompt,
 		Options:        aiOpts,
 		DeferRecording: s.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, s.aiClient, invocation)
+	var aiResp *core.AIResponse
+	if invocationResult != nil {
+		aiResp = invocationResult.Response
+	}
 	if err != nil {
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)
 
 		// Record failed interaction in debug store
-		s.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:         "event_summarization",
-			HookPhase:    HookPhasePost,
-			Timestamp:    startTime,
-			DurationMs:   int64(durationMs),
-			Prompt:       prompt,
-			SystemPrompt: eventSummarizerSystemPrompt,
-			Temperature:  float64(aiOpts.Temperature),
-			MaxTokens:    aiOpts.MaxTokens,
-			Model:        aiOpts.Model,
-			Success:      false,
-			Error:        err.Error(),
-			Attempt:      1,
-		})
+		s.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
+			Type:       "event_summarization",
+			HookPhase:  HookPhasePost,
+			Timestamp:  startTime,
+			DurationMs: int64(durationMs),
+			Success:    false,
+			Error:      err.Error(),
+			Attempt:    1,
+		}, invocationResult, invocation, aiResp, err))
 
 		if s.logger != nil {
 			s.logger.WarnWithContext(ctx, "Event summarization LLM call failed, using heuristic fallback", map[string]interface{}{
@@ -415,24 +415,18 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 	core.RecordTokenUsage(ctx, "event_summarization", aiResp.Usage)
 
 	// Record successful interaction in debug store
-	s.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	s.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "event_summarization",
 		HookPhase:        HookPhasePost,
 		Timestamp:        startTime,
 		DurationMs:       int64(durationMs),
-		Prompt:           prompt,
-		SystemPrompt:     eventSummarizerSystemPrompt,
-		Temperature:      float64(aiOpts.Temperature),
-		MaxTokens:        aiOpts.MaxTokens,
-		Model:            aiResp.Model,
-		Provider:         aiResp.Provider,
 		Response:         aiResp.Content,
 		PromptTokens:     aiResp.Usage.PromptTokens,
 		CompletionTokens: aiResp.Usage.CompletionTokens,
 		TotalTokens:      aiResp.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	})
+	}, invocationResult, invocation, aiResp, nil))
 
 	responseAttrs := []attribute.KeyValue{
 		attribute.String("request_id", requestID),

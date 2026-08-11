@@ -168,12 +168,17 @@ func (r *ContextualReResolver) ReResolve(
 	startTime := time.Now()
 
 	// LLM generates corrected parameters with reasoning
-	response, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "semantic-retry",
 		Prompt:         prompt,
 		Options:        reResolveOpts,
 		DeferRecording: r.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, r.aiClient, invocation)
+	var response *core.AIResponse
+	if invocationResult != nil {
+		response = invocationResult.Response
+	}
 	if err == nil {
 		core.RecordTokenUsage(ctx, "semantic_retry", response.Usage)
 	}
@@ -198,19 +203,15 @@ func (r *ContextualReResolver) ReResolve(
 		)
 
 		// LLM Debug: Record failed semantic retry attempt
-		r.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:        "semantic_retry",
-			Timestamp:   startTime,
-			DurationMs:  duration.Milliseconds(),
-			Prompt:      prompt,
-			Temperature: float64(reResolveOpts.Temperature),
-			MaxTokens:   reResolveOpts.MaxTokens,
-			Model:       reResolveOpts.Model,
-			Success:     false,
-			Error:       err.Error(),
-			Attempt:     execCtx.RetryCount + 1,
-			StepID:      execCtx.StepID,
-		})
+		r.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
+			Type:       "semantic_retry",
+			Timestamp:  startTime,
+			DurationMs: duration.Milliseconds(),
+			Success:    false,
+			Error:      err.Error(),
+			Attempt:    execCtx.RetryCount + 1,
+			StepID:     execCtx.StepID,
+		}, invocationResult, invocation, response, err))
 
 		r.logWarn("Re-resolution LLM call failed", map[string]interface{}{
 			"error":       err.Error(),
@@ -220,15 +221,10 @@ func (r *ContextualReResolver) ReResolve(
 	}
 
 	// LLM Debug: Record successful semantic retry
-	r.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	r.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "semantic_retry",
 		Timestamp:        startTime,
 		DurationMs:       duration.Milliseconds(),
-		Prompt:           prompt,
-		Temperature:      float64(reResolveOpts.Temperature),
-		MaxTokens:        reResolveOpts.MaxTokens,
-		Model:            response.Model,
-		Provider:         response.Provider,
 		Response:         response.Content,
 		PromptTokens:     response.Usage.PromptTokens,
 		CompletionTokens: response.Usage.CompletionTokens,
@@ -236,7 +232,7 @@ func (r *ContextualReResolver) ReResolve(
 		Success:          true,
 		Attempt:          execCtx.RetryCount + 1,
 		StepID:           execCtx.StepID,
-	})
+	}, invocationResult, invocation, response, nil))
 
 	// Parse structured response
 	result, parseErr := r.parseReResolutionResponse(response.Content)

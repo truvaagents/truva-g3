@@ -2,7 +2,9 @@ package requestpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,6 +24,16 @@ func (d *testDraft) HasExplicitIntent(path string) bool {
 }
 
 func (d *testDraft) PolicyFingerprintIdentity() string { return d.identity }
+
+type generationTestDraft struct {
+	*testDraft
+	temperaturePath string
+	maxTokensPath   string
+}
+
+func (d *generationTestDraft) EffectiveGenerationPaths() (string, string) {
+	return d.temperaturePath, d.maxTokensPath
+}
 
 type testMiddleware struct {
 	name    string
@@ -105,6 +117,138 @@ func TestEngine_ApplyPrecedenceReportingAndFingerprint(t *testing.T) {
 	}
 	if third.Fingerprint != report.Fingerprint {
 		t.Fatal("fingerprint included an arbitrary patch value")
+	}
+}
+
+func TestEngine_ReportsEffectiveGenerationValues(t *testing.T) {
+	engine, err := NewEngine(Config{})
+	if err != nil {
+		t.Fatalf("NewEngine returned error: %v", err)
+	}
+	draft := &generationTestDraft{
+		testDraft:       newTestDraft(t, map[string]interface{}{"temperature": json.Number("0.25"), "max_tokens": float64(128)}, nil),
+		temperaturePath: "/temperature",
+		maxTokensPath:   "/max_tokens",
+	}
+
+	report, err := engine.Apply(t.Context(), draft, nil)
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if report.EffectiveTemperature.Mode != core.AIParameterSet || report.EffectiveTemperature.Value != 0.25 {
+		t.Fatalf("effective temperature = %#v", report.EffectiveTemperature)
+	}
+	if report.EffectiveMaxTokens.Mode != core.AIParameterSet || report.EffectiveMaxTokens.Value != 128 {
+		t.Fatalf("effective max tokens = %#v", report.EffectiveMaxTokens)
+	}
+}
+
+func TestEffectiveGenerationReportPresenceAndInvalidValues(t *testing.T) {
+	tests := []struct {
+		name            string
+		draft           Draft
+		wantTemperature core.AIParameterMode
+		wantMaxTokens   core.AIParameterMode
+	}{
+		{
+			name:            "provider does not expose paths",
+			draft:           newTestDraft(t, map[string]interface{}{}, nil),
+			wantTemperature: core.AIParameterInherit,
+			wantMaxTokens:   core.AIParameterInherit,
+		},
+		{
+			name: "reported fields absent",
+			draft: &generationTestDraft{
+				testDraft:       newTestDraft(t, map[string]interface{}{}, nil),
+				temperaturePath: "/temperature",
+				maxTokensPath:   "/max_tokens",
+			},
+			wantTemperature: core.AIParameterOmit,
+			wantMaxTokens:   core.AIParameterOmit,
+		},
+		{
+			name: "reported fields cannot be represented",
+			draft: &generationTestDraft{
+				testDraft:       newTestDraft(t, map[string]interface{}{"temperature": "warm", "max_tokens": 1.5}, nil),
+				temperaturePath: "/temperature",
+				maxTokensPath:   "/max_tokens",
+			},
+			wantTemperature: core.AIParameterInherit,
+			wantMaxTokens:   core.AIParameterInherit,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			temperature, maxTokens := effectiveGenerationReport(test.draft)
+			if temperature.Mode != test.wantTemperature || maxTokens.Mode != test.wantMaxTokens {
+				t.Fatalf("effective generation = (%#v, %#v), want modes (%v, %v)", temperature, maxTokens, test.wantTemperature, test.wantMaxTokens)
+			}
+		})
+	}
+}
+
+func TestReportFloat32(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  float32
+		ok    bool
+	}{
+		{name: "float32", value: float32(0.25), want: 0.25, ok: true},
+		{name: "float64", value: float64(-0.5), want: -0.5, ok: true},
+		{name: "signed integer", value: int16(-2), want: -2, ok: true},
+		{name: "unsigned integer", value: uint32(3), want: 3, ok: true},
+		{name: "json number", value: json.Number("0.75"), want: 0.75, ok: true},
+		{name: "invalid json number", value: json.Number("invalid"), ok: false},
+		{name: "nil", value: nil, ok: false},
+		{name: "unsupported type", value: "0.25", ok: false},
+		{name: "nan", value: math.NaN(), ok: false},
+		{name: "positive infinity", value: math.Inf(1), ok: false},
+		{name: "negative infinity", value: math.Inf(-1), ok: false},
+		{name: "overflow", value: math.MaxFloat64, ok: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := reportFloat32(test.value)
+			if ok != test.ok || (ok && got != test.want) {
+				t.Fatalf("reportFloat32(%#v) = (%v, %t), want (%v, %t)", test.value, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestReportInt(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  int
+		ok    bool
+	}{
+		{name: "signed integer", value: int16(-2), want: -2, ok: true},
+		{name: "unsigned integer", value: uint32(3), want: 3, ok: true},
+		{name: "integral float32", value: float32(4), want: 4, ok: true},
+		{name: "integral float64", value: float64(5), want: 5, ok: true},
+		{name: "json integer", value: json.Number("6"), want: 6, ok: true},
+		{name: "fractional json number", value: json.Number("6.5"), ok: false},
+		{name: "invalid json number", value: json.Number("invalid"), ok: false},
+		{name: "nil", value: nil, ok: false},
+		{name: "unsupported type", value: "6", ok: false},
+		{name: "fractional float", value: 6.5, ok: false},
+		{name: "unsigned overflow", value: uint64(math.MaxUint64), ok: false},
+		{name: "positive infinity", value: math.Inf(1), ok: false},
+		{name: "negative infinity", value: math.Inf(-1), ok: false},
+		{name: "nan", value: math.NaN(), ok: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := reportInt(test.value)
+			if ok != test.ok || (ok && got != test.want) {
+				t.Fatalf("reportInt(%#v) = (%d, %t), want (%d, %t)", test.value, got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 

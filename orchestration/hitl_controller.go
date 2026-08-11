@@ -39,7 +39,7 @@ import (
 type DefaultInterruptController struct {
 	policy       InterruptPolicy
 	handler      InterruptHandler
-	store        CheckpointStore
+	store        CheckpointPersistence
 	commandStore CommandStore // Optional: enables Pub/Sub notification on ProcessCommand
 
 	// Optional dependencies (injected per framework patterns)
@@ -183,7 +183,7 @@ func (c *DefaultInterruptController) CheckPlanApproval(ctx context.Context, plan
 	}
 
 	// Notify via handler (non-blocking - checkpoint is already saved)
-	if c.handler != nil {
+	if c.handler != nil && !checkpointEnrichmentRequired(ctx) {
 		if err := c.handler.NotifyInterrupt(ctx, checkpoint); err != nil {
 			// Log warning but don't fail - checkpoint is saved, notification can be retried
 			if c.logger != nil {
@@ -191,7 +191,9 @@ func (c *DefaultInterruptController) CheckPlanApproval(ctx context.Context, plan
 					"operation":     "hitl_notify_interrupt",
 					"checkpoint_id": checkpoint.CheckpointID,
 					"request_id":    requestID,
-					"error":         err.Error(),
+					"status":        "error",
+					"error_type":    "notification",
+					"error":         safeInterruptNotificationError(err),
 				})
 			}
 			// Record notification failure metric (Phase 4 - Metrics Integration)
@@ -322,14 +324,17 @@ func (c *DefaultInterruptController) CheckBeforeStep(ctx context.Context, step R
 	}
 
 	// Notify
-	if c.handler != nil {
+	if c.handler != nil && !checkpointEnrichmentRequired(ctx) {
 		if err := c.handler.NotifyInterrupt(ctx, checkpoint); err != nil {
 			if c.logger != nil {
 				c.logger.WarnWithContext(ctx, "Failed to notify interrupt", map[string]interface{}{
 					"operation":     "hitl_notify_interrupt",
 					"checkpoint_id": checkpoint.CheckpointID,
+					"request_id":    requestID,
 					"step_id":       step.StepID,
-					"error":         err.Error(),
+					"status":        "error",
+					"error_type":    "notification",
+					"error":         safeInterruptNotificationError(err),
 				})
 			}
 		}
@@ -396,14 +401,17 @@ func (c *DefaultInterruptController) CheckAfterStep(ctx context.Context, step Ro
 	}
 
 	// Notify
-	if c.handler != nil {
+	if c.handler != nil && !checkpointEnrichmentRequired(ctx) {
 		if err := c.handler.NotifyInterrupt(ctx, checkpoint); err != nil {
 			if c.logger != nil {
 				c.logger.WarnWithContext(ctx, "Failed to notify interrupt", map[string]interface{}{
 					"operation":     "hitl_notify_interrupt",
 					"checkpoint_id": checkpoint.CheckpointID,
+					"request_id":    requestID,
 					"step_id":       step.StepID,
-					"error":         err.Error(),
+					"status":        "error",
+					"error_type":    "notification",
+					"error":         safeInterruptNotificationError(err),
 				})
 			}
 		}
@@ -477,14 +485,17 @@ func (c *DefaultInterruptController) CheckOnError(ctx context.Context, step Rout
 	}
 
 	// Notify
-	if c.handler != nil {
+	if c.handler != nil && !checkpointEnrichmentRequired(ctx) {
 		if notifyErr := c.handler.NotifyInterrupt(ctx, checkpoint); notifyErr != nil {
 			if c.logger != nil {
 				c.logger.WarnWithContext(ctx, "Failed to notify escalation", map[string]interface{}{
 					"operation":     "hitl_notify_interrupt",
 					"checkpoint_id": checkpoint.CheckpointID,
+					"request_id":    requestID,
 					"step_id":       step.StepID,
-					"error":         notifyErr.Error(),
+					"status":        "error",
+					"error_type":    "notification",
+					"error":         safeInterruptNotificationError(notifyErr),
 				})
 			}
 		}
@@ -792,7 +803,47 @@ func (c *DefaultInterruptController) SaveEnrichedCheckpoint(ctx context.Context,
 	if c.store == nil {
 		return nil
 	}
-	return c.store.SaveCheckpoint(ctx, checkpoint)
+	if err := c.store.SaveCheckpoint(ctx, checkpoint); err != nil {
+		return err
+	}
+	// Framework-owned checkpoints suppress their initial notification while
+	// lifecycle state is incomplete. Notify only after the authoritative save.
+	if checkpointEnrichmentRequired(ctx) && c.handler != nil {
+		if err := c.handler.NotifyInterrupt(ctx, checkpoint); err != nil {
+			requestID := GetRequestID(ctx)
+			if requestID == "" {
+				requestID = checkpoint.RequestID
+			}
+			telemetry.AddSpanEvent(ctx, "hitl.notification.failed",
+				attribute.String("request_id", requestID),
+				attribute.String("checkpoint_id", checkpoint.CheckpointID),
+				attribute.String("original_request_id", checkpoint.OriginalRequestID),
+				attribute.String("error_type", "notification"),
+			)
+			if c.logger != nil {
+				c.logger.WarnWithContext(ctx, "Failed to notify interrupt", map[string]interface{}{
+					"operation":           "hitl_notify_interrupt",
+					"checkpoint_id":       checkpoint.CheckpointID,
+					"request_id":          requestID,
+					"original_request_id": checkpoint.OriginalRequestID,
+					"status":              "error",
+					"error_type":          "notification",
+					"error":               safeInterruptNotificationError(err),
+				})
+			}
+			if checkpoint.Decision != nil {
+				RecordNotificationFailed(checkpoint.Decision.Reason)
+			}
+		}
+	}
+	return nil
+}
+
+func safeInterruptNotificationError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "interrupt notification failed"
 }
 
 // -----------------------------------------------------------------------------
@@ -862,6 +913,9 @@ func (c *DefaultInterruptController) createCheckpoint(
 		Status:            CheckpointStatusPending,
 		StepResults:       make(map[string]*StepResult),
 		UserContext:       userContext,
+	}
+	if checkpointEnrichmentRequired(ctx) {
+		checkpoint.Status = CheckpointStatusPreparing
 	}
 
 	if result != nil {

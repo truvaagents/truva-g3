@@ -125,6 +125,12 @@ type fingerprintDraft interface {
 	PolicyFingerprintIdentity() string
 }
 
+// generationPathsDraft identifies the provider-local logical fields that can
+// be projected into the provider-neutral effective-generation report.
+type generationPathsDraft interface {
+	EffectiveGenerationPaths() (temperaturePath, maxTokensPath string)
+}
+
 type headerReader interface {
 	Header(name string) (string, bool)
 }

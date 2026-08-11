@@ -115,7 +115,8 @@ func WithExecutionDebugErrorTTL(ttl time.Duration) RedisExecutionDebugStoreOptio
 // - Layer 2: Optional circuit breaker (injected via WithExecutionDebugCircuitBreaker)
 // - Layer 3: Fallback to NoOp on persistent failures (handled by factory)
 type RedisExecutionDebugStore struct {
-	client         *redis.Client
+	client         redis.UniversalClient
+	ownsClient     bool
 	logger         core.Logger
 	circuitBreaker core.CircuitBreaker // Optional - injected by application
 	keyPrefix      string
@@ -167,17 +168,7 @@ func NewRedisExecutionDebugStoreWithConfig(
 	config ExecutionStoreConfig,
 	opts ...RedisExecutionDebugStoreOption,
 ) (*RedisExecutionDebugStore, error) {
-	config = normalizeExecutionStoreConfig(config)
-	cfg := &redisExecutionDebugStoreConfig{
-		redisURL:       getRedisURLWithFallback(),
-		redisDB:        getEnvInt("TRUVAG3_EXECUTION_DEBUG_REDIS_DB", core.RedisDBExecutionDebug),
-		logger:         &core.NoOpLogger{},
-		keyPrefix:      config.KeyPrefix,
-		ttl:            config.TTL,
-		errorTTL:       config.ErrorTTL,
-		queryLimit:     config.ConversationQueryLimit,
-		indexScanLimit: config.ConversationIndexScanLimit,
-	}
+	cfg := defaultRedisExecutionDebugStoreConfig(config)
 
 	// Apply explicit options (override defaults)
 	for _, opt := range opts {
@@ -201,9 +192,10 @@ func NewRedisExecutionDebugStoreWithConfig(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed at %s (DB %d): %w\n"+
+		_ = client.Close()
+		return nil, fmt.Errorf("redis connection failed (DB %d): %w\n"+
 			"Hint: Check REDIS_URL or TRUVAG3_REDIS_URL environment variables, "+
-			"or use WithExecutionDebugRedisURL() option", cfg.redisURL, cfg.redisDB, err)
+			"or use WithExecutionDebugRedisURL() option", cfg.redisDB, core.RedactSensitiveError(err))
 	}
 
 	// Note: Circuit breaker is optional and injected by application (per ARCHITECTURE.md)
@@ -221,8 +213,56 @@ func NewRedisExecutionDebugStoreWithConfig(
 		"resilience":                    "layer1_builtin", // Always has Layer 1
 	})
 
+	return newRedisExecutionDebugStore(client, true, cfg), nil
+}
+
+// NewRedisExecutionDebugStoreWithClient creates a store using an
+// application-owned Redis client. Close leaves the supplied client open.
+func NewRedisExecutionDebugStoreWithClient(
+	client redis.UniversalClient,
+	config ExecutionStoreConfig,
+	opts ...RedisExecutionDebugStoreOption,
+) (*RedisExecutionDebugStore, error) {
+	if client == nil {
+		return nil, fmt.Errorf("redis execution debug client is required")
+	}
+	cfg := redisExecutionDebugStoreConfigForClient(config)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
+	return newRedisExecutionDebugStore(client, false, cfg), nil
+}
+
+func redisExecutionDebugStoreConfigForClient(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
+	config = normalizeExecutionStoreConfig(config)
+	return &redisExecutionDebugStoreConfig{
+		logger: &core.NoOpLogger{}, keyPrefix: config.KeyPrefix,
+		ttl: config.TTL, errorTTL: config.ErrorTTL,
+		queryLimit: config.ConversationQueryLimit, indexScanLimit: config.ConversationIndexScanLimit,
+	}
+}
+
+func defaultRedisExecutionDebugStoreConfig(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
+	config = normalizeExecutionStoreConfig(config)
+	return &redisExecutionDebugStoreConfig{
+		redisURL:       getRedisURLWithFallback(),
+		redisDB:        getEnvInt("TRUVAG3_EXECUTION_DEBUG_REDIS_DB", core.RedisDBExecutionDebug),
+		logger:         &core.NoOpLogger{},
+		keyPrefix:      config.KeyPrefix,
+		ttl:            config.TTL,
+		errorTTL:       config.ErrorTTL,
+		queryLimit:     config.ConversationQueryLimit,
+		indexScanLimit: config.ConversationIndexScanLimit,
+	}
+}
+
+func newRedisExecutionDebugStore(client redis.UniversalClient, ownsClient bool, cfg *redisExecutionDebugStoreConfig) *RedisExecutionDebugStore {
 	return &RedisExecutionDebugStore{
 		client:         client,
+		ownsClient:     ownsClient,
 		logger:         cfg.logger,
 		circuitBreaker: cfg.circuitBreaker,
 		keyPrefix:      cfg.keyPrefix,
@@ -230,7 +270,7 @@ func NewRedisExecutionDebugStoreWithConfig(
 		errorTTL:       cfg.errorTTL,
 		queryLimit:     cfg.queryLimit,
 		indexScanLimit: cfg.indexScanLimit,
-	}, nil
+	}
 }
 
 // Store saves a complete execution record (plan + result).
@@ -658,6 +698,9 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 
 // Close closes the Redis connection.
 func (s *RedisExecutionDebugStore) Close() error {
+	if !s.ownsClient {
+		return nil
+	}
 	return s.client.Close()
 }
 

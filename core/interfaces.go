@@ -275,6 +275,47 @@ type BeforePlanningHook interface {
 	BeforePlanning(ctx context.Context, pctx *PipelineContext) (*PipelineShortCircuit, error)
 }
 
+// PipelineShortCircuitKind identifies why an opt-in before-planning hook wants
+// to stop the pipeline. Authoritative responses (for example, policy denials)
+// do not depend on cache freshness. Cache responses are accepted only after
+// orchestration verifies their stored variation dimensions.
+type PipelineShortCircuitKind string
+
+const (
+	PipelineShortCircuitAuthoritative PipelineShortCircuitKind = "authoritative"
+	PipelineShortCircuitCache         PipelineShortCircuitKind = "cache"
+)
+
+// PipelineGate exposes request-local cache policy to opt-in hooks. CacheVary
+// returns a defensive copy on every call; mutating it cannot change framework
+// enforcement or the view supplied to another hook.
+type PipelineGate interface {
+	CacheVary() map[string]string
+	ResponseCacheReadDisabled() bool
+}
+
+// PipelineShortCircuitDecision adds provenance to the unchanged legacy
+// PipelineShortCircuit payload. CachedAgainst must be the variation map stored
+// with the cached entry. Echoing the gate's current values instead defeats the
+// freshness check and violates this contract.
+type PipelineShortCircuitDecision struct {
+	ShortCircuit  *PipelineShortCircuit
+	Kind          PipelineShortCircuitKind
+	CachedAgainst map[string]string
+}
+
+// BeforePlanningDecisionHook is the opt-in, provenance-aware alternative to
+// BeforePlanningHook. A hook may implement both; orchestration invokes only
+// this method when it is available. Returning nil continues the pipeline.
+type BeforePlanningDecisionHook interface {
+	PipelineHook
+	BeforePlanningDecision(
+		ctx context.Context,
+		pctx *PipelineContext,
+		gate PipelineGate,
+	) (*PipelineShortCircuitDecision, error)
+}
+
 // AfterPlanningHook runs after the planning phase. It may mutate the plan.
 type AfterPlanningHook interface {
 	PipelineHook

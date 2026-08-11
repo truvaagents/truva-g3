@@ -159,6 +159,37 @@ func TestGetDefaultRequestMode_DefaultsToNonStreaming(t *testing.T) {
 	}
 }
 
+func TestLegacyCheckpointExpiryPolicyFromEnvironment(t *testing.T) {
+	t.Setenv("TRUVAG3_HITL_DEFAULT_REQUEST_MODE", "streaming")
+	t.Setenv("TRUVAG3_HITL_STREAMING_EXPIRY", "apply_default")
+	t.Setenv("TRUVAG3_HITL_NON_STREAMING_EXPIRY", "implicit_deny")
+
+	got := legacyCheckpointExpiryPolicyFromEnvironment()
+	want := CheckpointExpiryPolicy{
+		DefaultRequestMode:   RequestModeStreaming,
+		StreamingBehavior:    StreamingExpiryApplyDefault,
+		NonStreamingBehavior: NonStreamingExpiryImplicitDeny,
+	}
+	if got != want {
+		t.Fatalf("legacy expiry policy = %#v, want %#v", got, want)
+	}
+
+	t.Setenv("TRUVAG3_HITL_DEFAULT_REQUEST_MODE", "non_streaming")
+	t.Setenv("TRUVAG3_HITL_STREAMING_EXPIRY", "implicit_deny")
+	t.Setenv("TRUVAG3_HITL_NON_STREAMING_EXPIRY", "apply_default")
+	want = DefaultCheckpointExpiryPolicy()
+	if got := legacyCheckpointExpiryPolicyFromEnvironment(); got != want {
+		t.Fatalf("inverse legacy expiry policy = %#v, want %#v", got, want)
+	}
+
+	t.Setenv("TRUVAG3_HITL_DEFAULT_REQUEST_MODE", "unsupported")
+	t.Setenv("TRUVAG3_HITL_STREAMING_EXPIRY", "unsupported")
+	t.Setenv("TRUVAG3_HITL_NON_STREAMING_EXPIRY", "unsupported")
+	if got := legacyCheckpointExpiryPolicyFromEnvironment(); got != DefaultCheckpointExpiryPolicy() {
+		t.Fatalf("invalid legacy environment changed defaults: %#v", got)
+	}
+}
+
 func TestGetDefaultRequestMode_DecisionOverridesEnvVar(t *testing.T) {
 	store := newTestStore()
 

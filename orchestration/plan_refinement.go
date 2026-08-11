@@ -139,7 +139,12 @@ func (r *PlanRefiner) Refine(
 		Options:        opts,
 		DeferRecording: r.debugStore != nil,
 	}
-	resp, _, err := invokeAI(ctx, r.aiClient, invocation)
+	invocationResult, err := invokeAI(ctx, r.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
+	debugInvocationResult := invocationResult
 	llmDuration := time.Since(llmStart)
 
 	if err == nil {
@@ -174,10 +179,15 @@ func (r *PlanRefiner) Refine(
 			attribute.String("parse_error", parseErr.Error()),
 		)
 		attempt = 2 // Record that a retry was attempted regardless of outcome
-		retryResp, _, retryErr := invokeAI(ctx, r.aiClient, invocation)
+		retryInvocationResult, retryErr := invokeAI(ctx, r.aiClient, invocation)
+		var retryResp *core.AIResponse
+		if retryInvocationResult != nil {
+			retryResp = retryInvocationResult.Response
+		}
 		if retryErr == nil {
 			decisions, parseErr = r.parseResponse(retryResp.Content, heldSteps)
-			resp = retryResp                   // Use retry response for debug store
+			resp = retryResp // Use retry response for debug store
+			debugInvocationResult = retryInvocationResult
 			llmDuration = time.Since(llmStart) // Update to include retry duration
 			core.RecordTokenUsage(ctx, "plan_refinement_retry", retryResp.Usage)
 		} else {
@@ -198,14 +208,10 @@ func (r *PlanRefiner) Refine(
 		if parseErr != nil {
 			errMsg = parseErr.Error()
 		}
-		_ = r.debugStore.RecordInteraction(ctx, requestID, LLMInteraction{
+		interaction := withEffectiveAIRequest(LLMInteraction{
 			Type:             "plan_refinement",
 			Timestamp:        llmStart,
 			DurationMs:       llmDuration.Milliseconds(),
-			Prompt:           prompt,
-			Temperature:      0.0,
-			MaxTokens:        opts.MaxTokens,
-			Model:            opts.Model,
 			Response:         resp.Content,
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
@@ -213,7 +219,8 @@ func (r *PlanRefiner) Refine(
 			Success:          parseErr == nil,
 			Error:            errMsg,
 			Attempt:          attempt,
-		})
+		}, debugInvocationResult, invocation, resp, nil)
+		_ = r.debugStore.RecordInteraction(ctx, requestID, interaction)
 	}
 
 	if parseErr != nil {

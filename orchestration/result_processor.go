@@ -164,6 +164,16 @@ type ResultTrimMetadata struct {
 	ContentLost bool `json:"content_lost"`
 }
 
+func cloneResultTrimMetadata(source *ResultTrimMetadata) *ResultTrimMetadata {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	copy.Keywords = append([]string(nil), source.Keywords...)
+	copy.MatchedPaths = append([]string(nil), source.MatchedPaths...)
+	return &copy
+}
+
 // degenerateKeptRatio is the threshold below which a structural trim is treated
 // as non-representative: so little of the source survived that the synthesizing
 // LLM must not infer that anything NOT shown is absent. Distillation output is
@@ -701,7 +711,7 @@ func ProcessMultipleForBudget(
 			OriginalQuery: originalQuery,
 		})
 		meta.BudgetAllocated = budgets[i]
-		metaMap[step.StepID] = meta
+		metaMap[step.StepID] = cloneResultTrimMetadata(meta)
 	}
 	return results, metaMap
 }

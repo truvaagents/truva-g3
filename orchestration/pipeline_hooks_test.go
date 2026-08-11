@@ -7,6 +7,8 @@ import (
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type stubConversationHistoryPreparer struct {
@@ -109,13 +111,44 @@ func (h *beforeOnlyHook) BeforePlanning(ctx context.Context, pctx *core.Pipeline
 	return nil, nil
 }
 
+type decisionHook struct {
+	name          string
+	decisionCalls int
+	legacyCalls   int
+	decision      func(core.PipelineGate) (*core.PipelineShortCircuitDecision, error)
+}
+
+func (h *decisionHook) Name() string { return h.name }
+
+func (h *decisionHook) BeforePlanningDecision(
+	_ context.Context,
+	_ *core.PipelineContext,
+	gate core.PipelineGate,
+) (*core.PipelineShortCircuitDecision, error) {
+	h.decisionCalls++
+	return h.decision(gate)
+}
+
+// BeforePlanning deliberately makes decisionHook implement both contracts so
+// tests can prove the opt-in method wins and exactly one callback is invoked.
+func (h *decisionHook) BeforePlanning(
+	_ context.Context,
+	_ *core.PipelineContext,
+) (*core.PipelineShortCircuit, error) {
+	h.legacyCalls++
+	return &core.PipelineShortCircuit{Response: "legacy must not run"}, nil
+}
+
 // --- Tests: runBeforePlanningHooks ---
 
 func TestRunBeforePlanningHooks_NoHooks(t *testing.T) {
 	o := &AIOrchestrator{}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result := o.runBeforePlanningHooks(context.Background(), pctx)
+	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
 	if result != nil {
 		t.Errorf("expected nil, got %+v", result)
 	}
@@ -132,7 +165,10 @@ func TestRunBeforePlanningHooks_TypeFiltering(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result := o.runBeforePlanningHooks(context.Background(), pctx)
+	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
 	if result != nil {
 		t.Errorf("expected nil (no short-circuit), got %+v", result)
 	}
@@ -156,15 +192,18 @@ func TestRunBeforePlanningHooks_ShortCircuit(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result := o.runBeforePlanningHooks(context.Background(), pctx)
+	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
 	if result == nil {
 		t.Fatal("expected short-circuit, got nil")
 	}
-	if result.Response != "cached answer" {
-		t.Errorf("expected 'cached answer', got %q", result.Response)
+	if result.shortCircuit.Response != "cached answer" {
+		t.Errorf("expected 'cached answer', got %q", result.shortCircuit.Response)
 	}
-	if result.Source != "semantic_cache" {
-		t.Errorf("expected source 'semantic_cache', got %q", result.Source)
+	if result.shortCircuit.Source != "semantic_cache" {
+		t.Errorf("expected source 'semantic_cache', got %q", result.shortCircuit.Source)
 	}
 	// Second hook should NOT have been called
 	if hook2.beforePlanCalls != 0 {
@@ -183,7 +222,10 @@ func TestRunBeforePlanningHooks_ErrorSkipsHook(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result := o.runBeforePlanningHooks(context.Background(), pctx)
+	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
 	if result != nil {
 		t.Errorf("expected nil (error skipped), got %+v", result)
 	}
@@ -200,6 +242,214 @@ func TestRunBeforePlanningHooks_ErrorSkipsHook(t *testing.T) {
 	}
 }
 
+func TestAcceptShortCircuit_CacheVariationContract(t *testing.T) {
+	response := &core.PipelineShortCircuit{Response: "response"}
+	tests := []struct {
+		name       string
+		expected   map[string]string
+		disabled   bool
+		candidate  *core.PipelineShortCircuitDecision
+		wantAccept bool
+		wantReason string
+		wantError  error
+	}{
+		{
+			name:       "missing payload",
+			candidate:  &core.PipelineShortCircuitDecision{Kind: core.PipelineShortCircuitCache},
+			wantReason: "missing_payload",
+			wantError:  ErrInvalidPipelineShortCircuitDecision,
+		},
+		{
+			name: "unknown kind",
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit: response,
+				Kind:         "future-kind",
+			},
+			wantReason: "unknown_kind",
+			wantError:  ErrUnknownPipelineShortCircuitKind,
+		},
+		{
+			name:     "authoritative ignores cache policy",
+			expected: map[string]string{"synthetic": "current"},
+			disabled: true,
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit: response,
+				Kind:         core.PipelineShortCircuitAuthoritative,
+			},
+			wantAccept: true,
+			wantReason: "authoritative",
+		},
+		{
+			name:     "cache reads disabled",
+			disabled: true,
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit: response,
+				Kind:         core.PipelineShortCircuitCache,
+			},
+			wantReason: "cache_read_disabled",
+		},
+		{
+			name:     "current dimension missing from stored entry",
+			expected: map[string]string{"synthetic": "current"},
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit: response,
+				Kind:         core.PipelineShortCircuitCache,
+			},
+			wantReason: "cache_dimension_mismatch",
+		},
+		{
+			name: "stored dimension missing from current request",
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit:  response,
+				Kind:          core.PipelineShortCircuitCache,
+				CachedAgainst: map[string]string{"synthetic": "stored"},
+			},
+			wantReason: "cache_dimension_mismatch",
+		},
+		{
+			name:     "dimension value mismatch",
+			expected: map[string]string{"synthetic": "current"},
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit:  response,
+				Kind:          core.PipelineShortCircuitCache,
+				CachedAgainst: map[string]string{"synthetic": "stored"},
+			},
+			wantReason: "cache_dimension_mismatch",
+		},
+		{
+			name:     "matching dimension",
+			expected: map[string]string{"synthetic": "same"},
+			candidate: &core.PipelineShortCircuitDecision{
+				ShortCircuit:  response,
+				Kind:          core.PipelineShortCircuitCache,
+				CachedAgainst: map[string]string{"synthetic": "same"},
+			},
+			wantAccept: true,
+			wantReason: "cache_match",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			accepted, reason, err := acceptShortCircuit(
+				test.expected,
+				test.disabled,
+				test.candidate,
+				"synthetic",
+			)
+			if accepted != test.wantAccept || reason != test.wantReason || !errors.Is(err, test.wantError) {
+				t.Fatalf("acceptShortCircuit() = (%t, %q, %v), want (%t, %q, %v)", accepted, reason, err, test.wantAccept, test.wantReason, test.wantError)
+			}
+		})
+	}
+}
+
+func TestRunBeforePlanningHooks_OptInDecisionPrecedenceAndDefensiveGate(t *testing.T) {
+	var firstView map[string]string
+	first := &decisionHook{
+		name: "first",
+		decision: func(gate core.PipelineGate) (*core.PipelineShortCircuitDecision, error) {
+			firstView = gate.CacheVary()
+			firstView["synthetic"] = "mutated"
+			return &core.PipelineShortCircuitDecision{
+				ShortCircuit:  &core.PipelineShortCircuit{Response: "stale"},
+				Kind:          core.PipelineShortCircuitCache,
+				CachedAgainst: map[string]string{"synthetic": "stale"},
+			}, nil
+		},
+	}
+	second := &decisionHook{
+		name: "second",
+		decision: func(gate core.PipelineGate) (*core.PipelineShortCircuitDecision, error) {
+			if got := gate.CacheVary()["synthetic"]; got != "current" {
+				t.Fatalf("second hook gate value = %q, want current", got)
+			}
+			return &core.PipelineShortCircuitDecision{
+				ShortCircuit: &core.PipelineShortCircuit{Response: "policy response"},
+				Kind:         core.PipelineShortCircuitAuthoritative,
+			}, nil
+		},
+	}
+	orchestrator := &AIOrchestrator{pipelineHooks: []core.PipelineHook{first, second}}
+
+	result, err := orchestrator.runBeforePlanningHooks(
+		context.Background(),
+		&core.PipelineContext{Enrichments: map[string]interface{}{}},
+		newPipelineGate(map[string]string{"synthetic": "current"}, false),
+		"synthetic",
+	)
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
+	if result == nil || result.shortCircuit.Response != "policy response" ||
+		result.kind != core.PipelineShortCircuitAuthoritative {
+		t.Fatalf("result = %+v", result)
+	}
+	if first.decisionCalls != 1 || first.legacyCalls != 0 ||
+		second.decisionCalls != 1 || second.legacyCalls != 0 {
+		t.Fatalf("hook calls: first decision/legacy=%d/%d second=%d/%d", first.decisionCalls, first.legacyCalls, second.decisionCalls, second.legacyCalls)
+	}
+	if firstView["synthetic"] != "mutated" {
+		t.Fatal("test did not mutate its private gate view")
+	}
+}
+
+func TestPipelineGateReportsCacheReadPolicyAndReturnsDefensiveViews(t *testing.T) {
+	gate := newPipelineGate(map[string]string{"synthetic": "current"}, true)
+	if !gate.ResponseCacheReadDisabled() {
+		t.Fatal("pipeline gate did not report disabled response-cache reads")
+	}
+	first := gate.CacheVary()
+	first["synthetic"] = "mutated"
+	if got := gate.CacheVary()["synthetic"]; got != "current" {
+		t.Fatalf("pipeline gate cache variation was mutated through a returned view: %q", got)
+	}
+}
+
+func TestRunBeforePlanningHooks_InvalidOptInDecisionFailsContract(t *testing.T) {
+	hook := &decisionHook{
+		name: "invalid",
+		decision: func(core.PipelineGate) (*core.PipelineShortCircuitDecision, error) {
+			return &core.PipelineShortCircuitDecision{
+				ShortCircuit: &core.PipelineShortCircuit{Response: "response"},
+			}, nil
+		},
+	}
+	orchestrator := &AIOrchestrator{pipelineHooks: []core.PipelineHook{hook}}
+
+	result, err := orchestrator.runBeforePlanningHooks(
+		context.Background(),
+		&core.PipelineContext{},
+		newPipelineGate(nil, false),
+	)
+	if result != nil || !errors.Is(err, ErrUnknownPipelineShortCircuitKind) {
+		t.Fatalf("runBeforePlanningHooks() = (%+v, %v)", result, err)
+	}
+}
+
+func TestRunBeforePlanningHooks_LegacyResponseRemainsAuthoritative(t *testing.T) {
+	hook := &allStagesHook{
+		name:         "legacy-policy",
+		shortCircuit: &core.PipelineShortCircuit{Response: "denied"},
+	}
+	orchestrator := &AIOrchestrator{pipelineHooks: []core.PipelineHook{hook}}
+
+	result, err := orchestrator.runBeforePlanningHooks(
+		context.Background(),
+		&core.PipelineContext{},
+		newPipelineGate(map[string]string{"synthetic": "current"}, true),
+		"synthetic",
+	)
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
+	if result == nil || result.shortCircuit.Response != "denied" ||
+		result.kind != core.PipelineShortCircuitAuthoritative ||
+		result.diagnostic != "legacy_authoritative" {
+		t.Fatalf("legacy result = %+v", result)
+	}
+}
+
 func TestRunBeforePlanningHooks_Enrichments(t *testing.T) {
 	hook := &enrichmentHook{key: core.EnrichmentRAGContext, value: "retrieved docs"}
 
@@ -208,7 +458,9 @@ func TestRunBeforePlanningHooks_Enrichments(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	o.runBeforePlanningHooks(context.Background(), pctx)
+	if _, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false)); err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
 
 	if pctx.Enrichments[core.EnrichmentRAGContext] != "retrieved docs" {
 		t.Errorf("expected enrichment 'retrieved docs', got %v", pctx.Enrichments[core.EnrichmentRAGContext])
@@ -362,61 +614,134 @@ func TestPrepareKnownEnrichments_CopiesRAGContext(t *testing.T) {
 	}
 }
 
-// --- Tests: runAfterPlanningHooks ---
-
-func TestRunAfterPlanningHooks_MutationChaining(t *testing.T) {
-	hook1 := &allStagesHook{name: "h1", planMutation: "plan-v2"}
-	hook2 := &allStagesHook{name: "h2", planMutation: "plan-v3"}
-
-	o := &AIOrchestrator{
-		pipelineHooks: []core.PipelineHook{hook1, hook2},
+func TestPlanningHelpers_DoNotInvokeLifecycleOwnedAfterPlanningHook(t *testing.T) {
+	client := &promptCapturingAIClient{
+		responses: []string{validPlanJSON(boolPtr(true))},
 	}
-	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
-
-	result := o.runAfterPlanningHooks(context.Background(), pctx, "plan-v1")
-
-	if result != "plan-v3" {
-		t.Errorf("expected 'plan-v3' after chaining, got %v", result)
+	orchestrator := setupTestOrchestrator(t, client)
+	if err := orchestrator.discovery.Register(context.Background(), &core.ServiceRegistration{
+		ID:   "test-agent",
+		Name: "test-agent",
+	}); err != nil {
+		t.Fatalf("register test agent: %v", err)
 	}
-	if hook1.afterPlanCalls != 1 || hook2.afterPlanCalls != 1 {
-		t.Errorf("expected each hook called once, got h1=%d h2=%d", hook1.afterPlanCalls, hook2.afterPlanCalls)
+	orchestrator.catalog.agents = map[string]*AgentInfo{
+		"test-agent": {
+			Registration: &core.ServiceRegistration{Name: "test-agent"},
+			Capabilities: []EnhancedCapability{{Name: "test_capability", Endpoint: "/process"}},
+		},
+	}
+	hook := &allStagesHook{
+		name:         "dead-production-after-planning",
+		planMutation: &RoutingPlan{PlanID: "must-not-be-used"},
+	}
+	orchestrator.pipelineHooks = []core.PipelineHook{hook}
+
+	completedResults := map[string]*StepResult{
+		"step-1": {StepID: "step-1", AgentName: "test-agent", Success: true, Response: `{"ok":true}`},
+	}
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "initial",
+			run: func() error {
+				_, err := orchestrator.generateExecutionPlan(context.Background(), "request", "request-initial")
+				return err
+			},
+		},
+		{
+			name: "continuation",
+			run: func() error {
+				_, err := orchestrator.generateContinuationPlan(
+					context.Background(), "request", "request-continuation",
+					completedResults, []string{"step-1"}, "continue", 2,
+				)
+				return err
+			},
+		},
+		{
+			name: "regeneration",
+			run: func() error {
+				_, err := orchestrator.regenerateContinuationPlan(
+					context.Background(), "request", "request-regeneration",
+					completedResults, []string{"step-1"}, "continue", 2,
+					errors.New("characterized validation failure"), boolPtr(true),
+				)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := hook.afterPlanCalls
+			if err := test.run(); err != nil {
+				t.Fatalf("planning path returned error: %v", err)
+			}
+			if hook.afterPlanCalls != before {
+				t.Fatalf("AfterPlanning calls changed from %d to %d", before, hook.afterPlanCalls)
+			}
+		})
 	}
 }
 
-func TestRunAfterPlanningHooks_ErrorPreservesOriginalPlan(t *testing.T) {
-	hook := &allStagesHook{name: "fail", afterPlanErr: errors.New("oops")}
+func TestAfterPlanningHook_RunsOnceOnFinalAcceptedInitialPlan(t *testing.T) {
+	client := &promptCapturingAIClient{responses: []string{
+		`{"plan_id":"accepted-plan","original_request":"request","mode":"autonomous","steps":[],"terminal":true}`,
+		"synthesized response",
+	}}
+	orchestrator := setupTestOrchestrator(t, client)
+	hook := &allStagesHook{name: "live-after-planning"}
+	orchestrator.pipelineHooks = []core.PipelineHook{hook}
 
-	logger := &hookTestLogger{}
-	o := &AIOrchestrator{
-		pipelineHooks: []core.PipelineHook{hook},
-		logger:        logger,
+	response, err := orchestrator.ProcessRequest(context.Background(), "request", nil)
+	if err != nil {
+		t.Fatalf("ProcessRequest() error = %v", err)
 	}
-	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
-
-	result := o.runAfterPlanningHooks(context.Background(), pctx, "original-plan")
-
-	if result != "original-plan" {
-		t.Errorf("expected 'original-plan' preserved on error, got %v", result)
+	if response == nil || response.Response == "" {
+		t.Fatalf("ProcessRequest() response = %#v", response)
 	}
-	if logger.warnCount != 1 {
-		t.Errorf("expected 1 warning, got %d", logger.warnCount)
+	if hook.afterPlanCalls != 1 {
+		t.Fatalf("AfterPlanning calls = %d, want exactly 1", hook.afterPlanCalls)
+	}
+	if hook.beforePlanCalls != 1 || hook.afterExecCalls != 1 || hook.afterSynthCalls != 1 {
+		t.Fatalf("pipeline lifecycle calls = %+v", hook)
 	}
 }
 
-func TestRunAfterPlanningHooks_SkipsNonMatchingHooks(t *testing.T) {
-	// beforeOnlyHook does NOT implement AfterPlanningHook
-	before := &beforeOnlyHook{name: "before-only"}
-	all := &allStagesHook{name: "all"}
-
-	o := &AIOrchestrator{
-		pipelineHooks: []core.PipelineHook{before, all},
+func TestValidatedAfterPlanningHooks_RejectInvalidMutationAndPreservePriorPlan(t *testing.T) {
+	orchestrator := setupTestOrchestrator(t, NewMockAIClient())
+	orchestrator.catalog.agents = map[string]*AgentInfo{
+		"test-agent": {
+			Registration: &core.ServiceRegistration{Name: "test-agent"},
+			Capabilities: []EnhancedCapability{{Name: "test_capability", Endpoint: "/process"}},
+		},
 	}
-	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
+	valid := &RoutingPlan{
+		PlanID: "valid-plan",
+		Steps: []RoutingStep{{
+			StepID: "step-1", AgentName: "test-agent", Instruction: "run",
+			Metadata: map[string]interface{}{"capability": "test_capability"},
+		}},
+	}
+	hook := &allStagesHook{name: "invalid-mutation", planMutation: &RoutingPlan{
+		PlanID: "invalid-plan",
+		Steps:  []RoutingStep{{StepID: "step-1", AgentName: "missing-agent"}},
+	}}
+	orchestrator.pipelineHooks = []core.PipelineHook{hook}
 
-	o.runAfterPlanningHooks(context.Background(), pctx, "plan")
-
-	if all.afterPlanCalls != 1 {
-		t.Errorf("expected 1 call on allStagesHook, got %d", all.afterPlanCalls)
+	result := orchestrator.runValidatedAfterPlanningHooks(
+		context.Background(),
+		&core.PipelineContext{Request: "request", Enrichments: map[string]interface{}{}},
+		valid, nil, nil, 1, "request-id",
+	)
+	if result != valid || result.PlanID != "valid-plan" {
+		t.Fatalf("invalid hook mutation replaced prior plan: %#v", result)
+	}
+	if valid.Steps[0].AgentName != "test-agent" {
+		t.Fatalf("prior plan was mutated in place: %#v", valid)
 	}
 }
 
@@ -520,9 +845,76 @@ func TestRunBeforePlanningHooks_WithTelemetry(t *testing.T) {
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
 	// Should not panic with telemetry set
-	result := o.runBeforePlanningHooks(context.Background(), pctx)
-	if result == nil || result.Response != "cached" {
+	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	if err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
+	if result == nil || result.shortCircuit.Response != "cached" {
 		t.Errorf("expected short-circuit with telemetry, got %+v", result)
+	}
+}
+
+func TestPipelineShortCircuitKindLabelIsBounded(t *testing.T) {
+	for _, test := range []struct {
+		kind core.PipelineShortCircuitKind
+		want string
+	}{
+		{kind: core.PipelineShortCircuitAuthoritative, want: "authoritative"},
+		{kind: core.PipelineShortCircuitCache, want: "cache"},
+		{kind: core.PipelineShortCircuitKind("hook-controlled-value"), want: "unknown"},
+	} {
+		if got := pipelineShortCircuitKindLabel(test.kind); got != test.want {
+			t.Fatalf("pipelineShortCircuitKindLabel(%q) = %q, want %q", test.kind, got, test.want)
+		}
+	}
+}
+
+func TestAcceptedShortCircuitIsVisibleOnRequestTrace(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx := telemetry.WithBaggage(t.Context(), "request_id", "request-short-circuit")
+	ctx, span := provider.Tracer("pipeline-hook-test").Start(ctx, "request")
+	hook := &decisionHook{
+		name: "policy",
+		decision: func(core.PipelineGate) (*core.PipelineShortCircuitDecision, error) {
+			return &core.PipelineShortCircuitDecision{
+				ShortCircuit: &core.PipelineShortCircuit{Response: "denied"},
+				Kind:         core.PipelineShortCircuitAuthoritative,
+			}, nil
+		},
+	}
+	orchestrator := &AIOrchestrator{pipelineHooks: []core.PipelineHook{hook}}
+	result, err := orchestrator.runBeforePlanningHooks(ctx, &core.PipelineContext{}, newPipelineGate(nil, false))
+	span.End()
+	if err != nil || result == nil {
+		t.Fatalf("short-circuit result/error = %#v, %v", result, err)
+	}
+
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(ended))
+	}
+	attrs := map[string]string{}
+	for _, attr := range ended[0].Attributes() {
+		attrs[string(attr.Key)] = attr.Value.String()
+	}
+	if attrs["pipeline.short_circuit"] != "true" ||
+		attrs["pipeline.short_circuit.kind"] != "authoritative" {
+		t.Fatalf("request span attributes = %#v", attrs)
+	}
+	var decisions int
+	for _, event := range ended[0].Events() {
+		if event.Name == "pipeline.short_circuit.decision" {
+			decisions++
+			if len(event.Attributes) == 0 || event.Attributes[0].Key != "request_id" ||
+				event.Attributes[0].Value.AsString() != "request-short-circuit" {
+				t.Fatalf("short-circuit event correlation = %#v", event.Attributes)
+			}
+		}
+	}
+	if decisions != 1 {
+		t.Fatalf("short-circuit decision events = %d, want 1", decisions)
 	}
 }
 

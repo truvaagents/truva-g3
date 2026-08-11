@@ -23,6 +23,10 @@ func (d *anthropicDraft) PolicyFingerprintIdentity() string {
 	return d.profile.fingerprintIdentity
 }
 
+func (d *anthropicDraft) EffectiveGenerationPaths() (string, string) {
+	return "/temperature", "/max_tokens"
+}
+
 func (d *anthropicDraft) Validate() error {
 	if err := d.profile.validate(); err != nil {
 		return err

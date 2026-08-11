@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,21 +49,34 @@ var _ core.TaskHandle = (*redisAtMostOnceHandle)(nil)
 // RedisTaskConsumer is a core.TaskConsumer backed by Redis BRPOP.
 // Delivery semantics: at-most-once.
 type RedisTaskConsumer struct {
-	client    redis.Cmdable
-	queueName string // captured for DLQ key derivation in handles
+	client      redis.Cmdable
+	queueName   string // captured for DLQ key derivation in handles
+	queuePrefix string
+	dlqPrefix   string
 }
 
 // NewRedisTaskConsumer returns a consumer that BRPOPs from the standard
 // truvag3:tasks:queue:{name} list pattern. The queueName is captured here
 // so handles returned from Consume know where to write dead-letters.
 func NewRedisTaskConsumer(client redis.Cmdable, queueName string) (*RedisTaskConsumer, error) {
+	return NewRedisTaskConsumerWithPrefix(client, queueName, "truvag3:tasks")
+}
+
+func NewRedisTaskConsumerWithPrefix(client redis.Cmdable, queueName, prefix string) (*RedisTaskConsumer, error) {
 	if client == nil {
 		return nil, errNilRedisClient
 	}
 	if queueName == "" {
 		return nil, fmt.Errorf("orchestration: NewRedisTaskConsumer queueName is required")
 	}
-	return &RedisTaskConsumer{client: client, queueName: queueName}, nil
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":")
+	if prefix == "" {
+		return nil, fmt.Errorf("orchestration: task consumer prefix is required")
+	}
+	return &RedisTaskConsumer{
+		client: client, queueName: queueName,
+		queuePrefix: prefix + ":queue:", dlqPrefix: prefix + ":dead:",
+	}, nil
 }
 
 // Consume implements core.TaskConsumer.
@@ -70,7 +84,7 @@ func (c *RedisTaskConsumer) Consume(ctx context.Context, queueName string) (core
 	if queueName == "" {
 		return nil, fmt.Errorf("orchestration: Consume queueName is required")
 	}
-	key := taskQueueKeyPrefix + queueName
+	key := c.queuePrefix + queueName
 
 	select {
 	case <-ctx.Done():
@@ -100,7 +114,7 @@ func (c *RedisTaskConsumer) Consume(ctx context.Context, queueName string) (core
 	return &redisAtMostOnceHandle{
 		client: c.client,
 		task:   &task,
-		dlqKey: dlqKeyPrefix + queueName,
+		dlqKey: c.dlqPrefix + queueName,
 	}, nil
 }
 

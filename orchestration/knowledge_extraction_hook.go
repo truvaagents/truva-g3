@@ -140,7 +140,7 @@ Example: [{"content": "High latency on Go services with tight memory limits is c
 
 Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(synthesizedResponse, 3000))
 
-	aiResp, _, err := invokeAI(ctx, h.aiClient, aiInvocation{
+	invocationResult, err := invokeAI(ctx, h.aiClient, aiInvocation{
 		Purpose: "knowledge-extraction",
 		Prompt:  extractionPrompt,
 		Options: &core.AIOptions{
@@ -157,6 +157,7 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 		})
 		return
 	}
+	aiResp := invocationResult.Response
 
 	// 2. Parse LLM response
 	var fragments []extractedFragment

@@ -533,6 +533,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 
 		// Make the LLM call, optionally wrapped with circuit breaker
 		var response *core.AIResponse
+		var invocationResult *aiInvocationResult
 		var err error
 
 		ctx := telemetry.WithBaggage(ctx, "ai.purpose", "tiered_selection")
@@ -545,12 +546,22 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		if t.circuitBreaker != nil {
 			err = t.circuitBreaker.Execute(ctx, func() error {
 				var cbErr error
-				response, _, cbErr = invokeAI(ctx, t.aiClient, invocation)
+				invocationResult, cbErr = invokeAI(ctx, t.aiClient, invocation)
+				if invocationResult != nil {
+					response = invocationResult.Response
+				}
 				return cbErr
 			})
 		} else {
-			response, _, err = invokeAI(ctx, t.aiClient, invocation)
+			invocationResult, err = invokeAI(ctx, t.aiClient, invocation)
+			if invocationResult != nil {
+				response = invocationResult.Response
+			}
 		}
+		effective := effectiveAIRequestForDebug(invocationResult, invocation)
+		model, provider := effectiveAIIdentity(invocationResult, response, err)
+		effectiveTemperature := effectiveAITemperature(effective, options.Temperature)
+		effectiveMaxTokens := effectiveAIMaxTokens(effective, options.MaxTokens)
 		if err == nil && response != nil {
 			core.RecordTokenUsage(ctx, "tiered_selection", response.Usage)
 		}
@@ -568,15 +579,18 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 			)
 
 			t.recordDebugInteraction(ctx, LLMInteraction{
-				Type:        "tiered_selection",
-				Timestamp:   llmStartTime,
-				DurationMs:  llmDuration.Milliseconds(),
-				Prompt:      prompt,
-				Temperature: float64(options.Temperature),
-				MaxTokens:   options.MaxTokens,
-				Success:     false,
-				Error:       err.Error(),
-				Attempt:     attempt,
+				Type:         "tiered_selection",
+				Timestamp:    llmStartTime,
+				DurationMs:   llmDuration.Milliseconds(),
+				Prompt:       effective.Prompt,
+				SystemPrompt: effective.SystemPrompt,
+				Temperature:  effectiveTemperature,
+				MaxTokens:    effectiveMaxTokens,
+				Model:        model,
+				Provider:     provider,
+				Success:      false,
+				Error:        err.Error(),
+				Attempt:      attempt,
 			})
 			return nil, fmt.Errorf("tiered tool selection failed for request %q: %w",
 				truncateRequest(request, 50), err)
@@ -603,11 +617,12 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
-				Prompt:           prompt,
-				Temperature:      0.0,
-				MaxTokens:        options.MaxTokens,
-				Model:            response.Model,
-				Provider:         response.Provider,
+				Prompt:           effective.Prompt,
+				SystemPrompt:     effective.SystemPrompt,
+				Temperature:      effectiveTemperature,
+				MaxTokens:        effectiveMaxTokens,
+				Model:            model,
+				Provider:         provider,
 				Response:         response.Content,
 				PromptTokens:     response.Usage.PromptTokens,
 				CompletionTokens: response.Usage.CompletionTokens,
@@ -716,11 +731,12 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 					Type:             "tiered_selection",
 					Timestamp:        llmStartTime,
 					DurationMs:       llmDuration.Milliseconds(),
-					Prompt:           prompt,
-					Temperature:      0.0,
-					MaxTokens:        options.MaxTokens,
-					Model:            response.Model,
-					Provider:         response.Provider,
+					Prompt:           effective.Prompt,
+					SystemPrompt:     effective.SystemPrompt,
+					Temperature:      effectiveTemperature,
+					MaxTokens:        effectiveMaxTokens,
+					Model:            model,
+					Provider:         provider,
 					Response:         response.Content,
 					PromptTokens:     response.Usage.PromptTokens,
 					CompletionTokens: response.Usage.CompletionTokens,
@@ -756,11 +772,12 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
-				Prompt:           prompt,
-				Temperature:      0.0,
-				MaxTokens:        options.MaxTokens,
-				Model:            response.Model,
-				Provider:         response.Provider,
+				Prompt:           effective.Prompt,
+				SystemPrompt:     effective.SystemPrompt,
+				Temperature:      effectiveTemperature,
+				MaxTokens:        effectiveMaxTokens,
+				Model:            model,
+				Provider:         provider,
 				Response:         response.Content,
 				PromptTokens:     response.Usage.PromptTokens,
 				CompletionTokens: response.Usage.CompletionTokens,
@@ -786,11 +803,12 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 			Type:             "tiered_selection",
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
-			Prompt:           prompt,
-			Temperature:      0.0,
-			MaxTokens:        options.MaxTokens,
-			Model:            response.Model,
-			Provider:         response.Provider,
+			Prompt:           effective.Prompt,
+			SystemPrompt:     effective.SystemPrompt,
+			Temperature:      effectiveTemperature,
+			MaxTokens:        effectiveMaxTokens,
+			Model:            model,
+			Provider:         provider,
 			Response:         response.Content,
 			PromptTokens:     response.Usage.PromptTokens,
 			CompletionTokens: response.Usage.CompletionTokens,
@@ -845,11 +863,12 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
-				Prompt:           prompt,
-				Temperature:      0.0,
-				MaxTokens:        options.MaxTokens,
-				Model:            response.Model,
-				Provider:         response.Provider,
+				Prompt:           effective.Prompt,
+				SystemPrompt:     effective.SystemPrompt,
+				Temperature:      effectiveTemperature,
+				MaxTokens:        effectiveMaxTokens,
+				Model:            model,
+				Provider:         provider,
 				Response:         response.Content,
 				PromptTokens:     response.Usage.PromptTokens,
 				CompletionTokens: response.Usage.CompletionTokens,

@@ -150,7 +150,6 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 	if checkpoint == nil {
 		return nil, noop, fmt.Errorf("checkpoint cannot be nil")
 	}
-
 	// Validate checkpoint is resumable
 	if !IsResumableStatus(checkpoint.Status) {
 		return nil, noop, fmt.Errorf("checkpoint %s has non-resumable status %q "+

@@ -423,12 +423,17 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 
 	// Make the LLM call
 	llmStartTime := time.Now()
-	resp, _, err := invokeAI(ctx, m.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "micro-resolution",
 		Prompt:         prompt,
 		Options:        opts,
 		DeferRecording: m.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, m.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "micro_resolution", resp.Usage)
@@ -442,19 +447,15 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 		)
 
 		// LLM Debug: Record failed micro-resolution attempt
-		m.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:        "micro_resolution",
-			Timestamp:   llmStartTime,
-			DurationMs:  llmDuration.Milliseconds(),
-			Prompt:      prompt,
-			Temperature: float64(opts.Temperature),
-			MaxTokens:   opts.MaxTokens,
-			Model:       opts.Model,
-			Success:     false,
-			Error:       err.Error(),
-			Attempt:     1,
-			StepID:      stepID,
-		})
+		m.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
+			Type:       "micro_resolution",
+			Timestamp:  llmStartTime,
+			DurationMs: llmDuration.Milliseconds(),
+			Success:    false,
+			Error:      err.Error(),
+			Attempt:    1,
+			StepID:     stepID,
+		}, invocationResult, invocation, resp, err))
 
 		return nil, fmt.Errorf("micro-resolution text call failed: %w", err)
 	}
@@ -468,15 +469,10 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 	)
 
 	// LLM Debug: Record successful micro-resolution
-	m.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	m.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "micro_resolution",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		Temperature:      float64(opts.Temperature),
-		MaxTokens:        opts.MaxTokens,
-		Model:            resp.Model,
-		Provider:         resp.Provider,
 		Response:         resp.Content,
 		PromptTokens:     resp.Usage.PromptTokens,
 		CompletionTokens: resp.Usage.CompletionTokens,
@@ -484,7 +480,7 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 		Success:          true,
 		Attempt:          1,
 		StepID:           stepID,
-	})
+	}, invocationResult, invocation, resp, nil))
 
 	// Parse the JSON response
 	content := strings.TrimSpace(resp.Content)
@@ -648,12 +644,17 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 	}
 
 	llmStartTime := time.Now()
-	resp, _, err := invokeAI(ctx, m.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "schema-mapping",
 		Prompt:         prompt,
 		Options:        schemaOpts,
 		DeferRecording: m.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, m.aiClient, invocation)
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "schema_mapping", resp.Usage)
@@ -665,19 +666,15 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 			attribute.String("error", err.Error()),
 			attribute.Int64("duration_ms", llmDuration.Milliseconds()),
 		)
-		m.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:        "schema_mapping",
-			Timestamp:   llmStartTime,
-			DurationMs:  llmDuration.Milliseconds(),
-			Prompt:      prompt,
-			Temperature: float64(schemaOpts.Temperature),
-			MaxTokens:   schemaOpts.MaxTokens,
-			Model:       schemaOpts.Model,
-			Success:     false,
-			Error:       err.Error(),
-			Attempt:     1,
-			StepID:      stepID,
-		})
+		m.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
+			Type:       "schema_mapping",
+			Timestamp:  llmStartTime,
+			DurationMs: llmDuration.Milliseconds(),
+			Success:    false,
+			Error:      err.Error(),
+			Attempt:    1,
+			StepID:     stepID,
+		}, invocationResult, invocation, resp, err))
 		return nil, fmt.Errorf("schema-mapping LLM call failed: %w", err)
 	}
 
@@ -687,15 +684,10 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 		attribute.String("response", truncateString(resp.Content, 1000)),
 		attribute.Int64("duration_ms", llmDuration.Milliseconds()),
 	)
-	m.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	m.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "schema_mapping",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		Temperature:      float64(schemaOpts.Temperature),
-		MaxTokens:        schemaOpts.MaxTokens,
-		Model:            resp.Model,
-		Provider:         resp.Provider,
 		Response:         resp.Content,
 		PromptTokens:     resp.Usage.PromptTokens,
 		CompletionTokens: resp.Usage.CompletionTokens,
@@ -703,7 +695,7 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 		Success:          true,
 		Attempt:          1,
 		StepID:           stepID,
-	})
+	}, invocationResult, invocation, resp, nil))
 
 	// Step 5: Parse the mapping expressions
 	content := strings.TrimSpace(resp.Content)

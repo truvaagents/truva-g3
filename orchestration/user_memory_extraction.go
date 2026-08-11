@@ -311,6 +311,7 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 	var extractResult *ExtractResult
 	var err error
 	var extractionDuration time.Duration
+	var extractionInvocation *aiInvocationResult
 	func() {
 		llmCtx, endLLMSpan := telemetry.StartChildSpan(ctx, "user_memory.extraction.llm",
 			attribute.String("user_id", userID),
@@ -324,7 +325,9 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 			attribute.String("user_id", userID),
 		)
 		extractCallCtx := h.deferLLMRecordingIfWeWillRecord(llmCtx)
+		extractCallCtx, evidence := withAIInvocationEvidenceCapture(extractCallCtx)
 		extractResult, err = h.extractor.ExtractFacts(extractCallCtx, in.request, response, nil)
+		extractionInvocation = evidence.Result()
 		extractionDuration = time.Since(extractionStart)
 		if extractResult != nil && extractResult.Response != nil {
 			telemetry.SetSpanAttributes(llmCtx,
@@ -338,12 +341,18 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 		telemetry.SetSpanAttributes(llmCtx, attribute.Int64("duration_ms", extractionDuration.Milliseconds()))
 	}()
 	if err != nil {
-		h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		interaction := LLMInteraction{
 			Type: "user_memory_extraction", HookPhase: HookPhasePost, Category: "llm",
 			Timestamp: extractionStart, DurationMs: extractionDuration.Milliseconds(),
 			Prompt:  fmt.Sprintf("[request] %s\n[response] %s", truncateUTF8(in.request, 200), truncateUTF8(response, 300)),
 			Success: false, Error: err.Error(),
-		})
+		}
+		if extractionInvocation != nil {
+			interaction = withEffectiveAIRequest(
+				interaction, extractionInvocation, aiInvocation{Purpose: "user-memory-extraction"}, extractionInvocation.Response, err,
+			)
+		}
+		h.recordDebugInteraction(ctx, requestID, interaction)
 		telemetry.RecordSpanError(ctx, err)
 		if h.logger != nil {
 			h.logger.WarnWithContext(ctx, "User fact extraction failed", map[string]interface{}{
@@ -372,6 +381,11 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 		extractRec.PromptTokens = extractResult.Response.Usage.PromptTokens
 		extractRec.CompletionTokens = extractResult.Response.Usage.CompletionTokens
 		extractRec.TotalTokens = extractResult.Response.Usage.TotalTokens
+	}
+	if extractionInvocation != nil {
+		extractRec = withEffectiveAIRequest(
+			extractRec, extractionInvocation, aiInvocation{Purpose: "user-memory-extraction"}, extractResult.Response, nil,
+		)
 	}
 	h.recordDebugInteraction(ctx, requestID, extractRec)
 
@@ -504,7 +518,7 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 	)
 
 	// 2b. Reconcile (batched if supported, with fallback to per-candidate).
-	results, batchUsed := h.reconcileAll(ctx, userID, requestID, inputs)
+	results, reconciliationInvocations, batchUsed := h.reconcileAll(ctx, userID, requestID, inputs)
 	skipCompactedWrites := h.markRedundantDurableWrites(ctx, requestID, userID, inputs, results)
 
 	// 2c. Apply each result. Skipped=true means per-candidate reconcile
@@ -549,6 +563,11 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 			recInteraction.PromptTokens = result.Response.Usage.PromptTokens
 			recInteraction.CompletionTokens = result.Response.Usage.CompletionTokens
 			recInteraction.TotalTokens = result.Response.Usage.TotalTokens
+		}
+		if !batchUsed && reconciliationInvocations[i] != nil {
+			recInteraction = withEffectiveAIRequest(
+				recInteraction, reconciliationInvocations[i], aiInvocation{Purpose: "user-memory-extraction"}, result.Response, nil,
+			)
 		}
 		h.recordDebugInteraction(ctx, requestID, recInteraction)
 
@@ -656,6 +675,7 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 		// Closure scopes the deferred span end so a panic inside the LLM call
 		// still closes the span cleanly.
 		var summaryResp *core.AIResponse
+		var summaryInvocation *aiInvocationResult
 		var summaryErr error
 		var summaryDuration time.Duration
 		func() {
@@ -670,12 +690,15 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 				attribute.String("request_id", requestID),
 				attribute.String("user_id", userID),
 			)
-			summaryResp, _, summaryErr = invokeAI(summaryCtx, h.aiClient, aiInvocation{
+			summaryInvocation, summaryErr = invokeAI(summaryCtx, h.aiClient, aiInvocation{
 				Purpose:        "user-memory-extraction",
 				Prompt:         summaryPrompt,
 				Options:        summaryOpts,
 				DeferRecording: h.debugStore != nil,
 			})
+			if summaryInvocation != nil {
+				summaryResp = summaryInvocation.Response
+			}
 			summaryDuration = time.Since(summaryStart)
 			if summaryResp != nil {
 				telemetry.SetSpanAttributes(summaryCtx,
@@ -693,11 +716,13 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 			}
 		}()
 		if summaryErr != nil {
-			h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			h.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 				Type: "user_memory_summary", HookPhase: HookPhasePost, Category: "llm",
 				Timestamp: summaryStart, DurationMs: summaryDuration.Milliseconds(),
 				Prompt: summaryPrompt, Success: false, Error: summaryErr.Error(),
-			})
+			}, summaryInvocation, aiInvocation{
+				Purpose: "user-memory-extraction", Prompt: summaryPrompt, Options: summaryOpts,
+			}, summaryResp, summaryErr))
 			// Fail-open — summary is nice-to-have, not critical
 			telemetry.RecordSpanError(ctx, summaryErr)
 			if h.logger != nil {
@@ -710,7 +735,7 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 				})
 			}
 		} else {
-			h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			h.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 				Type: "user_memory_summary", HookPhase: HookPhasePost, Category: "llm",
 				Timestamp:        summaryStart,
 				DurationMs:       summaryDuration.Milliseconds(),
@@ -724,7 +749,9 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 				Temperature:      float64(summaryOpts.Temperature),
 				MaxTokens:        summaryOpts.MaxTokens,
 				Success:          true,
-			})
+			}, summaryInvocation, aiInvocation{
+				Purpose: "user-memory-extraction", Prompt: summaryPrompt, Options: summaryOpts,
+			}, summaryResp, nil))
 			type summaryResult struct {
 				Content string `json:"content"`
 			}
@@ -892,6 +919,8 @@ func (h *UserMemoryExtractionHook) extractAndStore(ctx context.Context, in extra
 //   - results: slice of length len(inputs); entries with Skipped=true mean
 //     reconciliation failed for that candidate and the caller must ignore it
 //     (matches the prior `continue` semantics).
+//   - invocations: aligned effective-request evidence for per-candidate LLM
+//     calls; batch calls are recorded once inside this method instead.
 //   - batchUsed: true if the batched LLM call succeeded; false if the
 //     per-candidate fallback ran (either because the reconciler does not
 //     implement BatchUserFactReconciler or because the batched call failed
@@ -907,8 +936,9 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 	userID string,
 	requestID string,
 	inputs []reconcileInput,
-) (results []ReconcileResult, batchUsed bool) {
+) (results []ReconcileResult, invocations []*aiInvocationResult, batchUsed bool) {
 	results = make([]ReconcileResult, len(inputs))
+	invocations = make([]*aiInvocationResult, len(inputs))
 
 	// Try the batched path first if the reconciler supports it.
 	if br, ok := h.reconciler.(BatchUserFactReconciler); ok && len(inputs) > 0 {
@@ -936,6 +966,7 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 		var batchResults []ReconcileResult
 		var err error
 		var batchDuration time.Duration
+		var batchInvocation *aiInvocationResult
 		func() {
 			batchCtx, endBatchSpan := telemetry.StartChildSpan(ctx, "user_memory.reconciliation.batch",
 				attribute.String("user_id", userID),
@@ -946,7 +977,9 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 			defer endBatchSpan()
 			batchCtx = telemetry.WithBaggage(batchCtx, "ai.purpose", "user_memory_reconciliation")
 			batchCallCtx := h.deferLLMRecordingIfWeWillRecord(batchCtx)
+			batchCallCtx, evidence := withAIInvocationEvidenceCapture(batchCallCtx)
 			batchResults, err = br.ReconcileBatch(batchCallCtx, userID, h.namespace, candidates, neighbors)
+			batchInvocation = evidence.Result()
 			batchDuration = time.Since(batchStart)
 			telemetry.SetSpanAttributes(batchCtx, attribute.Int64("duration_ms", batchDuration.Milliseconds()))
 			if err == nil && len(batchResults) == len(inputs) {
@@ -983,12 +1016,17 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 						break
 					}
 				}
+				if batchInvocation != nil {
+					rec = withEffectiveAIRequest(
+						rec, batchInvocation, aiInvocation{Purpose: "user-memory-extraction"}, batchInvocation.Response, nil,
+					)
+				}
 				h.recordDebugInteraction(ctx, requestID, rec)
 				telemetry.Counter("user_memory.reconciliation.batch",
 					"module", telemetry.ModuleOrchestration, "outcome", "success")
 			}
 			copy(results, batchResults)
-			return results, true
+			return results, invocations, true
 		}
 
 		// Batched path failed — record the failure and fall through.
@@ -996,7 +1034,7 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 		// debug row with Success=false so the registry viewer can anchor
 		// the per-candidate fallback rows to the failed batch.
 		if err != nil {
-			h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			interaction := LLMInteraction{
 				Type:       "user_memory_reconciliation_batch",
 				HookPhase:  HookPhasePost,
 				Category:   "llm",
@@ -1005,7 +1043,13 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 				Prompt:     fmt.Sprintf("[batch] %d candidates", len(inputs)),
 				Success:    false,
 				Error:      err.Error(),
-			})
+			}
+			if batchInvocation != nil {
+				interaction = withEffectiveAIRequest(
+					interaction, batchInvocation, aiInvocation{Purpose: "user-memory-extraction"}, batchInvocation.Response, err,
+				)
+			}
+			h.recordDebugInteraction(ctx, requestID, interaction)
 			telemetry.RecordSpanError(ctx, err)
 			telemetry.Counter("user_memory.reconciliation.batch",
 				"module", telemetry.ModuleOrchestration, "outcome", "fallback")
@@ -1021,7 +1065,7 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 		} else {
 			// Length mismatch (no error) — also fall back.
 			mismatchErr := fmt.Sprintf("length mismatch: expected %d decisions, got %d", len(inputs), len(batchResults))
-			h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			interaction := LLMInteraction{
 				Type:       "user_memory_reconciliation_batch",
 				HookPhase:  HookPhasePost,
 				Category:   "llm",
@@ -1030,7 +1074,13 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 				Prompt:     fmt.Sprintf("[batch] %d candidates", len(inputs)),
 				Success:    false,
 				Error:      mismatchErr,
-			})
+			}
+			if batchInvocation != nil {
+				interaction = withEffectiveAIRequest(
+					interaction, batchInvocation, aiInvocation{Purpose: "user-memory-extraction"}, batchInvocation.Response, nil,
+				)
+			}
+			h.recordDebugInteraction(ctx, requestID, interaction)
 			telemetry.Counter("user_memory.reconciliation.batch",
 				"module", telemetry.ModuleOrchestration, "outcome", "fallback")
 			if h.logger != nil {
@@ -1048,13 +1098,15 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 
 	// Per-candidate fallback path (also used when the reconciler does not
 	// implement the optional batch interface).
-	reconcileCallCtx := h.deferLLMRecordingIfWeWillRecord(ctx)
 	for i, in := range inputs {
 		reconcileStart := time.Now()
+		reconcileCallCtx := h.deferLLMRecordingIfWeWillRecord(ctx)
+		reconcileCallCtx, evidence := withAIInvocationEvidenceCapture(reconcileCallCtx)
 		result, err := h.reconciler.Reconcile(reconcileCallCtx, userID, h.namespace, in.candidate, in.neighbors)
+		invocations[i] = evidence.Result()
 		reconcileDuration := time.Since(reconcileStart)
 		if err != nil {
-			h.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			interaction := LLMInteraction{
 				Type:       "user_memory_reconciliation",
 				HookPhase:  HookPhasePost,
 				Category:   "llm",
@@ -1063,7 +1115,13 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 				Prompt:     fmt.Sprintf("[candidate] %s\n[existing] %d facts", in.candidate.Content, len(in.neighbors)),
 				Success:    false,
 				Error:      err.Error(),
-			})
+			}
+			if invocations[i] != nil {
+				interaction = withEffectiveAIRequest(
+					interaction, invocations[i], aiInvocation{Purpose: "user-memory-extraction"}, invocations[i].Response, err,
+				)
+			}
+			h.recordDebugInteraction(ctx, requestID, interaction)
 			telemetry.RecordSpanError(ctx, err)
 			if h.logger != nil {
 				h.logger.WarnWithContext(ctx, "User fact reconciliation failed", map[string]interface{}{
@@ -1079,7 +1137,7 @@ func (h *UserMemoryExtractionHook) reconcileAll(
 		}
 		results[i] = result
 	}
-	return results, false
+	return results, invocations, false
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1253,11 +1311,15 @@ func (e *DefaultUserFactExtractor) ExtractFacts(ctx context.Context, userRequest
 		opts.Model = e.model
 	}
 
-	resp, _, err := invokeAI(ctx, e.aiClient, aiInvocation{
+	invocationResult, err := invokeAI(ctx, e.aiClient, aiInvocation{
 		Purpose: "user-memory-extraction",
 		Prompt:  prompt,
 		Options: opts,
 	})
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	if err != nil {
 		return nil, fmt.Errorf("user fact extraction LLM call failed: %w", err)
 	}
@@ -2181,11 +2243,15 @@ func (r *LLMUserFactReconciler) Reconcile(ctx context.Context, userID string, na
 		opts.Model = r.model
 	}
 
-	resp, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+	invocationResult, err := invokeAI(ctx, r.aiClient, aiInvocation{
 		Purpose: "user-memory-extraction",
 		Prompt:  prompt,
 		Options: opts,
 	})
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconciliation LLM call failed: %w", err)
 	}
@@ -2367,11 +2433,15 @@ func (r *LLMUserFactReconciler) ReconcileBatch(
 		opts.Model = r.model
 	}
 
-	resp, _, err := invokeAI(ctx, r.aiClient, aiInvocation{
+	invocationResult, err := invokeAI(ctx, r.aiClient, aiInvocation{
 		Purpose: "user-memory-extraction",
 		Prompt:  prompt,
 		Options: opts,
 	})
+	var resp *core.AIResponse
+	if invocationResult != nil {
+		resp = invocationResult.Response
+	}
 	if err != nil {
 		return nil, fmt.Errorf("batched reconciliation LLM call failed: %w", err)
 	}

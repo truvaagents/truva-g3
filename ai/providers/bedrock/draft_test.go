@@ -75,6 +75,10 @@ func TestDraftPortableIntentPolicyAndSDKTranslation(t *testing.T) {
 	if report == nil || !report.Stable || report.Surface != "converse" || report.Purpose != "bedrock-draft" {
 		t.Fatalf("report = %#v", report)
 	}
+	if report.EffectiveTemperature.Mode != core.AIParameterSet || report.EffectiveTemperature.Value != 0 ||
+		report.EffectiveMaxTokens.Mode != core.AIParameterSet || report.EffectiveMaxTokens.Value != 200 {
+		t.Fatalf("effective generation report = %#v / %#v", report.EffectiveTemperature, report.EffectiveMaxTokens)
+	}
 	if text := fmt.Sprintf("%#v", report); strings.Contains(text, "secret-prompt") || strings.Contains(text, "legacy system") {
 		t.Fatalf("report contains request content: %s", text)
 	}

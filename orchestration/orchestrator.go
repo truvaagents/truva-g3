@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -546,12 +545,16 @@ func getAllowedAgentKeys(allowedAgents map[string]bool) []string {
 
 // AIOrchestrator is an AI-powered orchestrator that uses LLM for intelligent routing
 type AIOrchestrator struct {
-	config      *OrchestratorConfig
-	discovery   core.Discovery
-	aiClient    core.AIClient
-	catalog     *AgentCatalog
-	executor    *SmartExecutor
-	synthesizer *AISynthesizer
+	config *OrchestratorConfig
+	// constructionErr is populated only by the source-compatible simple
+	// constructor when its error-returning counterpart fails. Every public
+	// execution entry point checks it before doing work.
+	constructionErr error
+	discovery       core.Discovery
+	aiClient        core.AIClient
+	catalog         *AgentCatalog
+	executor        *SmartExecutor
+	synthesizer     *AISynthesizer
 
 	// Capability provider for flexible capability discovery
 	capabilityProvider CapabilityProvider
@@ -589,6 +592,11 @@ type AIOrchestrator struct {
 	executionStore ExecutionStore
 	// executionWg tracks in-flight execution storage goroutines for graceful shutdown
 	executionWg sync.WaitGroup
+	// executionRecorders serialize writes within a request while allowing
+	// independent requests to persist concurrently.
+	executionRecorders sync.Map // map[string]*executionRecorder
+	recordingCtx       context.Context
+	recordingCancel    context.CancelFunc
 
 	// Observability (follows framework design principles)
 	telemetry core.Telemetry // For metrics and tracing
@@ -634,6 +642,7 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	recordingCtx, recordingCancel := context.WithCancel(context.Background())
 	catalog := NewAgentCatalog(discovery)
 
 	// Apply excluded capabilities (prevents self-referential orchestration)
@@ -642,16 +651,24 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 	}
 
 	o := &AIOrchestrator{
-		config:      config,
-		discovery:   discovery,
-		aiClient:    aiClient,
-		catalog:     catalog,
-		executor:    NewSmartExecutor(catalog),
-		synthesizer: NewAISynthesizer(aiClient),
-		metrics:     &OrchestratorMetrics{},
-		history:     make([]ExecutionRecord, 0, config.HistorySize),
-		ctx:         ctx,
-		cancel:      cancel,
+		config:    config,
+		discovery: discovery,
+		aiClient:  aiClient,
+		catalog:   catalog,
+		executor: newSmartExecutor(
+			catalog,
+			config.ExecutionOptions.MaxConcurrency,
+			config.ExecutionOptions.TotalTimeout,
+			config.ExecutionOptions.RetryAttempts,
+			config.stepRetryBackoff,
+		),
+		synthesizer:     NewAISynthesizer(aiClient),
+		metrics:         &OrchestratorMetrics{},
+		history:         make([]ExecutionRecord, 0, config.HistorySize),
+		ctx:             ctx,
+		cancel:          cancel,
+		recordingCtx:    recordingCtx,
+		recordingCancel: recordingCancel,
 		// Default to no-op telemetry
 		telemetry: &core.NoOpTelemetry{},
 	}
@@ -767,8 +784,9 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 
 	// Post-orchestrator plan refinement (ORCH-015).
 	// Independent of hybrid resolution — works with any parameter resolution strategy.
-	// Opt-in for initial rollout — set TRUVAG3_PLAN_REFINEMENT_ENABLED=true to enable.
-	if os.Getenv("TRUVAG3_PLAN_REFINEMENT_ENABLED") == "true" {
+	// Opt-in for initial rollout. Environment is resolved into typed config at
+	// construction; request execution never reads process-global state.
+	if config.PlanRefinementEnabled {
 		planRefiner := NewPlanRefiner(aiClient, o.logger)
 		if planRefiner != nil {
 			planRefiner.SetAIOptionsOverride(config.MicroResolutionAIOptions)
@@ -787,6 +805,9 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 
 // Start initializes the orchestrator and starts background processes
 func (o *AIOrchestrator) Start(ctx context.Context) error {
+	if err := o.rejectIfConstructionFailed(ctx, "start"); err != nil {
+		return err
+	}
 	// Initial catalog refresh
 	if err := o.catalog.Refresh(ctx); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %w", err)
@@ -796,6 +817,37 @@ func (o *AIOrchestrator) Start(ctx context.Context) error {
 	go o.catalogRefreshLoop()
 
 	return nil
+}
+
+func (o *AIOrchestrator) rejectIfConstructionFailed(ctx context.Context, operation string) error {
+	if o == nil || o.constructionErr == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestID := requestIDFromBaggage(ctx)
+	telemetry.Counter("orchestration.construction.rejected",
+		"module", telemetry.ModuleOrchestration,
+		"operation", operation,
+	)
+	telemetry.AddSpanEvent(ctx, "orchestrator.construction.rejected",
+		attribute.String("request_id", requestID),
+		attribute.String("operation", operation),
+		attribute.String("reason", "invalid_configuration"),
+	)
+	telemetry.RecordSpanError(ctx, ErrOrchestratorConstruction)
+	if o.logger != nil {
+		o.logger.ErrorWithContext(ctx, "Orchestrator operation rejected after construction failure", map[string]interface{}{
+			"operation":           "orchestrator_construction_rejection",
+			"requested_operation": operation,
+			"request_id":          requestID,
+			"status":              "rejected",
+			"error_type":          "preparation",
+			"error":               "orchestrator construction failed",
+		})
+	}
+	return o.constructionErr
 }
 
 // Stop gracefully shuts down the orchestrator
@@ -1271,9 +1323,7 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	result *ExecutionResult,
 	checkpoint *ExecutionCheckpoint,
 ) {
-	// Capture store reference to avoid TOCTOU race condition
-	store := o.executionStore
-	if store == nil {
+	if o.executionStore == nil {
 		return
 	}
 
@@ -1302,92 +1352,90 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	// Capture resume checkpoint ID before goroutine (ctx may be cancelled later)
 	resumeCheckpointID, isResume := IsResumeMode(ctx)
 
-	o.executionWg.Add(1)
-	go func() {
-		defer o.executionWg.Done()
+	stored := &StoredExecution{
+		RequestID:         requestID,
+		OriginalRequestID: originalRequestID,
+		TraceID:           traceID,
+		AgentName:         agentName,
+		OriginalRequest:   request,
+		Plan:              plan,
+		Result:            result,
+		Interrupted:       checkpoint != nil,
+		Checkpoint:        checkpoint,
+		CreatedAt:         createdAt,
+	}
 
-		storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-
-		stored := &StoredExecution{
-			RequestID:         requestID,
-			OriginalRequestID: originalRequestID,
-			TraceID:           traceID,
-			AgentName:         agentName,
-			OriginalRequest:   request,
-			Plan:              plan,
-			Result:            result,
-			Interrupted:       checkpoint != nil,
-			Checkpoint:        checkpoint,
-			CreatedAt:         createdAt,
+	if conversationID != "" {
+		stored.Metadata = map[string]string{
+			MetadataConversationID: conversationID,
 		}
+	}
 
-		if conversationID != "" {
-			stored.Metadata = map[string]string{
-				MetadataConversationID: conversationID,
+	// Tag resumed executions so the registry viewer can link them to the interrupted one.
+	if isResume && resumeCheckpointID != "" {
+		if stored.Metadata == nil {
+			stored.Metadata = make(map[string]string)
+		}
+		stored.Metadata["resume_checkpoint_id"] = resumeCheckpointID
+	}
+
+	// Extract multi-phase data from result metadata into typed StoredExecution fields
+	if result != nil {
+		if result.Metadata != nil {
+			if plans, ok := result.Metadata[MetadataKeyPhasePlans].([]*RoutingPlan); ok {
+				stored.PhasePlans = plans
 			}
-		}
-
-		// Tag resumed executions so the registry viewer can link them to the interrupted one.
-		if isResume && resumeCheckpointID != "" {
-			if stored.Metadata == nil {
-				stored.Metadata = make(map[string]string)
+			if count, ok := result.Metadata[MetadataKeyPhaseCount].(int); ok {
+				stored.PhaseCount = count
 			}
-			stored.Metadata["resume_checkpoint_id"] = resumeCheckpointID
-		}
-
-		// Extract multi-phase data from result metadata into typed StoredExecution fields
-		if result != nil {
-			if result.Metadata != nil {
-				if plans, ok := result.Metadata[MetadataKeyPhasePlans].([]*RoutingPlan); ok {
-					stored.PhasePlans = plans
-				}
-				if count, ok := result.Metadata[MetadataKeyPhaseCount].(int); ok {
-					stored.PhaseCount = count
-				}
-				if forced, ok := result.Metadata[MetadataKeyForcedTerminal].(bool); ok {
-					stored.ForcedTerminal = forced
-				}
-				// Serialize plan regeneration events into StoredExecution.Metadata (map[string]string)
-				if regenEvts, ok := result.Metadata[MetadataKeyPlanRegenerations]; ok {
-					if regenJSON, jsonErr := json.Marshal(regenEvts); jsonErr == nil {
-						if stored.Metadata == nil {
-							stored.Metadata = make(map[string]string)
-						}
-						stored.Metadata[MetadataKeyPlanRegenerations] = string(regenJSON)
+			if forced, ok := result.Metadata[MetadataKeyForcedTerminal].(bool); ok {
+				stored.ForcedTerminal = forced
+			}
+			// Serialize plan regeneration events into StoredExecution.Metadata (map[string]string)
+			if regenEvts, ok := result.Metadata[MetadataKeyPlanRegenerations]; ok {
+				if regenJSON, jsonErr := json.Marshal(regenEvts); jsonErr == nil {
+					if stored.Metadata == nil {
+						stored.Metadata = make(map[string]string)
 					}
+					stored.Metadata[MetadataKeyPlanRegenerations] = string(regenJSON)
 				}
 			}
-			// Fall back to the struct field when Metadata didn't carry PhaseCount.
-			// Honours callers (tests, future paths) that set PhaseCount on the struct
-			// directly without going through Metadata.
-			if stored.PhaseCount == 0 && result.PhaseCount > 0 {
-				stored.PhaseCount = result.PhaseCount
-			}
 		}
+		// Fall back to the struct field when Metadata didn't carry PhaseCount.
+		// Honours callers (tests, future paths) that set PhaseCount on the struct
+		// directly without going through Metadata.
+		if stored.PhaseCount == 0 && result.PhaseCount > 0 {
+			stored.PhaseCount = result.PhaseCount
+		}
+	}
 
-		if storeErr := store.Store(storeCtx, stored); storeErr != nil {
-			if o.logger != nil {
-				logFields := map[string]interface{}{
-					"operation":   "execution_store",
-					"request_id":  requestID,
-					"interrupted": checkpoint != nil,
-					"error_type":  "store_write",
-					"error":       safeExecutionStoreError(storeErr),
-				}
-				if traceID != "" {
-					logFields["trace_id"] = traceID
-				}
-				if conversationID != "" {
-					logFields[MetadataConversationID] = conversationID
-				}
-				if checkpoint != nil && checkpoint.CheckpointID != "" {
-					logFields["checkpoint_id"] = checkpoint.CheckpointID
-				}
-				o.logger.Warn("Failed to store execution for DAG visualization", logFields)
-			}
-		}
-	}()
+	checkpointID := ""
+	if checkpoint != nil {
+		checkpointID = checkpoint.CheckpointID
+	}
+	recorder := o.executionRecorderFor(requestID)
+	recorder.Record(executionRecordSnapshot{
+		Record:             stored,
+		CorrelationContext: ctx,
+		RequestID:          requestID,
+		TraceID:            traceID,
+		ConversationID:     conversationID,
+		CheckpointID:       checkpointID,
+		Interrupted:        checkpoint != nil,
+	})
+}
+
+func (o *AIOrchestrator) executionRecorderFor(requestID string) *executionRecorder {
+	created := newExecutionRecorder(
+		o.recordingCtx, o.executionStore, o.logger, &o.executionWg,
+		o.config.executionStoreWriteTimeout,
+	)
+	actual, _ := o.executionRecorders.LoadOrStore(requestID, created)
+	return actual.(*executionRecorder)
+}
+
+func (o *AIOrchestrator) releaseExecutionRecorder(requestID string) {
+	o.executionRecorders.Delete(requestID)
 }
 
 func safeExecutionStoreError(err error) string {
@@ -1526,6 +1574,9 @@ func (o *AIOrchestrator) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-done:
+		if o.recordingCancel != nil {
+			o.recordingCancel()
+		}
 		if o.logger != nil {
 			o.logger.Info("Orchestrator shutdown complete", map[string]interface{}{
 				"operation": "shutdown",
@@ -1533,6 +1584,9 @@ func (o *AIOrchestrator) Shutdown(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
+		if o.recordingCancel != nil {
+			o.recordingCancel()
+		}
 		if o.logger != nil {
 			o.logger.Warn("Orchestrator shutdown timed out, some recordings may be lost", map[string]interface{}{
 				"operation": "shutdown",
@@ -1630,11 +1684,17 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 	// Call LLM for correction. Defer wrapper-side recording — we write
 	// the authoritative `correction`-typed LLMInteraction ourselves below.
 	llmStartTime := time.Now()
-	response, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "plan-correction",
 		Prompt:         correctionPrompt,
 		DeferRecording: o.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, o.aiClient, invocation)
+	var response *core.AIResponse
+	if invocationResult != nil {
+		response = invocationResult.Response
+	}
+	effective := effectiveAIRequestForDebug(invocationResult, invocation)
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
 		core.RecordTokenUsage(ctx, "correction", response.Usage)
@@ -1642,30 +1702,37 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 
 	if err != nil {
 		// LLM Debug: Record failed correction attempt
-		errModel, errProvider := extractErrorProviderInfo(err)
+		errModel, errProvider := effectiveAIIdentity(invocationResult, response, err)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
-			Type:       "correction",
-			Timestamp:  llmStartTime,
-			DurationMs: llmDuration.Milliseconds(),
-			Prompt:     correctionPrompt,
-			Model:      errModel,
-			Provider:   errProvider,
-			Success:    false,
-			Error:      err.Error(),
-			Attempt:    1,
+			Type:         "correction",
+			Timestamp:    llmStartTime,
+			DurationMs:   llmDuration.Milliseconds(),
+			Prompt:       effective.Prompt,
+			SystemPrompt: effective.SystemPrompt,
+			Temperature:  effectiveAITemperature(effective, 0),
+			MaxTokens:    effectiveAIMaxTokens(effective, 0),
+			Model:        errModel,
+			Provider:     errProvider,
+			Success:      false,
+			Error:        err.Error(),
+			Attempt:      1,
 		})
 		return nil, fmt.Errorf("LLM correction request failed: %w", err)
 	}
 
 	// LLM Debug: Record successful correction attempt
+	model, provider := effectiveAIIdentity(invocationResult, response, nil)
 	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "correction",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           correctionPrompt,
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, 0),
+		MaxTokens:        effectiveAIMaxTokens(effective, 0),
 		Response:         response.Content,
-		Model:            response.Model,
-		Provider:         response.Provider,
+		Model:            model,
+		Provider:         provider,
 		PromptTokens:     response.Usage.PromptTokens,
 		CompletionTokens: response.Usage.CompletionTokens,
 		TotalTokens:      response.Usage.TotalTokens,
@@ -1768,6 +1835,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 	requestID string,
 	startTime time.Time,
 	span core.Span,
+	pipelineContext *core.PipelineContext,
 	onPhaseProgress phaseProgressFn,
 ) (*phaseLoopResult, error) {
 	// --- Phase tracking ---
@@ -1896,8 +1964,24 @@ func (o *AIOrchestrator) executePhaseLoop(
 		var plan *RoutingPlan
 		var err error
 		var planSource string
+		snapshotPhase := phaseCount
+		if resumeOverride != nil && resumeOverride.PhaseNumber > 0 {
+			snapshotPhase = resumeOverride.PhaseNumber
+		}
+		phaseCtx = withExecutionRunSnapshot(
+			phaseCtx,
+			newExecutionRunSnapshot(snapshotPhase, allStepResults, executedStepIDs, continuationNote),
+		)
 
 		if resumeOverride != nil {
+			if err = prepareOrchestrationBoundary(phaseCtx, boundaryResume); err != nil {
+				phaseSpan.RecordError(err)
+				phaseSpan.End()
+				if phaseCancel != nil {
+					phaseCancel()
+				}
+				return nil, fmt.Errorf("failed to prepare resume boundary (phase %d): %w", phaseCount, err)
+			}
 			planSource = "hitl_resume"
 			plan = resumeOverride
 			phaseCount = resumeOverride.PhaseNumber
@@ -2075,6 +2159,22 @@ func (o *AIOrchestrator) executePhaseLoop(
 			}
 		}
 
+		// The documented AfterPlanning stage observes exactly one final,
+		// planner-produced candidate per phase. It runs after the validation
+		// fixpoint and before HITL, persistence, or execution. Resume plans are
+		// approved checkpoint state rather than newly planner-produced values.
+		if planSource != "hitl_resume" && pipelineContext != nil {
+			plan = o.runValidatedAfterPlanningHooks(
+				phaseCtx,
+				pipelineContext,
+				plan,
+				allStepResults,
+				executedStepIDs,
+				phaseCount,
+				requestID,
+			)
+		}
+
 		// Set phase metadata on plan
 		plan.PhaseNumber = phaseCount
 		totalSteps += len(plan.Steps)
@@ -2174,7 +2274,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 
 		// --- HITL Plan Approval (per-phase) ---
 		if o.config.HITL.Enabled && o.interruptController != nil {
-			hitlCtx := WithRequestID(phaseCtx, requestID)
+			hitlCtx := withCheckpointEnrichmentRequired(WithRequestID(phaseCtx, requestID))
 			checkpoint, hitlErr := o.interruptController.CheckPlanApproval(hitlCtx, plan)
 			if hitlErr != nil {
 				phaseSpan.RecordError(hitlErr)
@@ -2185,49 +2285,14 @@ func (o *AIOrchestrator) executePhaseLoop(
 				return nil, fmt.Errorf("HITL plan check failed (phase %d): %w", phaseCount, hitlErr)
 			}
 			if checkpoint != nil {
-				// Enrich checkpoint with accumulated multi-phase state
-				checkpoint.PhaseNumber = phaseCount
-				checkpoint.AccumulatedResults = make(map[string]*StepResult, len(allStepResults))
-				for k, v := range allStepResults {
-					checkpoint.AccumulatedResults[k] = v
-				}
-				checkpoint.ExecutedStepIDs = executedStepIDs
-				checkpoint.ContinuationNote = continuationNote
-				if checkpoint.StepResults == nil {
-					checkpoint.StepResults = make(map[string]*StepResult)
-				}
-				for stepID, result := range allStepResults {
-					checkpoint.StepResults[stepID] = result
-				}
-
-				// RC9 (Site 1): Persist enriched checkpoint back to DB 6.
-				// createCheckpoint saved StepResults={} to DB 6 before enrichment.
-				// Without this re-save, BuildResumeContext loads an empty map on resume,
-				// and cross-phase template references cannot resolve.
-				if enricher, ok := o.interruptController.(CheckpointEnricher); ok {
-					if saveErr := enricher.SaveEnrichedCheckpoint(hitlCtx, checkpoint); saveErr != nil {
-						if o.logger != nil {
-							o.logger.WarnWithContext(hitlCtx, "Failed to save enriched checkpoint to DB 6 (plan-level)", map[string]interface{}{
-								"operation":     "save_enriched_checkpoint_plan",
-								"request_id":    requestID,
-								"checkpoint_id": checkpoint.CheckpointID,
-								"error":         saveErr.Error(),
-							})
-						}
-						telemetry.AddSpanEvent(hitlCtx, "hitl.enriched_checkpoint.save_failed",
-							attribute.String("request_id", requestID),
-							attribute.String("checkpoint_id", checkpoint.CheckpointID),
-							attribute.String("error", saveErr.Error()),
-							attribute.String("site", "plan_level"),
-						)
-					} else {
-						telemetry.AddSpanEvent(hitlCtx, "hitl.enriched_checkpoint.saved",
-							attribute.String("request_id", requestID),
-							attribute.String("checkpoint_id", checkpoint.CheckpointID),
-							attribute.Int("step_results_count", len(checkpoint.StepResults)),
-							attribute.String("site", "plan_level"),
-						)
+				snapshot := newExecutionRunSnapshot(phaseCount, allStepResults, executedStepIDs, continuationNote)
+				if saveErr := o.saveAuthoritativeCheckpoint(hitlCtx, checkpoint, snapshot, "plan_level"); saveErr != nil {
+					phaseSpan.RecordError(saveErr)
+					phaseSpan.End()
+					if phaseCancel != nil {
+						phaseCancel()
 					}
+					return nil, saveErr
 				}
 
 				// ORCH-022: route through buildNonSuccessResult so the interrupted
@@ -2251,6 +2316,9 @@ func (o *AIOrchestrator) executePhaseLoop(
 
 		// --- Execute this phase ---
 		execCtx := phaseCtx
+		if o.config.HITL.Enabled && o.interruptController != nil {
+			execCtx = withCheckpointEnrichmentRequired(execCtx)
+		}
 		if len(allStepResults) > 0 {
 			execCtx = WithCompletedSteps(execCtx, allStepResults)
 		}
@@ -2269,56 +2337,22 @@ func (o *AIOrchestrator) executePhaseLoop(
 			if IsInterrupted(err) {
 				// Step-level HITL interrupt — enrich checkpoint with accumulated state
 				checkpoint := GetCheckpoint(err)
-				if checkpoint != nil && phaseCount > 1 {
-					checkpoint.PhaseNumber = phaseCount
-					if checkpoint.StepResults == nil {
-						checkpoint.StepResults = make(map[string]*StepResult)
+				if checkpoint != nil {
+					combined := make(map[string]*StepResult, len(allStepResults)+len(checkpoint.StepResults))
+					for key, value := range allStepResults {
+						combined[key] = value
 					}
-					for stepID, result := range allStepResults {
-						if _, exists := checkpoint.StepResults[stepID]; !exists {
-							checkpoint.StepResults[stepID] = result
+					for key, value := range checkpoint.StepResults {
+						combined[key] = value
+					}
+					snapshot := newExecutionRunSnapshot(phaseCount, combined, executedStepIDs, continuationNote)
+					if saveErr := o.saveAuthoritativeCheckpoint(execCtx, checkpoint, snapshot, "step_level"); saveErr != nil {
+						phaseSpan.RecordError(saveErr)
+						phaseSpan.End()
+						if phaseCancel != nil {
+							phaseCancel()
 						}
-					}
-					checkpoint.AccumulatedResults = make(map[string]*StepResult)
-					for k, v := range allStepResults {
-						checkpoint.AccumulatedResults[k] = v
-					}
-					for k, v := range checkpoint.StepResults {
-						checkpoint.AccumulatedResults[k] = v
-					}
-					checkpoint.ExecutedStepIDs = executedStepIDs
-					checkpoint.ContinuationNote = continuationNote
-
-					// RC9 (Site 2): Persist enriched checkpoint back to DB 6 so that
-					// BuildResumeContext loads the complete step results (including prior-phase
-					// steps) on resume. Without this, cross-phase template references
-					// (e.g., {{step-3.response.data}}) fail because only the current-batch
-					// steps are in DB 6.
-					// See Issue 6 in BUG_CONTINUATION_PROMPT_MISSING_CUSTOM_INSTRUCTIONS_AND_RESUME_REPLAY.md.
-					if enricher, ok := o.interruptController.(CheckpointEnricher); ok && checkpoint.CheckpointID != "" {
-						if saveErr := enricher.SaveEnrichedCheckpoint(phaseCtx, checkpoint); saveErr != nil {
-							if o.logger != nil {
-								o.logger.WarnWithContext(phaseCtx, "Failed to save enriched checkpoint to DB 6 (step-level)", map[string]interface{}{
-									"operation":     "save_enriched_checkpoint_step",
-									"request_id":    requestID,
-									"checkpoint_id": checkpoint.CheckpointID,
-									"error":         saveErr.Error(),
-								})
-							}
-							telemetry.AddSpanEvent(phaseCtx, "hitl.enriched_checkpoint.save_failed",
-								attribute.String("request_id", requestID),
-								attribute.String("checkpoint_id", checkpoint.CheckpointID),
-								attribute.String("error", saveErr.Error()),
-								attribute.String("site", "step_level"),
-							)
-						} else {
-							telemetry.AddSpanEvent(phaseCtx, "hitl.enriched_checkpoint.saved",
-								attribute.String("request_id", requestID),
-								attribute.String("checkpoint_id", checkpoint.CheckpointID),
-								attribute.Int("step_results_count", len(checkpoint.StepResults)),
-								attribute.String("site", "step_level"),
-							)
-						}
+						return nil, saveErr
 					}
 				}
 				// ORCH-022: route through buildNonSuccessResult so the interrupted
@@ -2755,141 +2789,18 @@ func (o *AIOrchestrator) executePhaseLoop(
 	}, nil
 }
 
-// ProcessRequest handles a natural language request using AI-powered orchestration
-func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, metadata map[string]interface{}) (*OrchestratorResponse, error) {
-	startTime := time.Now()
-	requestID := generateRequestID()
-
-	// Add request_id to context baggage so downstream components (AI client, etc.)
-	// can access it via telemetry.GetBaggage() and include it in their logs
-	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
-
-	ctx, conversationID, requestMetadata := o.resolveConversationContext(ctx, metadata)
-	metadata = requestMetadata
-
-	// Propagate agent name so downstream tool calls can identify the
-	// requesting agent (used by schedule_task to default target_agent).
-	if o.config.Name != "" {
-		ctx = telemetry.WithBaggage(ctx, "agent_name", o.config.Name)
-	}
-
-	// Set original_request_id for trace correlation across HITL resumes.
-	// On initial requests: original_request_id = request_id (same value)
-	// On resume requests: original_request_id is already set via header, don't overwrite
-	if bag := telemetry.GetBaggage(ctx); bag == nil || bag["original_request_id"] == "" {
-		ctx = telemetry.WithBaggage(ctx, "original_request_id", requestID)
-	}
-
-	// Add request_id to context for GetRequestID() - used by HITL controller
-	// when creating checkpoints during execution (e.g., step-level interrupts)
-	ctx = WithRequestID(ctx, requestID)
-
-	// Store a merged clone for HITL checkpoint creation. Existing resume
-	// metadata survives nil request metadata, and only the validated canonical
-	// conversation ID is restored under the framework-owned key.
-	ctx = withCheckpointMetadata(ctx, metadata, conversationID)
-
-	// CRITICAL: Add request_id to the PARENT span (HTTP span) for trace searchability
-	// This must be done BEFORE creating the child orchestrator span, while the HTTP span
-	// is still the current span in context. This enables searching by request_id in distributed
-	// tracing tools to show the correct root operation name (e.g., "HTTP POST /chat/stream")
-	parentSpanAttributes := []attribute.KeyValue{
-		attribute.String("request_id", requestID),
-	}
-	if conversationID != "" {
-		parentSpanAttributes = append(
-			parentSpanAttributes,
-			attribute.String(MetadataConversationID, conversationID),
-		)
-	}
-	telemetry.SetSpanAttributes(ctx, parentSpanAttributes...)
-	// Also set original_request_id on parent span for trace correlation
-	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
-		telemetry.SetSpanAttributes(ctx,
-			attribute.String("original_request_id", bag["original_request_id"]),
-		)
-	}
-
-	// Start telemetry span if telemetry is available
-	var span core.Span
-	if o.telemetry != nil {
-		ctx, span = o.telemetry.StartSpan(ctx, "orchestrator.process_request")
-		defer span.End()
-	} else {
-		// Create a no-op span
-		span = &core.NoOpSpan{}
-	}
-
-	if o.logger != nil {
-		o.logger.InfoWithContext(ctx, "Starting request processing", map[string]interface{}{
-			"operation":      "process_request",
-			"request_id":     requestID,
-			"request_length": len(request),
-			"metadata_keys":  getMapKeys(metadata),
-		})
-	}
-
-	if span != nil {
-		span.SetAttribute("request_id", requestID)
-		span.SetAttribute("request_length", len(request))
-		if conversationID != "" {
-			span.SetAttribute(MetadataConversationID, conversationID)
-		}
-		// Set original_request_id for trace correlation - will be same as request_id on initial,
-		// or the original value on resumes (preserved from baggage set by handler)
-		if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
-			span.SetAttribute("original_request_id", bag["original_request_id"])
-		}
-	}
-
-	// Record metric for request count if telemetry is available
-	if o.telemetry != nil {
-		o.telemetry.RecordMetric("orchestrator.requests.total", 1, map[string]string{
-			"mode": string(o.config.RoutingMode),
-		})
-	}
-
-	// Inject token usage accumulator for metering
-	ctx, usageAcc := core.WithTokenUsageAccumulator(ctx)
-
-	// --- Pipeline hooks: before planning ---
-	pctx := &core.PipelineContext{
-		Request:     request,
-		Metadata:    metadata,
-		Enrichments: make(map[string]interface{}),
-	}
-	// Auto-promote known enrichment keys from metadata so agents can inject
-	// pre-formatted context (e.g. conversation history) without custom hooks.
-	prepareKnownEnrichments(ctx, metadata, pctx.Enrichments, o.conversationHistoryPreparer)
-	if shortCircuit := o.runBeforePlanningHooks(ctx, pctx); shortCircuit != nil {
-		totalUsage, usageByPhase := usageAcc.Snapshot()
-		return o.buildShortCircuitResponse(requestID, request, metadata, pctx, shortCircuit, startTime, &totalUsage, usageByPhase), nil
-	}
-	ctx = core.WithPipelineEnrichments(ctx, pctx.Enrichments)
-
-	// --- Execute phase loop ---
-	loopResult, err := o.executePhaseLoop(ctx, request, requestID, startTime, span, nil)
-	if err != nil {
-		if !IsInterrupted(err) {
-			o.updateMetrics(time.Since(startTime), false)
-		}
-		return nil, err
-	}
-
-	// --- Pipeline hooks: after execution ---
-	o.runAfterExecutionHooks(ctx, pctx, loopResult.CombinedResult)
-
-	// Update activity status to synthesizing
-	if o.activityCoordinator != nil {
-		if err := o.activityCoordinator.UpdateStatus(ctx, requestID, "synthesizing"); err != nil && o.logger != nil {
-			o.logger.WarnWithContext(ctx, "Failed to update activity status", map[string]interface{}{
-				"operation":  "activity_status_update",
-				"request_id": requestID,
-				"status":     "synthesizing",
-				"error":      err.Error(),
-			})
-		}
-	}
+// synthesizeBuffered owns only buffered synthesis, final response construction,
+// and delivery-specific completion observability. Shared lifecycle work has
+// already completed in runRequest.
+func (o *AIOrchestrator) synthesizeBuffered(state *executionRunState) (*OrchestratorResponse, error) {
+	ctx := state.Context
+	request := state.Input.Request
+	metadata := state.Pipeline.Metadata
+	requestID := state.Correlation.RequestID
+	startTime := state.StartedAt
+	pctx := state.Pipeline
+	loopResult := state.Phase.Result
+	usageAcc := state.Usage.Accumulator
 
 	// --- Synthesize (child span for Jaeger drill-down) ---
 	synthesisCtx := ctx
@@ -2918,7 +2829,6 @@ func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, met
 		synthesisSpan.End()
 	}
 	if err != nil {
-		o.updateMetrics(time.Since(startTime), false)
 		return nil, fmt.Errorf("synthesis failed: %w", err)
 	}
 
@@ -2951,295 +2861,20 @@ func (o *AIOrchestrator) ProcessRequest(ctx context.Context, request string, met
 		Clarification:   loopResult.CombinedResult.ClarificationNeeded, // ORCH-018: surface to UI consumers
 	}
 
-	// Update metrics and history
-	o.updateMetrics(response.ExecutionTime, true)
-	o.addToHistory(response)
-
-	// ORCH-018: classify termination reason for log filtering and record a
-	// clarification-turn-specific latency histogram so operators can compare
-	// clarification turn p50/p99 against normal turn latencies.
-	terminationReason := "completed"
-	if loopResult.CombinedResult.ClarificationNeeded != nil {
-		terminationReason = "clarification"
-		telemetry.Histogram("orchestrator.clarification_turn.latency_ms",
-			float64(response.ExecutionTime.Milliseconds()),
-			"module", telemetry.ModuleOrchestration,
-		)
-	} else if loopResult.ForcedTerminal {
-		terminationReason = "forced_terminal"
-	}
-
-	if o.logger != nil {
-		o.logger.InfoWithContext(ctx, "Request processing completed successfully", map[string]interface{}{
-			"operation":          "process_request_complete",
-			"request_id":         requestID,
-			"success":            true,
-			"total_duration_ms":  time.Since(startTime).Milliseconds(),
-			"termination_reason": terminationReason, // ORCH-018: enables log filtering by turn type
-			"phase_count":        loopResult.CombinedResult.PhaseCount,
-		})
-	}
-
-	// Record success metrics if telemetry is available
-	if o.telemetry != nil {
-		o.telemetry.RecordMetric("orchestrator.requests.success", 1, map[string]string{
-			"mode": string(o.config.RoutingMode),
-		})
-		o.telemetry.RecordMetric("orchestrator.latency_ms", float64(time.Since(startTime).Milliseconds()), map[string]string{
-			"operation": "process_request",
-		})
-	}
-
 	return response, nil
 }
 
-// ProcessRequestStreaming processes a request with streaming response
-// This enables real-time token-by-token delivery for chat-based applications.
-//
-// The streaming flow:
-// 1. Generate execution plan (same as ProcessRequest)
-// 2. Execute plan steps (same as ProcessRequest)
-// 3. Stream the synthesis response token-by-token via callback
-//
-// Parameters:
-//   - ctx: Context for cancellation and tracing
-//   - request: Natural language request
-//   - metadata: Additional request metadata
-//   - callback: Function called for each streaming chunk
-//
-// Returns:
-//   - StreamingOrchestratorResponse with final state and metrics
-//   - error if processing fails before streaming starts
-func (o *AIOrchestrator) ProcessRequestStreaming(
-	ctx context.Context,
-	request string,
-	metadata map[string]interface{},
-	callback core.StreamCallback,
-) (*StreamingOrchestratorResponse, error) {
-	startTime := time.Now()
-	// Use custom prefix if configured, otherwise default to "orch"
-	prefix := "orch"
-	if o.config.RequestIDPrefix != "" {
-		prefix = o.config.RequestIDPrefix
-	}
-	requestID := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
-
-	// Add request_id to context baggage so downstream components (AI client, etc.)
-	// can access it via telemetry.GetBaggage() and include it in their logs
-	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
-
-	ctx, conversationID, requestMetadata := o.resolveConversationContext(ctx, metadata)
-	metadata = requestMetadata
-
-	// Propagate agent name so downstream tool calls can identify the
-	// requesting agent (used by schedule_task to default target_agent).
-	if o.config.Name != "" {
-		ctx = telemetry.WithBaggage(ctx, "agent_name", o.config.Name)
-	}
-
-	// Set original_request_id for trace correlation across HITL resumes.
-	// On initial requests: original_request_id = request_id (same value)
-	// On resume requests: original_request_id is already set via header, don't overwrite
-	if bag := telemetry.GetBaggage(ctx); bag == nil || bag["original_request_id"] == "" {
-		ctx = telemetry.WithBaggage(ctx, "original_request_id", requestID)
-	}
-
-	// Add request_id to context for GetRequestID() - used by HITL controller
-	// when creating checkpoints during execution (e.g., step-level interrupts)
-	ctx = WithRequestID(ctx, requestID)
-
-	// Store a merged clone for HITL checkpoint creation. Existing resume
-	// metadata survives nil request metadata, and only the validated canonical
-	// conversation ID is restored under the framework-owned key.
-	ctx = withCheckpointMetadata(ctx, metadata, conversationID)
-
-	// CRITICAL: Add request_id to the PARENT span (HTTP span) for trace searchability
-	// This must be done BEFORE creating the child orchestrator span, while the HTTP span
-	// is still the current span in context. This enables searching by request_id in distributed
-	// tracing tools to show the correct root operation name (e.g., "HTTP POST /chat/stream")
-	parentSpanAttributes := []attribute.KeyValue{
-		attribute.String("request_id", requestID),
-	}
-	if conversationID != "" {
-		parentSpanAttributes = append(
-			parentSpanAttributes,
-			attribute.String(MetadataConversationID, conversationID),
-		)
-	}
-	telemetry.SetSpanAttributes(ctx, parentSpanAttributes...)
-	// Also set original_request_id on parent span for trace correlation
-	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
-		telemetry.SetSpanAttributes(ctx,
-			attribute.String("original_request_id", bag["original_request_id"]),
-		)
-	}
-
-	// Start tracing span (nil-safe per FRAMEWORK_DESIGN_PRINCIPLES.md)
-	var span core.Span
-	if o.telemetry != nil {
-		ctx, span = o.telemetry.StartSpan(ctx, "orchestrator.process_request_streaming")
-		defer span.End()
-	} else {
-		span = &core.NoOpSpan{}
-	}
-
-	span.SetAttribute("request_id", requestID)
-	span.SetAttribute("streaming", true)
-	if conversationID != "" {
-		span.SetAttribute(MetadataConversationID, conversationID)
-	}
-	// Set original_request_id for trace correlation - will be same as request_id on initial,
-	// or the original value on resumes (preserved from baggage set by handler)
-	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
-		span.SetAttribute("original_request_id", bag["original_request_id"])
-	}
-
-	// Check if AI client supports streaming
-	streamingClient, ok := o.aiClient.(core.StreamingAIClient)
-	if !ok || !streamingClient.SupportsStreaming() {
-		// Fall back to non-streaming and simulate streaming
-		if o.logger != nil {
-			o.logger.WarnWithContext(ctx, "AI client does not support streaming, using simulated streaming", map[string]interface{}{
-				"operation":  "streaming_fallback",
-				"request_id": requestID,
-			})
-		}
-
-		// Use regular ProcessRequest and chunk the response
-		response, err := o.ProcessRequest(ctx, request, metadata)
-		if err != nil {
-			return nil, err
-		}
-
-		// Simulate streaming by chunking the response
-		chunkSize := 50
-		chunkIndex := 0
-		for i := 0; i < len(response.Response); i += chunkSize {
-			end := i + chunkSize
-			if end > len(response.Response) {
-				end = len(response.Response)
-			}
-
-			chunk := core.StreamChunk{
-				Content: response.Response[i:end],
-				Delta:   true,
-				Index:   chunkIndex,
-			}
-			chunkIndex++
-
-			if err := callback(chunk); err != nil {
-				// Callback requested stop
-				return &StreamingOrchestratorResponse{
-					OrchestratorResponse: OrchestratorResponse{
-						RequestID:       requestID,
-						OriginalRequest: request,
-						Response:        response.Response[:end],
-						RoutingMode:     o.config.RoutingMode,
-						ExecutionTime:   time.Since(startTime),
-						AgentsInvolved:  response.AgentsInvolved,
-						Metadata:        response.Metadata,
-						Confidence:      response.Confidence,
-					},
-					ChunksDelivered: chunkIndex,
-					StreamCompleted: false,
-					PartialContent:  true,
-					FinishReason:    "cancelled",
-				}, nil
-			}
-		}
-
-		// Send final chunk
-		finalChunk := core.StreamChunk{
-			Delta:        false,
-			Index:        chunkIndex,
-			FinishReason: "stop",
-		}
-		_ = callback(finalChunk)
-
-		return &StreamingOrchestratorResponse{
-			OrchestratorResponse: *response,
-			ChunksDelivered:      chunkIndex,
-			StreamCompleted:      true,
-			PartialContent:       false,
-			FinishReason:         "stop",
-		}, nil
-	}
-
-	// --- Phase progress callback for streaming ---
-	onPhaseProgress := phaseProgressFn(func(phaseNumber int, stepsInPhase int) {
-		_ = callback(core.StreamChunk{
-			Content: fmt.Sprintf("Phase %d complete (%d steps). Planning next phase...",
-				phaseNumber, stepsInPhase),
-			Metadata: map[string]interface{}{
-				"type":     "phase_complete",
-				"phase":    phaseNumber,
-				"terminal": false,
-			},
-		})
-	})
-
-	// Inject token usage accumulator for metering
-	ctx, usageAcc := core.WithTokenUsageAccumulator(ctx)
-
-	// --- Pipeline hooks: before planning ---
-	pctx := &core.PipelineContext{
-		Request:     request,
-		Metadata:    metadata,
-		Enrichments: make(map[string]interface{}),
-	}
-	// Auto-promote known enrichment keys from metadata so agents can inject
-	// pre-formatted context (e.g. conversation history) without custom hooks.
-	prepareKnownEnrichments(ctx, metadata, pctx.Enrichments, o.conversationHistoryPreparer)
-	if shortCircuit := o.runBeforePlanningHooks(ctx, pctx); shortCircuit != nil {
-		// Short-circuit: simulate streaming with the cached response
-		chunkSize := 50
-		chunkIdx := 0
-		for i := 0; i < len(shortCircuit.Response); i += chunkSize {
-			end := i + chunkSize
-			if end > len(shortCircuit.Response) {
-				end = len(shortCircuit.Response)
-			}
-			chunk := core.StreamChunk{Content: shortCircuit.Response[i:end], Delta: true, Index: chunkIdx}
-			chunkIdx++
-			if err := callback(chunk); err != nil {
-				break
-			}
-		}
-		_ = callback(core.StreamChunk{FinishReason: "stop", Index: chunkIdx})
-		totalUsage, usageByPhase := usageAcc.Snapshot()
-		scResp := o.buildShortCircuitResponse(requestID, request, metadata, pctx, shortCircuit, startTime, &totalUsage, usageByPhase)
-		return &StreamingOrchestratorResponse{
-			OrchestratorResponse: *scResp,
-			ChunksDelivered:      chunkIdx,
-			StreamCompleted:      true,
-			FinishReason:         "stop",
-		}, nil
-	}
-	ctx = core.WithPipelineEnrichments(ctx, pctx.Enrichments)
-
-	// --- Execute phase loop ---
-	loopResult, err := o.executePhaseLoop(ctx, request, requestID, startTime, span, onPhaseProgress)
-	if err != nil {
-		if !IsInterrupted(err) {
-			o.updateMetrics(time.Since(startTime), false)
-		}
-		return nil, err
-	}
-
-	// --- Pipeline hooks: after execution ---
-	o.runAfterExecutionHooks(ctx, pctx, loopResult.CombinedResult)
-
-	// Update activity status to synthesizing
-	if o.activityCoordinator != nil {
-		if err := o.activityCoordinator.UpdateStatus(ctx, requestID, "synthesizing"); err != nil && o.logger != nil {
-			o.logger.WarnWithContext(ctx, "Failed to update activity status", map[string]interface{}{
-				"operation":  "activity_status_update",
-				"request_id": requestID,
-				"status":     "synthesizing",
-				"error":      err.Error(),
-			})
-		}
-	}
+// synthesizeNativeStreaming owns only provider streaming, final response
+// construction, and streaming completion observability.
+func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*StreamingOrchestratorResponse, error) {
+	ctx := state.Context
+	request := state.Input.Request
+	callback := state.Input.Callback
+	requestID := state.Correlation.RequestID
+	startTime := state.StartedAt
+	pctx := state.Pipeline
+	loopResult := state.Phase.Result
+	usageAcc := state.Usage.Accumulator
 
 	// --- Synthesis child span for Jaeger drill-down ---
 	synthesisCtx := ctx
@@ -3278,11 +2913,6 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 			attribute.Int("step_count", len(loopResult.CombinedResult.Steps)),
 		)
 	}
-
-	// Second store: persist result_trim metadata written by buildSynthesisPrompt into StepResult.Metadata.
-	// The first store (inside executePhaseLoop) fires before buildSynthesisPrompt runs, so result_trim is absent.
-	// This second fire-and-forget write picks up the metadata without blocking the streaming response path.
-	o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
 
 	// Agents involved from all phases
 	agentsInvolved := loopResult.AgentsList
@@ -3342,12 +2972,18 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	// Scope the ai.purpose baggage to the LLM call only — it would otherwise
 	// leak into AfterSynthesis hooks and mis-tag user_memory.extraction spans.
 	streamCtx := telemetry.WithBaggage(ctx, "ai.purpose", "synthesis_streaming")
-	aiResponse, _, err := streamAI(streamCtx, streamingClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "synthesis",
 		Prompt:         synthesisPrompt,
 		Options:        streamSynthesisOpts,
 		DeferRecording: o.debugStore != nil,
-	}, streamCallback)
+	}
+	invocationResult, err := streamAI(streamCtx, o.aiClient, invocation, streamCallback)
+	var aiResponse *core.AIResponse
+	if invocationResult != nil {
+		aiResponse = invocationResult.Response
+	}
+	effective := effectiveAIRequestForDebug(invocationResult, invocation)
 	if err == nil || err == core.ErrStreamPartiallyCompleted {
 		core.RecordTokenUsage(ctx, "synthesis", aiResponse.Usage)
 	}
@@ -3356,16 +2992,17 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	if err != nil {
 		if err == core.ErrStreamPartiallyCompleted {
 			// LLM Debug: Record partial streaming synthesis (interrupted but has content)
+			model, provider := effectiveAIIdentity(invocationResult, aiResponse, err)
 			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 				Type:             "synthesis_streaming",
 				Timestamp:        synthesisStart,
 				DurationMs:       time.Since(synthesisStart).Milliseconds(),
-				Prompt:           synthesisPrompt,
-				SystemPrompt:     systemPrompt,
-				Temperature:      float64(streamSynthesisOpts.Temperature),
-				MaxTokens:        streamSynthesisOpts.MaxTokens,
-				Model:            aiResponse.Model,
-				Provider:         aiResponse.Provider,
+				Prompt:           effective.Prompt,
+				SystemPrompt:     effective.SystemPrompt,
+				Temperature:      effectiveAITemperature(effective, streamSynthesisOpts.Temperature),
+				MaxTokens:        effectiveAIMaxTokens(effective, streamSynthesisOpts.MaxTokens),
+				Model:            model,
+				Provider:         provider,
 				Response:         aiResponse.Content,
 				PromptTokens:     aiResponse.Usage.PromptTokens,     // May be partial
 				CompletionTokens: aiResponse.Usage.CompletionTokens, // May be partial
@@ -3386,6 +3023,7 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 				}
 				synthesisSpan.End()
 			}
+			o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
 			partialUsage, partialByPhase := usageAcc.Snapshot()
 			return &StreamingOrchestratorResponse{
 				OrchestratorResponse: OrchestratorResponse{
@@ -3395,10 +3033,13 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 					RoutingMode:     o.config.RoutingMode,
 					ExecutionTime:   time.Since(startTime),
 					AgentsInvolved:  agentsInvolved,
+					Metadata:        mergeEnrichments(state.Pipeline.Metadata, core.GetPipelineEnrichments(ctx)),
 					Errors:          []string{"stream partially completed"},
 					Confidence:      0.7,
+					Steps:           loopResult.CombinedResult.Steps,
 					Usage:           &partialUsage,
 					UsageByPhase:    partialByPhase,
+					Clarification:   loopResult.CombinedResult.ClarificationNeeded,
 				},
 				ChunksDelivered: chunkIndex,
 				StreamCompleted: false,
@@ -3409,15 +3050,15 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 		}
 
 		// LLM Debug: Record failed streaming synthesis
-		errModel, errProvider := extractErrorProviderInfo(err)
+		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:         "synthesis_streaming",
 			Timestamp:    synthesisStart,
 			DurationMs:   time.Since(synthesisStart).Milliseconds(),
-			Prompt:       synthesisPrompt,
-			SystemPrompt: systemPrompt,
-			Temperature:  float64(streamSynthesisOpts.Temperature),
-			MaxTokens:    streamSynthesisOpts.MaxTokens,
+			Prompt:       effective.Prompt,
+			SystemPrompt: effective.SystemPrompt,
+			Temperature:  effectiveAITemperature(effective, streamSynthesisOpts.Temperature),
+			MaxTokens:    effectiveAIMaxTokens(effective, streamSynthesisOpts.MaxTokens),
 			Model:        errModel,
 			Provider:     errProvider,
 			Success:      false,
@@ -3430,6 +3071,7 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 			synthesisSpan.SetAttribute("synthesis.duration_ms", time.Since(synthesisStart).Milliseconds())
 			synthesisSpan.End()
 		}
+		o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
 		return nil, fmt.Errorf("synthesis streaming failed: %w", err)
 	}
 
@@ -3437,6 +3079,12 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	// Note: tokens were already streamed to the client. AfterSynthesis hooks
 	// operate on the accumulated full content for post-processing (logging, memory storage, etc.).
 	finalContent := o.runAfterSynthesisHooks(ctx, pctx, aiResponse.Content)
+
+	// The terminal native-streaming snapshot is recorded only after synthesis
+	// and AfterSynthesis hooks reach their terminal outcome. Request-local
+	// ordering prevents this view from being overwritten by an earlier phase
+	// snapshot.
+	o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
 
 	// Build final response with all enhanced fields
 	totalUsage, usageByPhase := usageAcc.Snapshot()
@@ -3448,7 +3096,9 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 			RoutingMode:     o.config.RoutingMode,
 			ExecutionTime:   time.Since(startTime),
 			AgentsInvolved:  agentsInvolved,
-			Confidence:      0.9,
+			Metadata:        mergeEnrichments(state.Pipeline.Metadata, core.GetPipelineEnrichments(ctx)),
+			Confidence:      0.95,
+			Steps:           loopResult.CombinedResult.Steps,
 			Usage:           &totalUsage,
 			UsageByPhase:    usageByPhase,
 			Clarification:   loopResult.CombinedResult.ClarificationNeeded, // ORCH-018: surface to UI consumers
@@ -3458,31 +3108,6 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 		PartialContent:  false,
 		StepResults:     loopResult.CombinedResult.Steps,
 		FinishReason:    finishReason,
-	}
-
-	// ORCH-018: classify termination reason for log filtering and record a
-	// clarification-turn-specific latency histogram (parity with non-streaming path).
-	terminationReason := "completed"
-	if loopResult.CombinedResult.ClarificationNeeded != nil {
-		terminationReason = "clarification"
-		telemetry.Histogram("orchestrator.clarification_turn.latency_ms",
-			float64(response.ExecutionTime.Milliseconds()),
-			"module", telemetry.ModuleOrchestration,
-		)
-	} else if loopResult.ForcedTerminal {
-		terminationReason = "forced_terminal"
-	}
-
-	if o.logger != nil {
-		o.logger.InfoWithContext(ctx, "Streaming request completed", map[string]interface{}{
-			"operation":          "streaming_complete",
-			"request_id":         requestID,
-			"chunks_delivered":   chunkIndex,
-			"response_length":    len(aiResponse.Content),
-			"duration_ms":        time.Since(startTime).Milliseconds(),
-			"termination_reason": terminationReason, // ORCH-018: enables log filtering by turn type
-			"phase_count":        loopResult.CombinedResult.PhaseCount,
-		})
 	}
 
 	// Stamp final synthesis attrs onto the parent span before End() so they're
@@ -3503,16 +3128,17 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	}
 
 	// LLM Debug: Record successful streaming synthesis
+	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "synthesis_streaming",
 		Timestamp:        synthesisStart,
 		DurationMs:       time.Since(synthesisStart).Milliseconds(),
-		Prompt:           synthesisPrompt,
-		SystemPrompt:     systemPrompt,
-		Temperature:      float64(streamSynthesisOpts.Temperature),
-		MaxTokens:        streamSynthesisOpts.MaxTokens,
-		Model:            aiResponse.Model,
-		Provider:         aiResponse.Provider,
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, streamSynthesisOpts.Temperature),
+		MaxTokens:        effectiveAIMaxTokens(effective, streamSynthesisOpts.MaxTokens),
+		Model:            model,
+		Provider:         provider,
 		Response:         aiResponse.Content,
 		PromptTokens:     aiResponse.Usage.PromptTokens,
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
@@ -3651,7 +3277,7 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			if result.Steps[i].Metadata == nil {
 				result.Steps[i].Metadata = make(map[string]interface{})
 			}
-			result.Steps[i].Metadata["result_trim"] = trimMeta
+			result.Steps[i].Metadata["result_trim"] = cloneResultTrimMetadata(trimMeta)
 		}
 
 		trimmedSize := len(response)
@@ -3783,8 +3409,34 @@ func (o *AIOrchestrator) planAIOptions(temperature float32, systemPrompt string)
 	return mergeAIOptions(base, o.config.PlanAIOptions)
 }
 
+// planPromptSystemSource records whether the effective planning system prompt
+// came from a framework-owned builder/fallback, an arbitrary developer
+// builder, or the raw PlanAIOptions replacement layer. Prompt finalization uses
+// this provenance to enforce ownership of reserved framework sections.
+func (o *AIOrchestrator) planPromptSystemSource() promptSystemSource {
+	if o != nil && o.config != nil && o.config.PlanAIOptions != nil &&
+		o.config.PlanAIOptions.SystemPrompt != nil {
+		return promptSystemAIOptionsOverride
+	}
+	if o == nil || o.promptBuilder == nil {
+		return promptSystemFrameworkBuilder
+	}
+	if _, ok := o.promptBuilder.(SystemPromptBuilder); !ok {
+		return promptSystemFrameworkBuilder
+	}
+	switch o.promptBuilder.(type) {
+	case *DefaultPromptBuilder, *TemplatePromptBuilder:
+		return promptSystemFrameworkBuilder
+	default:
+		return promptSystemCustomBuilder
+	}
+}
+
 // generateExecutionPlan uses LLM to create an execution plan
 func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request string, requestID string) (*RoutingPlan, error) {
+	if err := prepareOrchestrationBoundary(ctx, boundaryInitialPlanning); err != nil {
+		return nil, fmt.Errorf("prepare initial planning boundary: %w", err)
+	}
 	planGenStart := time.Now()
 
 	if o.logger != nil {
@@ -3862,12 +3514,19 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		// Defer wrapper-side recording — we emit the authoritative
 		// `plan_generation` typed LLMInteraction below.
 		llmStartTime := time.Now()
-		aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+		invocation := aiInvocation{
 			Purpose:        "planning",
 			Prompt:         promptResult.Prompt,
 			Options:        planOpts,
+			SystemSource:   o.planPromptSystemSource(),
 			DeferRecording: o.debugStore != nil,
-		})
+		}
+		invocationResult, err := invokeAI(ctx, o.aiClient, invocation)
+		var aiResponse *core.AIResponse
+		if invocationResult != nil {
+			aiResponse = invocationResult.Response
+		}
+		effective := effectiveAIRequestForDebug(invocationResult, invocation)
 		llmDuration := time.Since(llmStartTime)
 		if err == nil {
 			core.RecordTokenUsage(ctx, "planning", aiResponse.Usage)
@@ -3889,16 +3548,16 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 			telemetry.Counter("plan_generation.total",
 				"module", telemetry.ModuleOrchestration, "status", "error")
 
-			// LLM Debug: Record failed interaction (includes prompt for debugging)
-			errModel, errProvider := extractErrorProviderInfo(err)
+			// LLM Debug: Record the actual prepared request, even on failure.
+			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
 			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 				Type:         "plan_generation",
 				Timestamp:    llmStartTime,
 				DurationMs:   llmDuration.Milliseconds(),
-				Prompt:       promptResult.Prompt,
-				SystemPrompt: promptResult.SystemPrompt,
-				Temperature:  0.3,
-				MaxTokens:    planOpts.MaxTokens,
+				Prompt:       effective.Prompt,
+				SystemPrompt: effective.SystemPrompt,
+				Temperature:  effectiveAITemperature(effective, planOpts.Temperature),
+				MaxTokens:    effectiveAIMaxTokens(effective, planOpts.MaxTokens),
 				Model:        errModel,
 				Provider:     errProvider,
 				Success:      false,
@@ -3943,16 +3602,17 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 			"output", int64(aiResponse.Usage.CompletionTokens))
 
 		// LLM Debug: Record successful interaction with full prompt and response
+		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:             "plan_generation",
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
-			Prompt:           promptResult.Prompt,
-			SystemPrompt:     promptResult.SystemPrompt,
-			Temperature:      0.3,
-			MaxTokens:        planOpts.MaxTokens,
-			Model:            aiResponse.Model,
-			Provider:         aiResponse.Provider,
+			Prompt:           effective.Prompt,
+			SystemPrompt:     effective.SystemPrompt,
+			Temperature:      effectiveAITemperature(effective, planOpts.Temperature),
+			MaxTokens:        effectiveAIMaxTokens(effective, planOpts.MaxTokens),
+			Model:            model,
+			Provider:         provider,
 			Response:         aiResponse.Content,
 			PromptTokens:     aiResponse.Usage.PromptTokens,
 			CompletionTokens: aiResponse.Usage.CompletionTokens,
@@ -4159,12 +3819,19 @@ STRICT RULES FOR THIS RETRY:
 					// `plan_generation` typed interaction below.
 					retryLLMStartTime := time.Now()
 					retryPlanOpts := o.planAIOptions(0.2, promptResult.SystemPrompt)
-					retryResponse, _, retryErr := invokeAI(ctx, o.aiClient, aiInvocation{
+					retryInvocation := aiInvocation{
 						Purpose:        "planning",
 						Prompt:         hallucinationFeedback,
 						Options:        retryPlanOpts,
+						SystemSource:   o.planPromptSystemSource(),
 						DeferRecording: o.debugStore != nil,
-					})
+					}
+					retryInvocationResult, retryErr := invokeAI(ctx, o.aiClient, retryInvocation)
+					var retryResponse *core.AIResponse
+					if retryInvocationResult != nil {
+						retryResponse = retryInvocationResult.Response
+					}
+					retryEffective := effectiveAIRequestForDebug(retryInvocationResult, retryInvocation)
 					retryLLMDuration := time.Since(retryLLMStartTime)
 					if retryErr == nil {
 						core.RecordTokenUsage(ctx, "planning", retryResponse.Usage)
@@ -4190,15 +3857,15 @@ STRICT RULES FOR THIS RETRY:
 						}
 
 						// LLM Debug: Record failed hallucination retry plan generation
-						retryErrModel, retryErrProvider := extractErrorProviderInfo(retryErr)
+						retryErrModel, retryErrProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, retryErr)
 						o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 							Type:         "plan_generation",
 							Timestamp:    retryLLMStartTime,
 							DurationMs:   retryLLMDuration.Milliseconds(),
-							Prompt:       hallucinationFeedback,
-							SystemPrompt: promptResult.SystemPrompt,
-							Temperature:  0.2,
-							MaxTokens:    retryPlanOpts.MaxTokens,
+							Prompt:       retryEffective.Prompt,
+							SystemPrompt: retryEffective.SystemPrompt,
+							Temperature:  effectiveAITemperature(retryEffective, retryPlanOpts.Temperature),
+							MaxTokens:    effectiveAIMaxTokens(retryEffective, retryPlanOpts.MaxTokens),
 							Model:        retryErrModel,
 							Provider:     retryErrProvider,
 							Success:      false,
@@ -4210,16 +3877,17 @@ STRICT RULES FOR THIS RETRY:
 					}
 
 					// LLM Debug: Record successful hallucination retry plan generation
+					retryModel, retryProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, nil)
 					o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 						Type:             "plan_generation",
 						Timestamp:        retryLLMStartTime,
 						DurationMs:       retryLLMDuration.Milliseconds(),
-						Prompt:           hallucinationFeedback,
-						SystemPrompt:     promptResult.SystemPrompt,
-						Temperature:      0.2,
-						MaxTokens:        retryPlanOpts.MaxTokens,
-						Model:            retryResponse.Model,
-						Provider:         retryResponse.Provider,
+						Prompt:           retryEffective.Prompt,
+						SystemPrompt:     retryEffective.SystemPrompt,
+						Temperature:      effectiveAITemperature(retryEffective, retryPlanOpts.Temperature),
+						MaxTokens:        effectiveAIMaxTokens(retryEffective, retryPlanOpts.MaxTokens),
+						Model:            retryModel,
+						Provider:         retryProvider,
 						Response:         retryResponse.Content,
 						PromptTokens:     retryResponse.Usage.PromptTokens,
 						CompletionTokens: retryResponse.Usage.CompletionTokens,
@@ -4426,6 +4094,9 @@ func (o *AIOrchestrator) generateContinuationPlan(
 	continuationNote string,
 	phaseNumber int,
 ) (*RoutingPlan, error) {
+	if err := prepareOrchestrationBoundary(ctx, boundaryContinuationPlanning); err != nil {
+		return nil, fmt.Errorf("prepare continuation planning boundary: %w", err)
+	}
 	planGenStart := time.Now()
 
 	if o.logger != nil {
@@ -4500,12 +4171,19 @@ func (o *AIOrchestrator) generateContinuationPlan(
 		// Defer wrapper-side recording — we emit the authoritative
 		// `continuation_plan_generation` typed LLMInteraction below.
 		llmStartTime := time.Now()
-		aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+		invocation := aiInvocation{
 			Purpose:        "continuation-planning",
 			Prompt:         promptResult.Prompt,
 			Options:        planOpts,
+			SystemSource:   o.planPromptSystemSource(),
 			DeferRecording: o.debugStore != nil,
-		})
+		}
+		invocationResult, err := invokeAI(ctx, o.aiClient, invocation)
+		var aiResponse *core.AIResponse
+		if invocationResult != nil {
+			aiResponse = invocationResult.Response
+		}
+		effective := effectiveAIRequestForDebug(invocationResult, invocation)
 		llmDuration := time.Since(llmStartTime)
 		if err == nil {
 			core.RecordTokenUsage(ctx, "planning", aiResponse.Usage)
@@ -4529,17 +4207,17 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			telemetry.Counter("continuation_plan_generation.total",
 				"module", telemetry.ModuleOrchestration, "status", "error")
 
-			// Debug store: record failed LLM call
-			errModel, errProvider := extractErrorProviderInfo(err)
+			// Debug store: record the actual prepared request on failure.
+			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
 			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 				Type:            "continuation_plan_generation",
 				PhaseNumber:     phaseNumber,
 				Timestamp:       llmStartTime,
 				DurationMs:      llmDuration.Milliseconds(),
-				Prompt:          promptResult.Prompt,
-				SystemPrompt:    promptResult.SystemPrompt,
-				Temperature:     0.2,
-				MaxTokens:       planOpts.MaxTokens,
+				Prompt:          effective.Prompt,
+				SystemPrompt:    effective.SystemPrompt,
+				Temperature:     effectiveAITemperature(effective, planOpts.Temperature),
+				MaxTokens:       effectiveAIMaxTokens(effective, planOpts.MaxTokens),
 				Model:           errModel,
 				Provider:        errProvider,
 				Success:         false,
@@ -4597,21 +4275,22 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			"output", int64(aiResponse.Usage.CompletionTokens))
 
 		// Debug store: record successful LLM call
+		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:             "continuation_plan_generation",
 			PhaseNumber:      phaseNumber,
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
-			Prompt:           promptResult.Prompt,
-			SystemPrompt:     promptResult.SystemPrompt,
-			Temperature:      0.2,
-			MaxTokens:        planOpts.MaxTokens,
+			Prompt:           effective.Prompt,
+			SystemPrompt:     effective.SystemPrompt,
+			Temperature:      effectiveAITemperature(effective, planOpts.Temperature),
+			MaxTokens:        effectiveAIMaxTokens(effective, planOpts.MaxTokens),
 			Response:         responseContent,
 			PromptTokens:     aiResponse.Usage.PromptTokens,
 			CompletionTokens: aiResponse.Usage.CompletionTokens,
 			TotalTokens:      aiResponse.Usage.TotalTokens,
-			Model:            aiResponse.Model,
-			Provider:         aiResponse.Provider,
+			Model:            model,
+			Provider:         provider,
 			Success:          true,
 			Attempt:          attempt,
 			CallDescription:  fmt.Sprintf("Phase %d continuation plan generation", phaseNumber),
@@ -4800,6 +4479,9 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	validationErr error,
 	originalTerminal *bool, // preserve terminal from the original plan
 ) (*RoutingPlan, error) {
+	if err := prepareOrchestrationBoundary(ctx, boundaryRegeneration); err != nil {
+		return nil, fmt.Errorf("prepare continuation regeneration boundary: %w", err)
+	}
 	if o.aiClient == nil {
 		return nil, fmt.Errorf("AI client not configured for plan regeneration")
 	}
@@ -4846,12 +4528,19 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	// `continuation_plan_regeneration` typed LLMInteraction below.
 	llmStartTime := time.Now()
 
-	aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "continuation-planning",
 		Prompt:         prompt,
 		Options:        regenOpts,
+		SystemSource:   o.planPromptSystemSource(),
 		DeferRecording: o.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, o.aiClient, invocation)
+	var aiResponse *core.AIResponse
+	if invocationResult != nil {
+		aiResponse = invocationResult.Response
+	}
+	effective := effectiveAIRequestForDebug(invocationResult, invocation)
 
 	llmDuration := time.Since(llmStartTime)
 	if err == nil {
@@ -4874,16 +4563,16 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 			"module", telemetry.ModuleOrchestration, "status", "error")
 
 		// Debug store: record failed LLM call
-		errModel, errProvider := extractErrorProviderInfo(err)
+		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:            "continuation_plan_regeneration",
 			PhaseNumber:     phaseNumber,
 			Timestamp:       llmStartTime,
 			DurationMs:      llmDuration.Milliseconds(),
-			Prompt:          prompt,
-			SystemPrompt:    promptResult.SystemPrompt,
-			Temperature:     0.2,
-			MaxTokens:       regenOpts.MaxTokens,
+			Prompt:          effective.Prompt,
+			SystemPrompt:    effective.SystemPrompt,
+			Temperature:     effectiveAITemperature(effective, regenOpts.Temperature),
+			MaxTokens:       effectiveAIMaxTokens(effective, regenOpts.MaxTokens),
 			Model:           errModel,
 			Provider:        errProvider,
 			Success:         false,
@@ -4941,21 +4630,22 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		"module", telemetry.ModuleOrchestration, "status", "success")
 
 	// Debug store: record successful LLM call
+	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "continuation_plan_regeneration",
 		PhaseNumber:      phaseNumber,
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		SystemPrompt:     promptResult.SystemPrompt,
-		Temperature:      0.2,
-		MaxTokens:        regenOpts.MaxTokens,
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, regenOpts.Temperature),
+		MaxTokens:        effectiveAIMaxTokens(effective, regenOpts.MaxTokens),
 		Response:         aiResponse.Content,
 		PromptTokens:     aiResponse.Usage.PromptTokens,
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
 		TotalTokens:      aiResponse.Usage.TotalTokens,
-		Model:            aiResponse.Model,
-		Provider:         aiResponse.Provider,
+		Model:            model,
+		Provider:         provider,
 		Success:          true,
 		Attempt:          1,
 		CallDescription:  fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
@@ -6720,6 +6410,9 @@ func (o *AIOrchestrator) validateTemplatePaths(plan *RoutingPlan, executedStepCa
 
 // regeneratePlan attempts to fix a plan based on validation errors
 func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, requestID string, validationErr error) (*RoutingPlan, error) {
+	if err := prepareOrchestrationBoundary(ctx, boundaryRegeneration); err != nil {
+		return nil, fmt.Errorf("prepare regeneration boundary: %w", err)
+	}
 	// Check if AI client is available
 	if o.aiClient == nil {
 		return nil, fmt.Errorf("AI client not configured for plan regeneration")
@@ -6743,24 +6436,31 @@ Please generate a corrected plan that addresses this error.`,
 	planOpts := o.planAIOptions(0.2, basePromptResult.SystemPrompt)
 
 	llmStartTime := time.Now()
-	aiResponse, _, err := invokeAI(ctx, o.aiClient, aiInvocation{
+	invocation := aiInvocation{
 		Purpose:        "planning",
 		Prompt:         prompt,
 		Options:        planOpts,
+		SystemSource:   o.planPromptSystemSource(),
 		DeferRecording: o.debugStore != nil,
-	})
+	}
+	invocationResult, err := invokeAI(ctx, o.aiClient, invocation)
+	var aiResponse *core.AIResponse
+	if invocationResult != nil {
+		aiResponse = invocationResult.Response
+	}
+	effective := effectiveAIRequestForDebug(invocationResult, invocation)
 	llmDuration := time.Since(llmStartTime)
 
 	if err != nil {
-		errModel, errProvider := extractErrorProviderInfo(err)
+		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
 		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 			Type:         "plan_regeneration_fallback",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
-			Prompt:       prompt,
-			SystemPrompt: basePromptResult.SystemPrompt,
-			Temperature:  0.2,
-			MaxTokens:    planOpts.MaxTokens,
+			Prompt:       effective.Prompt,
+			SystemPrompt: effective.SystemPrompt,
+			Temperature:  effectiveAITemperature(effective, planOpts.Temperature),
+			MaxTokens:    effectiveAIMaxTokens(effective, planOpts.MaxTokens),
 			Model:        errModel,
 			Provider:     errProvider,
 			Success:      false,
@@ -6770,16 +6470,17 @@ Please generate a corrected plan that addresses this error.`,
 	}
 	core.RecordTokenUsage(ctx, "correction", aiResponse.Usage)
 
+	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
 	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
 		Type:             "plan_regeneration_fallback",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
-		Prompt:           prompt,
-		SystemPrompt:     basePromptResult.SystemPrompt,
-		Temperature:      0.2,
-		MaxTokens:        planOpts.MaxTokens,
-		Model:            aiResponse.Model,
-		Provider:         aiResponse.Provider,
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, planOpts.Temperature),
+		MaxTokens:        effectiveAIMaxTokens(effective, planOpts.MaxTokens),
+		Model:            model,
+		Provider:         provider,
 		Response:         aiResponse.Content,
 		PromptTokens:     aiResponse.Usage.PromptTokens,
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
@@ -6808,12 +6509,16 @@ func (o *AIOrchestrator) extractAgentsFromPlan(plan *RoutingPlan) []string {
 // This method sets up request_id in context baggage for observability,
 // ensuring downstream components can correlate logs with traces.
 func (o *AIOrchestrator) ExecutePlan(ctx context.Context, plan *RoutingPlan) (*ExecutionResult, error) {
+	if err := o.rejectIfConstructionFailed(ctx, "execute_plan"); err != nil {
+		return nil, err
+	}
 	if o.executor == nil {
 		return nil, fmt.Errorf("executor not configured")
 	}
 
 	// Generate request_id for this plan execution
-	requestID := generateRequestID()
+	requestID := o.newRequestID()
+	defer o.releaseExecutionRecorder(requestID)
 
 	// Add request_id to context baggage so downstream components (executor,
 	// tools, etc.) can access it via telemetry.GetBaggage() and include it in their logs
@@ -6849,6 +6554,9 @@ func (o *AIOrchestrator) ExecutePlanWithSynthesis(
 	plan *RoutingPlan,
 	originalRequest string,
 ) (*OrchestratorResponse, error) {
+	if err := o.rejectIfConstructionFailed(ctx, "execute_plan_with_synthesis"); err != nil {
+		return nil, err
+	}
 	startTime := time.Now()
 
 	// Validate plan is not nil (fail fast before any telemetry setup)
@@ -6857,7 +6565,8 @@ func (o *AIOrchestrator) ExecutePlanWithSynthesis(
 	}
 
 	// Generate request_id for this workflow execution
-	requestID := generateRequestID()
+	requestID := o.newRequestID()
+	defer o.releaseExecutionRecorder(requestID)
 
 	// Add request_id to context baggage so downstream components (AI client, synthesizer,
 	// micro_resolver, etc.) can access it via telemetry.GetBaggage() and include it in their logs
@@ -7068,9 +6777,11 @@ func (o *AIOrchestrator) ExecutePlanWithSynthesis(
 	// Record success metrics if telemetry is available (follows ProcessRequest pattern from orchestrator.go:1161-1168)
 	if o.telemetry != nil {
 		o.telemetry.RecordMetric("orchestrator.requests.success", 1, map[string]string{
-			"mode": string(ModeWorkflow),
+			"module": telemetry.ModuleOrchestration,
+			"mode":   string(ModeWorkflow),
 		})
 		o.telemetry.RecordMetric("orchestrator.latency_ms", float64(time.Since(startTime).Milliseconds()), map[string]string{
+			"module":    telemetry.ModuleOrchestration,
 			"operation": "execute_plan_with_synthesis",
 		})
 	}
@@ -7330,14 +7041,14 @@ func countStepOutcomes(steps []StepResult) (success, failed int) {
 	return
 }
 
-// generateID generates a unique ID
-func generateID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond())
-}
-
-// generateRequestID generates a unique request ID (alias for generateID for specification compatibility)
-func generateRequestID() string {
-	return generateID()
+// newRequestID is the single prefix-aware identifier generator for every
+// public orchestration execution entry point.
+func (o *AIOrchestrator) newRequestID() string {
+	prefix := "orch"
+	if o != nil && o.config != nil && o.config.RequestIDPrefix != "" {
+		prefix = o.config.RequestIDPrefix
+	}
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
 // getMapKeys extracts keys from a map for logging

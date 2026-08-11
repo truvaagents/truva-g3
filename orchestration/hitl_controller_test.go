@@ -143,6 +143,30 @@ func TestNewInterruptController_WithOptions(t *testing.T) {
 	}
 }
 
+func TestWithControllerCheckpointPersistenceAcceptsNarrowStore(t *testing.T) {
+	persistence := &expiryProcessorFixture{}
+	controller := NewInterruptController(
+		&mockPolicy{},
+		nil,
+		&mockInterruptHandler{},
+		WithControllerCheckpointPersistence(persistence),
+	)
+	if controller.store != persistence {
+		t.Fatalf("controller persistence = %T, want narrow injected store", controller.store)
+	}
+
+	existing := newMockCheckpointStore()
+	controller = NewInterruptController(
+		&mockPolicy{},
+		existing,
+		&mockInterruptHandler{},
+		WithControllerCheckpointPersistence(nil),
+	)
+	if controller.store != existing {
+		t.Fatal("nil narrow persistence option replaced the existing store")
+	}
+}
+
 // =============================================================================
 // SetPolicy/SetHandler/SetCheckpointStore Tests
 // =============================================================================
@@ -304,6 +328,81 @@ func TestCheckPlanApproval_NotifyError_ContinuesSuccessfully(t *testing.T) {
 	}
 	if checkpoint == nil {
 		t.Fatal("Checkpoint should be returned despite notify error")
+	}
+}
+
+func TestInterruptNotificationFailuresUseBoundedDiagnostics(t *testing.T) {
+	tests := []struct {
+		name   string
+		invoke func(context.Context, *DefaultInterruptController) error
+	}{
+		{
+			name: "plan approval",
+			invoke: func(ctx context.Context, controller *DefaultInterruptController) error {
+				_, err := controller.CheckPlanApproval(ctx, &RoutingPlan{PlanID: "plan-1"})
+				return err
+			},
+		},
+		{
+			name: "before step",
+			invoke: func(ctx context.Context, controller *DefaultInterruptController) error {
+				_, err := controller.CheckBeforeStep(ctx, RoutingStep{StepID: "step-1"}, &RoutingPlan{PlanID: "plan-1"})
+				return err
+			},
+		},
+		{
+			name: "after step",
+			invoke: func(ctx context.Context, controller *DefaultInterruptController) error {
+				_, err := controller.CheckAfterStep(ctx, RoutingStep{StepID: "step-1"}, &StepResult{StepID: "step-1"})
+				return err
+			},
+		},
+		{
+			name: "error escalation",
+			invoke: func(ctx context.Context, controller *DefaultInterruptController) error {
+				_, err := controller.CheckOnError(ctx, RoutingStep{StepID: "step-1"}, errors.New("tool failed"), 1)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision := &InterruptDecision{ShouldInterrupt: true, Reason: ReasonPlanApproval}
+			policy := &mockPolicy{
+				planDecision:       decision,
+				beforeStepDecision: decision,
+				afterStepDecision:  decision,
+				escalateDecision:   decision,
+			}
+			logger := &TestLogger{}
+			handler := &mockInterruptHandler{
+				notifyError: errors.New("webhook failed authorization=Bearer top-secret"),
+			}
+			controller := NewInterruptController(
+				policy,
+				newMockCheckpointStore(),
+				handler,
+				WithControllerLogger(logger),
+			)
+			ctx := WithRequestID(t.Context(), "request-notification")
+
+			if err := test.invoke(ctx, controller); err != nil {
+				t.Fatalf("interrupt check failed: %v", err)
+			}
+			logs := logger.GetLogsByOperation("hitl_notify_interrupt")
+			if len(logs) != 1 {
+				t.Fatalf("notification logs = %#v, want one", logs)
+			}
+			fields := logs[0].Fields
+			if logs[0].Level != "WARN" ||
+				fields["request_id"] != "request-notification" ||
+				fields["status"] != "error" ||
+				fields["error_type"] != "notification" ||
+				fields["error"] != "interrupt notification failed" {
+				t.Fatalf("notification failure log = %#v", logs[0])
+			}
+		})
 	}
 }
 
