@@ -191,7 +191,10 @@ func (t *LogsTool) handleQueryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "query_logs", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "query_logs", apiDuration,
 		attribute.Int("total_entries", resp.TotalEntries),
@@ -269,7 +272,10 @@ func (t *LogsTool) handleQueryLogsRange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "query_logs_range", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "query_logs_range", apiDuration,
 		attribute.Int("total_entries", resp.TotalEntries),
@@ -327,7 +333,10 @@ func (t *LogsTool) handleGetLabels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_labels", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_labels", apiDuration,
 		attribute.Int("label_count", len(labels)),
@@ -395,7 +404,10 @@ func (t *LogsTool) handleGetLabelValues(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_label_values", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_label_values", apiDuration,
 		attribute.Int("value_count", len(values)),
@@ -461,11 +473,7 @@ func (t *LogsTool) handleGetDetectedFields(w http.ResponseWriter, r *http.Reques
 	// Convert to response type
 	respFields := make([]DetectedField, 0, len(fields))
 	for _, f := range fields {
-		respFields = append(respFields, DetectedField{
-			Label:       f.Label,
-			Type:        f.Type,
-			Cardinality: f.Cardinality,
-		})
+		respFields = append(respFields, DetectedField(f))
 	}
 
 	resp := DetectedFieldsResponse{
@@ -476,7 +484,10 @@ func (t *LogsTool) handleGetDetectedFields(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_detected_fields", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_detected_fields", apiDuration,
 		attribute.Int("field_count", len(respFields)),
@@ -492,7 +503,7 @@ func (t *LogsTool) handleGetTraceServices(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 
 	// Decode body (may be empty — no required fields)
-	json.NewDecoder(r.Body).Decode(&struct{}{})
+	_ = json.NewDecoder(r.Body).Decode(&struct{}{})
 
 	telemetry.AddSpanEvent(ctx, "calling_jaeger_api",
 		attribute.String("request_id", hc.requestID),
@@ -516,7 +527,10 @@ func (t *LogsTool) handleGetTraceServices(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_trace_services", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_trace_services", apiDuration,
 		attribute.Int("service_count", len(services)),
@@ -570,7 +584,10 @@ func (t *LogsTool) handleGetTraceOperations(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_trace_operations", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_trace_operations", apiDuration,
 		attribute.Int("operation_count", len(operations)),
@@ -659,7 +676,10 @@ func (t *LogsTool) handleFindTraces(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "find_traces", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "find_traces", apiDuration,
 		attribute.Int("trace_count", len(summaries)),
@@ -775,7 +795,10 @@ func (t *LogsTool) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(core.ToolResponse{Success: true, Data: resp})
+	if err := encodeToolResponse(w, core.ToolResponse{Success: true, Data: resp}); err != nil {
+		t.recordError(r, hc, "get_trace", "response_encode", err)
+		return
+	}
 
 	t.recordSuccess(r, hc, "get_trace", apiDuration,
 		attribute.Int("span_count", len(spans)),
@@ -791,7 +814,7 @@ func (t *LogsTool) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 func (t *LogsTool) sendError(rw http.ResponseWriter, message string, status int, code string) {
 	rw.Header().Set("Content-Type", "application/json")
 	rw.WriteHeader(status)
-	json.NewEncoder(rw).Encode(core.ToolResponse{
+	_ = encodeToolResponse(rw, core.ToolResponse{
 		Success: false,
 		Error: &core.ToolError{
 			Code:      code,
@@ -805,7 +828,7 @@ func (t *LogsTool) sendError(rw http.ResponseWriter, message string, status int,
 func (t *LogsTool) sendUpstreamError(rw http.ResponseWriter, message string, info core.UpstreamErrorInfo) {
 	rw.Header().Set("Content-Type", "application/json")
 	rw.WriteHeader(info.HTTPStatus)
-	json.NewEncoder(rw).Encode(core.ToolResponse{
+	_ = encodeToolResponse(rw, core.ToolResponse{
 		Success: false,
 		Error: &core.ToolError{
 			Code:      info.Code,
@@ -814,6 +837,10 @@ func (t *LogsTool) sendUpstreamError(rw http.ResponseWriter, message string, inf
 			Retryable: info.Retryable,
 		},
 	})
+}
+
+func encodeToolResponse(writer http.ResponseWriter, response core.ToolResponse) error {
+	return json.NewEncoder(writer).Encode(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +863,10 @@ func buildLogsResponse(streams []lokiStream, query string) LogsQueryResponse {
 			}
 			// v[0] = timestamp in nanoseconds, v[1] = log line with CRI prefix
 			ts := parseNanoTimestamp(v[0])
-			line := stripCRIPrefix(v[1])
+			// Loki contains untrusted application output. Redact credentials before a
+			// line leaves this tool so historical leaks cannot be copied into an agent
+			// prompt, execution record, trace, or Registry Viewer response.
+			line := core.RedactSensitiveText(stripCRIPrefix(v[1]))
 
 			entries = append(entries, LogEntry{
 				Timestamp: ts,

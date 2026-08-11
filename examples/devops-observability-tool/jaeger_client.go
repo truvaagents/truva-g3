@@ -42,9 +42,9 @@ func NewJaegerClient(baseURL string) *JaegerClient {
 
 // jaegerTrace is a single trace from the Jaeger v2 API.
 type jaegerTrace struct {
-	TraceID   string                     `json:"traceID"`
-	Spans     []jaegerSpan               `json:"spans"`
-	Processes map[string]jaegerProcess   `json:"processes"`
+	TraceID   string                   `json:"traceID"`
+	Spans     []jaegerSpan             `json:"spans"`
+	Processes map[string]jaegerProcess `json:"processes"`
 }
 
 // jaegerSpan is a single span within a trace.
@@ -95,7 +95,7 @@ func (c *JaegerClient) Services(ctx context.Context) ([]string, error) {
 		Data []string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 500): failed to parse services: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 500): failed to parse services: %w", err)
 	}
 
 	return resp.Data, nil
@@ -114,7 +114,7 @@ func (c *JaegerClient) Operations(ctx context.Context, service string) ([]string
 		Data []string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 500): failed to parse operations: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 500): failed to parse operations: %w", err)
 	}
 
 	return resp.Data, nil
@@ -154,7 +154,7 @@ func (c *JaegerClient) FindTraces(ctx context.Context, service, operation, lookb
 		Data []jaegerTrace `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 500): failed to parse traces: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 500): failed to parse traces: %w", err)
 	}
 
 	return resp.Data, nil
@@ -173,11 +173,11 @@ func (c *JaegerClient) GetTrace(ctx context.Context, traceID string) (*jaegerTra
 		Data []jaegerTrace `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 500): failed to parse trace: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 500): failed to parse trace: %w", err)
 	}
 
 	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("Jaeger API error (status 404): trace %s not found", traceID)
+		return nil, fmt.Errorf("jaeger API error (status 404): trace %s not found", traceID)
 	}
 
 	return &resp.Data[0], nil
@@ -189,23 +189,23 @@ func (c *JaegerClient) GetTrace(ctx context.Context, traceID string) (*jaegerTra
 func (c *JaegerClient) doRequest(ctx context.Context, reqURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 500): failed to create request: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 500): failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 502): %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 502): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Jaeger API error (status 502): failed to read response: %w", err)
+		return nil, fmt.Errorf("jaeger API error (status 502): failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Jaeger API error (status %d): %s", resp.StatusCode, truncateBody(body))
+		return nil, fmt.Errorf("jaeger API error (status %d): %s", resp.StatusCode, truncateBody(body))
 	}
 
 	return body, nil
