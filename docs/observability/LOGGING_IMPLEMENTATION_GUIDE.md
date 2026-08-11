@@ -1077,6 +1077,11 @@ URL, credentials, payload, or raw backend error. The non-context logger avoids
 depending on a canceled request while the explicitly captured correlation
 fields retain troubleshooting value.
 
+Failures while cloning or serializing the immutable execution snapshot use
+`error_type=marshal`; only failures returned by `ExecutionStore.Store` use
+`error_type=store_write`. This prevents a framework serialization defect from
+being misdiagnosed as a storage-backend outage.
+
 Execution-store index and TTL failures use the same sanitized-error rule with
 bounded `error_type=index_write` and `error_type=ttl_update`. Observation error
 text must not include Redis connection material, payloads, or raw conversation
@@ -1220,9 +1225,9 @@ Use these field names across all your services:
 | `trace_id` | string | Active W3C trace identity | "5b54aa1e7925acb809e77479b5797f5d" |
 | `span_id` | string | Active W3C span identity | "e75ad960517fa8fe" |
 | `checkpoint_id` | string | HITL checkpoint identity | "cp-abc123" |
-| `status` | string | Result status | "success", "error", "retry" |
+| `status` | string | Bounded result status defined by the operation; terminal request records may also use `partial` or `interrupted`, while diagnostics may use `fallback`, `accepted`, or `rejected` | "success", "error", "retry", "partial", "interrupted", "fallback" |
 | `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
-| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "notification", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "request_failed", "callback_panic", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
 | `path` | string | Request path | "/api/capabilities/get_weather" |
@@ -1317,14 +1322,19 @@ if o.logger != nil {
 | Module | Operation | Description |
 |--------|-----------|-------------|
 | orchestration | `process_request` | Main request handling |
-| orchestration | `process_request_complete` | Successful turn completion (carries `termination_reason` field: `completed` / `forced_terminal` / `clarification`) |
-| orchestration | `streaming_complete` | Streaming turn completion (parity with `process_request_complete`) |
+| orchestration | `process_request_complete` | Exactly one terminal buffered-turn record for each successfully started request lifecycle. Carries `success`, bounded `status` (`success` / `partial` / `error` / `interrupted`), `termination_reason`, `duration_ms`, and compatibility `total_duration_ms`. Error completion is emitted at ERROR with `error_type=request_failed`; interruption remains INFO |
+| orchestration | `streaming_complete` | Exactly one terminal streaming-turn record for each successfully started request lifecycle, with field and severity parity with `process_request_complete` |
 | orchestration | `plan_generation` | LLM plan creation |
 | orchestration | `plan_validation` | Plan structural validation |
 | orchestration | `plan_execution` | Executing plan steps |
 | orchestration | `agent_discovery` | Finding agents |
 | orchestration | `llm_call` | LLM API calls |
 | orchestration | `conversation_history` | Shared conversation-history preparation and compaction lifecycle. Used by the metadata ingress path and the optional `ConversationHistoryHook` adapter. Success logs include `path`, token estimates, and `duration_ms`; degraded paths use bounded `error_type` values such as `count_tokens`, `compaction`, `watermark_mismatch`, `preparation`, or `session_read` |
+| orchestration | `orchestrator_construction_fallback` | Canonical/compatibility configuration used a documented safe fallback. WARN with bounded `variable`, `reason`, `action`, and `status=fallback`; raw environment values are excluded |
+| orchestration | `orchestrator_construction_rejection` | A public operation reached a compatibility orchestrator whose construction had failed. ERROR with `requested_operation`, `status=rejected`, `error_type=preparation`, request correlation when available, and a bounded error string |
+| orchestration | `streaming_fallback` | Caller requested streaming but the effective AI client reported no native streaming support. WARN with request correlation, `status=fallback`, and bounded `reason=client_streaming_unsupported` |
+| orchestration | `pipeline_short_circuit_decision` | WARN diagnostic for a rejected provenance-aware decision or an accepted legacy short-circuit when reserved cache dimensions exist. Carries request ID, hook, bounded kind/reason/status. Accepted modern decisions are intentionally trace/metric-only to avoid routine log volume |
+| orchestration | `after_planning_hook` | An after-planning hook error, wrong return type, clone failure, or invalid mutation was rejected. WARN with request ID, hook, and bounded reason; the last valid plan continues. Accepted mutations are metric/span-only |
 | orchestration | `clarification_short_circuit` | Phase loop terminated early because the planner emitted `needs_user_input` |
 | orchestration | `synthesis_clarification_mode` | Synthesizer entered clarification mode and used the augmented system prompt |
 | orchestration | `result_distill` | Result distillation lifecycle (Stage-1 pre-filter → Stage-2 LLM distill). Success logs carry `original_bytes` / `distilled_bytes` / `duration_ms`; failures use `error_type: compaction` and fall open to the structural floor |
@@ -1336,6 +1346,12 @@ if o.logger != nil {
 | orchestration | `remediation_trigger` | Phase loop forced a remediation continuation because one or more steps were skipped on a template-induced dependency failure; the next phase runs even if the current plan marked itself terminal. WARN level. Fields: `phase_number`, `plan_id`, `skipped_count`, `skipped_step_ids`, `error_type=template_induced_skip` |
 | orchestration | `remediation_failure_pattern` | Diagnostic for the shared-error pattern analyzer that runs alongside `remediation_trigger`. Lets operators answer "did the pattern line make it into the remediation prompt, and if not, why not?" without re-running the computation. DEBUG level. Fields: `phase_number`, `emitted` (bool). When emitted: `total_failed`, `dominant_count`. When rejected: `reject_reason` (bounded enum: `insufficient_failures`, `no_majority_error`) |
 | orchestration | `terminal_synthesis_normalization` | Acceptance-time normalizer removed a terminal "synthesis pseudo-step" (agent absent from catalog + capability registered nowhere + every param leaf a satisfiable step-output template) so the framework synthesizer produces the answer; the plan becomes a zero-step terminal plan when that was its only step. WARN level. Fields: `request_id`, `plan_id`, dropped `step_id`/`agent_name`/`capability`, `remaining_steps`. Counter: `orchestration.plan.terminal_synthesis_normalized` |
+| orchestration | `checkpoint_enrichment` | Authoritative HITL checkpoint enrichment/save failure. WARN with `status=error`, bounded `reason`, `error_type=preparation` for an unsupported enrichment path or `store_write` for an authoritative save failure, and a sanitized error |
+| orchestration | `hitl_notify_interrupt` | Non-fatal failure of an application interrupt handler after the checkpoint is durable. WARN with request/checkpoint-family correlation, `status=error`, `error_type=notification`, and the bounded error `interrupt notification failed`; raw handler errors are not logged by the framework-owned authoritative-save path |
+| orchestration | `hitl_expiry_scan` | One provider-neutral HITL expiry polling pass. INFO when work was attempted or the pass is partial, DEBUG for an empty successful pass, and WARN on claim failure. Carries synthetic `request_id=hitl-expiry-*`, `status`, `duration_ms`, and bounded batch counts; claim failures use `error_type=claim` |
+| orchestration | `hitl_expiry_claim_release` | Failure to release an expiry claim after processing. WARN with `status=error`, `error_type=claim_release`, checkpoint correlation, and a sanitized backend error; the enclosing scan completes with `status=partial` |
+| orchestration | `hitl_expiry_processor` | Per-checkpoint expiry decision and persistence. INFO records the chosen action/status; a missing legacy `RequestMode` emits a WARN fallback diagnostic with bounded `reason=request_mode_missing`; persistence failures use `status=error` and `error_type=store_write` |
+| orchestration | `hitl_expiry_callback` | Recovered panic from application expiry callback delivery. ERROR with `status=error`, `error_type=callback_panic`, checkpoint correlation, and a bounded error string |
 | ai | `ai_request` | AI provider calls |
 | ai | `chain_failover` | Chain client failed over to the next provider after a transient (proxy/CDN) 4xx error classified via `core.ProviderError.IsTransient()`. Indicates an infrastructure hiccup, not a request problem; usually self-resolves on the next provider |
 | ai | `chain_failover_retryable` | A generate-chain entry failed over to the next provider after a billing/quota terminal error classified via `core.ProviderError.IsRetryable()` (e.g. Anthropic credit balance exhausted, OpenAI insufficient_quota). Includes `failover_reason=provider_retryable`. **Compatibility cost signal for non-terminal generate attempts only**—terminal and streaming signals use the operations below |
@@ -1486,6 +1502,17 @@ observation surface in those cases. It must preserve the original error for the
 caller while logging a sanitized error message and a bounded `error_type`. The
 AI module implements this boundary with
 `providers.SanitizedObservationError`.
+
+For other framework and application boundaries, use
+`core.RedactSensitiveText(err.Error())` as defense in depth. It covers common
+authorization values, credential assignments, secret-bearing URL user
+information, and credential query parameters. The returned error remains
+unchanged for callers. When the error itself must cross a boundary with a safe
+observable message, wrap `core.RedactSensitiveError(err)` with `%w`; its
+`Unwrap` method preserves `errors.Is` and `errors.As` control flow. Because no
+redactor can recognize arbitrary domain
+secrets, continue to avoid raw endpoint URLs, request/response bodies, prompts,
+and provider diagnostics on observation surfaces.
 
 ---
 

@@ -358,9 +358,18 @@ outputs:
 ### 6.4 Programmatic Usage
 
 ```go
-// Create the workflow engine
-stateStore := orchestration.NewRedisStateStore(discovery)
-engine := orchestration.NewWorkflowEngine(discovery, stateStore, logger)
+// Application bootstrap supplies provider-neutral orchestration backends.
+requirements, err := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureWorkflow,
+)
+if err != nil {
+    log.Fatal(err)
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    log.Fatal(err)
+}
+engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger)
 
 // Load and parse YAML
 yamlData, _ := os.ReadFile("workflow.yaml")
@@ -373,6 +382,13 @@ execution, err := engine.ExecuteWorkflow(ctx, workflow, inputs)
 // Get results
 fmt.Printf("Result: %v\n", execution.Outputs["recommendation"])
 ```
+
+For the included Redis implementation, create `backends` once in application
+bootstrap with `redisprovider.NewOrchestrationBackends`. A custom provider can
+populate the same neutral bundle with typed options such as
+`WithWorkflowBackend`. Workflow execution itself remains provider-neutral.
+`NewRedisStateStore` is retained as a compatibility constructor, not the
+preferred path for new applications.
 
 > **Note**: The above is from the framework API. For a working example with YAML workflows, check back after the TODO in agent-with-orchestration is completed.
 

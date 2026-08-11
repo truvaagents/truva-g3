@@ -15,6 +15,8 @@ A comprehensive guide to TruvaG3's APIs with practical examples and best practic
 - [Schema Cache](#schema-cache-phase-3-validation) - Redis-backed schema caching for validation
 - [Schema Discovery](#registercapability) - Progressive enhancement: Phase 1 (descriptions) → Phase 2 (field hints) → Phase 3 (validation)
 - [Request-Aware AI API](#request-aware-ai-api) - Presence-aware requests, policy, enterprise hooks, and heterogeneous failover
+- [Canonical Orchestrator Construction](#canonical-orchestrator-construction) - Explicit configuration layers and error-returning construction
+- [Orchestration Backend Composition](#orchestration-backend-composition) - Provider-neutral capabilities and the included Redis preset
 
 **By Module:**
 - [Core](#core-module) - Foundation types and component lifecycle
@@ -814,6 +816,60 @@ go func() {
 defer registry.Unregister(ctx, info.ID)
 ```
 
+#### Pipeline short-circuit provenance
+
+The original `BeforePlanningHook` remains source compatible and its non-nil
+short circuits are treated as authoritative. New response-cache hooks should
+implement the additive provenance-aware contract:
+
+```go
+type PipelineShortCircuitKind string
+
+const (
+    PipelineShortCircuitAuthoritative PipelineShortCircuitKind = "authoritative"
+    PipelineShortCircuitCache         PipelineShortCircuitKind = "cache"
+)
+
+type PipelineGate interface {
+    CacheVary() map[string]string
+    ResponseCacheReadDisabled() bool
+}
+
+type PipelineShortCircuitDecision struct {
+    ShortCircuit  *PipelineShortCircuit
+    Kind          PipelineShortCircuitKind
+    CachedAgainst map[string]string
+}
+
+type BeforePlanningDecisionHook interface {
+    PipelineHook
+    BeforePlanningDecision(
+        context.Context,
+        *PipelineContext,
+        PipelineGate,
+    ) (*PipelineShortCircuitDecision, error)
+}
+```
+
+`authoritative` is for policy denials, rate limits, and other answers whose
+validity does not depend on response-cache freshness. `cache` must carry the
+variation dimensions persisted with the cached entry; it must not copy the
+gate's current dimensions during lookup. Orchestration accepts a cache hit only
+when every consumer-designated reserved dimension has the same presence and
+value in the stored and current maps; a value present on only one side is a
+mismatch. Other opaque dimensions are not enforced until their owning feature
+designates them. Cache reads are bypassed when `ResponseCacheReadDisabled` is
+true. Dimension semantics belong to the feature that adds them; core treats
+their names and values as opaque strings.
+
+An opt-in decision with no payload returns an error matching
+`orchestration.ErrInvalidPipelineShortCircuitDecision`; an empty or unsupported
+kind matches `orchestration.ErrUnknownPipelineShortCircuitKind`. Ordinary hook
+callback errors retain the legacy fail-open behavior.
+
+See [Pipeline Hooks Guide](../orchestration/PIPELINE_HOOKS_GUIDE.md) for the
+full lifecycle, compatibility behavior, and cache-hook example.
+
 #### Background Redis Retry
 
 TruvaG3 provides an intelligent background retry mechanism for handling Redis connection failures during service startup. This is particularly useful in Kubernetes environments where Redis may not be immediately available.
@@ -1307,6 +1363,11 @@ type SchedulerBackends struct {
 
 `NewRedisStreamsSchedulerBackends` returns a reaper `Runnable` that **must** be registered alongside the worker — without it, crashed replicas leak pending entries.
 
+These factories are retained convenience/compatibility layers. New application
+bootstrap code should expose the same interfaces through
+[`OrchestrationBackends`](#orchestration-backend-composition), validate the
+effective scheduler feature requirements, and register the bundle's runnables.
+
 #### core/conformance Sub-Package
 
 Contract test suite for `TaskConsumer` implementations.
@@ -1314,9 +1375,40 @@ Contract test suite for `TaskConsumer` implementations.
 ```go
 // core/conformance/task_consumer_conformance.go
 func RunTaskConsumerConformance(t *testing.T, factory TaskConsumerFactory)
+func RunTaskDeliveryProfileConformance(
+    t *testing.T,
+    profile TaskDeliveryProfile,
+    factory TaskDeliveryFactory,
+)
+
+const (
+    TaskDeliveryAtMostOnce  TaskDeliveryProfile = "at_most_once"
+    TaskDeliveryAtLeastOnce TaskDeliveryProfile = "at_least_once"
+)
 ```
 
-Runs 10 sub-tests (roundtrip, settlement, idempotency, cancellation, concurrency, field preservation, double-settlement). Any backend that passes all 10 is contract-compliant. See [Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md) for details.
+The base suite runs 10 transport-neutral subtests covering roundtrip,
+settlement, idempotency, cancellation, concurrency, field preservation, and
+double settlement. The profile suite also checks terminal dead-letter behavior
+and the recovery semantics advertised by an at-most-once or at-least-once
+adapter.
+
+The test-only `orchestration/backendconformance` package supplies corresponding
+provider-neutral suites for execution-debug and LLM-debug stores, checkpoint
+persistence and leased expiry claims, command delivery, workflow state, and
+distributed locks. Provider packages invoke these suites from their own tests;
+runtime code must not import the conformance package. See
+[Scheduled Tasks Guide](../orchestration/SCHEDULED_TASKS_GUIDE.md) for delivery
+details.
+
+```go
+func RunExecutionStoreConformance(t *testing.T, factory func(*testing.T) ExecutionFixture)
+func RunLLMDebugStoreConformance(t *testing.T, factory func(*testing.T) LLMDebugFixture)
+func RunCheckpointConformance(t *testing.T, factory CheckpointFactory)
+func RunCommandStoreConformance(t *testing.T, factory func(*testing.T) CommandFixture)
+func RunWorkflowStateConformance(t *testing.T, factory func(*testing.T) WorkflowFixture)
+func RunDistributedLockConformance(t *testing.T, factory LockFactory)
+```
 
 ### Upstream Error Classification
 
@@ -1358,12 +1450,47 @@ func (h *HotelHandler) handleSearch(rw http.ResponseWriter, r *http.Request) {
     result, err := h.amadeusClient.SearchHotels(ctx, params)
     if err != nil {
         info := core.ClassifyUpstreamError(err)
-        h.sendUpstreamError(rw, "Hotel search failed: "+err.Error(), info)
+        safeError := core.RedactSensitiveText(err.Error())
+        h.sendUpstreamError(rw, "Hotel search failed: "+safeError, info)
         return
     }
     h.sendSuccess(rw, result)
 }
 ```
+
+#### RedactSensitiveText
+
+Sanitizes untrusted diagnostic text before it is written to logs, traces,
+execution/debug state, or another model prompt:
+
+```go
+func RedactSensitiveText(value string) string
+func RedactSensitiveError(err error) error
+
+logger.Warn("Upstream request failed", map[string]interface{}{
+    "error": core.RedactSensitiveText(err.Error()),
+})
+
+return fmt.Errorf("upstream request failed: %w", core.RedactSensitiveError(err))
+```
+
+The helper recognizes common credential assignments and JSON fields, bearer or
+basic authorization values, credential-bearing URL user information, and common
+credential query parameters. It retains surrounding diagnostic structure and
+replaces values with `[REDACTED]`.
+
+This is defense in depth, not a general secret detector. Applications should
+still avoid placing credentials in URLs, response bodies, errors, prompts, or
+logs. The orchestration executor applies the helper to downstream failure text
+before retry/error-analysis prompts, state, logs, traces, checkpoints, and
+execution debug records. Successful tool payloads are not rewritten because
+they are application data. Tools that return logs or other observability data
+should sanitize those lines before returning them.
+
+Use `RedactSensitiveText` when only an observation field needs sanitization.
+Use `RedactSensitiveError` when the sanitized error is returned: its `Error`
+message is redacted while `Unwrap` preserves `errors.Is` and `errors.As`
+classification of the original cause.
 
 ### BackoffConfig
 
@@ -1656,16 +1783,18 @@ type AIResult struct {
 }
 
 type AIRequestReport struct {
-    Provider       string
-    ProviderAlias  string
-    Surface        string
-    Operation      string
-    Purpose        string
-    RequestedModel string
-    ResolvedModel  string
-    Adjustments    []AIRequestAdjustment
-    Fingerprint    string
-    Stable         bool
+    Provider             string
+    ProviderAlias        string
+    Surface              string
+    Operation            string
+    Purpose              string
+    RequestedModel       string
+    ResolvedModel        string
+    EffectiveTemperature AIParameter[float32]
+    EffectiveMaxTokens   AIParameter[int]
+    Adjustments          []AIRequestAdjustment
+    Fingerprint          string
+    Stable               bool
 }
 
 type AIRequestAdjustment struct {
@@ -1697,6 +1826,13 @@ text, credentials, raw bodies, complete secret-bearing endpoints, or secret
 field values. `AIRequestFingerprinter` optionally exposes the same stable,
 secret-free semantic identity before execution; AI-output caches must bypass
 reads and writes when it reports `stable=false`.
+
+`EffectiveTemperature` and `EffectiveMaxTokens` describe the final provider
+body after built-ins, application rules, middleware, per-request patches, and
+compatibility handling. `Set(value)` means the exact value was sent, `Omit`
+means the field was absent, and `Inherit` means that provider surface could not
+report the effective field. These fields are evidence, not a second request
+configuration surface.
 
 #### Provider patches
 
@@ -3803,13 +3939,94 @@ func main() {
 
 Intelligently coordinate multiple agents and tools to accomplish complex tasks.
 
+### Canonical Orchestrator Construction
+
+Use the canonical path when configuration errors must fail before the agent
+starts and environment ownership must be explicit:
+
+```go
+type ConfigResolution struct {
+    Base        *OrchestratorConfig
+    Environment EnvironmentMode
+    LookupEnv   func(string) (string, bool)
+    Options     []OrchestratorOption
+}
+
+func NewDefaultOrchestratorConfig() *OrchestratorConfig
+func ResolveOrchestratorConfig(ConfigResolution) (*ConfigResolutionResult, error)
+func DefaultConfigWithDiagnostics() ConfigResolutionResult
+func ValidateOrchestratorConfig(*OrchestratorConfig) error
+func ResolveOrchestratorConfigIdentity(*OrchestratorConfig) (OrchestratorConfigIdentity, error)
+func CreateResolvedOrchestrator(*OrchestratorConfig, OrchestratorDependencies) (*AIOrchestrator, error)
+func CreateOrchestratorFromEnvironment(OrchestratorDependencies, ...OrchestratorOption) (*AIOrchestrator, error)
+```
+
+`NewDefaultOrchestratorConfig` is deterministic and never reads process
+environment. `ResolveOrchestratorConfig` applies layers in this order:
+
+```text
+framework defaults/base -> selected environment mode -> code options -> normalization -> validation
+```
+
+The environment modes are:
+
+| Mode | Behavior |
+|---|---|
+| `EnvironmentDisabled` | Performs no environment reads |
+| `EnvironmentCompatible` | Preserves accepted legacy fallbacks and returns bounded `ConfigDiagnostic` values for ignored/coerced/defaulted settings |
+| `EnvironmentStrict` | Rejects malformed, empty, out-of-range, or inconsistent documented values without echoing their raw contents |
+
+`CreateResolvedOrchestrator` performs no environment reads and never initializes
+a telemetry provider. A nil telemetry dependency safely becomes NoOp and emits
+the documented bounded diagnostic when telemetry is enabled.
+`CreateOrchestratorFromEnvironment` selects strict environment resolution and
+then calls the canonical constructor. `CreateOrchestrator`,
+`CreateOrchestratorWithOptions`, and `CreateSimpleOrchestrator` remain supported
+compatibility entry points; they preserve their documented environment/bootstrap
+behavior.
+
+`DefaultConfigWithDiagnostics` is the total compatibility helper: it preserves
+legacy environment loading while returning bounded fallback diagnostics.
+`ResolveOrchestratorConfigIdentity` returns a sanitized behavior summary,
+fingerprint, and explicit `CacheEligible` bit. Prompt bodies, credentials,
+endpoints, and raw environment values are excluded. Cache consumers must bypass
+reuse unless `CacheEligible` is true.
+
+`OrchestratorConfig.RequestIDPrefix` is a code-owned compatibility-visible
+setting. Every buffered, native-streaming, simulated-streaming, and direct-plan
+execution now generates `<prefix>-<unix-nanoseconds>`; the default prefix is
+`orch`. Keep the prefix stable and low-cardinality because it appears in logs,
+traces, and execution records.
+
+```go
+resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+    Environment: orchestration.EnvironmentStrict,
+    Options: []orchestration.OrchestratorOption{
+        orchestration.WithMaxConcurrency(12), // code wins over environment
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+orchestrator, err := orchestration.CreateResolvedOrchestrator(resolved.Config, deps)
+```
+
 ### CreateSimpleOrchestrator
 
 Zero-configuration orchestrator for getting started quickly.
 
+This is a compatibility convenience. Use the canonical construction path above
+for production startup validation and explicit environment ownership.
+
 ```go
 func CreateSimpleOrchestrator(discovery core.Discovery, aiClient core.AIClient) *AIOrchestrator
+func CreateSimpleOrchestratorWithError(discovery core.Discovery, aiClient core.AIClient) (*AIOrchestrator, error)
 ```
+
+Prefer `CreateSimpleOrchestratorWithError` when startup must fail immediately.
+The pointer-only convenience preserves source compatibility by returning a
+poisoned orchestrator on construction failure; its first execution returns the
+stored construction error.
 
 **Example:**
 ```go
@@ -3855,8 +4072,14 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
 - `WithStepTimeout(d)` - Per-step execution timeout (default: 120s)
 - `WithTotalTimeout(d)` - Total HTTP client timeout for tool/agent calls (default: 600s)
+- `WithStepRetryBackoff(initial, max)` - Code-owned retry timing; canonical validation rejects non-positive or inverted values
+- `WithExecutionStoreWriteTimeout(d)` - Per-write deadline for execution-debug snapshots (default: 5s)
 
-**Iterative planning** is configured via `DefaultConfig()` struct fields or environment variables (no `With*` option function). See [IterativePlanConfig](#iterativeplanconfig) for details.
+**Iterative planning** is configured through `OrchestratorConfig` fields (start
+from `NewDefaultOrchestratorConfig`) or the documented environment layer; there
+is no dedicated `With*` option. `DefaultConfig()` remains the compatibility
+environment-loading helper. See [IterativePlanConfig](#iterativeplanconfig) for
+details.
 
 To build the Layer-2 distillation result processor **outside** `CreateOrchestrator` (e.g. in a custom runner), use `BuildDistillationEnabledResultProcessor(cfg ResultDistillConfig, ai core.AIClient, cache core.DigestCache, logger core.Logger) ResultProcessor` — a `StructuralTrimmer` wrapped by the `LLMDistiller` wrapped by a fail-open cache (nil `ai` → bare structural floor; nil `cache` → no caching).
 
@@ -3879,6 +4102,189 @@ To build the Layer-2 distillation result processor **outside** `CreateOrchestrat
 | `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
 | `ConversationHistoryPreparer` | `ConversationHistoryPreparer` | No | Shared conversation-history preparer for the metadata and hook ingress paths. If nil, the factory auto-builds the default Tier 1 processor from config. |
 | `ActivityCoordinator` | `core.ActivityCoordinator` | No | Real-time agent coordination signals — typically the second return value of `orchestration.BuildMemoryHooks` |
+
+### Orchestration Backend Composition
+
+`OrchestrationBackends` is a provider-neutral, immutable-style composition
+value with a private layout. Runtime features consume its narrow interfaces;
+they do not inspect a provider or infer one from discovery.
+
+```go
+func NewOrchestrationBackends(...OrchestrationBackendOption) (*OrchestrationBackends, error)
+func (b *OrchestrationBackends) With(...OrchestrationBackendOption) (*OrchestrationBackends, error)
+func (b *OrchestrationBackends) ValidateFor(BackendRequirements) error
+
+func RequirementsForFeatures(*OrchestratorConfig, ...BackendFeature) (BackendRequirements, error)
+```
+
+Typed options populate or override individual capabilities:
+
+```go
+WithExecutionBackend(ExecutionStore)
+WithLLMDebugBackend(LLMDebugStore)
+WithCheckpointPersistence(CheckpointPersistence)
+WithCheckpointExpiry(ExpiredCheckpointSource)
+WithCommandBackend(CommandStore)
+WithWorkflowBackend(StateStore)
+WithScheduleBackend(core.ScheduleStore)
+WithTaskBackend(core.TaskStore)
+WithTaskQueueBackend(core.TaskQueue)
+WithTaskDispatcherBackend(core.TaskDispatcher)
+WithTaskConsumerBackend(core.TaskConsumer)
+WithLockBackend(core.DistributedLock)
+WithRunnables(...core.Runnable)
+```
+
+Matching getters are `Execution`, `LLMDebug`, `Checkpoints`,
+`CheckpointExpiry`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
+`TaskDispatcher`, `TaskConsumer`, `Lock`, and `Runnables`. Getters are nil-safe;
+`Runnables` returns a defensive copy.
+
+`RequirementsForFeatures` combines execution/LLM-debug requirements from the
+effective orchestrator configuration with explicit feature flags such as
+`BackendFeatureWorkflow`, `BackendFeatureCrossInstanceHITL`,
+`BackendFeatureCheckpointExpiry`, `BackendFeatureSchedulerProducer`,
+`BackendFeatureScheduledWorker`, and `BackendFeatureDistributedLock`.
+`ValidateFor` fails startup with the complete sorted missing-capability list.
+
+#### Included Redis preset
+
+The included implementation lives in
+`github.com/truvaagents/truva-g3/orchestration/redisprovider`, outside runtime
+orchestration imports:
+
+```go
+redisClient := redis.NewClient(&redis.Options{Addr: "redis:6379"})
+defer redisClient.Close()
+
+clients, err := redisprovider.NewClientSet(redisClient)
+if err != nil {
+    log.Fatal(err)
+}
+options, err := redisprovider.NewOptions(
+    redisprovider.WithNamespace("travel-chat-agent"),
+    redisprovider.WithLogger(logger),
+)
+if err != nil {
+    log.Fatal(err)
+}
+backends, err := redisprovider.NewOrchestrationBackends(clients, options)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+`ClientSet` accepts one application-owned default Redis client plus optional
+role-specific clients through `WithRoleClient`. For configuration-owned
+connections, use `DefaultClientConfig`,
+`LoadClientConfigFromEnvironment`, and `NewOwnedClients`; close the returned
+`OwnedClients` after the framework stops. Redis URLs are parsed without being
+repeated in errors.
+
+Preset options are created with `NewOptions`. Deployment-owned operational
+values can then be applied using `LoadOptionsFromEnvironment`, followed by
+`ConfigureOptions` when code must win. Supported options include namespace,
+logger, execution-store configuration, workflow TTL, task-queue retry policy,
+and checkpoint expiry. Caller-supplied root backend overrides are applied last:
+
+```go
+backends, err := redisprovider.NewOrchestrationBackends(
+    clients,
+    options,
+    orchestration.WithExecutionBackend(customExecutionStore),
+)
+```
+
+The preset never starts background work and never closes injected clients.
+Register each returned `backends.Runnables()` value with `core.Framework` before
+`Run`. Individual `NewRedis*` constructors remain supported compatibility APIs,
+but new applications should prefer composition so switching providers does not
+change runtime feature wiring.
+
+The Redis preset's explicit configuration surface is:
+
+```go
+func DefaultClientConfig() ClientConfig
+func ConfigureClientConfig(ClientConfig, ...ClientConfigOption) (ClientConfig, error)
+func LoadClientConfigFromEnvironment(ClientConfig, func(string) (string, bool)) (ClientConfig, error)
+func WithClientURL(string) ClientConfigOption
+func WithRoleDatabase(ClientRole, int) ClientConfigOption
+func NewClientSet(redis.UniversalClient, ...ClientSetOption) (*ClientSet, error)
+func WithRoleClient(ClientRole, redis.UniversalClient) ClientSetOption
+func NewOwnedClients(ClientConfig) (*OwnedClients, error)
+func (*OwnedClients) ClientSet() *ClientSet
+func (*OwnedClients) Close() error
+
+const (
+    ClientRoleExecution  ClientRole = "execution"
+    ClientRoleLLMDebug   ClientRole = "llm_debug"
+    ClientRoleHITL       ClientRole = "hitl"
+    ClientRoleWorkflow   ClientRole = "workflow"
+    ClientRoleScheduling ClientRole = "scheduling"
+)
+
+func NewOptions(...Option) (Options, error)
+func ConfigureOptions(Options, ...Option) (Options, error)
+func LoadOptionsFromEnvironment(Options, func(string) (string, bool)) (Options, error)
+func WithNamespace(string) Option
+func WithExecutionStoreConfig(orchestration.ExecutionStoreConfig) Option
+func WithLogger(core.Logger) Option
+func WithWorkflowStateTTL(time.Duration) Option
+func WithTaskQueueRetryPolicy(int, time.Duration) Option
+func WithCheckpointExpiry(
+    orchestration.ExpiryProcessorConfig,
+    orchestration.ExpiryCallback,
+    ...orchestration.CheckpointExpiryProcessorOption,
+) Option
+```
+
+For adapter-specific composition, the application-owned client constructors
+are also public compatibility APIs:
+
+```go
+func NewRedisExecutionDebugStoreWithClient(redis.UniversalClient, ExecutionStoreConfig, ...RedisExecutionDebugStoreOption) (*RedisExecutionDebugStore, error)
+func NewRedisLLMDebugStoreWithClient(redis.UniversalClient, ...RedisLLMDebugStoreOption) (*RedisLLMDebugStore, error)
+func NewRedisCheckpointStoreWithClient(redis.UniversalClient, ...RedisCheckpointStoreOption) (*RedisCheckpointStore, error)
+func NewRedisCommandStoreWithClient(redis.UniversalClient, ...RedisCommandStoreOption) (*RedisCommandStore, error)
+func NewRedisStateStoreWithClient(redis.UniversalClient, time.Duration) (*RedisStateStore, error)
+func NewRedisStateStoreWithClientAndPrefix(redis.UniversalClient, time.Duration, string) (*RedisStateStore, error)
+func NewRedisTaskQueueWithClient(redis.Cmdable, *RedisTaskQueueConfig) *RedisTaskQueue
+func NewRedisTaskStoreWithClient(redis.Cmdable, *RedisTaskStoreConfig) *RedisTaskStore
+func NewRedisTaskDispatcherWithPrefix(redis.Cmdable, string) (*RedisTaskDispatcher, error)
+func NewRedisTaskConsumerWithPrefix(redis.Cmdable, string, string) (*RedisTaskConsumer, error)
+```
+
+These constructors never close the supplied client. The prefixed forms are
+useful when composing adapters without the preset; the application must give
+the producer and consumer sides the same namespace.
+
+#### Checkpoint expiry processor
+
+`CheckpointExpiryProcessor` separates provider-neutral expiry policy/lifecycle
+from storage. It implements `core.Runnable` and requires both
+`CheckpointPersistence` and `ExpiredCheckpointSource`:
+
+```go
+runtimeConfig, err := orchestration.LoadCheckpointExpiryRuntimeConfigFromEnvironment(
+    orchestration.DefaultCheckpointExpiryRuntimeConfig(),
+    os.LookupEnv,
+)
+processor, err := orchestration.NewCheckpointExpiryProcessor(
+    persistence,
+    expiredSource,
+    callback,
+    expiryConfig,
+    orchestration.WithCheckpointExpiryRuntimeConfig(runtimeConfig),
+    orchestration.WithCheckpointExpiryLogger(logger),
+    orchestration.WithCheckpointExpiryTelemetry(telemetryProvider),
+)
+framework.RegisterRunnable(processor)
+```
+
+The included Redis source uses atomic owner/lease claims so multiple replicas
+do not process the same expiry concurrently. The default claim lease is 30
+seconds and can be overridden with
+`TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` or code configuration.
 
 **Example - Production Orchestrator:**
 ```go
@@ -4161,6 +4567,19 @@ Prefer real-time data sources over cached information.`,
     Domain: "travel",
 }
 ```
+
+Planning system prompts are finalized after custom-builder output and
+`PlanAIOptions.SystemPrompt` merging. The framework guarantees exactly one
+canonical `<runtime_context>` section for initial, continuation, and
+regeneration planning. Application prompts must not declare that reserved tag;
+malformed, embedded, duplicate, or raw-override copies fail before the AI call.
+A legacy custom `SystemPromptBuilder` whose output already ends with the exact
+canonical block is retained byte-for-byte. Correction and synthesis prompts do
+not receive this planning-only finalizer.
+
+Callers can classify these preparation failures with
+`orchestration.ErrReservedRuntimeContext` and
+`orchestration.ErrInvalidPromptAssembly`.
 
 ### IterativePlanConfig
 
@@ -4586,6 +5005,11 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 ) (*StreamingOrchestratorResponse, error)
 ```
 
+Native delivery requires the streaming interface and `SupportsStreaming()` to
+return true. Otherwise orchestration uses simulated delivery and emits the
+bounded `streaming_fallback` diagnostic. Simulated chunks are split on UTF-8
+rune boundaries, so a callback never receives half of a multibyte character.
+
 **StreamingOrchestratorResponse fields:**
 ```go
 type StreamingOrchestratorResponse struct {
@@ -4644,7 +5068,7 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     )
 
     if err != nil {
-        fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+        fmt.Fprint(w, "event: error\ndata: request processing failed\n\n")
         return
     }
 
@@ -4852,7 +5276,24 @@ orchestration.WithDebugLogger(logger)
 orchestration.WithDebugCircuitBreaker(cb)
 orchestration.WithDebugTTL(24 * time.Hour)
 orchestration.WithDebugErrorTTL(168 * time.Hour)
+orchestration.WithDebugKeyPrefix("team-a:llm:debug")
 ```
+
+`NewRedisLLMDebugStore` creates and owns its Redis client. For application-owned
+connection routing, use:
+
+```go
+func NewRedisLLMDebugStoreWithClient(
+    client redis.UniversalClient,
+    opts ...RedisLLMDebugStoreOption,
+) (*RedisLLMDebugStore, error)
+```
+
+The supplied client remains open when the store is closed. The `WithClient`
+constructor does not read Redis connection or database environment variables;
+configure routing on the supplied client and use `WithDebugKeyPrefix` for key
+isolation. `WithDebugRedisURL` and `WithDebugRedisDB` do not reconfigure an
+already-supplied client.
 
 **Example - Enable Debug Capture:**
 ```go
@@ -4962,6 +5403,41 @@ type ExecutionStoreConfig struct {
 }
 ```
 
+The included direct Redis adapter exposes both store-owned and
+application-owned construction paths:
+
+```go
+func NewRedisExecutionDebugStore(
+    opts ...RedisExecutionDebugStoreOption,
+) (*RedisExecutionDebugStore, error)
+
+func NewRedisExecutionDebugStoreWithConfig(
+    config ExecutionStoreConfig,
+    opts ...RedisExecutionDebugStoreOption,
+) (*RedisExecutionDebugStore, error)
+
+func NewRedisExecutionDebugStoreWithClient(
+    client redis.UniversalClient,
+    config ExecutionStoreConfig,
+    opts ...RedisExecutionDebugStoreOption,
+) (*RedisExecutionDebugStore, error)
+
+func WithExecutionDebugRedisURL(url string) RedisExecutionDebugStoreOption
+func WithExecutionDebugRedisDB(db int) RedisExecutionDebugStoreOption
+func WithExecutionDebugLogger(logger core.Logger) RedisExecutionDebugStoreOption
+func WithExecutionDebugCircuitBreaker(cb core.CircuitBreaker) RedisExecutionDebugStoreOption
+func WithExecutionDebugKeyPrefix(prefix string) RedisExecutionDebugStoreOption
+func WithExecutionDebugTTL(ttl time.Duration) RedisExecutionDebugStoreOption
+func WithExecutionDebugErrorTTL(ttl time.Duration) RedisExecutionDebugStoreOption
+```
+
+The first two constructors create and own their Redis clients. The
+`WithClient` form leaves the application-owned client open on `Close` and does
+not read Redis connection or database environment variables. `config` supplies
+the normalized execution-store limits and retention policy; explicit adapter
+options apply afterward. `WithExecutionDebugRedisURL` and
+`WithExecutionDebugRedisDB` do not reconfigure an already-supplied client.
+
 Positive programmatic values are authoritative. Per-call result limits are
 clamped to `ConversationQueryLimit`, and stale-index work is bounded by
 `ConversationIndexScanLimit`.
@@ -4989,13 +5465,32 @@ type InterruptPolicy interface {
     ErrorEscalator    // ShouldEscalateError(ctx, step, err, attempts) (*InterruptDecision, error)
 }
 
-// CheckpointStore persists workflow state for interrupt/resume
-type CheckpointStore interface {
+// CheckpointPersistence is the provider-neutral request-path contract.
+type CheckpointPersistence interface {
     SaveCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) error
     LoadCheckpoint(ctx context.Context, checkpointID string) (*ExecutionCheckpoint, error)
     UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error
     ListPendingCheckpoints(ctx context.Context, filter CheckpointFilter) ([]*ExecutionCheckpoint, error)
     DeleteCheckpoint(ctx context.Context, checkpointID string) error
+}
+
+type ExpiredCheckpointClaimRequest struct {
+    Before time.Time
+    Limit  int
+    Owner  string
+    Lease  time.Duration
+}
+
+// ExpiredCheckpointSource atomically leases expiry work to one processor.
+type ExpiredCheckpointSource interface {
+    ClaimExpiredCheckpoints(ctx context.Context, request ExpiredCheckpointClaimRequest) ([]*ExecutionCheckpoint, error)
+    ReleaseExpiredCheckpointClaim(ctx context.Context, checkpointID, owner string) error
+}
+
+// CheckpointStore is the legacy convenience contract. New runtime code uses
+// CheckpointPersistence plus a separate CheckpointExpiryProcessor Runnable.
+type CheckpointStore interface {
+    CheckpointPersistence
     StartExpiryProcessor(ctx context.Context, config ExpiryProcessorConfig) error
     StopExpiryProcessor(ctx context.Context) error
     SetExpiryCallback(callback ExpiryCallback) error
@@ -5044,7 +5539,13 @@ func NewInterruptController(
 // Options
 func WithControllerLogger(logger core.Logger) InterruptControllerOption
 func WithControllerTelemetry(telemetry core.Telemetry) InterruptControllerOption
+func WithControllerCommandStore(store CommandStore) InterruptControllerOption
+func WithControllerCheckpointPersistence(store CheckpointPersistence) InterruptControllerOption
 ```
+
+`WithControllerCheckpointPersistence` is the provider-neutral path for request
+processing. It avoids requiring the legacy store-owned expiry lifecycle from a
+custom backend.
 
 **Policy:**
 ```go
@@ -5057,21 +5558,69 @@ func WithPolicyLogger(logger core.Logger) PolicyOption
 
 **CheckpointStore:**
 ```go
+// Canonical provider-neutral expiry lifecycle.
+func NewCheckpointExpiryProcessor(
+    persistence CheckpointPersistence,
+    source ExpiredCheckpointSource,
+    callback ExpiryCallback,
+    config ExpiryProcessorConfig,
+    options ...CheckpointExpiryProcessorOption,
+) (*CheckpointExpiryProcessor, error)
+
+type CheckpointExpiryRuntimeConfig struct {
+    ClaimLease time.Duration // default 30s
+}
+
+func DefaultCheckpointExpiryRuntimeConfig() CheckpointExpiryRuntimeConfig
+func LoadCheckpointExpiryRuntimeConfigFromEnvironment(
+    base CheckpointExpiryRuntimeConfig,
+    lookup func(string) (string, bool),
+) (CheckpointExpiryRuntimeConfig, error)
+
+func WithCheckpointExpiryOwner(owner string) CheckpointExpiryProcessorOption
+func WithCheckpointExpiryLease(lease time.Duration) CheckpointExpiryProcessorOption
+func WithCheckpointExpiryRuntimeConfig(config CheckpointExpiryRuntimeConfig) CheckpointExpiryProcessorOption
+func WithCheckpointExpiryLogger(logger core.Logger) CheckpointExpiryProcessorOption
+func WithCheckpointExpiryTelemetry(telemetry core.Telemetry) CheckpointExpiryProcessorOption
+func WithCheckpointExpiryPolicy(policy CheckpointExpiryPolicy) CheckpointExpiryProcessorOption
+
+// Included Redis compatibility constructor. Prefer redisprovider composition
+// for new application bootstrap code.
 func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
+func NewRedisCheckpointStoreWithClient(
+    client redis.UniversalClient,
+    opts ...RedisCheckpointStoreOption,
+) (*RedisCheckpointStore, error)
 
 // Options
 func WithCheckpointRedisURL(url string) RedisCheckpointStoreOption
 func WithCheckpointRedisDB(db int) RedisCheckpointStoreOption
 func WithCheckpointKeyPrefix(prefix string) RedisCheckpointStoreOption
 func WithCheckpointTTL(ttl time.Duration) RedisCheckpointStoreOption
-func WithInstanceID(id string) RedisCheckpointStoreOption  // For distributed claim coordination
+func WithInstanceID(id string) RedisCheckpointStoreOption  // Legacy store-owned expiry lifecycle only
 func WithCheckpointStoreLogger(logger core.Logger) RedisCheckpointStoreOption
 func WithCheckpointStoreTelemetry(telemetry core.Telemetry) RedisCheckpointStoreOption
 ```
 
+`NewRedisCheckpointStoreWithClient` leaves the supplied client open on
+`Close`. Unlike the command-store `WithClient` constructor, it retains the
+checkpoint identity resolution used by the compatibility constructor:
+`TRUVAG3_HITL_KEY_PREFIX`, followed by `TRUVAG3_AGENT_NAME` or
+`TRUVAG3_K8S_SERVICE_NAME`. `WithCheckpointKeyPrefix` remains the final
+in-code override. `WithCheckpointRedisURL` and `WithCheckpointRedisDB` do not
+reconfigure the supplied client.
+
+`CheckpointExpiryProcessor` implements `core.Runnable`. Register it before
+`Framework.Run()` and allow framework shutdown to cancel it. The processor owns
+polling, delivery policy, logging, tracing, and claim-owner identity; the
+storage provider owns persistence and atomic leased claims. The included Redis
+preset can assemble both with `redisprovider.WithCheckpointExpiry(...)` and
+returns the processor through `OrchestrationBackends.Runnables()`.
+
 **CommandStore:**
 ```go
 func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, error)
+func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisCommandStoreOption) (*RedisCommandStore, error)
 
 // Options
 func WithCommandStoreRedisURL(url string) RedisCommandStoreOption
@@ -5080,6 +5629,12 @@ func WithCommandStoreKeyPrefix(prefix string) RedisCommandStoreOption
 func WithCommandStoreLogger(logger core.Logger) RedisCommandStoreOption
 func WithCommandStoreTelemetry(t core.Telemetry) RedisCommandStoreOption
 ```
+
+`NewRedisCommandStore` is the environment-aware compatibility constructor.
+`NewRedisCommandStoreWithClient` uses an application-owned client, performs no
+environment lookup for its key prefix, defaults deterministically to
+`truvag3:hitl`, and leaves the supplied client open on `Close`. Pass
+`WithCommandStoreKeyPrefix` for a deployment-specific prefix.
 
 **InterruptHandler:**
 ```go
@@ -5202,6 +5757,10 @@ const (
     CheckpointStatusEdited    CheckpointStatus = "edited"
     CheckpointStatusCompleted CheckpointStatus = "completed"
     CheckpointStatusAborted   CheckpointStatus = "aborted"
+
+    // Framework-owned transient state while the durable run snapshot is
+    // attached. It is never resumable or listed as pending human work.
+    CheckpointStatusPreparing CheckpointStatus = "preparing"
 
     // Streaming expiry (implicit deny)
     CheckpointStatusExpired CheckpointStatus = "expired"
@@ -5357,7 +5916,7 @@ func WithExpiryProcessor(config ExpiryProcessorConfig) HITLOption
 | `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | Escalate to human after N retry failures |
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | Checkpoint expiration time |
 | `TRUVAG3_HITL_DEFAULT_ACTION` | `reject` | Action on timeout (approve, reject, abort) |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Redis key prefix |
+| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Base Redis key prefix; checkpoint stores append the resolved agent identity when present |
 
 #### Expiry Processor Configuration
 

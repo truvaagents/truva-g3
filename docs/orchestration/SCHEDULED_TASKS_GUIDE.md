@@ -330,11 +330,44 @@ The default backend uses Redis `BRPOP` -- the task is atomically removed from th
 
 **When this is fine**: monitoring checks, periodic refreshes, notifications -- workloads where losing a few tasks per pod crash is acceptable.
 
-**Wiring** (default, no change needed):
+**Wiring with the included Redis preset** (default):
 
 ```go
-backends, err := orchestration.NewRedisSchedulerBackends(redisClient)
+clients, err := redisprovider.NewClientSet(redisClient)
+if err != nil {
+    return err
+}
+providerOptions, err := redisprovider.NewOptions(
+    redisprovider.WithNamespace("scheduler"),
+)
+if err != nil {
+    return err
+}
+backends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
+if err != nil {
+    return err
+}
+requirements, err := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureSchedulerProducer,
+    orchestration.BackendFeatureScheduledWorker,
+)
+if err != nil {
+    return err
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    return err
+}
+
+scheduleStore := backends.Schedules()
+dispatcher := backends.TaskDispatcher()
+consumer := backends.TaskConsumer()
 ```
+
+`NewRedisSchedulerBackends` remains a compatibility convenience constructor.
+New application bootstrap code should compose through
+`OrchestrationBackends`, so replacing Redis does not change scheduler runtime
+code.
 
 ### At-Least-Once (Streams)
 
@@ -345,9 +378,44 @@ The alternative backend uses Redis Streams (`XREADGROUP` + `XACK`). The task sta
 **Wiring**:
 
 ```go
-backends, reaper, err := orchestration.NewRedisStreamsSchedulerBackends(redisClient)
-// MUST register the reaper -- without it, crashed replicas leak tasks
-framework.RegisterRunnable(reaper)
+streamDispatcher, err := orchestration.NewRedisStreamsTaskDispatcher(
+    redisClient,
+    orchestration.ScheduledExecutorQueue,
+)
+if err != nil {
+    return err
+}
+streamConsumer, err := orchestration.NewRedisStreamsTaskConsumer(
+    redisClient,
+    orchestration.ScheduledExecutorQueue,
+    "scheduled-executor-group",
+)
+if err != nil {
+    return err
+}
+reaper := orchestration.NewRedisStreamsReaper(
+    redisClient,
+    orchestration.ScheduledExecutorQueue,
+    "scheduled-executor-group",
+)
+
+// Starting with the provider-neutral bundle assembled above, override only
+// the delivery capabilities. The schedule store remains unchanged.
+backends, err = backends.With(
+    orchestration.WithTaskDispatcherBackend(streamDispatcher),
+    orchestration.WithTaskConsumerBackend(streamConsumer),
+    orchestration.WithRunnables(reaper),
+)
+if err != nil {
+    return err
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    return err
+}
+for _, runnable := range backends.Runnables() {
+    // Required: without the reaper, crashed replicas leak claimed tasks.
+    framework.RegisterRunnable(runnable)
+}
 ```
 
 ### Which One Should I Pick?
@@ -513,8 +581,28 @@ Wire it in `main.go`:
 
 ```go
 consumer := pgscheduler.NewPostgresTaskConsumer(db)
+dispatcher := pgscheduler.NewPostgresTaskDispatcher(db)
+scheduleStore := pgscheduler.NewPostgresScheduleStore(db)
+
+backends, err := orchestration.NewOrchestrationBackends(
+    orchestration.WithScheduleBackend(scheduleStore),
+    orchestration.WithTaskDispatcherBackend(dispatcher),
+    orchestration.WithTaskConsumerBackend(consumer),
+)
+if err != nil {
+    return err
+}
+requirements, _ := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureSchedulerProducer,
+    orchestration.BackendFeatureScheduledWorker,
+)
+if err := backends.ValidateFor(requirements); err != nil {
+    return err
+}
+
 worker, _ := executor.NewWorker(executor.ExecutorDeps{
-    Consumer:   consumer,
+    Consumer:   backends.TaskConsumer(),
     HTTPClient: tracedClient,
     Catalog:    catalog,
 })

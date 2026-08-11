@@ -121,8 +121,9 @@ response, err := h.client.SearchHotels(ctx, req)
 if err != nil {
     // ClassifyUpstreamError extracts the status code from err.Error()
     // and returns the correct HTTP status, category, and retryable flag
-    h.sendUpstreamError(rw, "Hotel search failed: "+err.Error(),
-        core.ClassifyUpstreamError(err))
+    info := core.ClassifyUpstreamError(err)
+    safeError := core.RedactSensitiveText(err.Error())
+    h.sendUpstreamError(rw, "Hotel search failed: "+safeError, info)
     return
 }
 ```
@@ -454,7 +455,7 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 
 ### For Tool Developers
 
-1. **Always use your tool's `sendUpstreamError` method + `core.ClassifyUpstreamError` for upstream API errors.** This ensures the `orchestration` module's executor routes errors to the correct handler.
+1. **Always use your tool's `sendUpstreamError` method + `core.ClassifyUpstreamError` for upstream API errors.** Classify the original error, then pass only `core.RedactSensitiveText(err.Error())` into the response and observation surfaces. This preserves routing without propagating common credential forms.
 
 2. **Use your tool's `sendError` method only for tool-local validation** — decode failures, missing required fields, invalid formats detected before calling the upstream API.
 
@@ -530,7 +531,9 @@ Routing decisions are made in `orchestration/error_analyzer.go`, executed by `or
 
 ```go
 // For upstream API errors:
-h.sendUpstreamError(rw, "API failed: "+err.Error(), core.ClassifyUpstreamError(err))
+info := core.ClassifyUpstreamError(err)
+safeError := core.RedactSensitiveText(err.Error())
+h.sendUpstreamError(rw, "API failed: "+safeError, info)
 
 // For local validation errors:
 h.sendError(rw, "city_code is required", http.StatusBadRequest, "MISSING_FIELDS")

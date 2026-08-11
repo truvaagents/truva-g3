@@ -598,9 +598,18 @@ on_error:
 ### Using Workflows in Code
 
 ```go
-// Step 1: Create the workflow engine
-stateStore := orchestration.NewRedisStateStore(discovery)
-engine := orchestration.NewWorkflowEngine(discovery, stateStore, logger)
+// Step 1: Validate and consume the provider-neutral workflow capability.
+requirements, err := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureWorkflow,
+)
+if err != nil {
+    log.Fatal(err)
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    log.Fatal(err)
+}
+engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger)
 
 // Step 2: Load your workflow (from file or string)
 yamlData, _ := os.ReadFile("investment-analysis.yaml")
@@ -628,6 +637,11 @@ for stepName, step := range execution.Steps {
         stepName, step.Status, step.EndTime.Sub(*step.StartTime))
 }
 ```
+
+`backends` is created once by application bootstrap. New workflow/runtime code
+should depend on `OrchestrationBackends` or the narrow `StateStore` it exposes,
+not construct Redis itself. `NewRedisStateStore` remains supported for
+compatibility.
 
 ### How Variables Work - Data Flow Between Steps
 
@@ -785,15 +799,19 @@ For sensitive operations, the orchestration module supports pausing execution an
 ### Quick Start
 
 ```go
-// 1. Create checkpoint store (Redis-backed for distributed deployments)
-checkpointStore, _ := orchestration.NewRedisCheckpointStore(
-    orchestration.WithCheckpointStoreRedisURL(redisURL),
+// 1. Validate and select the provider-neutral HITL capabilities assembled at
+// application bootstrap (see Application Wiring above).
+requirements, _ := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureCrossInstanceHITL,
 )
+if err := backends.ValidateFor(requirements); err != nil {
+    return err
+}
+checkpointStore := backends.Checkpoints()
+commandStore := backends.Commands()
 
-// 2. Create webhook handler to notify your approval system
-commandStore, _ := orchestration.NewRedisCommandStore(
-    orchestration.WithCommandStoreRedisURL(redisURL),
-)
+// 2. Create webhook handler to notify your approval system.
 handler := orchestration.NewWebhookInterruptHandler(
     "https://your-service/hitl/webhook",
     commandStore,
@@ -844,7 +862,7 @@ HITL can pause execution at different stages:
 Configure automatic behavior when humans don't respond:
 
 ```bash
-# Enable expiry processor (background goroutine)
+# Enable the lifecycle-owned expiry Runnable
 export TRUVAG3_HITL_EXPIRY_ENABLED=true
 export TRUVAG3_HITL_EXPIRY_INTERVAL=10s
 
@@ -856,7 +874,11 @@ export TRUVAG3_HITL_DEFAULT_ACTION=reject
 
 ## 8.1 Scheduled Task Execution
 
-The `orchestration/` package ships the consumer-side primitives for the scheduled-execution subsystem: `TaskConsumer` reference implementations (`RedisTaskConsumer` default + `RedisStreamsTaskConsumer` alternative), the `RegisterScheduledEndpoint` helper agents use to receive scheduled tasks, and the `SchedulerBackends` factory that bundles producer + consumer backends.
+The `orchestration/` package ships the provider-neutral consumer contracts and
+scheduled endpoint helper. The optional Redis provider supplies BRPOP and
+Streams adapters; new applications expose them through
+`OrchestrationBackends`, while `SchedulerBackends` remains a compatibility
+convenience bundle.
 
 **One-line agent integration:**
 
@@ -923,6 +945,66 @@ func main() {
     // The orchestrator now has AI capabilities WITHOUT importing ai module!
 }
 ```
+
+Storage and coordination use the same composition rule. The orchestration
+package defines provider-neutral capabilities; the included Redis preset is
+selected explicitly at the application boundary:
+
+```go
+redisClient := redis.NewClient(&redis.Options{Addr: "redis:6379"})
+defer redisClient.Close()
+
+clients, err := redisprovider.NewClientSet(redisClient)
+if err != nil {
+    log.Fatal(err)
+}
+providerOptions, err := redisprovider.NewOptions(
+    redisprovider.WithNamespace("travel-chat-agent"),
+    redisprovider.WithLogger(logger),
+)
+if err != nil {
+    log.Fatal(err)
+}
+backends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
+if err != nil {
+    log.Fatal(err)
+}
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.ExecutionStore.Enabled = true
+config.ExecutionStoreBackend = backends.Execution()
+config.LLMDebug.Enabled = true
+config.LLMDebugStore = backends.LLMDebug()
+
+deps := orchestration.OrchestratorDependencies{
+    Discovery: discovery,
+    AIClient:  aiClient,
+    Logger:    logger,
+}
+
+requirements, err := orchestration.RequirementsForFeatures(
+    config,
+    orchestration.BackendFeatureWorkflow,
+)
+if err != nil {
+    log.Fatal(err)
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    log.Fatal(err)
+}
+
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
+if err != nil {
+    log.Fatal(err)
+}
+engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger)
+```
+
+Applications register every value returned by `backends.Runnables()` with
+`core.Framework` before calling `Run`, and close their clients only after the
+framework stops. The preset constructs adapters but does not start goroutines
+or close application-owned clients. A non-Redis provider supplies the same
+root options and getters, so runtime consumers do not change.
 
 #### Benefits of This Design
 
@@ -1232,7 +1314,7 @@ if metrics.ComponentCallsFailed > 10 {
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `120s` | HTTP client timeout for tool/agent calls. For long-running AI workflows, set higher values (e.g., `5m`, `10m`). Uses Go duration format. |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | HTTP client timeout for tool/agent calls. Uses Go duration format. |
 | `TRUVAG3_OAUTH_TOKEN` | (empty) | Bearer token for service-to-service authentication. Per-request tokens via `WithOAuthToken(ctx, token)` take priority. When set, all outbound HTTP calls include `Authorization: Bearer <token>`. |
 | *(no env var)* | N/A | Custom header propagation via `config.PropagatedHeaders` (config-level) or `WithPropagatedHeaders(ctx, headers)` (per-request). Context headers override config headers on key conflict. Reserved headers (`Authorization`, `Content-Type`, `X-TruvaG3-*`) are protected. |
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | Enable tiered capability resolution for LLM token optimization. Automatically selects relevant tools before plan generation. |
@@ -1243,6 +1325,8 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index for debug storage |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
+| `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
+| `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `30s` | Lease for an atomic expired-checkpoint claim across replicas |
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | Enable multi-phase iterative planning. When enabled, the LLM planner can generate partial plans that execute in phases. Uses a tiered approach: Phase 1 discovers, Phase 2+ acts on results with context-aware tool re-selection. |
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | Maximum planning phases per request. Most queries need at most 2. |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | Maximum total steps across all phases. Prevents runaway plan generation. |
@@ -1282,8 +1366,18 @@ export TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL=10m
 
 ### Programmatic Configuration
 
+Prefer starting from deterministic defaults and changing only owned values.
+Pass the result to `CreateResolvedOrchestrator`, or use
+`ResolveOrchestratorConfig` when environment layering is intentional. A raw
+struct literal is shown below to make the major fields visible, but omitted
+fields do not communicate whether their zero values are deliberate.
+
 ```go
 config := &orchestration.OrchestratorConfig{
+    // Stable low-cardinality request ID prefix. Generated IDs use
+    // <prefix>-<unix-nanoseconds> in every request/delivery mode.
+    RequestIDPrefix: "travel",
+
     // Routing mode
     RoutingMode: orchestration.ModeAutonomous,  // Options: ModeAutonomous, ModeWorkflow
 
@@ -1347,7 +1441,8 @@ The orchestration module supports various usage patterns as demonstrated in the 
 
 ## 15. Requirements
 
-- **Redis** - For tool/agent discovery and state storage
+- **A `core.Discovery` implementation** - Redis is the included default, not a runtime requirement
+- **Backend implementations for enabled orchestration features** - The included Redis preset is optional and selected by application composition
 - **OpenAI API Key** - For AI orchestration (or compatible LLM)
 - **Running Components** - Tools and agents registered with discovery
 
@@ -1549,6 +1644,11 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 ) (*StreamingOrchestratorResponse, error)
 ```
 
+The shared request lifecycle chooses native delivery only when the client
+implements the streaming contract and reports `SupportsStreaming() == true`.
+Otherwise it uses simulated delivery, emits `streaming_fallback`, and chunks
+on UTF-8 rune boundaries rather than splitting multibyte characters.
+
 ### Basic Streaming Example
 
 ```go
@@ -1565,7 +1665,7 @@ result, err := orchestrator.ProcessRequestStreaming(ctx,
 )
 
 if err != nil {
-    log.Printf("Streaming failed: %v", err)
+    log.Printf("Streaming failed: %s", core.RedactSensitiveText(err.Error()))
     return
 }
 
@@ -1616,7 +1716,7 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     )
 
     if err != nil {
-        fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+        fmt.Fprint(w, "event: error\ndata: request processing failed\n\n")
         return
     }
 
@@ -1744,9 +1844,15 @@ These features are not yet implemented but could be added:
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
 - `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
 - `ExecutionStoreConfig` - Includes conversation query and stale-index scan limits
+- `OrchestrationBackends` - Provider-neutral bundle of optional storage and coordination capabilities
+- `BackendRequirements` / `BackendFeature` - Effective capability requirements and validation inputs
+- `ConfigResolution` / `ConfigResolutionResult` - Explicit defaults/environment/code resolution contract
 
 ### Key Functions
 - `CreateOrchestrator(config, deps)` - Create orchestrator with dependencies
+- `CreateResolvedOrchestrator(config, deps)` - Canonical environment-free, error-returning constructor
+- `CreateOrchestratorFromEnvironment(deps, opts...)` - Strict environment resolution followed by canonical construction
+- `ResolveOrchestratorConfig(input)` - Resolve explicit layers and bounded fallback diagnostics
 - `CreateSimpleOrchestrator(discovery, aiClient)` - Quick start orchestrator
 - `CreateOrchestratorWithOptions(deps, opts...)` - Create with option functions
 - `NewAIOrchestrator(config, discovery, aiClient)` - Low-level orchestrator creation
@@ -1761,6 +1867,8 @@ These features are not yet implemented but could be added:
 - `NewLLMCallRecorderAdapter(store)` - Bridge `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionConversationID(execution)` - Read canonical conversation metadata
 - `ExecutionSummaryConversationID(summary)` - Read canonical conversation metadata from a summary
+- `NewOrchestrationBackends(options...)` - Compose provider-neutral backend capabilities directly
+- `RequirementsForFeatures(config, features...)` - Derive and validate feature capability requirements
 
 ### Conversation-aware execution stores
 
@@ -2014,8 +2122,10 @@ The orchestration module captures complete LLM request/response payloads for pro
 
 **Key Features:**
 - **Complete Payload Visibility**: No truncation of prompts or responses
-- **Request Correlation**: Query by `request_id` (trace ID or sequence number)
-- **9 Recording Sites**: `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, `hallucination_detection`, plus `agent_llm_call` (via `ai.InstrumentedAIClient`)
+- **Request Correlation**: Query by the stable prefix-aware `request_id` carried
+  across logs, traces, and execution records
+- **Typed Recording Families**: core orchestration calls include `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, and `hallucination_detection`; optional memory/compaction features add their own types, and `ai.InstrumentedAIClient` contributes `agent_llm_call`
+- **Effective Request Evidence**: request-aware calls record sanitized requested/effective model and sampling intent plus bounded provider adjustments; prompt/system bodies remain in the existing debug payload fields and are never copied into metrics or preparation reports
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
 - **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
@@ -2148,7 +2258,7 @@ logger.DebugWithContext(ctx, "AI selected components", map[string]interface{}{
 logger.ErrorWithContext(ctx, "Workflow step failed", map[string]interface{}{
     "workflow": "report-generation",
     "step": "pdf-export",
-    "error": err.Error(),
+    "error": core.RedactSensitiveText(err.Error()),
     "retry_count": 3,
 })
 ```

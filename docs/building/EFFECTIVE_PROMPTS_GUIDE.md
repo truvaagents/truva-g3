@@ -801,6 +801,11 @@ Use this checklist to audit any prompt. Each check maps to a principle — follo
 | 8 | **Structural boundaries** | Major sections delimited with XML (or Markdown) tags (`<instructions>`, `<example>`, etc.) | [2.10](#210-use-xml-tags-for-section-boundaries) |
 | 9 | **Single CRITICAL** | "CRITICAL" label used for at most 1 rule | [4.6](#46-single-persona-single-critical) |
 | 10 | **Continuation slim** | Follow-up prompts drop repeated instructions; add only phase-specific context | [4.5](#45-slim-down-continuation-prompts) |
+| 11 | **Dynamic data encoding** | User, catalog, retrieved, tool, and authored package data cannot create or close framework sections | [2.10](#210-use-xml-tags-for-section-boundaries) |
+| 12 | **Context precedence preserved** | Prompt changes retain each prompt kind's established placement—immediately before the tail live request for planning, after enrichments before planning instructions for continuation, and after enrichments before agent responses for synthesis—and preserve its audit signals; skill-enabled changes test it together with `<skill_precedence>` | [9.3](#93-context-precedence-observability) |
+| 13 | **Instruction components measured** | System, base-user, and dynamically projected instructional tokens are measured together against the quality target | [2.2](#22-stay-under-the-bloat-threshold-3000-tokens) |
+| 14 | **Model-class portability** | Representative standard, reasoning, and smaller/open-weight model classes pass the applicable prompt evaluation | [2.11](#211-standard-models-need-precision-reasoning-models-prefer-brevity) |
+| 15 | **Semantic request audit input** | Request-entity extractors receive decoded semantic request text rather than JSON serialization, without changing the encoded model-facing or stored prompt | [9.3](#93-context-precedence-observability) |
 
 ### 8.6 Full Prompt Example: Before and After
 
@@ -1112,12 +1117,49 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 | `<context>` | User msg | Downstream task context (attrs: `source`, `capability`) |
 | `<data>` | User msg | Data to distill |
 
+#### Planned Agent Skills V1 (`orchestration/notes/AGENT_SKILLS_V1_IMPLEMENTATION_PLAN.md`)
+
+> **Status:** Reserved by the proposed Agent Skills V1 design; these tags are
+> not evidence that the implementation has shipped. Move them into the
+> applicable phase tables above as code lands.
+
+The skills compiler keeps selected package bodies in one framework-owned user
+message envelope. A fixed system rule identifies that envelope as trusted
+operator guidance while keeping authorization, safety, capability, and HITL
+rules above it.
+
+| Tag family | Location | Purpose |
+|-----|----------|---------|
+| `<skill_precedence>` | System msg | Fixed framework rule establishing framework policy > active-skill guidance > encoded request/external context. Contains no selected skill body. |
+| `<active_skills>` | User msg | Canonical current-boundary projection for initial planning, continuation, regeneration, and synthesis. |
+| `<skill>` | User msg, nested | One exact active namespace/name/version. |
+| `<planning_guidance>` / `<response_guidance>` | User msg, nested | Purpose-specific planning/continuation or synthesis instructions. |
+| `<instruction>` | User msg, nested | One canonically encoded authored instruction. |
+| `<selected_resources>` / `<resource>` | User msg, nested | Resources selected for the current boundary only; bodies use canonical data encoding. |
+| `<active_skill_tool_hints>` | Tiered-selection user msg | Request-scoped hints from active skills; never provider-wide mutable instructions. |
+| `skill_activation_*` | Standalone selector system/user msgs | Fixed identity/rules/example plus encoded candidates, context, request, and final JSON anchor. |
+| `skill_resource_*` | Standalone selector system/user msgs | Fixed identity/rules/example plus encoded eligible resources, phase context, request, and final JSON anchor. |
+| `skill_authoring_*` | Standalone advisor system/user msgs | Fixed identity/rules/example plus encoded deterministic validation/package data and final JSON anchor. |
+
+Skills V1 uses compact Go `encoding/json` serialization with standard HTML
+escaping enabled and no indentation for dynamic values inside these XML
+sections. XML provides the section structure; JSON is data serialization, not
+the outer prompt delimiter. The compiler preserves each existing prompt kind's
+section order: planning keeps `<context_precedence>` immediately before its
+tail `<user_request>`, continuation keeps it after enrichments and before
+custom/planning instructions, and synthesis keeps it after enrichments and
+before `<agent_responses>`. Golden and smaller/open-weight behavioral coverage
+must compose `<skill_precedence>` with `<context_precedence>` in one request;
+the former governs skill guidance versus request/external content, while the
+latter governs the live request versus stale profile/history.
+
 ### 9.2 Safe Tag Names for Agent Prompts
 
-Since the framework reserves `<instructions>`, `<example>`, `<identity>`, `<available_agents>`, `<agent_memory>`, `<conversation_history>`, `<user_profile>`, and `<context_precedence>` in its prompt templates, use **distinct names** in your `SystemInstructions`:
+Since the framework reserves `<runtime_context>`, `<instructions>`, `<example>`, `<identity>`, `<available_agents>`, `<agent_memory>`, `<conversation_history>`, `<user_profile>`, and `<context_precedence>` in its current prompt templates—and the planned Skills V1 design additionally reserves the tags and prefixed families listed above—use **distinct names** in your `SystemInstructions`. `<runtime_context>` is framework-owned in planning system messages: current built-in/fallback builders render it, and the pre-Skills foundation finalizes it exactly once after raw system overrides and custom system-prompt builders. New agent-authored prompts should leave that tag absent. For compatibility, a custom `SystemPromptBuilder` that already ends in the exact canonical block is accepted and retained byte-for-byte; malformed, embedded, or duplicate copies and raw AI-options overrides containing the tag are rejected:
 
 | Instead of | Use |
 |-----------|-----|
+| `<runtime_context>` | `<domain_time_context>`, `<business_calendar>` |
 | `<instructions>` | `<workflow>`, `<rules>`, `<guidelines>` |
 | `<example>` | `<workflow_example>`, `<plan_example>`, `<domain_example>` |
 | `<identity>` | OK in SystemInstructions — it becomes the system message, separate from the user message where the framework uses `<identity>` |
@@ -1167,6 +1209,19 @@ Opt-in fields (populated only when `AIOrchestrator.SetPrecedenceEntityExtractor`
 - `auditor_version` — version string from the extractor implementation; lets the registry viewer hide/demote old records when the extractor evolves.
 
 Entity extraction is opt-in because named-entity recognition is domain-specific; the framework stays domain-agnostic per `FRAMEWORK_DESIGN_PRINCIPLES.md §Framework is domain-agnostic`. Agents that need compliance detection implement `PrecedenceEntityExtractor` and wire it at startup.
+
+For `PrecedenceSectionRequest`, `text` is the decoded semantic request rather
+than its prompt serialization. Other section kinds retain their existing
+assembled-section input. When the planned Skills V1 compiler JSON-encodes
+`<user_request>`, the audit path decodes that value exactly once before calling
+the extractor. Both encoded and legacy request paths remove only the single
+framework-inserted newline immediately inside the section tags, rather than
+broadly trimming caller text. The model-facing and `LLMInteraction.Prompt`
+copies remain encoded. A decode failure produces empty request entities and an
+`inconclusive` audit, emits only the body-free
+`orchestrator.context_precedence.request_decode_failed` span event, and never
+fails the agent request. Skills-on and skills-off regression cases must yield
+identical request entities for quotes, Unicode, ampersands, and tag-like text.
 
 **Contract:**
 ```go

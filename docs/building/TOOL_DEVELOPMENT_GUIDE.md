@@ -687,15 +687,22 @@ func (t *YourTool) handleGetData(rw http.ResponseWriter, r *http.Request) {
     var result GetDataResponse
 
     if err != nil || data == nil {
-        // Record error on span for Jaeger visibility
+        if err == nil {
+            err = fmt.Errorf("external API returned no data")
+        }
+        // Classify the original error, but sanitize all observation/response text.
+        info := core.ClassifyUpstreamError(err)
+        safeError := core.RedactSensitiveText(err.Error())
+
+        // Record sanitized error text on the span for Jaeger visibility.
         if err != nil {
-            telemetry.RecordSpanError(ctx, err)
+            telemetry.RecordSpanError(ctx, fmt.Errorf("%s", safeError))
         }
 
         // Log the failure with context
         t.Logger.WarnWithContext(ctx, "External API call failed", map[string]interface{}{
             "operation":   "get_data",
-            "error":       err,
+            "error":       safeError,
             "error_type":  "api_error",
             "id":          req.ID,
             "request_id":  requestID,
@@ -707,8 +714,7 @@ func (t *YourTool) handleGetData(rw http.ResponseWriter, r *http.Request) {
         //
         // Alternative: If your tool provides fallback/mock data, skip the
         // sendUpstreamError + return and assign: result = generateFallbackData(req.ID)
-        t.sendUpstreamError(rw, fmt.Sprintf("Data fetch failed: %v", err),
-            core.ClassifyUpstreamError(err))
+        t.sendUpstreamError(rw, "Data fetch failed: "+safeError, info)
         return
     } else {
         // Log successful API call
@@ -1707,9 +1713,10 @@ The orchestrator routes errors by HTTP status code — **400s** go to the LLM er
 // ❌ WRONG: All upstream errors become 502
 t.sendError(rw, "API call failed: "+err.Error(), http.StatusBadGateway, "API_ERROR")
 
-// ✅ CORRECT: Classify upstream errors automatically
-t.sendUpstreamError(rw, fmt.Sprintf("API call failed: %v", err),
-    core.ClassifyUpstreamError(err))
+// ✅ CORRECT: Classify the original error, then sanitize returned text.
+info := core.ClassifyUpstreamError(err)
+safeError := core.RedactSensitiveText(err.Error())
+t.sendUpstreamError(rw, "API call failed: "+safeError, info)
 ```
 
 `ClassifyUpstreamError` extracts the HTTP status from error messages (handles `"status 400"`, `"error 400"`, `"code: 429"`, etc.) and maps it to the correct tool response. See [API Reference](../reference/API_REFERENCE.md#classifyupstreamerror) for the full classification mapping.
@@ -2275,13 +2282,14 @@ func (t *YourTool) handleGetDataAdvanced(rw http.ResponseWriter, r *http.Request
 
     data, err := t.client.GetData(ctx, req.ID)
     if err != nil {
-        telemetry.RecordSpanError(ctx, err)
+        safeError := core.RedactSensitiveText(err.Error())
+        telemetry.RecordSpanError(ctx, fmt.Errorf("%s", safeError))
         telemetry.Counter("tool.errors.total",
             "capability", "get_data",
             "error_type", "api_error",
         )
         // Use sendUpstreamError for external API failures
-        t.sendUpstreamError(rw, fmt.Sprintf("Data fetch failed: %v", err),
+        t.sendUpstreamError(rw, "Data fetch failed: "+safeError,
             core.ClassifyUpstreamError(err))
         return
     }

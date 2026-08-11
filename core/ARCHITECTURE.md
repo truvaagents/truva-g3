@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.1
+**Version**: 1.2
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -55,6 +55,11 @@ type StreamingAIRequestClient interface {
 type AIRequestFingerprinter interface {
     RequestFingerprint(context.Context, *AIRequest) (string, bool)
 }
+
+// AIRequestReport is sanitized provider evidence. Presence-aware effective
+// temperature/max-token fields describe the post-policy provider body:
+// Inherit means unreported, Omit means absent, and Set means sent.
+// Prompts, credentials, and raw request bodies are forbidden.
 
 // LegacyRepresentable centralizes the lossless-fallback decision so wrappers
 // and cache adapters do not duplicate parameter representability rules.
@@ -776,16 +781,27 @@ func (t *BaseTool) Initialize(ctx context.Context) error {
 
 #### 1. **No Secret Logging**
 ```go
-// ✅ Good: Redact secrets in logs
-func (c *Config) String() string {
-    // Never log API keys or sensitive information
-    redacted := *c
-    if redacted.AI.APIKey != "" {
-        redacted.AI.APIKey = "[REDACTED]"
-    }
-    return fmt.Sprintf("%+v", redacted)
-}
+// Keep the original error for control flow; sanitize only the observation.
+logger.Error("Provider request failed", map[string]interface{}{
+    "operation":  "provider_request",
+    "error_type": "upstream",
+    "error":      core.RedactSensitiveText(err.Error()),
+})
+return err
 ```
+
+`RedactSensitiveText` is a dependency-free defense-in-depth helper for strings
+that cross log, trace, debug-record, or tool-result boundaries. It recognizes
+common authorization headers, credential assignments, secret-bearing URL user
+information, and credential query parameters while retaining useful diagnostic
+structure. It is not a substitute for avoiding secrets in URLs, payloads,
+prompts, and errors in the first place.
+
+When a sanitized error must cross an API boundary, `RedactSensitiveError`
+provides the same observable-message protection while implementing `Unwrap` so
+`errors.Is` and `errors.As` still reach the original cause. Use
+`RedactSensitiveText` for observation-only fields and `RedactSensitiveError`
+when error-chain control flow must survive sanitization.
 
 #### 2. **Input Validation**
 ```go
@@ -861,7 +877,8 @@ func (r *RedisRegistry) StartHeartbeat(ctx context.Context, id string, heartbeat
 func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
     opts, err := redis.ParseURL(redisURL)
     if err != nil {
-        return nil, fmt.Errorf("invalid Redis URL: %w", err)
+        // Do not return parser text: it may echo URL user information.
+        return nil, errors.New("invalid Redis URL")
     }
     
     // Configure connection pool
@@ -872,6 +889,30 @@ func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
     return &RedisRegistry{client: client, ttl: ttl}, nil  // ttl from NewRedisRegistryWithOptions, clamped (min 5s, default 30s)
 }
 ```
+
+---
+
+## Pipeline Short-Circuit and Cache-Variation Contracts
+
+Core keeps the legacy `PipelineContext`, `PipelineShortCircuit`, and
+`BeforePlanningHook` field/method shapes unchanged. Provenance-aware behavior is
+additive:
+
+- `BeforePlanningDecisionHook` classifies a response as `authoritative` or
+  `cache` without teaching core any feature semantics;
+- authoritative policy, denial, rate-limit, and canned responses remain valid
+  independently of cache variation;
+- a cache decision returns the variation map persisted with the cache entry,
+  not the gate's current map echoed at lookup time; and
+- `PipelineGate.CacheVary` exposes a defensive copy of request-local named
+  dimensions. The orchestration consumer performs exact symmetric comparison:
+  a missing dimension on either side is a mismatch.
+
+Dimension names and values are opaque strings to core. The feature that owns a
+dimension owns its projection and semantics; core provides only provenance and
+transport. This keeps the contract reusable for memory, conversation
+compaction, model-routing, policy, and later features without importing any of
+their packages or vocabulary.
 
 ---
 
@@ -939,6 +980,7 @@ func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-08-09 | Added generic provenance-aware pipeline short-circuit and named cache-variation contracts without changing legacy hook payloads |
 | 1.1 | 2026-07-27 | Established the pre-release opaque conversation-correlation context and validation contract |
 | 1.0 | 2025-09-28 | Initial architecture documentation |
 

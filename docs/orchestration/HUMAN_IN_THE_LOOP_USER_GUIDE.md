@@ -145,7 +145,11 @@ The `SetupHITL` function creates four components that work together:
 3. **Policy**: Decides when to pause (based on your configuration)
 4. **Controller**: Coordinates everything
 
-For the complete `SetupHITL` implementation, see [hitl_setup.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go).
+For a runnable compatibility example, see
+[hitl_setup.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go).
+That example still uses the retained store-owned expiry lifecycle; new
+framework integrations should follow [Expiry Processor Setup](#expiry-processor-setup)
+and register the provider-neutral processor with the framework.
 
 ---
 
@@ -645,7 +649,7 @@ curl -X POST http://localhost:8352/chat \
 
 ```json
 {
-  "request_id": "1769372315637984136-637984177",
+  "request_id": "orch-1769372315637984136",
   "session_id": "aca6d5f6-fc8d-4724-a2d6-d4a58d2fd9cf",
   "interrupted": true,
   "checkpoint": {
@@ -720,7 +724,7 @@ Because `stock_quote` is a sensitive capability, execution pauses again before c
 
 ```json
 {
-  "request_id": "1769372352581198666-581198708",
+  "request_id": "orch-1769372352581198666",
   "session_id": "aca6d5f6-fc8d-4724-a2d6-d4a58d2fd9cf",
   "interrupted": true,
   "checkpoint": {
@@ -773,7 +777,7 @@ curl -X POST http://localhost:8352/hitl/resume-sync/cp-6b38d8c6-d2b4-46
 
 ```json
 {
-  "request_id": "1769372362628519713-628519755",
+  "request_id": "orch-1769372362628519713",
   "session_id": "aca6d5f6-fc8d-4724-a2d6-d4a58d2fd9cf",
   "response": "To determine if selling 100 Tesla shares will fund your trip... Based on the current value of $449.07 per share, you would receive $44,907 USD...",
   "tools_used": ["geocoding-tool", "currency-tool", "weather-tool-v2", "stock-service"],
@@ -960,7 +964,7 @@ if checkpoint.RequestMode != "" {
 
 | Type | Values | Purpose |
 |------|--------|---------|
-| `CheckpointStatus` | `pending`, `approved`, `rejected`, `edited`, `completed`, `aborted`, `expired`, `expired_approved`, `expired_rejected`, `expired_aborted` | Checkpoint lifecycle states |
+| `CheckpointStatus` | `preparing`, `pending`, `approved`, `rejected`, `edited`, `completed`, `aborted`, `expired`, `expired_approved`, `expired_rejected`, `expired_aborted` | Checkpoint lifecycle states; `preparing` is framework-owned and transient |
 | `InterruptPoint` | `plan_generated`, `before_step`, `on_error` (implemented); `after_step`, `context_gathering` (reserved) | Where HITL can pause |
 | `RequestMode` | `streaming`, `non_streaming` | Determines expiry behavior |
 | `CommandType` | `approve`, `reject`, `edit`, `skip`, `abort`, `retry` | Human decision types |
@@ -1012,7 +1016,7 @@ func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request)
 ```bash
 curl -X POST http://localhost:8352/hitl/resume/cp-dff21578-e9e1-40 \
   -H "Accept: text/event-stream" \
-  -H "X-Truvag3-Original-Request-ID: 1769372315637984136-637984177"
+  -H "X-Truvag3-Original-Request-ID: orch-1769372315637984136"
 ```
 
 The `X-Truvag3-Original-Request-ID` header is optional but recommended for trace correlation in Jaeger.
@@ -1035,7 +1039,7 @@ curl -X POST http://localhost:8352/hitl/resume-sync/cp-6b38d8c6-d2b4-46
 **Response (Completed):**
 ```json
 {
-  "request_id": "1769372362628519713-628519755",
+  "request_id": "orch-1769372362628519713",
   "session_id": "aca6d5f6-fc8d-4724-a2d6-d4a58d2fd9cf",
   "response": "To determine if selling 100 Tesla shares will fund your trip...",
   "tools_used": ["geocoding-tool", "currency-tool", "weather-tool-v2", "stock-service"],
@@ -1051,7 +1055,7 @@ If there are more sensitive steps, the response may contain another checkpoint:
 
 ```json
 {
-  "request_id": "1769372352581198666-581198708",
+  "request_id": "orch-1769372352581198666",
   "session_id": "aca6d5f6-fc8d-4724-a2d6-d4a58d2fd9cf",
   "interrupted": true,
   "checkpoint": {
@@ -1224,7 +1228,7 @@ See [ENVIRONMENT_VARIABLES_GUIDE.md](../reference/ENVIRONMENT_VARIABLES_GUIDE.md
 
 ## Expiry Processor Setup
 
-The expiry processor is a background goroutine that handles checkpoint timeouts. **Without it, checkpoints will never expire and auto-resume won't work.**
+The expiry processor is a provider-neutral `core.Runnable` that handles checkpoint timeouts. **Without a registered processor, checkpoints will never expire and auto-resume won't work.** The application owns its lifecycle through `Framework.RegisterRunnable`; the checkpoint store only persists checkpoints and exposes atomic expiry claims.
 
 ### Why You Need It
 
@@ -1236,14 +1240,20 @@ When a human doesn't respond within `DEFAULT_TIMEOUT`:
 ### Setting Up the Expiry Processor
 
 ```go
-// 1. Create checkpoint store
-checkpointStore, err := orchestration.NewRedisCheckpointStore(
-    orchestration.WithCheckpointRedisURL(redisURL),
-    orchestration.WithCheckpointStoreLogger(logger),
+// 1. Validate the capabilities supplied by your application's backend bundle.
+requirements, err := orchestration.RequirementsForFeatures(
+    nil,
+    orchestration.BackendFeatureCheckpointExpiry,
 )
+if err != nil {
+    return err
+}
+if err := backends.ValidateFor(requirements); err != nil {
+    return err
+}
 
-// 2. Set the expiry callback BEFORE starting the processor
-err = checkpointStore.SetExpiryCallback(func(ctx context.Context, cp *orchestration.ExecutionCheckpoint, action orchestration.CommandType) {
+// 2. Define expiry behavior independently of the storage provider.
+callback := func(ctx context.Context, cp *orchestration.ExecutionCheckpoint, action orchestration.CommandType) {
     // action is "" for implicit_deny, or "approve"/"reject"/"abort" for apply_default
 
     if action == "" {
@@ -1269,15 +1279,46 @@ err = checkpointStore.SetExpiryCallback(func(ctx context.Context, cp *orchestrat
         // Your auto-resume logic here
         // See Auto-Resume section below
     }
-})
+}
 
-// 3. Start the processor
-err = checkpointStore.StartExpiryProcessor(context.Background(), orchestration.ExpiryProcessorConfig{
-    Enabled:      true,
-    ScanInterval: 10 * time.Second,  // How often to check for expired checkpoints
-    BatchSize:    100,               // Max checkpoints processed per scan
-})
+// 3. Create the processor from provider-neutral contracts.
+runtimeConfig, err := orchestration.LoadCheckpointExpiryRuntimeConfigFromEnvironment(
+    orchestration.DefaultCheckpointExpiryRuntimeConfig(),
+    os.LookupEnv,
+)
+if err != nil {
+    return err
+}
+processorOptions := []orchestration.CheckpointExpiryProcessorOption{
+    orchestration.WithCheckpointExpiryRuntimeConfig(runtimeConfig),
+    orchestration.WithCheckpointExpiryLogger(logger),
+    orchestration.WithCheckpointExpiryTelemetry(telemetryProvider),
+}
+if owner := os.Getenv("HOSTNAME"); owner != "" {
+    // Kubernetes supplies the pod name; this makes claim diagnostics readable.
+    processorOptions = append(processorOptions, orchestration.WithCheckpointExpiryOwner(owner))
+}
+processor, err := orchestration.NewCheckpointExpiryProcessor(
+    backends.Checkpoints(),
+    backends.CheckpointExpiry(),
+    callback,
+    orchestration.ExpiryProcessorConfigFromEnv(),
+    processorOptions...,
+)
+if err != nil {
+    return err
+}
+
+// 4. Register before Framework.Run(); framework shutdown cancels it.
+framework.RegisterRunnable(processor)
 ```
+
+`backends` may come from any provider. The included Redis preset can create the
+checkpoint adapters and processor together with
+`redisprovider.WithCheckpointExpiry(...)`; register every value returned by
+`backends.Runnables()`. The older `RedisCheckpointStore.SetExpiryCallback`,
+`StartExpiryProcessor`, and `StopExpiryProcessor` methods remain compatibility
+APIs, but new application wiring should use the lifecycle-owned processor above.
 
 ### Expiry Processor Configuration
 
@@ -1296,30 +1337,34 @@ Environment variables:
 | `TRUVAG3_HITL_EXPIRY_INTERVAL` | `10s` | Scan interval |
 | `TRUVAG3_HITL_EXPIRY_BATCH_SIZE` | `100` | Max checkpoints per scan |
 | `TRUVAG3_HITL_EXPIRY_DELIVERY` | `at_most_once` | Delivery semantics |
+| `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `30s` | Lease held by one processor while it handles a claimed checkpoint |
 
 ### Graceful Shutdown
 
-Always stop the expiry processor before closing connections:
+Register the processor before `Framework.Run()`. Framework shutdown cancels and
+drains registered runnables before the application closes injected backend
+clients:
 
 ```go
-func (h *HITLInfrastructure) Close() error {
-    if h.CheckpointStore != nil {
-        // Stop expiry processor first (with timeout)
-        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-        defer cancel()
-        _ = h.CheckpointStore.StopExpiryProcessor(ctx)
+// processor was registered once during setup, before Run.
+if err := framework.Run(); err != nil {
+    return err
+}
 
-        // Then close the connection
-        h.CheckpointStore.Close()
-    }
-    if h.CommandStore != nil {
-        h.CommandStore.Close()
-    }
-    return nil
+// The Redis preset does not own an injected client. Close it after Run returns.
+if err := redisClient.Close(); err != nil {
+    logger.Warn("Failed to close Redis client", map[string]interface{}{
+        "operation":  "redis_close",
+        "error_type": "backend_close",
+        "error":      core.RedactSensitiveText(err.Error()),
+    })
 }
 ```
 
-See [hitl_setup.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go) for the complete implementation.
+The current
+[hitl_setup.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go)
+is a runnable compatibility example. It uses the older store-owned lifecycle;
+the composition and shutdown sequence above are the preferred framework path.
 
 ---
 
@@ -1405,18 +1450,16 @@ redis-cli ping
 **Why it happens:** The expiry processor isn't running, or the callback isn't set.
 
 **How to fix:**
-1. Verify the expiry processor is started:
+1. Verify the expiry processor is registered before `Framework.Run()`:
 ```go
-checkpointStore.StartExpiryProcessor(ctx, orchestration.ExpiryProcessorConfig{
-    Enabled: true,
-})
+framework.RegisterRunnable(expiryProcessor)
 ```
 
-2. Verify the callback is set BEFORE starting the processor:
+2. Verify the callback was passed when constructing the processor:
 ```go
-checkpointStore.SetExpiryCallback(func(ctx context.Context, cp *ExecutionCheckpoint, action CommandType) {
-    // Your callback logic
-})
+expiryProcessor, err := orchestration.NewCheckpointExpiryProcessor(
+    backends.Checkpoints(), backends.CheckpointExpiry(), callback, config,
+)
 ```
 
 3. Check logs for `hitl_expiry_processor_start` to confirm it's running.
@@ -1425,13 +1468,17 @@ checkpointStore.SetExpiryCallback(func(ctx context.Context, cp *ExecutionCheckpo
 
 **What you see:** The same checkpoint is processed by multiple pods, causing duplicate actions.
 
-**Why it happens:** Missing `WithInstanceID` or Redis connectivity issues during claim.
+**Why it happens:** Replicas were given the same claim owner, the expiry source
+does not implement atomic leased claims correctly, or the backend is unavailable.
 
 **How to fix:**
 ```go
-checkpointStore, _ := orchestration.NewRedisCheckpointStore(
-    orchestration.WithCheckpointRedisURL(redisURL),
-    orchestration.WithInstanceID(os.Getenv("HOSTNAME")),  // Add this!
+processor, err := orchestration.NewCheckpointExpiryProcessor(
+    backends.Checkpoints(),
+    backends.CheckpointExpiry(),
+    callback,
+    config,
+    orchestration.WithCheckpointExpiryOwner(os.Getenv("HOSTNAME")),
 )
 ```
 
@@ -1634,6 +1681,7 @@ When viewing search results, checkpoints may have different statuses:
 
 | Status | Category | Description |
 |--------|----------|-------------|
+| `preparing` | Internal/transient | Durable run state is still being attached; never resumable or listed as pending human work |
 | `pending` | Active | Awaiting human response |
 | `approved` | Human-initiated | Human clicked "Approve" |
 | `rejected` | Human-initiated | Human clicked "Reject" |
@@ -1680,20 +1728,24 @@ For typical usage (dozens to hundreds of checkpoints), this is fine. The registr
 
 When running multiple replicas of your HITL-enabled agent, you need to ensure only ONE pod processes each expired checkpoint. The framework handles this automatically using Redis-based distributed locking.
 
-**Set a unique instance ID for each pod:**
+**Set a unique claim owner for each pod:**
 
 ```go
 // In Kubernetes, use the pod name
 instanceID := os.Getenv("HOSTNAME")  // K8s sets this to the pod name
 
-checkpointStore, err := orchestration.NewRedisCheckpointStore(
-    orchestration.WithCheckpointRedisURL(redisURL),
-    orchestration.WithInstanceID(instanceID),  // Critical for multi-pod!
-    orchestration.WithCheckpointStoreLogger(logger),
+processor, err := orchestration.NewCheckpointExpiryProcessor(
+    backends.Checkpoints(),
+    backends.CheckpointExpiry(),
+    callback,
+    expiryConfig,
+    orchestration.WithCheckpointExpiryOwner(instanceID),
+    orchestration.WithCheckpointExpiryLogger(logger),
 )
 ```
 
-If you don't set `WithInstanceID`, a random UUID is generated. This works but makes debugging harder since you can't correlate logs with specific pods.
+If you do not set `WithCheckpointExpiryOwner`, a random UUID is generated. This
+is safe, but a stable pod name makes claim diagnostics easier to correlate.
 
 **How the claim mechanism works:**
 1. Pod A finds expired checkpoint
@@ -1702,7 +1754,9 @@ If you don't set `WithInstanceID`, a random UUID is generated. This works but ma
 4. If Pod B tries to claim the same checkpoint, `SETNX` fails - it skips
 5. Pod A releases the claim after processing
 
-This ensures exactly-once processing in a multi-pod deployment.
+This ensures a single active claimant for a lease. It does not promise global
+exactly-once delivery: choose `at_most_once` or `at_least_once` explicitly, and
+make callbacks idempotent when retries are enabled.
 
 ### Metrics for Monitoring
 
@@ -1732,7 +1786,8 @@ rate(orchestration_hitl_checkpoint_expired_total[5m]) by (action)
 
 ### Health Checks
 
-The expiry processor runs as a background goroutine. Add a health check that verifies Redis connectivity:
+The expiry processor runs under the framework lifecycle. Add a provider-specific
+health check for the backend client where the application composes that client:
 
 ```go
 func (h *HITLInfrastructure) HealthCheck() error {
@@ -1756,9 +1811,10 @@ When multiple HITL-enabled agents share the same Redis, each one must have a dis
 
 #### How identity resolves
 
-At `NewRedisCheckpointStore` construction, the framework builds the Redis key prefix in two parts.
+At `NewRedisCheckpointStore` or `NewRedisCheckpointStoreWithClient`
+construction, the framework builds the Redis key prefix in two parts.
 
-**Part 1 — the base prefix** comes from `TRUVAG3_HITL_KEY_PREFIX`, defaulting to `truvag3:hitl`. The `WithCheckpointKeyPrefix` option overrides this entirely (option wins over env).
+**Part 1 — the base prefix** comes from `TRUVAG3_HITL_KEY_PREFIX`, defaulting to `truvag3:hitl`. Without an in-code override, the framework combines this base with the agent suffix described below. The `WithCheckpointKeyPrefix` option then overrides the fully resolved prefix: its value is used as-is, and no agent suffix is appended to it.
 
 **Part 2 — the agent-name suffix** is appended to the base. Resolved in priority order:
 
@@ -1789,6 +1845,22 @@ checkpointStore, _ := orchestration.NewRedisCheckpointStore(
     orchestration.WithCheckpointKeyPrefix("truvag3:hitl:trading-agent"),
 )
 ```
+
+If application bootstrap already owns Redis routing and credentials, inject
+that client instead:
+
+```go
+checkpointStore, err := orchestration.NewRedisCheckpointStoreWithClient(
+    redisClient,
+    orchestration.WithCheckpointKeyPrefix("truvag3:hitl:trading-agent"),
+)
+```
+
+The supplied client remains application-owned and is left open when the store
+is closed. This constructor still uses the identity resolution described above:
+`TRUVAG3_HITL_KEY_PREFIX` establishes the base, and the agent/service identity
+is appended unless `WithCheckpointKeyPrefix` provides the final prefix. Redis
+connection and database selection belong to the injected client.
 
 Whichever path you choose, this agent's checkpoints are stored at `{prefix}:checkpoint:{id}` and the pending index at `{prefix}:pending` — disjoint from every other agent.
 
@@ -1867,27 +1939,29 @@ func TestHITL_PlanApproval(t *testing.T) {
 
 ```go
 func TestHITL_ExpiryCallback(t *testing.T) {
-    var callbackCalled bool
-    var callbackAction orchestration.CommandType
+    actions := make(chan orchestration.CommandType, 1)
 
-    store.SetExpiryCallback(func(ctx context.Context, cp *orchestration.ExecutionCheckpoint, action orchestration.CommandType) {
-        callbackCalled = true
-        callbackAction = action
-    })
+    callback := func(ctx context.Context, cp *orchestration.ExecutionCheckpoint, action orchestration.CommandType) {
+        actions <- action
+    }
 
-    // Start processor with fast scan
-    store.StartExpiryProcessor(ctx, orchestration.ExpiryProcessorConfig{
+    // A Redis checkpoint store satisfies both provider-neutral contracts.
+    processor, err := orchestration.NewCheckpointExpiryProcessor(store, store, callback, orchestration.ExpiryProcessorConfig{
+        Enabled:      true,
         ScanInterval: 100 * time.Millisecond,
     })
+    require.NoError(t, err)
+    go func() { _ = processor.Start(ctx) }()
 
     // Create a checkpoint that expires quickly
     // ... create checkpoint with short timeout
 
-    // Wait for expiry
-    time.Sleep(500 * time.Millisecond)
-
-    assert.True(t, callbackCalled)
-    assert.Equal(t, orchestration.CommandApprove, callbackAction)  // or "" for implicit_deny
+    select {
+    case action := <-actions:
+        assert.Equal(t, orchestration.CommandApprove, action) // or "" for implicit_deny
+    case <-time.After(500 * time.Millisecond):
+        t.Fatal("expiry callback was not called")
+    }
 }
 ```
 

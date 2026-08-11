@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.1
+**Version**: 1.3
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -514,7 +514,10 @@ Before hooks run, orchestration also performs a shared enrichment-preparation pa
 
 Available hook stages:
 - **BeforePlanningHook** — Runs before the phase loop. Can inject enrichments (RAG context, conversation history, agent memory, activity coordination) into `PipelineContext.Enrichments`, or return a `PipelineShortCircuit` to skip the entire pipeline (e.g., semantic cache hit).
-- **AfterPlanningHook** — Runs after plan generation. Can mutate the plan.
+- **AfterPlanningHook** — Runs once for each final validated planner-produced
+  phase plan, before HITL persistence and execution. Mutations are applied to a
+  copy and fully revalidated; an invalid mutation is rejected while the last
+  valid plan is retained. HITL resume does not rerun this boundary.
 - **AfterExecutionHook** — Runs after tool execution completes.
 - **AfterSynthesisHook** — Runs after synthesis. Can mutate the final response.
 
@@ -2082,7 +2085,12 @@ outputs:
 ### Pattern 4: Hybrid Intelligence
 
 ```go
-func hybridOrchestration(orchestrator *orchestration.AIOrchestrator) {
+func hybridOrchestration(
+    orchestrator *orchestration.AIOrchestrator,
+    discovery core.Discovery,
+    backends *orchestration.OrchestrationBackends,
+    logger core.Logger,
+) error {
     // Use AI for exploration
     explorationResponse, _ := orchestrator.ProcessRequest(
         context.Background(),
@@ -2096,16 +2104,37 @@ func hybridOrchestration(orchestrator *orchestration.AIOrchestrator) {
     // Create workflow from patterns
     workflow := createWorkflowFromPatterns(patterns)
 
-    // Execute workflow for production
-    stateStore := orchestration.NewRedisStateStore(orchestrator.discovery)
-    engine := orchestration.NewWorkflowEngine(orchestrator.discovery, stateStore, logger)
-    result, _ := engine.ExecuteWorkflow(
+    // Execute through a provider-neutral capability supplied by application bootstrap.
+    requirements, err := orchestration.RequirementsForFeatures(
+        nil,
+        orchestration.BackendFeatureWorkflow,
+    )
+    if err != nil {
+        return err
+    }
+    if err := backends.ValidateFor(requirements); err != nil {
+        return err
+    }
+    engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger)
+    result, err := engine.ExecuteWorkflow(
         context.Background(),
         workflow,
         map[string]interface{}{"company": "TSLA"},
     )
+    if err != nil {
+        return err
+    }
+    _ = result // Application-specific result handling.
+    return nil
 }
 ```
+
+`OrchestrationBackends` is supplied by the application composition root. An
+application may assemble it from custom implementations or select the included
+Redis preset through `redisprovider.NewOrchestrationBackends`. Runtime workflow
+code consumes only the narrow `StateStore` returned by `Workflow()` and never
+imports or infers a storage provider. `NewRedisStateStore` remains a supported
+compatibility constructor, but it is not the preferred pattern for new code.
 
 ---
 
@@ -2283,6 +2312,83 @@ migration:
 
 ---
 
+## Foundation Lifecycle and Configuration Contracts
+
+Canonical construction resolves a complete `OrchestratorConfig` before request
+execution. `NewDefaultOrchestratorConfig` is deterministic and environment-free;
+`ResolveOrchestratorConfig` applies the explicitly selected environment mode and
+then code options; `CreateResolvedOrchestrator` performs no environment reads.
+Compatibility constructors retain documented environment bootstrap behavior and
+emit bounded diagnostics for fallbacks.
+
+`ResolveOrchestratorConfigIdentity` returns a sanitized summary plus explicit
+cache eligibility. Prompt bodies, credentials, endpoints, raw environment values,
+and provider extensions never leave through this surface. A deterministic
+projection returns `CacheEligible=true` and a fingerprint. If any extension is
+not deterministically representable, normal execution remains valid but
+`CacheEligible=false` and `Fingerprint` is empty. Cache consumers must test the
+eligibility bit rather than interpreting a fallback string as identity.
+
+All public request entry points share one package-private lifecycle runner. The
+runner owns request correlation, hooks, phase boundaries, synthesis, terminal
+recording, and delivery-mode differences. Evolving per-request data is carried by
+typed run state or a typed extension seam rather than ad hoc context values.
+Execution-debug writes are defensively cloned and serialized per request by an
+orchestrator-owned recorder. Each write is bounded by
+`TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` (five seconds by default); cancellation
+and recorder draining are owned by the orchestrator lifecycle.
+
+At a framework-owned HITL suspension, the included controller first stores a
+checkpoint with the transient `preparing` status. Such a checkpoint is neither
+pending nor resumable, and no interrupt notification is sent. The checkpoint
+coordinator attaches the typed run snapshot, performs the authoritative save as
+`pending`, and only then notifies the handler. Direct controller callers that do
+not request orchestration enrichment retain the original pending-save-and-notify
+behavior. Provider-neutral expiry processing implements `core.Runnable`, blocks
+until cancellation even when disabled, and obtains atomic claims through
+`ExpiredCheckpointSource`; storage adapters do not own background goroutines.
+The claim lease is operational runtime configuration, while the claim-owner
+length cap is a fixed coordination-protocol invariant.
+
+The optional `redisprovider` preset owns only Redis adapter composition.
+`NewOptions` is deterministic; `LoadOptionsFromEnvironment` applies the preset's
+workflow TTL and task-queue retry limits; `ConfigureOptions` applies later code
+overrides. `WithLogger` propagates one application-owned logger to every
+logging-capable adapter assembled by the preset; each adapter retains its
+standard `framework/orchestration` component attribution and NoOp behavior when
+no logger is supplied. Root orchestration contracts and lifecycle code do not
+import the preset package or Redis clients.
+
+Direct Redis constructors that receive an application-owned client never close
+that client. For the execution-debug, LLM-debug, checkpoint, and command stores,
+the URL-owning compatibility constructors create and close their own clients;
+their corresponding `WithClient` constructors leave connection and database
+routing to application bootstrap.
+
+Prefix behavior is explicit per adapter. `NewRedisCommandStoreWithClient` does
+not read command-store identity from the process environment and uses the
+deterministic `truvag3:hitl` default; applications select another prefix with
+`WithCommandStoreKeyPrefix` or provider composition. Checkpoint identity is
+different by design: both checkpoint constructors resolve
+`TRUVAG3_HITL_KEY_PREFIX` plus `TRUVAG3_AGENT_NAME` or
+`TRUVAG3_K8S_SERVICE_NAME`, with `WithCheckpointKeyPrefix` as the final code
+override. Task and workflow adapter constructors take their namespace through
+their explicit prefix or configuration arguments.
+
+Errors crossing downstream execution and backend observation boundaries are
+sanitized before entering logs, trace attributes/events, execution-debug
+records, or returned tool observations. `core.RedactSensitiveText` supplies the
+shared defense-in-depth transformation. While an error remains in in-process Go
+control flow, `core.RedactSensitiveError` protects its observable message and
+retains the original cause for `errors.Is` and `errors.As`. When orchestration
+normalizes a failure into string-only step, checkpoint, debug, or API state,
+only the sanitized message is carried and Go error identity is intentionally
+not serialized. This does not authorize recording raw endpoints, prompts,
+payloads, or provider diagnostics—callers and adapters must still avoid placing
+secrets in those values.
+
+---
+
 ## Summary
 
 The orchestration module is the brain of the TruvaG3 framework, coordinating tools and agents to accomplish complex tasks. Its architecture emphasizes:
@@ -2295,7 +2401,11 @@ The orchestration module is the brain of the TruvaG3 framework, coordinating too
 
 The module follows the framework's design principles religiously, ensuring that it remains modular, testable, and maintainable while providing powerful orchestration capabilities.
 
-Remember: **The orchestrator never imports other modules directly** - it only depends on core interfaces. This is not a limitation but a strength that enables true modularity and flexibility.
+Remember: **The orchestration module imports only `core` and the explicitly
+allowed `telemetry` module**. AI, memory, resilience, storage, and other sibling
+behavior reaches orchestration through narrow interfaces and application
+composition. This is not a limitation but a strength that enables true
+modularity and flexibility.
 
 ---
 
@@ -2303,5 +2413,7 @@ Remember: **The orchestrator never imports other modules directly** - it only de
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2026-08-09 | Documented canonical configuration/cache eligibility, shared request recording, authoritative HITL suspension, and provider-neutral expiry lifecycle contracts |
+| 1.2 | 2026-08-07 | Corrected the summary to state the canonical `orchestration -> core + telemetry` module boundary |
 | 1.1 | 2026-07-27 | Established the pre-release conversation-resolution, checkpoint, and optional execution-store capability contracts |
 | 1.0 | 2025-09-28 | Initial architecture documentation |

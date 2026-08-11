@@ -361,6 +361,14 @@ successful but semantically wrong response.
 `AIRequestReport`, and optional provider usage counters. It never makes
 provider response envelopes part of the framework contract.
 
+After request policy and provider validation, a request-aware adapter also
+reports portable effective generation evidence. `EffectiveTemperature` and
+`EffectiveMaxTokens` use `Set(value)` when that value is present in the final
+provider body, `Omit` when the field is absent, and `Inherit` only when the
+adapter cannot report the field reliably. Provider-local wire names remain an
+adapter detail; consumers must not reconstruct effective values by interpreting
+adjustment paths.
+
 ---
 
 ## 4. Scenario 1: Add Enterprise Credentials and Routing
@@ -2927,12 +2935,19 @@ Request-aware clients can return an `AIRequestReport` that explains:
 
 - provider, alias, surface, operation, and purpose
 - requested and resolved model
+- provider-effective temperature and maximum-token presence
 - sanitized policy adjustments
 - semantic fingerprint and whether it is stable
 
 Reports and fingerprints must never contain prompts, credentials, raw request
 bodies, secret values, trusted route query parameters, or full secret-bearing
 endpoints.
+
+Provider tests must prove effective-field fidelity for ordinary values,
+explicit zero, and policy removal. They must also cover any provider behavior
+that routinely changes presence, such as Anthropic adaptive-thinking sampling
+rules. A request-aware provider must not leave a field at `Inherit` merely
+because policy changed the caller's requested value.
 
 The fingerprint represents the semantic provider surface, resolved model,
 policy rules and versions, deterministic middleware, and route identity. It is

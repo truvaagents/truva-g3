@@ -1621,6 +1621,28 @@ type SystemPromptBuilder interface {
 
 If not implemented, the orchestrator falls back to `PromptConfig.SystemInstructions` + a default orchestrator role description. Both `DefaultPromptBuilder` and `TemplatePromptBuilder` implement this interface.
 
+#### Framework-owned system finalization
+
+Planning system prompts pass through one final framework boundary after the
+builder result and `PlanAIOptions.SystemPrompt` merge. Initial planning,
+continuation planning, and regeneration therefore receive exactly one
+framework-owned `<runtime_context>` section containing the current UTC date.
+This invariant applies to custom builders and raw system-prompt overrides; a
+replacement can change the developer-owned base, but cannot remove the runtime
+contract.
+
+Do not emit `<runtime_context>` from new application prompt code. A legacy
+custom `SystemPromptBuilder` that already ends with the exact canonical block is
+accepted and retained byte-for-byte. Embedded, malformed, or duplicate copies
+are rejected during prompt preparation, and a raw AI-options override that
+declares the reserved tag is rejected. These failures occur before the provider
+call so the framework never sends an ambiguous system contract.
+
+The finalizer is purpose-specific. Parameter-correction prompts and synthesis
+prompts do not acquire this planning-only section. For the complete reserved-tag
+and precedence rules, see the
+[Effective Prompts Guide](../building/EFFECTIVE_PROMPTS_GUIDE.md#9-reserved-xml-tags--orchestration-framework).
+
 ### Understanding PromptInput
 
 Before building a custom PromptBuilder, understand what data you receive:
@@ -2326,17 +2348,21 @@ fmt.Println(prompt)  // See if your rules appear
 kubectl exec -it my-pod -- cat /config/planning-prompt.tmpl
 ```
 
-### Graceful Degradation
+### Fallbacks and Fail-Fast Invariants
 
-The system is designed to never crash due to configuration issues:
+Recoverable template-loading problems use the documented fallback. Violations
+of the framework-owned prompt contract reject the affected request before an AI
+provider call:
 
 | Problem | Behavior |
 |---------|----------|
 | Invalid template syntax | Falls back to DefaultPromptBuilder |
 | Missing template file | Falls back to DefaultPromptBuilder |
 | Template execution error | Falls back to DefaultPromptBuilder |
+| Planning fails with `invalid prompt assembly` | Request is rejected before provider dispatch; remove application-authored `<runtime_context>` tags and let the framework finalize the canonical section |
 
-You'll see warnings in logs, but the system keeps running.
+Fallbacks emit warnings and keep the service running. Prompt-contract failures
+remain request-local but intentionally do not degrade to an ambiguous prompt.
 
 ---
 
@@ -2406,6 +2432,8 @@ Only these three domains have automatic built-in additions:
 | [orchestration/template_prompt_builder.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/template_prompt_builder.go) | Layer 2 implementation |
 | [orchestration/prompt_config_env.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/prompt_config_env.go) | Environment loading |
 | [orchestration/factory.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/factory.go) | Builder selection logic |
+| [orchestration/prompt_assembly.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/prompt_assembly.go) | Purpose-specific assembly and immutable framework finalization |
+| [orchestration/ai_invocation.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/ai_invocation.go) | Effective request preparation and evidence |
 
 ---
 

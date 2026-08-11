@@ -295,8 +295,13 @@ result = await team.run(task="Analyze the data")
 
 **TruvaG3 Approach (AI-Driven Orchestration):**
 ```go
-// Create orchestrator - no explicit tool/agent wiring needed
-orchestrator := orchestration.CreateOrchestrator(config, deps)
+// Create orchestrator - no explicit tool/agent wiring needed. The canonical
+// constructor consumes deterministic, already-resolved configuration.
+config := orchestration.NewDefaultOrchestratorConfig()
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Process natural language request
 response, _ := orchestrator.ProcessRequest(ctx,

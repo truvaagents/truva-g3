@@ -1,7 +1,9 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.0  
-**Purpose**: Ensure consistency and maintainability across all framework development  
+**Version**: 1.2
+
+**Purpose**: Ensure consistency and maintainability across all framework development
+
 **Audience**: Core contributors, module developers, LLM-based coding agents
 
 ---
@@ -33,6 +35,9 @@ TruvaG3 enables **autonomous agent networks** in production environments through
 - **Environment-Aware**: Automatically detect and use standard environment variables
 - **Auto-Configuration**: When user intent is clear, auto-configure related settings
 - **Explicit Override**: Always allow explicit configuration to override defaults
+  through a supported customization seam. An override replaces a default; it
+  does not disable downstream correctness, integrity, wire-format, cache, or
+  lifecycle invariants.
 - **Simple things should be simple, complex things should be possible** (Alan Kay): Every framework feature should offer layered access — a convenience path for common use (minimal code, env-var-driven), a customisation path for domain-specific needs (swap interfaces via options), and direct access to underlying constructors for full control. Developers drop to a lower layer for one concern without abandoning the higher layer for everything else. No cliffs between layers.
 - **Configuration Split**: Numeric tuning (token budgets, TTLs, limits) uses environment variables — deployable without code changes. Behavioural plugs (custom interfaces, scoring functions) use `WithXXX()` option functions — domain-specific, requires code. If an option just sets a number, it should be an env var.
 
@@ -42,6 +47,43 @@ TruvaG3 enables **autonomous agent networks** in production environments through
 - **Modularity**: Each module implements well-defined interfaces from `core`
 - **Extensibility**: New implementations can be swapped without changing dependent code
 - **Composition over Bundling**: Cross-cutting concerns should be composable functions that return primitives the developer passes to the orchestrator — not monolithic constructors that bundle multiple concerns into a single call. Each module creates its own primitives; the application assembles them.
+
+#### Safe Customization and Invariant Boundaries
+
+Customization must identify what kind of seam it exposes rather than treating
+every value as an unrestricted replacement:
+
+1. **Defaults are replaceable.** A developer can override a default through
+   typed configuration, an option, an injected interface, or a direct
+   constructor at the documented layer.
+2. **Additive content stays additive.** A bounded guidance, rule, or filter seam
+   may refine framework behavior, but it cannot replace the framework-owned
+   identity, protocol, validation, precedence, or output contract around it.
+   A genuinely different behavior uses an explicit interface or direct
+   constructor instead of smuggling a replacement through a string setting.
+3. **Invariants remain enforced at their owning boundary.** Dropping to a lower
+   composition layer gives control over dependencies and behavior; it does not
+   make downstream validation, capability eligibility, integrity checks,
+   concurrency rules, or lifecycle contracts optional. If an invariant must
+   change, that is a reviewed contract change rather than configuration.
+4. **Invalid explicit configuration fails construction unless the feature
+   documents a semantically safe fallback.** The framework must never silently
+   discard a validation error or install a nil or partially configured
+   component. A documented fallback must emit its documented diagnostic and
+   still validate the fallback component. A genuinely absent optional
+   dependency may retain documented no-op behavior.
+
+Environment variables are best suited to bounded scalar values, closed modes,
+and references such as mounted-file paths. Large or multiline instructions and
+templates should use typed Go configuration or a bounded, startup-loaded file
+unless the feature explicitly documents and validates an inline representation.
+The feature contract must state whether content is additive or replacement,
+its precedence, its limits, and whether it is read once or watched.
+
+Any extension or deployment setting that can change a cached semantic result
+must be represented in the applicable cache identity. When the framework cannot
+derive a stable identity for custom behavior, normal execution may continue but
+cache reuse must be treated as ineligible rather than assuming equivalence.
 
 #### Layered Composition Example
 
@@ -115,20 +157,61 @@ The principles in §3 and §4 above are extracted from software systems that hav
 - Make assumptions about specific implementations (Redis, OpenAI, etc.)
 
 ### Optional Modules
-**Dependency Rule**: Can import `core` and at most one other framework module (`telemetry`)
 
-**Valid Dependencies**:
-- `ai` → `core` + `telemetry`
-- `memory` → `core` + `telemetry`
-- `resilience` → `core` + `telemetry`
-- `orchestration` → `core` + `telemetry`
-- `telemetry` → `core` (implements `core.Telemetry` interface)
+**Dependency Rule**: An optional framework module may import `core` and, when
+it needs the shared observability implementation, `telemetry`. It must not
+import a sibling optional framework module. These are maximum allowed direct
+framework edges, not requirements that every module use both dependencies.
+
+**Canonical framework-module DAG**:
+
+```text
+root facade  ──────────────────────> core
+telemetry    ──────────────────────> core
+ai           ──────────────────────> core + telemetry
+memory       ──────────────────────> core + telemetry
+resilience   ──────────────────────> core + telemetry
+orchestration ─────────────────────> core + telemetry
+core         ──────────────────────> no framework module
+```
+
+Packages below a module path are part of that same module and do not create a
+new framework-module edge. Third-party libraries are governed by minimality,
+ownership, and provider-neutrality rules separately; the allowance above does
+not prohibit a module from using justified external libraries.
+
+The module boundary applies equally to production source, internal packages,
+module-local guide/example packages, and `_test.go` files in the framework
+modules listed above. A test helper must not import a forbidden sibling module
+to bypass the production DAG. Test-only reference implementations should stay
+unexported in `_test.go` files and use existing or standard-library
+dependencies unless an independently justified test dependency is required.
+Standalone application and deployment examples are composition roots, not
+framework library modules; they may import multiple framework modules to wire
+the application, but no framework module may depend back on them.
+
+A new feature does not automatically justify a new top-level Go module. Keep it
+in the module that owns and consumes its lifecycle and expose narrow interfaces
+there. Creating a module or adding a framework-module edge requires an explicit
+architecture decision and a corresponding update to this canonical DAG; an
+acyclic edge is still invalid if it is not listed here.
+
+**Enforcement**:
+
+- review both `go.mod` requirements and package-level imports;
+- derive production and test import edges with `go list` for every workspace
+  module;
+- fail the owning module's architecture tests or CI guard when an unlisted
+  framework edge appears;
+- do not rely on successful compilation alone, because Go can compile a new
+  acyclic edge that still violates this framework boundary.
 
 **Critical Architectural Rule**: The `core` module **NEVER** imports optional modules. This ensures:
 1. **Unidirectional dependency flow** - Core is the foundation
 2. **True optional modules** - Telemetry remains genuinely optional
-3. **Compile-time enforcement** - Architectural violations are caught by the compiler
-4. **No circular dependencies** - Impossible by design
+3. **Automated graph enforcement** - Architecture tests or CI reject unlisted
+   edges even when the Go compiler could build them
+4. **No circular dependencies** - The canonical graph is acyclic by design
 
 ---
 
@@ -318,6 +401,13 @@ func (a *Agent) Process(ctx context.Context) error {
 ## Testing Requirements
 
 ### Unit Test Coverage
+- **Same-change ownership**: Every newly written production behavior that can
+  be isolated must receive a unit test in the same change. This includes public
+  adapters and defaulting wrappers, even when their implementation is small;
+  their tests pin the contract they expose. Type/interface declarations and
+  branches that cannot execute on the tested platform do not require artificial
+  tests, but the reason must be clear in review. A coverage percentage is
+  supporting evidence, not a substitute for behavior-specific assertions.
 - **Interfaces**: Mock all external dependencies
 - **Configuration**: Test all option combinations and precedence rules
 - **Error Paths**: Test failure scenarios and error propagation
@@ -536,9 +626,21 @@ func (t *BaseTool) processRequest() {
 - [ ] Provides clear error messages
 - [ ] Updates relevant documentation
 - [ ] No backwards compatibility breaks without major version
-- [ ] Core module doesn't import optional modules (telemetry, ai, etc.)
+- [ ] Production and test imports preserve the canonical framework-module DAG
+- [ ] No new top-level module or framework-module edge lacks an explicit
+      architecture decision and corresponding principles update
 - [ ] Telemetry usage is nil-safe (checks before use)
 - [ ] Application examples show proper telemetry initialization
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.2 | 2026-08-09 | Defined the canonical framework-module DAG and extended its enforcement to production, test, and conformance code |
+| 1.1 | 2026-08-08 | Added safe-customization, invariant-boundary, and cache-identity principles |
+| 1.0 | 2025-09-28 | Initial framework design principles |
 
 ---
 

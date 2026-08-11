@@ -351,17 +351,9 @@ func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error
 If your M2M token expires and you need to refresh it without restarting:
 
 ```go
-// Start a background goroutine to refresh the token
-go func() {
-    for {
-        token, expiresIn := fetchM2MToken()
-        orchestrator.SetOAuthToken(token)
-
-        // Refresh before expiry (e.g., at 80% of TTL)
-        refreshIn := time.Duration(float64(expiresIn) * 0.8)
-        time.Sleep(refreshIn)
-    }
-}()
+// SetOAuthToken is safe while requests are in flight. Run refresh work through
+// the core.Runnable lifecycle shown in Runtime Token Refresh below.
+orchestrator.SetOAuthToken(initialToken)
 ```
 
 This is thread-safe. In-flight requests continue using the old token until they complete; new requests pick up the refreshed token immediately.
@@ -544,6 +536,12 @@ This means:
 - Tokens don't leak into debug logs that serialize the config
 - Tokens don't appear in the registry viewer or execution store
 
+Serialization tags do not sanitize arbitrary error text or application logs.
+Never log complete headers, token responses, credential-bearing URLs, or raw
+OAuth provider bodies. Preserve original errors for control flow, but pass
+external diagnostic strings through `core.RedactSensitiveText` before writing
+them to logs, traces, debug records, or client-visible responses.
+
 ### Thread-Safe Token Storage
 
 Tokens and headers are stored using `atomic.Value`, which provides lock-free reads:
@@ -710,39 +708,56 @@ env:
 
 ## Runtime Token Refresh
 
-For M2M tokens that expire, you'll want a background refresh loop. Here's a production-grade pattern:
+For M2M tokens that expire, use a `core.Runnable` so startup, cancellation, and
+shutdown draining remain owned by the framework:
 
 ```go
-// tokenRefresher manages OAuth token lifecycle for the orchestrator.
-func startTokenRefresher(orch *orchestration.AIOrchestrator, logger core.Logger) {
-    go func() {
-        for {
-            // Fetch a new token from your OAuth provider
-            token, expiresIn, err := fetchClientCredentialsToken()
-            if err != nil {
-                logger.Error("Token refresh failed", map[string]interface{}{
-                    "error": err.Error(),
-                })
-                // Retry after a short backoff
-                time.Sleep(30 * time.Second)
-                continue
+type tokenRefresher struct {
+    orchestrator *orchestration.AIOrchestrator
+    logger       core.Logger
+}
+
+func (r *tokenRefresher) Start(ctx context.Context) error {
+    wait := time.Duration(0) // fetch immediately on startup
+    for {
+        if wait > 0 {
+            timer := time.NewTimer(wait)
+            select {
+            case <-ctx.Done():
+                timer.Stop()
+                return nil
+            case <-timer.C:
             }
-
-            // Update the orchestrator's token (thread-safe, lock-free)
-            orch.SetOAuthToken(token)
-            logger.Info("OAuth token refreshed", map[string]interface{}{
-                "expires_in": expiresIn.String(),
-            })
-
-            // Refresh at 80% of TTL to avoid edge-of-expiry failures
-            refreshIn := time.Duration(float64(expiresIn) * 0.8)
-            time.Sleep(refreshIn)
         }
-    }()
+
+        token, expiresIn, err := fetchClientCredentialsToken(ctx)
+        if err != nil {
+            r.logger.Error("Token refresh failed", map[string]interface{}{
+                "operation":  "oauth_token_refresh",
+                "status":     "error",
+                "error_type": "upstream",
+                "error":      core.RedactSensitiveText(err.Error()),
+            })
+            wait = 30 * time.Second
+            continue
+        }
+
+        r.orchestrator.SetOAuthToken(token)
+        r.logger.Info("OAuth token refreshed", map[string]interface{}{
+            "operation":  "oauth_token_refresh",
+            "status":     "success",
+            "expires_in": expiresIn.String(),
+        })
+
+        wait = time.Duration(float64(expiresIn) * 0.8)
+        if wait <= 0 {
+            wait = 30 * time.Second
+        }
+    }
 }
 
 // fetchClientCredentialsToken calls your OAuth provider's token endpoint.
-func fetchClientCredentialsToken() (string, time.Duration, error) {
+func fetchClientCredentialsToken(ctx context.Context) (string, time.Duration, error) {
     // Example: POST to your OAuth provider
     // resp, err := http.PostForm("https://auth.example.com/oauth/token", url.Values{
     //     "grant_type":    {"client_credentials"},
@@ -767,8 +782,11 @@ if err != nil {
     return err
 }
 
-// Start background token refresh
-startTokenRefresher(orch, t.Logger)
+// Register before Framework.Run. The framework starts and drains it.
+framework.RegisterRunnable(&tokenRefresher{
+    orchestrator: orch,
+    logger:       t.Logger,
+})
 ```
 
 ---
@@ -815,9 +833,9 @@ Both `CallService` and `HealthCheck` in the workflow executor honor the same two
    })
    ```
 
-2. **Check that `TRUVAG3_OAUTH_TOKEN` is loaded.** If using the env var, ensure your deployment actually sets it:
+2. **Check that `TRUVAG3_OAUTH_TOKEN` is loaded without printing it.** If using the env var, ensure your deployment actually sets it:
    ```bash
-   kubectl exec -it <pod> -- env | grep TRUVAG3_OAUTH_TOKEN
+   kubectl exec -it <pod> -- sh -c 'if [ -n "$TRUVAG3_OAUTH_TOKEN" ]; then echo set; else echo unset; fi'
    ```
 
 3. **Check token format.** TruvaG3 prepends `Bearer ` automatically. Don't include "Bearer " in your token value:
@@ -844,10 +862,15 @@ Both `CallService` and `HealthCheck` in the workflow executor honor the same two
    result, err := orch.ProcessRequest(ctx, request, nil)
    ```
 
-3. **Verify on the receiving side.** Add a log in your tool to confirm which headers arrive:
+3. **Verify on the receiving side without logging header values.** Log only the
+   presence of expected fields:
    ```go
    func handleProcess(w http.ResponseWriter, r *http.Request) {
-       log.Printf("Headers received: %v", r.Header)
+       logger.Debug("Expected request headers present", map[string]interface{}{
+           "has_authorization": r.Header.Get("Authorization") != "",
+           "has_tenant_id":    r.Header.Get("X-Tenant-ID") != "",
+           "has_request_id":   r.Header.Get("X-Truvag3-Request-Id") != "",
+       })
        // ...
    }
    ```
@@ -856,11 +879,15 @@ Both `CallService` and `HealthCheck` in the workflow executor honor the same two
 
 This is by design. Context-level headers override config-level headers on key conflict. If you set `X-Tenant-ID: tenant-A` in config and `X-Tenant-ID: tenant-B` in context, `tenant-B` wins.
 
-To debug, check whether a context header is being set unintentionally:
+To debug, inspect header names rather than values:
 ```go
 ctxHeaders := orchestration.GetPropagatedHeaders(ctx)
+headerNames := make([]string, 0, len(ctxHeaders))
+for name := range ctxHeaders {
+    headerNames = append(headerNames, name)
+}
 logger.Debug("Context headers", map[string]interface{}{
-    "headers": ctxHeaders,
+    "header_names": headerNames,
 })
 ```
 
@@ -925,8 +952,8 @@ func tenantMiddleware(next http.Handler) http.Handler {
 Watch for these signals that your auth setup is working:
 
 - **No 401 errors in tool logs**: If you see `component returned status 401`, the token isn't reaching the tool or is expired.
-- **Token refresh logging**: If using the runtime refresh pattern, your `startTokenRefresher` goroutine logs success/failure. Consider adding custom metrics (e.g., `telemetry.Counter("oauth.token_refresh", "status", "success")`) for production monitoring.
-- **Header presence in tool logs**: Add request header logging on the receiving tool side to verify propagated headers are arriving as expected.
+- **Token refresh logging**: If using the runtime refresh pattern, the registered token-refresher `Runnable` logs success/failure. Consider adding custom metrics (e.g., `telemetry.Counter("oauth.token_refresh", "status", "success")`) for production monitoring.
+- **Header presence in tool logs**: Record bounded presence booleans for the expected headers on the receiving side; never record their values.
 
 ---
 

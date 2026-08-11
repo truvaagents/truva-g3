@@ -143,6 +143,7 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Max parallel steps | 25 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `WithMaxConcurrency(n)` |
 | Step timeout | 120s | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
 | Total execution timeout | 600s | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
+| Execution-debug store write timeout | 5s | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `WithExecutionStoreWriteTimeout(d)` |
 
 ## Scheduled Executor
 
@@ -155,6 +156,18 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Dispatch timeout | 15m | `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | — |
 
 > The dispatch timeout is the HTTP client timeout for the synchronous POST to the target agent. It must be ≥ the target agent's `TRUVAG3_ORCHESTRATION_TIMEOUT`, otherwise the executor cancels the request before multi-phase orchestration completes.
+
+## Default Redis Orchestration Preset
+
+| What | Default | Env Var | Code Override |
+|------|---------|---------|---------------|
+| Workflow state TTL | 24h | `TRUVAG3_WORKFLOW_STATE_TTL` | `redisprovider.WithWorkflowStateTTL(d)` |
+| Task queue retry attempts | 3 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `redisprovider.WithTaskQueueRetryPolicy(n, d)` |
+| Task queue retry delay | 100ms | `TRUVAG3_TASK_QUEUE_RETRY_DELAY` | `redisprovider.WithTaskQueueRetryPolicy(n, d)` |
+
+The preset remains environment-free under `NewOptions`. Deployment values are
+loaded explicitly through `redisprovider.LoadOptionsFromEnvironment`, and later
+`ConfigureOptions` calls retain code-over-environment precedence.
 
 ## Continuation Prompt Limits
 
@@ -412,6 +425,13 @@ work never exceeds `ConversationIndexScanLimit`.
 | Enabled | false | `TRUVAG3_HITL_ENABLED` | — |
 | Require plan approval | false | `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | — |
 | Default timeout action | reject | `TRUVAG3_HITL_DEFAULT_ACTION` | — |
+| Expiry claim lease | 30s | `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `WithCheckpointExpiryRuntimeConfig(config)` |
+| Expiry claim owner identifier | 128 characters maximum | — (`maxCheckpointClaimOwnerLen`) | `WithCheckpointExpiryOwner(owner)` |
+
+The expiry claim-owner cap is a coordination-protocol invariant: bounded owner
+values keep backend claim records and diagnostic dimensions predictable. It is
+validated at the 128/129-character boundary and is intentionally not an
+operator-tunable deployment limit.
 
 ---
 
