@@ -121,7 +121,10 @@ func (s *AISynthesizer) Synthesize(ctx context.Context, request string, results 
 // synthesizeWithLLM uses the LLM to create a coherent response
 func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, results *ExecutionResult) (string, error) {
 	// Build prompt with all agent responses
-	prompt := s.buildSynthesisPrompt(ctx, request, results)
+	prompt, err := s.buildPreparedSynthesisPrompt(ctx, request, results)
+	if err != nil {
+		return "", fmt.Errorf("prepare synthesis prompt input: %w", err)
+	}
 	systemPrompt := synthesisSystemPromptFor(results) // ORCH-018: clarification-aware
 
 	// Extract request_id once for all telemetry in this method (LOGGING_IMPLEMENTATION_GUIDE.md Pattern 3)
@@ -305,14 +308,35 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 // When multiple successful results exist and MaxTotalPromptBytes is configured,
 // uses ProcessMultipleForBudget for proportional budget allocation across results.
 func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string, results *ExecutionResult) string {
-	var builder strings.Builder
+	prompt, _ := s.buildPreparedSynthesisPrompt(ctx, request, results)
+	return prompt
+}
 
-	fmt.Fprintf(&builder, "<user_request>\n%s\n</user_request>\n\n", request)
+func (s *AISynthesizer) buildPreparedSynthesisPrompt(
+	ctx context.Context,
+	request string,
+	results *ExecutionResult,
+) (string, error) {
+	var builder strings.Builder
+	preparedRequest, err := preparePromptValue(
+		ctx, promptSynthesis, promptValueRequest, promptFieldRequest, request,
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedEnrichments, err := prepareKnownPromptEnrichments(
+		ctx, promptSynthesis, core.GetPipelineEnrichments(ctx),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Fprintf(&builder, "<user_request>\n%s\n</user_request>\n\n", preparedRequest)
 
 	// Include agent coordination, memory, and conversation history from pipeline enrichments.
 	// Gives the synthesizer awareness of active agents, prior cross-agent activity, and
 	// session context so it can produce more informed, deduplicated summaries.
-	enrichments := core.GetPipelineEnrichments(ctx)
+	enrichments := preparedEnrichments
 	if len(enrichments) > 0 {
 		if coordCtx, ok := enrichments[core.EnrichmentActivityCoordination]; ok {
 			if coordStr, isStr := coordCtx.(string); isStr && coordStr != "" {
@@ -498,9 +522,21 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 				}
 			}
 
-			fmt.Fprintf(&builder, "<agent name=%q task=%q status=\"success\">\n%s\n</agent>\n\n", step.AgentName, step.Instruction, response)
+			preparedAgent, preparedInstruction, preparedResponse, prepareErr := prepareSynthesisStepValues(
+				ctx, step.AgentName, step.Instruction, response, promptFieldPriorResultResponse,
+			)
+			if prepareErr != nil {
+				return "", prepareErr
+			}
+			fmt.Fprintf(&builder, "<agent name=%q task=%q status=\"success\">\n%s\n</agent>\n\n", preparedAgent, preparedInstruction, preparedResponse)
 		} else {
-			fmt.Fprintf(&builder, "<agent name=%q task=%q status=\"failed\">\n%s\n</agent>\n\n", step.AgentName, step.Instruction, step.Error)
+			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareSynthesisStepValues(
+				ctx, step.AgentName, step.Instruction, step.Error, promptFieldPriorResultError,
+			)
+			if prepareErr != nil {
+				return "", prepareErr
+			}
+			fmt.Fprintf(&builder, "<agent name=%q task=%q status=\"failed\">\n%s\n</agent>\n\n", preparedAgent, preparedInstruction, preparedError)
 		}
 	}
 
@@ -532,7 +568,7 @@ func (s *AISynthesizer) buildSynthesisPrompt(ctx context.Context, request string
 		registry.Histogram("orchestration.synthesis_prompt.size_bytes", float64(len(prompt)))
 	}
 
-	return prompt
+	return prompt, nil
 }
 
 // synthesizeWithTemplate uses predefined templates for synthesis

@@ -51,8 +51,8 @@ func TestRedisPresetPropagatesLoggerToLoggingCapableBackends(t *testing.T) {
 	if _, err := NewOrchestrationBackends(clients, options); err != nil {
 		t.Fatal(err)
 	}
-	if len(logger.components) != 8 {
-		t.Fatalf("component logger applications = %d, want 8: %#v", len(logger.components), logger.components)
+	if len(logger.components) != 9 {
+		t.Fatalf("component logger applications = %d, want 9: %#v", len(logger.components), logger.components)
 	}
 	for _, component := range logger.components {
 		if component != "framework/orchestration" {
@@ -420,6 +420,7 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 			"TRUVAG3_REDIS_URL":           "redis://alias:6379",
 			"TRUVAG3_HITL_REDIS_DB":       "4",
 			"TRUVAG3_SCHEDULING_REDIS_DB": "5",
+			"TRUVAG3_SKILLS_REDIS_DB":     "9",
 		}
 		value, ok := values[name]
 		return value, ok
@@ -429,7 +430,7 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if fromEnvironment.url != "redis://standard:6379" || fromEnvironment.roleDB[ClientRoleHITL] != 4 ||
-		fromEnvironment.roleDB[ClientRoleScheduling] != 5 {
+		fromEnvironment.roleDB[ClientRoleScheduling] != 5 || fromEnvironment.roleDB[ClientRoleSkills] != 9 {
 		t.Fatalf("environment config = %#v", fromEnvironment)
 	}
 	configured, err := ConfigureClientConfig(fromEnvironment,
@@ -526,6 +527,10 @@ func TestOwnedClientsPreserveRoleDatabasesAndCloseOnce(t *testing.T) {
 	workflow, ok := owned.ClientSet().Resolve(ClientRoleWorkflow).(*redis.Client)
 	if !ok || workflow.Options().DB != 0 {
 		t.Fatalf("workflow client = %#v", workflow)
+	}
+	skills, ok := owned.ClientSet().Resolve(ClientRoleSkills).(*redis.Client)
+	if !ok || skills.Options().DB != core.RedisDBReserved9 {
+		t.Fatalf("skills client = %#v", skills)
 	}
 	if err := owned.Close(); err != nil {
 		t.Fatal(err)

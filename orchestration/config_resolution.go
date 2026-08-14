@@ -1,11 +1,13 @@
 package orchestration
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
@@ -187,6 +189,15 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 			MapConcurrency:          8,
 			MapReduceThresholdBytes: 0,
 		},
+		Skills: SkillConfig{
+			Enabled:                 false,
+			DomainCompatibilityMode: SkillDomainCompatibilityWarn,
+			Cache: SkillContentCacheConfig{
+				Mode:     SkillContentCacheLocal,
+				MaxBytes: DefaultSkillContentCacheCapacityBytes,
+			},
+			Limits: defaultSkillRuntimeLimits(),
+		},
 		ExecutionStore:             DefaultExecutionStoreConfig(),
 		stepRetryBackoff:           core.DefaultBackoffConfig(),
 		executionStoreWriteTimeout: defaultExecutionStoreWriteTimeout,
@@ -202,10 +213,17 @@ func ResolveOrchestratorConfig(input ConfigResolution) (*ConfigResolutionResult,
 		return nil, fmt.Errorf("%w: unknown environment mode", ErrInvalidOrchestratorConfig)
 	}
 	base := input.Base
+	defaultBase := base == nil
 	if base == nil {
 		base = NewDefaultOrchestratorConfig()
 	}
 	config := cloneOrchestratorConfig(base)
+	// Skill defaults are applied after environment and code layers so partial
+	// typed configuration retains explicit-Go -> environment -> default
+	// precedence. Other established config families retain their existing flow.
+	if defaultBase {
+		config.Skills = SkillConfig{}
+	}
 	lookup := input.LookupEnv
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -220,6 +238,11 @@ func ResolveOrchestratorConfig(input ConfigResolution) (*ConfigResolutionResult,
 	for _, option := range input.Options {
 		if option != nil {
 			option(config)
+		}
+	}
+	if input.Environment != EnvironmentDisabled {
+		if err := resolver.applySkills(config); err != nil {
+			return nil, err
 		}
 	}
 	normalizeOrchestratorConfig(config)
@@ -289,6 +312,7 @@ func normalizeOrchestratorConfig(config *OrchestratorConfig) {
 	} else {
 		config.PromptConfig.IterativePlanConfig = nil
 	}
+	normalizeSkillConfig(&config.Skills)
 }
 
 // ValidateOrchestratorConfig validates effective behavior after every selected
@@ -302,6 +326,9 @@ func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
 	}
 	if err := validatePromptInvariantConfig(config); err != nil {
 		return err
+	}
+	if err := validateSkillRuntimeConfig(config); err != nil {
+		return fmt.Errorf("%w: %w", errInvalidSkillRuntimeConfig, err)
 	}
 	positive := []struct {
 		name  string
@@ -545,6 +572,9 @@ func cloneOrchestratorConfig(source *OrchestratorConfig) *OrchestratorConfig {
 	cloned.TieredSelectionAIOptions = cloneAIOptionsOverride(source.TieredSelectionAIOptions)
 	cloned.ErrorAnalysisAIOptions = cloneAIOptionsOverride(source.ErrorAnalysisAIOptions)
 	cloned.ResultDistillAIOptions = cloneAIOptionsOverride(source.ResultDistillAIOptions)
+	cloned.SkillActivationAIOptions = cloneAIOptionsOverride(source.SkillActivationAIOptions)
+	cloned.SkillResourceAIOptions = cloneAIOptionsOverride(source.SkillResourceAIOptions)
+	cloned.Skills = cloneSkillConfig(source.Skills)
 	cloned.SemanticRetry.TriggerStatusCodes = append([]int(nil), source.SemanticRetry.TriggerStatusCodes...)
 	cloned.ExcludedCapabilities = append([]string(nil), source.ExcludedCapabilities...)
 	cloned.PropagatedHeaders = cloneStringMap(source.PropagatedHeaders)
@@ -748,6 +778,232 @@ func (r *configEnvResolver) aliasedText(
 		return r.text(standard)
 	}
 	return r.text(framework)
+}
+
+func (r *configEnvResolver) skillRaw(variable string) (string, bool, error) {
+	value, present := r.lookup(variable)
+	if !present {
+		return "", false, nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", false, &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonEmptyValue}
+	}
+	return value, true, nil
+}
+
+func (r *configEnvResolver) skillPositiveInt(variable string, target *int) error {
+	if *target < 0 {
+		return nil
+	}
+	if *target > 0 {
+		return nil
+	}
+	raw, present, err := r.skillRaw(variable)
+	if err != nil || !present {
+		return err
+	}
+	value, parseErr := strconv.Atoi(raw)
+	if parseErr != nil {
+		return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonInvalidInteger}
+	}
+	if value <= 0 {
+		return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonOutOfRange}
+	}
+	*target = value
+	return nil
+}
+
+func (r *configEnvResolver) skillNonNegativeInt(variable string, target *int) error {
+	if *target != 0 {
+		return nil
+	}
+	raw, present, err := r.skillRaw(variable)
+	if err != nil || !present {
+		return err
+	}
+	value, parseErr := strconv.Atoi(raw)
+	if parseErr != nil {
+		return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonInvalidInteger}
+	}
+	if value < 0 {
+		return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonOutOfRange}
+	}
+	*target = value
+	return nil
+}
+
+func (r *configEnvResolver) applySkills(config *OrchestratorConfig) error {
+	if raw, present, err := r.skillRaw("TRUVAG3_SKILLS_ENABLED"); err != nil {
+		return err
+	} else if present {
+		value, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILLS_ENABLED", Reason: ConfigReasonInvalidBoolean}
+		}
+		config.Skills.Enabled = value
+	}
+
+	if raw, present, err := r.skillRaw("TRUVAG3_SKILL_BINDINGS_JSON"); err != nil {
+		return err
+	} else if present {
+		bindings, decodeErr := decodeSkillBindingsJSON([]byte(raw))
+		if decodeErr != nil {
+			return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILL_BINDINGS_JSON", Reason: ConfigReasonInvalidJSON}
+		}
+		config.Skills.Bindings = bindings
+		config.Skills.bindingSource = SkillBindingsFromEnvironment
+	}
+
+	if config.Skills.DomainCompatibilityMode == "" {
+		if raw, present, err := r.skillRaw("TRUVAG3_SKILL_DOMAIN_COMPATIBILITY_MODE"); err != nil {
+			return err
+		} else if present {
+			mode := SkillDomainCompatibilityMode(strings.ToLower(raw))
+			switch mode {
+			case SkillDomainCompatibilityOff, SkillDomainCompatibilityWarn, SkillDomainCompatibilityEnforce:
+				config.Skills.DomainCompatibilityMode = mode
+			default:
+				return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILL_DOMAIN_COMPATIBILITY_MODE", Reason: ConfigReasonInvalidEnum}
+			}
+		}
+	}
+	if config.Skills.Cache.Mode == "" {
+		if raw, present, err := r.skillRaw("TRUVAG3_SKILL_CACHE_MODE"); err != nil {
+			return err
+		} else if present {
+			mode := SkillContentCacheMode(strings.ToLower(raw))
+			switch mode {
+			case SkillContentCacheLocal, SkillContentCacheDisabled:
+				config.Skills.Cache.Mode = mode
+			default:
+				return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILL_CACHE_MODE", Reason: ConfigReasonInvalidEnum}
+			}
+		}
+	}
+
+	limits := &config.Skills.Limits
+	for _, setting := range []struct {
+		variable string
+		target   *int
+	}{
+		{"TRUVAG3_SKILL_MAX_BINDINGS", &limits.MaxBindings},
+		{"TRUVAG3_SKILL_MAX_AUTO_CANDIDATES", &limits.MaxAutoCandidates},
+		{"TRUVAG3_SKILL_CATALOG_TOKEN_BUDGET", &limits.CatalogTokenBudget},
+		{"TRUVAG3_SKILL_MAX_RESOURCE_CANDIDATES", &limits.MaxResourceCandidates},
+		{"TRUVAG3_SKILL_RESOURCE_CATALOG_TOKEN_BUDGET", &limits.ResourceCatalogTokenBudget},
+		{"TRUVAG3_SKILL_MAX_ACTIVE_SKILLS", &limits.MaxActiveSkills},
+		{"TRUVAG3_SKILL_TOTAL_TOKEN_BUDGET", &limits.TotalTokenBudget},
+		{"TRUVAG3_SKILL_MAIN_TOKEN_BUDGET", &limits.MainTokenBudget},
+		{"TRUVAG3_SKILL_RESOURCE_TOKEN_BUDGET", &limits.ResourceTokenBudget},
+		{"TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE", &limits.MaxResourcesPerPhase},
+		{"TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION", &limits.MaxResourcesPerExecution},
+		{"TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS", &limits.ResolutionMaxTokens},
+		{"TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET", &limits.SynthesisTokenBudget},
+		{"TRUVAG3_SKILL_CACHE_MAX_BYTES", &config.Skills.Cache.MaxBytes},
+	} {
+		if err := r.skillPositiveInt(setting.variable, setting.target); err != nil {
+			return err
+		}
+	}
+	if err := r.skillNonNegativeInt("TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET", &limits.EffectiveInputTokenBudget); err != nil {
+		return err
+	}
+	if limits.RegistryReadTimeout == 0 {
+		if raw, present, err := r.skillRaw("TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT"); err != nil {
+			return err
+		} else if present {
+			value, parseErr := time.ParseDuration(raw)
+			if parseErr != nil {
+				return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT", Reason: ConfigReasonInvalidDuration}
+			}
+			if value <= 0 {
+				return &ConfigEnvironmentError{Variable: "TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT", Reason: ConfigReasonOutOfRange}
+			}
+			limits.RegistryReadTimeout = value
+		}
+	}
+
+	active := config.Skills.Enabled && len(config.Skills.Bindings) > 0
+	if !active {
+		return nil
+	}
+	if err := r.applySkillModel("TRUVAG3_SKILL_ACTIVATION_MODEL", &config.SkillActivationAIOptions); err != nil {
+		return err
+	}
+	if err := r.applySkillModel("TRUVAG3_SKILL_RESOURCE_MODEL", &config.SkillResourceAIOptions); err != nil {
+		return err
+	}
+	if config.SkillPromptGuidance.Activation == "" {
+		guidance, err := r.loadSkillGuidanceFile("TRUVAG3_SKILL_ACTIVATION_GUIDANCE_FILE")
+		if err != nil {
+			return err
+		}
+		config.SkillPromptGuidance.Activation = guidance
+	}
+	if config.SkillPromptGuidance.Resource == "" {
+		guidance, err := r.loadSkillGuidanceFile("TRUVAG3_SKILL_RESOURCE_GUIDANCE_FILE")
+		if err != nil {
+			return err
+		}
+		config.SkillPromptGuidance.Resource = guidance
+	}
+	return nil
+}
+
+func (r *configEnvResolver) applySkillModel(variable string, options **AIOptionsOverride) error {
+	if *options != nil && (*options).Model != nil {
+		return nil
+	}
+	raw, present, err := r.skillRaw(variable)
+	if err != nil || !present {
+		return err
+	}
+	*options = ensureAIOptionsOverride(*options)
+	(*options).Model = StringPtr(strings.TrimSpace(raw))
+	return nil
+}
+
+func (r *configEnvResolver) loadSkillGuidanceFile(variable string) (string, error) {
+	path, present, err := r.skillRaw(variable)
+	if err != nil || !present {
+		return "", err
+	}
+	file, openErr := os.Open(path) // #nosec G304 -- explicit deployment-owned mounted path
+	if openErr != nil {
+		return "", &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonInvalidConfiguration}
+	}
+	defer func() { _ = file.Close() }()
+	data, readErr := io.ReadAll(io.LimitReader(file, maxSkillGuidanceBytes+1))
+	if readErr != nil || len(data) > maxSkillGuidanceBytes {
+		return "", &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonOutOfRange}
+	}
+	guidance := normalizeSkillMetadataText(string(data))
+	if guidance == "" {
+		return "", &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonEmptyValue}
+	}
+	if err := validateSkillPromptGuidance(SkillPromptGuidance{Activation: guidance}); err != nil {
+		return "", &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonInvalidConfiguration}
+	}
+	return guidance, nil
+}
+
+func decodeSkillBindingsJSON(data []byte) ([]SkillBinding, error) {
+	if err := rejectDuplicateSkillJSONFields(data); err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var bindings []SkillBinding
+	if err := decoder.Decode(&bindings); err != nil {
+		return nil, err
+	}
+	if bindings == nil {
+		return nil, errors.New("skill bindings must be a JSON array")
+	}
+	if err := ensureSkillJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	return bindings, nil
 }
 
 func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool) error {

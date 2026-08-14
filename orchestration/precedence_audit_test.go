@@ -2,11 +2,14 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // ─── DerivePrecedenceAudit — self-gating + cheap fields ──────────────────────
@@ -98,10 +101,15 @@ type stubEntityExtractor struct {
 	planEntities         []string
 	version              string
 	calls                []PrecedenceSection
+	texts                map[PrecedenceSection][]string
 }
 
-func (e *stubEntityExtractor) ExtractEntities(_ context.Context, section PrecedenceSection, _ string) []string {
+func (e *stubEntityExtractor) ExtractEntities(_ context.Context, section PrecedenceSection, text string) []string {
 	e.calls = append(e.calls, section)
+	if e.texts == nil {
+		e.texts = make(map[PrecedenceSection][]string)
+	}
+	e.texts[section] = append(e.texts[section], text)
 	switch section {
 	case PrecedenceSectionProfileContext:
 		return e.profileEntities
@@ -160,6 +168,86 @@ travel there
 	assert.Contains(t, extractor.calls, PrecedenceSectionProfileContext)
 	assert.Contains(t, extractor.calls, PrecedenceSectionConversation)
 	assert.Contains(t, extractor.calls, PrecedenceSectionPlanResponse)
+}
+
+func TestDerivePrecedenceAuditSkillEncodingPreservesSemanticRequestText(t *testing.T) {
+	rawRequest := "  Visit Zürich\nthen Rome\t"
+	encoded, err := json.Marshal(rawRequest)
+	require.NoError(t, err)
+	prompt := func(requestBody string) string {
+		return `<user_profile>
+Context:
+- User previously visited Bern
+</user_profile>
+<context_precedence>Prefer the live turn.</context_precedence>
+<user_request>
+` + requestBody + `
+</user_request>`
+	}
+
+	plainExtractor := &stubEntityExtractor{}
+	plain := DerivePrecedenceAudit(t.Context(), LLMInteraction{
+		Type: "plan_generation", Prompt: prompt(rawRequest),
+	}, plainExtractor)
+	require.NotNil(t, plain)
+
+	skillCtx := withPromptInputPreparer(t.Context(), skillPromptInputPreparer{})
+	skillExtractor := &stubEntityExtractor{}
+	encodedAudit := DerivePrecedenceAudit(skillCtx, LLMInteraction{
+		Type: "plan_generation", Prompt: prompt(string(encoded)),
+	}, skillExtractor)
+	require.NotNil(t, encodedAudit)
+
+	require.Equal(t, []string{rawRequest}, plainExtractor.texts[PrecedenceSectionRequest])
+	require.Equal(t, plainExtractor.texts[PrecedenceSectionRequest], skillExtractor.texts[PrecedenceSectionRequest])
+}
+
+func TestDerivePrecedenceAuditSkillRequestDecodeFailureIsInconclusiveAndTraced(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("precedence-audit-test").Start(
+		withPromptInputPreparer(t.Context(), skillPromptInputPreparer{}),
+		"request",
+	)
+	extractor := &stubEntityExtractor{
+		profileEntities: []string{"Bern"}, planEntities: []string{"Bern"},
+	}
+	audit := DerivePrecedenceAudit(ctx, LLMInteraction{
+		Type: "plan_generation",
+		Prompt: `<user_profile>
+Context:
+- User previously visited Bern
+</user_profile>
+<context_precedence>Prefer the live turn.</context_precedence>
+<user_request>
+not-json
+</user_request>`,
+		Response: `{"city":"Bern"}`,
+	}, extractor)
+	span.End()
+
+	require.NotNil(t, audit)
+	assert.Empty(t, audit.RequestEntities)
+	assert.Equal(t, PrecedenceComplianceInconclusive, audit.Compliance)
+	assert.Empty(t, extractor.texts[PrecedenceSectionRequest])
+
+	ended := recorder.Ended()
+	require.Len(t, ended, 1)
+	for _, event := range ended[0].Events() {
+		if event.Name != "orchestrator.context_precedence.request_decode_failed" {
+			continue
+		}
+		attributes := make(map[string]string, len(event.Attributes))
+		for _, item := range event.Attributes {
+			attributes[string(item.Key)] = item.Value.AsString()
+		}
+		assert.Equal(t, PromptKindPlanning, attributes["prompt_kind"])
+		assert.Equal(t, string(PrecedenceSectionRequest), attributes["section"])
+		assert.Equal(t, skillInputEncoderPolicyVersion, attributes["encoder_version"])
+		return
+	}
+	t.Fatal("request decode failure span event was not recorded")
 }
 
 // ─── Compliance classification ───────────────────────────────────────────────

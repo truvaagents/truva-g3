@@ -33,6 +33,8 @@ type executionRunSnapshot struct {
 	AccumulatedResults map[string]*StepResult
 	ExecutedStepIDs    []string
 	ContinuationNote   string
+	SkillState         *SkillExecutionState
+	SkillCacheContext  *SkillCacheContext
 }
 
 func newExecutionRunSnapshot(
@@ -63,7 +65,7 @@ func newExecutionRunSnapshot(
 
 func (s executionRunSnapshot) requiresPersistence() bool {
 	return s.PhaseNumber > 1 || len(s.AccumulatedResults) > 0 ||
-		len(s.ExecutedStepIDs) > 0 || s.ContinuationNote != ""
+		len(s.ExecutedStepIDs) > 0 || s.ContinuationNote != "" || s.SkillState != nil
 }
 
 type checkpointCoordinator struct {
@@ -118,6 +120,18 @@ func applyRunSnapshot(checkpoint *ExecutionCheckpoint, snapshot executionRunSnap
 	}
 	checkpoint.ExecutedStepIDs = append([]string(nil), snapshot.ExecutedStepIDs...)
 	checkpoint.ContinuationNote = snapshot.ContinuationNote
+	if snapshot.SkillState != nil {
+		state := cloneSkillExecutionState(*snapshot.SkillState)
+		checkpoint.SkillState = &state
+	} else {
+		checkpoint.SkillState = nil
+	}
+	if snapshot.SkillCacheContext != nil {
+		cacheContext := *snapshot.SkillCacheContext
+		checkpoint.SkillCacheContext = &cacheContext
+	} else {
+		checkpoint.SkillCacheContext = nil
+	}
 	rebuildCheckpointCompletedSteps(checkpoint)
 }
 
@@ -127,6 +141,11 @@ func (o *AIOrchestrator) saveAuthoritativeCheckpoint(
 	snapshot executionRunSnapshot,
 	site string,
 ) error {
+	if holder, ok := skillExecutionHolderFromContext(ctx); ok {
+		skillState, cacheContext := holder.Snapshot()
+		snapshot.SkillState = &skillState
+		snapshot.SkillCacheContext = &cacheContext
+	}
 	coordinator := checkpointCoordinator{controller: o.interruptController}
 	if err := coordinator.saveAuthoritative(ctx, checkpoint, snapshot); err != nil {
 		reason := checkpointFailureReason(err)

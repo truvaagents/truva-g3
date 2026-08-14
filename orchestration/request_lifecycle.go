@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -71,9 +72,31 @@ type boundaryPreparation struct {
 	Snapshot executionRunSnapshot
 }
 
-type boundaryPreparer func(context.Context, orchestrationBoundary) error
+type boundaryPreparer func(context.Context, orchestrationBoundary) (context.Context, error)
 type boundaryPreparerContextKey struct{}
 type executionRunSnapshotContextKey struct{}
+
+// boundaryPreparationError distinguishes a lifecycle-boundary failure from an
+// ordinary planner failure. Callers may preserve planner retries without
+// retrying work that failed before the model boundary was reached.
+type boundaryPreparationError struct {
+	boundary orchestrationBoundary
+	cause    error
+}
+
+func (err *boundaryPreparationError) Error() string {
+	if err == nil || err.cause == nil {
+		return "orchestration boundary preparation failed"
+	}
+	return err.cause.Error()
+}
+
+func (err *boundaryPreparationError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.cause
+}
 
 func withBoundaryPreparer(ctx context.Context, prepare boundaryPreparer) context.Context {
 	return context.WithValue(ctx, boundaryPreparerContextKey{}, prepare)
@@ -83,12 +106,16 @@ func withExecutionRunSnapshot(ctx context.Context, snapshot executionRunSnapshot
 	return context.WithValue(ctx, executionRunSnapshotContextKey{}, snapshot)
 }
 
-func prepareOrchestrationBoundary(ctx context.Context, boundary orchestrationBoundary) error {
+func prepareOrchestrationBoundary(ctx context.Context, boundary orchestrationBoundary) (context.Context, error) {
 	prepare, _ := ctx.Value(boundaryPreparerContextKey{}).(boundaryPreparer)
 	if prepare == nil {
-		return nil
+		return ctx, nil
 	}
-	return prepare(ctx, boundary)
+	prepared, err := prepare(ctx, boundary)
+	if err != nil {
+		return prepared, &boundaryPreparationError{boundary: boundary, cause: err}
+	}
+	return prepared, nil
 }
 
 func executionRunSnapshotFromContext(ctx context.Context) executionRunSnapshot {
@@ -108,12 +135,76 @@ func (c phaseCoordinator) Run(
 	state *executionRunState,
 	progress phaseProgressFn,
 ) (*phaseLoopResult, error) {
-	ctx = withBoundaryPreparer(ctx, func(boundaryCtx context.Context, boundary orchestrationBoundary) error {
-		_, err := c.prepareBoundary(boundaryCtx, boundary, state)
-		return err
+	phaseProjections := make(map[int]*skillPromptProjection)
+	ctx = withBoundaryPreparer(ctx, func(boundaryCtx context.Context, boundary orchestrationBoundary) (context.Context, error) {
+		preparation, err := c.prepareBoundary(boundaryCtx, boundary, state)
+		if err != nil {
+			return boundaryCtx, err
+		}
+		if c.orchestrator.skillRuntime == nil || isSkillFreeCheckpointResume(boundaryCtx) {
+			return boundaryCtx, nil
+		}
+		skillState, found := state.skillState()
+		if !found {
+			return boundaryCtx, newSkillDomainError(ErrSkillIntegrity, "read execution skill state", SkillRef{})
+		}
+		switch boundary {
+		case boundaryInitialPlanning:
+			boundaryCtx, skillState, err = c.orchestrator.skillRuntime.prepareInitialBoundary(
+				boundaryCtx,
+				skillState,
+				state.Input.Request,
+				state.Pipeline.Enrichments,
+				max(preparation.Snapshot.PhaseNumber, 1),
+			)
+			if projection, found := skillPromptProjectionFromContext(boundaryCtx); found {
+				phaseProjections[max(preparation.Snapshot.PhaseNumber, 1)] = projection
+			}
+		case boundaryContinuationPlanning:
+			var projection *skillPromptProjection
+			boundaryCtx, skillState, projection, err = c.orchestrator.skillRuntime.prepareContinuationBoundary(
+				boundaryCtx, skillState, state.Input.Request, state.Pipeline.Enrichments,
+				preparation.Snapshot, SkillBoundaryContinuation,
+			)
+			if projection != nil {
+				phaseProjections[max(preparation.Snapshot.PhaseNumber, 1)] = projection
+			}
+		case boundaryRegeneration:
+			projection := phaseProjections[max(preparation.Snapshot.PhaseNumber, 1)]
+			if projection == nil {
+				return boundaryCtx, newSkillDomainError(ErrSkillIntegrity, "reuse regeneration projection", SkillRef{})
+			}
+			boundaryCtx, err = c.orchestrator.skillRuntime.reuseSkillProjection(
+				boundaryCtx, &skillState, projection, SkillBoundaryRegeneration,
+			)
+		case boundaryResume:
+			var projection *skillPromptProjection
+			boundaryCtx, skillState, projection, err = c.orchestrator.skillRuntime.prepareContinuationBoundary(
+				boundaryCtx, skillState, state.Input.Request, state.Pipeline.Enrichments,
+				preparation.Snapshot, SkillBoundaryResume,
+			)
+			if projection != nil {
+				phaseProjections[max(preparation.Snapshot.PhaseNumber, 1)] = projection
+			}
+		case boundarySynthesis:
+			boundaryCtx, skillState, _, err = c.orchestrator.skillRuntime.prepareSynthesisBoundary(
+				boundaryCtx, skillState, state.Input.Request, preparation.Snapshot,
+			)
+		}
+		state.setSkillState(skillState)
+		if holder, ok := skillExecutionHolderFromContext(boundaryCtx); ok {
+			holder.Store(skillState)
+		}
+		debug := skillState.Debug
+		state.Debug.Skills = &debug
+		boundaryCtx = withSkillExecutionState(boundaryCtx, skillState)
+		if err != nil {
+			return boundaryCtx, err
+		}
+		return boundaryCtx, nil
 	})
 	state.Context = ctx
-	return c.orchestrator.executePhaseLoop(
+	result, err := c.orchestrator.executePhaseLoop(
 		ctx,
 		state.Input.Request,
 		state.Correlation.RequestID,
@@ -122,6 +213,21 @@ func (c phaseCoordinator) Run(
 		state.Pipeline,
 		progress,
 	)
+	var preparationErr *boundaryPreparationError
+	if err != nil && errors.As(err, &preparationErr) {
+		// A boundary failure occurs before the planner/executor can produce a
+		// result. Persist the request-local debug snapshot that the boundary
+		// contributor captured so the failure is still diagnosable.
+		c.orchestrator.storeExecutionAsync(
+			state.Context,
+			state.Input.Request,
+			state.Correlation.RequestID,
+			nil,
+			nil,
+			nil,
+		)
+	}
+	return result, err
 }
 
 func (c phaseCoordinator) prepareBoundary(
@@ -150,8 +256,20 @@ type synthesisCoordinator struct {
 
 func (c synthesisCoordinator) Run(state *executionRunState) (*requestRunResult, error) {
 	state.Context = withExecutionRunSnapshot(state.Context, state.Snapshot())
-	if err := prepareOrchestrationBoundary(state.Context, boundarySynthesis); err != nil {
+	var err error
+	state.Context, err = prepareOrchestrationBoundary(state.Context, boundarySynthesis)
+	if err != nil {
 		return nil, err
+	}
+	if c.orchestrator.skillRuntime != nil && state.Phase.Result != nil {
+		c.orchestrator.storeExecutionAsync(
+			state.Context,
+			state.Input.Request,
+			state.Correlation.RequestID,
+			state.Phase.Result.LastPlan,
+			state.Phase.Result.CombinedResult,
+			nil,
+		)
 	}
 
 	switch state.Input.Delivery {
@@ -195,11 +313,13 @@ type usageState struct {
 	Accumulator *core.AggregatedTokenUsage
 }
 
-type executionDebugState struct{}
+type executionDebugState struct {
+	Skills *SkillExecutionDebug
+}
 
 // executionRunState is the request-local lifecycle owner. Feature-specific
-// state attaches through narrow boundaries; this aggregate contains only
-// framework lifecycle facts and immutable configuration-derived references.
+// state is typed and request-scoped; provider clients and content bodies never
+// attach to this aggregate.
 type executionRunState struct {
 	Input            requestRunInput
 	Context          context.Context
@@ -209,11 +329,27 @@ type executionRunState struct {
 	Phase            phaseRunState
 	Usage            usageState
 	Debug            executionDebugState
+	SkillState       *SkillExecutionState
 	Recorder         *executionRecorder
 	Span             core.Span
 	completionLogged bool
 	completionReason string
 	spanFailed       bool
+}
+
+func (s *executionRunState) setSkillState(state SkillExecutionState) {
+	if s == nil {
+		return
+	}
+	copy := cloneSkillExecutionState(state)
+	s.SkillState = &copy
+}
+
+func (s *executionRunState) skillState() (SkillExecutionState, bool) {
+	if s == nil || s.SkillState == nil {
+		return SkillExecutionState{}, false
+	}
+	return cloneSkillExecutionState(*s.SkillState), true
 }
 
 func (s *executionRunState) Snapshot() executionRunSnapshot {
@@ -307,7 +443,90 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 		}
 	}()
 
-	decision, err := o.runBeforePlanningHooks(state.Context, state.Pipeline, newPipelineGate(nil, false))
+	gate := newPipelineGate(nil, false)
+	if o.skillRuntime != nil {
+		var skillState SkillExecutionState
+		var cacheContext SkillCacheContext
+		var pinErr error
+		skillRuntimeActive := !isSkillFreeCheckpointResume(state.Context)
+		if checkpointState, priorCacheContext, ok := checkpointSkillStateFromContext(state.Context); ok &&
+			!checkpointHasEffectiveSkillState(checkpointState, priorCacheContext) {
+			// Explicitly empty compatibility snapshots are causal evidence that
+			// this suspended execution was skill-free. Do not attach bindings that
+			// were added after the checkpoint was created.
+			skillRuntimeActive = false
+			state.Context = withSkillFreeCheckpointResume(state.Context)
+		} else if ok {
+			skillState, cacheContext, pinErr = o.skillRuntime.ResumeCandidates(
+				state.Context, checkpointState, priorCacheContext,
+			)
+		} else if skillRuntimeActive {
+			skillState, cacheContext, pinErr = o.skillRuntime.PinCandidates(state.Context)
+		}
+		if skillRuntimeActive {
+			if pinErr != nil {
+				state.completionReason = "skill_candidate_pinning_failed"
+				if skillState.Pinned != nil {
+					holder := newSkillExecutionStateHolder(skillState, cacheContext)
+					state.Context = withSkillExecutionHolder(state.Context, holder)
+					state.Context = withSkillExecutionState(state.Context, skillState)
+					state.setSkillState(skillState)
+					debug := skillState.Debug
+					state.Debug.Skills = &debug
+					o.storeExecutionAsync(
+						state.Context, state.Input.Request, state.Correlation.RequestID,
+						nil, nil, nil,
+					)
+				}
+				return nil, pinErr
+			}
+			holder := newSkillExecutionStateHolder(skillState, cacheContext)
+			state.Context = withSkillExecutionHolder(state.Context, holder)
+			state.Context = withSkillExecutionState(state.Context, skillState)
+			state.setSkillState(skillState)
+			debug := skillState.Debug
+			state.Debug.Skills = &debug
+			gate = newPipelineGate(
+				map[string]string{reservedSkillCacheDimension: cacheContext.Fingerprint},
+				!cacheContext.ResponseCacheEligible,
+			)
+			// Persist request-start evidence before hooks can short-circuit the run.
+			o.storeExecutionAsync(
+				state.Context, state.Input.Request, state.Correlation.RequestID,
+				nil, nil, nil,
+			)
+		}
+	} else if checkpointState, priorCacheContext, ok := checkpointSkillStateFromContext(state.Context); ok &&
+		checkpointHasEffectiveSkillState(checkpointState, priorCacheContext) {
+		state.completionReason = "skill_binding_revoked"
+		diagnostic := SkillDiagnostic{
+			Code: "skill_binding_revoked", Boundary: SkillBoundaryResume,
+			Action: "resume_failed",
+		}
+		checkpointState.Diagnostics = append(checkpointState.Diagnostics, diagnostic)
+		checkpointState.Debug.Diagnostics = append(checkpointState.Debug.Diagnostics, diagnostic)
+		cacheContext := SkillCacheContext{}
+		if priorCacheContext != nil {
+			cacheContext = *priorCacheContext
+		}
+		holder := newSkillExecutionStateHolder(checkpointState, cacheContext)
+		state.Context = withSkillExecutionHolder(state.Context, holder)
+		state.Context = withSkillExecutionState(state.Context, checkpointState)
+		state.setSkillState(checkpointState)
+		debug := checkpointState.Debug
+		state.Debug.Skills = &debug
+		o.storeExecutionAsync(
+			state.Context, state.Input.Request, state.Correlation.RequestID,
+			nil, nil, nil,
+		)
+		return nil, newSkillDomainError(ErrSkillUnavailable, "resume with skills disabled", SkillRef{})
+	}
+	decision, err := o.runBeforePlanningHooks(
+		state.Context,
+		state.Pipeline,
+		gate,
+		reservedSkillCacheDimension,
+	)
 	if err != nil {
 		state.completionReason = "before_planning_failed"
 		return nil, fmt.Errorf("before-planning pipeline contract: %w", err)
@@ -370,6 +589,36 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	}
 	o.completeRun(state, result)
 	return result, err
+}
+
+func checkpointHasEffectiveSkillState(
+	state SkillExecutionState,
+	cacheContext *SkillCacheContext,
+) bool {
+	if cacheContext != nil &&
+		(cacheContext.Fingerprint != "" || cacheContext.ResponseCacheEligible) {
+		return true
+	}
+	if len(state.ActiveSkills) != 0 || len(state.UnavailableContent) != 0 ||
+		len(state.ResourceSelections) != 0 || len(state.Diagnostics) != 0 {
+		return true
+	}
+	if state.Debug.BindingSource != "" || state.Debug.BindingFingerprint != "" ||
+		state.Debug.BudgetFingerprint != "" || state.Debug.CacheFingerprint != "" ||
+		state.Debug.RuntimePolicy != (SkillRuntimePolicyDebug{}) ||
+		len(state.Debug.Candidates) != 0 || len(state.Debug.Activations) != 0 ||
+		len(state.Debug.ResourceSelections) != 0 || len(state.Debug.ContentLoads) != 0 ||
+		len(state.Debug.Projections) != 0 || len(state.Debug.Diagnostics) != 0 {
+		return true
+	}
+	if state.Pinned == nil {
+		return false
+	}
+	pinned := state.Pinned
+	return len(pinned.EffectiveBindings) != 0 || len(pinned.Candidates) != 0 ||
+		len(pinned.TrustedExplicitActivations) != 0 || len(pinned.TrustedResourceRequests) != 0 ||
+		len(pinned.ExpectedCapabilities) != 0 || len(pinned.DomainOutcomes) != 0 ||
+		pinned.CacheFingerprint != "" || pinned.DebugProvenance != (SkillDebugProvenance{})
 }
 
 func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunInput) (*executionRunState, error) {

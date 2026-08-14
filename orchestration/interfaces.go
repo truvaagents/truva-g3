@@ -404,7 +404,6 @@ type ExecutionOptions struct {
 	// Step completion callback for progress reporting (v1 addition)
 	// Called after each step completes (success or failure).
 	// Used by async task handlers to report per-tool progress.
-	// See notes/ASYNC_TASK_DESIGN.md Phase 6 for details.
 	OnStepComplete StepCompleteCallback `json:"-"` // Not serializable
 }
 
@@ -496,6 +495,27 @@ type OrchestratorConfig struct {
 
 	// ResultDistillAIOptions overrides AIOptions for result distillation calls.
 	ResultDistillAIOptions *AIOptionsOverride `json:"result_distill_ai_options,omitempty"`
+
+	// Skills contains only provider-neutral eligibility, limits, modes, and
+	// behavior identity. Disabled by default.
+	Skills SkillConfig `json:"skills,omitempty"`
+
+	// SkillActivationAIOptions and SkillResourceAIOptions permit only Model and
+	// ReasoningEffort. Framework prompts, temperature, portable JSON parsing,
+	// correction retry, and output ceilings remain fixed contracts; the
+	// provider-native response-format option stays unset.
+	SkillActivationAIOptions *AIOptionsOverride  `json:"skill_activation_ai_options,omitempty"`
+	SkillResourceAIOptions   *AIOptionsOverride  `json:"skill_resource_ai_options,omitempty"`
+	SkillPromptGuidance      SkillPromptGuidance `json:"-"`
+
+	// SkillRegistry is the authoritative runtime read dependency. The optional
+	// content cache stores verified exact immutable bodies only.
+	SkillRegistry         SkillRegistry         `json:"-"`
+	SkillContentCache     SkillContentCache     `json:"-"`
+	SkillActivationPolicy SkillActivationPolicy `json:"-"`
+	SkillResolver         SkillResolver         `json:"-"`
+	SkillResourceResolver SkillResourceResolver `json:"-"`
+	SkillTokenCounter     core.TokenCounter     `json:"-"`
 
 	// Deprecated legacy scalar fields kept as a compatibility bridge while the
 	// repo migrates to per-phase AIOptions overrides.
@@ -628,7 +648,8 @@ type OrchestratorConfig struct {
 
 	// Result Trim Configuration (large result data management)
 	// Full results remain in StepResult.Response for template interpolation.
-	// See orchestration/notes/LARGE_RESULT_DATA_MANAGEMENT.md
+	// Only the bounded representation supplied to downstream LLM calls is
+	// trimmed; authoritative execution results remain intact.
 	ResultTrim ResultTrimConfig `json:"result_trim,omitempty"`
 
 	// Result Distillation (opt-in two-stage pipeline: structural pre-filter → LLM distill)

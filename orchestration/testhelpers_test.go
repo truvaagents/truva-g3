@@ -115,8 +115,15 @@ func (m *mockLogger) WithError(err error) core.Logger {
 
 // mockTelemetry implements core.Telemetry for testing
 type mockTelemetry struct {
-	spans   []string
-	metrics map[string]float64
+	spans         []string
+	metrics       map[string]float64
+	metricRecords []mockMetricRecord
+}
+
+type mockMetricRecord struct {
+	name   string
+	value  float64
+	labels map[string]string
 }
 
 func (m *mockTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
@@ -132,6 +139,9 @@ func (m *mockTelemetry) RecordMetric(name string, value float64, labels map[stri
 		m.metrics = make(map[string]float64)
 	}
 	m.metrics[name] = value
+	m.metricRecords = append(m.metricRecords, mockMetricRecord{
+		name: name, value: value, labels: cloneStringMap(labels),
+	})
 }
 
 // mockSpan implements core.Span for testing

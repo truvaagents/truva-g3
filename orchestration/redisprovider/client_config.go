@@ -28,6 +28,7 @@ func DefaultClientConfig() ClientConfig {
 			ClientRoleHITL:       core.RedisDBTelemetry,
 			ClientRoleWorkflow:   core.RedisDBServiceDiscovery,
 			ClientRoleScheduling: core.RedisDBServiceDiscovery,
+			ClientRoleSkills:     core.RedisDBReserved9,
 		},
 	}
 }
@@ -91,6 +92,7 @@ func LoadClientConfigFromEnvironment(base ClientConfig, lookup func(string) (str
 		ClientRoleHITL:       "TRUVAG3_HITL_REDIS_DB",
 		ClientRoleWorkflow:   "TRUVAG3_WORKFLOW_REDIS_DB",
 		ClientRoleScheduling: "TRUVAG3_SCHEDULING_REDIS_DB",
+		ClientRoleSkills:     "TRUVAG3_SKILLS_REDIS_DB",
 	} {
 		if value, ok := lookup(name); ok {
 			database, err := strconv.Atoi(strings.TrimSpace(value))
@@ -123,7 +125,7 @@ func NewOwnedClients(config ClientConfig) (*OwnedClients, error) {
 	}
 	byDatabase := make(map[int]redis.UniversalClient)
 	roleOptions := make([]ClientSetOption, 0, len(configured.roleDB))
-	for _, role := range []ClientRole{ClientRoleExecution, ClientRoleLLMDebug, ClientRoleHITL, ClientRoleWorkflow, ClientRoleScheduling} {
+	for _, role := range []ClientRole{ClientRoleExecution, ClientRoleLLMDebug, ClientRoleHITL, ClientRoleWorkflow, ClientRoleScheduling, ClientRoleSkills} {
 		database, ok := configured.roleDB[role]
 		if !ok {
 			continue

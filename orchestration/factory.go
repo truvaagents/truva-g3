@@ -1,6 +1,7 @@
 package orchestration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -80,6 +81,7 @@ type OrchestratorDependencies struct {
 // explicit application-owned value. Legacy capability and telemetry bootstrap
 // adapters are confined to this wrapper family.
 func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencies) (*AIOrchestrator, error) {
+	validationStarted := time.Now()
 	diagnostics := []ConfigDiagnostic(nil)
 	if config == nil {
 		resolved := DefaultConfigWithDiagnostics()
@@ -92,12 +94,19 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 			config.SynthesisStrategy = StrategyLLM
 		}
 		if err := validateSynthesisStrategy(config.SynthesisStrategy); err != nil {
+			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
 			return nil, err
 		}
 		if err := validatePromptInvariantConfig(config); err != nil {
+			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
+			return nil, err
+		}
+		if err := validateSkillRuntimeConfig(config); err != nil {
+			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
 			return nil, err
 		}
 	}
+	recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), nil)
 	return createOrchestrator(config, deps, true, diagnostics)
 }
 
@@ -107,14 +116,17 @@ func CreateResolvedOrchestrator(
 	config *OrchestratorConfig,
 	deps OrchestratorDependencies,
 ) (*AIOrchestrator, error) {
+	validationStarted := time.Now()
 	if config == nil {
 		return nil, fmt.Errorf("%w: config is nil", ErrInvalidOrchestratorConfig)
 	}
 	resolved := cloneOrchestratorConfig(config)
 	normalizeOrchestratorConfig(resolved)
 	if err := ValidateOrchestratorConfig(resolved); err != nil {
+		recordSkillConfigValidation(deps.Telemetry, resolved, "startup", time.Since(validationStarted), err)
 		return nil, err
 	}
+	recordSkillConfigValidation(deps.Telemetry, resolved, "startup", time.Since(validationStarted), nil)
 	return createOrchestrator(resolved, deps, false, nil)
 }
 
@@ -125,11 +137,24 @@ func CreateOrchestratorFromEnvironment(
 	deps OrchestratorDependencies,
 	options ...OrchestratorOption,
 ) (*AIOrchestrator, error) {
+	return createOrchestratorFromEnvironment(deps, os.LookupEnv, options...)
+}
+
+// createOrchestratorFromEnvironment keeps environment resolution deterministic
+// and unit-testable without changing the public constructor contract.
+func createOrchestratorFromEnvironment(
+	deps OrchestratorDependencies,
+	lookup func(string) (string, bool),
+	options ...OrchestratorOption,
+) (*AIOrchestrator, error) {
+	validationStarted := time.Now()
 	resolved, err := ResolveOrchestratorConfig(ConfigResolution{
 		Environment: EnvironmentStrict,
+		LookupEnv:   lookup,
 		Options:     options,
 	})
 	if err != nil {
+		recordSkillConfigResolutionFailure(deps.Telemetry, err, time.Since(validationStarted))
 		return nil, err
 	}
 	return CreateResolvedOrchestrator(resolved.Config, deps)
@@ -190,6 +215,24 @@ func createOrchestrator(
 
 	// Create orchestrator
 	orchestrator := NewAIOrchestrator(config, deps.Discovery, deps.AIClient)
+	if config.Skills.Enabled && len(config.Skills.Bindings) > 0 {
+		contentCache, err := resolveSkillContentCache(config)
+		if err != nil {
+			return nil, fmt.Errorf("construct skill content cache: %w", err)
+		}
+		registry, err := NewImmutableCachedSkillRegistry(config.SkillRegistry, contentCache)
+		if err != nil {
+			return nil, fmt.Errorf("construct verified skill registry: %w", err)
+		}
+		runtime, err := newSkillRuntime(config, registry, deps.AIClient)
+		if err != nil {
+			return nil, fmt.Errorf("construct skill runtime: %w", err)
+		}
+		orchestrator.skillRuntime = runtime
+		runtime.debugRecorder = func(ctx context.Context, interaction LLMInteraction) {
+			orchestrator.recordDebugInteraction(ctx, GetRequestID(ctx), interaction)
+		}
+	}
 
 	if deps.ConversationHistoryPreparer == nil {
 		preparer, err := BuildConversationHistoryProcessor(config)
@@ -738,6 +781,80 @@ func WithResultDistillAIOptions(opts *AIOptionsOverride) OrchestratorOption {
 	}
 }
 
+// WithSkills replaces the complete developer-owned skill configuration.
+func WithSkills(config SkillConfig) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.Skills = cloneSkillConfig(config)
+	}
+}
+
+// WithSkillRegistry injects the authoritative provider-neutral runtime read
+// dependency. Construction never creates a concrete provider.
+func WithSkillRegistry(registry SkillRegistry) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillRegistry = registry
+	}
+}
+
+// WithSkillContentCache injects optional storage for verified exact immutable
+// bodies. It never replaces registry authority or integrity verification.
+func WithSkillContentCache(cache SkillContentCache) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillContentCache = cache
+	}
+}
+
+func WithSkillActivationAIOptions(options *AIOptionsOverride) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillActivationAIOptions = cloneAIOptionsOverride(options)
+	}
+}
+
+func WithSkillResourceAIOptions(options *AIOptionsOverride) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillResourceAIOptions = cloneAIOptionsOverride(options)
+	}
+}
+
+func WithSkillPromptGuidance(guidance SkillPromptGuidance) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillPromptGuidance = guidance
+	}
+}
+
+// WithSkillActivationPolicy installs an optional deterministic refinement for
+// unresolved auto candidates. Runtime validation still owns every decision.
+func WithSkillActivationPolicy(policy SkillActivationPolicy) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillActivationPolicy = policy
+	}
+}
+
+// WithSkillResolver replaces only the included activation model task. Binding,
+// availability, integrity, and admission remain framework-owned.
+func WithSkillResolver(resolver SkillResolver) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillResolver = resolver
+	}
+}
+
+// WithSkillResourceResolver replaces only the included resource-selection
+// model task. Runtime eligibility, exact reads, and admission remain fixed.
+func WithSkillResourceResolver(resolver SkillResourceResolver) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillResourceResolver = resolver
+	}
+}
+
+// WithSkillTokenCounter installs the advisory runtime counter used for skill
+// prompt admission. Invalid counter output degrades to the framework heuristic
+// and is recorded as a bounded execution diagnostic.
+func WithSkillTokenCounter(counter core.TokenCounter) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.SkillTokenCounter = counter
+	}
+}
+
 // Deprecated compatibility helpers. Prefer the per-phase With*AIOptions variants.
 func WithPlanMaxTokens(maxTokens int) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
@@ -892,13 +1009,16 @@ func WithHallucinationRetry(enabled bool, maxRetries int) OrchestratorOption {
 
 // CreateOrchestratorWithOptions creates an orchestrator with option functions
 func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...OrchestratorOption) (*AIOrchestrator, error) {
+	validationStarted := time.Now()
 	resolved, err := ResolveOrchestratorConfig(ConfigResolution{
 		Environment: EnvironmentCompatible,
 		Options:     opts,
 	})
 	if err != nil {
+		recordSkillConfigResolutionFailure(deps.Telemetry, err, time.Since(validationStarted))
 		return nil, err
 	}
+	recordSkillConfigValidation(deps.Telemetry, resolved.Config, "startup", time.Since(validationStarted), nil)
 	return createOrchestrator(resolved.Config, deps, true, resolved.Diagnostics)
 }
 

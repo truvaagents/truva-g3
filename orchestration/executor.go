@@ -96,7 +96,6 @@ type SmartExecutor struct {
 
 	// Step completion callback for async progress reporting (v1 addition)
 	// Called after each step completes to enable per-tool progress reporting.
-	// See notes/ASYNC_TASK_DESIGN.md Phase 6 for details.
 	onStepComplete StepCompleteCallback
 
 	// Retry configuration
@@ -348,7 +347,6 @@ func (e *SmartExecutor) SetSemanticRetryForIndependentSteps(enabled bool) {
 // SetOnStepComplete sets the callback for step completion notifications.
 // Used by async task handlers to receive per-step progress updates.
 // The callback is invoked after each step completes (success or failure).
-// See notes/ASYNC_TASK_DESIGN.md Phase 6 for usage details.
 func (e *SmartExecutor) SetOnStepComplete(cb StepCompleteCallback) {
 	e.onStepComplete = cb
 }
@@ -476,7 +474,6 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 	// Prior-phase steps are loaded into stepResults for template resolution but
 	// must NOT be added to `executed` — otherwise the loop condition
 	// `len(executed) < len(plan.Steps)` evaluates false and the phase is skipped.
-	// See orchestration/notes/BUG_PHASE3_SKIPPED_EXECUTION.md Issue 1.
 	completedSteps := GetCompletedSteps(ctx)
 	if completedSteps != nil {
 		// Build lookup of step IDs in the current plan
@@ -748,7 +745,6 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 
 				// Invoke step completion callbacks (outside lock to avoid blocking)
 				// This enables async task handlers to report per-tool progress.
-				// See notes/ASYNC_TASK_DESIGN.md Phase 6 for details.
 				// Check both executor-level and context-level callbacks
 				// Callbacks are wrapped with panic protection to prevent user callback
 				// panics from crashing the executor goroutine.

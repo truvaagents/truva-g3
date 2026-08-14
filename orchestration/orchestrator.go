@@ -624,6 +624,10 @@ type AIOrchestrator struct {
 
 	// Activity coordination for real-time agent signals (Phase 8)
 	activityCoordinator core.ActivityCoordinator // may be nil
+
+	// skillRuntime is present only when skills are enabled with at least one
+	// effective binding. It observes provider-neutral registry/cache contracts.
+	skillRuntime *skillRuntime
 }
 
 // NewAIOrchestrator creates a new AI-powered orchestrator
@@ -724,7 +728,6 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 
 	// Wire step completion callback for async progress reporting (v1 addition)
 	// This enables async task handlers to receive per-tool progress updates.
-	// See notes/ASYNC_TASK_DESIGN.md Phase 6 for details.
 	if config.ExecutionOptions.OnStepComplete != nil {
 		o.executor.SetOnStepComplete(config.ExecutionOptions.OnStepComplete)
 	}
@@ -867,11 +870,13 @@ func (o *AIOrchestrator) SetTelemetry(telemetry core.Telemetry) {
 	} else {
 		o.telemetry = telemetry
 	}
+	if o.skillRuntime != nil {
+		o.skillRuntime.telemetry = o.telemetry
+	}
 	// Propagate telemetry to hybrid resolver (micro-resolution spans)
 	if o.executor != nil && o.executor.hybridResolver != nil {
 		o.executor.hybridResolver.SetTelemetry(o.telemetry)
 	}
-
 	if telemetryAware, ok := o.conversationHistoryPreparer.(interface{ SetTelemetry(core.Telemetry) }); ok {
 		telemetryAware.SetTelemetry(o.telemetry)
 	}
@@ -896,6 +901,9 @@ func (o *AIOrchestrator) SetLogger(logger core.Logger) {
 		} else {
 			o.logger = logger
 		}
+	}
+	if o.skillRuntime != nil {
+		o.skillRuntime.logger = o.logger
 	}
 
 	// Propagate logger to sub-components (they will apply their own WithComponent)
@@ -1043,7 +1051,6 @@ func (o *AIOrchestrator) SetAgentInputProcessor(processor AgentInputProcessor) {
 // This enables operators to see exactly what was sent to and received from the LLM.
 // The store is propagated to all sub-components that make LLM calls:
 // synthesizer, micro_resolver, and contextual_re_resolver.
-// See orchestration/notes/LLM_DEBUG_PAYLOAD_DESIGN.md for design rationale.
 func (o *AIOrchestrator) SetLLMDebugStore(store LLMDebugStore) {
 	if store == nil {
 		return
@@ -1304,7 +1311,9 @@ func rebuildCheckpointCompletedSteps(checkpoint *ExecutionCheckpoint) {
 // This helper is used by both success and non-success paths.
 //
 // Contract (post ORCH-022):
-//   - For executions that have reached the phase loop, result is non-nil.
+//   - For executions that have reached model execution, result is non-nil.
+//   - A typed lifecycle-boundary failure may store a nil result with its
+//     request-local debug evidence before any model call occurs.
 //   - checkpoint != nil signals HITL interruption.
 //   - checkpoint == nil with result.Success == true signals successful completion
 //     or intermediate inter-phase store.
@@ -1363,6 +1372,11 @@ func (o *AIOrchestrator) storeExecutionAsync(
 		Interrupted:       checkpoint != nil,
 		Checkpoint:        checkpoint,
 		CreatedAt:         createdAt,
+	}
+	if holder, ok := skillExecutionHolderFromContext(ctx); ok {
+		skillState, _ := holder.Snapshot()
+		debug := cloneSkillExecutionState(skillState).Debug
+		stored.Skills = &debug
 	}
 
 	if conversationID != "" {
@@ -1974,7 +1988,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		)
 
 		if resumeOverride != nil {
-			if err = prepareOrchestrationBoundary(phaseCtx, boundaryResume); err != nil {
+			if phaseCtx, err = prepareOrchestrationBoundary(phaseCtx, boundaryResume); err != nil {
 				phaseSpan.RecordError(err)
 				phaseSpan.End()
 				if phaseCancel != nil {
@@ -2015,6 +2029,15 @@ func (o *AIOrchestrator) executePhaseLoop(
 		}
 
 		if err != nil {
+			var preparationErr *boundaryPreparationError
+			if errors.As(err, &preparationErr) {
+				phaseSpan.RecordError(err)
+				phaseSpan.End()
+				if phaseCancel != nil {
+					phaseCancel()
+				}
+				return nil, fmt.Errorf("failed to prepare orchestration boundary (phase %d): %w", phaseCount, err)
+			}
 			// Phase-appropriate retry
 			if len(allStepResults) > 0 {
 				genErr := err // capture before regenerateContinuationPlan overwrites err
@@ -2893,7 +2916,14 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	}
 
 	// Build synthesis prompt from combined phase results
-	synthesisPrompt := o.buildSynthesisPrompt(synthesisCtx, request, loopResult.CombinedResult)
+	synthesisPrompt, promptErr := o.buildPreparedSynthesisPrompt(synthesisCtx, request, loopResult.CombinedResult)
+	if promptErr != nil {
+		if synthesisSpan != nil {
+			synthesisSpan.RecordError(promptErr)
+			synthesisSpan.End()
+		}
+		return nil, fmt.Errorf("prepare streaming synthesis prompt input: %w", promptErr)
+	}
 	if synthesisSpan != nil {
 		synthesisSpan.SetAttribute("synthesis.prompt_length", len(synthesisPrompt))
 	}
@@ -2971,7 +3001,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	streamSynthesisOpts := o.synthesisAIOptions(systemPrompt)
 	// Scope the ai.purpose baggage to the LLM call only — it would otherwise
 	// leak into AfterSynthesis hooks and mis-tag user_memory.extraction spans.
-	streamCtx := telemetry.WithBaggage(ctx, "ai.purpose", "synthesis_streaming")
+	streamCtx := telemetry.WithBaggage(synthesisCtx, "ai.purpose", "synthesis_streaming")
 	invocation := aiInvocation{
 		Purpose:        "synthesis",
 		Prompt:         synthesisPrompt,
@@ -3158,13 +3188,34 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 // Uses XML-tagged structure following docs/building/EFFECTIVE_PROMPTS_GUIDE.md §8.3.
 // Budget allocation via ProcessMultipleForBudget mirrors synthesizer.go (Gap 1 fix).
 func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request string, result *ExecutionResult) string {
+	prompt, _ := o.buildPreparedSynthesisPrompt(ctx, request, result)
+	return prompt
+}
+
+func (o *AIOrchestrator) buildPreparedSynthesisPrompt(
+	ctx context.Context,
+	request string,
+	result *ExecutionResult,
+) (string, error) {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "<user_request>\n%s\n</user_request>\n\n", request)
+	preparedRequest, err := preparePromptValue(
+		ctx, promptSynthesis, promptValueRequest, promptFieldRequest, request,
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedEnrichments, err := prepareKnownPromptEnrichments(
+		ctx, promptSynthesis, core.GetPipelineEnrichments(ctx),
+	)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&sb, "<user_request>\n%s\n</user_request>\n\n", preparedRequest)
 
 	// Include agent coordination, memory, and conversation history from pipeline enrichments.
 	// Gives the synthesizer awareness of active agents, prior cross-agent activity, and
 	// session context so it can produce more informed, deduplicated summaries.
-	enrichments := core.GetPipelineEnrichments(ctx)
+	enrichments := preparedEnrichments
 	if len(enrichments) > 0 {
 		if coordCtx, ok := enrichments[core.EnrichmentActivityCoordination]; ok {
 			if coordStr, isStr := coordCtx.(string); isStr && coordStr != "" {
@@ -3241,7 +3292,13 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 
 	for i, step := range result.Steps {
 		if !step.Success {
-			fmt.Fprintf(&sb, "<agent name=%q task=%q status=\"failed\">\n%s\n</agent>\n\n", step.AgentName, step.Instruction, step.Error)
+			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareSynthesisStepValues(
+				ctx, step.AgentName, step.Instruction, step.Error, promptFieldPriorResultError,
+			)
+			if prepareErr != nil {
+				return "", prepareErr
+			}
+			fmt.Fprintf(&sb, "<agent name=%q task=%q status=\"failed\">\n%s\n</agent>\n\n", preparedAgent, preparedInstruction, preparedError)
 			continue
 		}
 
@@ -3356,7 +3413,13 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 			})
 		}
 
-		fmt.Fprintf(&sb, "<agent name=%q task=%q status=\"success\">\n%s\n</agent>\n\n", step.AgentName, step.Instruction, response)
+		preparedAgent, preparedInstruction, preparedResponse, prepareErr := prepareSynthesisStepValues(
+			ctx, step.AgentName, step.Instruction, response, promptFieldPriorResultResponse,
+		)
+		if prepareErr != nil {
+			return "", prepareErr
+		}
+		fmt.Fprintf(&sb, "<agent name=%q task=%q status=\"success\">\n%s\n</agent>\n\n", preparedAgent, preparedInstruction, preparedResponse)
 	}
 
 	sb.WriteString("</agent_responses>\n\n")
@@ -3387,7 +3450,7 @@ func (o *AIOrchestrator) buildSynthesisPrompt(ctx context.Context, request strin
 		registry.Histogram("orchestration.synthesis_prompt.size_bytes", float64(len(prompt)))
 	}
 
-	return prompt
+	return prompt, nil
 }
 
 func (o *AIOrchestrator) synthesisAIOptions(systemPrompt string) *core.AIOptions {
@@ -3434,7 +3497,9 @@ func (o *AIOrchestrator) planPromptSystemSource() promptSystemSource {
 
 // generateExecutionPlan uses LLM to create an execution plan
 func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request string, requestID string) (*RoutingPlan, error) {
-	if err := prepareOrchestrationBoundary(ctx, boundaryInitialPlanning); err != nil {
+	var err error
+	ctx, err = prepareOrchestrationBoundary(ctx, boundaryInitialPlanning)
+	if err != nil {
 		return nil, fmt.Errorf("prepare initial planning boundary: %w", err)
 	}
 	planGenStart := time.Now()
@@ -4094,7 +4159,9 @@ func (o *AIOrchestrator) generateContinuationPlan(
 	continuationNote string,
 	phaseNumber int,
 ) (*RoutingPlan, error) {
-	if err := prepareOrchestrationBoundary(ctx, boundaryContinuationPlanning); err != nil {
+	var err error
+	ctx, err = prepareOrchestrationBoundary(ctx, boundaryContinuationPlanning)
+	if err != nil {
 		return nil, fmt.Errorf("prepare continuation planning boundary: %w", err)
 	}
 	planGenStart := time.Now()
@@ -4479,7 +4546,9 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	validationErr error,
 	originalTerminal *bool, // preserve terminal from the original plan
 ) (*RoutingPlan, error) {
-	if err := prepareOrchestrationBoundary(ctx, boundaryRegeneration); err != nil {
+	var err error
+	ctx, err = prepareOrchestrationBoundary(ctx, boundaryRegeneration)
+	if err != nil {
 		return nil, fmt.Errorf("prepare continuation regeneration boundary: %w", err)
 	}
 	if o.aiClient == nil {
@@ -4492,6 +4561,10 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build continuation retry prompt: %w", err)
+	}
+	validationFeedback, err := prepareValidationFeedback(ctx, promptRegeneration, validationErr)
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation regeneration feedback: %w", err)
 	}
 
 	// Build terminal preservation instruction (Issue 9A-3)
@@ -4508,7 +4581,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	prompt := fmt.Sprintf(
 		"%s\n\nThe previous continuation plan failed validation with error: %s%s\n\n"+
 			"Please generate a corrected plan that addresses this error.",
-		promptResult.Prompt, validationErr.Error(), terminalInstruction,
+		promptResult.Prompt, validationFeedback, terminalInstruction,
 	)
 
 	// Span event: pre-LLM call
@@ -4865,15 +4938,18 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 	if err != nil {
 		return nil, err
 	}
+	input, err := preparePromptInput(ctx, promptInitialPlan, PromptInput{
+		CapabilityInfo: planCtx.CapabilityCatalog,
+		Request:        request,
+		AgentName:      o.config.Name,
+		Metadata:       core.GetPipelineEnrichments(ctx),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare planning prompt input: %w", err)
+	}
 
 	// Use PromptBuilder if available (Layer 1-3 customization)
 	if o.promptBuilder != nil {
-		input := PromptInput{
-			CapabilityInfo: planCtx.CapabilityCatalog,
-			Request:        request,
-			AgentName:      o.config.Name,
-			Metadata:       core.GetPipelineEnrichments(ctx),
-		}
 		prompt, err := o.promptBuilder.BuildPlanningPrompt(ctx, input)
 		if err != nil {
 			if o.logger != nil {
@@ -4888,7 +4964,7 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 			return &PlanningPromptResult{
 				Prompt:        prompt,
 				AllowedAgents: planCtx.AllowedAgents,
-				SystemPrompt:  o.buildSystemPrompt(ctx, request),
+				SystemPrompt:  o.buildSystemPromptFromInput(ctx, input),
 			}, nil
 		}
 	}
@@ -4902,7 +4978,7 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 	agentMemorySection := ""
 	conversationHistorySection := ""
 	contextPrecedenceSection := ""
-	enrichments := core.GetPipelineEnrichments(ctx)
+	enrichments := input.Metadata
 	if len(enrichments) > 0 {
 		if coordCtx, ok := enrichments[core.EnrichmentActivityCoordination]; ok {
 			if coordStr, isStr := coordCtx.(string); isStr && coordStr != "" {
@@ -4941,12 +5017,12 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 %s
 </user_request>
 
-%s`, planCtx.CapabilityCatalog, agentCoordinationSection, userProfileSection, agentMemorySection, conversationHistorySection, contextPrecedenceSection, request, planCtx.FormatRules)
+		%s`, input.CapabilityInfo, agentCoordinationSection, userProfileSection, agentMemorySection, conversationHistorySection, contextPrecedenceSection, input.Request, planCtx.FormatRules)
 
 	return &PlanningPromptResult{
 		Prompt:        prompt,
 		AllowedAgents: planCtx.AllowedAgents,
-		SystemPrompt:  o.buildSystemPrompt(ctx, request),
+		SystemPrompt:  o.buildSystemPromptFromInput(ctx, input),
 	}, nil
 }
 
@@ -4962,9 +5038,15 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 // receives today's date regardless of which constructor wired the orchestrator.
 // See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P10.
 func (o *AIOrchestrator) buildSystemPrompt(ctx context.Context, request string) string {
+	return o.buildSystemPromptFromInput(ctx, PromptInput{
+		Request: request, Metadata: clonePromptMetadata(core.GetPipelineEnrichments(ctx)),
+	})
+}
+
+func (o *AIOrchestrator) buildSystemPromptFromInput(ctx context.Context, input PromptInput) string {
 	if o.promptBuilder != nil {
 		if spb, ok := o.promptBuilder.(SystemPromptBuilder); ok {
-			return spb.BuildSystemPrompt(ctx, PromptInput{Request: request, Metadata: core.GetPipelineEnrichments(ctx)})
+			return spb.BuildSystemPrompt(ctx, PromptInput{Request: input.Request, Metadata: clonePromptMetadata(input.Metadata)})
 		}
 	}
 	if o.config.PromptConfig.SystemInstructions != "" {
@@ -5120,6 +5202,32 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		}
 		return nil, fmt.Errorf("failed to build planning context: %w", err)
 	}
+	preparedRequest, err := preparePromptValue(
+		ctx, promptContinuationPlan, promptValueRequest, promptFieldRequest, request,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation request: %w", err)
+	}
+	preparedCatalog, err := preparePromptValue(
+		ctx, promptContinuationPlan, promptValueCapabilityCatalog,
+		promptFieldCapabilityCatalog, planCtx.CapabilityCatalog,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation capability catalog: %w", err)
+	}
+	preparedContinuationNote, err := preparePromptValue(
+		ctx, promptContinuationPlan, promptValueContinuationNote,
+		promptFieldContinuationNote, previousContinuationNote,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation note: %w", err)
+	}
+	preparedEnrichments, err := prepareKnownPromptEnrichments(
+		ctx, promptContinuationPlan, core.GetPipelineEnrichments(ctx),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation enrichments: %w", err)
+	}
 
 	// 3. Build completed results section (Phase 14: chronological digests, greedy recency-fill, C escalate)
 	var resultsSb strings.Builder
@@ -5217,10 +5325,56 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 
 		// ORCH-015: surface orchestrator delegation sub-steps so the planner doesn't re-issue them.
 		childSummary := extractOrchestratorChildSummary(result)
+		preparedStepID, err := preparePromptValue(
+			ctx, promptContinuationPlan, promptValuePriorResult,
+			promptFieldPriorResultStepID, result.StepID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prepare continuation step identity: %w", err)
+		}
+		preparedAgentName, err := preparePromptValue(
+			ctx, promptContinuationPlan, promptValuePriorResult,
+			promptFieldPriorResultAgentName, result.AgentName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prepare continuation agent identity: %w", err)
+		}
+		preparedInstruction, err := preparePromptValue(
+			ctx, promptContinuationPlan, promptValuePriorResult,
+			promptFieldPriorResultInstruction, result.Instruction,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prepare continuation instruction: %w", err)
+		}
+		preparedBody := body
+		preparedResult := *result
+		if result.Success {
+			preparedBody, err = preparePromptValue(
+				ctx, promptContinuationPlan, promptValuePriorResult,
+				promptFieldPriorResultResponse, body,
+			)
+		} else {
+			preparedResult.Error, err = preparePromptValue(
+				ctx, promptContinuationPlan, promptValuePriorResult,
+				promptFieldPriorResultError, result.Error,
+			)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("prepare continuation result: %w", err)
+		}
+		if childSummary != "" {
+			childSummary, err = preparePromptValue(
+				ctx, promptContinuationPlan, promptValuePriorResult,
+				promptFieldPriorResultResponse, childSummary,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("prepare continuation child summary: %w", err)
+			}
+		}
 
 		fmt.Fprintf(&resultsSb, "Step %s (%s):\n  Task: %s\n  Result: %s\n",
-			result.StepID, result.AgentName, result.Instruction,
-			renderContinuationStepResult(result, body))
+			preparedStepID, preparedAgentName, preparedInstruction,
+			renderContinuationStepResult(&preparedResult, preparedBody))
 
 		if childSummary != "" {
 			fmt.Fprintf(&resultsSb,
@@ -5281,7 +5435,17 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	emitContinuationBudgetMetrics(len(steps), shown, escalated, resultsSb.Len())
 
 	// 4. Build executed step IDs list
-	executedIDsList := strings.Join(executedStepIDs, ", ")
+	preparedExecutedStepIDs := make([]string, len(executedStepIDs))
+	for index, stepID := range executedStepIDs {
+		preparedExecutedStepIDs[index], err = preparePromptValue(
+			ctx, promptContinuationPlan, promptValuePriorResult,
+			promptFieldPriorResultStepID, stepID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prepare executed step identity: %w", err)
+		}
+	}
+	executedIDsList := strings.Join(preparedExecutedStepIDs, ", ")
 
 	// 5. Compute phase budget (Issue 3: LLM needs visibility into budget)
 	maxPhases := o.config.IterativePlanning.MaxPhases
@@ -5295,7 +5459,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("CONTINUATION PHASE — Plan the next steps based on completed results.\n\n")
 
 	sb.WriteString("<user_request>\n")
-	sb.WriteString(request)
+	sb.WriteString(preparedRequest)
 	sb.WriteString("\n</user_request>\n\n")
 
 	sb.WriteString("<completed_steps>\n")
@@ -5327,21 +5491,21 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("Only use terminal: false if you need to discover new entities.\n")
 	sb.WriteString("</optimization_reminder>\n\n")
 
-	if previousContinuationNote != "" {
+	if preparedContinuationNote != "" {
 		sb.WriteString("<previous_note>\n")
-		sb.WriteString(previousContinuationNote)
+		sb.WriteString(preparedContinuationNote)
 		sb.WriteString("\n</previous_note>\n\n")
 	}
 
 	sb.WriteString("<available_agents>\n")
-	sb.WriteString(planCtx.CapabilityCatalog)
+	sb.WriteString(preparedCatalog)
 	sb.WriteString("\n</available_agents>\n\n")
 
 	// Include agent coordination, memory, and conversation history from pipeline enrichments.
 	// Same mechanism as the initial plan prompt — enables hooks to provide context
 	// for continuation phases. Enrichments were set once in BeforePlanningHooks and
 	// flow through via context for all phases.
-	enrichments := core.GetPipelineEnrichments(ctx)
+	enrichments := preparedEnrichments
 	if len(enrichments) > 0 {
 		if coordCtx, ok := enrichments[core.EnrichmentActivityCoordination]; ok {
 			if coordStr, isStr := coordCtx.(string); isStr && coordStr != "" {
@@ -6410,7 +6574,9 @@ func (o *AIOrchestrator) validateTemplatePaths(plan *RoutingPlan, executedStepCa
 
 // regeneratePlan attempts to fix a plan based on validation errors
 func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, requestID string, validationErr error) (*RoutingPlan, error) {
-	if err := prepareOrchestrationBoundary(ctx, boundaryRegeneration); err != nil {
+	var err error
+	ctx, err = prepareOrchestrationBoundary(ctx, boundaryRegeneration)
+	if err != nil {
 		return nil, fmt.Errorf("prepare regeneration boundary: %w", err)
 	}
 	// Check if AI client is available
@@ -6425,13 +6591,17 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 	if err != nil {
 		return nil, err
 	}
+	validationFeedback, err := prepareValidationFeedback(ctx, promptRegeneration, validationErr)
+	if err != nil {
+		return nil, fmt.Errorf("prepare regeneration feedback: %w", err)
+	}
 
 	prompt := fmt.Sprintf(`%s
 
 The previous plan failed validation with error: %s
 
 Please generate a corrected plan that addresses this error.`,
-		basePromptResult.Prompt, validationErr.Error())
+		basePromptResult.Prompt, validationFeedback)
 
 	planOpts := o.planAIOptions(0.2, basePromptResult.SystemPrompt)
 

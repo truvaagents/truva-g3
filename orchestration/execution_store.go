@@ -8,8 +8,6 @@
 // - Safe defaults (NoOp when unavailable)
 // - Disabled by default (enable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true)
 // - Dependency inversion (StorageProvider interface, not Redis directly)
-//
-// See orchestration/notes/DAG_VISUALIZATION_PROPOSAL.md for full design rationale.
 package orchestration
 
 import (
@@ -132,6 +130,10 @@ type StoredExecution struct {
 	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
 	PhaseCount     int            `json:"phase_count,omitempty"`     // Number of phases executed
 	ForcedTerminal bool           `json:"forced_terminal,omitempty"` // Whether max phases forced termination
+
+	// Skills is the bounded, body-free lifecycle reconstruction record. Full
+	// prompt content remains governed by the separate opt-in LLM debug store.
+	Skills *SkillExecutionDebug `json:"skills,omitempty"`
 
 	// Metadata contains framework-owned correlation metadata plus optional
 	// application investigation metadata. MetadataConversationID is reserved
