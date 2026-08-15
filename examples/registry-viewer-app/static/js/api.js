@@ -74,6 +74,32 @@ export async function postAPI(endpoint, body) {
 }
 
 /**
+ * Send a JSON control-plane request and retain response metadata such as ETag.
+ * Unlike fetchAPI, mutations are never cached.
+ */
+export async function requestJSON(endpoint, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    const resp = await fetch(endpoint, {
+        method: options.method || 'GET',
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+    const text = await resp.text();
+    let data = null;
+    if (text) {
+        try { data = JSON.parse(text); } catch { data = { message: text }; }
+    }
+    if (!resp.ok) {
+        const error = new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+        error.status = resp.status;
+        error.code = data?.code || '';
+        throw error;
+    }
+    return { data, status: resp.status, etag: resp.headers.get('ETag') || '' };
+}
+
+/**
  * Clear cache for a specific endpoint or all endpoints.
  * @param {string} [endpoint] - if omitted, clears all
  */

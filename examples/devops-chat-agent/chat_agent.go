@@ -182,6 +182,7 @@ func (t *DevOpsChatAgent) InitializeOrchestrator(
 	hitlConfig orchestration.HITLConfig,
 	memoryHooks []core.PipelineHook,
 	activityCoordinator core.ActivityCoordinator,
+	skillRegistry orchestration.SkillRegistry,
 ) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -191,7 +192,34 @@ func (t *DevOpsChatAgent) InitializeOrchestrator(
 	}
 
 	// Create orchestrator config
-	config := orchestration.DefaultConfig()
+	skillConfig := orchestration.SkillConfig{
+		Enabled: true,
+		Bindings: []orchestration.SkillBinding{
+			{
+				Namespace: "devops", Name: "kubernetes-safety", Version: "published",
+				Activation: orchestration.SkillActivationAlways, Required: true,
+			},
+			{
+				Namespace: "devops", Name: "observability-investigation", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "devops", Name: "infrastructure-change-documentation", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+		},
+	}
+	resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+		Environment: orchestration.EnvironmentCompatible,
+		Options: []orchestration.OrchestratorOption{
+			orchestration.WithSkills(skillConfig),
+			orchestration.WithSkillRegistry(skillRegistry),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resolve orchestrator configuration: %w", err)
+	}
+	config := resolved.Config
 	config.RoutingMode = orchestration.ModeAutonomous
 	config.SynthesisStrategy = orchestration.StrategyLLM
 	config.MetricsEnabled = true
@@ -221,10 +249,6 @@ use them to answer questions, gather data, and take actions on behalf of the use
 You can handle a wide range of queries: checking cluster health, inspecting workloads, reading logs,
 scaling services, looking up real-time information (weather, news, financials), and performing general
 utility tasks. When a user's request spans multiple tools or steps, coordinate them into a coherent plan.
-
-Be precise and cautious with any operation that mutates cluster state. Clearly communicate what you are
-about to do before executing it, especially for destructive or irreversible actions. After completing an
-action, summarize what happened and what the current state is.
 
 If a request is ambiguous or underspecified — for example, the target resource, namespace, or intended
 action is unclear — ask the user to clarify before proceeding. It is always better to ask than to act
@@ -286,22 +310,9 @@ is always more valuable than giving up early.`,
 
 		CustomInstructions: []string{
 			"When a Kubernetes namespace is not specified, default to 'truvag3-examples'",
-			"Before any mutating operation (scaling, restarting), first inspect the current state of the target resource",
 			"Prefer parallel execution when steps are independent AND target different backends; when multiple steps would query the same upstream service, sequence them across phases instead",
-			"When troubleshooting pod issues, start by examining logs and resource descriptions",
-			"When a step fails, investigate the error using available tools (logs, describe, status), adjust parameters or approach, and retry — escalate to the operator only after exhausting alternatives",
 			"When a dedicated capability exists for an operation, prefer it over generic command execution",
-			"Always summarize results in plain language — avoid dumping raw output without context",
-
-			// Observability tool usage patterns (logs + traces)
-			"To investigate a specific request_id, always use query_logs with {service_name=~\".+\"} |= \"request-id\" first — this finds the trace_id in stream labels, which you then pass to get_trace for the full distributed trace with all spans, errors, and durations",
-			"Always follow up find_traces results with get_trace on the specific trace_id to get actual span details — find_traces returns summaries only, get_trace returns the full span tree with errors and tags",
-			"When using find_traces, target the specific service the user asked about and use filters (min_duration, operation) — unfiltered queries across multiple services return health-check heartbeat noise",
-			"For end-to-end request troubleshooting, prefer this 3-step pattern: query_logs (find errors + trace_id) → get_trace (full span tree) → query_logs (service-specific error details)",
-			"When investigating logs across many services or a wide time range (questions like 'does X happen anywhere?', 'are any services doing Y?'), decompose into a discover-then-iterate plan: a discovery step to identify the relevant services or time bounds, then narrow per-service or per-window log queries in subsequent phases.",
-			"After any action that changes infrastructure state (e.g., rollout restart, scaling, pod deletion), document it in JIRA and notify via Slack. First check <agent_memory> for a recent ticket key (DEVOPS-NNN) on the same entity — if found, use add_comment directly. If no ticket is visible in memory, use search_issues to query JIRA for open tickets on this entity. If an open ticket exists, use add_comment with your actions and findings. Only create a new ticket under project key 'DEVOPS' when both memory and JIRA confirm no recent ticket exists. Then send a Slack notification to #notifications with an informative incident note: alert summary, findings with specific metrics and pod names, root cause, remediation taken, verification results, and the JIRA ticket link (use the browse_url returned by create_issue or search_issues). Write naturally using short paragraphs.",
-			"When referencing a JIRA ticket, use the browse_url field returned by the jira-tool (create_issue, search_issues, get_issue)",
-			"When the user asks you to perform an action (scale pods, restart a rollout, comment on a JIRA ticket, send a Slack message), invoke the corresponding capability and confirm it completed before reporting back. For asynchronous actions (a rollout settling, pods scaling up or down), poll the relevant status capability until you observe concrete evidence of completion. Report success only on that evidence; if the action failed, report what failed and what you tried.",
+			"Always summarize results in plain language and present raw excerpts with their relevant context",
 			"The devops_operations capability is this agent's own delegation endpoint — use the specific tool capabilities (devops-tool, jira-tool, slack-tool, etc.) directly instead",
 		},
 	}
@@ -355,6 +366,7 @@ is always more valuable than giving up early.`,
 		"routing_mode":       config.RoutingMode,
 		"synthesis_strategy": config.SynthesisStrategy,
 		"hitl_enabled":       hitlConfig.Enabled,
+		"skill_bindings":     len(config.Skills.Bindings),
 	})
 
 	return nil

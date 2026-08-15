@@ -1,0 +1,19 @@
+{
+  "display_name": "Travel Action Verification",
+  "description": "Use when a request asks to execute or confirm a travel search, comparison, lookup, reminder, or delegated action.",
+  "domains": ["travel"],
+  "tags": ["verification", "actions"],
+  "planning_instructions": [
+    "For an action request, invoke a discovered capability whose current contract supports the requested operation instead of only describing the action.",
+    "When the discovered catalog lacks support for the requested action, treat the action as incomplete, explain the limitation, and provide any useful supported alternative.",
+    "For an action request, include a verification step that checks the concrete result returned by the capability before treating the action as complete."
+  ],
+  "response_instructions": [
+    "Report success only when the execution result contains concrete completion evidence; otherwise state what failed or remains unverified."
+  ],
+  "activation_examples": {
+    "should_activate": ["Search for a flight and confirm the result", "Get the advisory and tell me when it is complete"],
+    "should_not_activate": []
+  },
+  "change_reason": "Initial V1 example package"
+}

@@ -28,6 +28,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
+	"github.com/truvaagents/truva-g3/telemetry"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
@@ -273,17 +274,18 @@ const (
 
 // StoredExecution contains everything needed for DAG visualization
 type StoredExecution struct {
-	RequestID         string            `json:"request_id"`
-	OriginalRequestID string            `json:"original_request_id,omitempty"`
-	TraceID           string            `json:"trace_id"`
-	AgentName         string            `json:"agent_name,omitempty"`
-	OriginalRequest   string            `json:"original_request"`
-	Plan              *RoutingPlan      `json:"plan"`
-	Result            *ExecutionResult  `json:"result"`
-	Interrupted       bool              `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint        *HITLCheckpoint   `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
-	CreatedAt         time.Time         `json:"created_at"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
+	RequestID         string                             `json:"request_id"`
+	OriginalRequestID string                             `json:"original_request_id,omitempty"`
+	TraceID           string                             `json:"trace_id"`
+	AgentName         string                             `json:"agent_name,omitempty"`
+	OriginalRequest   string                             `json:"original_request"`
+	Plan              *RoutingPlan                       `json:"plan"`
+	Result            *ExecutionResult                   `json:"result"`
+	Interrupted       bool                               `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint        *HITLCheckpoint                    `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
+	CreatedAt         time.Time                          `json:"created_at"`
+	Metadata          map[string]string                  `json:"metadata,omitempty"`
+	Skills            *orchestration.SkillExecutionDebug `json:"skills,omitempty"`
 
 	// Multi-phase execution data
 	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
@@ -424,8 +426,9 @@ type UnifiedExecutionView struct {
 	DAG *DAGResponse `json:"dag,omitempty"`
 
 	// LLM interactions (from LLM Debug store)
-	LLMInteractions []orchestration.LLMInteraction `json:"llm_interactions,omitempty"`
-	LLMDebugSummary *LLMDebugSummary               `json:"llm_debug_summary,omitempty"`
+	LLMInteractions []orchestration.LLMInteraction     `json:"llm_interactions,omitempty"`
+	LLMDebugSummary *LLMDebugSummary                   `json:"llm_debug_summary,omitempty"`
+	Skills          *orchestration.SkillExecutionDebug `json:"skills,omitempty"`
 
 	// HITL checkpoints (if any)
 	HITLCheckpoints []HITLCheckpoint `json:"hitl_checkpoints,omitempty"`
@@ -505,6 +508,34 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+func envOrDefault(key, defaultValue string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func initViewerTelemetry() core.Telemetry {
+	profile := telemetry.ProfileDevelopment
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) {
+	case "production", "prod":
+		profile = telemetry.ProfileProduction
+	case "staging", "stage":
+		profile = telemetry.ProfileStaging
+	}
+	config := telemetry.UseProfile(profile)
+	config.ServiceName = "registry-viewer"
+	config.ServiceType = string(core.ComponentTypeTool)
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
+		config.Endpoint = endpoint
+	}
+	if err := telemetry.Initialize(config); err != nil {
+		log.Printf("[WARN] Registry Viewer telemetry unavailable: %v", err)
+		return nil
+	}
+	return telemetry.GetTelemetryProvider()
+}
+
 func main() {
 	flag.Parse()
 
@@ -546,6 +577,23 @@ func main() {
 		log.Fatalf("REDIS_URL environment variable or -redis-url flag is required when not using mock mode")
 	}
 
+	viewerTelemetry := initViewerTelemetry()
+	if viewerTelemetry != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := telemetry.Shutdown(ctx); err != nil {
+				log.Printf("Telemetry shutdown failed: %s", core.RedactSensitiveText(err.Error()))
+			}
+		}()
+	}
+	viewerLogger := core.NewProductionLogger(
+		core.LoggingConfig{
+			Level: envOrDefault("TRUVAG3_LOG_LEVEL", "info"), Format: "json", Output: "stdout",
+		},
+		core.DevelopmentConfig{}, "registry-viewer",
+	)
+
 	mux := http.NewServeMux()
 
 	// API endpoints — all wrapped with apiMiddleware (CORS + gzip + ETag)
@@ -566,6 +614,22 @@ func main() {
 	mux.HandleFunc("/api/executions/", apiMiddleware(handleExecution)) // Handles both /{id} and /{id}/dag
 	mux.HandleFunc("/api/conversations", apiMiddleware(handleConversationTimeline))
 	mux.HandleFunc("/api/analytics/resolution", apiMiddleware(handleResolutionAnalytics))
+	if !useMock {
+		skillHandler, closer, skillErr := newSkillAdminAPI(namespace, viewerLogger, viewerTelemetry)
+		if skillErr != nil {
+			log.Fatalf("Failed to initialize skills API: %v", skillErr)
+		}
+		defer func() {
+			if err := closer.Close(); err != nil {
+				viewerLogger.Warn("Failed to close skills backend", map[string]interface{}{
+					"error": core.RedactSensitiveText(err.Error()),
+				})
+			}
+		}()
+		wrapped := withCORS(withGzip(skillHandler.ServeHTTP))
+		mux.HandleFunc("/api/v1/skills", wrapped)
+		mux.HandleFunc("/api/v1/skills/", wrapped)
+	}
 
 	// Memory endpoints — all wrapped with apiMiddleware (CORS + gzip + ETag)
 	mux.HandleFunc("/api/memory/domains", apiMiddleware(handleMemoryDomains))
@@ -626,8 +690,9 @@ func main() {
 func withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, If-Match, If-None-Match, Idempotency-Key, X-Audit-Reason")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag, Location")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -2361,6 +2426,7 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 		PhasePlans:        execution.PhasePlans,
 		PhaseCount:        execution.PhaseCount,
 		ForcedTerminal:    execution.ForcedTerminal,
+		Skills:            execution.Skills,
 	}
 
 	// Compute success and duration from result

@@ -1,0 +1,36 @@
+{
+  "display_name": "Observability Investigation",
+  "description": "Use when a production or Kubernetes request investigates logs, metrics, request IDs, traces, latency, failures, or service health.",
+  "domains": ["devops", "observability"],
+  "tags": ["logs", "traces", "metrics", "incident"],
+  "planning_instructions": [
+    "For pod or workload troubleshooting, inspect current workload and pod status plus the resource description before querying recent logs scoped to the target namespace and workload.",
+    "Start with the narrowest known correlation identifier and time window, then connect logs to a trace before widening the search.",
+    "Use the complete trace to locate the failing service or span, then query that service's logs for concrete error context.",
+    "When a trace ID must be chosen from a returned collection, complete discovery in one phase; in the later full-trace phase, pass the prior step's declared top-level collection for semantic parameter resolution instead of constructing a nested array template."
+  ],
+  "response_instructions": [
+    "Distinguish observed evidence from inference and include the relevant request or trace identifiers."
+  ],
+  "tool_hints": [
+    "For workload troubleshooting, select capabilities for current workload state, detailed resource conditions, and bounded recent logs.",
+    "When correlation evidence is available, include capabilities that can find and retrieve a complete distributed trace.",
+    "Include metrics when the investigation must determine whether a symptom is isolated or systemic."
+  ],
+  "resources": [
+    {
+      "name": "correlation-workflow",
+      "description": "Detailed log-to-trace investigation sequence.",
+      "load_when": "Load when a request ID, trace ID, distributed failure, latency spike, or cross-service incident is being investigated.",
+      "applies_to": ["planning", "continuation", "synthesis"],
+      "required_when_selected": false,
+      "content_type": "text/markdown",
+      "content": "1. Query logs in the smallest relevant window for the request ID or error; for an orchestration request ID, search across service labels first to recover its trace ID. 2. Extract the trace ID from structured fields. 3. When selection comes from a returned collection, finish discovery in that phase; in the next phase, pass the prior step's declared top-level collection so semantic parameter resolution can select the concrete trace ID. 4. Inspect the complete trace for error or slow spans. 5. Query the implicated service's logs for concrete error context. 6. Use service, operation, duration, and time-window filters to focus on relevant application traffic. 7. Use metrics to determine whether the symptom is isolated or systemic. 8. For broad questions spanning many services or a wide time range, discover the relevant services or time bounds first, then issue narrow per-service or per-window queries in later phases."
+    }
+  ],
+  "activation_examples": {
+    "should_activate": ["Investigate request orch-123", "Why is the travel agent slow?", "Find the cause of this trace failure"],
+    "should_not_activate": ["List pods", "Scale the deployment"]
+  },
+  "change_reason": "Use a phase boundary and valid top-level collection handoff for trace-ID selection"
+}

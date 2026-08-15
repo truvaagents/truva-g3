@@ -1577,6 +1577,7 @@ function updateDetailTabs() {
     const hitlTab = document.querySelector('[data-tab="dag-hitl"]');
     const preTab = document.querySelector('[data-tab="dag-pre"]');
     const postTab = document.querySelector('[data-tab="dag-post"]');
+    const skillsTab = document.querySelector('[data-tab="dag-skills"]');
 
     if (llmTab) {
         llmTab.style.display = selected?.has_llm_data ? 'block' : 'none';
@@ -1596,6 +1597,9 @@ function updateDetailTabs() {
     }
     if (postTab) {
         postTab.style.display = hasPostHooks ? 'block' : 'none';
+    }
+    if (skillsTab) {
+        skillsTab.style.display = selected?.skills ? 'block' : 'none';
     }
 }
 
@@ -1628,6 +1632,8 @@ function renderExecutionDetail() {
         renderPostExecution(container);
     } else if (activeTab === 'dag-hitl') {
         renderHITLCheckpoints(container);
+    } else if (activeTab === 'dag-skills') {
+        renderSkillExecution(container);
     } else if (activeTab === 'dag-raw') {
         container.innerHTML = `
             <div class="json-container">
@@ -1642,6 +1648,333 @@ function renderExecutionDetail() {
             });
         }
     }
+}
+
+function skillVersionIdentity(ref) {
+    const logical = ref?.ref || ref || {};
+    const base = [logical.namespace, logical.name].filter(Boolean).join('/');
+    return `${base || 'unknown-skill'}${ref?.version ? `@v${ref.version}` : ''}`;
+}
+
+function skillLogicalIdentity(ref) {
+    const logical = ref?.ref || ref || {};
+    return [logical.namespace, logical.name].filter(Boolean).join('/') || 'unknown-skill';
+}
+
+function skillMetadataIndex(candidates) {
+    const index = new Map();
+    (candidates || []).forEach(candidate => {
+        const metadata = {
+            displayName: candidate.display_name || candidate.ref?.name || 'Unnamed skill',
+            description: candidate.description || '',
+        };
+        index.set(skillLogicalIdentity(candidate.ref), metadata);
+        if (candidate.resolved) index.set(skillVersionIdentity(candidate.resolved), metadata);
+    });
+    return index;
+}
+
+function skillMetadataFor(ref, metadata) {
+    return metadata.get(skillVersionIdentity(ref)) ||
+        metadata.get(skillLogicalIdentity(ref)) || {
+            displayName: ref?.ref?.name || ref?.name || 'Unnamed skill',
+            description: '',
+        };
+}
+
+function skillEventStatus(...values) {
+    const status = values.filter(Boolean).join(' ').toLowerCase();
+    if (/(fail|error|reject|invalid|unavailable|not_found|deleted)/.test(status)) return 'failed';
+    if (/(skip|bypass|degrad|not_selected|ineligible|pending)/.test(status)) return 'pending';
+    return 'success';
+}
+
+function renderSkillIdentity(ref, metadata, { compact = false } = {}) {
+    const identity = skillMetadataFor(ref, metadata);
+    return `<div class="skill-inline-identity ${compact ? 'compact' : ''}">
+        <div class="skill-inline-heading">
+            <span class="skill-inline-name">${escapeHtml(identity.displayName)}</span>
+            <code>${escapeHtml(skillVersionIdentity(ref))}</code>
+        </div>
+        <p>${identity.description
+            ? escapeHtml(identity.description)
+            : '<span class="skill-metadata-unavailable">Description was not captured by this execution.</span>'}</p>
+    </div>`;
+}
+
+function renderSkillTechnicalRecord(item, label = 'Technical record') {
+    return `<details class="skill-technical-details">
+        <summary>${escapeHtml(label)}</summary>
+        <div class="json-container"><pre class="json-view skill-json-view">${syntaxHighlightJson(item)}</pre></div>
+    </details>`;
+}
+
+function renderSkillEventCard({ type, status, title, badge, identity, body, technical }) {
+    return `<article class="skill-event-card skill-event-${type} skill-status-${status}">
+        <div class="skill-event-header">
+            <div><span class="skill-event-kind">${escapeHtml(type.replace(/-/g, ' '))}</span><h4>${escapeHtml(title)}</h4></div>
+            <span class="skill-lifecycle-badge ${status}">${escapeHtml(badge)}</span>
+        </div>
+        ${identity || ''}
+        ${body || ''}
+        ${renderSkillTechnicalRecord(technical)}
+    </article>`;
+}
+
+function renderSkillStageHeader(stage, title, description, count) {
+    return `<div class="skill-card-heading">
+        <div class="skill-stage-heading-copy">
+            <span class="skill-eyebrow">${escapeHtml(stage)}</span>
+            <h3>${escapeHtml(title)}</h3>
+            <p class="skill-stage-description">${escapeHtml(description)}</p>
+        </div>
+        <span class="skill-card-hint">${count} record${count === 1 ? '' : 's'}</span>
+    </div>`;
+}
+
+function renderSkillLifecycleExplainer() {
+    const stages = [
+        {
+            number: 1,
+            short: 'Pin',
+            title: 'Resolve configured candidates',
+            description: 'The agent’s bindings are resolved together. Each available skill is fixed to an exact immutable version for the entire request.',
+            detail: 'Bindings → exact versions',
+            type: 'pinning',
+        },
+        {
+            number: 2,
+            short: 'Activate',
+            title: 'Decide which skills apply',
+            description: 'Always skills activate directly, explicit skills require a trusted host request, and auto skills are selected from their metadata and the current task.',
+            detail: 'Required controls failure handling, not relevance',
+            type: 'activation',
+        },
+        {
+            number: 3,
+            short: 'Select resources',
+            title: 'Choose phase-relevant resources',
+            description: 'For active skills, deterministic requirements and developer resolvers run first; an optional selector can choose among the remaining eligible resources.',
+            detail: 'Re-evaluated at execution boundaries',
+            type: 'resources',
+        },
+        {
+            number: 4,
+            short: 'Load',
+            title: 'Load and verify admitted content',
+            description: 'Instruction and resource bodies are loaded only when needed, checked against their pinned hashes, and admitted within configured limits.',
+            detail: 'Progressive disclosure—not one large blob',
+            type: 'loads',
+        },
+        {
+            number: 5,
+            short: 'Project',
+            title: 'Add content to the current prompt',
+            description: 'Only admitted instructions and resources relevant to the current planning, continuation, or synthesis boundary enter the model prompt.',
+            detail: 'Phase-local content within token budgets',
+            type: 'projection',
+        },
+    ];
+    const compact = stages.map((stage, index) => `${index ? '<i aria-hidden="true">→</i>' : ''}
+        <span><strong>${stage.number}</strong>${escapeHtml(stage.short)}</span>`).join('');
+    const expanded = stages.map((stage, index) => `${index ? '<div class="skill-flow-arrow" aria-hidden="true"><span>↓</span></div>' : ''}
+        <article class="skill-flow-step skill-flow-${stage.type}">
+            <div class="skill-flow-marker"><strong>${stage.number}</strong><span>${escapeHtml(stage.short)}</span></div>
+            <div class="skill-flow-copy">
+                <span class="skill-eyebrow">Stage ${stage.number}</span>
+                <h4>${escapeHtml(stage.title)}</h4>
+                <p>${escapeHtml(stage.description)}</p>
+                <code>${escapeHtml(stage.detail)}</code>
+            </div>
+        </article>`).join('');
+
+    return `<details class="skill-lifecycle-explainer">
+        <summary class="skill-lifecycle-summary">
+            <span class="skill-lifecycle-summary-copy">
+                <span class="skill-eyebrow">Selection flow</span>
+                <strong>How a skill reaches the model prompt</strong>
+                <span>Expand for a brief stage-by-stage explanation of runtime selection.</span>
+            </span>
+            <span class="skill-lifecycle-compact" aria-label="Pin, activate, select resources, load, then project">${compact}</span>
+            <span class="skill-lifecycle-toggle"><span></span><i aria-hidden="true">⌄</i></span>
+        </summary>
+        <div class="skill-lifecycle-flow">${expanded}</div>
+    </details>`;
+}
+
+function renderSkillExecution(container) {
+    const debug = selected?.skills;
+    if (!debug) {
+        container.innerHTML = `<div class="empty-detail"><div class="empty-detail-icon">🧩</div><div>No skill lifecycle data was recorded for this execution.</div></div>`;
+        return;
+    }
+
+    const candidates = debug.candidates || [];
+    const activations = debug.activations || [];
+    const resourceSelections = debug.resource_selections || [];
+    const contentLoads = debug.content_loads || [];
+    const projections = debug.projections || [];
+    const metadata = skillMetadataIndex(candidates);
+    const rows = (items, render) => items.length
+        ? items.map(render).join('')
+        : '<div class="skill-empty-state">None recorded for this execution.</div>';
+    const uniqueProjectedSkills = new Set(
+        projections.flatMap(item => item.skill_refs || []).map(skillVersionIdentity),
+    ).size;
+
+    const candidateCards = rows(candidates, item => {
+        const status = skillEventStatus(item.status);
+        const ref = item.resolved || item.ref;
+        return renderSkillEventCard({
+            type: 'pinning', status,
+            title: item.resolved ? `Pinned ${skillVersionIdentity(item.resolved)}` : skillLogicalIdentity(item.ref),
+            badge: item.status || 'unknown',
+            identity: renderSkillIdentity(ref, metadata),
+            body: `<div class="skill-event-meta">
+                <span>Requested <strong>${escapeHtml(item.requested_version || 'published')}</strong></span>
+                <span>Activation <strong>${escapeHtml(item.activation || '—')}</strong></span>
+                ${item.required ? '<span><strong>Required</strong></span>' : ''}
+            </div>`,
+            technical: item,
+        });
+    });
+
+    const activationCards = rows(activations, item => {
+        const status = skillEventStatus(item.decision, item.admission);
+        return renderSkillEventCard({
+            type: 'activation', status,
+            title: `${item.boundary || 'unknown boundary'} · phase ${item.phase_number || 0}`,
+            badge: item.decision || item.admission || 'recorded',
+            identity: renderSkillIdentity(item.skill, metadata),
+            body: `<div class="skill-event-meta">
+                <span>Selector <strong>${escapeHtml(item.selector || '—')}</strong></span>
+                <span>Admission <strong>${escapeHtml(item.admission || '—')}</strong></span>
+                <span>Activation <strong>${escapeHtml(item.activation || '—')}</strong></span>
+            </div>
+            ${item.reason ? `<div class="skill-selection-reason"><span>Selection reason</span><p>${escapeHtml(item.reason)}</p></div>` : ''}`,
+            technical: item,
+        });
+    });
+
+    const resourceCards = rows(resourceSelections, item => {
+        const status = skillEventStatus(item.decision, item.admission, item.eligibility);
+        return renderSkillEventCard({
+            type: 'resource-selection', status,
+            title: item.resource?.name || 'Unnamed resource',
+            badge: item.decision || item.admission || 'recorded',
+            identity: renderSkillIdentity(item.resource?.skill, metadata, { compact: true }),
+            body: `<div class="skill-event-meta">
+                <span>${escapeHtml(item.boundary || 'unknown boundary')}</span>
+                <span>Phase <strong>${item.phase_number || 0}</strong></span>
+                <span>Eligibility <strong>${escapeHtml(item.eligibility || '—')}</strong></span>
+                <span>Selector <strong>${escapeHtml(item.selector || '—')}</strong></span>
+                ${item.required_when_selected ? '<span><strong>Required when selected</strong></span>' : ''}
+            </div>
+            ${item.reason ? `<div class="skill-selection-reason"><span>Selection reason</span><p>${escapeHtml(item.reason)}</p></div>` : ''}`,
+            technical: item,
+        });
+    });
+
+    const loadCards = rows(contentLoads, item => {
+        const status = skillEventStatus(item.outcome, item.retry_outcome);
+        const label = item.content_kind === 'resource'
+            ? `Resource · ${item.resource_name || 'unnamed'}`
+            : 'Main skill instructions';
+        return renderSkillEventCard({
+            type: 'content-load', status,
+            title: label,
+            badge: item.outcome || 'recorded',
+            identity: renderSkillIdentity(item.skill, metadata, { compact: true }),
+            body: `<div class="skill-event-meta">
+                <span>${escapeHtml(item.boundary || 'unknown boundary')}</span>
+                <span>Phase <strong>${item.phase_number || 0}</strong></span>
+                <span>Cache <strong>${escapeHtml(item.cache_outcome || '—')}</strong></span>
+                <span>Source <strong>${escapeHtml(item.source || '—')}</strong></span>
+                <span>Attempt <strong>${item.attempt || 0}</strong></span>
+                <span>Size <strong>${item.byte_estimate || 0} bytes</strong></span>
+                <span>Estimate <strong>${item.token_estimate || 0} tokens</strong></span>
+                <span>Load time <strong>${formatDuration(item.duration_ms || 0)}</strong></span>
+            </div>`,
+            technical: item,
+        });
+    });
+
+    const projectionCards = rows(projections, item => {
+        const status = skillEventStatus(item.outcome);
+        const projectedSkills = (item.skill_refs || []).map(ref => renderSkillIdentity(ref, metadata, { compact: true })).join('');
+        const projectedResources = (item.resource_refs || []).map(ref => `<div class="skill-resource-ref">
+            <span>${escapeHtml(ref.name || 'Unnamed resource')}</span>
+            <code>${escapeHtml(skillVersionIdentity(ref.skill))}</code>
+        </div>`).join('');
+        return renderSkillEventCard({
+            type: 'projection', status,
+            title: `${item.boundary || 'unknown boundary'} · ${item.prompt_kind || 'prompt'}`,
+            badge: item.outcome || 'recorded',
+            body: `<div class="skill-event-meta">
+                <span>Phase <strong>${item.phase_number || 0}</strong></span>
+                <span>Total <strong>${item.total_tokens || 0} tokens</strong></span>
+                <span>Main <strong>${item.main_instruction_tokens || 0}</strong></span>
+                <span>Resources <strong>${item.resource_tokens || 0}</strong></span>
+            </div>
+            <div class="skill-projection-content">
+                <div><span class="skill-meta-label">Injected skills</span>${projectedSkills || '<span class="skill-empty-value">None</span>'}</div>
+                <div><span class="skill-meta-label">Injected resources</span>${projectedResources || '<span class="skill-empty-value">None</span>'}</div>
+            </div>`,
+            technical: item,
+        });
+    });
+
+    container.innerHTML = `<div class="skill-execution-view">
+        <section class="glass-card skill-execution-summary">
+            <div class="skill-summary-heading">
+                <div><span class="skill-eyebrow">Execution lifecycle</span><h3>Skill activity</h3><code class="skill-exact-ref">${escapeHtml(debug.binding_source || 'unknown')} bindings</code></div>
+                <span class="skill-status-badge ${debug.runtime_policy?.response_cache_eligible ? 'success' : 'pending'}">Cache ${debug.runtime_policy?.response_cache_eligible ? 'eligible' : 'ineligible'}</span>
+            </div>
+            <div class="skill-execution-stats">
+                <div><strong>${candidates.length}</strong><span>Candidates</span></div>
+                <div><strong>${activations.length}</strong><span>Decisions</span></div>
+                <div><strong>${resourceSelections.length}</strong><span>Resource decisions</span></div>
+                <div><strong>${uniqueProjectedSkills}</strong><span>Injected skills</span></div>
+            </div>
+            ${renderSkillTechnicalRecord({
+                binding_source: debug.binding_source,
+                binding_fingerprint: debug.binding_fingerprint,
+                budget_fingerprint: debug.budget_fingerprint,
+                cache_fingerprint: debug.cache_fingerprint,
+                runtime_policy: debug.runtime_policy,
+            }, 'Request pinning and runtime policy')}
+        </section>
+
+        ${renderSkillLifecycleExplainer()}
+
+        <section class="glass-container skill-lifecycle-section skill-section-pinning">
+            ${renderSkillStageHeader('Stage 1', 'Candidate pinning', 'Shows the developer-bound skills and exact immutable versions fixed for this request.', candidates.length)}
+            <div class="skill-event-list">${candidateCards}</div>
+        </section>
+        <section class="glass-container skill-lifecycle-section skill-section-activation">
+            ${renderSkillStageHeader('Stage 2', 'Activation decisions', 'Shows which pinned skills were activated or skipped at each execution boundary, including the selector reason.', activations.length)}
+            <div class="skill-event-list">${activationCards}</div>
+        </section>
+        <section class="glass-container skill-lifecycle-section skill-section-resources">
+            ${renderSkillStageHeader('Stage 3', 'Resource selections', 'Shows which resources from active skills were selected for each phase and why they were chosen.', resourceSelections.length)}
+            <div class="skill-event-list">${resourceCards}</div>
+        </section>
+        <section class="glass-container skill-lifecycle-section skill-section-loads">
+            ${renderSkillStageHeader('Stage 4', 'Content loads', 'Shows when selected instructions and resources were loaded, including source, cache outcome, and retries.', contentLoads.length)}
+            <div class="skill-event-list">${loadCards}</div>
+        </section>
+        <section class="glass-container skill-lifecycle-section skill-section-projections">
+            ${renderSkillStageHeader('Stage 5', 'Prompt projections', 'Shows which loaded skill instructions and resources entered each phase prompt, with their token usage.', projections.length)}
+            <div class="skill-event-list">${projectionCards}</div>
+        </section>
+        ${debug.diagnostics?.length ? `<section class="glass-container skill-lifecycle-section skill-section-diagnostics">
+            ${renderSkillStageHeader('Diagnostics', 'Skill warnings and failures', 'Shows lifecycle conditions that may explain missing, skipped, degraded, or failed skill behavior.', debug.diagnostics.length)}
+            <div class="skill-event-list">${debug.diagnostics.map(item => renderSkillEventCard({
+                type: 'diagnostic', status: skillEventStatus(item.code) === 'failed' ? 'failed' : 'pending', title: item.code || 'Diagnostic', badge: item.boundary || 'runtime',
+                body: item.detail ? `<p class="skill-diagnostic-detail">${escapeHtml(item.detail)}</p>` : '', technical: item,
+            })).join('')}</div>
+        </section>` : ''}
+    </div>`;
 }
 
 // ---------------------------------------------------------------------------

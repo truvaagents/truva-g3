@@ -29,6 +29,9 @@
                     <button class="main-nav-btn" data-view="dag">
                         <span class="nav-icon">🔀</span> Execution DAG
                     </button>
+                    <button class="main-nav-btn" data-view="skills">
+                        <span class="nav-icon">🧩</span> Skills
+                    </button>
                     <button class="main-nav-btn" data-view="memory">
                         <span class="nav-icon">📝</span> Memory
                     </button>
@@ -51,6 +54,9 @@
                 <div class="stats hidden" id="dagStats">
                     <div class="stat"><span>Executions</span><span class="stat-value" style="color: var(--accent-teal);" id="executionCount">-</span></div>
                     <div class="stat"><span>Success Rate</span><span class="stat-value" style="color: var(--accent-green);" id="successRate">-</span></div>
+                </div>
+                <div class="stats hidden" id="skillsStats">
+                    <div class="stat"><span>Published</span><span class="stat-value" style="color: var(--accent-purple);" id="skillsCount">-</span></div>
                 </div>
                 <div class="stats hidden" id="memoryStats">
                     <div class="stat"><span>Domain</span><span class="stat-value" style="color: var(--accent-teal);" id="memoryDomainLabel">-</span></div>
@@ -307,6 +313,7 @@
                         <button class="detail-tab" data-tab="dag-llm" style="display: none;">LLM Calls</button>
                         <button class="detail-tab" data-tab="dag-post" style="display: none;">Post-Execution</button>
                         <button class="detail-tab" data-tab="dag-hitl" style="display: none;">HITL</button>
+                        <button class="detail-tab" data-tab="dag-skills" style="display: none;">Skills</button>
                         <button class="detail-tab" data-tab="dag-raw">Raw JSON</button>
                     </div>
                 </div>
@@ -315,6 +322,41 @@
                         <div class="empty-detail-icon">🔀</div>
                         <div>Select an execution to view DAG</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Skills management view -->
+            <div class="list-panel hidden" id="skillsListPanel">
+                <div class="filters">
+                    <div class="search-box">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" id="skillsSearchInput" placeholder="Search skills by name, namespace, domain, or tag...">
+                    </div>
+                    <button class="filter-btn" id="skillsNewButton" type="button">New skill</button>
+                </div>
+                <div class="error-banner" id="skillsErrorBanner">
+                    <strong>Error:</strong> <span id="skillsErrorMessage"></span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Skill</th><th>Domain</th><th>Tags</th><th>Published</th></tr></thead>
+                        <tbody id="skillsTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="last-updated" id="skillsLastUpdated">Loading...</div>
+            </div>
+            <div class="resize-handle hidden" id="skillsResizeHandle"></div>
+            <div class="detail-panel hidden" id="skillsDetailPanel">
+                <div class="detail-header">
+                    <span class="detail-title" id="skillsDetailTitle">Select a skill</span>
+                    <div class="detail-tabs">
+                        <button class="detail-tab active" data-tab="skills-package">Package</button>
+                        <button class="detail-tab" data-tab="skills-versions">Versions</button>
+                        <button class="detail-tab" data-tab="skills-json">JSON</button>
+                    </div>
+                </div>
+                <div class="detail-content" id="skillsDetailContent">
+                    <div class="empty-detail"><div class="empty-detail-icon">🧩</div><div>Select a skill or create a new one</div></div>
                 </div>
             </div>
 

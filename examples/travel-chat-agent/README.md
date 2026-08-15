@@ -12,6 +12,7 @@ A streaming chat agent that demonstrates AI-powered orchestration using the Truv
 - [Architecture](#architecture)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
+  - [Agent Skills](#agent-skills)
   - [OpenAI-Compatible Providers](#openai-compatible-providers)
 - [User Memory](#user-memory)
 - [Session Management](#session-management)
@@ -93,9 +94,9 @@ cd ../places-tool && ./setup.sh deploy && cd ../travel-chat-agent
 **What `./setup.sh full-deploy` does:**
 1. Creates a Kind Kubernetes cluster with NGINX Ingress Controller
 2. Deploys infrastructure (Redis, Prometheus, Grafana, Jaeger, OTEL Collector)
-3. Builds and deploys the travel-chat-agent and chat-ui
-4. Configures Ingress routes and verifies all services are reachable
-5. Prints a summary with all service URLs
+3. Builds and loads the travel-chat-agent and chat-ui images
+4. Recreates or updates agent-owned skills, then deploys the agent and UI
+5. Configures Ingress routes, verifies services, and prints their URLs
 
 > **Note:** All services are accessible via `*.localhost` hostnames through the NGINX Ingress Controller. No port-forwarding is needed. On macOS/Linux, `*.localhost` resolves to `127.0.0.1` automatically ([RFC 6761](https://tools.ietf.org/html/rfc6761)). This is the same pattern used in production with real DNS on EKS/GKE/AKS.
 
@@ -414,8 +415,54 @@ List available tools discovered by the orchestrator.
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` | No |
 | `TRUVAG3_LLM_DEBUG_TTL` | TTL for successful debug records | `24h` | No |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | TTL for error debug records | `168h` | No |
+| `TRUVAG3_SKILLS_ENABLED` | Enable the framework skill runtime | `true` in this example | No |
+| `TRUVAG3_SKILL_BINDINGS_JSON` | Complete replacement for the code binding list | (code bindings) | No |
+| `TRUVAG3_SKILLS_REDIS_DB` | Included skill-registry Redis database | `9` | No |
 
 *At least one AI provider key is required.
+
+### Agent Skills
+
+The agent code explicitly binds five reusable packages:
+
+- `travel/action-verification` — `always`; verify live sources before acting
+  on travel information.
+- `travel/travel-search-preparation` — `auto`; prepare live travel searches
+  without hardcoding capability names.
+- `travel/currency-conversion` — `auto`; guide exchange-rate and conversion
+  requests toward current data and clear assumptions.
+- `travel/travel-readiness-assessment` — `auto`; combine material trip risks
+  and readiness checks when the request needs them.
+- `travel/weather-assessment` — `auto`; add weather-risk planning and response
+  guidance only when relevant.
+
+`setup.sh deploy`, `rebuild`, and `rollout` validate and conditionally publish
+the JSON packages under `skills/` through
+`http://registry.localhost/api/v1/skills` before restarting the agent. Existing
+content is updated using its current ETag, so repeated setup runs are safe.
+The same reconciliation is part of `full-deploy`, so an empty registry in a
+new Kind cluster is rebuilt from the Git-authored packages.
+
+To inspect or reconcile skills without building an image or restarting the
+agent:
+
+```bash
+./setup.sh skills-check  # Read-only comparison with Git
+./setup.sh skills-sync   # Create/update packages, then verify them
+```
+
+`skills-sync` skips equivalent content and publishes changed behavior as the
+next immutable version. It never clears the shared skill store.
+If the management host uses another address, set the setup-only
+`TRUVAG3_SKILLS_API_URL` to the full `/api/v1/skills` base URL.
+Agent replicas do not receive mutable binding API calls: code owns the default
+list, and `TRUVAG3_SKILL_BINDINGS_JSON` can replace it for the whole deployment.
+
+At request start, all bindings resolve in one Redis-backed batch and exact
+versions are pinned. A newly published version therefore appears on the next
+request without Pub/Sub, while an in-flight multi-phase execution stays on its
+pinned version. Inspect packages in the Registry Viewer **Skills** view and
+execution decisions in an execution's **Skills** tab.
 
 ### .env File
 

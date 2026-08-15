@@ -217,7 +217,12 @@ deploy_k8s() {
     # Create namespace if not exists
     kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-    # Update ConfigMap with correct Redis URL before applying
+    # Apply the workload objects first. The manifest carries portable defaults;
+    # the generated ConfigMap below is authoritative for this deployment and
+    # must be applied afterwards so environment-specific values are retained.
+    kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
+
+    # Update ConfigMap with the effective Redis configuration.
     # This allows the Redis URL to be derived from k8-deployment/redis.yaml
     # or overridden via REDIS_URL environment variable
     log_info "Configuring registry-viewer-config ConfigMap..."
@@ -227,11 +232,11 @@ deploy_k8s() {
         --from-literal=REDIS_NAMESPACE="${REDIS_NAMESPACE}" \
         --from-literal=USE_MOCK="false" \
         --from-literal=PORT="${APP_PORT}" \
+        --from-literal=APP_ENV="${APP_ENV:-development}" \
+        --from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}" \
         --from-literal=TRUVAG3_VIEWER_MEMORY_DOMAINS="${TRUVAG3_VIEWER_MEMORY_DOMAINS:-infrastructure}" \
+        --from-literal=TRUVAG3_SKILLS_REDIS_DB="${TRUVAG3_SKILLS_REDIS_DB:-9}" \
         --dry-run=client -o yaml | kubectl apply -f -
-
-    # Apply deployment (ConfigMap is already applied above)
-    kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
 
     # Restart to pick up new image
     log_info "Rolling out new version..."

@@ -156,6 +156,15 @@ setup_env() {
 # Load environment variables from .env file
 load_env() { truvag3_load_env "$SCRIPT_DIR/.env"; }
 
+# Preserve deployment feature flags from .env while preventing local-process
+# endpoints from overriding the shared infrastructure's in-cluster addresses.
+setup_shared_infra() {
+    (
+        unset REDIS_URL OTEL_EXPORTER_OTLP_ENDPOINT
+        truvag3_setup_infra
+    )
+}
+
 # Build the application (local only)
 build_app() {
     log_info "Building devops-chat-agent..."
@@ -193,6 +202,42 @@ setup_agent_config() {
     truvag3_create_configmap "devops-chat-agent-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
 }
 
+# Reconcile the exact skill packages bound by this agent. The Registry Viewer is
+# only the HTTP host; validation, optimistic concurrency, and persistence are
+# owned by orchestration's provider-neutral skills handler.
+sync_skills() {
+    local api_base="${TRUVAG3_SKILLS_API_URL:-http://registry.localhost/api/v1/skills}"
+    api_base="${api_base%/}"
+
+    truvag3_check_skill_tools || return 1
+    truvag3_sync_skill_package "$api_base" "devops" "kubernetes-safety" \
+        "$SCRIPT_DIR/skills/kubernetes-safety.json" || return 1
+    truvag3_sync_skill_package "$api_base" "devops" "observability-investigation" \
+        "$SCRIPT_DIR/skills/observability-investigation.json" || return 1
+    truvag3_sync_skill_package "$api_base" "devops" "infrastructure-change-documentation" \
+        "$SCRIPT_DIR/skills/infrastructure-change-documentation.json" || return 1
+    log_success "All DevOps skill packages match Git"
+}
+
+check_skills() {
+    local api_base="${TRUVAG3_SKILLS_API_URL:-http://registry.localhost/api/v1/skills}"
+    local failed=0
+    api_base="${api_base%/}"
+
+    truvag3_check_skill_tools || return 1
+    truvag3_check_skill_package "$api_base" "devops" "kubernetes-safety" \
+        "$SCRIPT_DIR/skills/kubernetes-safety.json" || failed=1
+    truvag3_check_skill_package "$api_base" "devops" "observability-investigation" \
+        "$SCRIPT_DIR/skills/observability-investigation.json" || failed=1
+    truvag3_check_skill_package "$api_base" "devops" "infrastructure-change-documentation" \
+        "$SCRIPT_DIR/skills/infrastructure-change-documentation.json" || failed=1
+    if [ "$failed" -ne 0 ]; then
+        log_error "One or more DevOps skill packages do not match Git"
+        return 1
+    fi
+    log_success "All DevOps skill packages match Git"
+}
+
 # Deploy to Kubernetes
 deploy_k8s() {
     log_info "Deploying to Kubernetes..."
@@ -206,6 +251,7 @@ deploy_k8s() {
     # Setup secrets and config
     setup_k8s_secrets
     setup_agent_config
+    sync_skills
 
     # Deploy the chat agent
     kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
@@ -355,7 +401,7 @@ full_deploy() {
     load_env
 
     truvag3_create_cluster
-    truvag3_setup_infra
+    setup_shared_infra
 
     # Step 4: Build and deploy
     build_docker
@@ -391,6 +437,7 @@ rebuild() {
     load_env
     setup_k8s_secrets
     setup_agent_config
+    sync_skills
 
     # Apply Kubernetes manifests
     log_info "Applying Kubernetes manifests..."
@@ -422,6 +469,7 @@ rollout() {
     log_info "Updating secrets and config from .env..."
     setup_k8s_secrets
     setup_agent_config
+    sync_skills
 
     # Apply k8-deployment.yaml to pick up ConfigMap changes
     log_info "Applying k8-deployment.yaml..."
@@ -497,6 +545,8 @@ Kubernetes Deployment Commands:
   deploy         Build, load to Kind, and deploy to Kubernetes
   rebuild        Rebuild with --no-cache and redeploy (fresh dependencies)
   rollout        Restart deployment to pick up new secrets/config from .env
+  skills-check   Compare published skills with the packages in Git (read-only)
+  skills-sync    Reconcile and verify skills from Git without restarting the agent
   forward        Port forward agent only
   forward-all    Port forward agent + monitoring (recommended)
   test           Run API tests
@@ -564,7 +614,7 @@ case "${1:-help}" in
         check_prerequisites
         print_header
         load_env
-        truvag3_setup_infra
+        setup_shared_infra
         ;;
     docker)
         check_prerequisites
@@ -583,6 +633,14 @@ case "${1:-help}" in
     rollout)
         check_prerequisites
         rollout
+        ;;
+    skills-check)
+        load_env
+        check_skills
+        ;;
+    skills-sync)
+        load_env
+        sync_skills
         ;;
     full-deploy)
         check_prerequisites

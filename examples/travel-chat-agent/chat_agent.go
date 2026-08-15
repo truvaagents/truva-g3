@@ -137,7 +137,10 @@ func NewTravelChatAgent() (*TravelChatAgent, error) {
 }
 
 // InitializeOrchestrator sets up the orchestrator after Discovery is available.
-func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error {
+func (t *TravelChatAgent) InitializeOrchestrator(
+	discovery core.Discovery,
+	skillRegistry orchestration.SkillRegistry,
+) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -146,7 +149,42 @@ func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error
 	}
 
 	// Create orchestrator config
-	config := orchestration.DefaultConfig()
+	skillConfig := orchestration.SkillConfig{
+		Enabled: true,
+		Bindings: []orchestration.SkillBinding{
+			{
+				Namespace: "travel", Name: "action-verification", Version: "published",
+				Activation: orchestration.SkillActivationAlways,
+			},
+			{
+				Namespace: "travel", Name: "travel-search-preparation", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "currency-conversion", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "travel-readiness-assessment", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "weather-assessment", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+		},
+	}
+	resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+		Environment: orchestration.EnvironmentCompatible,
+		Options: []orchestration.OrchestratorOption{
+			orchestration.WithSkills(skillConfig),
+			orchestration.WithSkillRegistry(skillRegistry),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resolve orchestrator configuration: %w", err)
+	}
+	config := resolved.Config
 	config.RoutingMode = orchestration.ModeAutonomous
 	config.SynthesisStrategy = orchestration.StrategyLLM
 	config.MetricsEnabled = true
@@ -207,18 +245,8 @@ devops-chat-agent and return its synthesized response.`,
 		},
 		CustomInstructions: []string{
 			"Before processing any planning query, first find out today's date so you can resolve relative dates like 'next week' or 'this weekend' accurately",
-			"If the user's query lacks critical information needed for accurate results (e.g., departure city, travel dates, number of travelers, budget range), ask clarifying questions in your response instead of making assumptions",
-			"Do not assume the user's home currency is USD — ask or infer from their departure location",
-			"Consider seasonal factors (weather, peak/off-peak pricing, local holidays) when recommending travel dates or destinations",
-			"For weather queries, always geocode the location first to get coordinates",
-			"For currency conversion, extract the destination country's currency code",
+			"If the user's query lacks critical information needed for accurate results (e.g., departure city, travel dates, number of travelers, budget range), ask clarifying questions before planning",
 			"Prefer parallel execution when steps are independent",
-			"For flight searches, use search_airports first to resolve city names to IATA codes if the user provides city names instead of airport codes",
-			"For hotel searches, use the city IATA code — use search_airports to find it if needed",
-			"When planning a trip to a country, check get_travel_advisory for safety information",
-			"For local dining and activities, use search_places or nearby_places with the destination coordinates",
-			"For any Kubernetes, cluster, pod, namespace, deployment, log, or DevOps-related query, delegate to the devops_operations capability (devops-chat-agent) by passing the user's natural-language question as the `query` field",
-			"When the user asks you to perform an action (book or search a flight/hotel, fetch an advisory, or delegate a request to another agent), invoke the corresponding capability and confirm it completed before reporting back. For actions that take time to complete, such as a request delegated to another agent, wait for and verify its result before reporting. Report success only on concrete evidence of completion; if the action failed, report what failed and what you tried.",
 		},
 	}
 
@@ -288,6 +316,7 @@ devops-chat-agent and return its synthesized response.`,
 	t.Logger.Info("Orchestrator initialized successfully", map[string]interface{}{
 		"routing_mode":       config.RoutingMode,
 		"synthesis_strategy": config.SynthesisStrategy,
+		"skill_bindings":     len(config.Skills.Bindings),
 	})
 
 	return nil

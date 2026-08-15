@@ -18,7 +18,10 @@ data:
   REDIS_NAMESPACE: "truvag3"
   USE_MOCK: "false"
   PORT: "8361"
+  APP_ENV: "development"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
   TRUVAG3_VIEWER_MEMORY_DOMAINS: "infrastructure"
+  TRUVAG3_SKILLS_REDIS_DB: "9"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -68,11 +71,27 @@ spec:
             configMapKeyRef:
               name: registry-viewer-config
               key: PORT
+        - name: APP_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: APP_ENV
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
         - name: TRUVAG3_VIEWER_MEMORY_DOMAINS
           valueFrom:
             configMapKeyRef:
               name: registry-viewer-config
               key: TRUVAG3_VIEWER_MEMORY_DOMAINS
+              optional: true
+        - name: TRUVAG3_SKILLS_REDIS_DB
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: TRUVAG3_SKILLS_REDIS_DB
               optional: true
         resources:
           requests:
