@@ -21,6 +21,7 @@ Welcome to the TruvaG3 logging guide! This document explains how to implement co
 15. [Common Mistakes and How to Avoid Them](#15-common-mistakes-and-how-to-avoid-them)
 16. [Quick Reference](#16-quick-reference)
 17. [Manual Trace ID Extraction](#17-manual-trace-id-extraction)
+18. [Agent Skills Logging](#18-agent-skills-logging)
 
 ---
 
@@ -1227,7 +1228,8 @@ Use these field names across all your services:
 | `checkpoint_id` | string | HITL checkpoint identity | "cp-abc123" |
 | `status` | string | Bounded result status defined by the operation; terminal request records may also use `partial` or `interrupted`, while diagnostics may use `fallback`, `accepted`, or `rejected` | "success", "error", "retry", "partial", "interrupted", "fallback" |
 | `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
-| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "stream_write", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "notification", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "request_failed", "callback_panic", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "unmarshal", "integrity", "backend_read", "framework", "stream_write", "store_read", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "notification", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "request_failed", "callback_panic", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `store_operation` | string | Bounded backend sub-operation when `operation` identifies the overall store | "list_metadata" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
 | `path` | string | Request path | "/api/capabilities/get_weather" |
@@ -2364,6 +2366,39 @@ func (a *MyAgent) handleRequest(w http.ResponseWriter, r *http.Request) {
 > **Note**: The `WithContext` methods automatically include trace correlation. Manual extraction is only needed for special cases like response headers or external system integration.
 
 For complete distributed tracing setup including infrastructure (Jaeger, OTEL Collector), client-side propagation, and trace visualization, see **[DISTRIBUTED_TRACING_GUIDE.md](DISTRIBUTED_TRACING_GUIDE.md)**.
+
+## 18. Agent Skills Logging
+
+Skills use the same application-injected `core.Logger` as orchestration and
+the included backend adapters. The canonical orchestrator and included Redis
+backend preset scope a component-aware logger to `framework/orchestration`.
+Hosts that construct `SkillAdminHandler` or `redisprovider.SkillStore` directly
+should pass an equivalently component-scoped logger.
+
+Runtime success paths remain primarily trace/metric evidence. Bounded warning
+records use operations such as `skills_pin_candidates`, `skills_activate`,
+`skills_resolve_resources`, `skills_registry_resolve_candidates`,
+`skills_registry_load_manifest`, `skills_registry_load_resource`, and
+`skill_store`. Administrative requests use `skills_admin_<operation>` and carry
+the request ID already established by the handler.
+
+Runtime failures use the closed classifications `llm_unavailable`, `timeout`,
+`integrity`, `validation`, `backend_read`, or `framework`; the operation name
+remains in `operation`. Unknown external error text is redacted before it is
+logged and does not become an `error_type` label.
+
+Skill-store failure records keep `operation=skill_store`, carry the bounded
+attempted action in `store_operation`, and classify the failure independently
+with `error_type=store_read|store_write|unmarshal|integrity`. For example, a
+failed metadata lookup uses `store_operation=list_metadata` and
+`error_type=store_read`; operation names must not be placed in `error_type`.
+
+Skill logs may contain bounded operation, boundary, phase, outcome, diagnostic
+code, duration, cache result, and exact non-secret identity fields. They must
+not contain instruction/resource bodies, complete packages, selector prompts or
+responses, ETags, idempotency keys, Redis URLs, credentials, or raw environment
+values. Backend errors pass through the shared redaction boundary before
+logging. Skill names and versions are diagnostic fields, never metric labels.
 
 ---
 

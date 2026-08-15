@@ -10,6 +10,7 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 - Auto-discovery: Components find each other automatically via Redis
 - Kubernetes-native: Designed for K8s with health checks, metrics, easy deployment
 - Batteries included: HTTP server, routing, middleware built-in
+- Reusable skills: Versioned developer-bound guidance loaded progressively by orchestration
 
 ---
 
@@ -31,6 +32,18 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 
 TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
 
+Agent Skills are optional and disabled by default. The travel and DevOps chat
+examples demonstrate them: their `setup.sh full-deploy`/`deploy`/`rebuild`/
+`rollout` commands validate and conditionally publish the example packages
+through the Registry Viewer management API, then start agents whose code
+explicitly binds those skills. Use `./setup.sh skills-check` for a read-only
+comparison with Git or `./setup.sh skills-sync` to reconstruct an empty or
+drifted runtime registry without rebuilding or restarting the agent.
+Open `http://registry.localhost/` and select **Skills** to inspect packages, or
+open an execution and select its **Skills** tab to inspect body-free runtime
+decisions. See the [Agent Skills Guide](docs/orchestration/AGENT_SKILLS_GUIDE.md)
+before enabling skills in your own agent.
+
 ### Required Software
 
 > **Go version**: the framework's `go.mod` declares `go 1.26.4`, so building
@@ -48,8 +61,8 @@ go version
 # Docker Desktop (or Podman - see below)
 brew install --cask docker
 
-# Kind and kubectl
-brew install kind kubectl
+# Kind, kubectl, and jq (used by skill package verification)
+brew install kind kubectl jq
 ```
 
 **Linux (Ubuntu/Debian):**
@@ -62,8 +75,8 @@ sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 
-# Docker
-sudo apt update && sudo apt install -y docker.io
+# Docker and jq (used by skill package verification)
+sudo apt update && sudo apt install -y docker.io jq
 sudo systemctl start docker && sudo systemctl enable docker
 sudo usermod -aG docker $USER
 # Log out and back in
@@ -973,6 +986,7 @@ You'll have ~10–30s of ingress downtime while the new pod schedules.
 - **[Custom AI Providers and Enterprise Integration](docs/building/CUSTOM_AI_PROVIDER_GUIDE.md)** - Request-aware policy, Azure OpenAI, Google-hosted models, dynamic credentials, routing, and custom adapters
 - **[AI Provider Change Playbook](docs/building/AI_PROVIDER_CHANGE_PLAYBOOK.md)** - Safe responses to provider model, parameter, authentication, and endpoint changes
 - **[Orchestration Module](orchestration/README.md)** - DAG workflows and AI-generated plans
+- **[Agent Skills Guide](docs/orchestration/AGENT_SKILLS_GUIDE.md)** - Authoring, binding, progressive disclosure, management, and operations
 - **[Telemetry Module](telemetry/README.md)** - OpenTelemetry integration
 - **[Resilience Module](resilience/README.md)** - Circuit breakers and graceful degradation
 - **[Agent Memory Guide](docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md)** - Cross-agent shared memory, activity compaction, and real-time coordination

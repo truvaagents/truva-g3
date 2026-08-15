@@ -5,7 +5,7 @@
 
 > **A different way to wire agents and tools.** Specialized agents and tools register their capabilities with a shared registry, find each other by logical name at runtime, and coordinate without a central conductor — the microservices pattern, applied to multi-agent systems.
 
-> **About this framework.** TruvaG3 is the open-source reference implementation of the microagents architecture described in [A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](https://truvag3.dev/blogs/microagents-architecture). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
+> **About this framework.** TruvaG3 is the open-source reference implementation of the microagents architecture described in [A Microagents Reference Architecture: Dynamic Capability Discovery and Decentralized Coordination](https://truvag3.dev/blogs/microagents-architecture). The framework demonstrates the architecture in working code — and adds the operational features a multi-agent system tends to need on top: a vendor-agnostic AI client, DAG-based execution with iterative re-plan, reusable versioned agent skills with progressive disclosure, circuit breakers and semantic retry, OpenTelemetry instrumentation, two-tier memory, and human-in-the-loop approvals. Every backend (service discovery, LLM provider, telemetry, memory store, skill registry) and most framework behaviors (prompt construction, planning, retry, pipeline hooks) sit behind interfaces that can be swapped.
 
 The architecture has five defining properties, each implemented here:
 
@@ -616,6 +616,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 - [Adding Context to Your Agent](docs/building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — pipeline hooks, RAG, guardrails
 
 **Orchestration:**
+- [Agent Skills Guide](docs/orchestration/AGENT_SKILLS_GUIDE.md) — reusable instruction packages, progressive disclosure, management, and operations
 - [Orchestration Modes Guide](docs/orchestration/ORCHESTRATION_MODES_GUIDE.md) — dynamic, predefined, and custom modes
 - [LLM Planning Prompt Guide](docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md) — prompt customization
 - [Error Handling Guide](docs/orchestration/ERROR_HANDLING_GUIDE.md) — structured errors, retry layers, recovery

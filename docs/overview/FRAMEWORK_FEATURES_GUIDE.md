@@ -1007,6 +1007,7 @@ See [TruvaG3 Tools vs MCP Servers](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md)
 | Discovery and registration | `core` | Redis/Valkey backend |
 | AI provider clients, provider registry, embeddings | `ai` | `telemetry`, `memory` |
 | Dynamic planning, iterative planning, and workflow execution | `orchestration` | `core`, `ai`, `telemetry` |
+| Reusable agent skills and progressive prompt disclosure | `orchestration` | Provider-neutral skill backend, `core`, `telemetry` |
 | Async tasks and scheduling interfaces | `core`, `orchestration` | Redis/Valkey backend |
 | HITL approvals | `orchestration` | Redis/Valkey backend |
 | Component, shared, and user memory | `core`, `memory` | `orchestration`, `telemetry`, Redis/Valkey, Qdrant |
@@ -1036,6 +1037,7 @@ Use these docs for deeper feature-level details:
 - [CUSTOM_AI_PROVIDER_GUIDE.md](../building/CUSTOM_AI_PROVIDER_GUIDE.md) - request-aware policy, hosted-cloud profiles, enterprise routing and credentials, and custom adapters
 - [AI_PROVIDER_CHANGE_PLAYBOOK.md](../building/AI_PROVIDER_CHANGE_PLAYBOOK.md) - safe responses to provider model, parameter, authentication, and endpoint changes
 - [ORCHESTRATION_MODES_GUIDE.md](../orchestration/ORCHESTRATION_MODES_GUIDE.md) - orchestration modes
+- [AGENT_SKILLS_GUIDE.md](../orchestration/AGENT_SKILLS_GUIDE.md) - authoring, binding, runtime disclosure, management, operations, and troubleshooting for agent skills
 - [EFFECTIVE_PROMPTS_GUIDE.md](../building/EFFECTIVE_PROMPTS_GUIDE.md) - capability descriptions and prompt quality
 - [ERROR_HANDLING_GUIDE.md](../orchestration/ERROR_HANDLING_GUIDE.md) - structured error patterns
 - [INTELLIGENT_ERROR_HANDLING.md](../orchestration/INTELLIGENT_ERROR_HANDLING.md) - LLM-assisted error analysis

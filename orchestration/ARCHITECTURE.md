@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.3
+**Version**: 1.4
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -23,8 +23,9 @@
 12. [Common Patterns & Examples](#common-patterns--examples)
 13. [Troubleshooting Guide](#troubleshooting-guide)
 14. [Future Considerations](#future-considerations)
-15. [Summary](#summary)
-16. [Version History](#version-history)
+15. [Agent Skills V1](#agent-skills-v1)
+16. [Summary](#summary)
+17. [Version History](#version-history)
 
 ---
 
@@ -608,7 +609,6 @@ The prompt builder is pluggable via the `PromptBuilder` interface:
 - **`TemplatePromptBuilder`**: Go `text/template` for full structural customization
 
 > 📖 **For template variables, customization guide, and cross-provider tips, see [LLM_PLANNING_PROMPT_GUIDE.md](../docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md).**
-```
 
 ### 1b. Multi-Phase Iterative Planning (AI-Driven Extension)
 
@@ -2389,6 +2389,133 @@ secrets in those values.
 
 ---
 
+## Agent Skills V1
+
+Agent skills are reusable, versioned instruction packages owned by
+orchestration. They add planning guidance, response guidance, capability hints,
+and independently loadable text resources without granting a tool, permission,
+or new execution authority. `core` remains skill-agnostic.
+
+An application explicitly binds eligible skills through `SkillConfig.Bindings`
+and injects a provider-neutral `SkillRegistry`. `TRUVAG3_SKILL_BINDINGS_JSON`
+is a deployment-time complete replacement for the code binding list; there is
+no runtime binding CRUD or replica-local merge. The included Redis adapter is
+composed in `orchestration/redisprovider`, while runtime lifecycle code imports
+no Redis types.
+
+For every request, orchestration performs one authoritative batched candidate
+resolution before `BeforePlanning` hooks. Mutable aliases such as `published`
+are resolved to exact version-and-hash identities and pinned for the execution.
+Host code may add bounded request-local expected-capability hints with
+`WithSkillExpectedCapabilities`; they are normalized and pinned with the
+candidate snapshot, influence selection only, and never grant a capability,
+tool, or permission. V1 does not infer them from user text or generated plans.
+The generic pipeline cache gate receives one opaque `skills` variation
+fingerprint. For a binding that targets `published`, a publish therefore
+affects the next request without Pub/Sub or replica invalidation; a numeric
+version binding remains fixed, and an in-flight or resumed execution retains
+its pinned identities. Only verified immutable manifest and resource bodies
+may be held in the optional bounded process-local cache.
+
+Every manifest and resource is verified against its pinned hash before use. A
+cached mismatch is evicted and reread once by exact version; a persistent
+mismatch is unavailable and is never projected or cached. V1 has no
+`allow_unverified` mode. Required-policy failures stop the applicable boundary;
+optional content is omitted with bounded diagnostic evidence.
+
+Cached-answer short-circuits are eligible only when the skill behavior identity
+is stable: either `SkillConfig.RuntimePolicyID` identifies the custom runtime,
+or no custom activation policy, resolver, or token counter is installed and
+both selector models are explicitly pinned. Ineligible configurations execute
+normally and may still use the immutable-content cache; they only bypass
+response-cache reuse.
+
+Only short-circuits explicitly classified as cached responses are subject to
+that comparison; authoritative policy/guardrail short-circuits pass unchanged.
+The reserved `skills` dimension is compared symmetrically, so a value present
+on only the current request or only the cached entry is a mismatch. This also
+prevents a cached skill-influenced answer from being served after skills are
+disabled.
+
+Runtime prompt-admission estimates use the injected `core.TokenCounter` when
+configured through `WithSkillTokenCounter`, otherwise the framework heuristic.
+Invalid custom output falls back to that heuristic with a bounded diagnostic.
+Because a custom counter can change projection, it requires the code-owned
+`SkillConfig.RuntimePolicyID` only when response-cache eligibility is desired.
+
+Skill disclosure follows named lifecycle boundaries:
+
+1. `always` bindings and trusted host-only `explicit` requests activate
+   deterministically; remaining `auto` candidates may use the bounded selector.
+   Activation is monotonic: a skill activated initially or during continuation
+   remains active for the rest of the execution. `required` controls failure
+   handling and never forces activation.
+2. Initial and continuation planning receive planning instructions and only the
+   resources selected for that boundary. Authored `applies_to` scopes filter
+   eligibility; `required_when_selected` never forces selection but makes a
+   selected resource's load, integrity, or admission failure fatal.
+3. Regeneration reuses the accepted phase projection exactly; it does not
+   reselect or reread content.
+4. Synthesis receives response instructions and synthesis-scoped resources.
+5. Checkpoints retain only body-free pinned state and selection evidence.
+
+Resume revalidates checkpointed exact tuples in one batch and never repins them
+to a newer publication or adds a newly configured binding. A legacy checkpoint
+with no skill fields, or an explicitly empty compatibility snapshot, remains
+skill-free without a registry read, cache dimension, or skill prompt
+projection. That decision is carried by private provenance installed by
+`BuildResumeContext`; setting the public `WithResumeMode` flag alone cannot
+suppress developer-configured skills.
+
+The current runtime behavior/cache projection is recomputed for decisions made
+after resume. A selector-model or policy deployment change while the request is
+suspended is diagnostic and does not reject the resume; it cannot rewrite the
+checkpointed exact skill tuples.
+
+Framework-generated `<active_skills>` data is placed in the user message under
+an immutable system-level `<skill_precedence>` contract. Dynamic request,
+history, memory, tool, and retrieved values are encoded before rendering.
+Reserved skill tags cannot be supplied by prompt overrides, while developer
+guidance remains available through bounded additive fields and mounted-file
+environment variables. With skills disabled or unbound, prompt bytes and the
+ordinary lifecycle remain unchanged.
+
+The included activation, resource-selection, and authoring-advisor calls leave
+provider-native response format unset. Their provider-neutral structured-output
+contract is a fixed JSON prompt, strict decoding and identity validation, and
+one bounded correction retry. The corresponding AI-option overrides accept
+only model and reasoning-effort intent; an application that requires a
+provider-native response protocol supplies a custom resolver or advisor.
+
+The provider-neutral `SkillAdminHandler` supplies schema, deterministic
+validation, optional non-mutating AI analysis, publication, catalog/history
+reads, and guarded version deletion. Publication uses `If-None-Match: *` for
+creation or the current `If-Match` ETag for update. Deletion requires the
+current ETag and an audit reason; the published and immediately preceding
+versions are protected. Mutations commit before audit delivery; a subsequent
+audit failure is reported truthfully as `audit_recorded: false` with a bounded
+warning and does not roll back the committed mutation. V1 authoring payloads
+are JSON packages; `SKILL.md` import/export interoperability is deferred.
+Authentication, authorization, and network exposure remain responsibilities of
+the hosting application and platform.
+
+V1 has one operational state, `published`. A content-changing accepted `PUT`
+atomically creates and publishes the next immutable revision; an identical
+canonical package is a no-op. There are no draft, rollback, archive, or
+automatic garbage-collection workflows. Recovery is roll-forward, with older
+unprotected revisions retained until an explicit guarded deletion.
+
+Ordinary traces, metrics, logs, and execution debug records contain bounded
+identity and decision evidence but never instruction or resource bodies. Jaeger
+shows `orchestrator.skills.*`, `skills.registry.*`, `skills.store.*`, and
+`skills.admin.*` spans. Execution records expose candidate, activation,
+resource-selection, content-load, projection, and diagnostic summaries through
+the Registry Viewer execution **Skills** tab. Content-load records include
+body-free source/cache disposition, integrity hashes, attempt/retry outcome,
+byte and canonical-token estimates, duration, and bounded diagnostics.
+
+---
+
 ## Summary
 
 The orchestration module is the brain of the TruvaG3 framework, coordinating tools and agents to accomplish complex tasks. Its architecture emphasizes:
@@ -2413,6 +2540,7 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2026-08-12 | Added the shipped Agent Skills V1 ownership, request pinning, progressive-disclosure, prompt, management, backend, and observability contracts |
 | 1.3 | 2026-08-09 | Documented canonical configuration/cache eligibility, shared request recording, authoritative HITL suspension, and provider-neutral expiry lifecycle contracts |
 | 1.2 | 2026-08-07 | Corrected the summary to state the canonical `orchestration -> core + telemetry` module boundary |
 | 1.1 | 2026-07-27 | Established the pre-release conversation-resolution, checkpoint, and optional execution-store capability contracts |

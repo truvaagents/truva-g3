@@ -16,6 +16,7 @@ A comprehensive guide to TruvaG3's APIs with practical examples and best practic
 - [Schema Discovery](#registercapability) - Progressive enhancement: Phase 1 (descriptions) → Phase 2 (field hints) → Phase 3 (validation)
 - [Request-Aware AI API](#request-aware-ai-api) - Presence-aware requests, policy, enterprise hooks, and heterogeneous failover
 - [Canonical Orchestrator Construction](#canonical-orchestrator-construction) - Explicit configuration layers and error-returning construction
+- [Agent Skills](#agent-skills) - Reusable versioned guidance, progressive disclosure, and management APIs
 - [Orchestration Backend Composition](#orchestration-backend-composition) - Provider-neutral capabilities and the included Redis preset
 
 **By Module:**
@@ -4011,6 +4012,257 @@ if err != nil {
 orchestrator, err := orchestration.CreateResolvedOrchestrator(resolved.Config, deps)
 ```
 
+### Agent Skills
+
+Skills are orchestration-owned, provider-neutral instruction packages. An agent
+developer explicitly binds eligibility; runtime candidate resolution pins exact
+versions before hooks and progressively loads only active content.
+
+For a complete developer and operator walkthrough, see the
+[Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md).
+
+```go
+type SkillBinding struct {
+    Namespace  string
+    Name       string
+    Version    string          // "published" or a positive immutable revision
+    Activation SkillActivation // always, auto, or explicit
+    Required   bool            // availability requirement, not forced activation
+}
+
+type SkillRegistry interface {
+    ListMetadata(context.Context, SkillMetadataFilter) ([]SkillMetadata, error)
+    ResolveCandidates(context.Context, []SkillCandidateRequest) ([]SkillCandidate, error)
+    GetManifest(context.Context, SkillVersionRef) (SkillManifest, error)
+    GetResource(context.Context, SkillResourceRef) (SkillResource, error)
+}
+```
+
+Binding fields are eligibility policy, not discovery:
+
+| Setting | Effect |
+|---|---|
+| `Version: "published"` | Resolve the current publication once at request start and pin its exact immutable identity for the execution. |
+| `Version: "N"` | Resolve positive immutable revision `N`; later publications do not move the binding. |
+| `Activation: always` | Activate every admitted candidate without an LLM decision. |
+| `Activation: auto` | Permit bounded selection at initial planning and continuation boundaries. |
+| `Activation: explicit` | Activate only when trusted host code supplies the request-local carrier. |
+| `Required: true` | Make applicable availability/content failures fatal; it does not force activation. |
+
+`DomainCompatibilityMode` is `off`, `warn` (default), or `enforce`. It only
+compares an explicitly bound skill's authored domains with
+`PromptConfig.Domain`; it never searches a domain catalog or substitutes
+another skill. A missing agent domain or an empty skill-domain list is not a
+mismatch. `off` skips comparison; `warn` records a diagnostic and honors the
+binding; `enforce` fails a mismatched required binding and omits a mismatched
+optional binding.
+
+Configure the complete binding list and inject the registry through code:
+
+```go
+skillConfig := orchestration.SkillConfig{
+    Enabled: true,
+    Bindings: []orchestration.SkillBinding{{
+        Namespace:  "travel",
+        Name:       "weather-assessment",
+        Version:    "published",
+        Activation: orchestration.SkillActivationAuto,
+    }},
+}
+
+resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+    Environment: orchestration.EnvironmentStrict,
+    Options: []orchestration.OrchestratorOption{
+        orchestration.WithSkills(skillConfig),
+        orchestration.WithSkillRegistry(skillRegistry),
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+orch, err := orchestration.CreateResolvedOrchestrator(resolved.Config, deps)
+```
+
+When set, `TRUVAG3_SKILL_BINDINGS_JSON` replaces the complete code binding
+list; it never merges. `WithSkillActivationAIOptions` and
+`WithSkillResourceAIOptions` accept only model and reasoning-effort intent.
+`WithSkillPromptGuidance` is bounded additive guidance. Custom deterministic
+selection implementations use `WithSkillActivationPolicy`, `WithSkillResolver`,
+or `WithSkillResourceResolver`; set a stable `SkillConfig.RuntimePolicyID` when
+custom behavior must remain response-cache eligible.
+
+Response-cache reuse is eligible only when `RuntimePolicyID` is present, or
+when no custom activation policy, activation/resource resolver, or token
+counter is installed and both selector models are explicitly pinned. An
+ineligible configuration continues to execute skills normally and may still
+cache verified immutable content; only cached-answer short-circuits are
+bypassed.
+
+`WithSkillTokenCounter(core.TokenCounter)` installs the advisory counter used
+for runtime skill prompt admission. A typed-nil counter is rejected at
+construction. An error, negative count, or zero count for non-empty input falls
+back to the framework heuristic and records a bounded diagnostic. Because a
+custom counter can change admission/projection behavior, set
+`SkillConfig.RuntimePolicyID` when response-cache short-circuits must remain
+eligible.
+
+The built-in selectors deliberately leave the provider-native response-format
+option unset. A fixed JSON prompt, strict decoding and identity validation, and
+one bounded correction retry form the portable structured-output contract.
+Applications that require a provider-specific protocol use a custom resolver.
+
+Trusted host code can request an `explicit` activation or named resource using
+`WithTrustedSkillActivations` and `WithTrustedSkillResourceRequests`. Ordinary
+request metadata and user text cannot populate these carriers. Each carrier is
+bounded to 32 entries.
+
+Trusted host code can also attach selection-only capability hints:
+
+```go
+ctx, err := orchestration.WithSkillExpectedCapabilities(
+    ctx,
+    "weather-forecasting",
+    "route-planning",
+)
+```
+
+The helper trims, deduplicates, sorts, and pins at most 32 values of at most
+128 bytes each for the execution. The hints are included in selector context
+and cache projection but never add a discovered capability, tool, or
+permission. V1 does not infer them from user text or model-generated plans; no
+carrier means an empty set.
+
+For management hosts, `NewSkillAdminHandler` composes narrow capabilities:
+
+```go
+handler, err := orchestration.NewSkillAdminHandler(
+    orchestration.SkillAdminHandlerDependencies{
+        Registry:             registry,
+        RevisionReader:       revisions,
+        Administration:       administration,
+        Deletions:            deletions,
+        AuthoringLimits:      customAuthoringLimits,  // optional; zero uses defaults
+        AdministrationLimits: customAdminLimits,      // optional; zero uses defaults
+        ValidationRules:      customValidationRules,  // optional deterministic rules
+        Audit:                auditSink,
+        AuditAttribution:     actorProvider,           // optional
+        Advisor:              optionalAdvisor,
+        Logger:               logger,
+        Telemetry:            telemetryProvider,
+    },
+)
+```
+
+The package body for first publication, validation, and later publication is
+the same complete representation (the namespace and name come from the path):
+
+```json
+{
+  "display_name": "Travel Weather Assessment",
+  "description": "Use when a travel request asks about forecasts or weather-related risk.",
+  "domains": ["travel"],
+  "tags": ["weather", "forecast", "risk"],
+  "planning_instructions": [
+    "Resolve the destination to coordinates before requesting forecast data."
+  ],
+  "response_instructions": [
+    "Separate observed conditions from forecast uncertainty."
+  ],
+  "tool_hints": ["geocode", "get_weather"],
+  "resources": [
+    {
+      "name": "weather-risk-checklist",
+      "description": "Checklist for weather-sensitive recommendations.",
+      "load_when": "Load when disruption risk affects the recommendation.",
+      "applies_to": ["planning", "continuation", "synthesis"],
+      "required_when_selected": false,
+      "content_type": "text/markdown",
+      "content": "Check forecast horizon, confidence, precipitation, wind, and official advisories."
+    }
+  ],
+  "activation_examples": {
+    "should_activate": ["Will storms disrupt my trip next week?"],
+    "should_not_activate": ["Convert 100 USD to JPY"]
+  },
+  "change_reason": "Initial publication"
+}
+```
+
+For the first publication through the bundled Registry Viewer host:
+
+```bash
+curl -X PUT \
+  -H 'Content-Type: application/json' \
+  -H 'If-None-Match: *' \
+  -H 'Idempotency-Key: weather-assessment-initial' \
+  --data @weather-assessment.json \
+  http://registry.localhost/api/v1/skills/travel/weather-assessment
+```
+
+Validate the same file without mutation by sending it to
+`POST /api/v1/skills/travel/weather-assessment/validate`. For an update, read
+the current representation and ETag, then replace `If-None-Match` with
+`If-Match: <current-etag>`.
+
+Resources accept `text/plain` or `text/markdown`. An empty `applies_to` applies
+at every eligible boundary; otherwise the values are `planning`,
+`continuation`, and/or `synthesis`. `required_when_selected` does not force
+selection, but once selected it turns load, integrity, and admission failures
+for that resource into fatal errors. Activation examples are retained for
+evaluation and authoring analysis and do not enter ordinary runtime prompts.
+
+The handler owns `/api/v1/skills`: schema and deterministic validation,
+optional non-mutating analysis, catalog/published/history reads, conditional
+publication, and guarded single/range deletion. Creation requires
+`If-None-Match: *`; updates and deletions require the current `If-Match` ETag.
+Deletion also requires `X-Audit-Reason`. The host—not orchestration—owns route
+exposure, authentication, and authorization.
+
+`PUT` may also carry a bounded `Idempotency-Key` header. Every mutation requires
+an audit sink. The store mutation commits before audit delivery; if the audit
+write then fails, the handler does not roll back the mutation. Instead it
+returns `audit_recorded: false` and a `skill_audit_not_recorded` warning so the
+host can repair that control-plane record. Deletion protects the currently
+published revision and the immediately preceding revision; older retained
+versions are removed only through an explicit guarded delete, preserving the
+roll-forward operational model.
+
+The permanent V1 routes are:
+
+| Method and path | Query parameters | Capability required |
+|---|---|---|
+| `GET /api/v1/skills/schema` | none | none |
+| `POST /api/v1/skills/{namespace}/{name}/validate` | none | none |
+| `POST /api/v1/skills/{namespace}/{name}/analyze` | none | advisor |
+| `GET /api/v1/skills` | optional `namespace`, `domain`, `tag`, `limit` | registry |
+| `GET /api/v1/skills/{namespace}/{name}` | none | revision reader |
+| `GET /api/v1/skills/{namespace}/{name}/versions` | optional `before`, `limit` | revision reader |
+| `GET /api/v1/skills/{namespace}/{name}/versions/{version}` | none | revision reader |
+| `PUT /api/v1/skills/{namespace}/{name}` | none | administration and audit |
+| `DELETE /api/v1/skills/{namespace}/{name}/versions/{version}` | none | deletion and audit |
+| `DELETE /api/v1/skills/{namespace}/{name}/versions` | required `from`, `to` inclusive | deletion and audit |
+
+Query parsing is strict: malformed encoding, unknown keys, and repeated keys
+are rejected. Numeric versions and limits must be positive, and deletion ranges
+must fit the configured maximum. The complete PUT package carries the required
+`change_reason`, whose authoritative ceiling is 1,024 UTF-8 bytes; the served
+JSON Schema can express only the corresponding character-count hint. Use the
+validate endpoint for the authoritative normalized and semantic result.
+
+The optional default authoring advisor analyzes normalized metadata, main
+guidance, tool hints, activation examples, validation results, and the
+body-free resource index; it receives neither resource bodies nor
+`change_reason` and cannot publish or mutate a package. It returns bounded
+suggestions after deterministic validation. Runtime selector
+and advisor model calls appear in LLM Debug as
+`skill_activation_selection`, `skill_resource_selection`, and
+`skill_authoring_analysis`; ordinary traces and execution skill records remain
+body-free.
+
+The included Redis implementation is `redisprovider.SkillStore`. Custom stores
+can use `backendconformance.RunSkillConformance` to verify publication,
+versioning, deletion, integrity, and cross-instance visibility semantics.
+
 ### CreateSimpleOrchestrator
 
 Zero-configuration orchestrator for getting started quickly.
@@ -4065,6 +4317,14 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithTieredSelectionAIOptions(opts)` - Per-phase overrides for tiered capability selection
 - `WithErrorAnalysisAIOptions(opts)` - Per-phase overrides for error analysis calls
 - `WithResultDistillAIOptions(opts)` - Per-phase overrides for result distillation calls
+- `WithSkills(config)` - Replace the complete developer-owned skill configuration
+- `WithSkillRegistry(registry)` - Inject the provider-neutral runtime skill registry
+- `WithSkillContentCache(cache)` - Replace the optional verified immutable-content cache
+- `WithSkillActivationAIOptions(opts)` / `WithSkillResourceAIOptions(opts)` - Set selector model/reasoning intent
+- `WithSkillPromptGuidance(guidance)` - Add bounded activation/resource selector guidance
+- `WithSkillActivationPolicy(policy)` - Add deterministic activation refinement before the model selector
+- `WithSkillResolver(resolver)` / `WithSkillResourceResolver(resolver)` - Replace only the corresponding model-selection task
+- `WithSkillTokenCounter(counter)` - Replace advisory runtime skill token counting; invalid output falls back safely
 - `WithResultTrimming(enabled, maxResultBytes)` - Enable/configure structural result trimming (Layer 1)
 - `WithResultPreserveKeys(keys)` - JSON keys the structural trimmer prioritizes keeping (a strong preference in its scoring, not a guarantee)
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
@@ -4132,12 +4392,19 @@ WithTaskQueueBackend(core.TaskQueue)
 WithTaskDispatcherBackend(core.TaskDispatcher)
 WithTaskConsumerBackend(core.TaskConsumer)
 WithLockBackend(core.DistributedLock)
+WithSkillRegistryBackend(SkillRegistry)
+WithSkillRevisionReader(SkillRevisionReader)
+WithSkillAdministrationStore(SkillAdministrationStore)
+WithSkillRevisionDeletionStore(SkillRevisionDeletionStore)
+WithSkillAuditSink(SkillAuditSink)
 WithRunnables(...core.Runnable)
 ```
 
 Matching getters are `Execution`, `LLMDebug`, `Checkpoints`,
 `CheckpointExpiry`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
-`TaskDispatcher`, `TaskConsumer`, `Lock`, and `Runnables`. Getters are nil-safe;
+`TaskDispatcher`, `TaskConsumer`, `Lock`, `SkillRegistry`, `SkillRevisionReader`,
+`SkillAdministrationStore`, `SkillRevisionDeletionStore`, `SkillAuditSink`, and
+`Runnables`. Getters are nil-safe;
 `Runnables` returns a defensive copy.
 
 `RequirementsForFeatures` combines execution/LLM-debug requirements from the
@@ -4221,6 +4488,7 @@ const (
     ClientRoleHITL       ClientRole = "hitl"
     ClientRoleWorkflow   ClientRole = "workflow"
     ClientRoleScheduling ClientRole = "scheduling"
+    ClientRoleSkills     ClientRole = "skills"
 )
 
 func NewOptions(...Option) (Options, error)
@@ -5240,12 +5508,17 @@ type LLMInteraction struct {
     DurationMs      int64     // Call duration in milliseconds
 
     // Request fields
-    Prompt       string  // Complete prompt sent to LLM
-    SystemPrompt string  // System prompt if used
-    Temperature  float64 // Temperature setting
-    MaxTokens    int     // Max tokens setting
-    Model        string  // Model identifier (e.g., "gpt-4o")
-    Provider     string  // Provider (openai, anthropic, gemini, bedrock)
+    Prompt            string  // Complete prompt sent to LLM
+    SystemPrompt      string  // System prompt if used
+    Temperature       float64 // Temperature setting
+    MaxTokens         int     // Max tokens setting
+    Model             string  // Model identifier (e.g., "gpt-4o")
+    Provider          string  // Provider (openai, anthropic, gemini, bedrock)
+    RequestedModel    string
+    EffectiveModel    string
+    Adjustments       []core.AIRequestAdjustment
+    PolicyFingerprint string
+    PolicyStable      bool
 
     // Response fields
     Response         string // Complete response from LLM

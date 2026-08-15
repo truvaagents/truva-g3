@@ -396,7 +396,7 @@
 <header class="article-header">
   <h1>TruvaG3: An Introduction to the Microagents Framework</h1>
   <p class="dek">A guided tour of <a href="https://github.com/truvaagents/truva-g3">TruvaG3</a> — why it exists, how the architecture works in practice, what the framework ships with, and how to decide whether it fits your situation. Written for engineers and architects who already operate Kubernetes platforms.</p>
-  <p class="meta">Neelabh Tripathi · May 16, 2026 · Updated August 10, 2026</p>
+  <p class="meta">Neelabh Tripathi · May 16, 2026 · Updated August 14, 2026</p>
 </header>
 
 <aside class="callout">
@@ -745,7 +745,7 @@ type Discovery interface {
 <ul>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/core/README.md"><strong><code>core</code></strong></a> — the framework's interfaces, the base implementations for tools and agents, configuration loading, the pluggable service registry, and the auto-generated HTTP surface. Every component depends on it.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/ai/README.md"><strong><code>ai</code></strong></a> — provider-neutral LLM clients, enterprise routing, failover chains, and embeddings. Add it when an agent needs to call an LLM.</li>
-  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md"><strong><code>orchestration</code></strong></a> — the per-agent reasoning loop: planning, DAG execution, streaming, approvals, async and scheduled work. Add it when an agent coordinates multi-step work.</li>
+  <li><a href="https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md"><strong><code>orchestration</code></strong></a> — the per-agent reasoning loop: planning, DAG execution, reusable agent skills, streaming, approvals, async and scheduled work. Add it when an agent coordinates multi-step work.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/memory/README.md"><strong><code>memory</code></strong></a> — shared agent memory and per-user memory. Add it when agents need state across requests.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md"><strong><code>resilience</code></strong></a> — circuit breakers, retry with exponential backoff, panic recovery. Add it for fault isolation between components.</li>
   <li><a href="https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md"><strong><code>telemetry</code></strong></a> — OpenTelemetry-native metrics, traces, and structured logging. Cross-cutting; the other modules wire it in through dependency injection.</li>
@@ -1183,6 +1183,8 @@ type Discovery interface {
 <p><strong>Plans are validated before any step runs.</strong> LLMs occasionally produce structurally invalid plans: a dependency on a step that does not exist, a cross-phase reference to a step never created, an unregistered macro. Each class is caught before execution and counted separately, so a rising rejection rate tells you the planning prompt has drifted or a model swap went badly — visible on a dashboard without reading a log line.</p>
 
 <p><strong>Large catalogs get a two-step selection.</strong> Past about twenty registered capabilities, sending every schema on every planning call wastes tokens and eventually overflows the context window. The orchestrator instead sends lightweight summaries, asks the planner which tools it wants, and fetches full schemas only for those.</p>
+
+<p><strong>Skills add reusable know-how without filling every prompt.</strong> An agent developer binds a versioned skill by its namespace and name. At the start of each request, orchestration resolves those bindings together, activates only the relevant skills, and loads detailed resources only at the planning or synthesis boundary that needs them. A binding to <code>published</code> sees a new publication on the next request, while a numeric binding and an in-flight request keep their exact pinned versions. The storage interface is provider-neutral, Redis is the included adapter, and the Registry Viewer plus Jaeger show the body-free selection and loading trail.</p>
 
 <p><strong>Failed steps get more than a blind retry.</strong> Transient transport errors are handled by exponential backoff. Input-level failures — wrong field name, missing value, ambiguous parameter — go further: the orchestrator hands the LLM the error, the original payload, and the capability's input schema, and asks for corrected parameters before the next attempt.</p>
 

@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.1
+**Version**: 1.2
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -26,7 +26,8 @@
 10. [Common Pitfalls](#common-pitfalls)
 11. [Troubleshooting Guide](#troubleshooting-guide)
 12. [Performance Characteristics](#performance-characteristics)
-13. [Version History](#version-history)
+13. [Agent Skills Observation Contract](#agent-skills-observation-contract)
+14. [Version History](#version-history)
 
 ---
 
@@ -1618,10 +1619,32 @@ BenchmarkBaggagePropagation-10          5000000   234.1 ns/op    128 B/op    3 a
 
 ---
 
+## Agent Skills Observation Contract
+
+Skills reuse the existing injected `core.Telemetry` boundary; the telemetry
+module has no skill dependency and no provider-specific code. Orchestration
+creates child spans named `orchestrator.skills.*`, `skills.registry.*`,
+`skills.store.*`, and `skills.admin.*`. Skill metric labels use only closed,
+bounded enumerations for module, stage, boundary, outcome, selector, token kind,
+content kind, source, retry outcome, action, severity,
+diagnostic code, operation, and prompt kind. Namespace, skill name, exact
+version, and resource name may appear as trace attributes for per-request
+diagnosis, but never as metric labels.
+
+Instruction text, resource bodies, selector payloads/responses, ETags,
+idempotency keys, and raw backend errors are excluded from ordinary skill span
+attributes/events and metrics. Model-call payload recording remains governed by
+the existing explicit LLM-debug contract. Missing telemetry installs the same
+NoOp implementation used by every other orchestration feature, so enabling
+skills does not add a telemetry initialization requirement.
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-08-12 | Documented the provider-neutral Agent Skills span, metric-cardinality, and content-exclusion contract |
 | 1.1 | 2026-07-27 | Established exact/property-preserving baggage, metric-eligibility, conversation propagation, and format-twin LLM-recording contracts |
 | 1.0 | 2025-09-28 | Initial architecture documentation |
 

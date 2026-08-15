@@ -18,9 +18,11 @@ Discovery and Decentralized
 Coordination*](https://github.com/truvaagents/truva-g3/blob/main/www/blogs/microagents-architecture.html)
 — and adds the operational features a multi-agent system tends to need
 on top: a vendor-agnostic AI client, DAG-based execution with iterative
-re-plan, circuit breakers and semantic retry, OpenTelemetry
+re-plan, reusable versioned agent skills with progressive disclosure, circuit
+breakers and semantic retry, OpenTelemetry
 instrumentation, two-tier memory, and human-in-the-loop approvals. Every
-backend (service discovery, LLM provider, telemetry, memory store) and
+backend (service discovery, LLM provider, telemetry, memory store, skill
+registry) and
 most framework behaviors sit behind interfaces that can be swapped.
 
 ## Two coordination layers
@@ -51,6 +53,10 @@ framework treats them differently:
   circuit breakers, semantic retry, panic recovery,
   OpenTelemetry-native traces and metrics with W3C trace-context
   propagation across agents and tools.
+- **Reusable agent skills.** Developers explicitly bind versioned procedural
+  guidance, while orchestration resolves exact revisions per request and loads
+  instructions and resources only at the lifecycle boundary that needs them.
+  The runtime contract is provider-neutral; Redis is the included adapter.
 - **Small runtime footprint.** Go binaries with ~15–44MB containers,
   ~6–45MB runtime memory, ~100ms startup. Replicas scale cheaply.
 - **Direct use of Kubernetes primitives.** Deployments, Services,
@@ -84,8 +90,10 @@ Step-by-step install commands for macOS, Linux, and Windows are in
 Two complete examples deploy end-to-end via a single `./setup.sh full-deploy`.
 Each provisions a Kind cluster, the shared infrastructure (Redis, OpenTelemetry
 Collector, Loki, Prometheus, Jaeger, Grafana, ingress-nginx), the agent, and
-its chat UI. First run takes about 5–15 minutes; subsequent examples on the
-same cluster finish in 1–2 minutes.
+its chat UI. The Travel and DevOps agents also validate and conditionally
+publish their developer-bound example skills through the Registry Viewer.
+First run takes about 5–15 minutes; subsequent examples on the same cluster
+finish in 1–2 minutes.
 
 Pick whichever matches your interest:
 
@@ -111,6 +119,7 @@ Both run side-by-side on the same cluster.
 - **[Framework Features Guide](/docs/overview/FRAMEWORK_FEATURES_GUIDE)** — the conceptual overview of what's in the framework and how the pieces fit.
 - **[Go Package Reference](/docs/reference/GO_PACKAGE_REFERENCE)** — exported types, interfaces, and signatures on pkg.go.dev.
 - **[Agent Development Guide](/docs/building/AGENT_DEVELOPMENT_GUIDE)** and **[Tool Development Guide](/docs/building/TOOL_DEVELOPMENT_GUIDE)** — patterns for building your own.
+- **[Agent Skills Guide](/docs/orchestration/AGENT_SKILLS_GUIDE)** — author, publish, bind, operate, and troubleshoot reusable skills.
 
 ## Build your own
 

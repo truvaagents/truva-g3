@@ -14,9 +14,9 @@ If you've ever had to keep a hand-written spec file in sync with your handlers, 
 > - **Auto-discovery feed**: [`examples/registry-viewer-app/main.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/main.go) (`handleSwaggerURLs`)
 > - **Live at**: [http://swagger.localhost](http://swagger.localhost)
 >
-> **Registry Viewer (runtime observability)**
+> **Registry Viewer (runtime observability and skill management)**
 > - **App**: [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app)
-> - **Views**: [`examples/registry-viewer-app/static/js/views/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/static/js/views) — `registry.js`, `llm-debug.js`, `hitl.js`, `dag.js`, `memory.js`
+> - **Views**: [`examples/registry-viewer-app/static/js/views/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/static/js/views) — `registry.js`, `llm-debug.js`, `hitl.js`, `dag.js`, `skills.js`, `memory.js`
 > - **Live at**: [http://registry.localhost](http://registry.localhost)
 >
 > Both URLs are available after running `examples/k8-deployment/setup-infrastructure.sh` against the local kind cluster. We recommend having the cluster running alongside this guide so you can click through while you read.
@@ -59,18 +59,19 @@ If you've ever had to keep a hand-written spec file in sync with your handlers, 
    - [When to Enable in Production](#when-to-enable-in-production)
    - [When NOT to Enable in Production](#when-not-to-enable-in-production)
 
-**Registry Viewer — Runtime Observability**
+**Registry Viewer — Runtime Observability and Skill Management**
 
 7. [Registry Viewer Overview](#7-registry-viewer-overview)
    - [What It Shows You](#what-it-shows-you)
    - [How It Gets Its Data](#how-it-gets-its-data)
    - [Prerequisites](#prerequisites)
-8. [The Five Views](#8-the-five-views)
+8. [The Six Views](#8-the-six-views)
    - [8.1 Registry View — Service Catalog](#81-registry-view--service-catalog)
    - [8.2 LLM Debug View — Raw LLM Call Stream](#82-llm-debug-view--raw-llm-call-stream)
    - [8.3 HITL Interrupted View — Pending Approvals](#83-hitl-interrupted-view--pending-approvals)
    - [8.4 Execution DAG View — The Flagship Debugging View](#84-execution-dag-view--the-flagship-debugging-view)
    - [8.5 Memory View — Shared Memory Inspector](#85-memory-view--shared-memory-inspector)
+   - [8.6 Skills View — Package Management](#86-skills-view--package-management)
 9. [Which Tool for What: A Decision Table](#9-which-tool-for-what-a-decision-table)
 10. [See Also](#10-see-also)
 
@@ -85,7 +86,7 @@ Building an agent network gives you two kinds of questions that developer tools 
 | Tool | Answers | Think of it as | URL (local kind) |
 |------|---------|----------------|------------------|
 | **Swagger UI** | What can this service do? What's the request shape? What does it return? Can I try calling it? | A self-updating API catalog — every service publishes its own OpenAPI spec at `/openapi.json`, no hand-written YAML | [http://swagger.localhost](http://swagger.localhost) |
-| **Registry Viewer** | Which services are running? What LLM calls did the orchestrator make and why? Is there a human approval waiting? For this specific execution, what was the plan, how did each step run, and which memory hooks fired? What's in shared memory right now? | A runtime dashboard for a living system — reads directly from Redis and vector DB, refreshes on demand | [http://registry.localhost](http://registry.localhost) |
+| **Registry Viewer** | Which services are running? What LLM calls did the orchestrator make and why? Is there a human approval waiting? For this specific execution, what was the plan, which skills were used, and how did each step run? Which skill packages are published? What's in shared memory right now? | A runtime dashboard plus the bundled skill-management host — reads through framework stores and APIs, refreshes on demand | [http://registry.localhost](http://registry.localhost) |
 
 Both are optional, opt-in, and developer-facing. Neither is required to run TruvaG3 in production — they exist so you can build, debug, and explain agent behavior while you're developing it.
 
@@ -105,7 +106,7 @@ Register capability "get_weather"       Register capability "get_weather"
 
 The `/openapi.json` endpoint is **opt-in** — disabled by default — so a production deployment never accidentally leaks its full API surface to anyone who can reach the pod. You enable it explicitly in dev and staging environments (via one env var or one framework option), and leave it off in prod unless you have a specific reason to turn it on behind a trust boundary.
 
-Think of the Registry Viewer as the **security camera and flight recorder** for the same restaurant — it doesn't tell you what the menu *should* be, it tells you what's happening on the floor right now. Which waiters are working (service registrations), what the head chef is reasoning about (LLM calls), which orders got held up for manager approval (HITL checkpoints), exactly how a specific ticket moved through the kitchen (execution DAG), and what the team remembers about the dinner rush so far (shared memory).
+Think of the Registry Viewer as the **security camera and flight recorder** for the same restaurant — it shows what's happening on the floor right now. Which waiters are working (service registrations), what the head chef is reasoning about (LLM calls), which orders got held up for manager approval (HITL checkpoints), exactly how a specific ticket moved through the kitchen (execution DAG), which reusable playbooks are published and entered that execution (skills), and what the team remembers about the dinner rush so far (shared memory).
 
 Swagger UI alone is enough to **build** against TruvaG3. Registry Viewer becomes essential the moment you start **debugging** it — especially when the question shifts from "my code is wrong" to "my code is correct but the LLM made a decision I don't understand."
 
@@ -505,35 +506,36 @@ Do not rely on the endpoint itself for access control — it has none. It is a p
 
 ---
 
-# Part 2 — Registry Viewer: Runtime Observability
+# Part 2 — Registry Viewer: Runtime Observability and Skill Management
 
-Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger UI tells you what your services *can* do, the Registry Viewer tells you what they *are* doing — right now, for any request you pick, across every layer the orchestrator touched. Section 9 ties both tools together with a decision table you can scan when you're stuck and not sure which one to open.
+Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger UI tells you what your services *can* do, Registry Viewer tells you what they *are* doing for a selected request and provides the bundled workflow for managing published skill packages. Section 9 ties both tools together with a decision table you can scan when you're stuck and not sure which one to open.
 
 ---
 
 ## 7. Registry Viewer Overview
 
-Open [http://registry.localhost](http://registry.localhost) against the local kind cluster and you land in a single-page web app with five tabs across the top: **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, and **Memory**. Each tab is its own view of the live system, backed by different data in Redis (and Qdrant for memory), refreshing on demand or on a timer. Everything is read-only except for one narrow exception: the HITL view can submit Approve/Reject commands back to the agent that owns a pending checkpoint.
+Open [http://registry.localhost](http://registry.localhost) against the local kind cluster and you land in a single-page web app with six tabs across the top: **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, **Skills**, and **Memory**. Each tab is its own view of the system, backed by a framework store or management API and refreshing on demand or on a timer. Most views are observational. The two deliberate mutation surfaces are HITL Approve/Reject commands and skill validation, publication, and guarded version deletion.
 
-The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. What it demonstrates is that every piece of runtime state TruvaG3 produces is persisted in Redis (and optionally Qdrant) under well-known keys, and a read-only dashboard can be built on top of it in a few thousand lines of Go + vanilla JS.
+The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. It demonstrates how framework interfaces and the included Redis/Valkey and optional Qdrant adapters can back a small Go + vanilla-JS operational UI. The Skills view calls the provider-neutral `SkillAdminHandler`; it does not make raw Redis writes.
 
 ### What It Shows You
 
-A quick tour of the five views before we go deep:
+A quick tour of the six views before we go deep:
 
 | View | What it answers | Data source |
 |------|-----------------|-------------|
 | 📋 **Registry** | Which services are registered right now? What capabilities does each one expose? Are they healthy? When was each last seen? | Redis `truvag3:services:*` keys — the same data Swagger UI's `/swagger-urls.json` feed reads |
 | 🔍 **LLM Debug** | Every LLM call the orchestrator made on behalf of an agent (plan generation, synthesis, tool selection, semantic retry, memory hook calls, error analysis) plus any direct AI calls an agent made through an instrumented client — with full prompts and responses, searchable across all requests and agents. How many tokens? How long? Did it error? | Redis `truvag3:llm:debug:*` (DB 7). Two writers feed the same store with the same record format: the orchestration module's `RedisLLMDebugStore` (called directly by orchestrator-internal components like compactors, resolvers, error analyzers — gated by `TRUVAG3_LLM_DEBUG_ENABLED`) and `telemetry.RedisLLMCallRecorder` (called by agents that wrap their AI client in `InstrumentedAIClient` — used for direct AI calls that don't go through the orchestrator). Both writers can be active independently. |
 | ✋ **HITL Interrupted** | Is there a human approval waiting? What did the agent pause for? Who needs to act? How much time until it expires? | Redis HITL checkpoint store (`orchestration.CheckpointStore`) |
-| 🔀 **Execution DAG** | For this specific request, what happened? What was the plan? How did each step run? Which LLM calls fired and why? Were memory hooks involved? Did HITL interrupt it? Was the plan regenerated mid-flight? | Redis `truvag3:execution:debug:*` — populated by the orchestrator's debug recorder |
+| 🔀 **Execution DAG** | For this specific request, what happened? What was the plan? How did each step run? Which skills and LLM calls were involved? Were memory hooks involved? Did HITL interrupt it? Was the plan regenerated mid-flight? | Redis `truvag3:execution:debug:*` — populated by the orchestrator's debug recorder |
+| 🧩 **Skills** | Which skill packages are published? What domains and tags describe them? Does an edited package validate? What immutable versions exist, and which old versions may be deleted? | Provider-neutral `SkillAdminHandler`; the bundled host composes `redisprovider.SkillStore` in DB 9 |
 | 📝 **Memory** | What's in shared memory right now for this domain? What events happened in the last 24 hours? What investigations are active? What's the current digest the LLM sees? | Redis shared-memory stores + optional Qdrant for knowledge vectors |
 
-All five views have the same layout shape: a **list panel** on the left (filterable, sortable, searchable) and a **detail panel** on the right that populates when you pick a row. Each view's detail panel has its own tabs, and the header shows per-view stats (record count, token count, pending count, etc.).
+All six views use a consistent list-and-detail visual language. Most have a **list panel** on the left and a **detail panel** on the right that populates when you pick a row. Each detail panel has view-specific tabs, and the header shows relevant stats such as record count, token count, pending count, or published-skill count.
 
 ### How It Gets Its Data
 
-The Registry Viewer is a thin reader over Redis and Qdrant. Nothing more. It does not scrape logs, does not talk to Prometheus, and does not invoke agents directly (except when you click Approve/Reject on a HITL checkpoint — that's a signed command POST back to the owning agent). Every piece of data it shows comes from one of these sources:
+The Registry Viewer does not scrape logs or talk to Prometheus. Its observational views read the included Redis and Qdrant-backed stores. HITL actions proxy a command to the owning agent, while Skills actions call the framework's management handler. Its data comes from these sources:
 
 | Source | What it holds | Which views use it |
 |--------|---------------|--------------------|
@@ -541,10 +543,11 @@ The Registry Viewer is a thin reader over Redis and Qdrant. Nothing more. It doe
 | Redis `truvag3:llm:debug:*` (DB 7) | Full LLM interaction records (prompt, response, tokens, duration, type, category, success). The store has two writers (see `truvag3:llm:debug:*` row in §7 view summary above): the orchestration module's `RedisLLMDebugStore` and `telemetry.RedisLLMCallRecorder`. Both write the same record format. | LLM Debug view; DAG detail panel's LLM Calls tab fetches the same record by request ID |
 | Redis HITL checkpoint store (`{base-prefix}[:{agent-name}]:checkpoint:*`; base defaults to `truvag3:hitl`) | Pending and expired checkpoints with plan, current step, resolved parameters, decision, status, agent name, agent address, request mode. Configure the base with `TRUVAG3_HITL_KEY_PREFIX`; the framework appends `TRUVAG3_AGENT_NAME` or `TRUVAG3_K8S_SERVICE_NAME` when present. | HITL Interrupted view; DAG detail panel's HITL tab |
 | Redis `truvag3:execution:debug:*` (DB 8) | Full execution records (plan, per-step results, LLM interactions for pre/post hooks, HITL events, phase count, regeneration events). Written by `orchestration.RedisExecutionDebugStore` independently of the LLM debug store — the two have separate enable flags and separate Redis databases. | Execution DAG view |
+| Provider-neutral skill management API; included Redis keys under `truvag3:skills:{store}:*` (DB 9) | Published skill metadata, immutable manifests/resources, version history and tombstones, revision tokens, and body-free audit records | Skills view; Execution DAG's Skills tab reads the separate execution-debug evidence for a request |
 | Redis shared memory keys (episodic events, activities, investigations, digest cache) | Source agents' episodic events; live activity signals from `ActivityCoordinator`; investigation locks from `InvestigationCoordinator`; cached compaction digests | Memory view |
 | Qdrant collections (when `TRUVAG3_VECTOR_DB_URL` is set) | Semantic knowledge vectors (Phase 2 shared memory) | Memory view (knowledge detail) — currently behind feature flag |
 
-Because everything flows through Redis and Qdrant, **the Registry Viewer has no authority over the system** — killing it or restarting it loses zero data. It is a lens, not a source of truth.
+Registry Viewer is not the source of truth: restarting it loses no persisted data. Its Registry, LLM Debug, execution, and memory surfaces are lenses over framework state. Its Skills surface is also the bundled management client and host, so successful publication or deletion intentionally changes the authoritative skill store through framework concurrency, validation, protection, and audit rules.
 
 > **Privacy design note — user memory.** You'll notice the Memory view only shows **shared memory** (domain-scoped events and investigations). There is no tab, list, or browser for **user memory** (per-user facts). This is intentional: user memory holds potentially personal or sensitive data, and exposing it in a general-purpose developer dashboard would be the wrong default. If a developer legitimately needs to inspect what's stored for a given user, they query the vector DB (Qdrant) and the user-memory Redis keys directly with the credentials they already have. The dashboard stays generic; the privacy-bearing data stays behind an explicit access step. The Execution DAG view still surfaces **user-memory activity** during a specific execution — which recall and extraction calls ran, how long they took, whether reconciliation fired — but it never shows the *contents* of the facts stored, only the hook invocations.
 
@@ -558,6 +561,7 @@ For the views to show data, the underlying features have to be enabled in your c
 | LLM Debug | Two enablement paths, often both at once: (a) **Orchestrator-internal calls** (`plan_generation`, `tiered_selection`, `synthesis_streaming`, memory hooks, error analysis, etc.) populate the store automatically when the orchestrator is constructed with `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's `RedisLLMDebugStore` is wired up by the factory. (b) **Direct agent AI calls** (an agent that calls `ai.GenerateResponse(...)` outside of an orchestration step) populate the store only when the agent wraps its AI client with `ai.NewInstrumentedClient(..., debugRecorder, ...)` using `telemetry.NewRedisLLMCallRecorder`. See [`examples/agent-with-telemetry/research_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-telemetry/research_agent.go) for the wiring. Most chat agents in the kind cluster don't need (b) because their LLM calls go through the orchestrator and are captured by (a). |
 | HITL Interrupted | At least one agent must run the orchestration module with HITL enabled (`HITLConfig.Enabled: true` and a configured checkpoint store). See [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md). |
 | Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED` — the execution debug store and the LLM debug store live in separate Redis databases (DB 8 and DB 7) and are wired by separate factory branches. In practice you almost always want both enabled, because the DAG view's LLM Calls tab pulls data from the LLM debug store. See the per-agent enablement table below — not every example chat agent in the kind cluster has both set, and the asymmetric setups are the most common gotchas. |
+| Skills | The Registry Viewer must compose its skills backend and `SkillAdminHandler`; the bundled deployment does this with `TRUVAG3_SKILLS_REDIS_DB=9`. Runtime skill evidence inside an execution also requires that agent to enable skills and `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. Full skill-bearing prompts require `TRUVAG3_LLM_DEBUG_ENABLED=true`. |
 | Memory | Agents must be wired with shared memory via `memory.NewSharedBackends(...)` and `orchestration.BuildMemoryHooks(...)`. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). `TRUVAG3_AGENT_DOMAIN` must be set so the view has a domain to pick from in its dropdown. |
 
 On the local kind cluster, **enablement varies per agent** because the env vars are independent and each example was originally written for its own purpose:
@@ -574,7 +578,7 @@ So the most common gotchas are exactly the asymmetric setups above: a request th
 
 ---
 
-## 8. The Five Views
+## 8. The Six Views
 
 This section walks through each view in detail: what the list panel shows, what the filters do, what each detail tab reveals, and concretely when to open that view while debugging. The views have similar shapes, so once you understand one, the others follow the same pattern.
 
@@ -668,7 +672,7 @@ This is the operational queue for Human-in-the-Loop checkpoints. Every time an a
 
 **Use this view when you want to ask:** "For this specific request, walk me through exactly what happened — the plan, the steps, the LLM calls, the hooks, the memory, everything — in one place."
 
-This is the view you open when logs aren't enough. It takes a single orchestration execution and assembles **every piece of data the orchestrator recorded about it** into one interactive timeline: the planned DAG, per-step results, all LLM calls grouped by phase, pre-execution hooks, post-execution hooks, HITL checkpoints that fired during the run, and any plan regenerations that happened mid-flight. This is the most information-dense view in the app and where most debugging time is spent.
+This is the view you open when logs aren't enough. It takes a single orchestration execution and assembles **every piece of data the orchestrator recorded about it** into one interactive timeline: the planned DAG, per-step results, skill lifecycle evidence, all LLM calls grouped by phase, pre-execution hooks, post-execution hooks, HITL checkpoints that fired during the run, and any plan regenerations that happened mid-flight. This is the most information-dense view in the app and where most debugging time is spent.
 
 **List panel.** A sortable table with columns:
 - **Status** — success / failed / interrupted (with colored icon)
@@ -679,7 +683,7 @@ This is the view you open when logs aren't enough. It takes a single orchestrati
 
 **Filters.** Search box (matches request ID or query text) plus **All / Success / Failed / Interrupted**.
 
-**Detail panel — seven tabs**, most of which only appear when the execution has relevant data. The visibility rules are: LLM-Calls appears if the record has any LLM interactions, Pre-Execution and Post-Execution appear if any pre/post hook ran, HITL appears if any checkpoint fired during this execution, and the other three are always visible.
+**Detail panel — eight tabs**, most of which only appear when the execution has relevant data. The visibility rules are: LLM Calls appears if the record has any LLM interactions, Pre-Execution and Post-Execution appear if any pre/post hook ran, HITL appears if any checkpoint fired, and Skills appears if skill lifecycle evidence was recorded. DAG Visualization, Step Details, and Raw JSON are always visible.
 
 #### Tab 1: DAG Visualization
 
@@ -744,7 +748,21 @@ Only visible when a checkpoint fired during this execution. Shows the checkpoint
 
 Useful for tracing "the user approved X, then what happened?"
 
-#### Tab 7: Raw JSON
+#### Tab 7: Skills
+
+Only visible when the execution contains skill lifecycle evidence. It presents
+an expandable five-stage flow—Pin, Activate, Select resources, Load, and
+Project—followed by cards with the exact body-free decision records. Use it to
+answer which developer-bound candidates resolved, which exact revisions were
+pinned, why an automatic skill or resource was selected or skipped, whether a
+manifest/resource came from the registry or local cache, and which admitted
+identities entered each phase prompt. Diagnostics explain bounded degradation
+or omission without storing instruction or resource bodies.
+
+Use the **LLM Calls** tab when you need to inspect the corresponding effective
+prompt text. Use the Skills tab for the safer lifecycle and integrity view.
+
+#### Tab 8: Raw JSON
 
 The full execution record as stored in Redis under `truvag3:execution:debug:*`. When you need to copy-paste into a bug report or pipe into external tooling.
 
@@ -777,6 +795,34 @@ This view is for inspecting the state of **shared memory** (domain-scoped). It a
 
 **Typical workflow.** Two agents keep making conflicting decisions about the same entity (say, the same Kubernetes deployment). You open Memory view, pick the `infrastructure` domain, widen the time range to 7 days, and scroll the event list looking for what each agent recorded about that entity. The Digest tab tells you what the LLM is currently reading about the domain; the Live Activity tab tells you whether one of the agents is mid-investigation right now.
 
+### 8.6 Skills View — Package Management
+
+**Use this view when you want to ask:** "Which reusable skill packages are
+published, what is in the current package, and how do I validate or publish a
+safe update?"
+
+The left panel lists published skills with their display name, exact
+`namespace/name`, description, published version, domains, and tags. Domain
+and tag values appear as pills, and search matches identity and taxonomy.
+
+Select a row to open three detail tabs:
+
+- **Package** — a readable package summary and complete JSON editor. **Validate**
+  runs deterministic normalization and checks without mutation. **Analyze** is
+  available only when the host configured an optional advisor. Publishing uses
+  the current ETag and an idempotency key automatically.
+- **Versions** — body-free immutable history, deletion/tombstone status, and
+  guarded single-version or inclusive-range deletion. The published revision
+  and its immediate predecessor remain protected.
+- **JSON** — the syntax-highlighted current published representation.
+
+The Skills view is a control-plane surface, unlike the observational Registry,
+LLM Debug, execution, and memory views. It never binds a skill to a running
+agent; bindings remain developer-owned code or complete deployment environment
+configuration. For the authoring schema, binding examples, progressive runtime
+loading, operational safety, and troubleshooting, use the
+[Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md).
+
 ---
 
 ## 9. Which Tool for What: A Decision Table
@@ -798,6 +844,9 @@ When you're stuck and not sure which tab to open, scan this table.
 | Find out why the orchestrator regenerated a plan mid-flight | Registry Viewer | Execution DAG | click request → DAG Visualization → look for the regeneration warning strip |
 | Walk through per-step parameters (resolved, not template) for a failed request | Registry Viewer | Execution DAG | click request → Step Details tab |
 | See the 4-layer parameter resolution metadata for a retry | Registry Viewer | Execution DAG | click request → Step Details tab → step metadata |
+| See which exact skill revisions and resources affected request X | Registry Viewer | Execution DAG | click request → Skills tab |
+| Inspect or validate the current published skill package | Registry Viewer | Skills | select the skill → Package tab |
+| Review or delete eligible old skill revisions | Registry Viewer | Skills | select the skill → Versions tab |
 | Find any pending HITL approvals right now | Registry Viewer | HITL Interrupted | All filter, default sort shows most-urgent first |
 | Approve or reject a paused workflow (dev testing) | Registry Viewer | HITL Interrupted | click checkpoint → Overview tab → Approve/Reject buttons (non-streaming checkpoints only; streaming checkpoints must be resolved by the connected client) |
 | See the full `RoutingPlan` for a paused checkpoint | Registry Viewer | HITL Interrupted | click checkpoint → Plan tab |
@@ -830,6 +879,7 @@ When you're stuck and not sure which tab to open, scan this table.
 - **[`examples/registry-viewer-app/static/js/views/llm-debug.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/llm-debug.js)** — LLM Debug view (§8.2).
 - **[`examples/registry-viewer-app/static/js/views/hitl.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/hitl.js)** — HITL Interrupted view (§8.3).
 - **[`examples/registry-viewer-app/static/js/views/dag.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/dag.js)** — Execution DAG view (§8.4) — the largest view, ~3,300 lines.
+- **[`examples/registry-viewer-app/static/js/views/skills.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/skills.js)** — Skill package-management view (§8.6).
 - **[`examples/registry-viewer-app/static/js/views/memory.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/memory.js)** — Memory view (§8.5).
 - **[`examples/registry-viewer-app/k8-deployment.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/k8-deployment.yaml)** — Kubernetes deployment and service.
 - **[`examples/k8-deployment/ingress-infra.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/ingress-infra.yaml)** — Ingress rule exposing `registry.localhost`.
@@ -839,6 +889,7 @@ When you're stuck and not sure which tab to open, scan this table.
 - **[Tool Schema Discovery Guide](../building/TOOL_SCHEMA_DISCOVERY_GUIDE.md)** — The 3-phase schema architecture (descriptions → field hints → full JSON Schema) that underpins all capability metadata. Phase 3 is what the per-capability `/schema` endpoint implements.
 - **[Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md)** — How to wire shared and user memory into an agent. The Memory view in the Registry Viewer reads the storage this guide tells you how to set up.
 - **[Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md)** — How HITL checkpoints work. The HITL Interrupted view in the Registry Viewer is an operational dashboard for the checkpoints this guide tells you how to create.
+- **[Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md)** — How to author, publish, bind, observe, and operate skills. The Skills view hosts its management workflow, while the execution Skills tab explains runtime selection and projection.
 - **[Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)** — How W3C trace IDs flow through TruvaG3. The DAG view surfaces trace IDs so you can pivot into Jaeger for even lower-level detail.
 - **[Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md)** — Full list of `TRUVAG3_*` environment variables, including `TRUVAG3_ENABLE_OPENAPI`, `TRUVAG3_LLM_DEBUG_ENABLED`, and `TRUVAG3_AGENT_DOMAIN`.
 - **[Architecture Overview](https://github.com/truvaagents/truva-g3/blob/main/docs/overview/ARCHITECTURE.md)** — Framework-wide architectural overview.

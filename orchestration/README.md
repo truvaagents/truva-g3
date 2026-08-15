@@ -27,7 +27,8 @@ Multi-agent coordination with AI-driven orchestration and declarative workflows.
 20. [API Reference](#20-api-reference)
 21. [Best Practices & Tips](#21-best-practices--tips)
 22. [Production-Ready Enhancements](#22-production-ready-enhancements)
-23. [Summary](#23-summary---what-youve-learned)
+23. [Agent Skills](#23-agent-skills)
+24. [Summary](#24-summary---what-youve-learned)
 
 ## 1. What Does This Module Do?
 
@@ -2355,7 +2356,73 @@ Wire via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` — s
 
 Custom domain-specific extractors implement the `EntityExtractor` interface (a single `ExtractEntities(text, metadata) []Entity` method). The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility.
 
-## 23. Summary - What You've Learned
+## 23. Agent Skills
+
+Skills are reusable, versioned instruction packages that an agent developer
+explicitly makes eligible. They complement tools: a tool performs an action,
+while a skill tells orchestration how to plan, choose supporting reference
+material, and present an answer. Skills do not grant permissions or make an
+unregistered capability callable. The feature is disabled by default; with it
+disabled or with no bindings, agents need no skill registry and preserve their
+ordinary prompt and lifecycle behavior.
+
+Configure bindings in code and inject a provider-neutral registry:
+
+```go
+config := orchestration.NewDefaultOrchestratorConfig()
+config.Skills.Enabled = true
+config.Skills.Bindings = []orchestration.SkillBinding{
+    {
+        Namespace:  "travel",
+        Name:       "weather-assessment",
+        Version:    "published",
+        Activation: orchestration.SkillActivationAuto,
+    },
+}
+config.SkillRegistry = skillRegistry // application-composed implementation
+
+orch, err := orchestration.CreateResolvedOrchestrator(config, deps)
+```
+
+`TRUVAG3_SKILL_BINDINGS_JSON` can replace the complete code-owned binding list
+for a deployment. It is not additive. Every request resolves all bindings in
+one batch, pins exact immutable versions, then progressively loads only active
+instructions and boundary-relevant resources. Publishing a new version needs
+no Pub/Sub: a `published` binding sees it on the next request, while a numeric
+binding and an in-flight request keep their pinned versions.
+
+The default activation and resource selectors use a fixed portable JSON prompt,
+strict validation, and one bounded correction retry. They intentionally do not
+set a provider-native response-format value. Their AI-option overrides accept
+only model and reasoning effort; use a custom resolver when a deployment needs
+a provider-specific structured-output protocol.
+
+Trusted host code may use `WithSkillExpectedCapabilities` to attach bounded,
+request-local selection hints. The normalized values are pinned for the whole
+execution and never grant a capability or tool; V1 does not infer them from
+user text or generated plans. `WithSkillTokenCounter` installs an advisory
+runtime counter for prompt admission. Invalid counter results fall back to the
+framework heuristic with a bounded diagnostic, and custom counter behavior
+needs `SkillConfig.RuntimePolicyID` only to remain response-cache eligible.
+Cached-answer reuse is also eligible without a policy ID when the runtime uses
+no custom skill components and explicitly pins both selector models. Otherwise
+skills execute normally and only the response-cache short-circuit is bypassed.
+
+The framework also provides `NewSkillAdminHandler`, a provider-neutral HTTP
+handler for schema discovery, deterministic validation, optional authoring
+advice, publication, version history, and guarded deletion. A host chooses the
+storage adapter and owns endpoint exposure and authorization. The included
+Redis adapter lives in `orchestration/redisprovider`; orchestration runtime code
+for skills does not depend on Redis. Pre-existing legacy Redis implementations
+for other orchestration concerns remain a separate portability activity.
+
+Start with the [Agent Skills Guide](../docs/orchestration/AGENT_SKILLS_GUIDE.md)
+for the authoring-to-operations walkthrough. See also
+[Agent Skills V1 in the architecture](ARCHITECTURE.md#agent-skills-v1), the
+[API reference](../docs/reference/API_REFERENCE.md#agent-skills), and the
+[environment reference](../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md#agent-skills-configuration).
+
+## 24. Summary - What You've Learned
 
 ### This Module Gives You Two Superpowers:
 
