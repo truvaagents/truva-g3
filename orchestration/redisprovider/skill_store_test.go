@@ -103,6 +103,29 @@ func TestRedisSkillStoreAuditIsIdempotentAndBodyFree(t *testing.T) {
 	}
 }
 
+func TestRedisSkillStoreRoundTripsPublishedSkillWithoutResources(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store, err := NewSkillStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := orchestration.SkillRef{Namespace: "travel", Name: "action-verification"}
+	publishRedisSkill(t, store, ref, "travel", "verification")
+
+	if _, err := store.GetPublished(t.Context(), ref); err != nil {
+		t.Fatalf("GetPublished() after JSON round trip error = %v", err)
+	}
+	page, err := store.ListVersions(t.Context(), ref, orchestration.SkillVersionListOptions{})
+	if err != nil {
+		t.Fatalf("ListVersions() after JSON round trip error = %v", err)
+	}
+	if len(page.Versions) != 1 || page.Versions[0].Ref.Version != 1 {
+		t.Fatalf("ListVersions() = %#v, want retained version 1", page)
+	}
+}
+
 func TestRedisSkillStoreDeleteSingleMaxUint64VersionTerminates(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -255,7 +278,8 @@ func TestRedisSkillStoreRejectsMalformedCurrentAndHistoryRecords(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	store, err := NewSkillStore(client)
+	logger := &skillStoreCaptureLogger{}
+	store, err := NewSkillStore(client, WithSkillStoreLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,11 +293,19 @@ func TestRedisSkillStoreRejectsMalformedCurrentAndHistoryRecords(t *testing.T) {
 	}}); !errors.Is(err, orchestration.ErrSkillIntegrity) {
 		t.Fatalf("ResolveCandidates(malformed current) error = %v", err)
 	}
+	if len(logger.warnings) != 1 || logger.warnings[0]["error_type"] != "unmarshal" ||
+		logger.warnings[0]["store_operation"] != "decode_published_candidate" {
+		t.Fatalf("malformed current warnings = %#v", logger.warnings)
+	}
 	if err := client.Set(t.Context(), store.revisionKey(ref, 1), "{not-json", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.GetVersion(t.Context(), ref, 1); !errors.Is(err, orchestration.ErrSkillIntegrity) {
 		t.Fatalf("GetVersion(malformed history) error = %v", err)
+	}
+	if len(logger.warnings) != 2 || logger.warnings[1]["error_type"] != "unmarshal" ||
+		logger.warnings[1]["store_operation"] != "decode_revision" {
+		t.Fatalf("malformed history warnings = %#v", logger.warnings)
 	}
 }
 
@@ -281,7 +313,8 @@ func TestRedisSkillStoreRejectsSemanticallyInconsistentRecords(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	store, err := NewSkillStore(client)
+	logger := &skillStoreCaptureLogger{}
+	store, err := NewSkillStore(client, WithSkillStoreLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +341,10 @@ func TestRedisSkillStoreRejectsSemanticallyInconsistentRecords(t *testing.T) {
 		Ref: ref, RequestedVersion: "published",
 	}}); !errors.Is(err, orchestration.ErrSkillIntegrity) {
 		t.Fatalf("ResolveCandidates(inconsistent current) error = %v", err)
+	}
+	if len(logger.warnings) != 1 || logger.warnings[0]["error_type"] != "integrity" ||
+		logger.warnings[0]["store_operation"] != "verify_published_candidate" {
+		t.Fatalf("inconsistent current warnings = %#v", logger.warnings)
 	}
 	if _, err := store.ListMetadata(t.Context(), orchestration.SkillMetadataFilter{}); !errors.Is(err, orchestration.ErrSkillIntegrity) {
 		t.Fatalf("ListMetadata(inconsistent current) error = %v", err)
@@ -404,7 +441,8 @@ func TestRedisSkillStoreFailedPublicationLeavesNoPartialRevision(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	store, err := NewSkillStore(client)
+	logger := &skillStoreCaptureLogger{}
+	store, err := NewSkillStore(client, WithSkillStoreLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,6 +455,10 @@ func TestRedisSkillStoreFailedPublicationLeavesNoPartialRevision(t *testing.T) {
 	server.SetError("")
 	if !errors.Is(err, orchestration.ErrSkillUnavailable) {
 		t.Fatalf("PutPublished(injected failure) error = %v", err)
+	}
+	if len(logger.warnings) != 1 || logger.warnings[0]["error_type"] != "store_write" ||
+		logger.warnings[0]["store_operation"] != "publish" {
+		t.Fatalf("failed publication warnings = %#v", logger.warnings)
 	}
 	for _, key := range []string{
 		store.currentKey(ref), store.candidateKey(ref, 1), store.revisionKey(ref, 1), store.manifestKey(ref, 1),
@@ -515,7 +557,8 @@ func TestRedisSkillStoreBackendFailureIsClassifiedAndLogged(t *testing.T) {
 	if !errors.Is(err, orchestration.ErrSkillUnavailable) {
 		t.Fatalf("ListMetadata() error = %v", err)
 	}
-	if len(logger.warnings) != 1 || logger.warnings[0]["error_type"] != "list metadata" ||
+	if len(logger.warnings) != 1 || logger.warnings[0]["error_type"] != "store_read" ||
+		logger.warnings[0]["store_operation"] != "list_metadata" ||
 		logger.warnings[0]["error"] == "" || logger.warnings[0]["request_id"] != "request-skill-store" ||
 		logger.warnings[0]["status"] != "failed" || logger.warnings[0]["reason"] != "backend_operation_failed" {
 		t.Fatalf("warnings = %#v", logger.warnings)

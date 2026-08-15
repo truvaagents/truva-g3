@@ -28,6 +28,15 @@ const (
 	maxSkillStoreTxRetries     = 32
 )
 
+type skillStoreFailureType string
+
+const (
+	skillStoreFailureStoreRead  skillStoreFailureType = "store_read"
+	skillStoreFailureStoreWrite skillStoreFailureType = "store_write"
+	skillStoreFailureUnmarshal  skillStoreFailureType = "unmarshal"
+	skillStoreFailureIntegrity  skillStoreFailureType = "integrity"
+)
+
 // SkillStore is the included Redis implementation of the provider-neutral
 // skill runtime and administration contracts. Its key schema and transaction
 // mechanics are deliberately private to this package.
@@ -124,7 +133,7 @@ func (store *SkillStore) ListMetadata(
 	}
 	identities, err := store.client.SMembers(ctx, store.catalogKey()).Result()
 	if err != nil {
-		return nil, store.backendError(ctx, "list metadata", orchestration.ErrSkillUnavailable, err)
+		return nil, store.backendError(ctx, "list metadata", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	sort.Strings(identities)
 	pipe := store.client.Pipeline()
@@ -133,7 +142,7 @@ func (store *SkillStore) ListMetadata(
 		commands[index] = pipe.Get(ctx, store.currentKeyFromIdentity(identity))
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, store.backendError(ctx, "list metadata", orchestration.ErrSkillUnavailable, err)
+		return nil, store.backendError(ctx, "list metadata", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	metadata := make([]orchestration.SkillMetadata, 0, min(limit, len(commands)))
 	for index, command := range commands {
@@ -142,17 +151,17 @@ func (store *SkillStore) ListMetadata(
 			continue
 		}
 		if err != nil {
-			return nil, store.backendError(ctx, "list metadata", orchestration.ErrSkillUnavailable, err)
+			return nil, store.backendError(ctx, "list metadata", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 		}
 		var current storedSkillPublished
 		if err := json.Unmarshal(encoded, &current); err != nil {
-			return nil, store.backendError(ctx, "decode metadata", orchestration.ErrSkillIntegrity, err)
+			return nil, store.backendError(ctx, "decode metadata", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 		}
 		if current.Ref.Ref.String() != identities[index] {
-			return nil, store.backendError(ctx, "verify metadata", orchestration.ErrSkillIntegrity, errors.New("catalog identity mismatch"))
+			return nil, store.backendError(ctx, "verify metadata", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, errors.New("catalog identity mismatch"))
 		}
 		if err := validateStoredSkillCurrent(current.Ref.Ref, current); err != nil {
-			return nil, store.backendError(ctx, "verify metadata", orchestration.ErrSkillIntegrity, err)
+			return nil, store.backendError(ctx, "verify metadata", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 		}
 		item := current.Metadata
 		if filter.Namespace != "" && item.Ref.Namespace != filter.Namespace ||
@@ -203,7 +212,7 @@ func (store *SkillStore) ResolveCandidates(
 		tombstones[index] = pipe.Get(ctx, store.tombstoneKey(request.Ref, version))
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, store.backendError(ctx, "resolve candidates", orchestration.ErrSkillUnavailable, err)
+		return nil, store.backendError(ctx, "resolve candidates", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	result := make([]orchestration.SkillCandidate, len(requests))
 	for index, request := range requests {
@@ -224,32 +233,32 @@ func (store *SkillStore) ResolveCandidates(
 				if _, tombstoneErr := tombstones[index].Bytes(); tombstoneErr == nil {
 					candidate.Status = orchestration.SkillCandidateDeleted
 				} else if !errors.Is(tombstoneErr, redis.Nil) {
-					return nil, store.backendError(ctx, "resolve tombstone", orchestration.ErrSkillUnavailable, tombstoneErr)
+					return nil, store.backendError(ctx, "resolve tombstone", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, tombstoneErr)
 				}
 			}
 			result[index] = candidate
 			continue
 		}
 		if err != nil {
-			return nil, store.backendError(ctx, "resolve candidates", orchestration.ErrSkillUnavailable, err)
+			return nil, store.backendError(ctx, "resolve candidates", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 		}
 		if versions[index] == 0 {
 			var current storedSkillPublished
 			if err := json.Unmarshal(encoded, &current); err != nil {
-				return nil, store.backendError(ctx, "decode published candidate", orchestration.ErrSkillIntegrity, err)
+				return nil, store.backendError(ctx, "decode published candidate", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 			}
 			if err := validateStoredSkillCurrent(request.Ref, current); err != nil {
-				return nil, store.backendError(ctx, "verify published candidate", orchestration.ErrSkillIntegrity, err)
+				return nil, store.backendError(ctx, "verify published candidate", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 			}
 			candidate.Resolved = current.Ref
 			candidate.Metadata = current.Metadata
 		} else {
 			var exact storedSkillCandidate
 			if err := json.Unmarshal(encoded, &exact); err != nil {
-				return nil, store.backendError(ctx, "decode exact candidate", orchestration.ErrSkillIntegrity, err)
+				return nil, store.backendError(ctx, "decode exact candidate", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 			}
 			if err := validateStoredSkillCandidate(request.Ref, versions[index], exact); err != nil {
-				return nil, store.backendError(ctx, "verify exact candidate", orchestration.ErrSkillIntegrity, err)
+				return nil, store.backendError(ctx, "verify exact candidate", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 			}
 			candidate.Resolved = exact.Ref
 			candidate.Metadata = exact.Metadata
@@ -269,11 +278,11 @@ func (store *SkillStore) GetManifest(ctx context.Context, ref orchestration.Skil
 		return orchestration.SkillManifest{}, fmt.Errorf("%w: exact manifest unavailable", orchestration.ErrSkillRevisionNotFound)
 	}
 	if err != nil {
-		return orchestration.SkillManifest{}, store.backendError(ctx, "load manifest", orchestration.ErrSkillUnavailable, err)
+		return orchestration.SkillManifest{}, store.backendError(ctx, "load manifest", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	var manifest orchestration.SkillManifest
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
-		return orchestration.SkillManifest{}, store.backendError(ctx, "decode manifest", orchestration.ErrSkillIntegrity, err)
+		return orchestration.SkillManifest{}, store.backendError(ctx, "decode manifest", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 	}
 	observed, err := orchestration.ComputeSkillManifestHash(manifest)
 	if err != nil || manifest.Ref.Ref != ref.Ref || manifest.Ref.Version != ref.Version || observed != ref.ManifestHash {
@@ -292,11 +301,11 @@ func (store *SkillStore) GetResource(ctx context.Context, ref orchestration.Skil
 		return orchestration.SkillResource{}, fmt.Errorf("%w: exact resource unavailable", orchestration.ErrSkillRevisionNotFound)
 	}
 	if err != nil {
-		return orchestration.SkillResource{}, store.backendError(ctx, "load resource", orchestration.ErrSkillUnavailable, err)
+		return orchestration.SkillResource{}, store.backendError(ctx, "load resource", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	var resource orchestration.SkillResource
 	if err := json.Unmarshal(encoded, &resource); err != nil {
-		return orchestration.SkillResource{}, store.backendError(ctx, "decode resource", orchestration.ErrSkillIntegrity, err)
+		return orchestration.SkillResource{}, store.backendError(ctx, "decode resource", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 	}
 	observed, err := orchestration.ComputeSkillResourceHash(resource)
 	if err != nil || resource.Ref.Skill.Ref != ref.Skill.Ref || resource.Ref.Skill.Version != ref.Skill.Version ||
@@ -320,7 +329,7 @@ func (store *SkillStore) GetPublished(ctx context.Context, ref orchestration.Ski
 		representation.Revision.RevisionToken != current.RevisionToken ||
 		!reflect.DeepEqual(representation.Revision.Metadata, current.Metadata) {
 		return orchestration.SkillRevisionRepresentation{}, store.backendError(
-			ctx, "verify published revision", orchestration.ErrSkillIntegrity,
+			ctx, "verify published revision", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity,
 			errors.New("published pointer and revision differ"),
 		)
 	}
@@ -358,13 +367,13 @@ func (store *SkillStore) ListVersions(
 		Max: maxVersion, Min: "-inf", Offset: 0, Count: int64(limit + 1),
 	}).Result()
 	if err != nil {
-		return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", orchestration.ErrSkillUnavailable, err)
+		return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	page := orchestration.SkillVersionPage{Versions: make([]orchestration.SkillRevisionSummary, 0, min(limit, len(versions)))}
 	if len(versions) > limit {
 		next, parseErr := strconv.ParseUint(versions[limit-1], 10, 64)
 		if parseErr != nil {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode version index", orchestration.ErrSkillIntegrity, parseErr)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode version index", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, parseErr)
 		}
 		page.NextBeforeVersion = next
 		versions = versions[:limit]
@@ -375,40 +384,40 @@ func (store *SkillStore) ListVersions(
 	for index, raw := range versions {
 		version, parseErr := strconv.ParseUint(raw, 10, 64)
 		if parseErr != nil {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode version index", orchestration.ErrSkillIntegrity, parseErr)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode version index", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, parseErr)
 		}
 		revisions[index] = pipe.Get(ctx, store.revisionKey(ref, version))
 		tombstones[index] = pipe.Get(ctx, store.tombstoneKey(ref, version))
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", orchestration.ErrSkillUnavailable, err)
+		return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	for index := range versions {
 		if encoded, err := revisions[index].Bytes(); err == nil {
 			var revision storedSkillRevision
 			if jsonErr := json.Unmarshal(encoded, &revision); jsonErr != nil {
-				return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode revision summary", orchestration.ErrSkillIntegrity, jsonErr)
+				return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode revision summary", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, jsonErr)
 			}
 			version, _ := strconv.ParseUint(versions[index], 10, 64)
 			if verifyErr := validateStoredSkillRevision(ref, version, revision); verifyErr != nil {
-				return orchestration.SkillVersionPage{}, store.backendError(ctx, "verify revision summary", orchestration.ErrSkillIntegrity, verifyErr)
+				return orchestration.SkillVersionPage{}, store.backendError(ctx, "verify revision summary", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, verifyErr)
 			}
 			page.Versions = append(page.Versions, revision.Summary)
 			continue
 		} else if !errors.Is(err, redis.Nil) {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", orchestration.ErrSkillUnavailable, err)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "list versions", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 		}
 		encoded, err := tombstones[index].Bytes()
 		if err != nil {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "load revision tombstone", orchestration.ErrSkillIntegrity, err)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "load revision tombstone", skillStoreFailureStoreRead, orchestration.ErrSkillIntegrity, err)
 		}
 		var summary orchestration.SkillRevisionSummary
 		if err := json.Unmarshal(encoded, &summary); err != nil {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode revision tombstone", orchestration.ErrSkillIntegrity, err)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "decode revision tombstone", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 		}
 		version, _ := strconv.ParseUint(versions[index], 10, 64)
 		if err := validateStoredSkillTombstone(ref, version, summary); err != nil {
-			return orchestration.SkillVersionPage{}, store.backendError(ctx, "verify revision tombstone", orchestration.ErrSkillIntegrity, err)
+			return orchestration.SkillVersionPage{}, store.backendError(ctx, "verify revision tombstone", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 		}
 		page.Versions = append(page.Versions, summary)
 	}
@@ -437,10 +446,10 @@ func (store *SkillStore) PutPublished(
 				if err == nil {
 					var prior storedSkillIdempotency
 					if jsonErr := json.Unmarshal(encoded, &prior); jsonErr != nil {
-						return store.backendError(ctx, "decode idempotency record", orchestration.ErrSkillIntegrity, jsonErr)
+						return store.backendError(ctx, "decode idempotency record", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, jsonErr)
 					}
 					if validationErr := validateStoredSkillIdempotency(input.Ref, prior); validationErr != nil {
-						return store.backendError(ctx, "verify idempotency record", orchestration.ErrSkillIntegrity, validationErr)
+						return store.backendError(ctx, "verify idempotency record", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, validationErr)
 					}
 					if !orchestration.SkillVersionedAuthoringContentEqual(prior.Package, input.Package) {
 						return fmt.Errorf("%w: idempotency key was used for different content", orchestration.ErrSkillConflict)
@@ -451,17 +460,17 @@ func (store *SkillStore) PutPublished(
 					return nil
 				}
 				if !errors.Is(err, redis.Nil) {
-					return store.backendError(ctx, "read idempotency record", orchestration.ErrSkillUnavailable, err)
+					return store.backendError(ctx, "read idempotency record", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 				}
 			}
 
 			current, currentErr := loadStoredCurrent(ctx, tx, store.currentKey(input.Ref))
 			if currentErr != nil && !errors.Is(currentErr, redis.Nil) {
-				return store.backendError(ctx, "read publication state", orchestration.ErrSkillUnavailable, currentErr)
+				return store.backendError(ctx, "read publication state", skillStoreReadFailureType(currentErr), orchestration.ErrSkillUnavailable, currentErr)
 			}
 			if currentErr == nil {
 				if err := validateStoredSkillCurrent(input.Ref, current); err != nil {
-					return store.backendError(ctx, "verify publication state", orchestration.ErrSkillIntegrity, err)
+					return store.backendError(ctx, "verify publication state", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 				}
 			}
 			if input.RequireAbsent {
@@ -475,10 +484,10 @@ func (store *SkillStore) PutPublished(
 			if currentErr == nil {
 				prior, err := loadStoredRevision(ctx, tx, store.revisionKey(input.Ref, current.Ref.Version))
 				if err != nil {
-					return store.backendError(ctx, "read current revision", orchestration.ErrSkillIntegrity, err)
+					return store.backendError(ctx, "read current revision", skillStoreReadFailureType(err), orchestration.ErrSkillIntegrity, err)
 				}
 				if err := validateStoredSkillRevision(input.Ref, current.Ref.Version, prior); err != nil {
-					return store.backendError(ctx, "verify current revision", orchestration.ErrSkillIntegrity, err)
+					return store.backendError(ctx, "verify current revision", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 				}
 				if orchestration.SkillVersionedAuthoringContentEqual(
 					orchestration.ValidatedSkillPackage{Package: prior.Representation.Package}, input.Package,
@@ -495,7 +504,7 @@ func (store *SkillStore) PutPublished(
 			if errors.Is(err, redis.Nil) {
 				next = 0
 			} else if err != nil {
-				return store.backendError(ctx, "read next revision", orchestration.ErrSkillUnavailable, err)
+				return store.backendError(ctx, "read next revision", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 			}
 			if next == math.MaxUint64 {
 				return fmt.Errorf("%w: skill version space is exhausted", orchestration.ErrSkillLimitExceeded)
@@ -554,7 +563,7 @@ func (store *SkillStore) PutPublished(
 			continue
 		}
 		if err != nil {
-			return orchestration.PutPublishedSkillResult{}, store.backendErrorUnlessDomain(ctx, "publish", err)
+			return orchestration.PutPublishedSkillResult{}, store.backendErrorUnlessDomain(ctx, "publish", skillStoreFailureStoreWrite, err)
 		}
 		return result, nil
 	}
@@ -590,10 +599,10 @@ func (store *SkillStore) DeleteVersions(
 				return fmt.Errorf("%w: skill does not exist", orchestration.ErrSkillNotFound)
 			}
 			if err != nil {
-				return store.backendError(ctx, "read deletion state", orchestration.ErrSkillUnavailable, err)
+				return store.backendError(ctx, "read deletion state", skillStoreReadFailureType(err), orchestration.ErrSkillUnavailable, err)
 			}
 			if err := validateStoredSkillCurrent(input.Ref, current); err != nil {
-				return store.backendError(ctx, "verify deletion state", orchestration.ErrSkillIntegrity, err)
+				return store.backendError(ctx, "verify deletion state", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 			}
 			if current.RevisionToken != input.ExpectedRevisionToken {
 				return fmt.Errorf("%w: deletion precondition failed", orchestration.ErrSkillPrecondition)
@@ -617,14 +626,14 @@ func (store *SkillStore) DeleteVersions(
 				revision, revisionErr := loadStoredRevision(ctx, tx, store.revisionKey(input.Ref, version))
 				if revisionErr == nil {
 					if err := validateStoredSkillRevision(input.Ref, version, revision); err != nil {
-						return store.backendError(ctx, "verify deletion target", orchestration.ErrSkillIntegrity, err)
+						return store.backendError(ctx, "verify deletion target", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 					}
 					revisions[version] = revision
 					result.DeletedVersions = append(result.DeletedVersions, version)
 					continue
 				}
 				if !errors.Is(revisionErr, redis.Nil) {
-					return store.backendError(ctx, "read deletion target", orchestration.ErrSkillUnavailable, revisionErr)
+					return store.backendError(ctx, "read deletion target", skillStoreReadFailureType(revisionErr), orchestration.ErrSkillUnavailable, revisionErr)
 				}
 				result.AlreadyDeletedVersions = append(result.AlreadyDeletedVersions, version)
 			}
@@ -660,7 +669,7 @@ func (store *SkillStore) DeleteVersions(
 			continue
 		}
 		if err != nil {
-			return orchestration.DeleteSkillVersionsResult{}, store.backendErrorUnlessDomain(ctx, "delete versions", err)
+			return orchestration.DeleteSkillVersionsResult{}, store.backendErrorUnlessDomain(ctx, "delete versions", skillStoreFailureStoreWrite, err)
 		}
 		return result, nil
 	}
@@ -680,7 +689,7 @@ func (store *SkillStore) RecordSkillAudit(ctx context.Context, event orchestrati
 		return fmt.Errorf("%w: encode audit event", orchestration.ErrInvalidSkillPackage)
 	}
 	key := store.auditKey(event.EventID)
-	return store.backendErrorUnlessDomain(ctx, "record audit", store.client.Watch(ctx, func(tx *redis.Tx) error {
+	return store.backendErrorUnlessDomain(ctx, "record audit", skillStoreFailureStoreWrite, store.client.Watch(ctx, func(tx *redis.Tx) error {
 		prior, err := tx.Get(ctx, key).Bytes()
 		if err == nil {
 			if string(prior) != string(encoded) {
@@ -707,8 +716,12 @@ func buildStoredSkillRevision(
 ) (storedSkillRevision, []orchestration.SkillResource, error) {
 	input := validated.Package
 	versionRef := orchestration.SkillVersionRef{Ref: ref, Version: version}
-	resources := make([]orchestration.SkillResource, len(input.Resources))
-	resourceMetadata := make([]orchestration.SkillResourceMetadata, len(input.Resources))
+	var resources []orchestration.SkillResource
+	var resourceMetadata []orchestration.SkillResourceMetadata
+	if len(input.Resources) > 0 {
+		resources = make([]orchestration.SkillResource, len(input.Resources))
+		resourceMetadata = make([]orchestration.SkillResourceMetadata, len(input.Resources))
+	}
 	for index, authored := range input.Resources {
 		resource := orchestration.SkillResource{
 			Ref:         orchestration.SkillResourceRef{Skill: versionRef, Name: authored.Name},
@@ -783,12 +796,12 @@ func (store *SkillStore) loadCurrent(ctx context.Context, ref orchestration.Skil
 	}
 	if err != nil {
 		if isSkillStoredJSONError(err) {
-			return storedSkillPublished{}, store.backendError(ctx, "decode published revision", orchestration.ErrSkillIntegrity, err)
+			return storedSkillPublished{}, store.backendError(ctx, "decode published revision", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 		}
-		return storedSkillPublished{}, store.backendError(ctx, "load published revision", orchestration.ErrSkillUnavailable, err)
+		return storedSkillPublished{}, store.backendError(ctx, "load published revision", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	if err := validateStoredSkillCurrent(ref, current); err != nil {
-		return storedSkillPublished{}, store.backendError(ctx, "verify published revision", orchestration.ErrSkillIntegrity, err)
+		return storedSkillPublished{}, store.backendError(ctx, "verify published revision", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 	}
 	return current, nil
 }
@@ -800,12 +813,12 @@ func (store *SkillStore) loadRevision(ctx context.Context, ref orchestration.Ski
 	}
 	if err != nil {
 		if isSkillStoredJSONError(err) {
-			return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "decode revision", orchestration.ErrSkillIntegrity, err)
+			return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "decode revision", skillStoreFailureUnmarshal, orchestration.ErrSkillIntegrity, err)
 		}
-		return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "load revision", orchestration.ErrSkillUnavailable, err)
+		return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "load revision", skillStoreFailureStoreRead, orchestration.ErrSkillUnavailable, err)
 	}
 	if err := validateStoredSkillRevision(ref, version, revision); err != nil {
-		return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "verify revision", orchestration.ErrSkillIntegrity, err)
+		return orchestration.SkillRevisionRepresentation{}, store.backendError(ctx, "verify revision", skillStoreFailureIntegrity, orchestration.ErrSkillIntegrity, err)
 	}
 	revision.Representation.Revision.RevisionToken = revision.RevisionToken
 	return revision.Representation, nil
@@ -959,12 +972,30 @@ func containsSkillString(values []string, want string) bool {
 	return false
 }
 
-func (store *SkillStore) backendError(ctx context.Context, operation string, category error, cause error) error {
-	store.logFailure(ctx, operation, cause)
+func skillStoreReadFailureType(err error) skillStoreFailureType {
+	if isSkillStoredJSONError(err) {
+		return skillStoreFailureUnmarshal
+	}
+	return skillStoreFailureStoreRead
+}
+
+func (store *SkillStore) backendError(
+	ctx context.Context,
+	operation string,
+	failureType skillStoreFailureType,
+	category error,
+	cause error,
+) error {
+	store.logFailure(ctx, operation, failureType, cause)
 	return fmt.Errorf("%w: %s: %w", category, operation, core.RedactSensitiveError(cause))
 }
 
-func (store *SkillStore) backendErrorUnlessDomain(ctx context.Context, operation string, err error) error {
+func (store *SkillStore) backendErrorUnlessDomain(
+	ctx context.Context,
+	operation string,
+	failureType skillStoreFailureType,
+	err error,
+) error {
 	if err == nil {
 		return nil
 	}
@@ -979,17 +1010,24 @@ func (store *SkillStore) backendErrorUnlessDomain(ctx context.Context, operation
 			return err
 		}
 	}
-	return store.backendError(ctx, operation, orchestration.ErrSkillUnavailable, err)
+	return store.backendError(ctx, operation, failureType, orchestration.ErrSkillUnavailable, err)
 }
 
-func (store *SkillStore) logFailure(ctx context.Context, operation string, err error) {
+func (store *SkillStore) logFailure(
+	ctx context.Context,
+	operation string,
+	failureType skillStoreFailureType,
+	err error,
+) {
 	if store.logger == nil || err == nil {
 		return
 	}
 	store.logger.WarnWithContext(ctx, "Skill store operation failed", map[string]interface{}{
 		"operation": "skill_store", "request_id": orchestration.GetRequestID(ctx),
 		"status": "failed", "reason": "backend_operation_failed",
-		"error_type": operation, "error": core.RedactSensitiveText(err.Error()),
+		"store_operation": strings.ReplaceAll(operation, " ", "_"),
+		"error_type":      string(failureType),
+		"error":           core.RedactSensitiveText(err.Error()),
 	})
 }
 

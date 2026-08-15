@@ -348,7 +348,7 @@ func (store *semanticSkillStore) DeleteVersions(
 	current := record.revisions[record.published].representation.Revision
 	if input.ExpectedRevisionToken == "" || input.ExpectedRevisionToken != current.RevisionToken ||
 		input.FromVersion == 0 || input.ToVersion < input.FromVersion {
-		return orchestration.DeleteSkillVersionsResult{}, fmt.Errorf("%w: semantic deletion precondition", orchestration.ErrSkillConflict)
+		return orchestration.DeleteSkillVersionsResult{}, fmt.Errorf("%w: semantic deletion precondition", orchestration.ErrSkillPrecondition)
 	}
 	protectedPrevious := uint64(0)
 	if record.published > 1 {
