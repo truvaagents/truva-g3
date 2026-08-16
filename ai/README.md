@@ -72,7 +72,7 @@ response, _ := client.GenerateResponse(ctx, "Hello AI!", nil)
 | **Request-Aware Client** | Presence-aware parameters, policy, reports, and enterprise hooks | `ai.NewRequestClient(ai.WithProvider("openai"))` |
 | **Heterogeneous Chain** | Independently configured or injected failover entries | `ai.NewChain(ai.ProviderEntry(...), ai.ClientEntry(...))` |
 | **Provider Aliases** | Clean identifiers with auto-configuration | `openai.groq` auto-configures Groq endpoint and API key |
-| **Model Aliases** | Portable model names | `smart` → `o3` (OpenAI), `claude-sonnet-4-5` (Anthropic) |
+| **Model Aliases** | Portable model names | `smart` → `gpt-5.6-sol` (OpenAI), `claude-opus-5` (Anthropic) |
 | **Env Overrides** | Runtime model configuration | `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1` overrides the "smart" alias |
 
 **Failover behavior**: Authentication errors (401) **allow failover** because each provider has its own API key. True client errors (400, malformed input) **do not failover** because the same input would fail everywhere.
@@ -906,7 +906,7 @@ When you buy a t-shirt, you don't say "I want a garment measuring 22 inches acro
 // Using different providers means remembering different model names
 openai, _ := ai.NewClient(
     ai.WithProviderAlias("openai"),
-    ai.WithModel("o3"),  // OpenAI's name for smart model
+    ai.WithModel("gpt-5.6-sol"),  // OpenAI model selected by the built-in smart alias
 )
 
 mistral, _ := ai.NewClient(
@@ -925,7 +925,7 @@ groq, _ := ai.NewClient(
 // The same model alias works across these catalog-backed providers.
 openai, _ := ai.NewClient(
     ai.WithProviderAlias("openai"),
-    ai.WithModel("smart"),  // Automatically uses o3
+    ai.WithModel("smart"),  // Automatically uses gpt-5.6-sol
 )
 
 mistral, _ := ai.NewClient(
@@ -943,15 +943,15 @@ groq, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | Gemini | DeepSeek | Groq | xAI | Qwen |
 |-------|---------|--------|-----------|--------|----------|------|-----|------|
-| **`default`** | General use, balanced | `gpt-4.1-mini` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-plus` |
-| **`fast`** | Latency-oriented catalog choice | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Reasoning-oriented catalog choice | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
-| **`premium`** | Highest-tier catalog choice | _(N/A)_ | `claude-opus-4-5-20251101` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| **`code`** | Code generation & analysis | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
-| **`vision`** | Image understanding | `gpt-4.1` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
+| **`default`** | General use, balanced | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-plus` |
+| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
+| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
+| **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
+| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
+| **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
 
-> **Note**: The `premium` alias is only available for Anthropic
-> (`claude-opus-4-5-20251101`) and Gemini (`gemini-3-pro-preview`). Other
+> **Note**: The `premium` alias is available for OpenAI (`gpt-5.6-sol`),
+> Anthropic (`claude-fable-5`), and Gemini (`gemini-3-pro-preview`). Other
 > built-in catalogs use `smart` for their reasoning-oriented choice.
 
 This table documents the catalog compiled into this branch; it is not a
@@ -983,12 +983,12 @@ You can override any model alias at runtime using environment variables, without
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}=actual-model-name
 
 # Override OpenAI aliases
-export TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-4.1-mini
-export TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
+export TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra
+export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
 
 # Override Anthropic aliases
-export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-4-5-20251101
-export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
+export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
+export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
 
 # Override Gemini aliases
 export TRUVAG3_GEMINI_MODEL_FAST=gemini-3.5-flash
@@ -1008,7 +1008,7 @@ export TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
 2. **Hardcoded alias** - Built-in mapping in `modelAliases`
 3. **Pass-through** (lowest) - Use model name as-is
 
-> **💡 Gotcha**: The `_DEFAULT` env var is special - it overrides ALL AI calls that don't specify an explicit model, not just calls with `Model: "default"`. Use `TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-4.1-mini` to control costs across your entire application.
+> **💡 Gotcha**: The `_DEFAULT` env var is special - it overrides ALL AI calls that don't specify an explicit model, not just calls with `Model: "default"`. Use `TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-luna` when an application deliberately prefers the lower-cost tier for all unspecified OpenAI calls.
 
 This enables:
 - **Per-environment configuration**: Use application-approved model choices in each environment
@@ -1075,7 +1075,7 @@ Here's how provider aliases, chain client, and model aliases work together beaut
 // Create a resilient multi-provider system with portable model names!
 client, _ := ai.NewChainClient(
     ai.WithProviderChain(
-        "openai",           // Primary: Use OpenAI's "smart" model (o3)
+        "openai",           // Primary: Use OpenAI's "smart" model (GPT-5.6 Sol)
         "openai.groq",      // Backup: Use Groq's "smart" model (openai/gpt-oss-120b)
         "anthropic",        // Emergency: Use Anthropic's "smart" model
     ),

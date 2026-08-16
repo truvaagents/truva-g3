@@ -438,7 +438,7 @@ Only a non-empty environment value overrides the built-in mapping.
 
 | Provider/profile | Override pattern | Examples and route behavior |
 |---|---|---|
-| OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=o3`; Azure resolver maps are keyed by the resulting semantic model |
+| OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`; Azure resolver maps are keyed by the resulting semantic model |
 | DeepSeek | `TRUVAG3_DEEPSEEK_MODEL_{ALIAS}` | Applies to `openai.deepseek` |
 | Groq | `TRUVAG3_GROQ_MODEL_{ALIAS}` | Applies to `openai.groq` |
 | Together AI | `TRUVAG3_TOGETHER_MODEL_{ALIAS}` | Applies to `openai.together` |
@@ -451,8 +451,8 @@ Only a non-empty environment value overrides the built-in mapping.
 | AWS Bedrock | No provider-specific alias environment variable | Use `ai.WithModel` or an SDK-destination `EndpointResolver` |
 
 Resolver maps receive `EndpointRequest.ResolvedModel`, which is the concrete
-post-alias semantic model. For example, a map must use `"o3"` rather than
-`"smart"` after `TRUVAG3_OPENAI_MODEL_SMART=o3`.
+post-alias semantic model. For example, a map must use `"gpt-5.6-sol"` rather
+than `"smart"` after `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`.
 
 Azure semantic resolution uses the immutable built-in OpenAI catalog plus the
 environment overrides above. Runtime mutations of the compatibility variable
@@ -704,7 +704,7 @@ would silently desynchronize them from code on every model release. See:
 
 Providers with an environment-backed model catalog can override an alias
 without recompiling—for example,
-`TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001` or
+`TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5` or
 `TRUVAG3_GROQ_MODEL_FAST=llama-3.1-8b-instant`. See
 [Semantic Model Alias Overrides](#semantic-model-alias-overrides) for the exact
 supported prefixes and the hosted-provider semantic/wire boundary.

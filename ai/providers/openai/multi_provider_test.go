@@ -382,10 +382,12 @@ func TestPhase2_ModelAliasResolution(t *testing.T) {
 		expectedModel string
 		description   string
 	}{
-		// OpenAI aliases - GPT-4.1 and O-series (December 2025)
-		{"openai", "fast", "gpt-4.1-mini", "OpenAI fast model"},
-		{"openai", "smart", "o3", "OpenAI smart model"},
-		{"openai", "code", "o3", "OpenAI code model"},
+		// OpenAI aliases - GPT-5.6 family (August 2026)
+		{"openai", "default", "gpt-5.6-terra", "OpenAI default model"},
+		{"openai", "fast", "gpt-5.6-luna", "OpenAI fast model"},
+		{"openai", "smart", "gpt-5.6-sol", "OpenAI smart model"},
+		{"openai", "premium", "gpt-5.6-sol", "OpenAI premium model"},
+		{"openai", "code", "gpt-5.6-sol", "OpenAI code model"},
 		{"openai", "vision", "gpt-4.1", "OpenAI vision model"},
 
 		// DeepSeek aliases - V3.2 family
@@ -417,7 +419,7 @@ func TestPhase2_ModelAliasResolution(t *testing.T) {
 		{"openai.deepseek", "deepseek-chat", "deepseek-chat", "Explicit model pass-through"},
 
 		// Empty alias defaults to openai
-		{"", "smart", "o3", "Empty alias defaults to openai"},
+		{"", "smart", "gpt-5.6-sol", "Empty alias defaults to openai"},
 	}
 
 	for _, tt := range tests {

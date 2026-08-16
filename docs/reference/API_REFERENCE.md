@@ -2528,12 +2528,12 @@ accepted by every entry.
 
 ```go
 // "smart" resolves differently per provider
-ai.WithProviderAlias("openai")          // → o3
+ai.WithProviderAlias("openai")          // → gpt-5.6-sol
 ai.WithProviderAlias("openai.deepseek") // → deepseek-reasoner
 ai.WithProviderAlias("openai.groq")     // → openai/gpt-oss-120b
 
 // "fast" for quick responses
-ai.WithProviderAlias("openai")          // → gpt-4.1-mini
+ai.WithProviderAlias("openai")          // → gpt-5.6-luna
 ai.WithProviderAlias("openai.deepseek") // → deepseek-chat
 ai.WithProviderAlias("openai.groq")     // → llama-3.1-8b-instant
 

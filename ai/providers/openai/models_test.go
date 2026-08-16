@@ -12,16 +12,18 @@ func TestResolveModel(t *testing.T) {
 		model         string
 		expected      string
 	}{
-		// Vanilla OpenAI - GPT-4.1 and O-series (December 2025)
-		{"openai fast", "openai", "fast", "gpt-4.1-mini"},
-		{"openai smart", "openai", "smart", "o3"},
-		{"openai code", "openai", "code", "o3"},
+		// Vanilla OpenAI - GPT-5.6 family (August 2026)
+		{"openai default", "openai", "default", "gpt-5.6-terra"},
+		{"openai fast", "openai", "fast", "gpt-5.6-luna"},
+		{"openai smart", "openai", "smart", "gpt-5.6-sol"},
+		{"openai premium", "openai", "premium", "gpt-5.6-sol"},
+		{"openai code", "openai", "code", "gpt-5.6-sol"},
 		{"openai vision", "openai", "vision", "gpt-4.1"},
 		{"openai pass-through", "openai", "gpt-4.1-nano", "gpt-4.1-nano"},
 
 		// Empty provider alias defaults to openai
-		{"empty alias fast", "", "fast", "gpt-4.1-mini"},
-		{"empty alias smart", "", "smart", "o3"},
+		{"empty alias fast", "", "fast", "gpt-5.6-luna"},
+		{"empty alias smart", "", "smart", "gpt-5.6-sol"},
 
 		// DeepSeek - V3.2 family
 		{"deepseek fast", "openai.deepseek", "fast", "deepseek-chat"},

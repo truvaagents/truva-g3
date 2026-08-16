@@ -213,8 +213,8 @@ func TestVertexFactoryDoesNotReadAnthropicEnvironment(t *testing.T) {
 
 func TestVertexSyncWireContractAndSemanticIdentity(t *testing.T) {
 	const (
-		semanticModel  = "claude-sonnet-4-5-20250929"
-		publisherModel = "claude-sonnet-4-5@20250929"
+		semanticModel  = "claude-opus-5"
+		publisherModel = "claude-opus-5"
 	)
 	resolver := &vertexTestResolver{
 		projectID: "acme-prod", location: "global",
@@ -237,7 +237,7 @@ func TestVertexSyncWireContractAndSemanticIdentity(t *testing.T) {
 		t.Fatalf("transport calls = %d", len(requests))
 	}
 	request := requests[0]
-	wantURL := "https://aiplatform.googleapis.com/v1/projects/acme-prod/locations/global/publishers/anthropic/models/claude-sonnet-4-5@20250929:rawPredict"
+	wantURL := "https://aiplatform.googleapis.com/v1/projects/acme-prod/locations/global/publishers/anthropic/models/claude-opus-5:rawPredict"
 	if request.url != wantURL {
 		t.Fatalf("request URL = %q", request.url)
 	}
@@ -269,7 +269,10 @@ func TestVertexSyncWireContractAndSemanticIdentity(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	reportText := fmt.Sprintf("%#v", result.RequestReport)
-	for _, secret := range []string{publisherModel, "cloud-platform-scope", "adc-token", "aiplatform.googleapis.com"} {
+	// Claude Opus 5 uses the same public model ID on the Claude API and
+	// Google Cloud, so the semantic model is expected in the report. Hosted
+	// route and credential details must remain absent.
+	for _, secret := range []string{"cloud-platform-scope", "adc-token", "aiplatform.googleapis.com"} {
 		if strings.Contains(reportText, secret) {
 			t.Fatalf("request report leaked %q: %s", secret, reportText)
 		}
@@ -324,7 +327,7 @@ func TestVertexRetainsSemanticSamplingAndPolicySelection(t *testing.T) {
 }
 
 func TestVertexResolverMapUsesPostAliasSemanticModel(t *testing.T) {
-	const semanticModel = "claude-sonnet-4-5-20250929"
+	const semanticModel = "claude-opus-5"
 	credentials := &phase4CredentialSource{credential: func(_ int64, _ ai.CredentialRequest) (ai.HeaderCredential, error) {
 		return ai.NewHeaderCredential("Authorization", "Bearer token"), nil
 	}}

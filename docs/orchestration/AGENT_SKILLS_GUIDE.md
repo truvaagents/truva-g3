@@ -1429,11 +1429,11 @@ parser, retry, temperature, or output contract:
 
 ```go
 activationOptions := &orchestration.AIOptionsOverride{
-    Model:           orchestration.StringPtr("your-fast-model-id"),
+    Model:           orchestration.StringPtr("fast"),
     ReasoningEffort: orchestration.StringPtr("low"),
 }
 resourceOptions := &orchestration.AIOptionsOverride{
-    Model:           orchestration.StringPtr("your-fast-model-id"),
+    Model:           orchestration.StringPtr("fast"),
     ReasoningEffort: orchestration.StringPtr("low"),
 }
 
@@ -1453,14 +1453,47 @@ resolved, err := orchestration.ResolveOrchestratorConfig(
 Equivalent deployment variables are:
 
 ```bash
-export TRUVAG3_SKILL_ACTIVATION_MODEL=your-fast-model-id
-export TRUVAG3_SKILL_RESOURCE_MODEL=your-fast-model-id
+TRUVAG3_SKILL_ACTIVATION_MODEL=fast
+TRUVAG3_SKILL_RESOURCE_MODEL=fast
+
+# Optional provider-specific definitions of the portable "fast" alias.
+TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna
+TRUVAG3_ANTHROPIC_MODEL_FAST=your-approved-anthropic-model-id
+TRUVAG3_GROQ_MODEL_FAST=your-approved-groq-model-id
 ```
 
-Use a model identifier accepted by the configured AI client; these values are
-not framework-defined `fast`/`smart` aliases. The two model variables are read
-only when skills are effectively enabled with at least one binding, as described
-in [Section 9.1](#91-configuration-precedence).
+Orchestration treats the model value as an opaque identifier. Clients created
+by the included `ai` module recognize its lower-case portable aliases, including
+`default`, `fast`, and `smart`. A custom `core.AIClient` must provide equivalent
+alias handling or accept the configured value as a literal model identifier.
+
+Use a portable alias when the agent uses `ChainClient`. Every provider attempt
+receives the same logical alias, but each provider resolves it to its own model:
+
+```text
+skill selector requests "fast"
+    ├── OpenAI    → TRUVAG3_OPENAI_MODEL_FAST or the built-in OpenAI mapping
+    ├── Anthropic → TRUVAG3_ANTHROPIC_MODEL_FAST or the built-in Anthropic mapping
+    └── Groq      → TRUVAG3_GROQ_MODEL_FAST or the built-in Groq mapping
+```
+
+Do not use an OpenAI-specific model identifier for a selector that may fail over
+to Anthropic or Groq. The chain preserves the requested model value between
+attempts. A fallback provider may therefore receive that OpenAI identifier,
+reject it as an invalid model, and prevent recovery. Aliases are case-sensitive;
+use `fast`, not `FAST`.
+
+Failover still depends on the chain's error policy. Provider outages,
+authentication failures, rate limits, server failures, and recognized billing
+or quota failures can move to the next provider. Cancellation, an exhausted
+request deadline, and genuine malformed input do not. Skill selector calls are
+non-streaming, so partial-stream failover restrictions do not apply to them.
+
+The two selector-model variables are read only when skills are effectively
+enabled with at least one binding, as described in
+[Section 9.1](#91-configuration-precedence). In Jaeger, the `ai.generate` span
+shows the alias in `ai.requested_model` and the provider-resolved model in
+`ai.model`. Registry Viewer's LLM Calls view shows the effective model.
 
 The built-in selectors use temperature `0.01`, a fixed portable JSON prompt,
 strict decoding and identity validation, one bounded correction retry, and a
@@ -3094,8 +3127,9 @@ TRUVAG3_SKILL_DOMAIN_COMPATIBILITY_MODE=warn
 TRUVAG3_SKILL_CACHE_MODE=local
 TRUVAG3_SKILL_CACHE_MAX_BYTES=16777216
 TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT=5s
-TRUVAG3_SKILL_ACTIVATION_MODEL=your-fast-model-id
-TRUVAG3_SKILL_RESOURCE_MODEL=your-fast-model-id
+TRUVAG3_SKILL_ACTIVATION_MODEL=fast
+TRUVAG3_SKILL_RESOURCE_MODEL=fast
+TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna
 ```
 
 For every runtime, authoring, and Registry Viewer host variable, see the

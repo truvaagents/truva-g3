@@ -9,8 +9,8 @@ import (
 
 var defaultAliases = map[string]map[string]string{
 	"openai": {
-		"fast": "gpt-4.1-mini", "smart": "o3", "vision": "gpt-4.1",
-		"code": "o3", "default": "gpt-4.1-mini",
+		"fast": "gpt-5.6-luna", "smart": "gpt-5.6-sol", "vision": "gpt-4.1",
+		"premium": "gpt-5.6-sol", "code": "gpt-5.6-sol", "default": "gpt-5.6-terra",
 	},
 	"openai.deepseek": {
 		"fast": "deepseek-chat", "smart": "deepseek-reasoner",

@@ -16,6 +16,37 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+func TestClientPrepareSemanticsResolvesBuiltInGPT56Aliases(t *testing.T) {
+	client := NewClient("test-key", "", "openai", &core.NoOpLogger{})
+	tests := []struct {
+		alias string
+		model string
+	}{
+		{alias: "default", model: "gpt-5.6-terra"},
+		{alias: "fast", model: "gpt-5.6-luna"},
+		{alias: "smart", model: "gpt-5.6-sol"},
+		{alias: "premium", model: "gpt-5.6-sol"},
+		{alias: "code", model: "gpt-5.6-sol"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.alias, func(t *testing.T) {
+			request := core.NewAIRequest("hello", "alias-resolution")
+			request.Generation.Model = test.alias
+			semantics, err := client.prepareSemantics(t.Context(), request, false)
+			if err != nil {
+				t.Fatalf("prepareSemantics returned error: %v", err)
+			}
+			if semantics.RequestedModel != test.alias || semantics.SemanticModel != test.model {
+				t.Fatalf("model resolution = %q -> %q, want %q -> %q", semantics.RequestedModel, semantics.SemanticModel, test.alias, test.model)
+			}
+			if !semantics.ReasoningModel {
+				t.Fatalf("resolved model %q was not classified as a reasoning model", test.model)
+			}
+		})
+	}
+}
+
 func TestFactoryCreateRequestClientAppliesPolicyAndReturnsReport(t *testing.T) {
 	var capturedBody map[string]interface{}
 	var capturedHeader string

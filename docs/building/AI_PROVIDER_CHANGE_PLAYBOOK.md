@@ -221,7 +221,7 @@ export TRUVAG3_OPENAI_MODEL_SMART=o3
 
 # Catalog-backed direct providers and OpenAI-compatible aliases use this
 # pattern (strip the "openai." prefix for OpenAI-compatible sub-providers).
-export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-sonnet-4-5-20250929
+export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
 ```
 
