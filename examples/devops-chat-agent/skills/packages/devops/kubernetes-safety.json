@@ -1,0 +1,34 @@
+{
+  "display_name": "Kubernetes Safety",
+  "description": "Use when a Kubernetes workload or cluster request may inspect, mutate, or verify infrastructure state.",
+  "domains": ["devops", "infrastructure"],
+  "tags": ["kubernetes", "safety", "mutation"],
+  "planning_instructions": [
+    "Before a mutating Kubernetes operation, inspect the current state and identify the exact namespace and resource.",
+    "Prefer the narrowest dedicated discovered capability that performs the requested Kubernetes operation; use general cluster command execution only when no dedicated capability covers it and policy permits it.",
+    "Respect the configured human-approval policy. For an asynchronous mutation, wait or poll until the intended stable state or a bounded timeout, then verify final workload state; an immediate state read does not establish completion."
+  ],
+  "response_instructions": [
+    "State the observed pre-change state, the action taken, and the concrete post-change verification."
+  ],
+  "tool_hints": [
+    "For a Kubernetes workload request, select capabilities that expose current workload instances and detailed resource conditions or events.",
+    "For a mutation, select the narrowest dedicated mutation capability, a bounded status or wait capability, and final-state inspectors; use permitted general cluster execution for the wait when no dedicated status capability exists."
+  ],
+  "resources": [
+    {
+      "name": "mutation-checklist",
+      "description": "Checklist for a Kubernetes state-changing operation.",
+      "load_when": "Load when a plan may scale, restart, delete, patch, or otherwise mutate Kubernetes state.",
+      "applies_to": ["planning", "continuation", "synthesis"],
+      "required_when_selected": true,
+      "content_type": "text/markdown",
+      "content": "Confirm resource kind, name, and namespace. Inspect current state. Respect approval gates. Perform one bounded change. For an asynchronous operation, use an available status or wait capability to poll until the intended stable state is observed or a bounded timeout is reached, then inspect the final resource and workload state. Treat a timeout or a still-progressing state as incomplete verification."
+    }
+  ],
+  "activation_examples": {
+    "should_activate": ["Scale the currency tool to three replicas", "Restart the travel agent deployment"],
+    "should_not_activate": []
+  },
+  "change_reason": "Require bounded completion waiting before asynchronous Kubernetes changes are treated as verified"
+}

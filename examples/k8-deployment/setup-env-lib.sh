@@ -17,10 +17,20 @@
 #     truvag3_create_configmap     - Create K8s ConfigMap with TRUVAG3_* + non-TRUVAG3 config from .env file
 #     truvag3_create_tool_secret   - Create K8s Secret with only tool-specific keys
 #
+#   Skill packages:
+#     truvag3_check_skill_tools    - Check local tools needed for skill management
+#     truvag3_check_skill_package  - Compare one Git package with the published revision
+#     truvag3_sync_skill_package   - Create/update and verify one published package
+#     truvag3_check_agent_skills   - Check every package in an agent-owned skills directory
+#     truvag3_sync_agent_skills    - Reconcile every package in an agent-owned skills directory
+#     truvag3_prepare_agent_skills - Best-effort synchronization during agent deployment
+#
 # Expected variables (set by the caller before sourcing):
 #   CLUSTER_NAME              - Kind cluster name (default: truvag3-demo-$(whoami))
 #   NAMESPACE                 - K8s namespace (default: truvag3-examples)
 #   EXAMPLES_DIR              - Path to examples/ directory (auto-detected if not set)
+#   TRUVAG3_SKILLS_API_URL    - Optional Skills management API base URL
+#   TRUVAG3_SKIP_SKILLS_SYNC  - Optional "true" to skip automatic deployment sync
 #   TRUVAG3_DEV_DISABLE_OPENAPI - Optional: set to "true" to suppress the dev-only
 #                               default of TRUVAG3_ENABLE_OPENAPI=true injected
 #                               into every tool/agent ConfigMap. See docs/operations/DEV_TOOLS_GUIDE.md.
@@ -104,7 +114,552 @@ _truvag3_log_warn() {
     fi
 }
 
+_truvag3_log_error() {
+    if type print_error &>/dev/null; then
+        print_error "$1"
+    elif type log_error &>/dev/null; then
+        log_error "$1"
+    else
+        echo "[ERROR] $1" >&2
+    fi
+}
+
+# Skill management commands are strict by default. The automatic deployment
+# wrapper dynamically enables warning-level failures so unavailable optional
+# management infrastructure cannot prevent an agent workload from deploying.
+_truvag3_log_skill_failure() {
+    if [ "${_TRUVAG3_SKILLS_BEST_EFFORT:-false}" = "true" ]; then
+        _truvag3_log_warn "$1"
+    else
+        _truvag3_log_error "$1"
+    fi
+}
+
 # ─── FUNCTIONS ───────────────────────────────────────────────────────────────
+
+# truvag3_check_skill_tools
+#
+# Checks only the local tools needed by the provider-neutral Skills HTTP API
+# workflow. It intentionally does not require Kind, kubectl, Go, or a container
+# runtime so the same command can target a remote management host.
+truvag3_check_skill_tools() {
+    local missing=()
+    local tool
+    for tool in curl jq cksum; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing+=("$tool")
+        fi
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        _truvag3_log_skill_failure "Skill management requires: ${missing[*]}"
+        return 1
+    fi
+}
+
+# Validate through the same server policy used for publication and write the
+# normalized authoring representation to the requested temporary file.
+_truvag3_validate_skill_source() {
+    local api_base="${1%/}"
+    local skill_namespace="$2"
+    local skill_name="$3"
+    local package_file="$4"
+    local normalized_file="$5"
+    local response_file status
+
+    if [ ! -f "$package_file" ]; then
+        _truvag3_log_skill_failure "Skill package not found: $package_file"
+        return 1
+    fi
+
+    response_file=$(mktemp)
+    if ! status=$(curl -sS --connect-timeout 5 --max-time 20 \
+        -o "$response_file" -w '%{http_code}' -X POST \
+        "${api_base}/${skill_namespace}/${skill_name}/validate" \
+        -H 'Content-Type: application/json' \
+        --data-binary "@$package_file"); then
+        rm -f "$response_file"
+        _truvag3_log_skill_failure "The configured Skills API is unavailable"
+        return 1
+    fi
+    if [ "$status" != "200" ]; then
+        _truvag3_log_skill_failure "Validating $skill_namespace/$skill_name failed (HTTP $status)"
+        sed -n '1,8p' "$response_file" >&2
+        rm -f "$response_file"
+        return 1
+    fi
+    if ! jq -e '.validation.valid == true and (.normalized | type == "object")' \
+        "$response_file" >/dev/null 2>&1; then
+        _truvag3_log_skill_failure "Skill package $skill_namespace/$skill_name is invalid"
+        jq -c '{errors: (.validation.errors // []), warnings: (.validation.warnings // [])}' \
+            "$response_file" >&2 2>/dev/null || sed -n '1,8p' "$response_file" >&2
+        rm -f "$response_file"
+        return 1
+    fi
+    if ! jq '.normalized' "$response_file" > "$normalized_file"; then
+        rm -f "$response_file"
+        _truvag3_log_skill_failure "Skills API returned invalid validation data for $skill_namespace/$skill_name"
+        return 1
+    fi
+    rm -f "$response_file"
+}
+
+# Produce the stable JSON compared by the framework when deciding whether a
+# package needs a new immutable revision. change_reason is audit metadata, not
+# versioned behavior. Activation examples and resources are order-independent.
+_truvag3_skill_versioned_content() {
+    jq -cS '
+        del(.change_reason)
+        | if (.activation_examples? | type) == "object" then
+            .activation_examples.should_activate = ((.activation_examples.should_activate // []) | sort)
+            | .activation_examples.should_not_activate = ((.activation_examples.should_not_activate // []) | sort)
+          else . end
+        | if (.resources? | type) == "array" then
+            .resources |= sort_by(.name)
+          else . end
+    ' "$1"
+}
+
+_truvag3_skill_packages_equal() {
+    local desired_file="$1"
+    local published_file="$2"
+    local desired published
+
+    desired=$(_truvag3_skill_versioned_content "$desired_file") || return 1
+    published=$(_truvag3_skill_versioned_content "$published_file") || return 1
+    [ "$desired" = "$published" ]
+}
+
+# Read the published skill and print its HTTP status. Callers can therefore
+# distinguish a missing package from an unavailable or integrity-failing store.
+_truvag3_read_published_skill() {
+    local api_base="${1%/}"
+    local skill_namespace="$2"
+    local skill_name="$3"
+    local headers_file="$4"
+    local response_file="$5"
+
+    curl -sS --connect-timeout 5 --max-time 15 \
+        -D "$headers_file" -o "$response_file" -w '%{http_code}' \
+        "${api_base}/${skill_namespace}/${skill_name}"
+}
+
+# Validate the provider-neutral published representation, require its ETag, and
+# extract the resubmittable package for semantic comparison.
+_truvag3_extract_published_skill() {
+    local skill_namespace="$1"
+    local skill_name="$2"
+    local headers_file="$3"
+    local response_file="$4"
+    local published_file="$5"
+    local etag
+
+    if ! jq -e --arg namespace "$skill_namespace" --arg name "$skill_name" '
+        (.revision.ref.ref.namespace == $namespace)
+        and (.revision.ref.ref.name == $name)
+        and (.revision.ref.version | type == "number" and . > 0)
+        and (.revision.ref.manifest_hash | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+        and (.revision.metadata.ref.namespace == $namespace)
+        and (.revision.metadata.ref.name == $name)
+        and (.revision.metadata.published_version == .revision.ref.version)
+        and (.revision.metadata.status == "published")
+        and (.package | type == "object")
+        and (.manifest | type == "object")
+        and (.manifest.ref.ref.namespace == $namespace)
+        and (.manifest.ref.ref.name == $name)
+        and (.manifest.ref.version == .revision.ref.version)
+        and (.manifest.ref.manifest_hash == .revision.ref.manifest_hash)
+    ' "$response_file" >/dev/null 2>&1; then
+        return 1
+    fi
+    etag=$(awk 'tolower($1) == "etag:" {print $2}' "$headers_file" | tr -d '\r' | tail -1)
+    if [ -z "$etag" ]; then
+        return 1
+    fi
+    jq '.package' "$response_file" > "$published_file"
+}
+
+# truvag3_check_skill_package <api_base> <namespace> <name> <package_file>
+#
+# Read-only validation and comparison of one Git-authored package. A successful
+# GET also exercises the backend's published-pointer and revision checks.
+truvag3_check_skill_package() {
+    local api_base="${1%/}"
+    local skill_namespace="$2"
+    local skill_name="$3"
+    local package_file="$4"
+    local normalized_file headers_file response_file published_file status version
+
+    normalized_file=$(mktemp)
+    headers_file=$(mktemp)
+    response_file=$(mktemp)
+    published_file=$(mktemp)
+
+    if ! _truvag3_validate_skill_source "$api_base" "$skill_namespace" "$skill_name" \
+        "$package_file" "$normalized_file"; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        return 1
+    fi
+    if ! status=$(_truvag3_read_published_skill "$api_base" "$skill_namespace" "$skill_name" \
+        "$headers_file" "$response_file"); then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_skill_failure "The configured Skills API is unavailable"
+        return 1
+    fi
+    if [ "$status" = "404" ]; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_warn "Skill $skill_namespace/$skill_name is missing"
+        return 1
+    fi
+    if [ "$status" != "200" ]; then
+        _truvag3_log_skill_failure "Reading $skill_namespace/$skill_name failed (HTTP $status)"
+        sed -n '1,8p' "$response_file" >&2
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        return 1
+    fi
+    if ! _truvag3_extract_published_skill "$skill_namespace" "$skill_name" \
+        "$headers_file" "$response_file" "$published_file"; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_skill_failure "Skills API returned an invalid published representation for $skill_namespace/$skill_name"
+        return 1
+    fi
+    if ! _truvag3_skill_packages_equal "$normalized_file" "$published_file"; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_warn "Skill $skill_namespace/$skill_name differs from its Git package"
+        return 1
+    fi
+
+    version=$(jq -r '.revision.ref.version // "unknown"' "$response_file")
+    rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+    _truvag3_log_success "Skill $skill_namespace/$skill_name matches Git (published version $version)"
+}
+
+# truvag3_sync_skill_package <api_base> <namespace> <name> <package_file>
+#
+# Reconciles one Git-authored package without rebuilding or restarting an
+# agent. Missing content is created, changed behavior rolls forward, and equal
+# content is skipped. The published representation is verified before return.
+truvag3_sync_skill_package() {
+    local api_base="${1%/}"
+    local skill_namespace="$2"
+    local skill_name="$3"
+    local package_file="$4"
+    local skill_url="${api_base}/${skill_namespace}/${skill_name}"
+    local normalized_file headers_file response_file published_file status etag
+    local precondition idempotency_key package_checksum state_checksum outcome version
+
+    normalized_file=$(mktemp)
+    headers_file=$(mktemp)
+    response_file=$(mktemp)
+    published_file=$(mktemp)
+
+    if ! _truvag3_validate_skill_source "$api_base" "$skill_namespace" "$skill_name" \
+        "$package_file" "$normalized_file"; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        return 1
+    fi
+    if ! status=$(_truvag3_read_published_skill "$api_base" "$skill_namespace" "$skill_name" \
+        "$headers_file" "$response_file"); then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_skill_failure "The configured Skills API is unavailable"
+        return 1
+    fi
+
+    if [ "$status" = "200" ]; then
+        if ! _truvag3_extract_published_skill "$skill_namespace" "$skill_name" \
+            "$headers_file" "$response_file" "$published_file"; then
+            rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+            _truvag3_log_skill_failure "Skills API returned an invalid published representation for $skill_namespace/$skill_name"
+            return 1
+        fi
+        if _truvag3_skill_packages_equal "$normalized_file" "$published_file"; then
+            version=$(jq -r '.revision.ref.version // "unknown"' "$response_file")
+            rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+            _truvag3_log_success "Skill $skill_namespace/$skill_name already matches Git (published version $version)"
+            return 0
+        fi
+        etag=$(awk 'tolower($1) == "etag:" {print $2}' "$headers_file" | tr -d '\r' | tail -1)
+        if [ -z "$etag" ]; then
+            rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+            _truvag3_log_skill_failure "Skills API did not return an ETag for $skill_namespace/$skill_name"
+            return 1
+        fi
+        precondition="If-Match: $etag"
+    elif [ "$status" = "404" ]; then
+        precondition="If-None-Match: *"
+    else
+        _truvag3_log_skill_failure "Reading $skill_namespace/$skill_name failed (HTTP $status)"
+        sed -n '1,8p' "$response_file" >&2
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        return 1
+    fi
+
+    package_checksum=$(cksum "$package_file" | awk '{print $1 "-" $2}')
+    state_checksum=$(printf '%s' "$precondition" | cksum | awk '{print $1 "-" $2}')
+    idempotency_key="example-${skill_namespace}-${skill_name}-${package_checksum}-${state_checksum}"
+    if ! status=$(curl -sS --connect-timeout 5 --max-time 20 \
+        -o "$response_file" -w '%{http_code}' -X PUT "$skill_url" \
+        -H 'Content-Type: application/json' \
+        -H "$precondition" \
+        -H "Idempotency-Key: $idempotency_key" \
+        --data-binary "@$package_file"); then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_skill_failure "The configured Skills API is unavailable"
+        return 1
+    fi
+    if [ "$status" != "200" ] && [ "$status" != "201" ]; then
+        _truvag3_log_skill_failure "Publishing $skill_namespace/$skill_name failed (HTTP $status)"
+        sed -n '1,8p' "$response_file" >&2
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        return 1
+    fi
+    outcome=$(jq -r '.result.outcome // "published"' "$response_file" 2>/dev/null || echo "published")
+    case "$outcome" in
+        created|updated|same_content_noop|idempotent_replay) ;;
+        *) outcome="published" ;;
+    esac
+
+    : > "$headers_file"
+    : > "$response_file"
+    if ! status=$(_truvag3_read_published_skill "$api_base" "$skill_namespace" "$skill_name" \
+        "$headers_file" "$response_file") || [ "$status" != "200" ] ||
+       ! _truvag3_extract_published_skill "$skill_namespace" "$skill_name" \
+            "$headers_file" "$response_file" "$published_file" ||
+       ! _truvag3_skill_packages_equal "$normalized_file" "$published_file"; then
+        rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+        _truvag3_log_skill_failure "Published skill $skill_namespace/$skill_name did not verify against Git"
+        return 1
+    fi
+
+    version=$(jq -r '.revision.ref.version // "unknown"' "$response_file")
+    rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
+    _truvag3_log_success "Synchronized skill $skill_namespace/$skill_name ($outcome, published version $version)"
+}
+
+# Wait for the provider-neutral Skills API contract rather than for a
+# deployment-specific health route. This absorbs the short ingress convergence
+# window that can follow a successful Registry Viewer rollout on a cold start.
+_truvag3_wait_for_skills_api() {
+    local api_base="${1%/}"
+    local operation="${2:-sync}"
+    local attempt=1
+    local max_attempts=15
+    local not_found_attempts=0
+    local max_not_found_attempts=3
+    local retry_delay="${_TRUVAG3_SKILLS_RETRY_DELAY_SECONDS:-2}"
+    local status=""
+
+    # A read-only drift check should report an unavailable API promptly. Sync
+    # keeps the longer startup-convergence allowance used by cold deployments.
+    if [ "$operation" = "check" ]; then
+        max_attempts=3
+    fi
+
+    while [ "$attempt" -le "$max_attempts" ]; do
+        status=$(curl -sS --connect-timeout 2 --max-time 5 \
+            -o /dev/null -w '%{http_code}' "${api_base}/schema" 2>/dev/null) || status=""
+        if [ "$status" = "200" ]; then
+            return 0
+        fi
+
+        # Retry only conditions that can reasonably clear while infrastructure
+        # starts. A 404 is retried briefly only for automatic best-effort setup:
+        # nginx can serve its default backend while a new ingress is converging,
+        # while a strict command should fail fast on a mistyped API base URL.
+        case "$status" in
+            ""|000|408|425|429|500|502|503|504) ;;
+            404)
+                not_found_attempts=$((not_found_attempts + 1))
+                if [ "${_TRUVAG3_SKILLS_BEST_EFFORT:-false}" != "true" ] ||
+                   [ "$not_found_attempts" -ge "$max_not_found_attempts" ]; then
+                    _truvag3_log_skill_failure "The configured Skills API is not ready (HTTP $status)"
+                    return 1
+                fi
+                ;;
+            *)
+                _truvag3_log_skill_failure "The configured Skills API is not ready (HTTP $status)"
+                return 1
+                ;;
+        esac
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            sleep "$retry_delay"
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    _truvag3_log_skill_failure "The configured Skills API did not become ready"
+    return 1
+}
+
+_truvag3_valid_example_skill_slug() {
+    local value="$1"
+    [ ${#value} -le 64 ] && [[ "$value" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
+}
+
+# _truvag3_process_agent_skills <check|sync> <packages_dir> [api_base]
+#
+# The directory is the agent's package inventory. Only files at
+# <packages_dir>/<namespace>/<name>.json are accepted; their path supplies the
+# identity used by the Skills API. A missing or empty directory is a no-op so
+# the same setup pattern remains safe for agents that do not use skills.
+_truvag3_process_agent_skills() {
+    local operation="$1"
+    local packages_dir="${2%/}"
+    local api_base="${3:-${TRUVAG3_SKILLS_API_URL:-http://registry.localhost/api/v1/skills}}"
+    local package_list relative_path skill_namespace file_name skill_name package_file
+    local invalid_entry ignored_metadata count=0 failed=0
+    api_base="${api_base%/}"
+
+    if [ -z "$packages_dir" ]; then
+        _truvag3_log_skill_failure "Agent skill package directory is required"
+        return 1
+    fi
+
+    case "$operation" in
+        check|sync) ;;
+        *)
+            _truvag3_log_skill_failure "Unsupported agent skill operation: $operation"
+            return 1
+            ;;
+    esac
+
+    if [ ! -e "$packages_dir" ]; then
+        _truvag3_log_info "No agent-owned skill packages found"
+        return 0
+    fi
+    if [ ! -d "$packages_dir" ]; then
+        _truvag3_log_skill_failure "Agent skill package path is not a directory: $packages_dir"
+        return 1
+    fi
+
+    invalid_entry=$(find "$packages_dir" -type l -print -quit 2>/dev/null)
+    if [ -n "$invalid_entry" ]; then
+        _truvag3_log_skill_failure "Agent skill package directories must not contain symbolic links: $invalid_entry"
+        return 1
+    fi
+
+    ignored_metadata=$(find "$packages_dir" -type f -name '.DS_Store' -print -quit 2>/dev/null)
+    if [ -n "$ignored_metadata" ]; then
+        _truvag3_log_info "Ignoring macOS metadata files under the agent skill package directory"
+    fi
+
+    package_list=$(mktemp)
+    if ! find "$packages_dir" -type f ! -name '.DS_Store' -print > "$package_list"; then
+        rm -f "$package_list"
+        _truvag3_log_skill_failure "Unable to enumerate agent skill packages: $packages_dir"
+        return 1
+    fi
+    if ! LC_ALL=C sort -o "$package_list" "$package_list"; then
+        rm -f "$package_list"
+        _truvag3_log_skill_failure "Unable to order agent skill packages: $packages_dir"
+        return 1
+    fi
+
+    while IFS= read -r package_file; do
+        relative_path="${package_file#"$packages_dir"/}"
+        skill_namespace="${relative_path%%/*}"
+        file_name="${relative_path#*/}"
+
+        if [ "$skill_namespace" = "$relative_path" ] || [[ "$file_name" == */* ]] ||
+           [[ "$file_name" != *.json ]]; then
+            _truvag3_log_skill_failure \
+                "Skill package must use <namespace>/<name>.json under $packages_dir: $relative_path"
+            failed=1
+            continue
+        fi
+
+        skill_name="${file_name%.json}"
+        if ! _truvag3_valid_example_skill_slug "$skill_namespace" ||
+           ! _truvag3_valid_example_skill_slug "$skill_name"; then
+            _truvag3_log_skill_failure \
+                "Skill package path must contain lowercase namespace and name slugs: $relative_path"
+            failed=1
+            continue
+        fi
+        count=$((count + 1))
+    done < "$package_list"
+
+    if [ "$failed" -ne 0 ]; then
+        rm -f "$package_list"
+        return 1
+    fi
+    if [ "$count" -eq 0 ]; then
+        rm -f "$package_list"
+        _truvag3_log_info "No agent-owned skill packages found"
+        return 0
+    fi
+
+    if ! truvag3_check_skill_tools ||
+       ! _truvag3_wait_for_skills_api "$api_base" "$operation"; then
+        rm -f "$package_list"
+        return 1
+    fi
+
+    while IFS= read -r package_file; do
+        relative_path="${package_file#"$packages_dir"/}"
+        skill_namespace="${relative_path%%/*}"
+        file_name="${relative_path#*/}"
+        skill_name="${file_name%.json}"
+
+        if [ "$operation" = "sync" ]; then
+            truvag3_sync_skill_package "$api_base" "$skill_namespace" "$skill_name" \
+                "$package_file" || failed=1
+        else
+            truvag3_check_skill_package "$api_base" "$skill_namespace" "$skill_name" \
+                "$package_file" || failed=1
+        fi
+    done < "$package_list"
+    rm -f "$package_list"
+
+    if [ "$failed" -ne 0 ]; then
+        _truvag3_log_skill_failure "One or more agent-owned skill packages failed $operation"
+        return 1
+    fi
+    _truvag3_log_success "All $count agent-owned skill package(s) passed $operation"
+}
+
+# truvag3_check_agent_skills <packages_dir> [api_base]
+#
+# Checks every Git-authored package at <namespace>/<name>.json against the
+# published representation without changing runtime state.
+truvag3_check_agent_skills() {
+    _truvag3_process_agent_skills "check" "$@"
+}
+
+# truvag3_sync_agent_skills <packages_dir> [api_base]
+#
+# Strictly reconciles every Git-authored package at <namespace>/<name>.json.
+# This entry point is intended for explicit operator and CI commands.
+truvag3_sync_agent_skills() {
+    _truvag3_process_agent_skills "sync" "$@"
+}
+
+# truvag3_prepare_agent_skills <packages_dir> [api_base]
+#
+# Attempts package synchronization during cold starts, deploys, rebuilds, and
+# rollouts without making the agent workload depend on the management API. An
+# explicit TRUVAG3_SKIP_SKILLS_SYNC=true skips the attempt. Validation, API, or
+# verification failures are reported as warnings and never fail deployment;
+# use truvag3_sync_agent_skills or truvag3_check_agent_skills when failure must
+# produce a non-zero exit status.
+truvag3_prepare_agent_skills() {
+    if [ "${TRUVAG3_SKIP_SKILLS_SYNC:-false}" = "true" ]; then
+        _truvag3_log_warn \
+            "Automatic agent skill synchronization is disabled by TRUVAG3_SKIP_SKILLS_SYNC=true"
+        return 0
+    fi
+
+    local _TRUVAG3_SKILLS_BEST_EFFORT=true
+    if truvag3_sync_agent_skills "$@"; then
+        return 0
+    fi
+
+    _truvag3_log_warn \
+        "Agent skill synchronization did not complete; continuing deployment without updating published skills"
+    _truvag3_log_warn \
+        "Run './setup.sh skills-sync' after the Skills API is available to reconcile the published state"
+    return 0
+}
 
 # truvag3_create_secret <secret_name> <namespace> [extra_keys...]
 #

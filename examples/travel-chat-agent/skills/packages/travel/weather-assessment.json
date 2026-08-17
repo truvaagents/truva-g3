@@ -1,0 +1,33 @@
+{
+  "display_name": "Travel Weather Assessment",
+  "description": "Use when a travel request asks about forecasts, severe weather, seasonal conditions, or weather-related risk for a destination or route.",
+  "domains": ["travel"],
+  "tags": ["weather", "forecast", "risk"],
+  "planning_instructions": [
+    "Resolve the destination to coordinates before requesting forecast data when the weather capability requires coordinates.",
+    "Use forecast horizon and confidence when assessing whether weather may disrupt the trip."
+  ],
+  "response_instructions": [
+    "Separate observed conditions from forecast uncertainty and call out material travel risks."
+  ],
+  "tool_hints": [
+    "Select current conditions, forecast, severe-weather alert, or historical-weather capabilities according to the time period and risk in the request.",
+    "When the selected weather capability requires coordinates, also select a location-resolution capability that can produce them from the user's destination."
+  ],
+  "resources": [
+    {
+      "name": "weather-risk-checklist",
+      "description": "A compact checklist for weather-sensitive travel recommendations.",
+      "load_when": "Load when severe weather, a long forecast horizon, or disruption risk affects a recommendation.",
+      "applies_to": ["planning", "continuation", "synthesis"],
+      "required_when_selected": false,
+      "content_type": "text/markdown",
+      "content": "Check forecast horizon, confidence, precipitation, wind, temperature extremes, and official travel advisories. Express long-range forecasts with explicit uncertainty."
+    }
+  ],
+  "activation_examples": {
+    "should_activate": ["Will storms disrupt my trip to Tokyo next week?", "What should I pack for the forecast in Oslo?"],
+    "should_not_activate": ["Convert 100 USD to JPY", "Find a hotel in Paris"]
+  },
+  "change_reason": "Initial V1 example package"
+}

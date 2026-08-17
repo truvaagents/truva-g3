@@ -464,13 +464,17 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 
 	// Build the selection prompt — context-aware for Phase 2+
 	var prompt string
+	var promptErr error
 	if phaseContext != nil && phaseContext[PhaseContextKeyPhaseNumber] != nil {
 		telemetry.Counter("tiered_selection.context_aware.total",
 			"module", telemetry.ModuleOrchestration,
 		)
-		prompt = t.buildContinuationSelectionPrompt(ctx, summaries, request, phaseContext)
+		prompt, promptErr = t.buildPreparedContinuationSelectionPrompt(ctx, summaries, request, phaseContext)
 	} else {
-		prompt = t.buildSelectionPrompt(ctx, summaries, request)
+		prompt, promptErr = t.buildPreparedSelectionPrompt(ctx, summaries, request)
+	}
+	if promptErr != nil {
+		return nil, fmt.Errorf("prepare tiered selection prompt input: %w", promptErr)
 	}
 
 	// Use deterministic settings for tool selection
@@ -904,6 +908,42 @@ func (t *TieredCapabilityProvider) buildSelectionPrompt(
 	summaries []CapabilitySummary,
 	request string,
 ) string {
+	return t.buildSelectionPromptFromCatalog(ctx, formatCapabilitySummaryCatalog(summaries), request)
+}
+
+func (t *TieredCapabilityProvider) buildPreparedSelectionPrompt(
+	ctx context.Context,
+	summaries []CapabilitySummary,
+	request string,
+) (string, error) {
+	preparedRequest, err := preparePromptValue(
+		ctx, promptCapabilitySelect, promptValueRequest, promptFieldRequest, request,
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedCatalog, err := preparePromptValue(
+		ctx, promptCapabilitySelect, promptValueCapabilityCatalog,
+		promptFieldCapabilityCatalog, formatCapabilitySummaryCatalog(summaries),
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedEnrichments, err := prepareKnownPromptEnrichments(
+		ctx, promptCapabilitySelect, core.GetPipelineEnrichments(ctx),
+	)
+	if err != nil {
+		return "", err
+	}
+	ctx = core.WithPipelineEnrichments(ctx, preparedEnrichments)
+	return t.buildSelectionPromptFromCatalog(ctx, preparedCatalog, preparedRequest), nil
+}
+
+func (t *TieredCapabilityProvider) buildSelectionPromptFromCatalog(
+	ctx context.Context,
+	catalog string,
+	request string,
+) string {
 	var sb strings.Builder
 
 	sb.WriteString(`<identity>
@@ -933,9 +973,7 @@ C. COMPLETENESS CHECK: Review each part of the request
 	writeCustomInstructions(&sb, t.customInstructions)
 
 	sb.WriteString("<available_tools>\n")
-	for _, s := range summaries {
-		fmt.Fprintf(&sb, "- %s/%s: %s\n", s.AgentName, s.CapabilityName, s.Summary)
-	}
+	sb.WriteString(catalog)
 	sb.WriteString("</available_tools>\n\n")
 
 	// Inject conversation history from pipeline enrichments so the selection LLM
@@ -988,6 +1026,62 @@ func (t *TieredCapabilityProvider) buildContinuationSelectionPrompt(
 	request string,
 	phaseContext map[string]interface{},
 ) string {
+	return t.buildContinuationSelectionPromptFromCatalog(
+		ctx, formatCapabilitySummaryCatalog(summaries), request, phaseContext,
+	)
+}
+
+func (t *TieredCapabilityProvider) buildPreparedContinuationSelectionPrompt(
+	ctx context.Context,
+	summaries []CapabilitySummary,
+	request string,
+	phaseContext map[string]interface{},
+) (string, error) {
+	preparedRequest, err := preparePromptValue(
+		ctx, promptCapabilitySelect, promptValueRequest, promptFieldRequest, request,
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedCatalog, err := preparePromptValue(
+		ctx, promptCapabilitySelect, promptValueCapabilityCatalog,
+		promptFieldCapabilityCatalog, formatCapabilitySummaryCatalog(summaries),
+	)
+	if err != nil {
+		return "", err
+	}
+	preparedPhaseContext := clonePromptMetadata(phaseContext)
+	if priorIDs, ok := phaseContext[PhaseContextKeyPriorToolIDs].([]string); ok {
+		preparedIDs := make([]string, len(priorIDs))
+		for index, value := range priorIDs {
+			preparedIDs[index], err = preparePromptValue(
+				ctx, promptCapabilitySelect, promptValuePhaseContext,
+				promptFieldPhaseContextPriorToolID, value,
+			)
+			if err != nil {
+				return "", err
+			}
+		}
+		preparedPhaseContext[PhaseContextKeyPriorToolIDs] = preparedIDs
+	}
+	preparedEnrichments, err := prepareKnownPromptEnrichments(
+		ctx, promptCapabilitySelect, core.GetPipelineEnrichments(ctx),
+	)
+	if err != nil {
+		return "", err
+	}
+	ctx = core.WithPipelineEnrichments(ctx, preparedEnrichments)
+	return t.buildContinuationSelectionPromptFromCatalog(
+		ctx, preparedCatalog, preparedRequest, preparedPhaseContext,
+	), nil
+}
+
+func (t *TieredCapabilityProvider) buildContinuationSelectionPromptFromCatalog(
+	ctx context.Context,
+	catalog string,
+	request string,
+	phaseContext map[string]interface{},
+) string {
 	var sb strings.Builder
 
 	// Identity + key behavioral directive at top (U-curve high-attention zone).
@@ -1024,9 +1118,7 @@ Reason silently. Output raw JSON only — no reasoning text, no markdown, no cod
 
 	// Available tools — same compact format as buildSelectionPrompt
 	sb.WriteString("<available_tools>\n")
-	for _, s := range summaries {
-		fmt.Fprintf(&sb, "- %s/%s: %s\n", s.AgentName, s.CapabilityName, s.Summary)
-	}
+	sb.WriteString(catalog)
 	sb.WriteString("</available_tools>\n\n")
 
 	// Inject conversation history for follow-up queries (same as buildSelectionPrompt).
@@ -1072,6 +1164,14 @@ JSON array:
 `, request)
 
 	return sb.String()
+}
+
+func formatCapabilitySummaryCatalog(summaries []CapabilitySummary) string {
+	var catalog strings.Builder
+	for _, summary := range summaries {
+		fmt.Fprintf(&catalog, "- %s/%s: %s\n", summary.AgentName, summary.CapabilityName, summary.Summary)
+	}
+	return catalog.String()
 }
 
 // parseToolSelection extracts tool names from the LLM response.

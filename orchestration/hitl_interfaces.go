@@ -401,6 +401,12 @@ type ExecutionCheckpoint struct {
 	ExecutedStepIDs    []string               `json:"executed_step_ids,omitempty"`
 	ContinuationNote   string                 `json:"continuation_note_checkpoint,omitempty"`
 
+	// SkillState preserves the body-free pinned candidates, active decisions,
+	// resource-selection history, and diagnostics needed for causal resume.
+	// Instruction and resource bodies are never checkpointed.
+	SkillState        *SkillExecutionState `json:"skill_state,omitempty"`
+	SkillCacheContext *SkillCacheContext   `json:"skill_cache_context,omitempty"`
+
 	// Timing
 	CreatedAt time.Time        `json:"created_at"`
 	ExpiresAt time.Time        `json:"expires_at"`

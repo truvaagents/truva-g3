@@ -1,0 +1,22 @@
+{
+  "display_name": "Travel Readiness Assessment",
+  "description": "Use when a travel request asks about safety advisories, destination readiness, seasonal timing, peak pricing periods, or local holidays.",
+  "domains": ["travel"],
+  "tags": ["advisory", "seasonality", "holidays", "readiness"],
+  "planning_instructions": [
+    "When planning travel to another country, check the destination's current travel advisory.",
+    "When recommending travel dates or destinations, consider relevant weather patterns, peak or off-peak pricing, and local holidays when evidence is available."
+  ],
+  "response_instructions": [
+    "Separate current official advisory evidence from general seasonal considerations and identify any uncertainty."
+  ],
+  "tool_hints": [
+    "For destination safety, select a capability that returns a current official travel advisory for the named country.",
+    "When travel timing or seasonal risk is part of the request, also select weather or other current evidence appropriate to the requested dates."
+  ],
+  "activation_examples": {
+    "should_activate": ["Is Japan safe for my trip next month?", "Is December a good time to visit Paris?"],
+    "should_not_activate": ["Convert 100 USD to EUR", "Find a hotel in Boston for tonight"]
+  },
+  "change_reason": "Move conditional safety and seasonal guidance out of the agent-wide prompt"
+}

@@ -23,6 +23,7 @@ Welcome to the complete guide on distributed tracing in TruvaG3! Think of this a
 15. [LLM Telemetry in Orchestration (Automatic)](#15-llm-telemetry-in-orchestration-automatic)
 16. [HITL Cross-Trace Correlation](#16-hitl-cross-trace-correlation)
 17. [AI Module Distributed Tracing](#17-ai-module-distributed-tracing)
+18. [Agent Skills Tracing](#18-agent-skills-tracing)
 
 ---
 
@@ -2438,6 +2439,36 @@ See these examples for production-ready AI telemetry patterns:
 
 - `examples/agent-with-orchestration/` - Full orchestration with AI telemetry
 - `examples/agent-with-telemetry/` - Agent with comprehensive telemetry
+
+---
+
+## 18. Agent Skills Tracing
+
+Agent Skills tracing is automatic when the hosting agent supplies the same
+telemetry dependency it already uses for orchestration. No example-specific
+span code is required.
+
+In Jaeger, a skill-enabled request can include:
+
+| Span/event family | What it answers |
+|---|---|
+| `orchestrator.skills.pin_candidates` | Did request-start binding resolution and pinning succeed? |
+| `skills.registry.*` | Which authoritative batch, manifest, or resource read ran, and how long did it take? |
+| `orchestrator.skills.activate` | At which boundary did activation run and what bounded outcome occurred? |
+| `orchestrator.skills.resolve_resources` | Did the boundary select and admit reference material? |
+| `orchestrator.skills.projection` event | How many skills/resources and estimated tokens entered that prompt boundary? |
+| `skills.store.*` / `skills.admin.*` | Which management/storage operation ran and whether it succeeded? |
+
+Per-request trace attributes may include `skill.namespace`, `skill.name`,
+`skill.version`, and `skill.resource`, so Jaeger can identify what was loaded.
+These values are deliberately not metric labels. Instruction and resource
+bodies, selector payloads, ETags, idempotency keys, credentials, and raw backend
+details are never ordinary span attributes or events.
+
+Use the Registry Viewer's execution **Skills** tab for the ordered body-free
+candidate, activation, resource, load, projection, and diagnostic records; use
+Jaeger for timing and distributed causality. LLM Debug remains the explicit
+body-bearing surface for prompts sent to a model.
 
 ---
 

@@ -2,8 +2,12 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // PrecedenceAudit captures per-interaction observability metadata about
@@ -191,15 +195,58 @@ func DerivePrecedenceAudit(ctx context.Context, i LLMInteraction, extractor Prec
 	if hasHistory {
 		audit.ConversationEntities = extractor.ExtractEntities(ctx, PrecedenceSectionConversation, historyMatch[1])
 	}
+	requestDecodeFailed := false
 	if reqMatch := userRequestRE.FindStringSubmatch(i.Prompt); len(reqMatch) > 1 {
-		audit.RequestEntities = extractor.ExtractEntities(ctx, PrecedenceSectionRequest, reqMatch[1])
+		requestText := removePromptSectionFraming(reqMatch[1])
+		if skillPromptRequestEncodingActive(ctx) {
+			var decoded string
+			if err := json.Unmarshal([]byte(requestText), &decoded); err != nil {
+				requestDecodeFailed = true
+				telemetry.AddSpanEvent(ctx, "orchestrator.context_precedence.request_decode_failed",
+					attribute.String("prompt_kind", audit.PromptKind),
+					attribute.String("section", string(PrecedenceSectionRequest)),
+					attribute.String("encoder_version", skillInputEncoderPolicyVersion),
+				)
+			} else {
+				requestText = decoded
+			}
+		}
+		if !requestDecodeFailed {
+			audit.RequestEntities = extractor.ExtractEntities(ctx, PrecedenceSectionRequest, requestText)
+		}
 	}
 	if i.Response != "" {
 		audit.PlanTargetEntities = extractor.ExtractEntities(ctx, PrecedenceSectionPlanResponse, i.Response)
 	}
 
-	audit.Compliance = derivePrecedenceCompliance(audit)
+	if requestDecodeFailed {
+		audit.Compliance = PrecedenceComplianceInconclusive
+	} else {
+		audit.Compliance = derivePrecedenceCompliance(audit)
+	}
 	return audit
+}
+
+// removePromptSectionFraming removes only the line feeds inserted by the
+// framework immediately inside a prompt section. Caller-owned leading and
+// trailing whitespace remains part of the semantic value.
+func removePromptSectionFraming(value string) string {
+	value = strings.TrimPrefix(value, "\n")
+	value = strings.TrimSuffix(value, "\n")
+	return value
+}
+
+func skillPromptRequestEncodingActive(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	preparer, _ := ctx.Value(promptInputPreparerContextKey{}).(promptInputPreparer)
+	switch preparer.(type) {
+	case skillPromptInputPreparer, *skillPromptInputPreparer:
+		return true
+	default:
+		return false
+	}
 }
 
 // promptKindForInteractionType maps recorded LLMInteraction.Type values

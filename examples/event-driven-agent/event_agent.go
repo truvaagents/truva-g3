@@ -102,6 +102,7 @@ func (a *EventDrivenAgent) InitializeOrchestrator(
 	hitlConfig orchestration.HITLConfig,
 	memoryHooks []core.PipelineHook,
 	activityCoordinator core.ActivityCoordinator,
+	skillRegistry orchestration.SkillRegistry,
 ) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -110,7 +111,26 @@ func (a *EventDrivenAgent) InitializeOrchestrator(
 		return fmt.Errorf("discovery service not available")
 	}
 
-	config := orchestration.DefaultConfig()
+	skillConfig := orchestration.SkillConfig{
+		Enabled: true,
+		Bindings: []orchestration.SkillBinding{
+			{
+				Namespace: "incident-response", Name: "evidence-driven-incident-response", Version: "published",
+				Activation: orchestration.SkillActivationAlways, Required: true,
+			},
+		},
+	}
+	resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+		Environment: orchestration.EnvironmentCompatible,
+		Options: []orchestration.OrchestratorOption{
+			orchestration.WithSkills(skillConfig),
+			orchestration.WithSkillRegistry(skillRegistry),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resolve orchestrator configuration: %w", err)
+	}
+	config := resolved.Config
 	config.RoutingMode = orchestration.ModeAutonomous
 	config.SynthesisStrategy = orchestration.StrategyLLM
 	config.MetricsEnabled = true
@@ -131,30 +151,26 @@ func (a *EventDrivenAgent) InitializeOrchestrator(
 	// Apply HITL config
 	config.HITL = hitlConfig
 
-	// PromptConfig: incident response domain
+	// Keep agent identity, lifecycle, and deployment policy in the system prompt.
+	// Reusable investigation and remediation procedures come from the bound skill.
 	config.PromptConfig = orchestration.PromptConfig{
-		SystemInstructions: `You are an autonomous incident response agent for a microservices platform.
-You investigate alerts by checking metrics, pod status, and logs, then diagnose root causes.
-You coordinate remediation actions like pod restarts, scaling, and notifications.
+		SystemInstructions: `<incident_agent_identity>
+You are an autonomous incident response agent for a microservices platform. You investigate alerts, coordinate justified remediation under configured approval policy, and complete operational follow-up.
+</incident_agent_identity>
 
-CRITICAL: Each phase should contain only one type of work. Plan in this order across phases:
-Phase 1 — Investigate: check metrics, pod status, and logs (parallel when independent)
-Phase 2 — Remediate: take action for high/critical alerts, then verify success
-Phase 3 — Notify: document in JIRA, then send Slack notification
+<incident_workflow_contract>
+1. Use one work type per phase in this order: investigate; remediate and verify when evidence justifies a change; document and notify.
+2. Complete the documentation and notification phase for every critical investigation, including a false positive or a no-change decision.
+3. Group related alerts by fingerprint. Before creating a record, use recent memory to find a matching DEVOPS reference, then search the configured work-tracking system when memory has no match. Update an open match and create a DEVOPS record only after both checks find none.
+4. Make the notification depend on the successful record action and include its returned human-facing URL.
+5. Continue planning until the current execution contains successful record and notification results. Set terminal to true only after both results exist; a planned, attempted, remembered, or failed action remains incomplete.
+</incident_workflow_contract>
 
-Before creating a JIRA ticket, first check <agent_memory> for a recent ticket key (DEVOPS-NNN) on the same entity. If found, use add_comment directly. If no ticket is visible in memory, use search_issues to query JIRA for open tickets on the same entity or alert. If an open ticket exists, use add_comment with your findings and remediation results. If you remediated the issue, add a resolution comment. Only create a new ticket when both memory and JIRA confirm no recent ticket exists for this entity.
-
-Place JIRA/Slack steps in a separate phase after investigation and remediation complete.`,
+<incident_workflow_example>
+Phase 1 establishes whether the alert reflects a real incident. Phase 2 performs and verifies the smallest justified change, or produces a verified no-change decision. Phase 3 updates or creates the DEVOPS record and sends the dependent notification; only phase 3 is terminal.
+</incident_workflow_example>`,
 
 		Domain: "incident-response",
-		CustomInstructions: []string{
-			"For high latency alerts, query Prometheus metrics for the affected service endpoint",
-			"For pod failures, inspect pod status and recent logs before restarting",
-			"JIRA tickets use project_key 'DEVOPS' with severity, root cause, remediation, verification, and alert fingerprint",
-			"Slack messages should read like a human-written incident note: alert summary, investigation findings with metric values and pod names, root cause, remediation taken, verification result, and the JIRA link (use the browse_url returned by create_issue or search_issues)",
-			"Group related alerts by fingerprint to avoid duplicate investigations",
-			"When remediating (scaling, restarting a rollout, commenting on a JIRA ticket, sending a Slack message), invoke the corresponding capability and confirm it completed before recording the action as done. For asynchronous actions (a rollout settling, pods scaling up or down), poll the relevant status capability until you observe concrete evidence of completion. Record an action as successful only on that evidence; if it failed, note what failed and what was tried.",
-		},
 	}
 
 	deps := orchestration.OrchestratorDependencies{
@@ -167,6 +183,10 @@ Place JIRA/Slack steps in a separate phase after investigation and remediation c
 		ActivityCoordinator: activityCoordinator,
 	}
 
+	// Use the compatibility constructor after resolving configuration so this
+	// example retains its documented environment-backed debug stores. The
+	// resolved config remains authoritative; the constructor only supplies the
+	// legacy backend bootstrap until this example composes those stores itself.
 	orch, err := orchestration.CreateOrchestrator(config, deps)
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)

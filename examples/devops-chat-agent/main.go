@@ -45,6 +45,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
+	if err != nil {
+		log.Fatalf("Failed to create skill registry: %v", err)
+	}
+	defer func() {
+		if skillClients != nil {
+			_ = skillClients.Close()
+		}
+	}()
 
 	// 4a. Conditionally initialize HITL infrastructure
 	hitlConfig := orchestration.DefaultConfig().HITL
@@ -162,7 +171,9 @@ func main() {
 		if memBackends != nil {
 			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
 		}
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord); err != nil {
+		if err := agent.InitializeOrchestrator(
+			agent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
+		); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})
@@ -241,7 +252,6 @@ func main() {
 			})
 		}
 	}
-
 	agent.Logger.Info("Shutdown completed", nil)
 }
 

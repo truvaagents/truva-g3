@@ -328,6 +328,15 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
+	if err != nil {
+		log.Fatalf("Failed to create skill registry: %v", err)
+	}
+	defer func() {
+		if skillClients != nil {
+			_ = skillClients.Close()
+		}
+	}()
 
 	// Register task handlers
 	if err := workerPool.RegisterHandler("alert_investigation", agent.HandleAlertInvestigation); err != nil {
@@ -383,7 +392,9 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
 		}
 
-		if err := agent.InitializeOrchestrator(discovery, hitl, hitlConfig, memoryHooks, activityCoord); err != nil {
+		if err := agent.InitializeOrchestrator(
+			discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
+		); err != nil {
 			log.Printf("Warning: Failed to initialize orchestrator: %v (AI orchestration will be disabled)", err)
 		} else {
 			agent.Logger.Info("AI orchestrator initialized", nil)
@@ -502,6 +513,15 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
+	if err != nil {
+		log.Fatalf("Failed to create skill registry: %v", err)
+	}
+	defer func() {
+		if skillClients != nil {
+			_ = skillClients.Close()
+		}
+	}()
 
 	// Register task handlers
 	if err := workerPool.RegisterHandler("alert_investigation", agent.HandleAlertInvestigation); err != nil {
@@ -628,7 +648,9 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 		if memBackends != nil {
 			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
 		}
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord); err != nil {
+		if err := agent.InitializeOrchestrator(
+			agent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
+		); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})

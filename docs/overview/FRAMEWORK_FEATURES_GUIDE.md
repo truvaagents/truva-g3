@@ -50,6 +50,7 @@ This guide is a feature map for the framework. It is intentionally organized aro
     - [Clarification Requests](#clarification-requests)
     - [Execution Controls And Token Usage](#execution-controls-and-token-usage)
     - [Prompt Customization](#prompt-customization)
+    - [Agent Skills](#agent-skills)
     - [Large Catalog Support](#large-catalog-support)
   - [6. Reliability And Error Recovery](#6-reliability-and-error-recovery)
     - [Structured Tool Errors](#structured-tool-errors)
@@ -108,7 +109,6 @@ This guide is a feature map for the framework. It is intentionally organized aro
     - [MCP Integration Paths](#mcp-integration-paths)
 - [Feature-To-Module Index](#feature-to-module-index)
 - [Documentation Index](#documentation-index)
-- [Known Documentation Gaps](#known-documentation-gaps)
 
 ## How To Read This Guide
 
@@ -505,6 +505,53 @@ Prompt customization supports:
 
 See [LLM Planning Prompt Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) and [Effective Prompts Guide](../building/EFFECTIVE_PROMPTS_GUIDE.md).
 
+#### Agent Skills
+
+Agent skills are reusable, versioned instruction packages that developers
+explicitly make available to an agent. They complement prompt configuration:
+the agent's identity and universal behavior stay in its system instructions,
+while conditional or reusable procedures can live in skills. Skills are
+disabled by default; an agent without an enabled, nonempty binding list follows
+the ordinary orchestration path without skill registry or selector calls.
+
+For each skill-enabled request, orchestration follows a bounded five-stage
+lifecycle:
+
+1. resolve every binding and pin an exact immutable revision, including
+   resolving a `published` alias at request start;
+2. activate eligible skills according to each binding's `always`, `auto`, or
+   trusted `explicit` policy;
+3. select resources that apply to the current initial-planning, continuation,
+   resume, or synthesis boundary;
+4. load and verify only the selected content; and
+5. project the admitted instructions into the prompt for that boundary.
+
+This progressive loading keeps the full skill catalog out of every prompt.
+Continuation, resume, and synthesis boundaries re-evaluate resource relevance
+instead of carrying every previously loaded resource forward. Plan regeneration
+within the same phase reuses the already accepted projection exactly; it does
+not rerun activation or resource selection.
+
+Application code injects the provider-neutral `SkillRegistry` interface. The
+included adapter supports Redis and Valkey, but agents do not depend directly
+on either product. Bindings belong to developer code or Kubernetes deployment
+configuration; an environment binding list replaces the complete code list so
+replicas remain consistent. Skills can suggest capability categories through
+tool hints, but they neither register nor authorize tools. Capability selection
+continues to use runtime discovery.
+
+The management API validates and publishes packages. The shipped examples keep
+their source packages in Git, synchronize them automatically during setup, and
+provide strict `skills-sync` and `skills-check` maintenance commands. Registry
+Viewer supports package management and execution inspection, while Jaeger and
+structured logs expose the body-free runtime lifecycle.
+
+See the [Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md) for the
+complete authoring, configuration, provider, deployment, observability, and
+operational workflow. See the
+[Agent Development Guide](../building/AGENT_DEVELOPMENT_GUIDE.md#optional-enable-agent-skills)
+for the minimum integration in a new agent.
+
 #### Large Catalog Support
 
 For large systems, capability providers reduce prompt bloat and help the planner work with relevant subsets of a large tool/agent catalog.
@@ -808,6 +855,8 @@ The Registry Viewer is a developer-facing runtime dashboard. It can inspect:
 - LLM debug records
 - HITL checkpoints
 - execution DAGs
+- skill package management and version history
+- per-execution skill pinning, activation, resource loading, and prompt projection evidence
 - shared memory
 
 See [Developer Tools Guide](../operations/DEV_TOOLS_GUIDE.md#7-registry-viewer-overview).
@@ -940,7 +989,7 @@ See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#25-e
 
 Common runtime backends include:
 
-- Redis/Valkey for discovery, sessions, memory events, scheduling, async tasks, Redis Streams consumers, and debug stores
+- Redis/Valkey for discovery, sessions, memory events, scheduling, async tasks, Redis Streams consumers, debug stores, and the included skills package store (database 9 by default)
 - Qdrant for vector-backed shared knowledge and user memory
 - OpenTelemetry Collector for metrics and traces
 - Prometheus, Jaeger, Grafana, and Loki in the example stack
@@ -1007,6 +1056,7 @@ See [TruvaG3 Tools vs MCP Servers](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md)
 | Discovery and registration | `core` | Redis/Valkey backend |
 | AI provider clients, provider registry, embeddings | `ai` | `telemetry`, `memory` |
 | Dynamic planning, iterative planning, and workflow execution | `orchestration` | `core`, `ai`, `telemetry` |
+| Reusable agent skills and progressive prompt disclosure | `orchestration` | Provider-neutral skill backend, `core`, `telemetry` |
 | Async tasks and scheduling interfaces | `core`, `orchestration` | Redis/Valkey backend |
 | HITL approvals | `orchestration` | Redis/Valkey backend |
 | Component, shared, and user memory | `core`, `memory` | `orchestration`, `telemetry`, Redis/Valkey, Qdrant |
@@ -1036,6 +1086,7 @@ Use these docs for deeper feature-level details:
 - [CUSTOM_AI_PROVIDER_GUIDE.md](../building/CUSTOM_AI_PROVIDER_GUIDE.md) - request-aware policy, hosted-cloud profiles, enterprise routing and credentials, and custom adapters
 - [AI_PROVIDER_CHANGE_PLAYBOOK.md](../building/AI_PROVIDER_CHANGE_PLAYBOOK.md) - safe responses to provider model, parameter, authentication, and endpoint changes
 - [ORCHESTRATION_MODES_GUIDE.md](../orchestration/ORCHESTRATION_MODES_GUIDE.md) - orchestration modes
+- [AGENT_SKILLS_GUIDE.md](../orchestration/AGENT_SKILLS_GUIDE.md) - authoring, binding, runtime disclosure, management, operations, and troubleshooting for agent skills
 - [EFFECTIVE_PROMPTS_GUIDE.md](../building/EFFECTIVE_PROMPTS_GUIDE.md) - capability descriptions and prompt quality
 - [ERROR_HANDLING_GUIDE.md](../orchestration/ERROR_HANDLING_GUIDE.md) - structured error patterns
 - [INTELLIGENT_ERROR_HANDLING.md](../orchestration/INTELLIGENT_ERROR_HANDLING.md) - LLM-assisted error analysis
@@ -1055,11 +1106,3 @@ Use these docs for deeper feature-level details:
 - [TRUVAG3_TOOLS_VS_MCP_SERVERS.md](../reference/TRUVAG3_TOOLS_VS_MCP_SERVERS.md) - TruvaG3 tool model compared with MCP
 - [AUTO_DISCOVERY_GUIDE.md](../operations/AUTO_DISCOVERY_GUIDE.md) - auto-discovery feature guide (registration, lookup, lease architecture, multi-replica, resilience)
 - [LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) - prompt customization
-
-## Known Documentation Gaps
-
-Some docs still appear older than the current codebase and should be reviewed before relying on them as authoritative:
-
-- [examples/README.md](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md) references several example directories that are no longer present.
-- [API_REFERENCE.md](../reference/API_REFERENCE.md) describes a `ui` package with chat and REST transports, but no matching package or implementation appears in the repository.
-This guide is based on the current root/module READMEs and the current guides under `docs/`.

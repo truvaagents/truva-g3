@@ -149,7 +149,7 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
-	if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "o3" || resolver.requests[0].Operation != "generate" {
+	if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "gpt-5.6-sol" || resolver.requests[0].Operation != "generate" {
 		t.Fatalf("endpoint requests = %#v", resolver.requests)
 	}
 	if len(transport.requests) != 1 {
@@ -171,7 +171,7 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 		}
 	}
 	if result.Response.Provider != "azureopenai.v1" || result.RequestReport == nil ||
-		result.RequestReport.RequestedModel != "smart" || result.RequestReport.ResolvedModel != "o3" {
+		result.RequestReport.RequestedModel != "smart" || result.RequestReport.ResolvedModel != "gpt-5.6-sol" {
 		t.Fatalf("result = %#v", result)
 	}
 	encodedReport, _ := json.Marshal(result.RequestReport)
@@ -239,7 +239,7 @@ func TestAzureSemanticCatalogBoundary(t *testing.T) {
 	if _, err := client.prepareInvocation(t.Context(), core.NewAIRequest("hello", "catalog"), false); err != nil {
 		t.Fatalf("prepareInvocation returned error: %v", err)
 	}
-	if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "o3" {
+	if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "gpt-5.6-sol" {
 		t.Fatalf("Azure semantic resolution used mutable OpenAI aliases: %#v", resolver.requests)
 	}
 
@@ -270,8 +270,8 @@ func TestAzureResolverMapUsesPostAliasSemanticModel(t *testing.T) {
 		deployments map[string]string
 		wantError   string
 	}{
-		{name: "post-alias key", deployments: map[string]string{"o3": "prod-o3"}},
-		{name: "application alias key", deployments: map[string]string{"smart": "prod-o3"}, wantError: `no deployment for semantic model "o3"`},
+		{name: "post-alias key", deployments: map[string]string{"gpt-5.6-sol": "prod-o3"}},
+		{name: "application alias key", deployments: map[string]string{"smart": "prod-o3"}, wantError: `no deployment for semantic model "gpt-5.6-sol"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resolver := &deploymentMapResolver{endpoint: endpoint, deployments: test.deployments}
@@ -286,7 +286,7 @@ func TestAzureResolverMapUsesPostAliasSemanticModel(t *testing.T) {
 				!strings.Contains(errors.Unwrap(err).Error(), test.wantError)) {
 				t.Fatalf("prepareInvocation error = %v", err)
 			}
-			if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "o3" {
+			if len(resolver.requests) != 1 || resolver.requests[0].ResolvedModel != "gpt-5.6-sol" {
 				t.Fatalf("resolver requests = %#v", resolver.requests)
 			}
 		})

@@ -9,6 +9,7 @@ A backend autonomous agent that explores websites, generates Playwright test scr
   - [Quick Start (Recommended)](#quick-start-recommended)
   - [Step-by-Step Deployment](#step-by-step-deployment)
 - [Required Tools](#required-tools)
+- [Agent Skills](#agent-skills)
 - [Architecture](#architecture)
   - [Workflow](#workflow)
   - [Data Flow](#data-flow)
@@ -134,6 +135,38 @@ The qa-agent orchestrates 3 tools in a fixed 4-step workflow. **All tools must b
 ### How Tools Are Discovered
 
 The qa-agent uses Redis-based service discovery. When a tool starts, it registers its capabilities in Redis (DB 0). The orchestrator's AI planner selects tools based on capability descriptions — no hardcoded tool addresses.
+
+---
+
+## Agent Skills
+
+The agent binds the required `qa/web-application-testing` skill. Its reviewable
+source package is stored at
+`skills/packages/qa/web-application-testing.json`.
+
+Normal setup is automatic. `deploy`, `rebuild`, and `rollout` validate and
+synchronize every package under `skills/packages/<namespace>/<name>.json`
+before starting or restarting the agent. This automatic step is best-effort:
+failure produces a warning but does not block deployment. An unchanged package
+is skipped; a changed package is published as the next version and read back
+for verification.
+
+Use these commands only when you want to inspect or repair skill state without
+rebuilding the agent:
+
+```bash
+./setup.sh skills-check  # Read-only comparison with Git
+./setup.sh skills-sync   # Reconcile packages and verify the result
+```
+
+These explicit commands remain strict and return a non-zero status on drift or
+failure. Set `TRUVAG3_SKILLS_API_URL` for another management host, or set the
+setup-only `TRUVAG3_SKIP_SKILLS_SYNC=true` when automatic deployment sync is
+intentionally unavailable.
+
+If the local Kind cluster is deleted, the next infrastructure bootstrap and
+`./setup.sh deploy` recreate this package from Git. The agent pod does not
+publish skills during startup.
 
 ---
 
@@ -407,6 +440,7 @@ Structured JSON logs with component attribution and trace context:
 ```
 qa-agent/
 ├── main.go                           # Entry point, telemetry init, framework setup
+├── skills.go                         # Skills registry construction
 ├── qa_agent.go                       # Agent with orchestrator, prompt config, capabilities
 ├── handlers.go                       # HTTP handlers (query, health, discover)
 ├── go.mod                            # Go module definition
@@ -414,6 +448,8 @@ qa-agent/
 ├── setup.sh                          # Build and deployment script
 ├── .env.example                      # Environment configuration template
 ├── Dockerfile.workspace              # Development container with local modules
+├── skills/
+│   └── packages/qa/                  # Git-authored QA skill packages
 ├── PRODUCTION_OBSERVABILITY_PLAN.md  # Grafana dashboard + QA UI roadmap
 └── README.md                         # This file
 ```
@@ -482,6 +518,10 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 
 # Restart the deployment (e.g., to pick up a new ConfigMap from .env)
 ./setup.sh rollout
+
+# Inspect or repair agent-owned skill packages without restarting
+./setup.sh skills-check
+./setup.sh skills-sync
 
 # Rebuild image and restart (use after changing Go code)
 ./setup.sh rollout --build

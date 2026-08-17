@@ -31,7 +31,8 @@ This document provides a comprehensive reference for all environment variables s
 18. [Human-in-the-Loop (HITL) Configuration](#human-in-the-loop-hitl-configuration)
 19. [Async Task Configuration](#async-task-configuration)
 20. [Prompt Configuration](#prompt-configuration)
-21. [Quick Reference Table](#quick-reference-table)
+21. [Agent Skills Configuration](#agent-skills-configuration)
+22. [Quick Reference Table](#quick-reference-table)
 
 ---
 
@@ -437,7 +438,7 @@ Only a non-empty environment value overrides the built-in mapping.
 
 | Provider/profile | Override pattern | Examples and route behavior |
 |---|---|---|
-| OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=o3`; Azure resolver maps are keyed by the resulting semantic model |
+| OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`; Azure resolver maps are keyed by the resulting semantic model |
 | DeepSeek | `TRUVAG3_DEEPSEEK_MODEL_{ALIAS}` | Applies to `openai.deepseek` |
 | Groq | `TRUVAG3_GROQ_MODEL_{ALIAS}` | Applies to `openai.groq` |
 | Together AI | `TRUVAG3_TOGETHER_MODEL_{ALIAS}` | Applies to `openai.together` |
@@ -450,8 +451,8 @@ Only a non-empty environment value overrides the built-in mapping.
 | AWS Bedrock | No provider-specific alias environment variable | Use `ai.WithModel` or an SDK-destination `EndpointResolver` |
 
 Resolver maps receive `EndpointRequest.ResolvedModel`, which is the concrete
-post-alias semantic model. For example, a map must use `"o3"` rather than
-`"smart"` after `TRUVAG3_OPENAI_MODEL_SMART=o3`.
+post-alias semantic model. For example, a map must use `"gpt-5.6-sol"` rather
+than `"smart"` after `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`.
 
 Azure semantic resolution uses the immutable built-in OpenAI catalog plus the
 environment overrides above. Runtime mutations of the compatibility variable
@@ -703,7 +704,7 @@ would silently desynchronize them from code on every model release. See:
 
 Providers with an environment-backed model catalog can override an alias
 without recompiling—for example,
-`TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001` or
+`TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5` or
 `TRUVAG3_GROQ_MODEL_FAST=llama-3.1-8b-instant`. See
 [Semantic Model Alias Overrides](#semantic-model-alias-overrides) for the exact
 supported prefixes and the hosted-provider semantic/wire boundary.
@@ -1808,6 +1809,128 @@ export TRUVAG3_PROMPT_DOMAIN="healthcare"
 export TRUVAG3_PROMPT_TYPE_RULES='[{"type_names":["uuid"],"json_type":"JSON strings","example":"\"abc-123\""}]'
 export TRUVAG3_PROMPT_CUSTOM_INSTRUCTIONS='["Prefer local tools", "Minimize API calls"]'
 ```
+
+---
+
+## Agent Skills Configuration
+
+Skills are disabled by default. These variables are read only by the explicit
+orchestration environment-resolution path (`ResolveOrchestratorConfig` with an
+environment mode or `CreateOrchestratorFromEnvironment`). Empty or malformed
+skill values that participate in effective resolution fail both compatible and
+strict modes without echoing their contents; `EnvironmentDisabled` performs no
+environment reads. A non-authoritative tuning value shadowed by an explicit
+code value is not consulted.
+
+Skill environment precedence is intentionally asymmetric. When present,
+`TRUVAG3_SKILLS_ENABLED` and `TRUVAG3_SKILL_BINDINGS_JSON` are authoritative
+deployment settings applied after code options; the binding value replaces the
+complete developer-owned list and never appends or merges. Other skill
+variables fill only fields that code left unset. Model and guidance-file
+variables are read only after skills are effectively enabled with at least one
+binding. This keeps every pod replica on the same eligibility policy while
+preserving explicit code overrides for tuning values.
+
+For a concept-to-operations walkthrough with authoring, binding, Kubernetes,
+and Registry Viewer examples, see the
+[Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md).
+
+### Runtime and binding variables
+
+| Variable | Default | Status | Description |
+|---|---:|---|---|
+| `TRUVAG3_SKILLS_ENABLED` | `false` | **Implemented** | Enable skill runtime. A non-empty binding list and injected `SkillRegistry` are also required. |
+| `TRUVAG3_SKILL_BINDINGS_JSON` | `[]` | **Implemented** | Complete JSON array of `{namespace,name,version,activation,required}` bindings. `version` defaults to `published`; activation is `always`, `auto`, or `explicit`. |
+| `TRUVAG3_SKILL_DOMAIN_COMPATIBILITY_MODE` | `warn` | **Implemented** | `off`, `warn`, or `enforce` comparison between an agent prompt domain and authored skill domains. Domain never changes skill identity. |
+| `TRUVAG3_SKILL_CACHE_MODE` | `local` | **Implemented** | `local` for verified immutable-body LRU caching or `disabled`. Aliases and catalog reads are never cached. |
+| `TRUVAG3_SKILL_CACHE_MAX_BYTES` | `16777216` | **Implemented** | Positive byte capacity of the process-local immutable-content cache. |
+| `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `5s` | **Implemented** | Positive timeout for each runtime registry operation. |
+| `TRUVAG3_SKILL_ACTIVATION_MODEL` | agent/client model | **Implemented** | Model intent for the bounded activation selector. |
+| `TRUVAG3_SKILL_RESOURCE_MODEL` | agent/client model | **Implemented** | Model intent for the bounded resource selector. |
+| `TRUVAG3_SKILL_ACTIVATION_GUIDANCE_FILE` | none | **Implemented** | Mounted UTF-8 file containing bounded additive activation-selector guidance. |
+| `TRUVAG3_SKILL_RESOURCE_GUIDANCE_FILE` | none | **Implemented** | Mounted UTF-8 file containing bounded additive resource-selector guidance. |
+
+Example complete binding replacement:
+
+```bash
+export TRUVAG3_SKILLS_ENABLED=true
+export TRUVAG3_SKILL_BINDINGS_JSON='[
+  {"namespace":"travel","name":"weather-assessment","version":"published","activation":"auto","required":false},
+  {"namespace":"travel","name":"safety-policy","version":"3","activation":"always","required":true}
+]'
+```
+
+Binding behavior is precise:
+
+| Field/value | Runtime behavior |
+|---|---|
+| `version: "published"` | Resolve the mutable publication pointer once at request start, then pin its exact immutable revision and hashes for the execution. |
+| `version: "N"` | Resolve that positive immutable revision; later publications do not affect it. |
+| `activation: "always"` | Activate deterministically whenever candidate resolution admits the binding. |
+| `activation: "auto"` | Let the bounded selector activate it at initial planning or a later continuation boundary. |
+| `activation: "explicit"` | Activate only through the trusted host carrier; user text and ordinary request metadata cannot request it. |
+| `required: true` | Treat candidate/content availability failures as fatal when applicable. This does not force activation. A required binding is invalid while skills are disabled. |
+
+`SkillConfig.RuntimePolicyID` is deliberately code-only and limited to 128
+bytes. It identifies custom activation, resource-resolution, or token-counting
+behavior for response-cache eligibility; it is not a deployment environment
+switch.
+
+Selector guidance is capped at 4,096 bytes and 512 estimated tokens. Selector
+temperature (`0.01`), deliberately unset provider-native response format,
+strict JSON parsing, retry count, fixed prompts, and output ceilings are
+framework contracts and are not environment switches. The unset response
+format avoids provider-specific wire values; the fixed prompt/parser/retry path
+still enforces structured JSON output.
+
+### Runtime limits
+
+| Variable | Default | Status | Description |
+|---|---:|---|---|
+| `TRUVAG3_SKILL_MAX_BINDINGS` | `32` | **Implemented** | Maximum explicit bindings. |
+| `TRUVAG3_SKILL_MAX_AUTO_CANDIDATES` | `16` | **Implemented** | Maximum candidates presented to activation selection. |
+| `TRUVAG3_SKILL_CATALOG_TOKEN_BUDGET` | `2000` | **Implemented** | Body-free activation catalog budget. |
+| `TRUVAG3_SKILL_MAX_RESOURCE_CANDIDATES` | `32` | **Implemented** | Maximum resource-index candidates at one boundary. |
+| `TRUVAG3_SKILL_RESOURCE_CATALOG_TOKEN_BUDGET` | `2000` | **Implemented** | Body-free resource catalog budget. |
+| `TRUVAG3_SKILL_MAX_ACTIVE_SKILLS` | `6` | **Implemented** | Maximum admitted active skills in one execution. |
+| `TRUVAG3_SKILL_TOTAL_TOKEN_BUDGET` | `8192` | **Implemented** | Overall skill projection budget. |
+| `TRUVAG3_SKILL_MAIN_TOKEN_BUDGET` | `6144` | **Implemented** | Main instruction budget. |
+| `TRUVAG3_SKILL_RESOURCE_TOKEN_BUDGET` | `4096` | **Implemented** | Resource-content budget. |
+| `TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE` | `2` | **Implemented** | Resource bodies admitted at one boundary. |
+| `TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION` | `8` | **Implemented** | Distinct resource bodies admitted across an execution. |
+| `TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS` | `512` | **Implemented** | Fixed upper output budget used by selectors. |
+| `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `2048` | **Implemented** | Skill contribution budget at synthesis. |
+| `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `0` | **Implemented** | Optional model-context allowance. When positive, the effective total skill budget is `min(total_token_budget, floor(effective_input_token_budget/10))`; `0` disables this additional 10% cap. |
+
+Response-cache short-circuits are eligible only when the behavior projection is
+stable: either `SkillConfig.RuntimePolicyID` is set, or no custom skill runtime
+component is installed and both selector models are explicitly pinned. Normal
+execution, immutable content caching, and skill correctness do not depend on
+this eligibility bit; an ineligible configuration simply bypasses cached
+answers.
+
+### Included Redis and Registry Viewer host
+
+| Variable | Default | Status | Description |
+|---|---:|---|---|
+| `TRUVAG3_SKILLS_REDIS_DB` | `9` | **Implemented** | Role database used by `redisprovider.NewOwnedClients`; runtime orchestration itself does not read it. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_NAME_CHARS` | `64` | **Example Only** | Registry Viewer skill-management host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_DESCRIPTION_CHARS` | `1024` | **Example Only** | Registry Viewer host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_TOKENS` | `5000` | **Example Only** | Registry Viewer host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_BYTES` | `24576` | **Example Only** | Registry Viewer host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCE_TOKENS` | `8000` | **Example Only** | Per-resource host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCE_BYTES` | `32768` | **Example Only** | Per-resource host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCES` | `32` | **Example Only** | Resources per package host override. |
+| `TRUVAG3_SKILL_AUTHORING_MAX_PACKAGE_BYTES` | `1048576` | **Example Only** | HTTP package body host override. |
+| `TRUVAG3_SKILL_ADMIN_MAX_DELETE_VERSIONS` | `100` | **Example Only** | Maximum inclusive deletion range accepted by the host. |
+| `TRUVAG3_SKILL_AUTHORING_ADVICE_MAX_OUTPUT_TOKENS` | `1024` | **Example Only** | Optional authoring-advisor output ceiling; the bundled host does not configure an advisor in V1. |
+
+The authoring-limit variables belong to the example host, not framework-global
+configuration. Other hosts pass `SkillAuthoringLimits` and
+`SkillAdministrationLimits` directly to `NewSkillAdminHandler`. The Registry
+Viewer binary reads these values from its process environment; its bundled
+`setup.sh` does not automatically forward authoring/admin overrides from the
+invoking shell into Kubernetes.
 
 ---
 

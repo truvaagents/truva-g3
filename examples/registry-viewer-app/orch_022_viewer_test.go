@@ -3,11 +3,38 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/truvaagents/truva-g3/orchestration"
 )
 
 // Tests for ORCH-022 Phase B: registry viewer's normalizeSteps helper.
 // Proves the three branches (PhasePlans multi-phase, single-phase Plan, and
 // legacy Checkpoint-fallback synthesis) and the buildUnifiedView integration.
+
+func TestBuildUnifiedViewPreservesSkillExecutionDebug(t *testing.T) {
+	previousMock := useMock
+	useMock = true
+	t.Cleanup(func() { useMock = previousMock })
+
+	execution := &StoredExecution{
+		RequestID: "request-with-skills",
+		Skills: &orchestration.SkillExecutionDebug{
+			BindingSource: "code",
+			Candidates: []orchestration.SkillCandidateDebug{{
+				Sequence: 1, DisplayName: "Weather Assessment",
+				Description: "Evaluates forecast conditions and travel disruption.",
+			}},
+		},
+	}
+
+	view := buildUnifiedView(execution)
+	if view == nil || view.Skills == nil || view.Skills.BindingSource != "code" ||
+		len(view.Skills.Candidates) != 1 ||
+		view.Skills.Candidates[0].DisplayName != "Weather Assessment" ||
+		view.Skills.Candidates[0].Description != "Evaluates forecast conditions and travel disruption." {
+		t.Fatalf("unified skills = %#v", view)
+	}
+}
 
 func TestNormalizeSteps_MultiPhasePostFix(t *testing.T) {
 	t0 := time.Now()

@@ -19,9 +19,10 @@ Those four are the quick-start keys; this agent's `setup.sh` also accepts
 DeepSeek, xAI, Mistral, Qwen, Together AI, and other OpenAI-compatible providers
 — see `.env.example` and [../../GETTING_STARTED.md](../../GETTING_STARTED.md) §6.
 
-Verbs: `full-deploy`, `deploy`, `rollout`, `rebuild`, plus `cleanup` /
-`cleanup-all` to tear down (this script happens to use `cleanup`; the verb isn't
-consistent across examples). Run `./setup.sh help` for the full list.
+Verbs: `full-deploy`, `deploy`, `rollout`, `rebuild`, `skills-check`, and
+`skills-sync`, plus `cleanup` / `cleanup-all` to tear down (this script happens
+to use `cleanup`; the verb isn't consistent across examples). Run
+`./setup.sh help` for the full list.
 
 ## After editing
 

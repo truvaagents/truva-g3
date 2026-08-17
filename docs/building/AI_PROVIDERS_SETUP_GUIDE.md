@@ -175,7 +175,7 @@ auto-detection requires an explicitly configured loopback `OLLAMA_BASE_URL`
 whose `/models` endpoint responds; use an explicit alias for a remote Ollama
 endpoint.
 
-**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `o3`, Anthropic resolves it to `claude-sonnet-4-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
+**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `gpt-5.6-sol`, Anthropic resolves it to `claude-opus-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
 
 ### When to Use Which
 
@@ -288,8 +288,8 @@ No code changes needed. The proxy gets all Groq traffic for logging/monitoring.
 ### The Model Name Problem
 
 Every AI provider has different model names:
-- OpenAI: `gpt-4.1-mini`, `o3`, `gpt-4.1`
-- Anthropic: `claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`
+- OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`
+- Anthropic: `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`
 - Groq: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
 
 If you hardcode model names, switching providers means changing code everywhere. And when providers release new models? More code changes.
@@ -308,14 +308,14 @@ client, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | Gemini | Groq | DeepSeek |
 |-------|---------|--------|-----------|--------|------|----------|
-| `default` | General catalog choice | `gpt-4.1-mini` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `fast` | Latency-oriented catalog choice | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
-| `smart` | Reasoning-oriented catalog choice | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
-| `premium` | Highest-tier catalog choice | _(N/A)_ | `claude-opus-4-5-20251101` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
-| `code` | Code-oriented catalog choice | `o3` | `claude-sonnet-4-5-20250929` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-sonnet-4-5-20250929` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
+| `default` | General catalog choice | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
+| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
+| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
+| `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
+| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
+| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
 
-> **Note**: The `premium` alias is only available for Anthropic and Gemini.
+> **Note**: The `premium` alias is available for OpenAI, Anthropic, and Gemini.
 > Other built-in catalogs use `smart` for their reasoning-oriented choice.
 
 The table reports the aliases compiled into this branch, not a guarantee that
@@ -354,10 +354,10 @@ Here's where it gets powerful. You can override any alias at runtime without cha
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}=actual-model-name
 
 # Override OpenAI's "smart" alias
-export TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
+export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-terra
 
 # Override Anthropic's "fast" alias
-export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
+export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
 
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
@@ -367,7 +367,7 @@ export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
 ```
 
 **Why this matters for ops**:
-- **Cost control**: Set `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1-mini` in dev to save money
+- **Cost control**: Set `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-luna` in dev to use the efficient tier
 - **A/B testing**: Route traffic to different models without code changes
 - **Rollback**: If a new model has issues, switch back via env var
 
@@ -382,7 +382,7 @@ When you call `client.GenerateResponse(ctx, prompt, &core.AIOptions{Model: "smar
 
 2. **Hardcoded alias mapping**
    ```go
-   modelAliases["openai"]["smart"] = "o3"  // Built-in default
+   modelAliases["openai"]["smart"] = "gpt-5.6-sol"  // Built-in default
    ```
 
 3. **Pass-through** (lowest priority)
@@ -484,12 +484,12 @@ This is a subtle bug that caused real production issues before we fixed it. Here
 ```
 Step 1: Request with Model="smart"
         Chain Client tries OpenAI
-        OpenAI resolves "smart" → "o3"
+        OpenAI resolves "smart" → "gpt-5.6-sol"
         OpenAI fails with 401
 
 Step 2: Chain Client tries Anthropic
-        Options still has Model="o3" (from OpenAI!)
-        Anthropic doesn't know "o3"
+        Options still has Model="gpt-5.6-sol" (from OpenAI!)
+        Anthropic doesn't know "gpt-5.6-sol"
         Anthropic uses default model instead of resolving "smart"
 ```
 
@@ -650,8 +650,8 @@ ANTHROPIC_API_KEY=sk-ant-staging-key
 GROQ_API_KEY=gsk-staging-key
 
 # But use mid-tier models to save costs
-TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1-mini
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-haiku-4-5-20251001
+TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-terra
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-haiku-4-5
 ```
 
 **Code**:
@@ -687,8 +687,8 @@ ANTHROPIC_API_KEY=sk-ant-prod-key
 GROQ_API_KEY=gsk-prod-key
 
 # Use the models approved for this production workload
-TRUVAG3_OPENAI_MODEL_SMART=o3
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-sonnet-4-5-20250929
+TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
 TRUVAG3_GROQ_MODEL_SMART=openai/gpt-oss-120b
 ```
 
@@ -865,8 +865,8 @@ metadata:
   name: ai-model-config
   namespace: development
 data:
-  TRUVAG3_OPENAI_MODEL_SMART: "gpt-4.1-mini"
-  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-haiku-4-5-20251001"
+  TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-terra"
+  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-haiku-4-5"
   TRUVAG3_GROQ_MODEL_DEFAULT: "llama-3.1-8b-instant"
 
 ---
@@ -877,8 +877,8 @@ metadata:
   name: ai-model-config
   namespace: production
 data:
-  TRUVAG3_OPENAI_MODEL_SMART: "o3"
-  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-sonnet-4-5-20250929"
+  TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-sol"
+  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-opus-5"
   TRUVAG3_GROQ_MODEL_DEFAULT: "openai/gpt-oss-120b"
 ```
 
@@ -969,7 +969,7 @@ kubectl exec -it pod/my-ai-service-xxx -- env | grep API_KEY
 
 ### Issue 2: Wrong Model Being Used
 
-**Symptom**: Logs show `gpt-4.1-mini` but you expected `o3`
+**Symptom**: Logs show `gpt-5.6-luna` but you expected `gpt-5.6-sol`
 
 **Cause**: Environment variable override is taking precedence
 
@@ -979,14 +979,14 @@ kubectl exec -it pod/my-ai-service-xxx -- env | grep API_KEY
 env | grep TRUVAG3_
 
 # Look for:
-TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1-mini  # This overrides the default!
+TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-luna  # This overrides the default!
 ```
 
 **Fix**: Clear the override or set it to the model you want:
 ```bash
 unset TRUVAG3_OPENAI_MODEL_SMART
 # or
-export TRUVAG3_OPENAI_MODEL_SMART=o3
+export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
 ```
 
 ### Issue 3: Failover Not Working
@@ -1680,7 +1680,7 @@ and **stops immediately** — it does not try the next provider. This silently
 breaks failover.
 
 Portable aliases work because each provider resolves them independently:
-- `"fast"` → Anthropic resolves to Haiku, OpenAI resolves to gpt-4.1-mini
+- `"fast"` → Anthropic resolves to Haiku 4.5, OpenAI resolves to GPT-5.6 Luna
 - Failover works correctly since each provider gets a model it recognizes
 
 **Example** — route each orchestration phase to an appropriate model tier:
@@ -1693,10 +1693,10 @@ TRUVAG3_MICRO_RESOLUTION_MODEL=fast
 TRUVAG3_RESULT_DISTILL_MODEL=fast
 
 # Optionally control which concrete model each alias maps to per-provider
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-4-6
-TRUVAG3_OPENAI_MODEL_SMART=o3
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
+TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
 TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
-TRUVAG3_OPENAI_MODEL_FAST=gpt-4.1-mini
+TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna
 ```
 
 Or programmatically:
@@ -1771,7 +1771,7 @@ OLLAMA_BASE_URL=http://...
 ```bash
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}
 TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
-TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5-20251001
+TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
 TRUVAG3_GROQ_MODEL_DEFAULT=openai/gpt-oss-120b
 TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
 # For openai.deepseek, strip prefix → TRUVAG3_DEEPSEEK_MODEL_*

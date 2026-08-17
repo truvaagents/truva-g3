@@ -133,7 +133,6 @@ func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger 
 	//
 	// The enrichment hook and record hook have SEPARATE extractor defaults
 	// because they operate at different pipeline stages with different data.
-	// See orchestration/notes/LLM_NATIVE_ENTITY_EXTRACTION_PROPOSAL.md §6.2.2.
 	//
 	// Record extractor (AfterExecution):
 	//   - aiClient != nil → LLMEntityExtractor (piggybacks on EventSummarizer)

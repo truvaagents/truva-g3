@@ -163,8 +163,6 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 //
 // This fixes the critical bug where ChainClient captures NoOpLogger during
 // agent construction (before Framework sets the real logger).
-//
-// See: ai/notes/LOGGING_TELEMETRY_AUDIT.md - "CRITICAL BUG: AI Module Logger Not Propagated"
 func (c *ChainClient) SetLogger(logger core.Logger) {
 	if logger == nil {
 		c.logger = &core.NoOpLogger{}

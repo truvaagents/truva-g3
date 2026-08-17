@@ -142,7 +142,7 @@ func prepareAIInvocation(ctx context.Context, invocation aiInvocation) (*prepare
 	prepared.Prompt = renderUserPrompt(assembly)
 	prepared.Options = options
 	prepared.Patches = append([]core.AIProviderPatch(nil), assembly.ProviderPatches...)
-	if len(promptFinalizers(kind)) > 0 {
+	if requiresFinalizedSystemPrompt(ctx, kind) {
 		// Planning finalizers are immutable framework contracts. An explicit
 		// provider-level omission may remove developer content, but it cannot
 		// remove the finalized runtime context from the actual request.
@@ -334,20 +334,23 @@ func effectiveAIIdentity(result *aiInvocationResult, response *core.AIResponse, 
 			model = result.Effective.RequestedModel
 		}
 	}
-	if errorModel, errorProvider := extractErrorProviderInfo(callErr); errorModel != "" || errorProvider != "" {
-		if errorModel != "" {
-			model = errorModel
-		}
-		if errorProvider != "" {
-			provider = errorProvider
-		}
-	}
 	if result != nil {
 		if result.Effective.ResolvedModel != "" {
 			model = result.Effective.ResolvedModel
 		}
 		if result.Report != nil && result.Report.Provider != "" {
 			provider = result.Report.Provider
+		}
+	}
+	// A provider error identifies the model that actually failed and therefore
+	// outranks requested/resolved preparation metadata. A response, when one is
+	// returned, remains the final authority below.
+	if errorModel, errorProvider := extractErrorProviderInfo(callErr); errorModel != "" || errorProvider != "" {
+		if errorModel != "" {
+			model = errorModel
+		}
+		if errorProvider != "" {
+			provider = errorProvider
 		}
 	}
 	if response != nil {
@@ -384,6 +387,16 @@ func withEffectiveAIRequest(
 	interaction.Temperature = effectiveAITemperature(effective, fallbackTemperature)
 	interaction.MaxTokens = effectiveAIMaxTokens(effective, fallbackMaxTokens)
 	interaction.Model, interaction.Provider = effectiveAIIdentity(result, response, callErr)
+	interaction.RequestedModel = effective.RequestedModel
+	interaction.EffectiveModel = effective.ResolvedModel
+	if interaction.EffectiveModel == "" {
+		interaction.EffectiveModel = interaction.Model
+	}
+	interaction.Adjustments = append([]core.AIRequestAdjustment(nil), effective.Adjustments...)
+	interaction.PolicyFingerprint = effective.PolicyFingerprint
+	if result != nil && result.Report != nil {
+		interaction.PolicyStable = result.Report.Stable
+	}
 	return interaction
 }
 

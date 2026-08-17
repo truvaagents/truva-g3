@@ -1,0 +1,37 @@
+{
+  "display_name": "Web Application Testing",
+  "description": "Use when a web application or website request needs page exploration, reusable browser-test discovery, Playwright test authoring, test execution, accessibility checks, or evidence-based QA reporting.",
+  "domains": ["qa", "qa-testing", "web-testing"],
+  "tags": ["accessibility", "browser", "playwright", "regression", "testing"],
+  "planning_instructions": [
+    "Inspect the current page structure and discover reusable tests for the target hostname in parallel before authoring a new test suite.",
+    "Run a reusable test by its returned name when it matches the target and remains usable; otherwise author a fresh suite from current exploration evidence. Give a fresh reusable script a concise base name without a file extension.",
+    "For a fresh suite, create 15 to 25 focused tests that combine structural checks such as visibility, landmarks, accessible names, and console errors with functional interactions supported by the explored page.",
+    "Use exact text and selector evidence returned by page exploration. Prefer role-and-name locators for navigation elements, because a reported destination URL may differ from the element's DOM attribute.",
+    "When exploration identifies a single-page application, wait for hydration with page.waitForLoadState('networkidle') after navigation. Include keyboard and accessible-name checks when the discovered markup supports them.",
+    "Make every test navigate to its target independently, use soft assertions for non-critical checks, and treat cross-origin font-loading noise as non-actionable unless the request specifically covers it.",
+    "Use only these Playwright assertions: locator assertions toBeVisible, toBeHidden, toBeEnabled, toBeDisabled, toBeEditable, toBeEmpty, toBeChecked, toBeFocused, toBeAttached, toBeInViewport, toContainText, toHaveText, toHaveAttribute, toHaveClass, toHaveCount, toHaveCSS, toHaveId, toHaveValue, and toHaveAccessibleName; page assertions toHaveTitle and toHaveURL; for numeric counts, read locator.count() and compare the number with a numeric assertion.",
+    "After test execution, use the returned pass and failure details plus the artifact base path when present as evidence for the required tracking record and team notification. State that artifacts are unavailable when no base path is returned.",
+    "When a step consumes another step's result, declare a same-phase producer in depends_on and a prior-phase producer in implicit_deps. Reference only top-level output fields advertised by the current capability schema; pass a declared collection to semantic parameter resolution when one item must be selected.",
+    "Create the tracking record only after the test-execution result is available. Read the current output summary and use its declared record reference and human-facing link fields exactly in the dependent notification."
+  ],
+  "response_instructions": [
+    "Report the target, passed and failed counts, concrete failure details, tracking-record result, notification result, and artifact location when available. Distinguish an executed action from an intended or unsuccessful action."
+  ],
+  "tool_hints": [
+    "Select capabilities that inspect current page structure and discover reusable tests before selecting browser-test execution.",
+    "After test results are available, select work-tracking and team-notification capabilities that can return concrete completion evidence."
+  ],
+  "activation_examples": {
+    "should_activate": [
+      "Explore and test https://example.com",
+      "Run the reusable regression tests for our account portal",
+      "Check this web page for navigation and accessibility problems"
+    ],
+    "should_not_activate": [
+      "Check the health of a Kubernetes deployment",
+      "Convert 100 USD to EUR"
+    ]
+  },
+  "change_reason": "Move reusable browser QA procedures out of the dedicated agent prompt"
+}

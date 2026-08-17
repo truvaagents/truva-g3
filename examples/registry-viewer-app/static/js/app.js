@@ -9,6 +9,7 @@ import * as registry from './views/registry.js';
 import * as llmDebug from './views/llm-debug.js';
 import * as hitl from './views/hitl.js';
 import * as dag from './views/dag.js';
+import * as skills from './views/skills.js';
 import * as memory from './views/memory.js';
 
 // ─── View Registry ──────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ const views = {
     'llm-debug': llmDebug,
     'hitl': hitl,
     'dag': dag,
+    'skills': skills,
     'memory': memory,
 };
 
@@ -47,10 +49,11 @@ function switchView(view) {
 
     // Toggle layout class for different views
     const mainContainer = document.getElementById('mainContainer');
-    mainContainer.classList.remove('llm-debug-view', 'hitl-view', 'dag-view', 'memory-view');
+    mainContainer.classList.remove('llm-debug-view', 'hitl-view', 'dag-view', 'skills-view', 'memory-view');
     if (view === 'llm-debug') mainContainer.classList.add('llm-debug-view');
     if (view === 'hitl') mainContainer.classList.add('hitl-view');
     if (view === 'dag') mainContainer.classList.add('dag-view');
+    if (view === 'skills') mainContainer.classList.add('skills-view');
     if (view === 'memory') mainContainer.classList.add('memory-view');
 
     // Toggle panels
@@ -66,6 +69,9 @@ function switchView(view) {
     document.getElementById('dagListPanel').classList.toggle('hidden', view !== 'dag');
     document.getElementById('dagDetailPanel').classList.toggle('hidden', view !== 'dag');
     document.getElementById('dagResizeHandle').classList.toggle('hidden', view !== 'dag');
+    document.getElementById('skillsListPanel').classList.toggle('hidden', view !== 'skills');
+    document.getElementById('skillsDetailPanel').classList.toggle('hidden', view !== 'skills');
+    document.getElementById('skillsResizeHandle').classList.toggle('hidden', view !== 'skills');
     document.getElementById('memoryListPanel').classList.toggle('hidden', view !== 'memory');
     document.getElementById('memoryDetailPanel').classList.toggle('hidden', view !== 'memory');
     document.getElementById('memoryResizeHandle').classList.toggle('hidden', view !== 'memory');
@@ -75,6 +81,7 @@ function switchView(view) {
     document.getElementById('llmDebugStats').classList.toggle('hidden', view !== 'llm-debug');
     document.getElementById('hitlStats').classList.toggle('hidden', view !== 'hitl');
     document.getElementById('dagStats').classList.toggle('hidden', view !== 'dag');
+    document.getElementById('skillsStats').classList.toggle('hidden', view !== 'skills');
     document.getElementById('memoryStats').classList.toggle('hidden', view !== 'memory');
 
     // Handle auto-refresh per view — restart the interval so it picks up
@@ -96,6 +103,7 @@ const VIEW_REFRESH_INTERVALS = {
     'registry':  15000,  // Services register/deregister infrequently
     'llm-debug': 30000,  // High volume, keep polling gentle
     'dag':       30000,  // Execution list changes slowly
+    'skills':    30000,  // Published metadata changes through operator actions
     'hitl':       5000,  // Time-sensitive approvals
     // 'memory'   — runs its own per-endpoint timers, global refresh still fires
 };
@@ -197,6 +205,7 @@ function setupResizablePanels() {
     setupResizeHandle('llmResizeHandle', 'llmDebugListPanel', '35%');
     setupResizeHandle('hitlResizeHandle', 'hitlListPanel', '40%');
     setupResizeHandle('dagResizeHandle', 'dagListPanel', '35%');
+    setupResizeHandle('skillsResizeHandle', 'skillsListPanel', '38%');
     setupResizeHandle('memoryResizeHandle', 'memoryListPanel', '35%');
 }
 

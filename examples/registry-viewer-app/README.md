@@ -9,6 +9,7 @@ A standalone, real-time web dashboard for viewing services registered in a Redis
 - [Setup Script Commands](#setup-script-commands)
 - [Configuration](#configuration)
 - [API Endpoints](#api-endpoints)
+- [Skills Management](#skills-management)
 - [Service Data Structure](#service-data-structure)
 - [Docker](#docker)
 - [Kubernetes Deployment](#kubernetes-deployment)
@@ -47,8 +48,22 @@ A standalone, real-time web dashboard for viewing services registered in a Redis
 
 ### UI Features
 - Dark theme optimized for monitoring
-- Tab-based navigation (Services / LLM Debug)
+- Navigation for Registry, LLM Debug, HITL, Execution DAG, Skills, and Memory
 - Zero external framework dependencies
+
+### Skills Management
+
+For the complete authoring, binding, runtime, and operational workflow, see the
+[Agent Skills Guide](../../docs/orchestration/AGENT_SKILLS_GUIDE.md).
+
+- Browse published skill metadata and exact version history
+- Inspect the complete current package; use the exact-version API for an older
+  retained package body (the UI history cards remain body-free)
+- Create or edit complete packages with schema and deterministic validation
+- Publish with optimistic ETag preconditions and idempotency keys
+- Delete one version or a bounded inclusive range with protected-version checks
+- Inspect each execution's body-free candidate, activation, resource-load,
+  projection, and diagnostic evidence in its **Skills** tab
 
 ## 🚀 Quick Start
 
@@ -140,6 +155,32 @@ Environment variables override command-line flags, making the app easy to config
 | `REDIS_NAMESPACE` | Redis key namespace (overrides `-namespace`) |
 | `USE_MOCK` | Set to `false` to use Redis (overrides `-mock`) |
 | `PORT` | HTTP server port (overrides `-port`) |
+| `APP_ENV` | Selects the `development` (default), `staging`, or `production` telemetry profile |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP endpoint used by Registry Viewer and framework telemetry |
+| `TRUVAG3_SKILLS_REDIS_DB` | Redis role database for skill packages (default `9`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_NAME_CHARS` | Maximum namespace/name/domain/tag/resource slug length (default `64`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_DESCRIPTION_CHARS` | Maximum main skill catalog-description length (default `1024`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_TOKENS` | Maximum estimated tokens in one main manifest (default `5000`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_BYTES` | Maximum bytes in the main normative guidance (default `24576`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCE_TOKENS` | Maximum estimated tokens in one resource (default `8000`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCE_BYTES` | Maximum bytes in one resource (default `32768`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_RESOURCES` | Maximum resources in one package (default `32`) |
+| `TRUVAG3_SKILL_AUTHORING_MAX_PACKAGE_BYTES` | Maximum HTTP package body size (default `1048576`) |
+| `TRUVAG3_SKILL_ADMIN_MAX_DELETE_VERSIONS` | Maximum versions in one inclusive deletion range (default `100`) |
+| `TRUVAG3_SKILL_AUTHORING_ADVICE_MAX_OUTPUT_TOKENS` | Advisor output ceiling if an advisor is configured (default `1024`) |
+
+The `TRUVAG3_SKILL_AUTHORING_*` and admin variables above are Registry Viewer
+host settings, not framework-global environment variables. Invalid or
+non-positive values fail application startup. See the
+[central environment reference](../../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md#agent-skills-configuration)
+for the runtime variables consumed by skill-enabled agents.
+
+The binary reads these settings from its process environment. The bundled
+`setup.sh` currently materializes `TRUVAG3_SKILLS_REDIS_DB` but does not copy the
+authoring/admin overrides from the invoking shell into the Deployment. For a
+persistent Kubernetes override, add the chosen keys to your deployment
+configuration (and to the example ConfigMap/env mapping if you retain the
+bundled manifest).
 
 ### Kubernetes ConfigMap
 
@@ -168,6 +209,20 @@ REDIS_URL=redis://custom-redis:6379 ./setup.sh deploy
 | `GET /api/executions?group_conversations=true` | List server-owned conversation groups; stable DB 8 sorts support filter-aware cursor pagination |
 | `GET /api/executions/{request_id}/unified` | Get the unified execution, DAG, LLM, HITL, trace, and conversation detail |
 | `GET /api/conversations?conversation_id={id}` | Get one verified chronological conversation timeline |
+| `GET /api/v1/skills` | List body-free published skill metadata; optional `namespace`, `domain`, `tag`, and `limit` filters |
+| `GET /api/v1/skills/schema` | Get the complete authoring JSON Schema with its active constraints |
+| `POST /api/v1/skills/{namespace}/{name}/validate` | Deterministically normalize and validate a complete package without mutation |
+| `PUT /api/v1/skills/{namespace}/{name}` | Publish using `If-None-Match: *` or the current `If-Match` ETag |
+| `GET /api/v1/skills/{namespace}/{name}` | Read the complete published representation and ETag |
+| `GET /api/v1/skills/{namespace}/{name}/versions` | List bounded body-free version history |
+| `GET /api/v1/skills/{namespace}/{name}/versions/{version}` | Read one retained complete version |
+| `DELETE /api/v1/skills/{namespace}/{name}/versions/{version}` | Guarded single-version deletion |
+| `DELETE /api/v1/skills/{namespace}/{name}/versions?from=N&to=M` | Guarded inclusive-range deletion |
+
+`POST .../analyze` is registered only when the host supplies an optional
+`SkillAuthoringAdvisor`; the bundled Registry Viewer does not configure one by
+default. The framework does not add authentication or authorization—the host,
+ingress, service mesh, and platform policy own endpoint protection.
 
 The conversation endpoints read the existing framework-owned Redis DB 7 and
 DB 8 data. The Registry Viewer does not create, repair, expire, or otherwise

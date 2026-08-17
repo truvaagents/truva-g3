@@ -26,6 +26,66 @@ func init() {
 		},
 	})
 
+	telemetry.DeclareMetrics("orchestration_skills", telemetry.ModuleConfig{
+		Metrics: []telemetry.MetricDefinition{
+			{
+				Name: skillOperationTotalMetric,
+				Type: "counter", Help: "Bounded runtime skill operation outcomes",
+				Labels: []string{"module", "stage", "boundary", "outcome"},
+			},
+			{
+				Name: skillOperationDurationMetric,
+				Type: "histogram", Help: "Runtime skill operation latency",
+				Labels: []string{"module", "stage", "boundary", "outcome"}, Unit: "ms",
+				Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000},
+			},
+			{
+				Name: skillCandidateBatchMetric,
+				Type: "histogram", Help: "Resolved skill candidates in one authoritative batch",
+				Labels: []string{"module", "boundary", "outcome"}, Unit: "candidates",
+				Buckets: []float64{1, 2, 4, 8, 16, 32},
+			},
+			{
+				Name: skillSelectorTokensMetric,
+				Type: "histogram", Help: "Skill selector and advisor token usage",
+				Labels: []string{"module", "selector", "token_kind", "outcome"}, Unit: "tokens",
+				Buckets: []float64{16, 64, 128, 256, 512, 1024, 2048, 4096},
+			},
+			{
+				Name: skillContentCacheMetric,
+				Type: "counter", Help: "Immutable skill content cache outcomes",
+				Labels: []string{"module", "content_kind", "outcome"},
+			},
+			{
+				Name: skillPromptTokensMetric,
+				Type: "histogram", Help: "Estimated tokens in admitted skill prompt projections",
+				Labels: []string{"module", "prompt_kind", "boundary"}, Unit: "tokens",
+				Buckets: []float64{16, 64, 128, 256, 512, 1024, 2048, 4096, 8192},
+			},
+			{
+				Name: skillIntegrityMetric,
+				Type: "counter", Help: "Skill content integrity verification outcomes",
+				Labels: []string{"module", "content_kind", "source", "retry_outcome", "action"},
+			},
+			{
+				Name: skillAuthoringDiagnosticMetric,
+				Type: "counter", Help: "Bounded skill authoring diagnostics",
+				Labels: []string{"module", "severity", "diagnostic_code", "operation"},
+			},
+			{
+				Name: skillAdminOperationTotalMetric,
+				Type: "counter", Help: "Bounded skill administration operation outcomes",
+				Labels: []string{"module", "operation", "outcome"},
+			},
+			{
+				Name: skillAdminOperationDurationMetric,
+				Type: "histogram", Help: "Skill administration operation latency",
+				Labels: []string{"module", "operation", "outcome"}, Unit: "ms",
+				Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000},
+			},
+		},
+	})
+
 	// Declare workflow executor metrics
 	telemetry.DeclareMetrics("workflow", telemetry.ModuleConfig{
 		Metrics: []telemetry.MetricDefinition{

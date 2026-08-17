@@ -411,6 +411,74 @@ Both conversation store limits accept positive integers. A request-level
 lookup limit is additionally clamped to `ConversationQueryLimit`; stale-member
 work never exceeds `ConversationIndexScanLimit`.
 
+## Agent Skills
+
+See the [Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md) for how
+these authoring and runtime limits affect progressive disclosure in practice.
+
+### Runtime disclosure
+
+The global precedence statement at the top has one deliberate skills
+exception: when present, `TRUVAG3_SKILLS_ENABLED` and
+`TRUVAG3_SKILL_BINDINGS_JSON` override code options and define deployment-wide
+eligibility. Other skill environment values fill only code fields left unset.
+
+| What | Default / Limit | Environment | Programmatic Override |
+|---|---:|---|---|
+| Skills enabled | false | `TRUVAG3_SKILLS_ENABLED` | `WithSkills(SkillConfig{Enabled: ...})` |
+| Complete binding list | empty; max 32 | `TRUVAG3_SKILL_BINDINGS_JSON` (complete replacement) | `WithSkills` / `SkillConfig.Bindings` |
+| Domain compatibility | warn | `TRUVAG3_SKILL_DOMAIN_COMPATIBILITY_MODE` | `SkillConfig.DomainCompatibilityMode` |
+| Auto candidates | 16 | `TRUVAG3_SKILL_MAX_AUTO_CANDIDATES` | `SkillConfig.Limits.MaxAutoCandidates` |
+| Activation catalog | 2000 tokens | `TRUVAG3_SKILL_CATALOG_TOKEN_BUDGET` | `SkillConfig.Limits.CatalogTokenBudget` |
+| Active skills | 6 | `TRUVAG3_SKILL_MAX_ACTIVE_SKILLS` | `SkillConfig.Limits.MaxActiveSkills` |
+| Main / resource / total tokens | 6144 / 4096 / 8192 | `TRUVAG3_SKILL_MAIN_TOKEN_BUDGET`, `TRUVAG3_SKILL_RESOURCE_TOKEN_BUDGET`, `TRUVAG3_SKILL_TOTAL_TOKEN_BUDGET` | `SkillConfig.Limits` |
+| Resource candidates | 32 | `TRUVAG3_SKILL_MAX_RESOURCE_CANDIDATES` | `SkillConfig.Limits.MaxResourceCandidates` |
+| Resource catalog | 2000 tokens | `TRUVAG3_SKILL_RESOURCE_CATALOG_TOKEN_BUDGET` | `SkillConfig.Limits.ResourceCatalogTokenBudget` |
+| Resources per phase / execution | 2 / 8 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE`, `TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION` | `SkillConfig.Limits` |
+| Selector output | 512 tokens | `TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS` | `SkillConfig.Limits.ResolutionMaxTokens` |
+| Synthesis skill projection | 2048 tokens | `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `SkillConfig.Limits.SynthesisTokenBudget` |
+| Effective-input allowance | disabled (`0`); skills use at most 10% when set | `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `SkillConfig.Limits.EffectiveInputTokenBudget` |
+| Registry operation timeout | 5s | `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `SkillConfig.Limits.RegistryReadTimeout` |
+| Immutable content cache | local, 16 MiB | `TRUVAG3_SKILL_CACHE_MODE`, `TRUVAG3_SKILL_CACHE_MAX_BYTES` | `SkillConfig.Cache` / `WithSkillContentCache` |
+| Selector guidance | 4096 bytes and 512 estimated tokens | `TRUVAG3_SKILL_ACTIVATION_GUIDANCE_FILE`, `TRUVAG3_SKILL_RESOURCE_GUIDANCE_FILE` | `WithSkillPromptGuidance` |
+| Runtime policy ID | 128 bytes | none (code-only) | `SkillConfig.RuntimePolicyID` |
+| Trusted explicit activations / resource requests | 32 / 32 | none | `WithTrustedSkillActivations` / `WithTrustedSkillResourceRequests` |
+| Expected capability hints | 32 values, 128 bytes each | none | `WithSkillExpectedCapabilities` |
+
+The selector temperature (`0.01`), deliberately unset provider-native response
+format, strict JSON parsing, two-attempt parse limit, framework prompts, and
+reserved prompt tags are fixed contracts. V1 leaves response format unset
+because provider wire values differ; the prompt/parser/retry path supplies the
+portable structured-output contract. The legacy AI-client adapter cannot
+represent an explicitly set zero generation value, which is why V1 uses the
+non-zero low temperature. Request-aware clients remain the recommended path.
+
+### Authoring and management
+
+| What | Default / Limit | Host Override |
+|---|---:|---|
+| Namespace/name/domain/tag/resource slugs / description | 64 / 1024 characters | `SkillAuthoringLimits` |
+| Manifest | 5000 tokens and 24 KiB | `SkillAuthoringLimits` |
+| One resource | 8000 tokens and 32 KiB | `SkillAuthoringLimits` |
+| Resources / package | 32 / 1 MiB | `SkillAuthoringLimits` |
+| Validation-rule diagnostics | 64 maximum | Fixed framework contract |
+| Diagnostic code / path / message | 64 / 256 / 1024 bytes | Fixed framework contract |
+| Advisor findings / patches / summary | 16 / 16 / 2048 bytes | Fixed framework contract |
+| Delete range | 100 versions | `SkillAdministrationLimits.MaxDeleteVersions` |
+| Idempotency key / audit reason / actor | 256 / 1024 / 256 bytes | Fixed wire contract |
+| Package `change_reason` | 1024 UTF-8 bytes | Fixed audit contract |
+| Resource content types | `text/plain`, `text/markdown` | Fixed V1 contract |
+| Protected deletion set | published and published−1 | Fixed safety contract |
+
+Authoring also emits quality warnings before the hard limits at 320 description
+characters, 2,500 manifest tokens, 4,000 tokens per resource, 12 resources,
+256 KiB per package, or 3,000 combined instruction tokens. Warnings do not
+silently rewrite or reject a package; errors enforce the hard limits above.
+
+The included Redis role uses database 9 by default and can be changed with
+`TRUVAG3_SKILLS_REDIS_DB`. This is adapter configuration; orchestration runtime
+depends only on the provider-neutral skill interfaces.
+
 ## Capability Provider (Service Mode)
 
 | What | Default | Env Var | `With*` Option |

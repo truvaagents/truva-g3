@@ -131,7 +131,7 @@ func TestPromptAssembly_RejectsSpoofedReservedRuntimeContextBeforeProvider(t *te
 	}
 }
 
-func TestPromptAssembly_SynthesisHasNoRuntimeFinalizer(t *testing.T) {
+func TestPromptAssembly_SynthesisFinalizerIsNoOpWithoutProjection(t *testing.T) {
 	prepared, err := prepareAIInvocation(context.Background(), aiInvocation{
 		Purpose: "synthesis",
 		Prompt:  "prompt",
@@ -143,8 +143,10 @@ func TestPromptAssembly_SynthesisHasNoRuntimeFinalizer(t *testing.T) {
 	if got := prepared.Request.LegacyOptions().SystemPrompt; got != "synthesis persona" {
 		t.Fatalf("synthesis system prompt = %q", got)
 	}
-	if len(promptFinalizers(promptSynthesis)) != 0 {
-		t.Fatal("synthesis unexpectedly has a framework finalizer")
+	if strings.Contains(prepared.Effective.SystemPrompt, "<runtime_context>") ||
+		strings.Contains(prepared.Effective.SystemPrompt, "<skill_precedence>") ||
+		prepared.Effective.Prompt != "prompt" {
+		t.Fatalf("no-projection synthesis changed = %#v", prepared.Effective)
 	}
 }
 

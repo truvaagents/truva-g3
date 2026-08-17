@@ -1,0 +1,39 @@
+{
+  "display_name": "Evidence-Driven Incident Response",
+  "description": "Use when an alert, latency regression, workload failure, unavailable service, or other operational incident needs evidence gathering, safe remediation, verification, work-tracking follow-up, and a team notification.",
+  "domains": ["incident-response", "operations"],
+  "tags": ["alert", "evidence", "kubernetes", "remediation", "verification"],
+  "planning_instructions": [
+    "Investigate before changing state. For latency or availability symptoms, gather bounded metrics; for workload symptoms, gather current workload state, detailed resource conditions or events, and bounded recent logs. Run independent evidence requests in parallel.",
+    "Treat an empty metric result as unavailable evidence rather than proof of health or failure. Corroborate it with workload state, endpoints, application logs, or another independent signal before identifying a cause.",
+    "When a later action needs one identifier from a structured collection, complete collection discovery in one phase and pass the prior step's declared top-level result collection into the later phase for semantic parameter resolution. Extract and supply one concrete scalar identifier to a scalar parameter.",
+    "Prefer direct discovered evidence and action capabilities. Delegate to another agent only when the current catalog lacks a direct capability or the request needs genuinely different specialist judgment.",
+    "Before a state-changing operation, identify the exact resource and scope, inspect its current state, respect the configured approval policy, perform the smallest justified change, and poll until the intended stable state or a bounded timeout. Verify the final state with concrete evidence.",
+    "After investigation and any remediation verification, locate a recent matching operational record from memory or the discovered work-tracking system, update an open match, or create a record when no match exists. Include severity, alert fingerprint, evidence, root cause or remaining uncertainty, remediation or no-change decision, and verification. Make the team notification depend on the record action so it can use the exact returned reference and human-facing link field advertised by the current capability schema.",
+    "Treat a capability action as complete only after its returned result confirms success. Record unsuccessful, timed-out, or still-progressing actions with their observed state and attempted recovery.",
+    "For command-style results, require a zero exit code and no error output in addition to a successful transport or wrapper status. Do not claim that a change was applied when the command failed, or that verification passed when the expected observable state did not change.",
+    "When a delegated specialist already returns confirmed tracking-record and notification outcomes, reuse those results and do not create duplicate follow-up actions. Verify any delegated remediation claim against its returned command outcome and post-change evidence.",
+    "When a step consumes another step's result, declare a same-phase producer in depends_on and a prior-phase producer in implicit_deps. Reference only top-level output fields advertised by the current capability schema; pass a declared collection to semantic parameter resolution when one item must be selected."
+  ],
+  "response_instructions": [
+    "Separate observed evidence from inference, state when a signal returned no data, and summarize the affected scope, root cause or remaining uncertainty, remediation or no-change decision, final verification, and exact tracking-record and notification outcomes. Never describe a failed command or unchanged verification signal as a successful remediation.",
+    "Keep the operations notification brief and human-readable while retaining decisive metric values, resource names, verification evidence, and the returned record URL."
+  ],
+  "tool_hints": [
+    "Select direct capabilities for bounded metrics, current workload state, detailed conditions or events, and recent logs before considering a mutation or delegation.",
+    "For a justified mutation, include the narrowest state-changing capability plus bounded status or wait capabilities and final-state inspection.",
+    "Select work-tracking search and update-or-create capabilities plus a team-notification capability for the follow-up phase."
+  ],
+  "activation_examples": {
+    "should_activate": [
+      "Investigate a critical alert for an unavailable service",
+      "Find the cause of high latency and remediate it safely",
+      "Check why a Kubernetes workload is failing and document the result"
+    ],
+    "should_not_activate": [
+      "Test a public web page with Playwright",
+      "Plan a vacation itinerary"
+    ]
+  },
+  "change_reason": "Move reusable incident investigation, remediation, and follow-up procedures out of the dedicated agent prompt"
+}

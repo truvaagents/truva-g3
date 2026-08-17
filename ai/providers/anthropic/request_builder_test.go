@@ -12,6 +12,7 @@ import (
 
 func TestClientPrepareRequest_OmitsSamplingForRestrictedFamilies(t *testing.T) {
 	models := []string{
+		"claude-opus-5",
 		"claude-opus-4-7",
 		"claude-opus-4-8-20260701",
 		"claude-sonnet-5",
@@ -107,6 +108,38 @@ func TestClientPrepareRequest_AppliesPolicyAfterAliasResolution(t *testing.T) {
 	assertNoSamplingKeys(t, decodePreparedBody(t, prepared.Body))
 	if got := adjustmentPaths(prepared.Adjustments); !reflect.DeepEqual(got, []string{"/temperature"}) {
 		t.Fatalf("adjusted paths = %#v, want only temperature", got)
+	}
+}
+
+func TestClientPrepareRequest_BuiltInDefaultUsesSonnet5(t *testing.T) {
+	client := NewClient("anthropic-key", "", &core.NoOpLogger{})
+
+	prepared, err := client.prepareRequest("hello", nil, false)
+	if err != nil {
+		t.Fatalf("prepareRequest returned error: %v", err)
+	}
+	if prepared.Model != "claude-sonnet-5" {
+		t.Fatalf("resolved model = %q, want claude-sonnet-5", prepared.Model)
+	}
+	assertNoSamplingKeys(t, decodePreparedBody(t, prepared.Body))
+	if prepared.SamplingPolicy != samplingOmitted {
+		t.Fatalf("sampling policy = %s, want omitted", prepared.SamplingPolicy)
+	}
+}
+
+func TestClientPrepareRequest_BuiltInPremiumUsesFable5(t *testing.T) {
+	client := NewClient("anthropic-key", "", &core.NoOpLogger{})
+
+	prepared, err := client.prepareRequest("hello", &core.AIOptions{Model: "premium"}, false)
+	if err != nil {
+		t.Fatalf("prepareRequest returned error: %v", err)
+	}
+	if prepared.Model != "claude-fable-5" {
+		t.Fatalf("resolved model = %q, want claude-fable-5", prepared.Model)
+	}
+	assertNoSamplingKeys(t, decodePreparedBody(t, prepared.Body))
+	if prepared.SamplingPolicy != samplingOmitted {
+		t.Fatalf("sampling policy = %s, want omitted", prepared.SamplingPolicy)
 	}
 }
 

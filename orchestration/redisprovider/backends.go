@@ -15,7 +15,7 @@ func NewOrchestrationBackends(
 	if clients == nil {
 		return nil, fmt.Errorf("redisprovider: client set is required")
 	}
-	backendOptions := make([]orchestration.OrchestrationBackendOption, 0, 14)
+	backendOptions := make([]orchestration.OrchestrationBackendOption, 0, 19)
 
 	if client := clients.Resolve(ClientRoleExecution); client != nil {
 		executionOptions := []orchestration.RedisExecutionDebugStoreOption{}
@@ -149,6 +149,27 @@ func NewOrchestrationBackends(
 			orchestration.WithTaskDispatcherBackend(dispatcher),
 			orchestration.WithTaskConsumerBackend(consumer),
 			orchestration.WithLockBackend(lock),
+		)
+	}
+
+	if client := clients.Resolve(ClientRoleSkills); client != nil {
+		skillOptions := []SkillStoreOption{}
+		if options.namespace != "" {
+			skillOptions = append(skillOptions, WithSkillStoreKeyPrefix(options.namespace+":skills"))
+		}
+		if options.logger != nil {
+			skillOptions = append(skillOptions, WithSkillStoreLogger(componentLogger(options.logger)))
+		}
+		store, err := NewSkillStore(client, skillOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("redisprovider: skill backend: %w", core.RedactSensitiveError(err))
+		}
+		backendOptions = append(backendOptions,
+			orchestration.WithSkillRegistryBackend(store),
+			orchestration.WithSkillRevisionReader(store),
+			orchestration.WithSkillAdministrationStore(store),
+			orchestration.WithSkillRevisionDeletionStore(store),
+			orchestration.WithSkillAuditSink(store),
 		)
 	}
 

@@ -208,6 +208,15 @@ setup_env() {
 
 load_env() { truvag3_load_env "$SCRIPT_DIR/.env"; }
 
+# Preserve deployment feature flags from .env while preventing local-process
+# endpoints from overriding the shared infrastructure's in-cluster addresses.
+setup_shared_infra() {
+    (
+        unset REDIS_URL OTEL_EXPORTER_OTLP_ENDPOINT
+        truvag3_setup_infra
+    )
+}
+
 # Build the application (local only)
 build_app() {
     log_info "Building travel-chat-agent..."
@@ -260,6 +269,22 @@ setup_agent_config() {
     truvag3_create_configmap "travel-chat-agent-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
 }
 
+# Best-effort reconciliation used by deployment commands. The explicit
+# skills-sync command below remains strict for operator and CI use.
+prepare_skills() {
+    truvag3_prepare_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+# Strictly reconcile every package stored under
+# skills/packages/<namespace>/<name>.json.
+sync_skills() {
+    truvag3_sync_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+check_skills() {
+    truvag3_check_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
 # Deploy to Kubernetes (both chat agent and chat UI)
 deploy_k8s() {
     log_info "Deploying to Kubernetes..."
@@ -273,6 +298,7 @@ deploy_k8s() {
     # Setup secrets and config
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     # Deploy the chat agent
     kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
@@ -440,9 +466,11 @@ full_deploy() {
     log_info "Starting full deployment..."
     echo ""
 
-    truvag3_create_cluster
-    truvag3_setup_infra
+    # Load environment before infrastructure so cold-start feature flags are
+    # honored. deploy_k8s reloads it before creating the agent configuration.
     load_env
+    truvag3_create_cluster
+    setup_shared_infra
     build_docker
     load_to_kind
     deploy_k8s
@@ -478,6 +506,7 @@ rebuild() {
     load_env
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     # Apply Kubernetes manifests
     log_info "Applying Kubernetes manifests..."
@@ -517,6 +546,7 @@ rollout() {
     log_info "Updating secrets and config from .env..."
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     # Apply k8-deployment.yaml to pick up ConfigMap changes
     log_info "Applying k8-deployment.yaml..."
@@ -592,6 +622,8 @@ Kubernetes Deployment Commands:
   deploy         Build, load to Kind, and deploy to Kubernetes
   rebuild        Rebuild with --no-cache and redeploy (fresh dependencies)
   rollout        Restart deployment to pick up new secrets/config from .env
+  skills-check   Compare published skills with the packages in Git (read-only)
+  skills-sync    Reconcile and verify skills from Git without restarting the agent
   verify         Verify all ingress routes are reachable
   forward        Port-forward agent only (fallback if ingress unavailable)
   forward-all    Port-forward agent + UI + monitoring
@@ -660,7 +692,8 @@ case "${1:-help}" in
     infra)
         check_prerequisites
         print_header
-        truvag3_setup_infra
+        load_env
+        setup_shared_infra
         ;;
     docker)
         check_prerequisites
@@ -679,6 +712,14 @@ case "${1:-help}" in
     rollout)
         check_prerequisites
         rollout
+        ;;
+    skills-check)
+        load_env
+        check_skills
+        ;;
+    skills-sync)
+        load_env
+        sync_skills
         ;;
     full-deploy)
         check_prerequisites

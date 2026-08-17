@@ -1639,8 +1639,21 @@ declares the reserved tag is rejected. These failures occur before the provider
 call so the framework never sends an ambiguous system contract.
 
 The finalizer is purpose-specific. Parameter-correction prompts and synthesis
-prompts do not acquire this planning-only section. For the complete reserved-tag
-and precedence rules, see the
+prompts do not acquire this planning-only section. When Agent Skills are active,
+the same final assembly adds an immutable `<skill_precedence>` system contract
+and prefixes the user message with a canonical `<active_skills>` projection.
+Planning and continuation receive planning guidance; synthesis receives
+response guidance; regeneration reuses the accepted phase projection. Custom
+builders do not need to render any skill section and must not emit the reserved
+skill tags themselves.
+
+Skill dynamic values—including the live request, known enrichments, instruction
+strings, and selected resource bodies—are encoded before builder interpolation.
+This prevents authored or external text from closing framework sections. The
+semantic precedence-entity audit still receives the decoded request, so
+model-facing encoding does not degrade audit identity extraction.
+
+For the complete reserved-tag and precedence rules, see the
 [Effective Prompts Guide](../building/EFFECTIVE_PROMPTS_GUIDE.md#9-reserved-xml-tags--orchestration-framework).
 
 ### Understanding PromptInput

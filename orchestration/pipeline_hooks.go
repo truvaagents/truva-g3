@@ -295,6 +295,7 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 			Kind:          decision.Kind,
 			CachedAgainst: cloneStringMap(decision.CachedAgainst),
 		}
+		decisionStartedAt := time.Now()
 		accepted, reason, decisionErr := acceptShortCircuit(
 			gate.cacheVary,
 			gate.cacheReadDisabled,
@@ -305,6 +306,10 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 			reason = "legacy_authoritative"
 		}
 		o.recordPipelineShortCircuitDecision(ctx, hook.Name(), decision.Kind, reason, accepted)
+		o.recordSkillResponseCacheDecision(
+			gate.cacheVary, decision.CachedAgainst, decision.Kind,
+			accepted, decisionErr, time.Since(decisionStartedAt),
+		)
 		if decisionErr != nil {
 			return nil, fmt.Errorf("before-planning hook %q: %w", hook.Name(), decisionErr)
 		}

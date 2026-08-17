@@ -1,0 +1,23 @@
+{
+  "display_name": "Travel Currency Conversion",
+  "description": "Use when a travel request asks about a spending budget, exchange rate, destination currency, or currency conversion.",
+  "domains": ["travel", "finance"],
+  "tags": ["currency", "exchange-rate", "budget"],
+  "planning_instructions": [
+    "Use the user's stated home currency, or infer it from the departure location when the evidence is clear; otherwise ask for it before converting.",
+    "Resolve and use the destination country's ISO 4217 currency code for the target currency when it is not already known.",
+    "Verify that a current conversion or exchange-rate capability's advertised coverage includes the requested currency pair before selecting it."
+  ],
+  "response_instructions": [
+    "Report the source amount and currency, converted amount and currency, exchange rate, and rate date when the capability returns them."
+  ],
+  "tool_hints": [
+    "When an amount must be converted, select a currency-conversion capability whose current description covers both currencies.",
+    "When the destination currency is unknown, also select a country-metadata capability that returns a standard currency code; for a rate table request, select an exchange-rate capability with the required coverage."
+  ],
+  "activation_examples": {
+    "should_activate": ["Convert my 500 USD Tokyo budget to yen", "What currency will I need in Norway?"],
+    "should_not_activate": ["Find a flight from Chicago to Tokyo", "Will it rain in Oslo?"]
+  },
+  "change_reason": "Move conditional travel currency guidance out of the agent-wide prompt"
+}

@@ -6,8 +6,6 @@
 // - Interface-first design for swappable backends
 // - Safe defaults (NoOp when unavailable)
 // - Disabled by default (enable via TRUVAG3_LLM_DEBUG_ENABLED=true)
-//
-// See orchestration/notes/LLM_DEBUG_PAYLOAD_DESIGN.md for full design rationale.
 package orchestration
 
 import (
@@ -163,12 +161,17 @@ type LLMInteraction struct {
 	DurationMs int64 `json:"duration_ms"`
 
 	// Request fields
-	Prompt       string  `json:"prompt"`                  // Complete prompt sent to LLM
-	SystemPrompt string  `json:"system_prompt,omitempty"` // System prompt if used
-	Temperature  float64 `json:"temperature"`
-	MaxTokens    int     `json:"max_tokens"`
-	Model        string  `json:"model,omitempty"`    // Model identifier (e.g., "gpt-4o-mini")
-	Provider     string  `json:"provider,omitempty"` // Provider (e.g., "openai", "anthropic")
+	Prompt            string                     `json:"prompt"`                  // Complete prompt sent to LLM
+	SystemPrompt      string                     `json:"system_prompt,omitempty"` // System prompt if used
+	Temperature       float64                    `json:"temperature"`
+	MaxTokens         int                        `json:"max_tokens"`
+	Model             string                     `json:"model,omitempty"`    // Model identifier (e.g., "gpt-4o-mini")
+	Provider          string                     `json:"provider,omitempty"` // Provider (e.g., "openai", "anthropic")
+	RequestedModel    string                     `json:"requested_model,omitempty"`
+	EffectiveModel    string                     `json:"effective_model,omitempty"`
+	Adjustments       []core.AIRequestAdjustment `json:"adjustments,omitempty"`
+	PolicyFingerprint string                     `json:"policy_fingerprint,omitempty"`
+	PolicyStable      bool                       `json:"policy_stable"`
 
 	// Response fields
 	Response         string `json:"response"` // Complete LLM response

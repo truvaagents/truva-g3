@@ -112,6 +112,22 @@ setup_agent_config() {
     truvag3_create_configmap "qa-agent-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
 }
 
+# Best-effort reconciliation used by deployment commands. The explicit
+# skills-sync command below remains strict for operator and CI use.
+prepare_skills() {
+    truvag3_prepare_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+# Strictly reconcile every package stored under
+# skills/packages/<namespace>/<name>.json.
+sync_skills() {
+    truvag3_sync_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+check_skills() {
+    truvag3_check_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
 # Deploy to Kubernetes
 cmd_deploy() {
     print_header "Deploying to Kubernetes"
@@ -134,6 +150,7 @@ cmd_deploy() {
     # Setup secrets and config from .env
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     # Apply Kubernetes manifests
     print_info "Applying Kubernetes manifests..."
@@ -214,6 +231,7 @@ cmd_rollout() {
     load_env
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     if [ "$rebuild" = true ]; then
         print_info "Rebuilding Docker image..."
@@ -253,6 +271,7 @@ cmd_rebuild() {
     kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
     setup_k8s_secrets
     setup_agent_config
+    prepare_skills
 
     kubectl apply -f k8-deployment.yaml
     kubectl rollout restart deployment/$APP_NAME -n $NAMESPACE
@@ -285,6 +304,8 @@ cmd_help() {
     echo "  docker-build  Build Docker image"
     echo "  deploy        Build, load, and deploy to Kubernetes"
     echo "  rebuild       Rebuild with --no-cache and redeploy"
+    echo "  skills-check  Compare published skill packages with Git"
+    echo "  skills-sync   Reconcile and verify skill packages without restarting"
     echo ""
     echo "Testing & Access Commands:"
     echo "  test          Run smoke tests against deployed agent"
@@ -317,6 +338,8 @@ case "${1:-help}" in
     docker-build) cmd_docker_build ;;
     deploy)     cmd_deploy ;;
     rebuild)    cmd_rebuild ;;
+    skills-check) load_env; check_skills ;;
+    skills-sync) load_env; sync_skills ;;
     test)       cmd_test ;;
     forward)    cmd_forward ;;
     logs)       cmd_logs ;;

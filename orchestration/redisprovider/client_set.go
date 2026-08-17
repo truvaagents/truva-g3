@@ -18,11 +18,13 @@ const (
 	ClientRoleHITL       ClientRole = "hitl"
 	ClientRoleWorkflow   ClientRole = "workflow"
 	ClientRoleScheduling ClientRole = "scheduling"
+	ClientRoleSkills     ClientRole = "skills"
 )
 
 var knownClientRoles = map[ClientRole]struct{}{
 	ClientRoleExecution: {}, ClientRoleLLMDebug: {}, ClientRoleHITL: {},
 	ClientRoleWorkflow: {}, ClientRoleScheduling: {},
+	ClientRoleSkills: {},
 }
 
 type ClientSet struct {

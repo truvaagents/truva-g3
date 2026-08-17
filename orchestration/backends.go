@@ -27,13 +27,14 @@ const (
 	BackendTaskDispatcher   BackendCapability = "task_dispatcher"
 	BackendTaskConsumer     BackendCapability = "task_consumer"
 	BackendLock             BackendCapability = "lock"
+	BackendSkills           BackendCapability = "skills"
 )
 
 var knownBackendCapabilities = map[BackendCapability]struct{}{
 	BackendExecutionDebug: {}, BackendLLMDebug: {}, BackendCheckpoints: {},
 	BackendCheckpointExpiry: {}, BackendCommands: {}, BackendWorkflowState: {},
 	BackendSchedules: {}, BackendTasks: {}, BackendTaskQueue: {},
-	BackendTaskDispatcher: {}, BackendTaskConsumer: {}, BackendLock: {},
+	BackendTaskDispatcher: {}, BackendTaskConsumer: {}, BackendLock: {}, BackendSkills: {},
 }
 
 // BackendRequirements is an immutable set of capabilities required by an
@@ -97,6 +98,9 @@ func RequirementsForFeatures(config *OrchestratorConfig, features ...BackendFeat
 		if config.LLMDebug.Enabled {
 			required[BackendLLMDebug] = struct{}{}
 		}
+		if config.Skills.Enabled && len(config.Skills.Bindings) > 0 {
+			required[BackendSkills] = struct{}{}
+		}
 	}
 	seen := make(map[BackendFeature]struct{}, len(features))
 	for _, feature := range features {
@@ -144,6 +148,11 @@ type OrchestrationBackends struct {
 	taskDispatcher   core.TaskDispatcher
 	taskConsumer     core.TaskConsumer
 	lock             core.DistributedLock
+	skillRegistry    SkillRegistry
+	skillRevisions   SkillRevisionReader
+	skillAdmin       SkillAdministrationStore
+	skillDeletions   SkillRevisionDeletionStore
+	skillAudit       SkillAuditSink
 	runnables        []core.Runnable
 }
 
@@ -224,6 +233,24 @@ func WithTaskConsumerBackend(value core.TaskConsumer) OrchestrationBackendOption
 }
 func WithLockBackend(value core.DistributedLock) OrchestrationBackendOption {
 	return backendOption("lock", value, func(b *OrchestrationBackends, v core.DistributedLock) { b.lock = v })
+}
+
+// WithSkillRegistryBackend follows the established composition naming and
+// leaves WithSkillRegistry available for the agent-facing orchestrator option.
+func WithSkillRegistryBackend(value SkillRegistry) OrchestrationBackendOption {
+	return backendOption("skill registry", value, func(b *OrchestrationBackends, v SkillRegistry) { b.skillRegistry = v })
+}
+func WithSkillRevisionReader(value SkillRevisionReader) OrchestrationBackendOption {
+	return backendOption("skill revision reader", value, func(b *OrchestrationBackends, v SkillRevisionReader) { b.skillRevisions = v })
+}
+func WithSkillAdministrationStore(value SkillAdministrationStore) OrchestrationBackendOption {
+	return backendOption("skill administration", value, func(b *OrchestrationBackends, v SkillAdministrationStore) { b.skillAdmin = v })
+}
+func WithSkillRevisionDeletionStore(value SkillRevisionDeletionStore) OrchestrationBackendOption {
+	return backendOption("skill revision deletion", value, func(b *OrchestrationBackends, v SkillRevisionDeletionStore) { b.skillDeletions = v })
+}
+func WithSkillAuditSink(value SkillAuditSink) OrchestrationBackendOption {
+	return backendOption("skill audit", value, func(b *OrchestrationBackends, v SkillAuditSink) { b.skillAudit = v })
 }
 
 func WithRunnables(values ...core.Runnable) OrchestrationBackendOption {
@@ -311,6 +338,36 @@ func (b *OrchestrationBackends) Lock() core.DistributedLock {
 	}
 	return b.lock
 }
+func (b *OrchestrationBackends) SkillRegistry() SkillRegistry {
+	if b == nil {
+		return nil
+	}
+	return b.skillRegistry
+}
+func (b *OrchestrationBackends) SkillRevisionReader() SkillRevisionReader {
+	if b == nil {
+		return nil
+	}
+	return b.skillRevisions
+}
+func (b *OrchestrationBackends) SkillAdministrationStore() SkillAdministrationStore {
+	if b == nil {
+		return nil
+	}
+	return b.skillAdmin
+}
+func (b *OrchestrationBackends) SkillRevisionDeletionStore() SkillRevisionDeletionStore {
+	if b == nil {
+		return nil
+	}
+	return b.skillDeletions
+}
+func (b *OrchestrationBackends) SkillAuditSink() SkillAuditSink {
+	if b == nil {
+		return nil
+	}
+	return b.skillAudit
+}
 func (b *OrchestrationBackends) Runnables() []core.Runnable {
 	if b == nil {
 		return nil
@@ -360,6 +417,8 @@ func (b *OrchestrationBackends) has(capability BackendCapability) bool {
 		return !isNilBackendValue(b.taskConsumer)
 	case BackendLock:
 		return !isNilBackendValue(b.lock)
+	case BackendSkills:
+		return !isNilBackendValue(b.skillRegistry)
 	default:
 		return false
 	}

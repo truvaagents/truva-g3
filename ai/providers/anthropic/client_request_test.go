@@ -49,7 +49,7 @@ func TestClient_GenerateResponse_MergesExtrasResponseFormatAndHeaders(t *testing
 	}
 
 	_, err := client.GenerateResponse(context.Background(), "hello", &core.AIOptions{
-		Model:          "default",
+		Model:          "claude-haiku-4-5",
 		ResponseFormat: "json",
 		Extra: map[string]interface{}{
 			"top_k": 7,

@@ -10,10 +10,12 @@ func TestResolveModel(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"smart", "claude-sonnet-4-5-20250929"},
-		{"fast", "claude-haiku-4-5-20251001"},
-		{"code", "claude-sonnet-4-5-20250929"},
-		{"vision", "claude-sonnet-4-5-20250929"},
+		{"default", "claude-sonnet-5"},
+		{"smart", "claude-opus-5"},
+		{"fast", "claude-haiku-4-5"},
+		{"code", "claude-opus-5"},
+		{"vision", "claude-opus-5"},
+		{"premium", "claude-fable-5"},
 		{"claude-opus-4-5-20251101", "claude-opus-4-5-20251101"}, // Pass-through
 		{"unknown-alias", "unknown-alias"},                       // Pass-through
 	}

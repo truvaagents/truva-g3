@@ -1,0 +1,34 @@
+{
+  "display_name": "Infrastructure Change Follow-up",
+  "description": "Use when an infrastructure request may change system state or requires work-tracking and operations-notification follow-up.",
+  "domains": ["devops", "infrastructure"],
+  "tags": ["change-management", "work-tracking", "notification"],
+  "planning_instructions": [
+    "Treat infrastructure-change follow-up as complete after current-execution results show both a successful operational-record action for the current change and a successful notification; after stable-state verification, plan any missing follow-up actions before ending execution.",
+    "For a direct work-tracking or team-notification request, invoke a discovered capability whose current contract supports that action and verify its returned outcome.",
+    "Use completed-step results from the current execution as evidence of recording and notification, and use earlier memory to locate a relevant record. Defer follow-up when stable verification is incomplete or unsuccessful and report the observed state."
+  ],
+  "response_instructions": [
+    "Report the concrete recording and notification outcomes, including any follow-up deferred because post-change verification was incomplete."
+  ],
+  "tool_hints": [
+    "After completed results verify the intended stable state, or when the request explicitly permits a work-record action now, select work-tracking capabilities for the complete branch: search for a matching open record, update or comment on a match, create a record when no match exists, and retrieve record details when an action result lacks the requested human-facing URL; planning-only requests keep these actions as future work.",
+    "Select a capability that can notify the configured operations communication destination only after a state change is verified and notification is permitted now; planning-only requests keep this as future work."
+  ],
+  "resources": [
+    {
+      "name": "change-follow-up",
+      "description": "Detailed operational-record reuse and team-notification workflow for an infrastructure change.",
+      "load_when": "Load when a plan may execute an infrastructure mutation, must prepare its change-management follow-up, or directly performs work-tracking or notification actions.",
+      "applies_to": ["planning", "continuation", "synthesis"],
+      "required_when_selected": true,
+      "content_type": "text/markdown",
+      "content": "After verification confirms the intended stable post-change state, first check <agent_memory> for a recent operational record on the same entity. If present, update that record with the action, findings, and verification. Otherwise search the configured work-tracking system for an open record on the entity and update it when found. Create a new record in the configured DEVOPS project after memory and the work-tracking system confirm the absence of a recent open record. When the record action returns no human-facing URL, retrieve that record through a discovered record-detail capability. Make the notification depend on the record action and any required detail lookup so their returned reference and link are available. Send one short paragraph, normally within 700 characters, containing the affected resource and scope, action and outcome, compact final-state verification, and the exact human-facing record reference and URL returned by the selected capability. When the available record-detail path returns no URL, append `link unavailable`. Condense command and tool results into final-state facts so operators can scan the message and open the record quickly. Example shape: `[resource] [action] completed in [scope]. Verification: [compact final-state evidence]. Record: [reference] — [human-facing URL].` Reuse the same returned reference and link in the final response. A still-progressing, timed-out, or unhealthy post-change state keeps recording and notification deferred while the response reports the observed evidence. For a planning-only request, describe this follow-up as future work."
+    }
+  ],
+  "activation_examples": {
+    "should_activate": ["Restart the travel agent and document the change", "Create an operational record and notify the team after scaling"],
+    "should_not_activate": []
+  },
+  "change_reason": "Resolve missing human-facing record URLs through discovered detail capabilities before concise notification"
+}

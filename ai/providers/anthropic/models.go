@@ -97,21 +97,22 @@ type StreamUsage struct {
 
 // modelAliases maps portable names to Anthropic model IDs.
 // These aliases enable portable model names across providers when using Chain Client.
-// Updated December 2025 with Claude 4.5 family models.
+// Updated August 2026 with Claude 5 family models.
 //
 // Source: https://platform.claude.com/docs/en/about-claude/models
 //
 // Available models:
-//   - claude-opus-4-5-20251101: Premium model, maximum intelligence (200K context)
-//   - claude-sonnet-4-5-20250929: Best balance for agents/coding (200K/1M context)
-//   - claude-haiku-4-5-20251001: Fastest with near-frontier intelligence (200K context)
+//   - claude-fable-5: Most capable widely released model for demanding agentic work (1M context)
+//   - claude-opus-5: Complex agentic coding and enterprise work (1M context)
+//   - claude-sonnet-5: Best balance of intelligence and speed (1M context)
+//   - claude-haiku-4-5: Convenience alias for the current Haiku 4.5 snapshot
 var modelAliases = map[string]string{
-	"default": "claude-sonnet-4-5-20250929", // Sonnet 4.5: best balance of intelligence and speed
-	"fast":    "claude-haiku-4-5-20251001",  // Haiku 4.5: fastest, near-frontier intelligence
-	"smart":   "claude-sonnet-4-5-20250929", // Sonnet 4.5: best for agents and coding
-	"premium": "claude-opus-4-5-20251101",   // Opus 4.5: maximum intelligence
-	"code":    "claude-sonnet-4-5-20250929", // Sonnet 4.5: exceptional coding performance
-	"vision":  "claude-sonnet-4-5-20250929", // Sonnet 4.5: supports vision
+	"default": "claude-sonnet-5",  // Sonnet 5: best balance of intelligence and speed
+	"fast":    "claude-haiku-4-5", // Haiku 4.5: provider-maintained convenience alias
+	"smart":   "claude-opus-5",    // Opus 5: complex analysis and agentic work
+	"premium": "claude-fable-5",   // Fable 5: most capable widely released model
+	"code":    "claude-opus-5",    // Opus 5: complex agentic coding
+	"vision":  "claude-opus-5",    // Opus 5: strongest vision in this catalog
 }
 
 // resolveModel returns the actual model name for an alias.

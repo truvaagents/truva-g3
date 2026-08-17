@@ -17,8 +17,186 @@ const (
 	promptContinuationPlan promptKind = "continuation_plan"
 	promptRegeneration     promptKind = "regeneration"
 	promptSynthesis        promptKind = "synthesis"
+	promptCapabilitySelect promptKind = "capability_selection"
 	promptOther            promptKind = "other"
 )
+
+// promptDynamicValueKind identifies one framework-owned dynamic input before
+// a renderer interpolates it. It is deliberately private and feature-neutral.
+type promptDynamicValueKind string
+
+const (
+	promptValueRequest            promptDynamicValueKind = "request"
+	promptValueCapabilityCatalog  promptDynamicValueKind = "capability_catalog"
+	promptValuePhaseContext       promptDynamicValueKind = "phase_context"
+	promptValueEnrichment         promptDynamicValueKind = "enrichment"
+	promptValuePriorResult        promptDynamicValueKind = "prior_result"
+	promptValueContinuationNote   promptDynamicValueKind = "continuation_note"
+	promptValueValidationFeedback promptDynamicValueKind = "validation_feedback"
+)
+
+const (
+	promptFieldRequest                        = "request"
+	promptFieldCapabilityCatalog              = "capability_catalog"
+	promptFieldContinuationNote               = "continuation_note"
+	promptFieldValidationFeedback             = "validation_feedback"
+	promptFieldPriorResultStepID              = "prior_result.step_id"
+	promptFieldPriorResultAgentName           = "prior_result.agent_name"
+	promptFieldPriorResultInstruction         = "prior_result.instruction"
+	promptFieldPriorResultResponse            = "prior_result.response"
+	promptFieldPriorResultError               = "prior_result.error"
+	promptFieldPhaseContextPriorToolID        = "phase_context.prior_tool_id"
+	promptFieldPhaseContextCompletedSummary   = "phase_context.completed_summary"
+	promptFieldEnrichmentActivityCoordination = "enrichment.activity_coordination"
+	promptFieldEnrichmentUserProfile          = "enrichment.user_profile"
+	promptFieldEnrichmentRAGContext           = "enrichment.rag_context"
+	promptFieldEnrichmentConversationHistory  = "enrichment.conversation_history"
+)
+
+type promptInputPreparer interface {
+	PreparePromptValue(
+		context.Context,
+		promptKind,
+		promptDynamicValueKind,
+		string,
+		string,
+	) (string, error)
+}
+
+type promptInputPreparerContextKey struct{}
+
+func withPromptInputPreparer(ctx context.Context, preparer promptInputPreparer) context.Context {
+	if preparer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, promptInputPreparerContextKey{}, preparer)
+}
+
+func preparePromptValue(
+	ctx context.Context,
+	kind promptKind,
+	valueKind promptDynamicValueKind,
+	field string,
+	value string,
+) (string, error) {
+	preparer, _ := ctx.Value(promptInputPreparerContextKey{}).(promptInputPreparer)
+	if preparer == nil {
+		return value, nil
+	}
+	return preparer.PreparePromptValue(ctx, kind, valueKind, field, value)
+}
+
+func preparePromptInput(ctx context.Context, kind promptKind, source PromptInput) (PromptInput, error) {
+	prepared := source
+	prepared.Metadata = clonePromptMetadata(source.Metadata)
+	var err error
+	prepared.Request, err = preparePromptValue(ctx, kind, promptValueRequest, promptFieldRequest, source.Request)
+	if err != nil {
+		return PromptInput{}, err
+	}
+	prepared.CapabilityInfo, err = preparePromptValue(
+		ctx, kind, promptValueCapabilityCatalog, promptFieldCapabilityCatalog, source.CapabilityInfo,
+	)
+	if err != nil {
+		return PromptInput{}, err
+	}
+	prepared.Metadata, err = prepareKnownPromptEnrichments(ctx, kind, prepared.Metadata)
+	if err != nil {
+		return PromptInput{}, err
+	}
+	return prepared, nil
+}
+
+func prepareKnownPromptEnrichments(
+	ctx context.Context,
+	kind promptKind,
+	source map[string]interface{},
+) (map[string]interface{}, error) {
+	prepared := clonePromptMetadata(source)
+	known := []struct {
+		key   string
+		field string
+	}{
+		{core.EnrichmentActivityCoordination, promptFieldEnrichmentActivityCoordination},
+		{core.EnrichmentUserProfile, promptFieldEnrichmentUserProfile},
+		{core.EnrichmentRAGContext, promptFieldEnrichmentRAGContext},
+		{core.EnrichmentConversationHistory, promptFieldEnrichmentConversationHistory},
+	}
+	for _, item := range known {
+		value, found := prepared[item.key]
+		if !found {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		var err error
+		prepared[item.key], err = preparePromptValue(ctx, kind, promptValueEnrichment, item.field, text)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return prepared, nil
+}
+
+func prepareSynthesisStepValues(
+	ctx context.Context,
+	agentName string,
+	instruction string,
+	content string,
+	contentField string,
+) (string, string, string, error) {
+	preparedAgent, err := preparePromptValue(
+		ctx, promptSynthesis, promptValuePriorResult,
+		promptFieldPriorResultAgentName, agentName,
+	)
+	if err != nil {
+		return "", "", "", err
+	}
+	preparedInstruction, err := preparePromptValue(
+		ctx, promptSynthesis, promptValuePriorResult,
+		promptFieldPriorResultInstruction, instruction,
+	)
+	if err != nil {
+		return "", "", "", err
+	}
+	preparedContent, err := preparePromptValue(
+		ctx, promptSynthesis, promptValuePriorResult, contentField, content,
+	)
+	if err != nil {
+		return "", "", "", err
+	}
+	return preparedAgent, preparedInstruction, preparedContent, nil
+}
+
+func prepareValidationFeedback(
+	ctx context.Context,
+	kind promptKind,
+	validationErr error,
+) (string, error) {
+	if validationErr == nil {
+		return "", nil
+	}
+	return preparePromptValue(
+		ctx,
+		kind,
+		promptValueValidationFeedback,
+		promptFieldValidationFeedback,
+		validationErr.Error(),
+	)
+}
+
+func clonePromptMetadata(source map[string]interface{}) map[string]interface{} {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
 
 type promptRole uint8
 
@@ -76,6 +254,8 @@ func promptKindForPurpose(purpose string) promptKind {
 		return promptContinuationPlan
 	case "synthesis":
 		return promptSynthesis
+	case "tiered-selection":
+		return promptCapabilitySelect
 	default:
 		return promptOther
 	}
@@ -84,9 +264,26 @@ func promptKindForPurpose(purpose string) promptKind {
 func promptFinalizers(kind promptKind) []promptFinalizer {
 	switch kind {
 	case promptInitialPlan, promptContinuationPlan, promptRegeneration:
-		return []promptFinalizer{promptFinalizerFunc(finalizeRuntimeContext)}
+		return []promptFinalizer{
+			promptFinalizerFunc(finalizeRuntimeContext),
+			promptFinalizerFunc(finalizeSkillPrompt),
+		}
+	case promptSynthesis, promptCapabilitySelect:
+		return []promptFinalizer{promptFinalizerFunc(finalizeSkillPrompt)}
 	default:
 		return nil
+	}
+}
+
+func requiresFinalizedSystemPrompt(ctx context.Context, kind promptKind) bool {
+	switch kind {
+	case promptInitialPlan, promptContinuationPlan, promptRegeneration:
+		return true
+	case promptSynthesis:
+		projection, ok := skillPromptProjectionFromContext(ctx)
+		return ok && compileSkillInstructionEnvelope(projection, true) != ""
+	default:
+		return false
 	}
 }
 

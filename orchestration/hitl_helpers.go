@@ -156,6 +156,9 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 			"(only approved, edited, or expired_approved checkpoints can be resumed)",
 			checkpoint.CheckpointID, checkpoint.Status)
 	}
+	if checkpoint.SkillState == nil && checkpoint.SkillCacheContext != nil {
+		return nil, noop, fmt.Errorf("%w: checkpoint has skill cache context without skill state", ErrSkillIntegrity)
+	}
 
 	// Restore trace context across the async boundary (RC7-B3).
 	// Read typed fields first (set by createCheckpoint after RC7-B2 is deployed),
@@ -214,6 +217,22 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 
 	// Build resume context using existing helpers from orchestrator.go
 	resumeCtx = WithResumeMode(resumeCtx, checkpoint.CheckpointID)
+	if checkpoint.SkillState != nil {
+		resumeCtx = withCheckpointSkillState(
+			resumeCtx,
+			*checkpoint.SkillState,
+			checkpoint.SkillCacheContext,
+		)
+		if !checkpointHasEffectiveSkillState(*checkpoint.SkillState, checkpoint.SkillCacheContext) {
+			resumeCtx = withSkillFreeCheckpointResume(resumeCtx)
+		}
+	} else {
+		// A checkpoint created before skills existed must remain skill-free even
+		// when the resuming deployment now has bindings. This private marker is
+		// intentionally checkpoint-derived; WithResumeMode alone cannot disable
+		// developer-configured skills on an ordinary request.
+		resumeCtx = withSkillFreeCheckpointResume(resumeCtx)
+	}
 
 	if checkpoint.Plan != nil {
 		// Inject the approved plan so orchestrator skips LLM planning

@@ -1,0 +1,25 @@
+{
+  "display_name": "Travel Search Preparation",
+  "description": "Use when a travel request asks to find flights, hotels, local dining, activities, or itinerary options for a destination.",
+  "domains": ["travel"],
+  "tags": ["flights", "hotels", "places", "location-resolution"],
+  "planning_instructions": [
+    "Use each selected search capability's current input contract as the source of truth for identifier formats and derive any missing location identifiers through an appropriate discovered resolver.",
+    "For transport searches, resolve the user's origin and destination into the exact identifier form required by the selected offer-search capability and preserve which locations were chosen.",
+    "For lodging searches, provide the city, country, dates, and traveler details required by the selected lodging capability without substituting transport identifiers unless its current contract explicitly requires them.",
+    "For local dining and activities, use a search capability that accepts the available location representation and resolve coordinates only when its current contract requires them."
+  ],
+  "response_instructions": [
+    "State the resolved airport, city code, or coordinates when they materially affect the search result."
+  ],
+  "tool_hints": [
+    "For transport offers, select an offer-search capability and any resolver needed to turn the user's place names into the identifier form advertised by that search capability.",
+    "For lodging, select a priced lodging-search capability and any country or location metadata capability required by its current input contract.",
+    "For local dining or activities, select a place-search capability and add location resolution only when the chosen search contract needs it."
+  ],
+  "activation_examples": {
+    "should_activate": ["Find flights and a hotel for a trip to Tokyo", "Find a restaurant near my hotel in Paris"],
+    "should_not_activate": ["Convert 100 USD to JPY", "What is the travel advisory for Japan?"]
+  },
+  "change_reason": "Move conditional travel search preparation out of the agent-wide prompt"
+}

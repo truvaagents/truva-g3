@@ -725,9 +725,8 @@ type StepSummaryInput struct {
 // "patient"). Implementations that do not extract entities should return
 // Entities as nil; consumers treat nil and empty slice identically.
 //
-// See orchestration/notes/LLM_NATIVE_ENTITY_EXTRACTION_PROPOSAL.md for the
-// rationale behind extracting entities as a side effect of summarization
-// rather than as a separate LLM call.
+// Entity extraction is performed as a side effect of summarization so callers
+// do not pay for a separate LLM call over the same step data.
 type StepSummary struct {
 	Summary  string      `json:"summary"`
 	Entities []EntityRef `json:"entities,omitempty"`
@@ -746,7 +745,6 @@ type StepSummary struct {
 // map[string]StepSummary. External implementers must update their method
 // signature. The Summary field carries the same semantics as the legacy
 // string return; the new Entities field is additive and may be left nil.
-// See orchestration/notes/LLM_NATIVE_ENTITY_EXTRACTION_PROPOSAL.md §6.4.
 type EventSummarizer interface {
 	// SummarizeSteps generates summaries for a batch of steps in a single call.
 	// Returns a map of stepID -> StepSummary.

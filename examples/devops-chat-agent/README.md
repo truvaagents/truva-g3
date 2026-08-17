@@ -12,6 +12,7 @@ A streaming chat agent that demonstrates AI-powered orchestration of Kubernetes 
 - [Architecture](#architecture)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
+  - [Agent Skills](#agent-skills)
   - [OpenAI-Compatible Providers](#openai-compatible-providers)
 - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
 - [Shared Agent Memory](#shared-agent-memory)
@@ -85,9 +86,9 @@ cd ../system-utilities-tool && ./setup.sh deploy && cd ../devops-chat-agent
 **What `./setup.sh full-deploy` does:**
 1. Creates a Kind Kubernetes cluster with NGINX Ingress Controller
 2. Deploys infrastructure (Redis, Prometheus, Grafana, Jaeger, OTEL Collector)
-3. Builds and deploys the devops-chat-agent (this script does **not** deploy `chat-ui`)
-4. Configures Ingress routes and verifies the agent + Grafana + Jaeger are reachable
-5. Prints a summary with all service URLs
+3. Builds and loads the devops-chat-agent image
+4. Recreates or updates agent-owned skills, then deploys the agent (this script does **not** deploy `chat-ui`)
+5. Configures Ingress routes, verifies services, and prints their URLs
 
 > **Note:** All services are accessible via `*.localhost` hostnames through the NGINX Ingress Controller. No port-forwarding is needed. On macOS/Linux, `*.localhost` resolves to `127.0.0.1` automatically ([RFC 6761](https://tools.ietf.org/html/rfc6761)). This is the same pattern used in production with real DNS on EKS/GKE/AKS.
 
@@ -421,8 +422,57 @@ List available tools discovered by the orchestrator.
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` | No |
 | `TRUVAG3_LLM_DEBUG_TTL` | TTL for successful debug records | `24h` | No |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | TTL for error debug records | `168h` | No |
+| `TRUVAG3_SKILLS_ENABLED` | Enable the framework skill runtime | `true` in this example | No |
+| `TRUVAG3_SKILL_BINDINGS_JSON` | Complete replacement for the code binding list | (code bindings) | No |
+| `TRUVAG3_SKILLS_REDIS_DB` | Included skill-registry Redis database | `9` | No |
 
 *At least one AI provider key is required.
+
+### Agent Skills
+
+The agent code explicitly binds three reusable packages:
+
+- `devops/kubernetes-safety` — `always` and required; reinforces evidence-first
+  Kubernetes investigation and preserves HITL authority for mutations.
+- `devops/observability-investigation` — `auto`; adds log, trace, and metric
+  correlation guidance only when the request needs it.
+- `devops/infrastructure-change-documentation` — `auto`; produce concise
+  change records and include links returned by incident systems.
+
+`setup.sh deploy`, `rebuild`, and `rollout` discover, validate, and
+conditionally publish the JSON packages under
+`skills/packages/<namespace>/<name>.json` through
+`http://registry.localhost/api/v1/skills` before restarting the agent. This
+automatic step is best-effort: an unavailable API or invalid package produces
+a warning, but deployment continues. Existing content is updated with its
+current ETag, so repeated setup runs are safe.
+The same reconciliation is part of `full-deploy`, so an empty registry in a
+new Kind cluster is rebuilt from the Git-authored packages.
+
+To inspect or reconcile skills without building an image or restarting the
+agent:
+
+```bash
+./setup.sh skills-check  # Read-only comparison with Git
+./setup.sh skills-sync   # Create/update packages, then verify them
+```
+
+`skills-sync` skips equivalent content and publishes changed behavior as the
+next immutable version. It never clears the shared skill store.
+If the management host uses another address, set the setup-only
+`TRUVAG3_SKILLS_API_URL` to the full `/api/v1/skills` base URL.
+Set `TRUVAG3_SKIP_SKILLS_SYNC=true` when the setup host intentionally cannot
+reach that API. This skips only automatic deployment synchronization;
+`skills-sync` and `skills-check` remain strict and return a non-zero status on
+failure or drift.
+Code owns the default bindings; `TRUVAG3_SKILL_BINDINGS_JSON` is an explicit complete
+deployment replacement, never a replica-local merge.
+
+Every request performs one batched binding resolution and pins exact versions.
+Later phases re-evaluate activation/resource relevance but never switch the
+pinned revision. Skills add guidance only: they do not grant a Kubernetes
+capability or bypass plan/step approval. Inspect management state and body-free
+execution evidence in the Registry Viewer **Skills** views.
 
 ### .env File
 
@@ -609,6 +659,7 @@ Structured JSON logs with component attribution and trace context. Request-scope
 ```
 devops-chat-agent/
 ├── main.go              # Entry point and initialization (memory + HITL wiring)
+├── skills.go            # Skills registry construction
 ├── chat_agent.go        # Agent with orchestration integration + DevOps prompt
 ├── sse_handler.go       # SSE streaming handler
 ├── session.go           # Redis-backed session management
@@ -619,6 +670,8 @@ devops-chat-agent/
 ├── Dockerfile           # Production container image
 ├── Dockerfile.workspace # Development container with local modules
 ├── k8-deployment.yaml   # Kubernetes deployment manifest
+├── skills/
+│   └── packages/devops/ # Git-authored DevOps skill packages
 ├── setup.sh             # Build and deployment script
 └── README.md            # This file
 ```

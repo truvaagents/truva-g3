@@ -4,9 +4,8 @@
  * Reusable classes for Phase 2b+ component library (data-table.js, card.js, etc.).
  * Glassmorphism surfaces per GLASSMORPHISM_DESIGN.md.
  *
- * These classes are NOT used by the current index.html — they exist for the
- * JS component library to reference when views are modularized in Phase 2b-2f.
- * Adding this file now has zero visual effect.
+ * Shared by the modular JS views and component helpers. Views compose these
+ * surfaces with layout-specific classes rather than redefining the theme.
  */
 
 /* ── Glassmorphism surfaces (per GLASSMORPHISM_DESIGN.md §Dark Theme Glassmorphism) ── */

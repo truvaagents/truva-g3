@@ -41,6 +41,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
+	if err != nil {
+		log.Fatalf("Failed to create skill registry: %v", err)
+	}
+	defer func() {
+		if skillClients != nil {
+			_ = skillClients.Close()
+		}
+	}()
 
 	// 5. Create framework with tracing middleware
 	middlewareConfig := &telemetry.TracingMiddlewareConfig{
@@ -91,7 +100,7 @@ func main() {
 		}
 
 		// Discovery is available, initialize orchestrator
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery); err != nil {
+		if err := agent.InitializeOrchestrator(agent.Discovery, skillRegistry); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})
@@ -145,7 +154,6 @@ func main() {
 	if agent.userMemBackend != nil {
 		agent.userMemBackend.Close()
 	}
-
 	log.Println("Travel chat agent shutdown complete")
 }
 

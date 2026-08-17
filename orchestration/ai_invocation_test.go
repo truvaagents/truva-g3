@@ -265,9 +265,32 @@ func TestAIInvocationReconcilesEffectiveGenerationFromProviderReport(t *testing.
 	}
 }
 
+func TestWithEffectiveAIRequestCopiesCompleteProviderEvidence(t *testing.T) {
+	adjustment := core.AIRequestAdjustment{Source: "provider", Rule: "sampling", Action: "omit"}
+	result := &aiInvocationResult{
+		Effective: effectiveAIRequest{
+			Prompt: "effective prompt", SystemPrompt: "effective system",
+			RequestedModel: "requested-model", ResolvedModel: "effective-model",
+			PolicyFingerprint: "sha256:policy", Adjustments: []core.AIRequestAdjustment{adjustment},
+		},
+		Report: &core.AIRequestReport{Provider: "test", Stable: true},
+	}
+	interaction := withEffectiveAIRequest(
+		LLMInteraction{}, result, aiInvocation{}, nil, nil,
+	)
+	result.Effective.Adjustments[0].Action = "mutated"
+	if interaction.Prompt != "effective prompt" || interaction.SystemPrompt != "effective system" ||
+		interaction.RequestedModel != "requested-model" || interaction.EffectiveModel != "effective-model" ||
+		interaction.Model != "effective-model" || interaction.Provider != "test" ||
+		interaction.PolicyFingerprint != "sha256:policy" || !interaction.PolicyStable ||
+		len(interaction.Adjustments) != 1 || interaction.Adjustments[0].Action != "omit" {
+		t.Fatalf("effective interaction = %#v", interaction)
+	}
+}
+
 func TestEffectiveAIIdentityPreservesFailingProviderModel(t *testing.T) {
 	result := &aiInvocationResult{
-		Effective: effectiveAIRequest{RequestedModel: "caller-alias"},
+		Effective: effectiveAIRequest{RequestedModel: "caller-alias", ResolvedModel: "prepared-model"},
 		Report:    &core.AIRequestReport{Provider: "openai"},
 	}
 	model, provider := effectiveAIIdentity(result, nil, &invocationProviderError{
