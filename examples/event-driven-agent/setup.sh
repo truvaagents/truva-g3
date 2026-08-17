@@ -51,6 +51,15 @@ check_prerequisites() { truvag3_check_prerequisites; }
 # Load .env file if it exists
 load_env() { truvag3_load_env "$SCRIPT_DIR/.env"; }
 
+# Preserve deployment feature flags from .env while preventing local-process
+# endpoints from overriding the shared infrastructure's in-cluster addresses.
+setup_shared_infra() {
+    (
+        unset REDIS_URL OTEL_EXPORTER_OTLP_ENDPOINT
+        truvag3_setup_infra
+    )
+}
+
 check_command() {
     if ! command -v $1 &> /dev/null; then
         print_error "$1 is not installed"
@@ -121,7 +130,7 @@ docker_build() {
 cluster() { truvag3_create_cluster; }
 
 # Setup monitoring infrastructure
-infra() { load_env; truvag3_setup_infra; }
+infra() { load_env; setup_shared_infra; }
 
 # Deploy AlertManager (config + deployment + service)
 deploy_alertmanager() {
@@ -140,6 +149,22 @@ setup_api_keys() {
 # Setup agent configuration from .env as ConfigMap (delegates to shared library)
 setup_agent_config() {
     truvag3_create_configmap "event-driven-agent-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
+}
+
+# Best-effort reconciliation used by deployment commands. The explicit
+# skills-sync command below remains strict for operator and CI use.
+prepare_skills() {
+    truvag3_prepare_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+# Strictly reconcile every package stored under
+# skills/packages/<namespace>/<name>.json.
+sync_skills() {
+    truvag3_sync_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+check_skills() {
+    truvag3_check_agent_skills "$SCRIPT_DIR/skills/packages"
 }
 
 # Deploy to Kubernetes
@@ -164,6 +189,7 @@ deploy() {
     # Setup API keys and agent config
     setup_api_keys
     setup_agent_config
+    prepare_skills
 
     print_info "Waiting for any existing deployment..."
     kubectl wait --for=condition=available --timeout=30s deployment/$APP_NAME -n $NAMESPACE 2>/dev/null || true
@@ -326,6 +352,7 @@ rollout() {
     print_info "Updating secrets and config from .env..."
     setup_api_keys
     setup_agent_config
+    prepare_skills
 
     # Rebuild if requested
     if [ "$rebuild" = true ]; then
@@ -472,6 +499,7 @@ rebuild() {
     if type setup_agent_config &>/dev/null; then
         setup_agent_config
     fi
+    prepare_skills
 
     # Apply Kubernetes manifests
     print_info "Applying Kubernetes manifests..."
@@ -528,6 +556,7 @@ deploy_split() {
     if type setup_agent_config &>/dev/null; then
         setup_agent_config
     fi
+    prepare_skills
 
     # Remove embedded deployment if it exists
     print_info "Cleaning up embedded deployment (if exists)..."
@@ -630,6 +659,8 @@ show_help() {
     echo "  docker-build    Build Docker image using local workspace modules"
     echo "  deploy          Build, load, and deploy to Kubernetes (includes AlertManager)"
     echo "  rebuild         Rebuild with --no-cache and redeploy (fresh local modules)"
+    echo "  skills-check    Compare published skill packages with Git"
+    echo "  skills-sync     Reconcile and verify skill packages without restarting"
     echo "  deploy-split    Deploy in split mode (separate API + Worker pods)"
     echo "  deploy-embedded Switch back to embedded mode (single pod)"
     echo "  test          Run test requests against deployed agent"
@@ -695,6 +726,14 @@ case "${1:-help}" in
         ;;
     rebuild)
         rebuild
+        ;;
+    skills-check)
+        load_env
+        check_skills
+        ;;
+    skills-sync)
+        load_env
+        sync_skills
         ;;
     full-deploy)
         full_deploy

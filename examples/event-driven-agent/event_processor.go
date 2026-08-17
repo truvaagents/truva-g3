@@ -21,11 +21,11 @@ import (
 // This is the TaskHandler registered with the worker pool.
 //
 // Pipeline:
-//   1. Deserialize alert from task input
-//   2. Build enriched natural language query for the LLM planner
-//   3. Call orchestrator.ProcessRequest() for AI-driven DAG execution
-//   4. Handle ProviderError (AI client failures)
-//   5. Cleanup dedup key on completion
+//  1. Deserialize alert from task input
+//  2. Build enriched natural language query for the LLM planner
+//  3. Call orchestrator.ProcessRequest() for AI-driven DAG execution
+//  4. Handle ProviderError (AI client failures)
+//  5. Cleanup dedup key on completion
 func (a *EventDrivenAgent) HandleAlertInvestigation(
 	ctx context.Context,
 	task *core.Task,
@@ -54,7 +54,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 		task.TraceID,
 		task.ParentSpanID,
 		map[string]string{
-			"task.id":            task.ID,
+			"task.id":           task.ID,
 			"alert.name":        alert.Labels["alertname"],
 			"alert.severity":    alert.Labels["severity"],
 			"alert.fingerprint": alert.Fingerprint,
@@ -245,11 +245,9 @@ func buildEnrichedQuery(alert Alert) string {
 	}
 	return fmt.Sprintf(
 		"ALERT: %s (severity: %s). %s. "+
-			"Investigate: check Prometheus metrics for %s, get pod status and logs, "+
-			"diagnose root cause. Then delegate remediation to the devops-chat-agent "+
-			"(use its devops_operations capability) — it will handle pod restarts, "+
-			"JIRA ticket creation, and Slack notification internally. "+
-			"After delegation completes, create a JIRA ticket and notify %s on Slack with findings.",
+			"Affected instance or target: %s. Investigate and respond using the agent's "+
+			"configured incident-response procedure. When that procedure calls for a "+
+			"team notification, use the configured incident channel %s.",
 		alert.Labels["alertname"],
 		alert.Labels["severity"],
 		alert.Annotations["summary"],
@@ -484,10 +482,10 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 	defer endLinkedSpan()
 
 	a.Logger.InfoWithContext(ctx, "Resuming orchestration from checkpoint", map[string]interface{}{
-		"checkpoint_id":     checkpointID,
-		"request_id":        checkpoint.RequestID,
-		"interrupt_point":   checkpoint.InterruptPoint,
-		"original_request":  checkpoint.Plan.OriginalRequest[:min(80, len(checkpoint.Plan.OriginalRequest))],
+		"checkpoint_id":    checkpointID,
+		"request_id":       checkpoint.RequestID,
+		"interrupt_point":  checkpoint.InterruptPoint,
+		"original_request": checkpoint.Plan.OriginalRequest[:min(80, len(checkpoint.Plan.OriginalRequest))],
 	})
 
 	// Re-enter the orchestrator with the original request
@@ -498,10 +496,10 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 			newCheckpoint := orchestration.GetCheckpoint(err)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":            "interrupted",
-				"checkpoint_id":     newCheckpoint.CheckpointID,
-				"message":           "Another step requires approval",
-				"resumed_from":      checkpointID,
+				"status":        "interrupted",
+				"checkpoint_id": newCheckpoint.CheckpointID,
+				"message":       "Another step requires approval",
+				"resumed_from":  checkpointID,
 			})
 			return
 		}

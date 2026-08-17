@@ -43,6 +43,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
+	if err != nil {
+		log.Fatalf("Failed to create skill registry: %v", err)
+	}
+	defer func() {
+		if skillClients != nil {
+			_ = skillClients.Close()
+		}
+	}()
 
 	// 5. Setup shared agent memory (episodic events, investigation coordination)
 	var memBackends *memory.SharedBackends
@@ -113,7 +122,9 @@ func main() {
 			memHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
 		}
 
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery, memHooks, activityCoord); err != nil {
+		if err := agent.InitializeOrchestrator(
+			agent.Discovery, memHooks, activityCoord, skillRegistry,
+		); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})

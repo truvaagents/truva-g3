@@ -202,40 +202,20 @@ setup_agent_config() {
     truvag3_create_configmap "devops-chat-agent-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
 }
 
-# Reconcile the exact skill packages bound by this agent. The Registry Viewer is
-# only the HTTP host; validation, optimistic concurrency, and persistence are
-# owned by orchestration's provider-neutral skills handler.
-sync_skills() {
-    local api_base="${TRUVAG3_SKILLS_API_URL:-http://registry.localhost/api/v1/skills}"
-    api_base="${api_base%/}"
+# Best-effort reconciliation used by deployment commands. The explicit
+# skills-sync command below remains strict for operator and CI use.
+prepare_skills() {
+    truvag3_prepare_agent_skills "$SCRIPT_DIR/skills/packages"
+}
 
-    truvag3_check_skill_tools || return 1
-    truvag3_sync_skill_package "$api_base" "devops" "kubernetes-safety" \
-        "$SCRIPT_DIR/skills/kubernetes-safety.json" || return 1
-    truvag3_sync_skill_package "$api_base" "devops" "observability-investigation" \
-        "$SCRIPT_DIR/skills/observability-investigation.json" || return 1
-    truvag3_sync_skill_package "$api_base" "devops" "infrastructure-change-documentation" \
-        "$SCRIPT_DIR/skills/infrastructure-change-documentation.json" || return 1
-    log_success "All DevOps skill packages match Git"
+# Strictly reconcile every package stored under
+# skills/packages/<namespace>/<name>.json.
+sync_skills() {
+    truvag3_sync_agent_skills "$SCRIPT_DIR/skills/packages"
 }
 
 check_skills() {
-    local api_base="${TRUVAG3_SKILLS_API_URL:-http://registry.localhost/api/v1/skills}"
-    local failed=0
-    api_base="${api_base%/}"
-
-    truvag3_check_skill_tools || return 1
-    truvag3_check_skill_package "$api_base" "devops" "kubernetes-safety" \
-        "$SCRIPT_DIR/skills/kubernetes-safety.json" || failed=1
-    truvag3_check_skill_package "$api_base" "devops" "observability-investigation" \
-        "$SCRIPT_DIR/skills/observability-investigation.json" || failed=1
-    truvag3_check_skill_package "$api_base" "devops" "infrastructure-change-documentation" \
-        "$SCRIPT_DIR/skills/infrastructure-change-documentation.json" || failed=1
-    if [ "$failed" -ne 0 ]; then
-        log_error "One or more DevOps skill packages do not match Git"
-        return 1
-    fi
-    log_success "All DevOps skill packages match Git"
+    truvag3_check_agent_skills "$SCRIPT_DIR/skills/packages"
 }
 
 # Deploy to Kubernetes
@@ -251,7 +231,7 @@ deploy_k8s() {
     # Setup secrets and config
     setup_k8s_secrets
     setup_agent_config
-    sync_skills
+    prepare_skills
 
     # Deploy the chat agent
     kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
@@ -437,7 +417,7 @@ rebuild() {
     load_env
     setup_k8s_secrets
     setup_agent_config
-    sync_skills
+    prepare_skills
 
     # Apply Kubernetes manifests
     log_info "Applying Kubernetes manifests..."
@@ -469,7 +449,7 @@ rollout() {
     log_info "Updating secrets and config from .env..."
     setup_k8s_secrets
     setup_agent_config
-    sync_skills
+    prepare_skills
 
     # Apply k8-deployment.yaml to pick up ConfigMap changes
     log_info "Applying k8-deployment.yaml..."

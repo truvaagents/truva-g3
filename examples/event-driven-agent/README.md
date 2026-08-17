@@ -9,6 +9,7 @@ A production-ready event-driven incident response agent that receives Prometheus
   - [Quick Start (Recommended)](#quick-start-recommended)
   - [Step-by-Step Deployment](#step-by-step-deployment)
 - [Required Tools and Agents](#required-tools-and-agents)
+- [Agent Skills](#agent-skills)
 - [Overview](#overview)
 - [What You'll Learn](#what-youll-learn)
 - [Architecture](#architecture)
@@ -101,11 +102,17 @@ At minimum, uncomment and set ONE of these in your `.env` file:
 
 **What `./setup.sh full-deploy` does:**
 1. Creates a Kind Kubernetes cluster with proper port mappings
-2. Deploys shared monitoring infrastructure (Redis, OTEL Collector, Prometheus, Jaeger, Grafana)
-3. Deploys Prometheus AlertManager with routing rules for TruvaG3 alerts
-4. Builds and deploys the event-driven agent
-5. Deploys the product-catalog-api mock service (for E2E HITL testing — see [E2E Stress Test](#e2e-stress-test-hitl-demo))
-6. Sets up port forwarding automatically
+2. Deploys shared infrastructure, including Redis, observability services, Registry Viewer, and the Skills API host
+3. Builds the event-driven agent image
+4. Validates and synchronizes the agent-owned incident-response skill package
+5. Deploys the event-driven agent and Prometheus AlertManager
+6. Deploys the product-catalog-api mock service (for E2E HITL testing — see [E2E Stress Test](#e2e-stress-test-hitl-demo))
+7. Verifies the configured ingress routes
+
+The infrastructure step keeps local-process values such as
+`REDIS_URL=redis://localhost:6379` and the localhost OTLP endpoint out of shared
+Kubernetes workloads. Those workloads receive their in-cluster service
+addresses instead.
 
 Once complete, access the services at:
 
@@ -246,6 +253,38 @@ cd examples/devops-tool
 ./setup.sh run          # Run locally
 ./setup.sh help         # See all options
 ```
+
+---
+
+## Agent Skills
+
+The agent binds the required
+`incident-response/evidence-driven-incident-response` skill. Its reviewable
+source package is stored at
+`skills/packages/incident-response/evidence-driven-incident-response.json`.
+
+Normal setup is automatic. `full-deploy`, `deploy`, `rebuild`, `rollout`, and
+both deployment-mode paths synchronize every package under
+`skills/packages/<namespace>/<name>.json` before the agent starts or restarts.
+This automatic step is best-effort: failure produces a warning but does not
+block deployment. An unchanged package is skipped; a changed package is
+published as the next version and read back for verification.
+
+Use these commands only when you want to inspect or repair skill state without
+rebuilding the agent:
+
+```bash
+./setup.sh skills-check  # Read-only comparison with Git
+./setup.sh skills-sync   # Reconcile packages and verify the result
+```
+
+These explicit commands remain strict and return a non-zero status on drift or
+failure. Set `TRUVAG3_SKILLS_API_URL` for another management host, or set the
+setup-only `TRUVAG3_SKIP_SKILLS_SYNC=true` when automatic deployment sync is
+intentionally unavailable.
+
+If the local Kind cluster is deleted, `full-deploy` recreates the package from
+Git. Agent replicas do not publish skills during process startup.
 
 ---
 
@@ -751,6 +790,8 @@ See `.env.example` for complete documentation of all supported providers.
 ./setup.sh docker-build     # Build Docker image using local workspace modules
 ./setup.sh deploy           # Build, load, and deploy to Kubernetes (embedded mode)
 ./setup.sh rebuild          # Rebuild with --no-cache and redeploy
+./setup.sh skills-check     # Compare published skill packages with Git
+./setup.sh skills-sync      # Reconcile skill packages without restarting
 ./setup.sh deploy-split     # Deploy in split mode (separate API + Worker pods)
 ./setup.sh deploy-embedded  # Switch back to embedded mode (single pod)
 ./setup.sh test             # Run test requests against deployed agent
@@ -1038,6 +1079,7 @@ Structured JSON logs with component attribution and trace context. Request-scope
 ```
 event-driven-agent/
 ├── main.go                    # Entry point; mode dispatch (embedded / api / worker)
+├── skills.go                  # Skills registry construction
 ├── event_agent.go             # Agent type + AI chain client wiring + capability registration
 ├── event_processor.go         # AI investigation pipeline (context enrichment → orchestrator → synthesis)
 ├── webhook_receiver.go        # AlertManager webhook parser + deterministic pipeline (sev route, dedup, enqueue)
@@ -1052,6 +1094,8 @@ event-driven-agent/
 ├── go.mod                     # Go module definition
 ├── Dockerfile                 # Production container image
 ├── Dockerfile.workspace       # Development container with local modules
+├── skills/
+│   └── packages/incident-response/ # Git-authored incident-response packages
 ├── setup.sh                   # Build and deployment script (cluster, infra, deploy, mock-service driver)
 └── README.md                  # This file
 ```
@@ -1154,6 +1198,10 @@ All day-to-day operations go through `setup.sh`. Run `./setup.sh help` to see ev
 
 # Restart the deployment (e.g., to pick up a new ConfigMap from .env)
 ./setup.sh rollout
+
+# Inspect or repair agent-owned skill packages without restarting
+./setup.sh skills-check
+./setup.sh skills-sync
 
 # Run the built-in smoke test against the deployed agent
 ./setup.sh test

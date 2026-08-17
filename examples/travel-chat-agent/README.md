@@ -436,10 +436,13 @@ The agent code explicitly binds five reusable packages:
 - `travel/weather-assessment` — `auto`; add weather-risk planning and response
   guidance only when relevant.
 
-`setup.sh deploy`, `rebuild`, and `rollout` validate and conditionally publish
-the JSON packages under `skills/` through
-`http://registry.localhost/api/v1/skills` before restarting the agent. Existing
-content is updated using its current ETag, so repeated setup runs are safe.
+`setup.sh deploy`, `rebuild`, and `rollout` discover, validate, and
+conditionally publish the JSON packages under
+`skills/packages/<namespace>/<name>.json` through
+`http://registry.localhost/api/v1/skills` before restarting the agent. This
+automatic step is best-effort: an unavailable API or invalid package produces
+a warning, but deployment continues. Existing content is updated using its
+current ETag, so repeated setup runs are safe.
 The same reconciliation is part of `full-deploy`, so an empty registry in a
 new Kind cluster is rebuilt from the Git-authored packages.
 
@@ -455,6 +458,10 @@ agent:
 next immutable version. It never clears the shared skill store.
 If the management host uses another address, set the setup-only
 `TRUVAG3_SKILLS_API_URL` to the full `/api/v1/skills` base URL.
+Set `TRUVAG3_SKIP_SKILLS_SYNC=true` when the setup host intentionally cannot
+reach that API. This skips only automatic deployment synchronization;
+`skills-sync` and `skills-check` remain strict and return a non-zero status on
+failure or drift.
 Agent replicas do not receive mutable binding API calls: code owns the default
 list, and `TRUVAG3_SKILL_BINDINGS_JSON` can replace it for the whole deployment.
 
@@ -641,6 +648,7 @@ Structured JSON logs with component attribution and trace context. Request-scope
 ```
 travel-chat-agent/
 ├── main.go              # Entry point and initialization
+├── skills.go            # Skills registry construction
 ├── chat_agent.go        # Agent with orchestration integration
 ├── sse_handler.go       # SSE streaming handler
 ├── session.go           # Redis-backed session management
@@ -649,6 +657,8 @@ travel-chat-agent/
 ├── Dockerfile           # Production container image
 ├── Dockerfile.workspace # Development container with local modules
 ├── k8-deployment.yaml   # Kubernetes deployment manifest
+├── skills/
+│   └── packages/travel/ # Git-authored Travel skill packages
 ├── setup.sh             # Build and deployment script
 └── README.md            # This file
 ```

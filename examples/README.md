@@ -15,6 +15,7 @@ a copied example still has access to sibling examples or this top-level catalog.
 
 - [Portable Example Contract](#portable-example-contract)
 - [Quick Start](#quick-start)
+- [Skills in Examples](#skills-in-examples)
 - [Example Catalog](#example-catalog)
 - [Infrastructure and UIs](#infrastructure-and-uis)
 - [Learning Paths](#learning-paths)
@@ -80,6 +81,100 @@ Most examples expose a similar setup interface:
 
 The first `full-deploy` creates the Kind cluster and shared infrastructure. Later
 examples can reuse the same cluster.
+
+## Skills in Examples
+
+Some agents use skills: reusable instructions that help the orchestrator apply
+domain-specific procedures without hardcoding discovered tool or capability
+names. Their setup is automatic. Developers running an example do not need to
+create skill records manually.
+
+Git stores the desired packages with the agent:
+
+```text
+examples/<agent>/
+  skills/
+    packages/
+      <namespace>/
+        <skill-name>.json
+```
+
+The directory path supplies the skill identity. For example:
+
+```text
+skills/packages/travel/weather-assessment.json
+                └─┬──┘ └────────┬────────┘
+              namespace       skill name
+```
+
+During a cold start or normal deployment, setup follows this order:
+
+```text
+create or reuse cluster
+          │
+          ▼
+deploy shared infrastructure and the Skills API host
+          │
+          ▼
+validate and synchronize every agent-owned package
+          │
+          ▼
+create or restart the agent workload
+          │
+          ▼
+agent binds and reads the published skills during execution
+```
+
+`full-deploy`, `deploy`, `rebuild`, and `rollout` perform synchronization before
+the skill-enabled agent starts or restarts. Unchanged content is skipped, so
+repeated setup commands do not create unnecessary versions. Changed content is
+published as a new version and verified by reading it back. Automatic
+synchronization is best-effort: an invalid package or an unavailable management
+API produces a clear warning, but the agent deployment continues. The agent can
+use an existing published revision if one is available. A request that needs a
+missing required skill can still fail until the published state is repaired.
+Finder-created `.DS_Store` files are ignored; other unexpected files still
+produce a warning during automatic setup and fail the strict maintenance
+commands.
+
+This means deleting and recreating the local Kind cluster does not lose the
+example definition. The runtime data store is derived state; the next
+`full-deploy` recreates the published packages from Git.
+
+Skill-enabled examples also provide two operational commands:
+
+```bash
+./setup.sh skills-check   # read-only: compare published packages with Git
+./setup.sh skills-sync    # reconcile packages without rebuilding the agent
+```
+
+Use `TRUVAG3_SKILLS_API_URL` to point these commands at a different deployment
+of the provider-neutral Skills management API. The local examples default to
+`http://registry.localhost/api/v1/skills`. Registry Viewer provides the local
+management screen and lets developers inspect published versions, while the
+orchestration module owns validation and storage contracts.
+
+The explicit `skills-sync` and `skills-check` commands are strict: drift,
+invalid content, or an unavailable API returns a non-zero status for operators
+and CI. On a headless or remote setup host that cannot route to the management
+API, set `TRUVAG3_SKIP_SKILLS_SYNC=true` to skip only the automatic deployment
+attempt. The explicit maintenance commands ignore this setup-only switch.
+Automatic setup briefly retries an ingress `404` that can occur while a new
+route is converging. Strict commands fail fast on `404`, and the read-only
+`skills-check` uses a shorter retry budget for other temporary failures.
+
+The management API and the agent must also address the same logical datastore.
+For the included Redis implementation, keep `TRUVAG3_SKILLS_REDIS_DB` consistent
+between Registry Viewer and every skill-enabled agent. Changing the value in an
+agent `.env` and running only `rollout` updates the agent reader, not Registry
+Viewer's writer. Run an infrastructure-capable example's `./setup.sh infra`
+with the new value before `skills-sync` and the agent rollout.
+
+When a coding agent adds a new skill, it must add the package under the standard
+directory and add an explicit runtime binding for the same namespace and name.
+No per-package setup command is needed: the shared setup helper discovers the
+new file automatically. The complete coding-assistant rules are in
+[`examples/AGENTS.md`](AGENTS.md#agent-owned-skills).
 
 ## Example Catalog
 

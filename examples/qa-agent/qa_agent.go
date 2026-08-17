@@ -100,7 +100,12 @@ func NewQAAgent() (*QAAgent, error) {
 
 // InitializeOrchestrator sets up the orchestrator after Discovery is available.
 // memoryHooks and activityCoordinator are optional — nil disables memory.
-func (q *QAAgent) InitializeOrchestrator(discovery core.Discovery, memoryHooks []core.PipelineHook, activityCoordinator core.ActivityCoordinator) error {
+func (q *QAAgent) InitializeOrchestrator(
+	discovery core.Discovery,
+	memoryHooks []core.PipelineHook,
+	activityCoordinator core.ActivityCoordinator,
+	skillRegistry orchestration.SkillRegistry,
+) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -108,7 +113,26 @@ func (q *QAAgent) InitializeOrchestrator(discovery core.Discovery, memoryHooks [
 		return fmt.Errorf("discovery service not available")
 	}
 
-	config := orchestration.DefaultConfig()
+	skillConfig := orchestration.SkillConfig{
+		Enabled: true,
+		Bindings: []orchestration.SkillBinding{
+			{
+				Namespace: "qa", Name: "web-application-testing", Version: "published",
+				Activation: orchestration.SkillActivationAlways, Required: true,
+			},
+		},
+	}
+	resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+		Environment: orchestration.EnvironmentCompatible,
+		Options: []orchestration.OrchestratorOption{
+			orchestration.WithSkills(skillConfig),
+			orchestration.WithSkillRegistry(skillRegistry),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resolve orchestrator configuration: %w", err)
+	}
+	config := resolved.Config
 	config.RoutingMode = orchestration.ModeAutonomous
 	config.SynthesisStrategy = orchestration.StrategyLLM
 	config.MetricsEnabled = true
@@ -122,44 +146,24 @@ func (q *QAAgent) InitializeOrchestrator(discovery core.Discovery, memoryHooks [
 	config.ExecutionOptions.TotalTimeout = 30 * time.Minute
 	config.ExecutionOptions.StepTimeout = 10 * time.Minute
 
-	// Configure prompt builder for QA testing domain
-	// Prompt structure follows EFFECTIVE_PROMPTS_GUIDE.md:
-	//   Identity → Instructions → Example (in SystemInstructions)
-	//   Single CRITICAL, positive directives, XML section boundaries, ~2K tokens
+	// Keep agent identity, lifecycle, and deployment policy in the system prompt.
+	// Reusable browser-testing procedures are projected from the bound skill.
 	config.PromptConfig = orchestration.PromptConfig{
-		SystemInstructions: `<identity>
+		SystemInstructions: `<qa_agent_identity>
 You are an autonomous QA testing agent that explores websites, generates Playwright tests from what it discovers, executes them, files bug tickets, and sends chat notifications.
-</identity>
+</qa_agent_identity>
 
-<workflow>
-1. Multi-phase planning: explore first, test second, report last.
-2. Explore the site and check for reusable scripts in parallel before writing any tests.
-3. Prefer reusable scripts by name when available. Generate fresh scripts only when none exist or the site has changed significantly.
-4. Fresh scripts: 15-25 tests covering structural checks (visibility, landmarks, console errors) and functional interactions (search, clicks, form fills, dropdowns). Ignore CORS font errors. Use exact text from explore results as selectors. Each test calls page.goto() independently. Use expect.soft() for non-critical checks.
-5. After tests complete, file a bug tracker ticket (project_key: "QA", labels: "qa-automated,playwright") and send a chat notification to #qa-tests. Include artifacts.base_path from test results in both.
+<qa_workflow_contract>
+1. Phase 1 gathers current page evidence and checks for reusable tests in parallel.
+2. Phase 2 executes a matching reusable test or a newly authored test suite.
+3. Phase 3 records the completed run in project "QA" with labels "qa-automated,playwright", then notifies "#qa-tests" using the returned record reference and artifact location when available.
+4. Continue planning after test execution until the current execution contains successful tracking-record and notification results. Set terminal to true only after both results exist.
+5. Treat planned, attempted, remembered, and failed follow-up actions as incomplete.
+</qa_workflow_contract>
 
-CRITICAL — Playwright expect allowlist (use only these):
-Locator: toBeVisible, toBeHidden, toBeEnabled, toBeDisabled, toBeEditable, toBeEmpty, toBeChecked, toBeFocused, toBeAttached, toBeInViewport, toContainText, toHaveText, toHaveAttribute, toHaveClass, toHaveCount, toHaveCSS, toHaveId, toHaveValue, toHaveAccessibleName.
-Page: toHaveTitle, toHaveURL. Counts: const count = await locator.count(); expect(count).toBeGreaterThan(0);
-</workflow>
-
-<workflow_example>
-Phase 1 (Terminal: false) — discover + check scripts:
-  step-1: explore site at depth 1
-  step-2: check for reusable scripts (parallel with step-1)
-
-Phase 2 (Terminal: false) — run tests:
-  Reuse path: step-3: reuse_script_name: "example-homepage", target_url: "https://example.com"
-  Fresh path: step-3: generate 20+ tests —
-    Structural: page.getByRole('link', { name: 'Learn' }).toBeVisible(), page.getByRole('heading', { name: 'Welcome' }), footer, nav landmark, console errors
-    Functional: page.getByPlaceholder('Search').fill('networking') → press Enter → waitForResponse(/search/) → verify results visible; page.getByRole('link', { name: 'Intro to…' }).click() → waitForURL(/courses/) → verify heading; dropdown: selectOption() → verify content change
-
-Phase 3 (Terminal: true) — report:
-  step-4: file ticket — project_key: "QA", summary: "[QA] example.com — 18/20 passed (2026-03-16)", priority: "High", description: test table + failure details + "Artifacts: s3://bucket/example.com/runs/…"
-  step-5: notify "#qa-tests" — "[QA] example.com — 18/20 | QA-42 | Artifacts: s3://…"
-
-Terminal stays false until ticket AND notification are sent. script_name is a base name without extension (e.g. "example-homepage").
-</workflow_example>`,
+<qa_workflow_example>
+Explore and reusable-test discovery complete in phase 1; browser tests complete in phase 2; phase 3 creates the QA record and sends the dependent notification; only phase 3 is terminal.
+</qa_workflow_example>`,
 
 		Domain: "qa-testing",
 		AdditionalTypeRules: []orchestration.TypeRule{
@@ -206,15 +210,6 @@ Terminal stays false until ticket AND notification are sent. script_name is a ba
 				Description: "Slack Block Kit blocks for rich message formatting",
 			},
 		},
-		// CustomInstructions kept minimal — most guidance is in the example above.
-		// Only includes rules that address observed failures not covered by the example.
-		CustomInstructions: []string{
-			"Always check for reusable test scripts for the target hostname in Phase 1 (parallel with explore). If a script exists, run it by name instead of generating a new one",
-			"When explore_page detects a SPA framework (React, Vue, Angular), generate tests that wait for hydration with page.waitForLoadState('networkidle')",
-			"Include accessibility checks (aria labels, keyboard navigation) when explore_page reveals accessible markup",
-			"Use explore_page selector values directly — they reflect actual CSS selectors found on the page",
-			"For navigation links, use page.getByRole('link', { name: 'Link Text' }) — href values from explore_page may differ from DOM attributes",
-		},
 	}
 
 	deps := orchestration.OrchestratorDependencies{
@@ -227,6 +222,10 @@ Terminal stays false until ticket AND notification are sent. script_name is a ba
 		ActivityCoordinator: activityCoordinator,
 	}
 
+	// Use the compatibility constructor after resolving configuration so this
+	// example retains its documented environment-backed debug stores. The
+	// resolved config remains authoritative; the constructor only supplies the
+	// legacy backend bootstrap until this example composes those stores itself.
 	orch, err := orchestration.CreateOrchestrator(config, deps)
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
