@@ -280,9 +280,12 @@ The script publishes these packages through the Registry Viewer host:
 - `travel/travel-readiness-assessment` — `auto`
 - `travel/weather-assessment` — `auto`
 
-The packages are reviewable files under `skills/`. `full-deploy` recreates
-them when the Kind cluster has an empty runtime registry. When the cluster and
-management API are already running, inspect or reconcile only the skills:
+The packages are reviewable files under
+`skills/packages/<namespace>/<name>.json`. The directory path supplies the
+stored skill identity, and the setup helper discovers every package there.
+`full-deploy` recreates them when the Kind cluster has an empty runtime
+registry. When the cluster and management API are already running, inspect or
+reconcile only the skills:
 
 ```bash
 ./setup.sh skills-check  # Read-only comparison with Git
@@ -294,6 +297,32 @@ infrastructure. `skills-sync` skips equivalent content and rolls changed
 behavior forward as a new immutable revision. If the store cannot return a
 valid published package and ETag, the command stops; repair the configured
 backend and run `skills-sync` again instead of bypassing integrity checks.
+
+The example deployment commands use a different, best-effort wrapper. They
+attempt the same synchronization before creating or restarting the workload,
+but validation, routing, or management API failures are warnings and do not
+stop agent deployment. Existing published revisions remain available. If a
+required package has never been published, requests that need it can fail until
+you run the strict `skills-sync` command successfully.
+
+For a headless or remote setup host that intentionally cannot route to the
+management API, skip the automatic attempt:
+
+```bash
+TRUVAG3_SKIP_SKILLS_SYNC=true ./setup.sh deploy
+```
+
+This setup-only switch does not weaken `./setup.sh skills-sync` or
+`./setup.sh skills-check`; explicit maintenance commands always remain strict.
+Set `TRUVAG3_SKILLS_API_URL` to the full `/api/v1/skills` base URL when the API
+is reachable at another address.
+
+Automatic setup briefly retries an HTTP `404` because a new ingress can serve
+its default backend while the Skills route is converging. A strict command
+treats `404` as an incorrect API base URL and fails immediately. The read-only
+`skills-check` also uses a shorter retry budget than synchronization so an
+unavailable API is reported promptly. Finder-created `.DS_Store` files are
+ignored during package discovery; other unexpected files remain errors.
 
 Open:
 
@@ -336,10 +365,11 @@ lowercase slugs: letters, digits, and internal hyphens, with no leading or
 trailing hyphen (64 characters by default).
 
 Keep source packages with the application or deployment repository that owns
-them—for example, the shipped agents use
-`examples/travel-chat-agent/skills/*.json` and
-`examples/devops-chat-agent/skills/*.json`. Treat those files as reviewable
-source and publish them through the management API during deployment. After a
+them. The shipped examples use
+`examples/<agent>/skills/packages/<namespace>/<name>.json`. Treat those files
+as reviewable source and publish them through the management API during
+deployment. The example setup helper derives namespace and name from the path,
+so adding a package does not require another per-package shell command. After a
 successful publication, the configured skill store is the runtime source of
 truth; agent pods do not read the source file directly.
 
@@ -2349,6 +2379,58 @@ Conditional PUT
 There are no draft, rollback, archive, or automatic garbage-collection states
 in V1. Recovery is roll-forward: correct the package and publish the next
 revision.
+
+### Example deployment synchronization
+
+The example setup scripts treat the Git package directory as desired state,
+but they do not make workload availability depend on the management API:
+
+```text
+deploy / rebuild / rollout / full-deploy
+        │
+        ├─ automatic sync succeeds ─► deploy agent
+        │
+        └─ automatic sync fails ─────► warn, then deploy agent
+
+skills-sync / skills-check
+        │
+        ├─ operation succeeds ───────► exit 0
+        │
+        └─ drift or failure ─────────► non-zero exit
+```
+
+This separation keeps first-time setup usable when Registry Viewer or ingress
+is not ready, while preserving strict commands for repair and CI. Automatic
+sync never deletes a package. `TRUVAG3_SKIP_SKILLS_SYNC=true` disables only the
+automatic attempt; `TRUVAG3_SKILLS_API_URL` selects another management host.
+
+### Keep the management writer and runtime readers aligned
+
+The management host publishes revisions and agent runtimes read them through
+the same provider-neutral contracts, but separate Kubernetes workloads own
+their own backend configuration. They must address the same logical skills
+datastore.
+
+With the included Redis implementation, keep the Redis address and
+`TRUVAG3_SKILLS_REDIS_DB` consistent between Registry Viewer and every
+skill-enabled agent. Keep Registry Viewer's default `truvag3` key namespace
+unless the agent's `SkillStore` prefix is changed in code at the same time. An
+agent `rollout` updates only that agent's ConfigMap. It does not update Registry
+Viewer's ConfigMap, so changing the skills database on the agent alone can make
+publication write to one database while runtime reads another.
+
+For the local examples, apply a database change in this order:
+
+```bash
+# Set the same TRUVAG3_SKILLS_REDIS_DB in the environment used by setup.
+./setup.sh infra        # redeploy the management host configuration
+./setup.sh skills-sync  # publish through the updated management host
+./setup.sh rollout      # update and restart the agent reader
+```
+
+Use an example that provides the `infra` verb. For another storage provider,
+the equivalent rule is the same: the management writer and runtime readers
+must share the provider's logical namespace or table configuration.
 
 ### List the catalog
 

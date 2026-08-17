@@ -9,6 +9,7 @@ This guide provides a comprehensive, step-by-step tutorial for developing **agen
 3. [Project Structure](#3-project-structure)
 4. [Step 1: Create the Agent Struct](#4-step-1-create-the-agent-struct)
 5. [Step 2: Configure the Orchestrator](#5-step-2-configure-the-orchestrator)
+   - [Optional: Enable Agent Skills](#optional-enable-agent-skills)
 6. [Step 3: Register Capabilities](#6-step-3-register-capabilities)
 7. [Step 4: Implement Handlers](#7-step-4-implement-handlers)
 8. [Step 5: Add SSE Streaming (Streaming Agents Only)](#8-step-5-add-sse-streaming-streaming-agents-only)
@@ -16,9 +17,11 @@ This guide provides a comprehensive, step-by-step tutorial for developing **agen
 10. [Step 7: Create the Main Entry Point](#10-step-7-create-the-main-entry-point)
    - [Background Jobs: `core.Runnable` and `framework.RegisterRunnable`](#background-jobs-corerunnable-and-frameworkregisterrunnable)
 11. [Step 8: Add Deployment Files](#11-step-8-add-deployment-files)
+   - [Agent-owned skill packages](#agent-owned-skill-packages)
 12. [Logging and Observability](#12-logging-and-observability)
 13. [Distributed Tracing](#13-distributed-tracing)
 14. [Testing Your Agent](#14-testing-your-agent)
+   - [Test Agent Skills](#test-agent-skills)
 15. [Adding Human-in-the-Loop (HITL) Approval](#15-adding-human-in-the-loop-hitl-approval)
    - 15.1 [When to Use HITL](#151-when-to-use-hitl)
    - 15.2 [Resume Context: The Critical Contract](#152-resume-context-the-critical-contract)
@@ -123,6 +126,7 @@ Client → POST /chat/stream → Agent → Orchestrator → Tools → SSE Events
 | Step progress | In final response | Real-time SSE events |
 | Conversation history | Optional | Typically required |
 | Session management | Optional | Typically required |
+| Agent skills | Optional | Optional |
 | Implementation complexity | Lower | Higher |
 | Files needed | 3-4 Go files | 4-5 Go files |
 
@@ -142,6 +146,7 @@ examples/your-agent/
 ├── Dockerfile           # Standalone container build
 ├── Dockerfile.workspace # Development container (builds from truvag3 root)
 ├── k8-deployment.yaml   # Kubernetes deployment manifest
+├── skills/packages/    # Optional reviewable skill packages grouped by namespace
 └── setup.sh             # Full lifecycle: build, deploy, test, clean
 ```
 
@@ -159,6 +164,7 @@ examples/your-chat-agent/
 ├── Dockerfile           # Standalone container build
 ├── Dockerfile.workspace # Development container (builds from truvag3 root)
 ├── k8-deployment.yaml   # Kubernetes deployment manifest
+├── skills/packages/    # Optional reviewable skill packages grouped by namespace
 └── setup.sh             # Full lifecycle: build, deploy, test, clean
 ```
 
@@ -171,6 +177,7 @@ examples/your-chat-agent/
 | `handlers.go` | `handleNaturalOrchestration()`, `handleHealth()`, `handleDiscover()`, helper functions | Session CRUD handlers, health, discover, helper functions |
 | `sse_handler.go` | N/A | `StreamCallback` interface, `SSECallback` impl, `SSEHandler.ServeHTTP()` |
 | `session.go` | N/A | `SessionStore` (Redis-backed), `Session`/`Message` types, conversation history |
+| `skills/packages/` | Optional skill package source grouped as `<namespace>/<name>.json` | Same |
 
 ---
 
@@ -360,6 +367,28 @@ func NewYourChatAgent() (*YourChatAgent, error) {
 }
 ```
 
+### Thread-Safe Orchestrator Access
+
+The request and scheduling examples later in this guide call
+`GetOrchestrator()`. Define the matching getter on the agent type so those
+callers do not race with background initialization:
+
+```go
+func (a *YourAgent) GetOrchestrator() *orchestration.AIOrchestrator {
+    a.mu.RLock()
+    defer a.mu.RUnlock()
+    return a.orchestrator
+}
+
+func (a *YourChatAgent) GetOrchestrator() *orchestration.AIOrchestrator {
+    a.mu.RLock()
+    defer a.mu.RUnlock()
+    return a.orchestrator
+}
+```
+
+In a real agent, include only the method for that agent's concrete type.
+
 ### Key Points
 
 1. **Embed `*core.BaseAgent`**: Provides `Logger`, `AI`, `Discovery`, `RegisterCapability()`, and `GetID()`
@@ -374,9 +403,9 @@ func NewYourChatAgent() (*YourChatAgent, error) {
 The code above uses `ai.NewChainClient()` for multi-provider failover. Key concepts:
 
 - **Provider aliases**: One-line identifiers (`"openai"`, `"anthropic"`, `"openai.groq"`, `"openai.ollama"`) that auto-resolve base URL + API key env var
-- **Model aliases**: Portable names (`"default"`, `"fast"`, `"smart"`, `"premium"`) that resolve to the best model per provider. Override at runtime: `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1`
+- **Model aliases**: Portable names (`"default"`, `"fast"`, `"smart"`, `"premium"`, `"code"`, `"vision"`) that resolve per provider. Override a mapping at runtime when needed: `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-luna`
 - **Explicit vs auto-detect chain**: Use `ai.WithProviderChain("openai", "anthropic")` for deterministic order, or omit for auto-detection from available API keys
-- **Reasoning models** (o1, o3, o4): Need extended timeouts (240s+) and a token multiplier (default 5x) for chain-of-thought overhead
+- **Reasoning-capable models**: May need extended timeouts. The OpenAI-compatible request path reserves reasoning-token capacity with a configurable multiplier (default 5x); follow the provider's current model guidance rather than coupling application code to a model family name
 
 > **Reference:** [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) for provider/model alias tables, failover behavior, K8s secrets/ConfigMaps, and operational scenarios.
 
@@ -448,9 +477,9 @@ Provide clear, actionable information and warn about potentially destructive ope
 
         // Custom instructions guide the LLM planner
         CustomInstructions: []string{
-            "For pod queries, always specify the namespace parameter",
-            "Before scaling, check current replica count first",
             "Prefer parallel execution when steps are independent",
+            "Use the smallest discovered capability set that fully satisfies the request",
+            "Preserve dependency order when a step consumes an earlier step's output",
         },
     }
 
@@ -489,10 +518,126 @@ Provide clear, actionable information and warn about potentially destructive ope
 
 `PromptConfig` is the most important configuration — it controls how the LLM plans and synthesizes:
 - **SystemInstructions**: Define persona in first sentence, state what agent does, include constraints. Keep to 3-5 sentences
-- **CustomInstructions**: One decision per instruction. Use "always", "before", "prefer" to be unambiguous
+- **CustomInstructions**: Keep short, agent-specific guidance that applies to every request here. Use one clear decision per instruction
 - **AdditionalTypeRules**: Teach LLM domain-specific JSON types (e.g., namespace names, replica counts)
 
+Use an agent skill instead of `CustomInstructions` when procedural guidance is
+reusable, versioned, relevant only to some requests, or large enough to benefit
+from loading resources only when needed. Keep the agent's identity and universal
+behavior in `SystemInstructions`. Skills guide planning and responses; they do
+not register, authorize, or hardcode tool endpoints. The orchestrator continues
+to discover capabilities at runtime.
+
 > **See also:** [docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) for full PromptConfig documentation.
+
+### Optional: Enable Agent Skills
+
+Skills are disabled by default. Enabling them is an explicit application choice
+with two separate parts. The same integration applies to request/response,
+streaming, asynchronous, and event-driven agents that use orchestration; the
+agent's delivery mode does not change the skill lifecycle.
+
+1. The application startup code (the composition root) creates a provider-backed
+   implementation of the provider-neutral `orchestration.SkillRegistry`
+   interface. Keep the registry and any provider-client owner alive for the
+   orchestrator's lifetime, and close owned clients during application shutdown.
+2. The agent supplies the complete set of skill bindings through code or
+   deployment environment configuration.
+
+When the effective skill runtime is inactive—because the binding list is empty,
+or because skills are disabled without a required binding—no skill registry is
+required, no selector or registry calls run, and no skill sections are added to
+prompts. Disabling skills while retaining a `Required: true` binding is invalid
+configuration and fails startup.
+
+The following replaces the configuration-resolution and construction portions
+of the earlier example. For this path, initialize the earlier `config` value
+with `orchestration.NewDefaultOrchestratorConfig()` instead of
+`orchestration.DefaultConfig()`, apply the ordinary fields shown above, and let
+`ResolveOrchestratorConfig` perform the one selected environment-resolution
+pass. `EnvironmentStrict` validates all supported orchestration environment
+settings, not only the skill settings.
+
+The `skillRegistry` argument comes from the application startup code; it is not
+created by `WithSkills`. The included Redis/Valkey composition and a custom
+provider example are shown separately in the Agent Skills Guide. See
+[the included provider](../orchestration/AGENT_SKILLS_GUIDE.md#64-compose-the-included-redisvalkey-registry)
+and
+[custom storage adapters](../orchestration/AGENT_SKILLS_GUIDE.md#9121-integrate-an-existing-custom-storage-adapter).
+
+```go
+func createSkillEnabledOrchestrator(
+    config *orchestration.OrchestratorConfig,
+    deps orchestration.OrchestratorDependencies,
+    skillRegistry orchestration.SkillRegistry,
+) (*orchestration.AIOrchestrator, error) {
+    skillConfig := orchestration.SkillConfig{
+        Enabled: true,
+        Bindings: []orchestration.SkillBinding{
+            {
+                Namespace:  "travel",
+                Name:       "weather-assessment",
+                Version:    "published",
+                Activation: orchestration.SkillActivationAuto,
+                Required:   false,
+            },
+        },
+    }
+
+    resolved, err := orchestration.ResolveOrchestratorConfig(
+        orchestration.ConfigResolution{
+            Base:        config,
+            Environment: orchestration.EnvironmentStrict,
+            Options: []orchestration.OrchestratorOption{
+                orchestration.WithSkills(skillConfig),
+                orchestration.WithSkillRegistry(skillRegistry),
+            },
+        },
+    )
+    if err != nil {
+        return nil, fmt.Errorf("resolve orchestrator configuration: %w", err)
+    }
+
+    orch, err := orchestration.CreateResolvedOrchestrator(resolved.Config, deps)
+    if err != nil {
+        return nil, fmt.Errorf("create orchestrator: %w", err)
+    }
+    return orch, nil
+}
+```
+
+This helper constructs the orchestrator but does not start it. The caller must
+still call `orch.Start(ctx)` and assign the started instance as shown in the
+earlier `InitializeOrchestrator` example.
+
+`always` activates on every request, `auto` lets the bounded activation policy
+choose, and `explicit` requires a trusted activation from application code.
+`Required: true` means that an unavailable bound package fails the applicable
+request boundary; it does not force an `auto` skill to activate. A `published`
+binding is resolved to one exact revision at request start and remains pinned
+for that execution.
+
+Either environment-enabled resolution mode lets deployment configuration
+replace the code-owned binding list. Skill environment values are validated
+strictly in both `EnvironmentCompatible` and `EnvironmentStrict`.
+`EnvironmentStrict` additionally rejects malformed non-skill orchestration
+environment values instead of applying compatible fallbacks. For example,
+place the complete JSON array on one line in the agent's `.env` file:
+
+```bash
+TRUVAG3_SKILLS_ENABLED=true
+TRUVAG3_SKILL_BINDINGS_JSON='[{"namespace":"travel","name":"weather-assessment","version":"published","activation":"auto","required":false}]'
+```
+
+`TRUVAG3_SKILL_BINDINGS_JSON` replaces the complete code list; it never appends
+or merges. This keeps all replicas in a Kubernetes Deployment on the same
+binding configuration. There is no V1 API for changing the bindings of one
+running replica. An empty array is an explicit deployment-owned binding list
+with no skills:
+
+```bash
+TRUVAG3_SKILL_BINDINGS_JSON='[]'
+```
 
 ---
 
@@ -809,7 +954,7 @@ The `core.ProviderError` check above is not just cosmetic — it's the final lin
 
 ```
 AI Provider (e.g., OpenAI returns 429 Rate Limit)
-  ↓  providerError{StatusCode: 429, Provider: "openai", Model: "o3"}
+  ↓  providerError{StatusCode: 429, Provider: "openai", Model: "gpt-5.6-sol"}
 ChainClient.isClientError() — inspects via errors.As()
   ↓  429 excluded from client errors → tries next provider (Anthropic)
   ↓  Anthropic also fails → error propagates up
@@ -1494,7 +1639,7 @@ func main() {
         core.WithNamespace(os.Getenv("NAMESPACE")),
         core.WithRedisURL(os.Getenv("REDIS_URL")),
         core.WithDiscovery(true, "redis"),
-        core.WithCORS([]string{"*"}, true),
+        core.WithCORSDefaults(),
         core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("your-agent", middlewareConfig)),
     )
     if err != nil {
@@ -1551,6 +1696,11 @@ func main() {
 // validateConfig(), initTelemetry(), getPort() — standard helpers.
 // See examples/travel-chat-agent/main.go for complete implementations.
 ```
+
+`WithCORSDefaults()` is convenient for local browser-facing examples because
+it accepts the headers used by the reference chat UI. For production, restrict
+origins and configure only the methods and headers your application needs; do
+not treat the permissive development default as a production security policy.
 
 ### Background Jobs: `core.Runnable` and `framework.RegisterRunnable`
 
@@ -1672,20 +1822,21 @@ For the full story on scheduling -- architecture, delivery semantics, observabil
 
 ### go.mod
 
-Agents depend on four framework modules: `ai`, `core`, `orchestration`, and `telemetry`.
+The basic orchestration agent in this guide directly depends on four framework
+modules: `ai`, `core`, `orchestration`, and `telemetry`.
 
 ```go
 module github.com/truvaagents/truva-g3/examples/your-agent
 
-go 1.26.4
+go 1.26.6
 
 require (
     github.com/google/uuid v1.6.0
-    github.com/truvaagents/truva-g3/ai v0.9.1
-    github.com/truvaagents/truva-g3/core v0.9.1
-    github.com/truvaagents/truva-g3/orchestration v0.9.1
-    github.com/truvaagents/truva-g3/telemetry v0.9.1
-    go.opentelemetry.io/otel v1.38.0
+    github.com/truvaagents/truva-g3/ai v0.3.0
+    github.com/truvaagents/truva-g3/core v0.3.0
+    github.com/truvaagents/truva-g3/orchestration v0.3.0
+    github.com/truvaagents/truva-g3/telemetry v0.3.0
+    go.opentelemetry.io/otel v1.45.0
 )
 
 // Use local workspace modules for development
@@ -1696,6 +1847,16 @@ replace (
     github.com/truvaagents/truva-g3/resilience => ../../resilience
     github.com/truvaagents/truva-g3/telemetry => ../../telemetry
 )
+```
+
+Those are the minimum framework modules for this orchestration example.
+`memory` is optional, but an agent that directly uses memory APIs or registers
+`memory.ReflectionJob` must add the matching module and local replacement:
+
+```go
+require github.com/truvaagents/truva-g3/memory v0.3.0
+
+replace github.com/truvaagents/truva-g3/memory => ../../memory
 ```
 
 ### .env
@@ -1714,9 +1875,10 @@ OPENAI_API_KEY=sk-...
 # Optional: Model alias overrides (pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS})
 # These override the portable model aliases (default, fast, smart, premium, code, vision)
 # without requiring code changes. See AI_PROVIDERS_SETUP_GUIDE.md for full reference.
-# TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-4.1-2025-04-14
-# TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1         # Use cheaper model in dev instead of o3
-# TRUVAG3_ANTHROPIC_MODEL_DEFAULT=claude-sonnet-4-6
+# TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra
+# TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna
+# TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
+# TRUVAG3_ANTHROPIC_MODEL_DEFAULT=claude-sonnet-5
 
 # Telemetry
 APP_ENV=development
@@ -1736,7 +1898,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 | `REDIS_URL` | Yes | — | Service discovery and session storage |
 | `PORT` | Yes | — | HTTP server port ([port allocation](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md)) |
 | AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc. |
-| `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
+| `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type,Authorization` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `5000` | Max output tokens for LLM synthesis. Chat agents typically need `10000` for detailed responses |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in Redis DB 8 for [Registry Viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) inspection |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Recommended | `false` | Stores LLM request/response payloads for debugging |
@@ -1745,7 +1907,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 | `TRUVAG3_DEBUG` | No | `false` | Enables debug mode (sets log level to `debug`) |
 | `APP_ENV` | No | `development` | Telemetry profile: `development`, `staging`, `production` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | OpenTelemetry collector for tracing/metrics |
-| `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Provider default | Model alias overrides (e.g., `TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-4.1-2025-04-14`) |
+| `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Provider default | Model alias overrides (e.g., `TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra`) |
 
 **Common mistakes:**
 - Missing `TRUVAG3_CORS_HEADERS` — the chat-ui frontend sends `X-User-ID` via a custom header; without this setting, CORS blocks the request silently
@@ -1760,10 +1922,75 @@ Key differences for agents:
 
 | Aspect | Tool | Agent |
 |--------|------|-------|
-| COPY in Dockerfile | `core/`, `telemetry/` | `ai/`, `core/`, `orchestration/`, `resilience/`, `telemetry/` |
+| COPY in Dockerfile | `core/`, `telemetry/` | `ai/`, `core/`, `orchestration/`, `resilience/`, `telemetry/`; add `memory/` when the agent imports that module |
 | K8s `component` label | `tool` | `agent` |
 | K8s resource limits | Lower (50m-100m CPU) | Higher (100m-500m CPU) — AI calls are compute-intensive |
 | Secrets | Tool-specific API keys | AI provider API keys |
+
+#### Agent-owned skill packages
+
+For a skill-enabled example, keep each reviewable package at:
+
+```text
+skills/packages/<namespace>/<skill-name>.json
+```
+
+Source files in Git are the deployable definition, and the published store is
+the runtime source read by agent replicas. The store is derived state because
+setup can reconstruct it from the reviewed packages. Source the shared
+`k8-deployment/setup-env-lib.sh` as other examples do, then add thin wrappers
+to the agent's `setup.sh`:
+
+```bash
+prepare_skills() {
+    truvag3_prepare_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+sync_skills() {
+    truvag3_sync_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+
+check_skills() {
+    truvag3_check_agent_skills "$SCRIPT_DIR/skills/packages"
+}
+```
+
+Call `prepare_skills` after shared infrastructure is ready and before creating
+or restarting the workload in every state-changing deployment path, including
+`full-deploy`, `deploy`, `rebuild`, and `rollout`. It is best-effort: it warns
+when validation or the management API is unavailable but does not block the
+agent deployment. Expose `skills-sync` and `skills-check` as explicit setup
+commands; those commands are strict so operators and continuous integration
+can detect publication failures or drift.
+
+The helper discovers every valid package automatically and skips publication
+when the published content is already equivalent. A missing or empty package
+directory is a successful no-op, so a reusable setup scaffold can include this
+integration before an agent owns any skills.
+
+Use `TRUVAG3_SKILLS_API_URL` when the management API is not available at the
+local example default, `http://registry.localhost/api/v1/skills`. On a setup
+host that intentionally cannot reach the API, set
+`TRUVAG3_SKIP_SKILLS_SYNC=true` to skip only the automatic deployment attempt.
+The explicit `skills-sync` and `skills-check` commands ignore this switch and
+remain strict. These variables control the example setup process; they do not
+configure the orchestrator's runtime skill selection.
+
+The management API writer and the agent's `SkillRegistry` reader must address
+the same logical data store. With the included adapter, keep the Redis/Valkey
+deployment and `TRUVAG3_SKILLS_REDIS_DB` aligned between the management host and
+every skill-enabled agent. Setup synchronization uses the HTTP management API;
+it must not write provider keys directly.
+
+After this one-time setup integration, adding another skill needs only a new
+package file and a matching runtime binding. Do not add one shell command per
+package. Removing a source file does not automatically delete a published
+revision; remove the agent binding and use the management lifecycle when
+deletion is intentional. See
+[examples/AGENTS.md](https://github.com/truvaagents/truva-g3/blob/main/examples/AGENTS.md#agent-owned-skills)
+for the repository rules and the
+[Agent Skills Guide](../orchestration/AGENT_SKILLS_GUIDE.md#3-quick-start) for
+the full authoring, publication, runtime, and troubleshooting lifecycle.
 
 ---
 
@@ -1936,6 +2163,32 @@ curl -N -X POST http://localhost:8357/chat/stream \
 curl http://localhost:8357/chat/session/{session_id}/history | jq .
 ```
 
+### Test Agent Skills
+
+For a skill-enabled Kubernetes example, verify both deployment state and
+runtime behavior:
+
+```bash
+# Confirm that every Git-authored package matches the published representation.
+./setup.sh skills-check
+```
+
+Then send at least one request that should activate each `auto` skill and one
+nearby request that should not. Confirm that `always` skills activate on every
+ordinary request that reaches skill preparation, and test trusted application
+activation separately for any `explicit` binding. If the agent uses multi-phase
+planning or HITL, also exercise continuation or resume and verify that the exact
+version stays pinned while boundary-relevant resources are selected again.
+
+When stored execution evidence is enabled, open **Registry Viewer → Executions**,
+choose the request, and open its **Skills** tab. Verify the ordered Pin,
+Activate, Select resources, Load, and Project records. Use the LLM Calls or LLM
+Debug view only when you need to inspect the effective prompt; execution skill
+records deliberately exclude instruction and resource bodies. In Jaeger,
+verify the skill lifecycle spans and selector calls under the same request
+trace. The full evidence setup and expected fields are documented in
+[Agent Skills Guide §13](../orchestration/AGENT_SKILLS_GUIDE.md#13-observability).
+
 ### Viewing Traces
 
 Open Jaeger at `http://localhost:16686`, select your agent's service name, and search by operation (e.g., `POST /chat/stream`) or `request_id` from the API response.
@@ -2000,7 +2253,7 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go#L141)) sets up the full resume contract in a single call:
+`BuildResumeContext` ([hitl_helpers.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go)) sets up the full resume contract in a single call:
 
 | What it sets | Why it matters |
 |---|---|
@@ -2043,13 +2296,14 @@ This is a **context drift** problem: as the framework grows the resume contract 
 ## 16. Best Practices
 
 1. **Orchestration endpoints `Internal: true`** — `/orchestrate/*` and `/chat/stream` must be internal to prevent recursive self-calls. Domain-specific endpoints may use `Internal: false` for multi-agent hierarchies
-2. **Invest in PromptConfig** — `SystemInstructions` and `CustomInstructions` are what make your agent smart
+2. **Separate prompt responsibilities** — keep identity and universal behavior in `PromptConfig`; use explicitly bound skills for conditional, reusable, or versioned procedures
 3. **Deferred orchestrator init** — always via background goroutine after Discovery is available
 4. **Check orchestrator availability** before processing — return 503 if still initializing
 5. **Surface AI provider errors correctly** — Use `errors.As(err, &pe)` with `core.ProviderError` to extract the real HTTP status from AI provider errors. Return the original status code (e.g., 400, 429) instead of wrapping everything as 500. See the handler example in [Step 4](#7-step-4-implement-handlers)
 6. **Extended AI timeouts** — 240s+ for reasoning models; cap session history at ~50 messages
 7. **Never log API keys** — use env vars for all credentials, restrict CORS in production
-8. **Redis DB isolation** — sessions use DB 2, registry uses DB 0
+8. **Backend role isolation** — discovery uses Redis DB 0, sessions use DB 2, and the included skills adapter defaults to DB 9; keep skill management and runtime readers aligned
+9. **Keep skill eligibility explicit** — publishing a package does not grant access; bind every skill the agent may use through code or deployment configuration
 
 ---
 
@@ -2062,6 +2316,8 @@ This is a **context drift** problem: as the framework grows the resume contract 
 | **AI 4xx errors returned as 500** | Client sees 500 for provider bad-request/rate-limit | Add `core.ProviderError` check with `errors.As()` before generic 500 — see [Step 4](#7-step-4-implement-handlers) |
 | **No AI providers** | `"no providers detected"` on startup | API key env vars set, blank import present (`_ ".../ai/providers/openai"`) |
 | **Wrong model** | Logs show unexpected model name | Check `env \| grep TRUVAG3_` for alias overrides |
+| **Skill is not selected** | Request succeeds without expected skill guidance | Check that the package is published, namespace/name match the binding, skills are enabled, and the binding activation mode matches the request |
+| **Skill setup warns during deploy** | Agent deploys but package reconciliation did not complete | Run `./setup.sh skills-check`, then use strict `./setup.sh skills-sync` after repairing API reachability or package validation |
 | **No traces in Jaeger** | Requests succeed, no traces | `OTEL_EXPORTER_OTLP_ENDPOINT` set, init order correct, `TracingMiddleware` added |
 | **Missing trace_id in logs** | Logs lack `trace_id`/`span_id` | Use `WithContext` methods, `ctx` from `r.Context()` |
 | **SSE events not arriving** | Connection opens, no events | `http.Flusher` supported, `X-Accel-Buffering: no` for Nginx, `flusher.Flush()` called |
@@ -2163,7 +2419,12 @@ func main() {
 | `APP_ENV` | No | `development`, `staging`, `production` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OpenTelemetry collector endpoint |
 | `TRUVAG3_PLAN_MAX_TOKENS` | No | Max tokens for planning (default: 15000) |
-| `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Override model alias (e.g., `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1`) |
+| `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Override model alias (e.g., `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`) |
+| `TRUVAG3_SKILLS_ENABLED` | No | Enable skill processing; the effective binding list must also be nonempty |
+| `TRUVAG3_SKILL_BINDINGS_JSON` | No | Replace the complete code-owned skill binding list with deployment configuration |
+| `TRUVAG3_SKILLS_REDIS_DB` | No | Select the skills database for the included Redis/Valkey adapter (default: 9); management and runtime must use the same value |
+| `TRUVAG3_SKILLS_API_URL` | No | Setup-only override for the Skills management API base URL |
+| `TRUVAG3_SKIP_SKILLS_SYNC` | No | Setup-only `true` switch that skips automatic best-effort synchronization; strict commands ignore it |
 
 For additional AI provider keys (`GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`), base URL overrides, and Ollama setup, see [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md). For the full streaming chat agent .env checklist, see [Step 8: Streaming Chat Agent .env Checklist](#streaming-chat-agent-env-checklist).
 
@@ -2177,6 +2438,7 @@ For additional AI provider keys (`GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API
 - [TOOL_DEVELOPMENT_GUIDE.md](TOOL_DEVELOPMENT_GUIDE.md) - Tool development (counterpart to this guide)
 - [TOOL_SCHEMA_DISCOVERY_GUIDE.md](TOOL_SCHEMA_DISCOVERY_GUIDE.md) - 3-phase AI payload generation (descriptions, field hints, schema validation)
 - [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) - Provider aliases, model aliases, failover behavior, K8s secrets/ConfigMaps, operational scenarios
+- [AGENT_SKILLS_GUIDE.md](../orchestration/AGENT_SKILLS_GUIDE.md) - Skill authoring, explicit binding, provider composition, progressive loading, operations, and troubleshooting
 
 ### Advanced Features
 - [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Complete HITL guide: checkpoint stores, expiry callbacks, `BuildResumeContext`, status lifecycle, and configuration

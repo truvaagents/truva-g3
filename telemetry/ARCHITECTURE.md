@@ -1145,7 +1145,7 @@ OTEL_RESOURCE_ATTRIBUTES="deployment.environment=production,cluster.name=us-west
 ### Dockerfile Best Practices
 
 ```dockerfile
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.26.6-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./

@@ -24,7 +24,7 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 > - **Container runtime:** [OrbStack](https://orbstack.dev/)
 > - **Kubernetes UI:** [Lens Desktop](https://k8slens.dev/) (see [Optional: Kubernetes UI](#optional-kubernetes-ui) below for the free alternative)
 > - **AI models:** Each agent's `.env.example` ships the author's defaults
->   (e.g. `gpt-4.1`, `claude-sonnet-4-6`, `gpt-oss-120b`). During
+>   (e.g. `gpt-5.6-terra`, `claude-sonnet-5`, `gpt-oss-120b`). During
 >   development, frontier non-reasoning models have been consistently more
 >   effective for this framework's workloads than dedicated reasoning
 >   models, which tend to add latency without clearly improving outcomes
@@ -32,13 +32,17 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 
 TruvaG3 is designed to run on Kubernetes. For local development, we use [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker).
 
-Agent Skills are optional and disabled by default. The travel and DevOps chat
-examples demonstrate them: their `setup.sh full-deploy`/`deploy`/`rebuild`/
-`rollout` commands validate and conditionally publish the example packages
-through the Registry Viewer management API, then start agents whose code
-explicitly binds those skills. Use `./setup.sh skills-check` for a read-only
-comparison with Git or `./setup.sh skills-sync` to reconstruct an empty or
-drifted runtime registry without rebuilding or restarting the agent.
+Agent Skills are optional and disabled by default. The travel, DevOps, QA, and
+event-driven agents demonstrate them. Their setup scripts discover packages at
+`skills/packages/<namespace>/<name>.json`, validate and conditionally publish
+them through the Registry Viewer management API, and then start agents whose
+code explicitly binds those skills. Use `./setup.sh skills-check` for a
+read-only comparison with Git or `./setup.sh skills-sync` to reconstruct an
+empty or drifted runtime registry without rebuilding or restarting the agent.
+Automatic synchronization during deployment is best-effort: it warns and lets
+the agent deploy if the management API is unavailable. The explicit commands
+remain strict. Set `TRUVAG3_SKIP_SKILLS_SYNC=true` when the setup host
+intentionally cannot reach the API.
 Open `http://registry.localhost/` and select **Skills** to inspect packages, or
 open an execution and select its **Skills** tab to inspect body-free runtime
 decisions. See the [Agent Skills Guide](docs/orchestration/AGENT_SKILLS_GUIDE.md)
@@ -46,9 +50,9 @@ before enabling skills in your own agent.
 
 ### Required Software
 
-> **Go version**: the framework's `go.mod` declares `go 1.26.4`, so building
+> **Go version**: the framework's `go.mod` declares `go 1.26.6`, so building
 > from source needs Go 1.26+. With Go's toolchain auto-upgrade (default since
-> Go 1.21), an older Go install will fetch 1.26.4 on first build — but some
+> Go 1.21), an older Go install will fetch 1.26.6 on first build — but some
 > controlled environments disable auto-upgrade, so installing a current Go
 > directly is the simplest path.
 
@@ -68,7 +72,7 @@ brew install kind kubectl jq
 **Linux (Ubuntu/Debian):**
 ```bash
 # Go (substitute the latest 1.26+ release for $GO_VERSION)
-GO_VERSION=1.26.4
+GO_VERSION=1.26.6
 wget "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
