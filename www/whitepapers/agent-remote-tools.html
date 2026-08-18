@@ -333,7 +333,7 @@
 
 <header class="hero">
   <div class="container">
-    <div class="research-date">Research date · <b>May 25, 2026</b></div>
+    <div class="research-date">Research date · <b>May 25, 2026</b> · MCP transport note updated · <b>August 6, 2026</b></div>
     <div class="ai-capsule">Generated with AI</div>
     <h1>Internal vs Remote Tools — How AI Agent Frameworks Wire In Each</h1>
     <p class="subtitle">
@@ -384,7 +384,7 @@
       <div class="uni-item">
         <span class="tag" style="color: var(--mcp); border: 1px solid currentColor; background: transparent">MCP</span>
         <b>Model Context Protocol</b>
-        <p>An open JSON-RPC protocol for tool servers, defined at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>. Transports include stdio (subprocess), streamable HTTP, and SSE. Tools are discovered at runtime via <code>list_tools</code>.</p>
+        <p>An open JSON-RPC protocol for tool servers, defined at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>. The current transports are stdio (subprocess) and Streamable HTTP; legacy SSE remains supported by some framework integrations for compatibility. Tools are discovered at runtime via <code>tools/list</code>.</p>
       </div>
       <div class="uni-item">
         <span class="tag" style="color: var(--openapi); border: 1px solid currentColor; background: transparent">OPENAPI</span>
@@ -1374,7 +1374,7 @@ let agent = builder.build();</code></pre>
     <p class="lede">Terms used above that mean slightly different things in different frameworks.</p>
     <div class="gloss">
       <div><b>MCP</b> (Model Context Protocol) — open JSON-RPC protocol for exposing tools, resources, and prompts to LLM agents. See <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>.</div>
-      <div><b>MCP transport</b> — how the client talks to the server: <code>stdio</code> (server runs as a subprocess), <code>streamable-http</code> (HTTP POST + optional SSE), <code>sse</code> (legacy server-sent events), or <code>websocket</code> (LangChain4j extension).</div>
+      <div><b>MCP transport</b> — how the client talks to the server: <code>stdio</code> (server runs as a subprocess) and POST-only <code>streamable-http</code> are current; <code>sse</code> is the deprecated legacy transport retained by some frameworks, and <code>websocket</code> is a LangChain4j extension outside the core protocol.</div>
       <div><b>Agent card</b> (A2A) — a <code>.well-known/agent-card.json</code> document at the remote agent's URL describing its capabilities, skills, auth, and supported modes.</div>
       <div><b>A2A</b> (Agent-to-Agent Protocol) — open standard for one agent calling another over HTTP using the agent-card discovery + JSON-RPC messaging. Cross-framework by design.</div>
       <div><b>OpenAPI toolset / toolkit</b> — a framework-level converter from an OpenAPI 3.x spec to a set of tools, one per operation (or one generic verb-based tool).</div>

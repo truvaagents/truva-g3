@@ -232,7 +232,7 @@
 
 <header class="hero">
   <div class="container">
-    <div class="research-date">Research date · <b>June 18, 2026</b></div>
+    <div class="research-date">Research date · <b>June 18, 2026</b> · MCP updated · <b>August 6, 2026</b></div>
     <div class="ai-capsule">Generated with AI</div>
     <h1>Skills vs Tools vs MCP</h1>
     <p class="subtitle">
@@ -287,7 +287,7 @@
       <div class="owns mcp">
         <h4>MCP answers: <i>how do capabilities get connected?</i></h4>
         <ul>
-          <li><b>MCP</b> is an open protocol &mdash; a wire format and lifecycle &mdash; for an application to discover and call tools (and resources and prompts) exposed by an external server.</li>
+          <li><b>MCP</b> is an open protocol &mdash; a wire format and request model &mdash; for an application to discover and call tools (and resources and prompts) exposed by an external server.</li>
           <li>It is infrastructure, not a capability: "a standardized way to connect AI applications to external systems."</li>
           <li>The unit of <b>integration</b>.</li>
         </ul>
@@ -481,8 +481,8 @@
         </p>
 
         <span class="step-label r1">Architecture · host / client / server</span>
-        <p>MCP follows a <b>client-host-server</b> architecture. The <b>host</b> is the AI application coordinating everything; it creates one <b>client</b> per server, each holding a 1:1 stateful session; each <b>server</b> exposes capabilities. Servers can be local subprocesses or remote services.</p>
-        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">modelcontextprotocol.io · Specification (2025-11-25) · Architecture</a> · <a href="https://modelcontextprotocol.io/docs/learn/architecture">Concepts · Architecture</a> (host/client/server definitions).</div>
+        <p>MCP follows a <b>client-host-server</b> architecture. The <b>host</b> is the AI application coordinating everything; it creates one <b>client</b> per server, and each client communicates exclusively with that server; each <b>server</b> exposes capabilities. Servers can be local subprocesses or remote services. Revision <code>2026-07-28</code> has no protocol-level sessions.</p>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/architecture">modelcontextprotocol.io · Specification (2026-07-28) · Architecture</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">Specification · Changelog</a> (stateless protocol).</div>
 
         <span class="step-label r2">What a server exposes · three primitives</span>
         <p>An MCP server can offer three things, distinguished by who controls them:</p>
@@ -490,20 +490,20 @@
 "tools":     Functions for the AI model to execute     <span class="cm">// model-controlled</span>
 "resources": Context and data for the user or model    <span class="cm">// application-controlled</span>
 "prompts":   Templated messages and workflows          <span class="cm">// user-controlled</span></code></pre>
-        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25">modelcontextprotocol.io · Specification (2025-11-25) overview</a> (Tools / Resources / Prompts one-line definitions) · <a href="https://modelcontextprotocol.io/docs/learn/server-concepts">Concepts · Server concepts</a> (the model- / application- / user-controlled labels).</div>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28">modelcontextprotocol.io · Specification (2026-07-28) overview</a> (Tools / Resources / Prompts one-line definitions) · <a href="https://modelcontextprotocol.io/docs/learn/server-concepts">Concepts · Server concepts</a> (the model- / application- / user-controlled labels).</div>
 
         <p>Note the nesting that often causes confusion: <b>a &ldquo;tool&rdquo; is one of MCP's primitives.</b> An MCP server is, among other things, a delivery mechanism for tools. MCP didn't replace tools; it standardized how they (and resources and prompts) are discovered and called.</p>
 
-        <span class="step-label r3">Mechanics · JSON-RPC, lifecycle, transports</span>
-        <p>Messages are <b>JSON-RPC 2.0</b>. A session opens with an <code>initialize</code> handshake that negotiates capabilities, then uses methods like <code>tools/list</code> and <code>tools/call</code> (and <code>resources/list</code>, <code>prompts/list</code>). Two standard transports are defined: <b>stdio</b> (server as a subprocess) and <b>Streamable HTTP</b> (which replaced the older HTTP+SSE transport). Authorization is optional, but when used over HTTP transports the spec defines an OAuth 2.1 model.</p>
-        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle">Spec · Lifecycle</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">Spec · Transports</a> (stdio + Streamable HTTP; &ldquo;replaces the HTTP+SSE transport&rdquo;) · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">Spec · Authorization (OAuth 2.1)</a>.</div>
+        <span class="step-label r3">Mechanics · JSON-RPC, request metadata, transports</span>
+        <p>Messages are <b>JSON-RPC 2.0</b>. Revision <code>2026-07-28</code> removes the <code>initialize</code> handshake and protocol-level sessions: every request carries its protocol version and client capabilities in <code>_meta</code>, and servers implement <code>server/discover</code>. Operations include <code>tools/list</code> and <code>tools/call</code> (plus <code>resources/list</code> and <code>prompts/list</code>). The two current transports are <b>stdio</b> (server as a subprocess) and POST-only <b>Streamable HTTP</b>; the older HTTP+SSE transport remains only during its formal deprecation window. Authorization is optional, but when used with Streamable HTTP the specification defines an OAuth 2.1 profile.</p>
+        <div class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic">Spec · Base protocol</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/discover">Spec · Discovery</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio">Spec · stdio</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http">Spec · Streamable HTTP</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">Spec · Authorization</a>.</div>
 
         <div class="prov-notes">
           <div class="nb"><h5>What it standardizes</h5><p>&ldquo;MCP standardizes how to integrate additional context and tools into the ecosystem of AI applications&rdquo; &mdash; explicitly inspired by the Language Server Protocol. Build a server once, use it across many MCP-compatible hosts.</p></div>
-          <div class="nb"><h5>Latest revision</h5><p>The spec is date-versioned; the current revision is <b>2025-11-25</b> (succeeding 2025-06-18). The version string travels in the <code>initialize</code> handshake and the <code>MCP-Protocol-Version</code> header.</p></div>
-          <div class="nb"><h5>Also from the client</h5><p>Beyond the three server primitives, clients can offer features back to servers: <b>sampling</b>, <b>roots</b>, and <b>elicitation</b>.</p></div>
+          <div class="nb"><h5>Latest revision</h5><p>The specification is date-versioned; the current revision is <b>2026-07-28</b> (succeeding 2025-11-25). The version travels in per-request <code>_meta</code> and, for Streamable HTTP, the <code>MCP-Protocol-Version</code> header.</p></div>
+          <div class="nb"><h5>Additional client input</h5><p>When a server needs elicitation, sampling, or roots input, it returns an MRTR <code>input_required</code> result and the client retries the original operation. Direct server-to-client requests are no longer part of the core request flow.</p></div>
         </div>
-        <div class="src">Source · <a href="https://modelcontextprotocol.io/specification/2025-11-25">Spec overview (LSP analogy, latest version)</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">Architecture (client features)</a>.</div>
+        <div class="src">Source · <a href="https://modelcontextprotocol.io/specification/2026-07-28">Specification 2026-07-28</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">Changelog</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr">Multi Round-Trip Requests</a>.</div>
       </div>
     </div>
   </div>
@@ -644,7 +644,7 @@ description: Extract text and tables from PDF files, fill forms, merge documents
         Sources: <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">anthropic.com (&ldquo;how Skills can complement Model Context Protocol (MCP) servers&rdquo;)</a>
         · <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Agent Skills Overview (skills run in a code-execution environment)</a>
         · <a href="https://code.claude.com/docs/en/skills">code.claude.com · Skills (a skill's SKILL.md can be &ldquo;provided by an MCP server&rdquo;)</a>
-        · <a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">MCP · Server tools (tools/call)</a>.
+        · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools">MCP · Server tools (tools/call)</a>.
       </p>
     </div>
   </div>
@@ -698,7 +698,7 @@ description: Extract text and tables from PDF files, fill forms, merge documents
           <tr>
             <td class="row-hd">Form / spec</td>
             <td><code>name</code> + <code>description</code> + JSON-Schema (<code>input_schema</code> / <code>parameters</code>)</td>
-            <td>JSON-RPC 2.0; <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>; stdio or Streamable HTTP</td>
+            <td>JSON-RPC 2.0; per-request <code>_meta</code>, <code>server/discover</code>, <code>tools/list</code>, <code>tools/call</code>; stdio or Streamable HTTP</td>
             <td><code>SKILL.md</code> with YAML frontmatter (<code>name</code>, <code>description</code>) + bundled files</td>
           </tr>
           <tr>
@@ -834,15 +834,15 @@ description: Extract text and tables from PDF files, fill forms, merge documents
       <div><b>input_schema / parameters</b> — The JSON-Schema describing a tool's arguments. Anthropic uses <code>input_schema</code>; OpenAI and Google use <code>parameters</code>.</div>
       <div><b>stop_reason: tool_use</b> — Anthropic's signal that the model is pausing to wait for a tool result before continuing. OpenAI instead returns the requested call(s) in a <code>tool_calls</code> array on the assistant message.</div>
       <div><b>MCP</b> — Model Context Protocol: an open standard for connecting AI applications to external systems via servers.</div>
-      <div><b>MCP host / client / server</b> — The host is the AI app; it creates one client per server (1:1 session); each server exposes capabilities.</div>
+      <div><b>MCP host / client / server</b> — The host is the AI app; it creates one client per server, and each client communicates exclusively with that server; each server exposes capabilities.</div>
       <div><b>MCP primitives</b> — What a server exposes: <i>tools</i> (model-controlled), <i>resources</i> (app-controlled), <i>prompts</i> (user-controlled).</div>
       <div><b>JSON-RPC 2.0</b> — The message format MCP uses on the wire, with methods like <code>tools/list</code> and <code>tools/call</code>.</div>
-      <div><b>Transports (MCP)</b> — stdio (server as subprocess) and Streamable HTTP (which replaced HTTP+SSE).</div>
+      <div><b>Transports (MCP)</b> — stdio (server as subprocess) and POST-only Streamable HTTP. The legacy HTTP+SSE transport remains only during its formal deprecation window.</div>
       <div><b>Agent Skill</b> — A folder packaging instructions, scripts, and resources the agent loads on demand to specialize at a task.</div>
       <div><b>SKILL.md</b> — A skill's entry file: YAML frontmatter (required <code>name</code> and <code>description</code>) plus instructions.</div>
       <div><b>Progressive disclosure</b> — The three-level loading model that keeps skills cheap: metadata always, instructions when triggered, resources as needed.</div>
       <div><b>Code execution tool</b> — A provider-run sandbox (Python/bash) that skills run inside; lets the agent run deterministic code instead of generating it.</div>
-      <div><b>Capability negotiation</b> — The MCP <code>initialize</code> handshake where client and server declare which features they support.</div>
+      <div><b>Per-request <code>_meta</code></b> — Metadata carrying the MCP revision and client capabilities on every request; client identity is normally included as well.</div>
     </div>
   </div>
 </section>

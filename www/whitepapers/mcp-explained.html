@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Model Context Protocol — How It Works, On Your Desktop and In the Cloud</title>
-<meta name="description" content="A protocol-level reference for MCP (Model Context Protocol): the wire model, stdio and streamable HTTP transports, the initialize / tools/list / tools/call lifecycle, the OAuth 2.1 authorization model, and how desktop AI apps (Claude Code, VS Code, Cursor) and server-hosted AI agents both consume MCP servers." />
+<title>Model Context Protocol — How It Works Locally and in the Cloud</title>
+<meta name="description" content="A protocol-level reference for MCP 2026-07-28: stateless JSON-RPC, stdio and Streamable HTTP, header-based routing, discovery, caching, MRTR, subscriptions, authorization, and deployment patterns." />
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="TruvaG3">
-<meta property="og:title" content="Model Context Protocol — How It Works, On Your Desktop and In the Cloud">
-<meta property="og:description" content="A protocol-level reference for MCP: wire model, transports, lifecycle, authorization, and how desktop apps and server-hosted agents both consume MCP servers.">
+<meta property="og:title" content="Model Context Protocol — How It Works Locally and in the Cloud">
+<meta property="og:description" content="A protocol-level reference for MCP 2026-07-28: its stateless wire model, transports, discovery, tools, caching, interactivity, authorization, and deployment patterns.">
 <meta property="og:url" content="https://truvag3.dev/whitepapers/mcp-explained">
 <meta property="og:image" content="https://truvag3.dev/og-image.png">
 <meta property="og:image:width" content="1200">
@@ -16,7 +16,7 @@
 <meta property="og:image:alt" content="TruvaG3 — Microagents Framework for Go">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Model Context Protocol — How It Works">
-<meta name="twitter:description" content="A protocol-level reference for MCP: wire model, transports, lifecycle, authorization, and how desktop apps and server-hosted agents both consume MCP servers.">
+<meta name="twitter:description" content="A protocol-level reference for MCP 2026-07-28: stateless requests, transports, discovery, tools, caching, MRTR, subscriptions, authorization, and deployment patterns.">
 <meta name="twitter:image" content="https://truvag3.dev/og-image.png">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -166,22 +166,22 @@
 
 <header class="hero">
   <div class="container">
-    <div class="research-date">Research date · <b>May 25, 2026</b></div>
+    <div class="research-date">Research date · <b>August 1, 2026</b></div>
     <div class="ai-capsule">Generated with AI</div>
-    <h1>Model Context Protocol — How It Works, On Your Desktop and In the Cloud</h1>
+    <h1>Model Context Protocol — How It Works Locally and in the Cloud</h1>
     <p class="subtitle">
       A protocol-level reference for the Model Context Protocol (MCP): the wire model, the two
-      current transports (stdio and Streamable HTTP), the connection lifecycle, the OAuth&nbsp;2.1
-      authorization model, and how the same protocol powers both desktop AI applications (Claude Code,
-      VS Code, Cursor) and server-hosted AI agents. Every JSON-RPC example is taken from the
-      official MCP specification revision <b>2025-11-25</b>.
+      current transports (stdio and Streamable HTTP), the stateless request model, header-based routing,
+      discovery, caching, Multi Round-Trip Requests, subscriptions, the optional OAuth&nbsp;2.1 authorization profile, and how
+      the same protocol powers local AI clients (Claude Code, VS Code, Cursor) and server-hosted agents.
+      Every protocol example is verified against the official MCP specification revision <b>2026-07-28</b>.
     </p>
     <div class="pillrow">
       <a class="pill" href="#overview"><span class="dot" style="background:#9ec5ff"></span>The wire model</a>
       <a class="pill" href="#stdio"><span class="dot" style="background:var(--transport)"></span>stdio transport</a>
       <a class="pill" href="#http"><span class="dot" style="background:var(--transport)"></span>Streamable HTTP</a>
-      <a class="pill" href="#lifecycle"><span class="dot" style="background:var(--client)"></span>Lifecycle</a>
-      <a class="pill" href="#desktop"><span class="dot" style="background:var(--server)"></span>Desktop apps</a>
+      <a class="pill" href="#lifecycle"><span class="dot" style="background:var(--client)"></span>Request flow</a>
+      <a class="pill" href="#desktop"><span class="dot" style="background:var(--server)"></span>Local clients</a>
       <a class="pill" href="#hosted"><span class="dot" style="background:var(--server)"></span>Hosted agents</a>
       <a class="pill" href="#auth"><span class="dot" style="background:var(--auth)"></span>Authorization</a>
       <a class="pill" href="#authoring"><span class="dot" style="background:var(--server)"></span>Authoring a server</a>
@@ -200,20 +200,20 @@
      ============================================================ -->
 <section id="version-notice" style="padding: 36px 0 0; border-bottom: none;">
   <div class="container">
-    <div class="note-box" style="border-left-color: var(--warn); background: rgba(251,191,36,.06); border-color: rgba(251,191,36,.30);">
-      <b style="color: var(--warn);">Spec revision in this paper · <code>2025-11-25</code> (current stable).</b>
-      A <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/">release candidate for revision <code>2026-07-28</code></a>
-      was locked on May 21, 2026; the final ships July 28, 2026. It is the largest revision
-      since launch and contains breaking changes. The most consequential for this paper:
+    <div class="note-box">
+      <b style="color: var(--accent);">Spec revision in this paper · <code>2026-07-28</code>.</b>
+      The <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">final specification shipped on July 28, 2026</a>.
+      It replaces MCP's protocol-level sessions and initialisation handshake with a stateless,
+      self-describing request model. The changes most consequential to this paper are:
       <ul style="margin: 8px 0 0; padding-left: 22px; color: #d4dcef;">
-        <li>The <code>initialize</code> / <code>notifications/initialized</code> handshake is removed (<a href="https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575">SEP-2575</a>). Protocol version, client info, and client capabilities now travel in <code>_meta</code> on every request; a new <code>server/discover</code> method fetches server capabilities on demand. §4 of this paper describes the <i>current</i> handshake.</li>
-        <li>The <code>MCP-Session-Id</code> header and protocol-level session are removed (<a href="https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567">SEP-2567</a>). Any request can land on any server instance — no sticky routing required. §3, §6, §9, and §11 of this paper describe the <i>current</i> session model.</li>
-        <li>New required Streamable HTTP headers: <code>MCP-Protocol-Version</code>, <code>Mcp-Method</code>, and <code>Mcp-Name</code> on every request, so gateways can route without inspecting the body.</li>
-        <li><i>Roots</i>, <i>Sampling</i>, and <i>Logging</i> capabilities are deprecated (continue to work; replacements documented in the RC notes).</li>
-        <li>Tools' <code>inputSchema</code> / <code>outputSchema</code> are lifted to full JSON Schema 2020-12, with support for <code>oneOf</code>, <code>anyOf</code>, <code>allOf</code>, <code>$ref</code>, and <code>$defs</code>.</li>
-        <li>The <i>Tasks</i> feature graduates out of the core spec into an Extensions track.</li>
+        <li>The <code>initialize</code> / <code>notifications/initialized</code> handshake is removed. Protocol version and client capabilities now travel in <code>_meta</code> on every request; clients SHOULD also include their identity. Servers MUST implement <code>server/discover</code>, although calling it is optional.</li>
+        <li>The <code>Mcp-Session-Id</code> header and protocol-level session are removed. Any request can land on any server instance; cross-call application state is carried with explicit server-minted handles.</li>
+        <li>Streamable HTTP is POST-only. Every request carries <code>MCP-Protocol-Version</code> and <code>Mcp-Method</code>; <code>Mcp-Name</code> is additionally required for <code>tools/call</code>, <code>resources/read</code>, and <code>prompts/get</code>. Tool schemas can mirror selected primitive arguments into validated <code>Mcp-Param-*</code> headers.</li>
+        <li>Multi Round-Trip Requests (MRTR) replace direct server-initiated requests. A server returns <code>resultType: "input_required"</code>, and the client retries the original operation with <code>inputResponses</code>. All ordinary results now require <code>resultType: "complete"</code>.</li>
+        <li><code>server/discover</code>, <code>tools/list</code>, <code>prompts/list</code>, <code>resources/list</code>, <code>resources/templates/list</code>, and <code>resources/read</code> results carry <code>ttlMs</code> and <code>cacheScope</code>; tool order SHOULD be deterministic. Tool schemas now accept the full JSON Schema 2020-12 vocabulary.</li>
+        <li>The extensions framework is formalised, with <i>Tasks</i> now an official extension. <i>Roots</i>, <i>Sampling</i>, <i>Logging</i>, Dynamic Client Registration, and the legacy HTTP+SSE transport are deprecated under a policy with a minimum twelve-month deprecation window.</li>
       </ul>
-      <span style="display: block; margin-top: 8px; font-size: 12.5px;">This paper will be updated after the <code>2026-07-28</code> spec is finalised. Until then, every claim below is verified against the current stable revision <code>2025-11-25</code>.</span>
+      <span style="display: block; margin-top: 8px; font-size: 12.5px;">The final <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">2026-07-28 changelog</a> is the source of truth for migrations from <code>2025-11-25</code>.</span>
     </div>
   </div>
 </section>
@@ -225,10 +225,11 @@
   <div class="container">
     <h2>1 · The wire model</h2>
     <p class="lede">
-      MCP is an open, JSON-RPC 2.0–based protocol that connects an <b>MCP client</b> (typically an LLM
-      application or agent runtime) to one or more <b>MCP servers</b> (processes that expose
-      <em>tools</em>, <em>resources</em>, and <em>prompts</em>). The protocol is transport-agnostic; the
-      current revision (<b>2025-11-25</b>) standardises two transports: <b>stdio</b> and
+      MCP is an open, JSON-RPC 2.0–based protocol with a client–host–server architecture. A
+      <b>host</b> (typically an LLM application or agent runtime) creates and manages one
+      <b>MCP client</b> per server, and each client communicates with exactly one <b>MCP server</b>
+      (a process that exposes <em>tools</em>, <em>resources</em>, and <em>prompts</em>). The protocol is transport-agnostic; the
+      current revision (<b>2026-07-28</b>) standardises two transports: <b>stdio</b> and
       <b>Streamable HTTP</b>.
     </p>
 
@@ -244,13 +245,13 @@
 
   <!-- Client (host application) — pushed to the left edge -->
   <rect x="10" y="60" width="210" height="200" rx="14" fill="url(#g-client)"/>
-  <text x="115" y="92" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">MCP Client (host)</text>
-  <text x="115" y="115" text-anchor="middle" fill="#dbeafe" font-size="12">desktop app · agent runtime</text>
+  <text x="115" y="92" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Host application</text>
+  <text x="115" y="115" text-anchor="middle" fill="#dbeafe" font-size="12">local app · agent runtime</text>
   <rect x="30" y="135" width="170" height="32" rx="6" fill="#0a2540" stroke="#3a8aff"/>
   <text x="115" y="156" text-anchor="middle" fill="#9ec5ff" font-size="11">LLM (Claude · GPT · Gemini · …)</text>
   <rect x="30" y="175" width="170" height="32" rx="6" fill="#0a2540" stroke="#3a8aff"/>
   <text x="115" y="196" text-anchor="middle" fill="#9ec5ff" font-size="11">MCP client library</text>
-  <text x="115" y="232" text-anchor="middle" fill="#dbeafe" font-size="11">owns one connection per server</text>
+  <text x="115" y="232" text-anchor="middle" fill="#dbeafe" font-size="11">one client instance per server</text>
 
   <!-- Transport channel — width shrunk 15% (240→204), centered at x=450 -->
   <rect x="348" y="120" width="204" height="80" rx="12" fill="#171f33" stroke="var(--transport)" stroke-width="1.5" stroke-dasharray="4 5"/>
@@ -266,7 +267,7 @@
   <text x="785" y="156" text-anchor="middle" fill="#bbf7d0" font-size="11">tool: get_weather(loc)</text>
   <rect x="700" y="175" width="170" height="32" rx="6" fill="#03241f" stroke="#34d399"/>
   <text x="785" y="196" text-anchor="middle" fill="#bbf7d0" font-size="11">tool: search_db(query)</text>
-  <text x="785" y="232" text-anchor="middle" fill="#dcfce7" font-size="11">in-process or hosted service</text>
+  <text x="785" y="232" text-anchor="middle" fill="#dcfce7" font-size="11">local process or hosted service</text>
 
   <!-- Forward arrows (client → transport → server). Each gap is 128 px, plenty of room for labels. -->
   <text x="284" y="142" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">JSON-RPC request</text>
@@ -283,15 +284,15 @@
   <!-- (boundary annotations removed; the corresponding facts live in the legend below) -->
 </svg>
       </div>
-      <div class="caption">Figure 1 · MCP wire model: client and server communicate JSON-RPC 2.0 messages over a transport. The blue arrows show client-initiated requests; the amber dashed arrows show server-initiated responses and notifications.</div>
+      <div class="caption">Figure 1 · MCP wire model: client and server exchange JSON-RPC 2.0 messages over a transport. Blue arrows show client requests; amber dashed arrows show server responses and subscribed or request-scoped notifications.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Client (host)</b><p>The application that hosts the LLM and orchestrates tool use. Examples in this paper: Claude Code, VS Code (Copilot Chat), Cursor, and any custom agent runtime that links the MCP client library.</p></div></li>
-        <li><span class="num">2</span><div><b>Server</b><p>A separate process (local subprocess or remote service) that exposes tools, resources, and/or prompts. One client maintains one logical connection per server. A client typically connects to several servers concurrently.</p></div></li>
-        <li><span class="num">3</span><div><b>Transport</b><p>Either <code>stdio</code> (server runs as a child process; messages flow through stdin/stdout) or <code>Streamable HTTP</code> (server is a network endpoint reached over HTTP POST, with optional Server-Sent Events for server-initiated messages).</p></div></li>
-        <li><span class="num">4</span><div><b>Messages</b><p>Three JSON-RPC 2.0 message types: <em>requests</em> (have an <code>id</code>, expect a response), <em>responses</em> (match a request by <code>id</code>), and <em>notifications</em> (no <code>id</code>, no response). All messages share a single bidirectional channel.</p></div></li>
+        <li><span class="num">1</span><div><b>Host and client</b><p>The <em>host</em> is the application that hosts the LLM and orchestrates tool use — Claude Code, VS Code (Copilot Chat), Cursor, or any custom agent runtime. The host creates one <em>MCP client</em> per server; each client speaks the protocol to exactly one server and keeps the servers isolated from one another.</p></div></li>
+        <li><span class="num">2</span><div><b>Server</b><p>A local subprocess or remote service that exposes tools, resources, and/or prompts. A host typically runs several servers concurrently — one client per server — and routes each operation to the client that owns it.</p></div></li>
+        <li><span class="num">3</span><div><b>Transport</b><p>Either <code>stdio</code> (server runs as a child process; messages flow through stdin/stdout) or <code>Streamable HTTP</code> (server is a network endpoint reached over HTTP POST, with Server-Sent Events for streaming responses and subscribed notifications).</p></div></li>
+        <li><span class="num">4</span><div><b>Messages</b><p>Three JSON-RPC 2.0 message types remain: <em>requests</em> (have an <code>id</code> and expect a response), <em>responses</em> (match a request by <code>id</code>), and <em>notifications</em> (have no <code>id</code> and receive no response). Their delivery is transport-specific.</p></div></li>
       </ol>
-      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">modelcontextprotocol.io · Specification 2025-11-25 · Architecture</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic">Base Protocol overview</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">Transports</a></p>
+      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/architecture">modelcontextprotocol.io · Specification 2026-07-28 · Architecture</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic">Base Protocol</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning">Versioning</a></p>
     </div>
   </div>
 </section>
@@ -331,7 +332,7 @@
   <rect x="35" y="180" width="235" height="32" rx="6" fill="#171f33" stroke="#3a4a72"/>
   <text x="152" y="201" text-anchor="middle" fill="#cfe1ff" font-size="11">write(stdin) · read(stdout)</text>
   <rect x="35" y="220" width="235" height="32" rx="6" fill="#171f33" stroke="#3a4a72"/>
-  <text x="152" y="241" text-anchor="middle" fill="#cfe1ff" font-size="11">on shutdown: send SIGTERM</text>
+  <text x="152" y="241" text-anchor="middle" fill="#cfe1ff" font-size="11">shutdown: close stdin → TERM → KILL</text>
 
   <!-- Child process (server) — pushed to the right edge -->
   <rect x="615" y="70" width="265" height="200" rx="12" fill="#03241f" stroke="#34d399"/>
@@ -358,17 +359,17 @@
   <path d="M610,250 L285,250" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#arr-r2)"/>
 </svg>
       </div>
-      <div class="caption">Figure 2 · stdio transport: the client spawns the server as a child process. Each JSON-RPC message is a single line of UTF-8 JSON terminated by <code>\n</code> and MUST NOT contain embedded newlines. stderr is reserved for free-form server logs.</div>
+      <div class="caption">Figure 2 · stdio transport: the client spawns the server as a child process. Each JSON-RPC message is a single line of UTF-8 JSON terminated by <code>\n</code> and MUST NOT contain embedded newlines. stderr is the only channel available for free-form server logs.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Launch</b><p>The client invokes the server's <code>command</code> with <code>args</code> and an optional <code>env</code> map. The server inherits the client's working directory unless the client overrides it. No network sockets are opened.</p></div></li>
+        <li><span class="num">1</span><div><b>Launch</b><p>The client invokes the server's <code>command</code> with <code>args</code> and an optional <code>env</code> map. The server inherits the client's working directory unless the client overrides it. The stdio channel itself opens no network socket, though the server may of course reach network services of its own.</p></div></li>
         <li><span class="num">2</span><div><b>Framing</b><p>Each JSON-RPC message is one UTF-8 line terminated by <code>\n</code>. Embedded newlines are forbidden, so multi-line content must be JSON-escaped. There is no separate header frame; the line itself is the message.</p></div></li>
-        <li><span class="num">3</span><div><b>Logging</b><p>The server MAY write any UTF-8 text to stderr; the client captures and surfaces it for debugging. This is the only out-of-band channel — anything written to stdout MUST be a valid JSON-RPC message.</p></div></li>
-        <li><span class="num">4</span><div><b>Lifecycle</b><p>The connection ends when either process closes its end of the pipes. The client typically sends SIGTERM/SIGKILL to shut down the server cleanly.</p></div></li>
+        <li><span class="num">3</span><div><b>Logging</b><p>The server MAY write any UTF-8 text to stderr; the client MAY capture, forward, or ignore it, and SHOULD NOT read stderr output as a sign of failure. This is the only out-of-band channel — anything written to stdout MUST be a valid JSON-RPC message.</p></div></li>
+        <li><span class="num">4</span><div><b>Shutdown</b><p>The client first closes the server's input stream and waits for it to exit. If it remains alive, Unix clients send <code>SIGTERM</code>, wait again, and use <code>SIGKILL</code> only as the forced final fallback.</p></div></li>
       </ol>
     </div>
 
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">modelcontextprotocol.io · Specification 2025-11-25 · Transports</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio">modelcontextprotocol.io · Specification 2026-07-28 · stdio</a></p>
   </div>
 </section>
 
@@ -379,11 +380,10 @@
   <div class="container">
     <h2>3 · The <code>Streamable HTTP</code> transport</h2>
     <p class="lede">
-      Streamable HTTP is the standardised transport for remote MCP servers. The server exposes a
-      single HTTP endpoint that supports both <code>POST</code> (for client-to-server messages) and
-      <code>GET</code> (for the optional server-initiated message stream). A response to a
-      <code>POST</code> can be either a single JSON object or a Server-Sent Events (SSE) stream,
-      depending on whether the server needs to emit multiple messages in reply.
+      Streamable HTTP is the standardised transport for remote MCP servers. The server exposes one
+      POST-only endpoint. Every JSON-RPC request is a separate HTTP <code>POST</code>, and the response
+      is either a single JSON object or a Server-Sent Events (SSE) stream scoped to that request.
+      The protocol has no HTTP-level session and no standalone <code>GET</code> stream.
     </p>
 
     <div class="diagram-card">
@@ -402,18 +402,18 @@
   <!-- Client (pushed flush left) -->
   <rect x="15" y="60" width="240" height="320" rx="14" fill="#0a2540" stroke="#3a8aff"/>
   <text x="135" y="92" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">MCP Client</text>
-  <text x="135" y="113" text-anchor="middle" fill="#9ec5ff" font-size="12">desktop app · hosted agent</text>
+  <text x="135" y="113" text-anchor="middle" fill="#9ec5ff" font-size="12">local client · hosted agent</text>
   <rect x="30" y="135" width="210" height="32" rx="6" fill="#171f33" stroke="#3a4a72"/>
   <text x="135" y="156" text-anchor="middle" fill="#cfe1ff" font-size="11">HTTP client (POST writer)</text>
   <rect x="30" y="175" width="210" height="32" rx="6" fill="#171f33" stroke="#3a4a72"/>
-  <text x="135" y="196" text-anchor="middle" fill="#cfe1ff" font-size="11">POST-response SSE reader</text>
+  <text x="135" y="196" text-anchor="middle" fill="#cfe1ff" font-size="11">JSON / response-SSE reader</text>
   <rect x="30" y="215" width="210" height="40" rx="6" fill="#171f33" stroke="#3a4a72"/>
   <text x="135" y="234" text-anchor="middle" fill="#cfe1ff" font-size="11">Auth: Bearer &lt;access_token&gt;</text>
-  <text x="135" y="248" text-anchor="middle" fill="#9aa6bd" font-size="10">(OAuth 2.1 token; see §6)</text>
-  <!-- Bottom anchor for the long-lived GET channel -->
+  <text x="135" y="248" text-anchor="middle" fill="#9aa6bd" font-size="10">(when authorization is enabled; see §7)</text>
+  <!-- Bottom anchor for the subscription response stream -->
   <rect x="30" y="320" width="210" height="40" rx="6" fill="#171f33" stroke="#fbbf24" stroke-dasharray="3 3"/>
-  <text x="135" y="338" text-anchor="middle" fill="#fde68a" font-size="11">Long-lived GET listener</text>
-  <text x="135" y="354" text-anchor="middle" fill="#9aa6bd" font-size="10">(SSE stream, optional)</text>
+  <text x="135" y="338" text-anchor="middle" fill="#fde68a" font-size="11">subscriptions/listen reader</text>
+  <text x="135" y="354" text-anchor="middle" fill="#9aa6bd" font-size="10">(long-lived POST response)</text>
 
   <!-- Network channel — extended so all four arrows live inside it -->
   <rect x="335" y="100" width="230" height="280" rx="12" fill="none" stroke="#fbbf24" stroke-dasharray="4 4"/>
@@ -426,67 +426,70 @@
   <rect x="660" y="135" width="210" height="32" rx="6" fill="#0a2520" stroke="#10b981"/>
   <text x="765" y="156" text-anchor="middle" fill="#bbf7d0" font-size="11">POST /mcp  (client → server)</text>
   <rect x="660" y="175" width="210" height="32" rx="6" fill="#0a2520" stroke="#10b981"/>
-  <text x="765" y="196" text-anchor="middle" fill="#bbf7d0" font-size="11">POST response writer</text>
+  <text x="765" y="196" text-anchor="middle" fill="#bbf7d0" font-size="11">JSON or request-scoped SSE</text>
   <rect x="660" y="215" width="210" height="40" rx="6" fill="#0a2520" stroke="#10b981"/>
-  <text x="765" y="234" text-anchor="middle" fill="#bbf7d0" font-size="11">MCP-Session-Id (correlation)</text>
-  <text x="765" y="248" text-anchor="middle" fill="#a7f3d0" font-size="10">issued in initialize response</text>
-  <!-- Bottom anchor for the long-lived GET channel -->
+  <text x="765" y="234" text-anchor="middle" fill="#bbf7d0" font-size="11">Stateless request handling</text>
+  <text x="765" y="248" text-anchor="middle" fill="#a7f3d0" font-size="10">no protocol session or sticky routing</text>
+  <!-- Bottom anchor for the subscription response stream -->
   <rect x="660" y="320" width="210" height="40" rx="6" fill="#0a2520" stroke="#fbbf24" stroke-dasharray="3 3"/>
-  <text x="765" y="338" text-anchor="middle" fill="#fde68a" font-size="11">GET /mcp  SSE writer</text>
-  <text x="765" y="354" text-anchor="middle" fill="#9aa6bd" font-size="10">(server-initiated channel)</text>
+  <text x="765" y="338" text-anchor="middle" fill="#fde68a" font-size="11">subscriptions/listen SSE</text>
+  <text x="765" y="354" text-anchor="middle" fill="#9aa6bd" font-size="10">(opted-in change notifications)</text>
 
   <!-- Arrow 1 · Request -->
   <path d="M255,155 L645,155" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#arr-b3)"/>
-  <text x="450" y="148" text-anchor="middle" fill="#9ec5ff" font-size="11">POST  Accept: application/json, text/event-stream</text>
+  <text x="450" y="148" text-anchor="middle" fill="#9ec5ff" font-size="11">POST · version + method/name headers · JSON-RPC request</text>
 
   <!-- Arrow 2 · Single JSON response -->
   <path d="M645,195 L255,195" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#arr-g3)"/>
   <text x="450" y="190" text-anchor="middle" fill="#34d399" font-size="11">200 OK  Content-Type: application/json  (single response)</text>
 
-  <!-- Arrow 3 · SSE response stream -->
+  <!-- Arrow 3 · Request-scoped SSE response stream -->
   <path d="M645,235 L255,235" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#arr-y3)" class="flow-line"/>
-  <text x="450" y="230" text-anchor="middle" fill="#fbbf24" font-size="11">— OR — 200 OK  Content-Type: text/event-stream  (SSE)</text>
+  <text x="450" y="230" text-anchor="middle" fill="#fbbf24" font-size="11">— OR — SSE: related notifications, then final response</text>
 
-  <!-- Arrow 4 · Long-lived GET stream — label sits right above the arrow, between the bottom panels -->
-  <path d="M645,340 L255,340" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#arr-y3)" class="flow-line"/>
-  <text x="450" y="333" text-anchor="middle" fill="#fbbf24" font-size="11">GET /mcp (open SSE) — server-initiated requests &amp; notifications</text>
+  <!-- Arrow 4 · subscriptions/listen request and its long-lived response -->
+  <path d="M255,325 L645,325" stroke="#9ec5ff" stroke-width="1.5" fill="none" marker-end="url(#arr-b3)"/>
+  <text x="450" y="318" text-anchor="middle" fill="#9ec5ff" font-size="11">POST subscriptions/listen · notification filter</text>
+  <path d="M645,350 L255,350" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#arr-y3)" class="flow-line"/>
+  <text x="450" y="367" text-anchor="middle" fill="#fbbf24" font-size="11">SSE · acknowledged subscription + opted-in changes</text>
 </svg>
       </div>
-      <div class="caption">Figure 3 · Streamable HTTP transport: one HTTP endpoint handles all traffic. Clients <code>POST</code> requests; the server responds with either a single JSON body or an SSE stream of multiple messages. A separate, optional <code>GET</code> opens a channel for server-initiated requests.</div>
+      <div class="caption">Figure 3 · Streamable HTTP in revision 2026-07-28. Every operation is its own POST. A normal response is JSON or a request-scoped SSE stream; long-lived change notifications use the SSE response to <code>subscriptions/listen</code>.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Single endpoint</b><p>The server exposes one path (commonly <code>/mcp</code>). The client sends <code>Accept: application/json, text/event-stream</code> so the server may choose its response format per call.</p></div></li>
-        <li><span class="num">2</span><div><b>Two response shapes</b><p>If the server returns one response, it sends <code>Content-Type: application/json</code>. If it needs to stream multiple messages (e.g. a server-initiated request in the middle of handling a tool call), it returns <code>Content-Type: text/event-stream</code>.</p></div></li>
-        <li><span class="num">3</span><div><b>Sessions</b><p>On <code>initialize</code>, the server MAY return an <code>MCP-Session-Id</code> header. The client echoes that header on subsequent requests to keep them on the same logical session. Session state allows the server to scale horizontally while still routing related calls together.</p></div></li>
-        <li><span class="num">4</span><div><b>Server-initiated stream</b><p>For notifications (e.g. <code>tools/list_changed</code>, progress updates) and server-initiated requests (e.g. sampling), the client opens a long-lived <code>GET</code> against the same endpoint. The server streams messages over SSE.</p></div></li>
-        <li><span class="num">5</span><div><b>Authorization</b><p>Requests carry a Bearer token from the OAuth 2.1 flow described in §6. The server validates the token's audience matches its own URI (RFC 8707 resource indicator) before processing the JSON-RPC envelope.</p></div></li>
+        <li><span class="num">1</span><div><b>One POST endpoint and routable headers</b><p>The server exposes one path (commonly <code>/mcp</code>) that accepts POST. Every request includes <code>Accept: application/json, text/event-stream</code>, <code>MCP-Protocol-Version</code>, and <code>Mcp-Method</code>. Selected named operations also include <code>Mcp-Name</code>. A tool can mark safe primitive inputs with <code>x-mcp-header</code>; conforming HTTP clients mirror them as <code>Mcp-Param-*</code> headers. Sensitive values should never be marked this way.</p></div></li>
+        <li><span class="num">2</span><div><b>Two response shapes</b><p>A simple result uses <code>Content-Type: application/json</code>. A streaming result uses SSE for notifications related to that request — such as progress — followed by the final JSON-RPC response. Streams are not resumable: if one breaks, the client reissues the operation with a new JSON-RPC <code>id</code>.</p></div></li>
+        <li><span class="num">3</span><div><b>No protocol session</b><p>Every request carries its protocol version and client capabilities in <code>params._meta</code>. Any instance can process it. Applications that need cross-call state return an explicit handle and accept that handle on later calls.</p></div></li>
+        <li><span class="num">4</span><div><b>Subscriptions</b><p>A client that wants tool-list, prompt-list, resource-list, or resource-update notifications sends <code>subscriptions/listen</code> with an explicit filter. Its POST response remains open as an SSE stream.</p></div></li>
+        <li><span class="num">5</span><div><b>Multi Round-Trip Requests</b><p>Sampling, elicitation, and roots are no longer separate requests sent by the server. The server returns <code>resultType: "input_required"</code>; the client gathers the requested input and retries the original method with a new JSON-RPC <code>id</code>.</p></div></li>
+        <li><span class="num">6</span><div><b>Endpoint security and optional authorization</b><p>Servers MUST validate a present <code>Origin</code> header, and local servers SHOULD bind only to <code>127.0.0.1</code>. A protected server can use the OAuth 2.1 profile in §7 and validate a resource-bound Bearer token; deployments protected by mTLS, workload identity, or private-network policy need not use that profile.</p></div></li>
       </ol>
     </div>
 
     <div class="note-box">
-      <b>About the legacy SSE transport.</b> The earlier two-endpoint HTTP+SSE transport from spec revision <code>2024-11-05</code> is now deprecated. Servers MAY continue to expose it for backwards compatibility, and clients SHOULD attempt Streamable HTTP first and fall back to the legacy SSE shape only if they receive HTTP 400/404/405 on POST.
+      <b>Backward compatibility.</b> Revisions <code>2025-03-26</code> through <code>2025-11-25</code> used sessions, a standalone GET stream, direct server requests, and resumable SSE. None belongs to <code>2026-07-28</code>. Compatibility clients may implement both models, but must not apply retired semantics to requests negotiated as <code>2026-07-28</code>.
     </div>
 
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">modelcontextprotocol.io · Specification 2025-11-25 · Transports</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#backwards-compatibility">Backwards compatibility</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http">modelcontextprotocol.io · Specification 2026-07-28 · Streamable HTTP</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr">Multi Round-Trip Requests</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions">Subscriptions</a></p>
   </div>
 </section>
 
 <!-- ============================================================
-     SECTION 4 — LIFECYCLE
+     SECTION 4 — STATELESS REQUEST FLOW
      ============================================================ -->
 <section id="lifecycle">
   <div class="container">
-    <h2>4 · Connection lifecycle</h2>
+    <h2>4 · Stateless request flow</h2>
     <p class="lede">
-      Every MCP connection follows the same four-step lifecycle: <b>initialize</b> the connection,
-      acknowledge with the <b>initialized</b> notification, <b>list</b> the server's capabilities,
-      and then <b>invoke</b> tools as needed. The lifecycle is identical for stdio and Streamable
-      HTTP — only the framing differs.
+      MCP no longer has a protocol-level connection lifecycle. Each request is self-describing and
+      independent: the client may first call <b>server/discover</b>, list the server's tools, and
+      invoke one of them. Every request repeats the protocol version and client capabilities in
+      <code>_meta</code>; no handshake or hidden session state is created.
     </p>
 
     <div class="diagram-card">
       <div class="svg-wrap">
-<svg viewBox="0 0 900 740" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MCP connection lifecycle sequence diagram">
+<svg viewBox="0 0 900 740" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MCP stateless request flow sequence diagram">
   <defs>
     <marker id="seq-arr"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
     <marker id="seq-arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#34d399"/></marker>
@@ -507,19 +510,18 @@
   <rect x="20" y="90" width="100" height="22" rx="11" fill="#19243d" stroke="#3a4a72"/>
   <text x="70" y="105" text-anchor="middle" fill="#9fc2ff" font-size="11">PHASE 1</text>
 
-  <!-- Message 1: initialize request -->
-  <text x="450" y="148" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="600">initialize  (request id:1)</text>
+  <!-- Message 1: optional discovery request -->
+  <text x="450" y="148" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="600">server/discover  (optional request id:1)</text>
   <path d="M210,158 L690,158" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#seq-arr)"/>
-  <text x="450" y="178" text-anchor="middle" fill="#cfe1ff" font-size="10.5">params: protocolVersion, capabilities, clientInfo</text>
+  <text x="450" y="178" text-anchor="middle" fill="#cfe1ff" font-size="10.5">params._meta: protocolVersion, clientCapabilities, clientInfo</text>
 
-  <!-- Message 2: initialize response -->
-  <text x="450" y="228" text-anchor="middle" fill="#34d399" font-size="12" font-weight="600">initialize response  (id:1)</text>
+  <!-- Message 2: discovery response -->
+  <text x="450" y="228" text-anchor="middle" fill="#34d399" font-size="12" font-weight="600">discover response  (id:1)</text>
   <path d="M690,238 L210,238" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#seq-arr-g)"/>
-  <text x="450" y="258" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: protocolVersion, capabilities, serverInfo</text>
+  <text x="450" y="258" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: supportedVersions, capabilities, ttlMs, cacheScope · serverInfo in _meta</text>
 
-  <!-- Message 3: initialized notification -->
-  <text x="450" y="305" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">notifications/initialized  (notification, no id)</text>
-  <path d="M210,315 L690,315" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#seq-arr-y)" class="flow-line"/>
+  <!-- Statelessness annotation -->
+  <text x="450" y="305" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">No handshake · no session · every later request repeats _meta</text>
 
   <!-- PHASE 2 -->
   <rect x="20" y="345" width="100" height="22" rx="11" fill="#19243d" stroke="#3a4a72"/>
@@ -528,12 +530,12 @@
   <!-- Message 4: tools/list request -->
   <text x="450" y="395" text-anchor="middle" fill="#9ec5ff" font-size="12" font-weight="600">tools/list  (request id:2)</text>
   <path d="M210,405 L690,405" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#seq-arr)"/>
-  <text x="450" y="425" text-anchor="middle" fill="#cfe1ff" font-size="10.5">optional params: cursor (pagination)</text>
+  <text x="450" y="425" text-anchor="middle" fill="#cfe1ff" font-size="10.5">params: optional cursor + required request _meta</text>
 
   <!-- Message 5: tools/list response -->
   <text x="450" y="465" text-anchor="middle" fill="#34d399" font-size="12" font-weight="600">tools/list response  (id:2)</text>
   <path d="M690,475 L210,475" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#seq-arr-g)"/>
-  <text x="450" y="495" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: tools[] (name, description, inputSchema)</text>
+  <text x="450" y="495" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: resultType, tools[], ttlMs, cacheScope</text>
 
   <!-- PHASE 3 -->
   <rect x="20" y="525" width="100" height="22" rx="11" fill="#19243d" stroke="#3a4a72"/>
@@ -544,79 +546,97 @@
   <path d="M210,585 L690,585" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#seq-arr)"/>
   <text x="450" y="605" text-anchor="middle" fill="#cfe1ff" font-size="10.5">params: name="get_weather", arguments:{ location:"NYC" }</text>
 
-  <!-- Message 7: tools/call response -->
-  <text x="450" y="645" text-anchor="middle" fill="#34d399" font-size="12" font-weight="600">tools/call response  (id:3)</text>
-  <path d="M690,655 L210,655" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#seq-arr-g)"/>
-  <text x="450" y="675" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: content[] = [{ type:"text", text:"72°F, partly cloudy" }]</text>
+  <!-- Message 7: optional progress notification before the final response -->
+  <text x="450" y="635" text-anchor="middle" fill="#fbbf24" font-size="11">(optional) notifications/progress on this request's response stream</text>
+  <path d="M690,645 L210,645" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#seq-arr-y)" class="flow-line"/>
 
-  <!-- Message 8: optional progress notification during a long tool call -->
-  <text x="450" y="710" text-anchor="middle" fill="#fbbf24" font-size="11">(optional) notifications/progress  during long tool calls</text>
-  <path d="M690,720 L210,720" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#seq-arr-y)" class="flow-line"/>
+  <!-- Message 8: tools/call response -->
+  <text x="450" y="685" text-anchor="middle" fill="#34d399" font-size="12" font-weight="600">tools/call response  (id:3)</text>
+  <path d="M690,695 L210,695" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#seq-arr-g)"/>
+  <text x="450" y="720" text-anchor="middle" fill="#a7f3d0" font-size="10.5">result: resultType="complete", content[]</text>
 </svg>
       </div>
-      <div class="caption">Figure 4 · The MCP lifecycle as a sequence diagram. Blue: client requests. Green: server responses. Amber dashed: notifications (no <code>id</code>, no response). The diagram shows one tool call; in practice phase 3 repeats for every tool the LLM invokes.</div>
+      <div class="caption">Figure 4 · A typical stateless MCP flow. Discovery is optional; a client may send <code>tools/list</code> or <code>tools/call</code> immediately and handle an unsupported-version error. Every blue request independently declares its version and client capabilities.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Phase 1 · <i>Initialization</i></b><p>The client sends <code>initialize</code> with its <code>protocolVersion</code>, supported <code>capabilities</code>, and <code>clientInfo</code>. The server replies with its own <code>protocolVersion</code>, <code>capabilities</code>, and <code>serverInfo</code>. The client then sends a <code>notifications/initialized</code> notification to confirm the connection is ready.</p></div></li>
-        <li><span class="num">2</span><div><b>Phase 2 · Discovery (within the spec's <i>Operation</i> phase)</b><p>The client calls <code>tools/list</code> (and, optionally, <code>prompts/list</code> / <code>resources/list</code>) to discover what the server exposes. Each tool comes with a <code>name</code>, a human-readable <code>description</code>, and a JSON Schema <code>inputSchema</code> that defines its arguments.</p></div></li>
-        <li><span class="num">3</span><div><b>Phase 3 · Invocation (within the spec's <i>Operation</i> phase)</b><p>When the LLM decides to call a tool, the client sends <code>tools/call</code> with the tool's <code>name</code> and <code>arguments</code>. The server returns a <code>content</code> array (typically text blocks, but image, audio, and embedded resources are also defined). For long-running calls, the server MAY emit <code>notifications/progress</code>.</p></div></li>
-        <li><span class="num">4</span><div><b>Notifications</b><p>Throughout the connection, the server can push <code>notifications/tools/list_changed</code> (when the available tool list changes), <code>notifications/resources/.../updated</code>, and <code>notifications/logging/message</code>. Notifications have no <code>id</code> and never receive a response.</p></div></li>
-        <li><span class="num">5</span><div><b>The spec's three formal phases</b><p>The MCP specification names three lifecycle phases: <i>Initialization</i>, <i>Operation</i>, and <i>Shutdown</i>. Phase 1 above maps to <i>Initialization</i>; phases 2 and 3 are both within <i>Operation</i> and are split here for clarity. <i>Shutdown</i> is transport-specific and is not shown.</p></div></li>
+        <li><span class="num">1</span><div><b>Per-request identity</b><p>Every request carries <code>io.modelcontextprotocol/protocolVersion</code> and <code>io.modelcontextprotocol/clientCapabilities</code> in <code>params._meta</code>. Clients SHOULD also send <code>io.modelcontextprotocol/clientInfo</code>; servers SHOULD identify themselves in each result's <code>_meta</code>.</p></div></li>
+        <li><span class="num">2</span><div><b>Optional server discovery</b><p>Servers MUST implement <code>server/discover</code>. Clients MAY use it to retrieve supported versions, server capabilities, identity, and instructions before any other operation, but can instead call an operation directly and negotiate from <code>UnsupportedProtocolVersionError</code>.</p></div></li>
+        <li><span class="num">3</span><div><b>Cacheable discovery and reads</b><p><code>server/discover</code>, <code>tools/list</code>, <code>prompts/list</code>, <code>resources/list</code>, <code>resources/templates/list</code>, and <code>resources/read</code> return <code>ttlMs</code> and <code>cacheScope</code> on every <code>complete</code> result. Tool order SHOULD be deterministic so clients and upstream model prompts can be cached reliably.</p></div></li>
+        <li><span class="num">4</span><div><b>Invocation</b><p>The client sends <code>tools/call</code> with a name and arguments. An ordinary result has <code>resultType: "complete"</code>. A server that needs elicitation, sampling, or roots returns <code>resultType: "input_required"</code>, and the client retries the original operation with the requested input.</p></div></li>
+        <li><span class="num">5</span><div><b>Notifications</b><p>Request-scoped progress or log messages travel before the final response on that request's stream. Independent list-change and resource-update notifications require an opted-in <code>subscriptions/listen</code> request. Notifications have no <code>id</code> and receive no response.</p></div></li>
       </ol>
-      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle">modelcontextprotocol.io · Specification 2025-11-25 · Lifecycle</a></p>
+      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning">modelcontextprotocol.io · Specification 2026-07-28 · Versioning</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/discover">Discovery</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching">Caching</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools">Tools</a></p>
     </div>
 
-    <h3>Wire example — the four messages</h3>
-    <p>The following four JSON-RPC envelopes are taken from the spec, showing one full turn of the lifecycle.</p>
+    <h3>Wire example — discovery, listing, and invocation</h3>
+    <p>These representative exchanges show the required per-request metadata and the new result fields.</p>
 
-    <h4>1 · Client → Server: <code>initialize</code></h4>
+    <h4>1 · Client → Server: optional <code>server/discover</code></h4>
 <pre><code>{
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "initialize",
+  "method": "server/discover",
   "params": {
-    "protocolVersion": "2025-11-25",
-    "capabilities": {
-      "roots": { "listChanged": true },
-      "sampling": {},
-      "elicitation": { "form": {}, "url": {} }
-    },
-    "clientInfo": {
-      "name": "ExampleClient",
-      "title": "Example Client Display Name",
-      "version": "1.0.0"
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "ExampleClient",
+        "version": "1.0.0"
+      }
     }
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle">modelcontextprotocol.io · Specification 2025-11-25 · Lifecycle</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/discover">modelcontextprotocol.io · Specification 2026-07-28 · Discovery</a></p>
 
-    <h4>2 · Server → Client: <code>initialize</code> response</h4>
+    <h4>2 · Server → Client: <code>server/discover</code> response</h4>
 <pre><code>{
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "protocolVersion": "2025-11-25",
+    "resultType": "complete",
+    "supportedVersions": ["2026-07-28"],
     "capabilities": {
-      "logging": {},
-      "prompts":   { "listChanged": true },
-      "resources": { "subscribe": true, "listChanged": true },
-      "tools":     { "listChanged": true }
+      "resources": {},
+      "tools": { "listChanged": true }
     },
-    "serverInfo": {
-      "name": "ExampleServer",
-      "title": "Example Server Display Name",
-      "version": "1.0.0"
+    "_meta": {
+      "io.modelcontextprotocol/serverInfo": {
+        "name": "ExampleServer",
+        "version": "1.0.0"
+      }
     },
-    "instructions": "Optional instructions for the client"
+    "instructions": "Weather and resource utilities",
+    "ttlMs": 3600000,
+    "cacheScope": "public"
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle">modelcontextprotocol.io · Specification 2025-11-25 · Lifecycle</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/discover">modelcontextprotocol.io · Specification 2026-07-28 · Discovery</a></p>
 
-    <h4>3 · Client → Server: <code>tools/list</code> response (shape)</h4>
-<pre><code>{
+    <h4>3 · Client ↔ Server: <code>tools/list</code></h4>
+<pre><code>// Request
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "ExampleClient",
+        "version": "1.0.0"
+      }
+    }
+  }
+}
+
+// Response
+{
   "jsonrpc": "2.0",
   "id": 2,
   "result": {
+    "resultType": "complete",
     "tools": [
       {
         "name": "get_weather",
@@ -634,10 +654,11 @@
         }
       }
     ],
-    "nextCursor": "next-page-cursor"
+    "ttlMs": 300000,
+    "cacheScope": "public"
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">modelcontextprotocol.io · Specification 2025-11-25 · Server / Tools</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools">modelcontextprotocol.io · Specification 2026-07-28 · Server / Tools</a></p>
 
     <h4>4 · Client → Server: <code>tools/call</code> + response</h4>
 <pre><code>// Request
@@ -647,7 +668,15 @@
   "method": "tools/call",
   "params": {
     "name": "get_weather",
-    "arguments": { "location": "New York" }
+    "arguments": { "location": "New York" },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "ExampleClient",
+        "version": "1.0.0"
+      }
+    }
   }
 }
 
@@ -656,6 +685,7 @@
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
+    "resultType": "complete",
     "content": [
       {
         "type": "text",
@@ -665,26 +695,27 @@
     "isError": false
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">modelcontextprotocol.io · Specification 2025-11-25 · Server / Tools</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools">modelcontextprotocol.io · Specification 2026-07-28 · Server / Tools</a></p>
   </div>
 </section>
 
 <!-- ============================================================
-     SECTION 5 — DESKTOP APPS
+     SECTION 5 — LOCAL AI CLIENTS
      ============================================================ -->
 <section id="desktop">
   <div class="container">
-    <h2>5 · Pattern A — Desktop AI applications</h2>
+    <h2>5 · Pattern A — Local AI clients</h2>
     <p class="lede">
-      A desktop AI app (Claude Code, VS Code, Cursor, and several others) ships an MCP client built
-      into the application process. The app reads a configuration file that lists MCP servers; on
-      startup, it spawns each stdio server as a child process and opens HTTP connections to each
-      remote server. Tools from all servers are presented to the LLM as a single combined toolset.
+      A local AI application (Claude Code, VS Code, Cursor, and others) acts as the MCP host. It reads a
+      configuration file that lists MCP servers, creates one MCP client per entry, spawns stdio servers
+      as child processes, and sends HTTP requests to remote servers. It combines their tools into one
+      logical catalog, but may load tools on demand or expose a search step instead of placing every
+      definition in every model turn.
     </p>
 
     <div class="diagram-card">
       <div class="svg-wrap">
-<svg viewBox="0 0 900 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Desktop AI application with multiple MCP servers">
+<svg viewBox="0 0 900 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Local AI host application with multiple MCP servers">
   <defs>
     <marker id="d-arr-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
     <marker id="d-arr-y" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/></marker>
@@ -694,9 +725,9 @@
   <circle cx="60" cy="140" r="22" fill="#0a2540" stroke="#3a8aff"/>
   <text x="60" y="145" text-anchor="middle" fill="#9ec5ff" font-size="11">User</text>
 
-  <!-- Desktop app boundary (taller, so the config-file → stdio gap can grow) -->
+  <!-- Local client boundary (taller, so the config-file → stdio gap can grow) -->
   <rect x="120" y="60" width="320" height="400" rx="14" fill="none" stroke="#3a4a72" stroke-dasharray="3 5"/>
-  <text x="140" y="80" fill="#9aa6bd" font-size="11">Desktop app process (Claude Code · VS Code · Cursor)</text>
+  <text x="140" y="80" fill="#9aa6bd" font-size="11">Local client process (Claude Code · VS Code · Cursor)</text>
 
   <!-- LLM + Client lib (height now 80, matches the GitHub MCP box on the right) -->
   <rect x="150" y="100" width="260" height="80" rx="10" fill="url(#g-client)" />
@@ -722,7 +753,7 @@
   <text x="347" y="403" text-anchor="middle" fill="#a7f3d0" font-size="10">python my_server.py</text>
   <text x="347" y="423" text-anchor="middle" fill="#a7f3d0" font-size="10">(child process)</text>
 
-  <!-- Internet / cloud (height matched to the Desktop enclosure) -->
+  <!-- Internet / cloud (height matched to the local-client enclosure) -->
   <rect x="490" y="60" width="380" height="400" rx="14" fill="none" stroke="#3a4a72" stroke-dasharray="3 5"/>
   <text x="510" y="80" fill="#9aa6bd" font-size="11">Internet — remote MCP servers (Streamable HTTP)</text>
 
@@ -741,7 +772,7 @@
   <!-- Auth server — aligned with the stdio row -->
   <rect x="520" y="340" width="320" height="110" rx="10" fill="#0a2540" stroke="#3a8aff"/>
   <text x="680" y="380" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">OAuth 2.1 authorization server</text>
-  <text x="680" y="402" text-anchor="middle" fill="#9ec5ff" font-size="10.5">issues access tokens (see §6)</text>
+  <text x="680" y="402" text-anchor="middle" fill="#9ec5ff" font-size="10.5">issues access tokens (see §7)</text>
 
   <!-- Arrow: User → LLM (now a horizontal straight line) -->
   <path d="M84,140 L150,140" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#d-arr-b)"/>
@@ -749,11 +780,14 @@
 
   <!-- Arrow: LLM → GitHub MCP (horizontal straight line, both boxes share y=100-180) -->
   <path d="M410,140 L520,140" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#d-arr-b)"/>
-  <text x="465" y="130" text-anchor="middle" fill="#9aa6bd" font-size="10">HTTPS + Bearer</text>
+  <text x="465" y="116" text-anchor="middle" fill="#9aa6bd" font-size="10">
+    <tspan x="465">HTTPS + Bearer</tspan>
+    <tspan x="465" dy="12">(when protected)</tspan>
+  </text>
 
   <!-- Arrow: LLM → Linear MCP (diagonal from the LLM bottom-right to Linear's left edge) -->
   <path d="M410,170 L520,245" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#d-arr-b)"/>
-  <text x="475" y="200" text-anchor="middle" fill="#9aa6bd" font-size="10">HTTPS + Bearer</text>
+  <text x="475" y="200" text-anchor="middle" fill="#9aa6bd" font-size="10">HTTPS request</text>
 
   <!-- Arrows: Config file → stdio servers (longer vertical drop, label sits between the boxes) -->
   <path d="M212,280 L212,340" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#d-arr-y)" class="flow-line"/>
@@ -762,21 +796,24 @@
   <text x="280" y="322" text-anchor="middle" fill="#fde68a" font-size="10">one child process per entry</text>
 </svg>
       </div>
-      <div class="caption">Figure 5 · The desktop pattern: one application process embeds the MCP client library, spawns local stdio servers as children, and opens authenticated HTTPS connections to remote MCP servers. The configuration file lists both kinds together.</div>
+      <div class="caption">Figure 5 · The local-client pattern: one application process embeds the MCP client library, spawns local stdio servers as children, and sends HTTPS requests to remote MCP servers. The configuration file lists both kinds together.</div>
 
       <ol class="legend-list">
         <li><span class="num">1</span><div><b>Config-driven</b><p>The application loads a JSON config (location and root key vary by app; see snippets below) that lists every MCP server it should connect to. Servers are typically scoped at three levels: user-wide, workspace/project, and (in Claude Code) enterprise-managed.</p></div></li>
-        <li><span class="num">2</span><div><b>One process, many servers</b><p>Each <code>stdio</code> server is started as a child process. Each remote server is reached over HTTPS. All of them feed tools into the same client; the LLM sees a single combined toolset (with names typically prefixed by server name to avoid collisions).</p></div></li>
-        <li><span class="num">3</span><div><b>Auth lives at the transport</b><p>Remote servers are authenticated per the OAuth 2.1 flow described in §6 — the desktop app stores the access token in the OS keychain and passes it as <code>Authorization: Bearer …</code> on every request.</p></div></li>
-        <li><span class="num">4</span><div><b>Lifecycle is per-connection</b><p>The client repeats <code>initialize → tools/list → tools/call</code> independently for each server. Servers do not see each other; the client merges their tool lists before showing them to the LLM.</p></div></li>
+        <li><span class="num">2</span><div><b>One host, many client–server pairs</b><p>The host creates one MCP client per configured server: each <code>stdio</code> server is a child process, and each remote server is reached over HTTP. Their tools enter one logical catalog. The host disambiguates collisions — often by prefixing names — and may defer large catalogs behind tool search.</p></div></li>
+        <li><span class="num">3</span><div><b>Authorization is per server</b><p>A protected remote server may use the OAuth 2.1 flow in §7, a configured Bearer token, or another client-supported mechanism. Interactive clients generally keep OAuth credentials in secure credential storage and attach the resulting access token to each protected request.</p></div></li>
+        <li><span class="num">4</span><div><b>Requests are per server</b><p>Each client independently discovers or lists its own server, and the host routes <code>tools/call</code> to the client that owns the selected tool. Servers do not see one another, and no shared MCP session is created.</p></div></li>
       </ol>
     </div>
 
     <h3>Configuration — Claude Code</h3>
     <p>
       Claude Code reads <code>.mcp.json</code> at the project root (or <code>~/.claude.json</code> for
-      user-wide servers). The <code>type</code> field accepts <code>stdio</code>, <code>http</code>,
-      or <code>streamable-http</code> (alias for <code>http</code>).
+      user-wide servers). For the two transports this paper covers, the <code>type</code> field
+      accepts <code>stdio</code> and <code>http</code> — with <code>streamable-http</code> as an
+      alias for <code>http</code>. Claude Code also accepts <code>sse</code> — the legacy HTTP+SSE
+      transport, which remains in the specification in the Deprecated state — and an app-specific
+      <code>ws</code> (WebSocket) transport that sits outside the specification altogether.
     </p>
 <pre><code>{
   "mcpServers": {
@@ -784,14 +821,13 @@
       "type": "streamable-http",
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": {
-        "Authorization": "Bearer YOUR_TOKEN"
+        "Authorization": "Bearer ${GITHUB_TOKEN}"
       }
     },
     "my-db": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@bytebase/dbhub", "--dsn",
-               "postgresql://readonly:pass@prod.db.com:5432/analytics"],
+      "args": ["-y", "@bytebase/dbhub", "--dsn", "${DB_DSN}"],
       "env": { "DB_TIMEOUT": "30000" }
     }
   }
@@ -802,8 +838,10 @@
     <p>
       VS Code reads <code>.vscode/mcp.json</code> for workspace-scoped servers (or a user-profile
       <code>mcp.json</code> for user-wide). The root key is <code>servers</code> (not
-      <code>mcpServers</code>); the <code>type</code> field accepts <code>stdio</code> or
-      <code>http</code>.
+      <code>mcpServers</code>); the <code>type</code> field accepts <code>stdio</code>,
+      <code>http</code>, and <code>sse</code> — the last being the legacy HTTP+SSE transport, which
+      the specification now marks Deprecated. VS Code tries the HTTP Stream transport first and falls
+      back to SSE only for a server that does not support it.
     </p>
 <pre><code>{
   "servers": {
@@ -818,13 +856,13 @@
     }
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://code.visualstudio.com/docs/copilot/customization/mcp-servers">code.visualstudio.com · Copilot · MCP servers</a></p>
+    <p class="snip-src">Source: <a href="https://code.visualstudio.com/docs/agent-customization/mcp-servers">code.visualstudio.com · Add and manage MCP servers</a> · <a href="https://code.visualstudio.com/docs/agents/reference/mcp-configuration">MCP configuration reference</a></p>
 
     <h3>Configuration — Cursor</h3>
     <p>
       Cursor reads <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project).
-      The root key is <code>mcpServers</code>; if the <code>url</code> field is present, the
-      transport defaults to HTTP.
+      The root key is <code>mcpServers</code>. Remote entries declare only a <code>url</code>; Cursor
+      infers the HTTP transport when <code>url</code> is present.
     </p>
 <pre><code>{
   "mcpServers": {
@@ -838,10 +876,13 @@
     }
   }
 }</code></pre>
-    <p class="snip-src">Source: <a href="https://cursor.com/docs/mcp">cursor.com/docs/mcp</a></p>
+    <p class="snip-src">Source: <a href="https://cursor.com/docs/mcp">cursor.com/docs/mcp · Model Context Protocol</a></p>
 
     <div class="note-box">
-      <b>Naming quirks across clients.</b> Claude Code and Cursor use <code>mcpServers</code>; VS Code uses <code>servers</code>. Claude Code's HTTP type is <code>streamable-http</code> (with <code>http</code> accepted as alias); VS Code uses <code>http</code>; Cursor infers HTTP when <code>url</code> is set. All three accept the same stdio fields (<code>command</code>, <code>args</code>, <code>env</code>).
+      <b>Naming quirks across clients.</b> Claude Code and Cursor use <code>mcpServers</code>; VS Code uses <code>servers</code>. Claude Code accepts <code>streamable-http</code> as an alias for <code>http</code>; VS Code uses <code>http</code>; Cursor infers HTTP from the presence of <code>url</code>. All three accept the same core stdio fields (<code>command</code>, <code>args</code>, <code>env</code>).
+    </div>
+    <div class="note-box">
+      <b>Keep secrets out of project files.</b> The placeholders above assume environment interpolation. Prefer the client's OAuth flow, environment variables, or a dynamic credential helper over committing access tokens, client secrets, or database connection strings.
     </div>
   </div>
 </section>
@@ -853,11 +894,11 @@
   <div class="container">
     <h2>6 · Pattern B — Server-hosted AI agents</h2>
     <p class="lede">
-      In this pattern, an MCP client lives inside an agent runtime running in a container, a serverless
-      function, or a long-lived service. Local stdio servers are uncommon here because the agent
-      process may be ephemeral and may not have a writable filesystem; instead, the agent connects to
-      one or more <em>remote</em> MCP servers over Streamable HTTP. Many remote MCP servers can be
-      hosted on the same cluster as the agent, or with a third party.
+      In this pattern, the agent runtime acts as the MCP host: running in a container, a serverless
+      function, or a long-lived service, it creates one MCP client per server. Local stdio servers are
+      less common because the runtime may be ephemeral or may restrict child-process execution. The
+      agent instead connects to one or more remote MCP servers over Streamable HTTP. Those servers may run in the same cluster as the agent
+      or be operated by a third party.
     </p>
 
     <div class="diagram-card">
@@ -887,19 +928,19 @@
   <text x="210" y="210" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Agent</text>
   <text x="210" y="228" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">replica 1</text>
   <text x="210" y="258" text-anchor="middle" fill="#dbeafe" font-size="10">LLM</text>
-  <text x="210" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP client</text>
+  <text x="210" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP clients</text>
 
   <rect x="270" y="160" width="100" height="260" rx="10" fill="url(#g-client)" opacity="0.85"/>
   <text x="320" y="210" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Agent</text>
   <text x="320" y="228" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">replica 2</text>
   <text x="320" y="258" text-anchor="middle" fill="#dbeafe" font-size="10">LLM</text>
-  <text x="320" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP client</text>
+  <text x="320" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP clients</text>
 
   <rect x="380" y="160" width="100" height="260" rx="10" fill="url(#g-client)" opacity="0.7"/>
   <text x="430" y="210" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Agent</text>
   <text x="430" y="228" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">replica N</text>
   <text x="430" y="258" text-anchor="middle" fill="#dbeafe" font-size="10">LLM</text>
-  <text x="430" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP client</text>
+  <text x="430" y="274" text-anchor="middle" fill="#dbeafe" font-size="10">+ MCP clients</text>
 
   <!-- Internet boundary — narrower, sits flush with the right edge -->
   <rect x="610" y="40" width="270" height="400" rx="14" fill="none" stroke="#3a4a72" stroke-dasharray="3 5"/>
@@ -929,7 +970,10 @@
 
   <!-- Arrow: Replicas → Internal MCP (horizontal at Internal MCP centre y=200) -->
   <path d="M480,200 L630,200" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#h-arr-b)"/>
-  <text x="555" y="191" text-anchor="middle" fill="#9aa6bd" font-size="11">MCP over HTTP (private mesh)</text>
+  <text x="555" y="171" text-anchor="middle" fill="#9aa6bd" font-size="11">
+    <tspan x="555">MCP over HTTP</tspan>
+    <tspan x="555" dy="13">(private mesh)</tspan>
+  </text>
 
   <!-- Arrow pair: Replicas ↔ 3rd-party MCP (both arrows in the same gap) -->
   <path d="M480,290 L630,290" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#h-arr-b)"/>
@@ -942,15 +986,15 @@
   <text x="555" y="391" text-anchor="middle" fill="#fbbf24" font-size="11">OAuth 2.1 token exchange</text>
 </svg>
       </div>
-      <div class="caption">Figure 6 · A horizontally-scaled agent service consuming MCP servers. Each replica embeds an MCP client and opens its own connections to internal and third-party servers. <code>MCP-Session-Id</code> lets server-side load balancers pin a logical session to one backend.</div>
+      <div class="caption">Figure 6 · A horizontally scaled agent service consuming MCP servers. Each replica manages its own MCP client instances and sends self-describing requests to internal and third-party servers. Any request may land on any compatible backend instance.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Stateless replicas</b><p>Agent replicas are typically stateless at the process level. Each replica that handles a request opens (or reuses) its own MCP connections. Session affinity is achieved at the MCP layer via <code>MCP-Session-Id</code> rather than at the load balancer.</p></div></li>
-        <li><span class="num">2</span><div><b>Streamable HTTP everywhere</b><p>stdio is rarely usable because the agent process may not have permission to spawn subprocesses, or may be cold-started per request. Streamable HTTP is the default; even MCP servers that originally shipped as stdio are commonly wrapped in a small HTTP front so a hosted agent can reach them.</p></div></li>
-        <li><span class="num">3</span><div><b>Two trust domains</b><p>"Internal" MCP servers (inside the same VPC or cluster) often authenticate with mTLS or short-lived JWTs. "External" MCP servers (third-party vendors) use OAuth 2.1 with per-resource access tokens. The agent runtime is responsible for fetching and refreshing both.</p></div></li>
-        <li><span class="num">4</span><div><b>Tool selection happens in the LLM</b><p>Just like the desktop pattern, all tools from all MCP servers are flattened into the model's tool list at each turn. The choice of which tool to call is the LLM's; the MCP client just routes calls to the right server.</p></div></li>
+        <li><span class="num">1</span><div><b>Stateless protocol</b><p>Each request carries the protocol version and client capabilities needed to process it, and normally the client's identity as well. No MCP session affinity is required. When a tool needs cross-call application state, it returns an explicit handle that the model passes back as a later tool argument.</p></div></li>
+        <li><span class="num">2</span><div><b>Streamable HTTP is common</b><p>A hosted runtime may not permit child processes and may be cold-started per request, so remote HTTP services are usually easier to operate. A stdio-only server can be deployed behind a conforming Streamable HTTP front end when needed.</p></div></li>
+        <li><span class="num">3</span><div><b>Multiple trust domains</b><p>Internal services may use mTLS, workload identity, or short-lived tokens. Protected third-party servers commonly use the MCP OAuth 2.1 profile with resource-bound access tokens. Authentication choices remain deployment-specific.</p></div></li>
+        <li><span class="num">4</span><div><b>Selection and routing are separate</b><p>The agent runtime aggregates or searches the available tool catalogs; the model or orchestration layer selects a tool. The host then routes that call to the client that owns the tool's server. It need not place every tool definition in every model request.</p></div></li>
       </ol>
-      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management">modelcontextprotocol.io · Specification 2025-11-25 · Transports · Session management</a> (<code>MCP-Session-Id</code> semantics) · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">Authorization</a> (OAuth 2.1 token model). The architectural commentary about stateless replicas, ephemeral runtimes, and trust domains is not in the spec; it describes how MCP is commonly deployed in containerised agent runtimes.</p>
+      <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">modelcontextprotocol.io · Specification 2026-07-28 · Changelog</a> (stateless protocol) · <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools#stateful-tools">Tools · Stateful tools</a> (explicit handles) · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">Authorization</a>. The deployment commentary about ephemeral runtimes and trust domains is non-normative.</p>
     </div>
   </div>
 </section>
@@ -962,17 +1006,16 @@
   <div class="container">
     <h2>7 · Authorization (Streamable HTTP)</h2>
     <p class="lede">
-      For remote (HTTP) MCP servers, the spec mandates <b>OAuth 2.1</b> with three RFC profiles:
-      <b>PKCE</b> (mandatory on all clients), <b>Resource Indicators</b> (RFC 8707; tokens are
-      bound to a specific MCP server URI), and <b>Protected Resource Metadata</b> (RFC 9728;
-      clients discover the authorization server from the resource server). Dynamic Client
-      Registration (RFC 7591) is supported for backwards compatibility but Client ID Metadata
-      Documents are now the preferred path.
+      Authorization is optional in MCP. When an HTTP server is protected, implementations SHOULD
+      follow the MCP OAuth&nbsp;2.1 profile: Protected Resource Metadata (RFC&nbsp;9728) locates the
+      authorization server, PKCE protects the authorization code, Resource Indicators (RFC&nbsp;8707)
+      bind tokens to the MCP server, and issuer validation (RFC&nbsp;9207) prevents authorization-server
+      mix-up. Client ID Metadata Documents are preferred; Dynamic Client Registration is deprecated.
     </p>
 
     <div class="diagram-card">
       <div class="svg-wrap">
-<svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OAuth 2.1 authorization flow for MCP">
+<svg viewBox="0 0 900 650" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OAuth 2.1 authorization flow for MCP">
   <defs>
     <marker id="a-arr"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#9ec5ff"/></marker>
     <marker id="a-arr-y" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#fbbf24"/></marker>
@@ -988,16 +1031,16 @@
   <rect x="660" y="20" width="180" height="40" rx="10" fill="#03241f" stroke="#34d399"/>
   <text x="750" y="45" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">MCP Server</text>
 
-  <line x1="150" y1="60" x2="150" y2="580" stroke="#3a4a72" stroke-dasharray="3 4"/>
-  <line x1="450" y1="60" x2="450" y2="580" stroke="#3a4a72" stroke-dasharray="3 4"/>
-  <line x1="750" y1="60" x2="750" y2="580" stroke="#3a4a72" stroke-dasharray="3 4"/>
+  <line x1="150" y1="60" x2="150" y2="635" stroke="#3a4a72" stroke-dasharray="3 4"/>
+  <line x1="450" y1="60" x2="450" y2="635" stroke="#3a4a72" stroke-dasharray="3 4"/>
+  <line x1="750" y1="60" x2="750" y2="635" stroke="#3a4a72" stroke-dasharray="3 4"/>
 
   <!-- Phase A — DISCOVERY -->
   <rect x="20" y="80" width="120" height="22" rx="11" fill="#19243d" stroke="#3a4a72"/>
   <text x="80" y="95" text-anchor="middle" fill="#9fc2ff" font-size="11">A · DISCOVERY</text>
 
   <!-- 1: client → server (unauthenticated probe) -->
-  <text x="450" y="118" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">1 · GET /mcp  (unauthenticated probe)</text>
+  <text x="450" y="118" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">1 · POST /mcp  (MCP request without a token)</text>
   <path d="M155,128 L745,128" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
 
   <!-- 2: server → client (401 + header) — split across two lines -->
@@ -1015,50 +1058,53 @@
   <path d="M745,280 L155,280" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-arr-g)"/>
 
   <!-- Phase B — AUTHORIZATION -->
-  <rect x="20" y="305" width="180" height="22" rx="11" fill="#2b1e3f" stroke="#a78bfa"/>
-  <text x="110" y="320" text-anchor="middle" fill="#c4b5fd" font-size="11">B · AUTHORIZATION (PKCE)</text>
+  <rect x="20" y="305" width="205" height="22" rx="11" fill="#2b1e3f" stroke="#a78bfa"/>
+  <text x="122" y="320" text-anchor="middle" fill="#c4b5fd" font-size="11">B · DISCOVERY + AUTHORIZATION</text>
 
-  <!-- 5: client → AS (authorize) -->
-  <text x="300" y="345" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">5 · authorize</text>
-  <text x="300" y="361" text-anchor="middle" fill="#9ec5ff" font-size="10.5">PKCE code_challenge  +  resource=…  +  scopes</text>
+  <!-- 5: client → AS (metadata and registration) -->
+  <text x="300" y="345" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">5 · discover AS metadata + obtain client_id</text>
+  <text x="300" y="361" text-anchor="middle" fill="#9ec5ff" font-size="10.5">CIMD, pre-registration, or deprecated DCR fallback</text>
   <path d="M155,371 L445,371" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
 
-  <!-- 6: AS → client (authorization code) -->
-  <text x="300" y="395" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">6 · authorization code  (after user consent)</text>
-  <path d="M445,405 L155,405" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-arr-g)"/>
+  <!-- 6: client → AS (authorize through browser) -->
+  <text x="300" y="395" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">6 · authorize via browser</text>
+  <text x="300" y="411" text-anchor="middle" fill="#9ec5ff" font-size="10.5">PKCE code_challenge + resource + scopes</text>
+  <path d="M155,421 L445,421" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
 
-  <!-- 7: client → AS (token exchange) -->
-  <text x="300" y="430" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">7 · token exchange</text>
-  <text x="300" y="446" text-anchor="middle" fill="#9ec5ff" font-size="10.5">code  +  PKCE code_verifier  +  resource</text>
-  <path d="M155,456 L445,456" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
+  <!-- 7: AS → client (authorization code + issuer) -->
+  <text x="300" y="447" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">7 · authorization code (+ iss when supported)</text>
+  <path d="M445,457 L155,457" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-arr-g)"/>
+  <text x="300" y="474" text-anchor="middle" fill="#fde68a" font-size="10.5">client validates a present iss vs. recorded issuer</text>
 
-  <!-- 8: AS → client (access token) -->
-  <text x="300" y="480" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">8 · access_token  (audience = MCP server URI)</text>
-  <path d="M445,490 L155,490" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-arr-g)"/>
+  <!-- 8: token exchange and response -->
+  <text x="300" y="500" text-anchor="middle" fill="#9ec5ff" font-size="10.5">8 · code + verifier + resource</text>
+  <path d="M155,510 L445,510" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
+  <text x="300" y="529" text-anchor="middle" fill="#34d399" font-size="10.5">access_token (for MCP server URI)</text>
+  <path d="M445,537 L155,537" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-arr-g)"/>
 
   <!-- Phase C — AUTHENTICATED MCP -->
-  <rect x="20" y="515" width="200" height="22" rx="11" fill="#03241f" stroke="#34d399"/>
-  <text x="120" y="530" text-anchor="middle" fill="#bbf7d0" font-size="11">C · AUTHENTICATED MCP</text>
+  <rect x="20" y="555" width="200" height="22" rx="11" fill="#03241f" stroke="#34d399"/>
+  <text x="120" y="570" text-anchor="middle" fill="#bbf7d0" font-size="11">C · AUTHENTICATED MCP</text>
 
-  <!-- 9: client → server (initialize with Bearer) -->
-  <text x="450" y="555" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">9 · POST /mcp  ·  Authorization: Bearer &lt;access_token&gt;  ·  initialize</text>
-  <path d="M155,565 L745,565" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
+  <!-- 9: client → server (ordinary request with Bearer) -->
+  <text x="450" y="595" text-anchor="middle" fill="#9ec5ff" font-size="11" font-weight="600">9 · POST /mcp · Authorization: Bearer &lt;access_token&gt; · tools/list</text>
+  <path d="M155,605 L745,605" stroke="#9ec5ff" stroke-width="2" fill="none" marker-end="url(#a-arr)"/>
 
-  <!-- 10: server → client (initialize response) -->
-  <text x="450" y="590" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">10 · 200 OK · initialize response  (server validates token audience)</text>
+  <!-- 10: server → client (ordinary response) -->
+  <text x="450" y="635" text-anchor="middle" fill="#34d399" font-size="11" font-weight="600">10 · 200 OK · tools/list response (server validates audience + scopes)</text>
 </svg>
       </div>
-      <div class="caption">Figure 7 · OAuth 2.1 + RFC 9728 + RFC 8707 flow. The client probes the MCP server unauthenticated, follows the discovery chain to the authorization server, completes a PKCE-protected authorization code exchange with the target resource indicator, and then makes its authenticated MCP request.</div>
+      <div class="caption">Figure 7 · The optional MCP authorization profile. The client follows RFC 9728 and authorization-server metadata, obtains a client ID, completes a PKCE-protected authorization-code flow with a resource indicator, validates the issuer when the response carries one, and sends the resource-bound token to the MCP server.</div>
 
       <ol class="legend-list">
-        <li><span class="num">1</span><div><b>Discovery (steps 1–4)</b><p>The client makes an unauthenticated request, receives a <code>401</code> with a <code>WWW-Authenticate</code> header pointing at the resource metadata document, and fetches that document to learn which authorization server(s) protect this resource.</p></div></li>
-        <li><span class="num">2</span><div><b>Authorization code + PKCE (steps 5–6)</b><p>The client redirects the user to the authorization server with a PKCE code challenge and the <code>resource</code> parameter (RFC 8707) naming the MCP server's URI. After user consent, the authorization server returns an authorization code.</p></div></li>
-        <li><span class="num">3</span><div><b>Token exchange (steps 7–8)</b><p>The client exchanges the code (plus the PKCE verifier) for an access token. The token's audience is bound to the specific MCP server URI; it cannot be replayed against another resource server.</p></div></li>
-        <li><span class="num">4</span><div><b>Authenticated MCP (steps 9–10 and onward)</b><p>The client includes <code>Authorization: Bearer …</code> on every HTTP request to the MCP server. The server validates audience, signature, and scopes before processing the JSON-RPC envelope. On scope failure, the server returns <code>403</code> with <code>WWW-Authenticate: Bearer error="insufficient_scope", scope="…"</code> and the client initiates a step-up authorization.</p></div></li>
+        <li><span class="num">1</span><div><b>Protected-resource discovery (steps 1–4)</b><p>An unauthenticated MCP request receives <code>401</code> with a <code>WWW-Authenticate</code> challenge pointing at RFC 9728 metadata. The client fetches that document and then the selected authorization server's OAuth or OpenID Connect metadata.</p></div></li>
+        <li><span class="num">2</span><div><b>Client registration (step 5)</b><p>The client obtains a client ID through a Client ID Metadata Document, pre-registration, or — only for backwards compatibility — Dynamic Client Registration. Persisted credentials are keyed by issuer and must not be reused with another authorization server.</p></div></li>
+        <li><span class="num">3</span><div><b>Authorization code + PKCE (steps 6–8)</b><p>The browser request includes a PKCE challenge and an RFC 8707 <code>resource</code> parameter. Before redeeming the returned code, the client validates a present <code>iss</code> against the issuer it recorded from validated metadata, then exchanges the code with the verifier and resource.</p></div></li>
+        <li><span class="num">4</span><div><b>Authenticated MCP (steps 9–10 and onward)</b><p>The client includes <code>Authorization: Bearer …</code> on every protected HTTP request. The server validates that the token was issued for its resource and has sufficient scopes. A <code>403</code> insufficient-scope challenge can trigger step-up authorization.</p></div></li>
       </ol>
     </div>
 
-    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">modelcontextprotocol.io · Specification 2025-11-25 · Authorization</a></p>
+    <p class="snip-src">Source: <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">modelcontextprotocol.io · Specification 2026-07-28 · Authorization</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration">Client registration</a></p>
   </div>
 </section>
 
@@ -1069,21 +1115,21 @@
   <div class="container">
     <h2>8 · Authoring an MCP server</h2>
     <p class="lede">
-      The official MCP SDKs are maintained at <code>modelcontextprotocol/python-sdk</code> and
-      <code>modelcontextprotocol/typescript-sdk</code>. Both ship a high-level API
-      (<code>FastMCP</code> in Python, <code>McpServer</code> in TypeScript) that hides the JSON-RPC
-      plumbing, plus a lower-level API for fine-grained control. The same server code can be served
-      over stdio or Streamable HTTP by choosing a different transport at startup.
+      The Tier 1 SDKs for revision <code>2026-07-28</code> are TypeScript, Python, Go, and C#; Rust
+      supports the revision in beta. The Python and TypeScript v2 examples below use high-level APIs
+      that hide JSON-RPC parsing and derive tool schemas from native types. The same tool definitions
+      are served over stdio or Streamable HTTP by changing only how the server is mounted at startup.
     </p>
+    <p class="snip-src">Source: <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">Official MCP 2026-07-28 release announcement</a></p>
 
-    <h3>Python — FastMCP</h3>
+    <h3>Python v2 — <code>MCPServer</code></h3>
     <p>
-      Install with <code>pip install mcp</code>. A minimal server exposes one tool and runs over
-      stdio:
+      Install with <code>pip install "mcp[cli]"</code>. A minimal server exposes one tool and runs
+      over stdio:
     </p>
-<pre><code>from mcp.server.fastmcp import FastMCP
+<pre><code>from mcp.server import MCPServer
 
-mcp = FastMCP("greeting-server")
+mcp = MCPServer("greeting-server")
 
 @mcp.tool()
 def greet(name: str) -> str:
@@ -1092,21 +1138,21 @@ def greet(name: str) -> str:
 
 if __name__ == "__main__":
     mcp.run()              # stdio is the default transport</code></pre>
-    <p class="snip-src">Source: <a href="https://github.com/modelcontextprotocol/python-sdk">github.com/modelcontextprotocol/python-sdk · README quickstart</a></p>
+    <p class="snip-src">Source: <a href="https://py.sdk.modelcontextprotocol.io/run/">Official MCP Python SDK v2 · Running your server</a></p>
 
     <p>To serve the same code over Streamable HTTP, change one line:</p>
 <pre><code>if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=8000)
+    mcp.run(transport="streamable-http", port=8000)
     # server is now reachable at http://localhost:8000/mcp</code></pre>
-    <p class="snip-src">Source: <a href="https://gofastmcp.com/deployment/running-server">gofastmcp.com · Running your server</a></p>
+    <p class="snip-src">Source: <a href="https://py.sdk.modelcontextprotocol.io/run/#streamable-http">Official MCP Python SDK v2 · Streamable HTTP</a></p>
 
-    <h3>TypeScript — <code>McpServer</code></h3>
+    <h3>TypeScript v2 — <code>McpServer</code></h3>
     <p>
-      Install with <code>npm install @modelcontextprotocol/sdk zod</code>. A minimal stdio server:
+      Install with <code>npm install @modelcontextprotocol/server zod</code>. A minimal stdio server:
     </p>
-<pre><code>import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
+<pre><code>import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import * as z from "zod/v4";
 
 const server = new McpServer({ name: "greeting-server", version: "1.0.0" });
 
@@ -1123,19 +1169,42 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);</code></pre>
-    <p class="snip-src">Source: <a href="https://github.com/modelcontextprotocol/typescript-sdk">github.com/modelcontextprotocol/typescript-sdk · README quickstart</a></p>
+    <p class="snip-src">Source: <a href="https://github.com/modelcontextprotocol/typescript-sdk">Official MCP TypeScript SDK v2 · README quickstart</a></p>
 
-    <p>The Streamable HTTP variant swaps the transport import and provides network options:</p>
-<pre><code>import { StreamableHTTPServerTransport }
-  from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+    <p>
+      Streamable HTTP is not a different transport object in v2. <code>createMcpHandler</code> takes the same
+      registrations wrapped in a <b>factory</b> and returns a web-standard handler. The factory runs once per
+      HTTP request, so a fresh <code>McpServer</code> serves every call and the handler keeps nothing between
+      requests — §4's stateless request model expressed directly in the API:
+    </p>
+<pre><code>import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 
-const transport = new StreamableHTTPServerTransport({ /* options */ });
-await server.connect(transport);
-// Mount the transport's HTTP handler on your web framework (Express, Hono, …).</code></pre>
-    <p class="snip-src">Source: <a href="https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/server.md">github.com/modelcontextprotocol/typescript-sdk · docs/server.md · Streamable HTTP transport</a></p>
+const handler = createMcpHandler(() =&gt; {
+  const server = new McpServer({ name: "greeting-server", version: "1.0.0" });
+  server.registerTool(/* …the same registration as above… */);
+  return server;
+});</code></pre>
+    <p class="snip-src">Source: <a href="https://ts.sdk.modelcontextprotocol.io/v2/serving/http.html">Official MCP TypeScript SDK v2 · Serve over HTTP</a> (<code>createMcpHandler</code> replaces v1's per-request <code>StreamableHTTPServerTransport</code> + <code>connect()</code> wiring).</p>
+
+    <p>
+      <code>handler.fetch</code> is a standard <code>(Request) =&gt; Promise&lt;Response&gt;</code>, so on a
+      web-standard runtime (Cloudflare Workers, Deno, Bun) <code>export default handler</code> is the entire
+      mount. Node frameworks wrap it once with <code>toNodeHandler</code>; thin adapter packages cover Node,
+      Express, Fastify, and Hono:
+    </p>
+<pre><code>npm install @modelcontextprotocol/server @modelcontextprotocol/express @modelcontextprotocol/node express</code></pre>
+<pre><code>import { createMcpExpressApp } from "@modelcontextprotocol/express";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+
+const app = createMcpExpressApp();   // express() + express.json() + DNS-rebinding guards
+const node = toNodeHandler(handler);
+
+app.all("/mcp", (req, res) =&gt; void node(req, res, req.body));
+app.listen(3000);</code></pre>
+    <p class="snip-src">Source: <a href="https://ts.sdk.modelcontextprotocol.io/v2/serving/express.html">Official MCP TypeScript SDK v2 · Serve with Express</a>. <code>createMcpExpressApp</code> applies the <code>Host</code> and <code>Origin</code> validation §3 requires, defaulting to a <code>127.0.0.1</code> bind; pass <code>allowedHosts</code> when binding to <code>0.0.0.0</code>.</p>
 
     <div class="note-box">
-      <b>The tool function signature is the schema.</b> In both SDKs, the tool's parameter types are also its JSON Schema <code>inputSchema</code>. Python derives the schema from type hints and docstring; TypeScript derives it from the Zod schema. The result is what the model sees in the <code>tools/list</code> response.
+      <b>The tool declaration defines the schema.</b> Python derives the tool schema from type hints and the docstring; TypeScript accepts Standard Schema-compatible libraries such as Zod v4. The generated JSON Schema is returned as the tool's <code>inputSchema</code> in <code>tools/list</code>.
     </div>
   </div>
 </section>
@@ -1162,18 +1231,21 @@ await server.connect(transport);
           <tr><td class="row-hd">Framing</td>
               <td>Newline-delimited JSON-RPC on stdin/stdout</td>
               <td>HTTP POST body (one JSON-RPC message); response is either JSON or SSE</td></tr>
-          <tr><td class="row-hd">Server-initiated messages</td>
-              <td>Server writes to stdout at any time</td>
-              <td>Server uses SSE — either as a response to a POST or via a long-lived GET</td></tr>
+          <tr><td class="row-hd">Request metadata</td>
+              <td>Protocol version and client capabilities in every request's <code>_meta</code></td>
+              <td>The same <code>_meta</code>, plus required version and routing headers</td></tr>
+          <tr><td class="row-hd">Server-to-client interaction</td>
+              <td>MRTR results; subscribed notifications share stdout</td>
+              <td>MRTR results; notifications use request SSE or <code>subscriptions/listen</code></td></tr>
           <tr><td class="row-hd">Authentication</td>
-              <td>Inherits the OS user of the client process</td>
-              <td>OAuth 2.1 with PKCE; tokens bound to resource URI (RFC 8707)</td></tr>
+              <td>Normally inherits the OS user; credentials come from the environment</td>
+              <td>Deployment-specific; protected servers SHOULD use the MCP OAuth 2.1 profile</td></tr>
           <tr><td class="row-hd">Concurrency</td>
               <td>One client per server process</td>
               <td>One server may serve many concurrent clients</td></tr>
-          <tr><td class="row-hd">Session affinity</td>
-              <td>Implicit (one process)</td>
-              <td>Explicit via <code>MCP-Session-Id</code> header</td></tr>
+          <tr><td class="row-hd">Protocol sessions</td>
+              <td>None; process lifetime bounds the transport connection</td>
+              <td>None; each request is independent and may reach any instance</td></tr>
           <tr><td class="row-hd">Logs</td>
               <td>stderr</td>
               <td>Server's own logging stack</td></tr>
@@ -1181,7 +1253,8 @@ await server.connect(transport);
               <td>Local tools on a developer machine; CLI integrations</td>
               <td>Remote / multi-tenant tools; hosted agent runtimes; vendor APIs</td></tr>
           <tr><td class="row-hd">Spec section</td>
-              <td colspan="2"><a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">modelcontextprotocol.io · Specification 2025-11-25 · Transports</a></td></tr>
+              <td><a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio">Specification 2026-07-28 · stdio</a></td>
+              <td><a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http">Specification 2026-07-28 · Streamable HTTP</a></td></tr>
         </tbody>
       </table>
     </div>
@@ -1194,40 +1267,40 @@ await server.connect(transport);
 <section id="takeaways">
   <div class="container">
     <h2>10 · Summary observations</h2>
-    <p class="lede">Six factual observations drawn from the spec and current SDK behaviour.</p>
+    <p class="lede">Six factual observations drawn from revision 2026-07-28 and the current Tier 1 SDKs.</p>
     <div class="takeaways">
       <div class="ta">
         <span class="tag">PROTOCOL</span>
-        <h4>1 · MCP is a thin JSON-RPC 2.0 protocol</h4>
-        <p>The wire format is plain JSON-RPC. There are three message types (request, response, notification), four core methods for tools (<code>initialize</code>, <code>notifications/initialized</code>, <code>tools/list</code>, <code>tools/call</code>), and a small set of capability flags negotiated in the handshake.</p>
+        <h4>1 · MCP is stateless JSON-RPC 2.0</h4>
+        <p>Every request declares its protocol version and client capabilities in <code>_meta</code>. There is no initialisation handshake or protocol-level session. Servers implement <code>server/discover</code>, but clients may call any supported RPC first.</p>
       </div>
       <div class="ta">
         <span class="tag">TRANSPORTS</span>
-        <h4>2 · Two transports are standardised; the legacy SSE one is deprecated</h4>
-        <p>The current spec (revision 2025-11-25) defines <code>stdio</code> and <code>Streamable HTTP</code>. The earlier two-endpoint HTTP+SSE transport remains documented for backwards compatibility only.</p>
+        <h4>2 · Two transports are standardised</h4>
+        <p>Revision 2026-07-28 defines <code>stdio</code> and POST-only <code>Streamable HTTP</code>. The earlier two-endpoint HTTP+SSE transport remains available only during its formal deprecation window.</p>
       </div>
       <div class="ta">
-        <span class="tag">DESKTOP</span>
-        <h4>3 · Desktop apps merge tools from many servers</h4>
-        <p>Claude Code, VS Code, and Cursor each load a JSON config file (<code>.mcp.json</code> / <code>.vscode/mcp.json</code> / <code>.cursor/mcp.json</code>) listing stdio and remote servers. The client merges their tools into one combined list for the LLM.</p>
+        <span class="tag">INTERACTION</span>
+        <h4>3 · Routing, caching, and interactivity are explicit</h4>
+        <p>HTTP headers expose method, operation name, and selected tool arguments to gateways. Cacheable results carry freshness and scope hints. MRTR handles elicitation, sampling, and roots through retryable results; <code>subscriptions/listen</code> carries opted-in change notifications.</p>
       </div>
       <div class="ta">
-        <span class="tag">HOSTED</span>
-        <h4>4 · Hosted agents use HTTP almost exclusively</h4>
-        <p>Server-hosted agent runtimes prefer Streamable HTTP because container/serverless environments often cannot spawn subprocesses, share filesystem state, or persist between invocations. Session affinity for multi-call interactions is achieved via the <code>MCP-Session-Id</code> header rather than load-balancer stickiness.</p>
+        <span class="tag">DEPLOYMENT</span>
+        <h4>4 · The same protocol serves local hosts and hosted agents</h4>
+        <p>A local host reads a config file, creates one client per server, and merges their tools into one catalog. A hosted runtime does the same per replica and needs no session affinity: any request can land on any compatible instance, and tools needing cross-call state return explicit handles the model passes back as ordinary arguments.</p>
       </div>
       <div class="ta">
         <span class="tag">AUTH</span>
-        <h4>5 · The HTTP transport mandates OAuth 2.1 + PKCE + resource indicators</h4>
-        <p>Discovery uses Protected Resource Metadata (RFC 9728); authorization uses OAuth 2.1 with PKCE; tokens are scoped to a specific MCP server URI via Resource Indicators (RFC 8707). Dynamic Client Registration (RFC 7591) is supported for backwards compatibility; Client ID Metadata Documents are the preferred registration path going forward.</p>
+        <h4>5 · Authorization is optional but standardised</h4>
+        <p>Protected HTTP servers SHOULD use the MCP OAuth 2.1 profile: RFC 9728 discovery, PKCE, RFC 8707 resource indicators, and RFC 9207 issuer validation. Client ID Metadata Documents are preferred; Dynamic Client Registration is deprecated.</p>
       </div>
       <div class="ta">
         <span class="tag">SDKS</span>
-        <h4>6 · The official SDKs hide the JSON-RPC plumbing</h4>
-        <p>FastMCP in Python and <code>McpServer</code> in TypeScript reduce a tool-exposing server to a class, a decorator/<code>registerTool</code> call, and a <code>run()</code>/<code>connect()</code> entry point. Switching between stdio and Streamable HTTP is a one-line change in both SDKs.</p>
+        <h4>6 · Tier 1 SDKs implement the new revision</h4>
+        <p>Python, TypeScript, Go, and C# support revision 2026-07-28. Python v2's <code>MCPServer</code> and TypeScript v2's <code>McpServer</code> hide JSON-RPC plumbing and derive or accept tool schemas from native type systems.</p>
       </div>
     </div>
-    <p class="snip-src">Sources for the six observations above, in order: <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic">Base Protocol</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">Transports</a> · client docs cited in §5 (<a href="https://code.claude.com/docs/en/mcp">Claude Code</a>, <a href="https://code.visualstudio.com/docs/copilot/customization/mcp-servers">VS Code</a>, <a href="https://cursor.com/docs/mcp">Cursor</a>) · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management">Session Management</a> · <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">Authorization</a> · SDK docs cited in §8 (<a href="https://github.com/modelcontextprotocol/python-sdk">Python</a>, <a href="https://github.com/modelcontextprotocol/typescript-sdk">TypeScript</a>).</p>
+    <p class="snip-src">Sources: <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">2026-07-28 changelog</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio">stdio</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http">Streamable HTTP</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr">MRTR</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions">Subscriptions</a> · <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">Authorization</a> · SDK docs cited in §8.</p>
   </div>
 </section>
 
@@ -1240,27 +1313,34 @@ await server.connect(transport);
     <p class="lede">Terms used throughout this paper.</p>
     <div class="gloss">
       <div><b>MCP</b> — Model Context Protocol; an open JSON-RPC 2.0 protocol for connecting LLM applications to tool servers. Spec at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a>.</div>
-      <div><b>Client / Host</b> — the application that hosts the LLM and the MCP client library (Claude Code, VS Code, a hosted agent runtime).</div>
+      <div><b>Host</b> — the application that hosts the LLM and orchestrates tool use (Claude Code, VS Code, a hosted agent runtime). It creates and manages one MCP client per server.</div>
+      <div><b>Client</b> — the protocol-speaking component created by the host. Each client communicates with exactly one server and maintains the security boundary between servers.</div>
       <div><b>Server</b> — a process that exposes tools, resources, and/or prompts to MCP clients. Can be a local subprocess (stdio) or a network service (HTTP).</div>
       <div><b>Tool</b> — a callable exposed by a server, described by <code>name</code>, <code>description</code>, and a JSON Schema <code>inputSchema</code>. Invoked via <code>tools/call</code>.</div>
       <div><b>Resource</b> — a piece of read-only content (file, document, query result) the server can supply. Listed via <code>resources/list</code> and fetched via <code>resources/read</code>.</div>
       <div><b>Prompt</b> — a parameterised template the server exposes that the client can render and present to the user.</div>
       <div><b>stdio transport</b> — server runs as a child process; messages flow over newline-delimited JSON on stdin/stdout.</div>
-      <div><b>Streamable HTTP transport</b> — server exposes one HTTP endpoint; clients POST requests; responses are JSON or SSE; a separate GET opens a server-to-client SSE stream.</div>
-      <div><b>MCP-Session-Id</b> — header issued in the <code>initialize</code> response that the client echoes on every subsequent request to keep them on the same logical session.</div>
-      <div><b>FastMCP</b> — high-level Python SDK API; decorator-based server authoring.</div>
-      <div><b>McpServer</b> — high-level TypeScript SDK API; <code>registerTool</code>-based server authoring with Zod schemas.</div>
-      <div><b>RFC 8707 (Resource Indicators)</b> — OAuth 2.0 extension that binds an access token to a specific resource server, preventing token replay.</div>
+      <div><b>Streamable HTTP transport</b> — server exposes one POST endpoint; each response is JSON or request-scoped SSE. Long-lived change notifications use the response to <code>subscriptions/listen</code>.</div>
+      <div><b>Per-request <code>_meta</code></b> — metadata carrying protocol version, client capabilities, and normally client identity on every request.</div>
+      <div><b><code>Mcp-Method</code> / <code>Mcp-Name</code></b> — required Streamable HTTP headers that mirror the RPC method and, for selected operations, the tool name, prompt name, or resource URI.</div>
+      <div><b><code>x-mcp-header</code></b> — tool-schema annotation that instructs Streamable HTTP clients to mirror a safe primitive argument into a validated <code>Mcp-Param-*</code> request header.</div>
+      <div><b><code>resultType</code></b> — required result discriminator: <code>complete</code> for an ordinary result or <code>input_required</code> for an MRTR interim result.</div>
+      <div><b>MRTR</b> — Multi Round-Trip Requests; a server returns <code>input_required</code> and the client retries the original method with requested input.</div>
+      <div><b>Subscription</b> — an opted-in, long-lived <code>subscriptions/listen</code> response stream for list-change and resource-update notifications.</div>
+      <div><b>Cacheable result</b> — a result with <code>ttlMs</code> and <code>cacheScope</code> hints that tell clients how long and where it may be cached.</div>
+      <div><b>MCPServer / McpServer</b> — the high-level Python and TypeScript v2 server APIs, respectively.</div>
+      <div><b>RFC 8707 (Resource Indicators)</b> — OAuth 2.0 extension that binds an access token to a specific resource server, so a token minted for one MCP server is not accepted by another.</div>
       <div><b>RFC 9728 (Protected Resource Metadata)</b> — discovery document at <code>/.well-known/oauth-protected-resource</code> that tells clients which authorization server protects a resource.</div>
       <div><b>PKCE</b> — Proof Key for Code Exchange (RFC 7636); mandatory in OAuth 2.1 to prevent authorization code interception.</div>
+      <div><b>CIMD</b> — Client ID Metadata Document; an HTTPS metadata document used as an OAuth client identifier and preferred over Dynamic Client Registration.</div>
     </div>
-    <p class="snip-src">All MCP-specific term definitions above are taken from the <a href="https://modelcontextprotocol.io/specification/2025-11-25">MCP Specification 2025-11-25</a> (Base Protocol, Transports, Lifecycle, Authorization, and Server / Tools sub-pages). RFC numbers refer to the published IETF documents.</p>
+    <p class="snip-src">MCP-specific definitions above are taken from the <a href="https://modelcontextprotocol.io/specification/2026-07-28">MCP Specification 2026-07-28</a>. RFC numbers refer to the published IETF documents.</p>
   </div>
 </section>
 
 <footer>
   <div class="container">
-    Compiled from the official MCP specification at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a> (revision 2025-11-25), the Python and TypeScript SDK repositories, and the official MCP configuration docs for Claude Code, VS Code, and Cursor.
+    Compiled from the official MCP specification at <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a> (revision 2026-07-28), the Tier 1 SDK documentation, and the official MCP configuration docs for Claude Code, VS Code, and Cursor.
     <p class="copyright">© 2026 <a href="https://github.com/itsneelabh">Neelabh Tripathi</a>. Licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
   </div>
 </footer>
