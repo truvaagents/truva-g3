@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -119,7 +119,7 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 	redisOpt.PoolSize = 10    // Match core.RedisRegistry connection pool pattern
 	redisOpt.MinIdleConns = 5 // Keep connections warm for async recording bursts
 
-	client := redis.NewClient(redisOpt)
+	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -257,7 +257,7 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		}
 		pipe.Expire(ctx, metaKey, ttl)
 		pipe.Expire(ctx, interKey, ttl)
-		pipe.ZAdd(ctx, recorderIndexKey, &redis.Z{
+		pipe.ZAdd(ctx, recorderIndexKey, redis.Z{
 			Score:  float64(now.Unix()),
 			Member: requestID,
 		})

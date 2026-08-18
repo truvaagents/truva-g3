@@ -66,7 +66,7 @@ That's exactly what this k8-deployment setup provides for your TruvaG3 applicati
 | Component | Image | Purpose | Access | Storage |
 |-----------|-------|---------|--------|---------|
 | **Namespace** | N/A | Isolated environment for TruvaG3 apps | N/A | N/A |
-| **Redis** | `redis:7-alpine` | Service discovery registry | `redis:6379` | 1Gi PVC |
+| **Redis** | `redis:8.2.8-alpine` | Default registry and orchestration data store | `redis:6379` | 1Gi PVC |
 | **Loki** | `grafana/loki:3.6.7` | Log aggregation with retention | `loki:3100` | 5Gi PVC |
 | **OTEL Collector** | `otel/opentelemetry-collector-contrib:latest` | Telemetry routing (traces, metrics, logs) | `otel-collector:4318` | None |
 | **OTEL Collector Logs** | `otel/opentelemetry-collector-contrib:latest` | Pod log collection (DaemonSet) | N/A (node-level) | None |
@@ -443,7 +443,14 @@ kubectl patch statefulset prometheus -n truvag3-examples -p '{"spec":{"replicas"
 
 ### Redis Configuration
 
-Redis serves as the service discovery backend for all TruvaG3 components.
+Redis is the included default backend for service discovery and Redis-backed
+orchestration data such as skills, execution records, queues, and checkpoints.
+
+The included deployment pins Redis Open Source `8.2.8` rather than a moving
+major-version tag. Redis 8.2 is an LTS line in the official
+[version schedule](https://redis.io/docs/latest/operate/oss_and_stack/install/version-mgmt/).
+Framework-owned Go clients use go-redis/v9 and explicitly negotiate RESP2;
+evaluating RESP3 is a separate, application-owned compatibility exercise.
 
 **Key Features:**
 - Persistent storage with volume claims
@@ -451,13 +458,20 @@ Redis serves as the service discovery backend for all TruvaG3 components.
 - Health checks and restart policies
 - Configurable maxmemory policies
 
+The example requests 64 MiB, which covers the measured local baseline without
+reserving production-sized capacity on a developer laptop. Redis can burst to a
+512 MiB container limit, while `maxmemory` keeps the dataset eviction ceiling at
+256 MiB. This is development headroom, not a guarantee for a completely full,
+write-heavy dataset: production deployments must size the limit for process
+overhead and copy-on-write memory during RDB or AOF persistence.
+
 **Environment Variables:**
 ```yaml
 # In redis.yaml
 args:
   - --appendonly yes          # Enable persistence
   - --appendfsync everysec    # Sync every second
-  - --maxmemory 1gb          # Memory limit
+  - --maxmemory 256mb        # Dataset eviction ceiling
   - --maxmemory-policy allkeys-lru  # Eviction policy
 ```
 
@@ -956,7 +970,7 @@ kubectl patch deployment redis -n truvag3-examples -p '{
 **Check Redis connectivity:**
 ```bash
 # Test Redis from another pod
-kubectl run redis-test --image=redis:7-alpine -it --rm --restart=Never \
+kubectl run redis-test --image=redis:8.2.8-alpine -it --rm --restart=Never \
   -- redis-cli -h redis.truvag3-examples.svc.cluster.local ping
 
 # Should return: PONG
@@ -1140,6 +1154,9 @@ git pull origin main
 
 # Re-apply updated manifests and restart workloads (handles ConfigMap changes)
 ./setup-infrastructure.sh rebuild
+
+# Rebuild only Redis after reviewing redis.yaml
+./setup-infrastructure.sh rebuild redis
 ```
 
 > Prior revisions of this doc recommended `kubectl apply -k examples/k8-deployment`.
@@ -1151,14 +1168,15 @@ git pull origin main
 
 ### Version Management
 
-```bash
-# Tag current configuration
-kubectl annotate namespace truvag3-examples \
-  deployment.version="v$(date +%Y%m%d-%H%M%S)"
+Before a Redis major-version upgrade, create and verify a persistence backup,
+record `INFO keyspace` and `INFO persistence`, and then use the targeted rebuild
+command above. After rollout, confirm the server version, keyspace counts, AOF
+status, application reconnection, and at least one write/read workflow.
 
-# Rollback if needed
-kubectl rollout undo deployment/redis -n truvag3-examples
-```
+Prefer roll-forward to a fixed patch. Do not treat `kubectl rollout undo` as a
+safe database downgrade: once the newer server has rewritten persistence files,
+an older server may not be able to read them. Recovery to the old major version
+must restore the pre-upgrade backup into a separately verified deployment.
 
 ## Summary
 

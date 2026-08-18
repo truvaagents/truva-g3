@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.2
+**Version**: 1.3
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -95,11 +95,21 @@ import "github.com/truvaagents/truva-g3/ai" // NEVER in core
 ```go
 // ✅ Justified external dependencies
 require (
-    github.com/go-redis/redis/v8 v8.11.5  // Redis implementation of discovery
-    github.com/google/uuid v1.6.0         // ID generation
-    github.com/stretchr/testify v1.11.1   // Testing only
+    github.com/redis/go-redis/v9 v9.22.0  // Redis implementation of discovery
+    github.com/google/uuid v1.6.0          // ID generation
+    github.com/stretchr/testify v1.11.1    // Testing only
 )
 ```
+
+Framework-owned Redis clients pass their options through
+`ApplyRedisClientDefaults`. This keeps the migration to go-redis/v9 on RESP2
+and preserves the established timeout, retry, and idle-connection defaults.
+The dialer implementation, TCP keepalive, and buffer sizing use go-redis/v9
+defaults unless the application overrides them. An application-owned client may
+choose RESP3 explicitly, but the application must validate its complete command
+and backend surface before injecting that client. The helper returns a shallow
+copy, fills only zero-value option fields, and leaves explicit non-zero settings
+and negative timeout sentinels application-owned.
 
 **Forbidden**:
 ```go
@@ -885,7 +895,7 @@ func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
     opts.PoolSize = 10
     opts.MinIdleConns = 5
     
-    client := redis.NewClient(opts)
+    client := redis.NewClient(ApplyRedisClientDefaults(opts))
     return &RedisRegistry{client: client, ttl: ttl}, nil  // ttl from NewRedisRegistryWithOptions, clamped (min 5s, default 30s)
 }
 ```
@@ -980,6 +990,7 @@ their packages or vocabulary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2026-08-17 | Migrated the included Redis implementation to go-redis/v9 with explicit RESP2 compatibility defaults and application-owned RESP3 opt-in |
 | 1.2 | 2026-08-09 | Added generic provenance-aware pipeline short-circuit and named cache-variation contracts without changing legacy hook payloads |
 | 1.1 | 2026-07-27 | Established the pre-release opaque conversation-correlation context and validation contract |
 | 1.0 | 2025-09-28 | Initial architecture documentation |

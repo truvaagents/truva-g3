@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // ArtifactStore stores raw PR patches/files outside of orchestration state.

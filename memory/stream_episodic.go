@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -166,9 +166,10 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 	}
 	streamKey := v.domainStreamKey()
 	pipe.XAdd(ctx, &redis.XAddArgs{
-		Stream:       streamKey,
-		MaxLenApprox: v.streamMaxLen,
-		Values:       map[string]interface{}{"event_id": event.EventID, "entity_id": primaryEntityID},
+		Stream: streamKey,
+		MaxLen: v.streamMaxLen,
+		Approx: true,
+		Values: map[string]interface{}{"event_id": event.EventID, "entity_id": primaryEntityID},
 	})
 
 	// 3. Index by all entities (one event, multiple sorted set entries)
@@ -176,26 +177,27 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 		for _, entity := range event.Entities {
 			if entity.Type != "" && entity.ID != "" {
 				entityKey := v.entityIndexKey(entity.Type, entity.ID)
-				pipe.ZAdd(ctx, entityKey, &redis.Z{Score: score, Member: event.EventID})
+				pipe.ZAdd(ctx, entityKey, redis.Z{Score: score, Member: event.EventID})
 			}
 		}
 	} else if event.EntityType != "" && event.EntityID != "" {
 		// Backward compat: singular fields
 		entityKey := v.entityIndexKey(event.EntityType, event.EntityID)
-		pipe.ZAdd(ctx, entityKey, &redis.Z{Score: score, Member: event.EventID})
+		pipe.ZAdd(ctx, entityKey, redis.Z{Score: score, Member: event.EventID})
 	}
 
 	// 4. Index by agent
 	agentKey := v.agentIndexKey(event.AgentName)
-	pipe.ZAdd(ctx, agentKey, &redis.Z{Score: score, Member: event.EventID})
+	pipe.ZAdd(ctx, agentKey, redis.Z{Score: score, Member: event.EventID})
 
 	// 5. Dual-write: ScopeGlobal events also go to the global stream
 	if event.Scope == core.ScopeGlobal {
 		globalStreamKey := "truvag3:memory:global:events:stream"
 		pipe.XAdd(ctx, &redis.XAddArgs{
-			Stream:       globalStreamKey,
-			MaxLenApprox: v.streamMaxLen,
-			Values:       map[string]interface{}{"event_id": event.EventID, "domain": event.AgentDomain},
+			Stream: globalStreamKey,
+			MaxLen: v.streamMaxLen,
+			Approx: true,
+			Values: map[string]interface{}{"event_id": event.EventID, "domain": event.AgentDomain},
 		})
 	}
 
@@ -420,6 +422,8 @@ func (v *StreamEpisodicMemory) queryZSet(ctx context.Context, key string, since,
 	}
 
 	// Reverse range to get most recent first
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 	results, err := v.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
 		Min:   min,
 		Max:   max,

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/orchestration/backendconformance"
@@ -203,26 +203,29 @@ type skillPipelineCountingHook struct {
 	pipelineCommands []string
 }
 
-func (hook *skillPipelineCountingHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
-	return ctx, nil
+func (*skillPipelineCountingHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
 }
-func (hook *skillPipelineCountingHook) AfterProcess(context.Context, redis.Cmder) error {
-	hook.mu.Lock()
-	hook.commands++
-	hook.mu.Unlock()
-	return nil
-}
-func (hook *skillPipelineCountingHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
-	return ctx, nil
-}
-func (hook *skillPipelineCountingHook) AfterProcessPipeline(_ context.Context, commands []redis.Cmder) error {
-	hook.mu.Lock()
-	hook.pipelines++
-	for _, command := range commands {
-		hook.pipelineCommands = append(hook.pipelineCommands, command.String())
+func (hook *skillPipelineCountingHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		err := next(ctx, command)
+		hook.mu.Lock()
+		hook.commands++
+		hook.mu.Unlock()
+		return err
 	}
-	hook.mu.Unlock()
-	return nil
+}
+func (hook *skillPipelineCountingHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, commands []redis.Cmder) error {
+		err := next(ctx, commands)
+		hook.mu.Lock()
+		hook.pipelines++
+		for _, command := range commands {
+			hook.pipelineCommands = append(hook.pipelineCommands, command.String())
+		}
+		hook.mu.Unlock()
+		return err
+	}
 }
 
 func TestRedisSkillCandidateResolutionUsesOnePipeline(t *testing.T) {
@@ -231,6 +234,12 @@ func TestRedisSkillCandidateResolutionUsesOnePipeline(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	store, err := NewSkillStore(client)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Establish the v9 connection before attaching the operation-counting hook.
+	// Otherwise HELLO and connection metadata initialization are counted as
+	// candidate-resolution commands even though they are transport setup.
+	if err := client.Ping(t.Context()).Err(); err != nil {
 		t.Fatal(err)
 	}
 	requests := []orchestration.SkillCandidateRequest{

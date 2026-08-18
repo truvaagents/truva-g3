@@ -48,7 +48,7 @@ setup_redis() {
         log_info "Starting Redis via Docker..."
         "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop truvag3-redis 2>/dev/null || true
         "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm truvag3-redis 2>/dev/null || true
-        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d --name truvag3-redis -p 6379:6379 redis:7-alpine
+        "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d --name truvag3-redis -p 6379:6379 redis:8.2.8-alpine
         log_success "Redis started on port 6379"
     else
         log_error "Redis not available. Install Redis or Docker."

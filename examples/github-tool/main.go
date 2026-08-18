@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -176,7 +176,7 @@ func connectRedis(url string) (*redis.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)
 	}
-	client := redis.NewClient(opts)
+	client := redis.NewClient(core.ApplyRedisClientDefaults(opts))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {

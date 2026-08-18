@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 )
@@ -134,7 +134,7 @@ func getLLMDebugReadClient() (*redis.Client, error) {
 			return nil, fmt.Errorf("invalid redis URL: %w", err)
 		}
 		opt.DB = core.RedisDBLLMDebug
-		llmDebugReadClient = redis.NewClient(opt)
+		llmDebugReadClient = redis.NewClient(core.ApplyRedisClientDefaults(opt))
 	}
 	return llmDebugReadClient, nil
 }

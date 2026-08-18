@@ -35,7 +35,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 
 	// Import AI providers for auto-detection
@@ -65,7 +65,7 @@ func main() {
 			log.Println("   Schema caching will be disabled")
 		} else {
 			// Create Redis client for schema cache
-			redisClient := redis.NewClient(redisOpt)
+			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 			// Test connection
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

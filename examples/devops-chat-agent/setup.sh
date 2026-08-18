@@ -67,7 +67,7 @@ setup_redis() {
         "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
-            redis:7-alpine
+            redis:8.2.8-alpine
 
         log_success "Redis started on port 6379"
     else
@@ -76,7 +76,7 @@ setup_redis() {
         echo ""
         echo "Options:"
         echo "  1. Install Redis: brew install redis && brew services start redis"
-        echo "  2. Use Docker: docker run -d -p 6379:6379 redis:7-alpine"
+        echo "  2. Use Docker: docker run -d -p 6379:6379 redis:8.2.8-alpine"
         exit 1
     fi
 

@@ -952,7 +952,9 @@ package defines provider-neutral capabilities; the included Redis preset is
 selected explicitly at the application boundary:
 
 ```go
-redisClient := redis.NewClient(&redis.Options{Addr: "redis:6379"})
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
+    &redis.Options{Addr: "redis:6379"},
+))
 defer redisClient.Close()
 
 clients, err := redisprovider.NewClientSet(redisClient)

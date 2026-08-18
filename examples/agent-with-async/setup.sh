@@ -78,7 +78,7 @@ setup_redis() {
         "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run -d \
             --name truvag3-redis \
             -p 6379:6379 \
-            redis:7-alpine
+            redis:8.2.8-alpine
 
         echo -e "${GREEN}✓ Redis started on port 6379${NC}"
     else

@@ -12,6 +12,7 @@ A comprehensive guide to TruvaG3's APIs with practical examples and best practic
 
 **Key Features:**
 - [RegisterCapability](#registercapability) - Define capabilities with AI-powered payload generation (3-phase approach)
+- [Redis Client Defaults](#redis-client-compatibility-defaults) - Keep application-owned go-redis/v9 clients aligned with framework compatibility settings
 - [Schema Cache](#schema-cache-phase-3-validation) - Redis-backed schema caching for validation
 - [Schema Discovery](#registercapability) - Progressive enhancement: Phase 1 (descriptions) → Phase 2 (field hints) → Phase 3 (validation)
 - [Request-Aware AI API](#request-aware-ai-api) - Presence-aware requests, policy, enterprise hooks, and heterogeneous failover
@@ -350,6 +351,38 @@ tool.RegisterCapability(core.Capability{
 })
 ```
 
+### Redis Client Compatibility Defaults
+
+TruvaG3 uses `github.com/redis/go-redis/v9`. Framework-owned clients apply a
+stable compatibility profile instead of inheriting changing library defaults.
+Use the same helper for an application-owned client that you inject into core,
+memory, telemetry, or orchestration:
+
+```go
+func ApplyRedisClientDefaults(options *redis.Options) *redis.Options
+
+redisOptions, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+if err != nil {
+    log.Fatal(err)
+}
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOptions))
+```
+
+The helper returns a shallow copy and changes only unset fields, so the supplied
+options are not mutated. It selects RESP2 and retains the framework's established
+timeouts, retry backoff, and idle-connection lifetime. The dialer implementation,
+TCP keepalive, and buffer sizing use go-redis/v9 defaults unless the application
+sets them explicitly. Negative duration values that disable a go-redis timeout
+are also preserved. To evaluate RESP3, set `Protocol: 3` on an application-owned
+client and validate every command family and backend before injecting it.
+Framework-owned clients remain on RESP2 in this release.
+
+The v9 migration changes exported Redis client types. Applications that inject
+Redis clients must update imports from `github.com/go-redis/redis/v8` to
+`github.com/redis/go-redis/v9`. Code that calls `core.RedisClient.ZAdd` must pass
+`redis.Z` values rather than `*redis.Z` pointers. This is a source-level change;
+stored Redis keys and values are unchanged.
+
 ### Schema Cache (Phase 3 Validation)
 
 Redis-backed caching for JSON Schemas used in Phase 3 validation. Schemas are fetched once and cached forever, providing zero-overhead validation after initial fetch.
@@ -380,7 +413,7 @@ type SchemaCache interface {
 ```go
 // In your agent initialization
 redisOpt, _ := redis.ParseURL(os.Getenv("REDIS_URL"))
-redisClient := redis.NewClient(redisOpt)
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 // Create schema cache with defaults (24-hour TTL)
 agent.SchemaCache = core.NewSchemaCache(redisClient)
@@ -4421,7 +4454,9 @@ The included implementation lives in
 orchestration imports:
 
 ```go
-redisClient := redis.NewClient(&redis.Options{Addr: "redis:6379"})
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
+    &redis.Options{Addr: "redis:6379"},
+))
 defer redisClient.Close()
 
 clients, err := redisprovider.NewClientSet(redisClient)

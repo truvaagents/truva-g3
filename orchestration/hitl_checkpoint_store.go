@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -261,7 +261,7 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 	redisOpts.DB = config.redisDB
 
 	// Create Redis client
-	client := redis.NewClient(redisOpts)
+	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpts))
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

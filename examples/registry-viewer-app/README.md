@@ -357,7 +357,7 @@ This app is designed to be fully portable. To use it as a standalone project:
 1. Copy the entire `registry-viewer-app` folder
 2. No modifications needed - just build and run
 3. The module path is generic (`registry-viewer-app`)
-4. Only dependency is `go-redis/redis/v8`
+4. Only direct runtime dependency is `github.com/redis/go-redis/v9`
 
 ```bash
 # In a new location/repo
