@@ -19,6 +19,8 @@ spec:
     spec:
       containers:
       - name: redis
+        # Version policy: pin the newest patch of Redis's latest LTS line.
+        # Do not use a moving tag or upgrade to a newer non-LTS release.
         image: redis:8.2.8-alpine
         ports:
         - containerPort: 6379
