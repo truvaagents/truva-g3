@@ -17,6 +17,46 @@ source "$EXAMPLES_DIR/k8-deployment/setup-env-lib.sh"
 # Load .env. truvag3_load_env auto-bootstraps from .env.example on fresh checkouts.
 load_env() { truvag3_load_env "$SCRIPT_DIR/.env"; }
 
+# Keep local-only endpoints from the tool's environment out of shared
+# infrastructure configuration. The caller's environment is restored when the
+# subshell exits.
+setup_shared_infra() (
+    unset REDIS_URL
+    unset OTEL_EXPORTER_OTLP_ENDPOINT
+    truvag3_setup_infra "$NAMESPACE"
+)
+
+setup_config() {
+    truvag3_create_configmap "${APP_NAME}-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
+}
+
+ensure_namespace() {
+    kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+}
+
+apply_manifest() {
+    kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
+}
+
+wait_for_rollout() {
+    if kubectl rollout status "deployment/$APP_NAME" -n "$NAMESPACE" --timeout=120s; then
+        echo "$APP_NAME rollout completed successfully!"
+        return
+    fi
+
+    echo "ERROR: $APP_NAME rollout failed" >&2
+    kubectl logs -n "$NAMESPACE" -l "app=$APP_NAME" --tail=20 || true
+    return 1
+}
+
+cmd_cluster() {
+    truvag3_create_cluster "$CLUSTER_NAME"
+}
+
+cmd_infra() {
+    setup_shared_infra
+}
+
 # Build Go binary locally (GOWORK=off for replace directives)
 cmd_build() {
     GOWORK=off go mod tidy
@@ -50,21 +90,18 @@ cmd_deploy() {
     cmd_docker_build
     truvag3_load_to_kind "$APP_NAME:latest" "$CLUSTER_NAME"
 
-    kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-
-    # Create ConfigMap from .env (no secrets needed — this tool has no API keys)
-    truvag3_create_configmap "${APP_NAME}-env-config" "$NAMESPACE" "$SCRIPT_DIR/.env"
-
-    kubectl apply -f k8-deployment.yaml
-    kubectl wait --for=condition=available deployment/$APP_NAME -n $NAMESPACE --timeout=120s
+    ensure_namespace
+    setup_config
+    apply_manifest
+    wait_for_rollout
 
     echo "$APP_NAME deployed successfully!"
 }
 
-# Full deploy: cluster + infra + deploy (non-blocking per feedback_setup_scripts.md)
+# Full deploy: cluster + shared infrastructure + tool deployment.
 cmd_full_deploy() {
-    truvag3_create_cluster "$CLUSTER_NAME"
-    truvag3_setup_infra "$NAMESPACE"
+    cmd_cluster
+    cmd_infra
     cmd_deploy
     echo ""
     echo "Full deployment complete!"
@@ -87,41 +124,95 @@ cmd_forward_all() {
 
 # Test — spawn temporary port-forward, run tests, clean up
 cmd_test() {
-    kubectl port-forward -n $NAMESPACE svc/${APP_NAME}-service $PORT:80 &
-    PF_PID=$!
+    local pf_pid
+    cleanup_test_forward() {
+        kill "$pf_pid" 2>/dev/null || true
+        wait "$pf_pid" 2>/dev/null || true
+    }
+
+    kubectl port-forward -n "$NAMESPACE" "svc/${APP_NAME}-service" "$PORT:80" >/dev/null 2>&1 &
+    pf_pid=$!
+    trap cleanup_test_forward EXIT INT TERM
     sleep 3
 
     echo "--- Health ---"
-    curl -s http://localhost:$PORT/health | jq .
+    local health
+    health=$(curl -fsS "http://localhost:$PORT/health")
+    echo "$health" | jq .
+    echo "$health" | jq -e '.status == "healthy"' >/dev/null
     echo ""
-    echo "--- Capabilities ---"
-    curl -s http://localhost:$PORT/api/capabilities | jq .
-    echo ""
-    echo "--- query_events (last 24h) ---"
-    curl -s -X POST http://localhost:$PORT/api/capabilities/query_events \
-        -H "Content-Type: application/json" \
-        -d '{"since_hours": 24, "limit": 5}' | jq .
-    echo ""
-    echo "--- query_investigations ---"
-    curl -s -X POST http://localhost:$PORT/api/capabilities/query_investigations \
-        -H "Content-Type: application/json" \
-        -d '{}' | jq .
 
-    kill $PF_PID 2>/dev/null || true
+    echo "--- Capabilities ---"
+    local capabilities
+    capabilities=$(curl -fsS "http://localhost:$PORT/api/capabilities")
+    echo "$capabilities" | jq .
+    echo "$capabilities" | jq -e '
+        map(.name) as $names |
+        all(["query_events", "query_knowledge", "query_investigations"][]; . as $name | $names | index($name))
+    ' >/dev/null
+    echo ""
+
+    echo "--- query_events (last 24h) ---"
+    local events
+    events=$(curl -fsS -X POST "http://localhost:$PORT/api/capabilities/query_events" \
+        -H "Content-Type: application/json" \
+        -d '{"since_hours": 24, "limit": 5}')
+    echo "$events" | jq .
+    echo "$events" | jq -e '.success == true and (.data.events | type == "array")' >/dev/null
+    echo ""
+
+    echo "--- query_investigations ---"
+    local investigations
+    investigations=$(curl -fsS -X POST "http://localhost:$PORT/api/capabilities/query_investigations" \
+        -H "Content-Type: application/json" \
+        -d '{}')
+    echo "$investigations" | jq .
+    echo "$investigations" | jq -e '.success == true and (.data.investigations | type == "array")' >/dev/null
+
+    cleanup_test_forward
+    trap - EXIT INT TERM
+    echo "$APP_NAME smoke tests passed!"
 }
 
-# Rollout — optional --build flag to rebuild image first
+# Rollout configuration changes without rebuilding the image.
 cmd_rollout() {
-    if [ "${2:-}" = "--build" ]; then
-        cmd_docker_build
-        truvag3_load_to_kind "$APP_NAME:latest" "$CLUSTER_NAME"
+    if [ "$#" -gt 0 ]; then
+        echo "ERROR: rollout does not accept build flags; use './setup.sh rebuild' after code changes" >&2
+        return 2
     fi
-    kubectl rollout restart deployment/$APP_NAME -n $NAMESPACE
+
+    load_env
+    ensure_namespace
+    setup_config
+    apply_manifest
+    kubectl rollout restart "deployment/$APP_NAME" -n "$NAMESPACE"
+    wait_for_rollout
+}
+
+# Rebuild the image without cache and guarantee that the running pod uses it.
+cmd_rebuild() {
+    load_env
+    DOCKER_NO_CACHE=true cmd_docker_build
+    truvag3_load_to_kind "$APP_NAME:latest" "$CLUSTER_NAME"
+
+    ensure_namespace
+    setup_config
+    apply_manifest
+    kubectl rollout restart "deployment/$APP_NAME" -n "$NAMESPACE"
+    wait_for_rollout
+}
+
+cmd_logs() {
+    kubectl logs -n "$NAMESPACE" -l "app=$APP_NAME" -f --tail=100
+}
+
+cmd_status() {
+    kubectl get deployment,pods,svc -n "$NAMESPACE" -l "app=$APP_NAME"
 }
 
 # Clean — remove deployment only (keep cluster/infra)
 cmd_clean() {
-    kubectl delete -f k8-deployment.yaml --ignore-not-found
+    kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found
 }
 
 # Clean all — delete entire Kind cluster with confirmation
@@ -135,45 +226,56 @@ cmd_clean_all() {
     fi
 }
 
+cmd_help() {
+    echo "Usage: ./setup.sh <command>"
+    echo ""
+    echo "Quick Start:"
+    echo "  full-deploy  One-click: cluster + infra + deploy"
+    echo "  cluster      Create the Kind cluster if it does not exist"
+    echo "  infra        Deploy or reconcile shared infrastructure"
+    echo ""
+    echo "Build & Deploy:"
+    echo "  build        Build Go binary locally"
+    echo "  run          Build and run locally"
+    echo "  docker-build Build Docker image (workspace mode)"
+    echo "  deploy       Build, load, and deploy to K8s"
+    echo "  rebuild      Rebuild with --no-cache and replace the running pod"
+    echo ""
+    echo "Testing & Access:"
+    echo "  test         Run API tests against the deployed tool"
+    echo "  forward      Port forward the service only"
+    echo "  forward-all  Port forward service + monitoring"
+    echo "  logs         View tool logs"
+    echo "  status       Check deployment status"
+    echo ""
+    echo "Operational:"
+    echo "  rollout      Refresh .env-backed config and restart the deployment"
+    echo "  clean        Remove tool deployment only"
+    echo "  clean-all    Delete the entire Kind cluster"
+}
+
 # Main entry point
 case "${1:-help}" in
+    cluster)     cmd_cluster ;;
+    infra)       cmd_infra ;;
     build)       cmd_build ;;
     run)         cmd_run ;;
     docker-build) cmd_docker_build ;;
     deploy)      cmd_deploy ;;
     full-deploy) cmd_full_deploy ;;
-    rebuild)     DOCKER_NO_CACHE=true cmd_deploy ;;
+    rebuild)     cmd_rebuild ;;
     test)        cmd_test ;;
     forward)     cmd_forward ;;
     forward-all) cmd_forward_all ;;
-    logs)        kubectl logs -n $NAMESPACE -l app=$APP_NAME -f --tail=100 ;;
-    status)      kubectl get pods,svc -n $NAMESPACE -l app=$APP_NAME ;;
-    rollout)     cmd_rollout "$@" ;;
+    logs)        cmd_logs ;;
+    status)      cmd_status ;;
+    rollout)     shift; cmd_rollout "$@" ;;
     clean)       cmd_clean ;;
     clean-all)   cmd_clean_all ;;
+    help|--help|-h) cmd_help ;;
     *)
-        echo "Usage: ./setup.sh <command>"
-        echo ""
-        echo "Quick Start:"
-        echo "  full-deploy  One-click: cluster + infra + deploy"
-        echo ""
-        echo "Build & Deploy:"
-        echo "  build        Build Go binary locally"
-        echo "  run          Build and run locally"
-        echo "  docker-build Build Docker image (workspace mode)"
-        echo "  deploy       Build, load to Kind, deploy to K8s"
-        echo "  rebuild      Rebuild with --no-cache and redeploy"
-        echo ""
-        echo "Testing & Access:"
-        echo "  test         Run API tests against deployed tool"
-        echo "  forward      Port forward the service only"
-        echo "  forward-all  Port forward service + monitoring"
-        echo "  logs         View tool logs"
-        echo "  status       Check deployment status"
-        echo ""
-        echo "Operational:"
-        echo "  rollout      Restart deployment (--build to rebuild first)"
-        echo "  clean        Remove tool deployment only"
-        echo "  clean-all    Delete entire Kind cluster"
+        echo "ERROR: unknown command '$1'" >&2
+        cmd_help
+        exit 1
         ;;
 esac

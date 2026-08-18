@@ -45,12 +45,10 @@ If you don't have a cluster yet:
 
 ```bash
 # 1. Ensure infrastructure is running
-cd examples/devops-chat-agent  # or any agent
 ./setup.sh cluster
 ./setup.sh infra
 
 # 2. Deploy the tool
-cd examples/agentic-memory-tool
 ./setup.sh deploy
 
 # 3. Test
@@ -256,6 +254,9 @@ Events are written by agent pipeline hooks. Ensure agents (devops-chat-agent, ev
 ### Useful Commands
 
 ```bash
+./setup.sh deploy       # Build and deploy to an existing cluster
+./setup.sh rebuild      # No-cache image rebuild and guaranteed pod replacement
+./setup.sh rollout      # Refresh .env-backed config and restart; no image build
 ./setup.sh status       # Check deployment status
 ./setup.sh logs         # View tool logs
 ./setup.sh test         # Run API tests
