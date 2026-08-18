@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/truvaagents/truva-g3/ai"
@@ -12,37 +13,74 @@ func init() {
 	ai.MustRegister(&Factory{})
 }
 
-// Factory creates Gemini AI clients
+// Factory creates Gemini AI clients.
 type Factory struct{}
 
-// Name returns the provider name
-func (f *Factory) Name() string {
-	return "gemini"
-}
+var _ ai.ValidatedProviderFactory = (*Factory)(nil)
+var _ ai.RequestProviderFactory = (*Factory)(nil)
 
-// Description returns provider description
-func (f *Factory) Description() string {
+func (factory *Factory) Name() string { return "gemini" }
+
+func (factory *Factory) Description() string {
 	return "Google Gemini models with native GenerateContent API"
 }
 
-// Priority returns provider priority
-func (f *Factory) Priority() int {
-	return 800 // Third after OpenAI and Anthropic, higher than OpenAI sub-providers
+func (factory *Factory) Priority() int { return 800 }
+
+// Create preserves ProviderFactory while routing configuration failures through
+// the error-capable construction path used by the request-aware registry.
+func (factory *Factory) Create(config *ai.AIConfig) core.AIClient {
+	client, err := factory.CreateValidated(config)
+	if err != nil {
+		panic(fmt.Sprintf("create Gemini client: %v", err))
+	}
+	return client
 }
 
-// Create creates a new Gemini client
-func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-	// Get API key from config or environment
+func (factory *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
+	return factory.createClient(config)
+}
+
+func (factory *Factory) CreateRequestClient(
+	config *ai.AIConfig,
+	integration ai.ProviderIntegrationConfig,
+) (core.AIRequestClient, error) {
+	client, err := factory.createClient(config)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := newRequestPolicyEngineWithIntegration(
+		integration.RequestRules,
+		integration.RequestMiddleware,
+		integration.CompatibilityMode,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configure Gemini request policy: %w", err)
+	}
+	client.requestPolicy = engine
+	client.credentialSource = integration.CredentialSource
+	client.endpointResolver = integration.EndpointResolver
+	if integration.HTTPClient != nil {
+		client.HTTPClient = providerHTTPClient(integration.HTTPClient)
+	}
+	return client, nil
+}
+
+func (factory *Factory) createClient(config *ai.AIConfig) (*Client, error) {
+	if config == nil {
+		return nil, fmt.Errorf("gemini AI config is nil")
+	}
+
 	apiKey := config.APIKey
 	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
+		// This precedence is Google's documented behavior when both variables
+		// are present.
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 		if apiKey == "" {
-			// Also check for GOOGLE_API_KEY as an alternative
-			apiKey = os.Getenv("GOOGLE_API_KEY")
+			apiKey = os.Getenv("GEMINI_API_KEY")
 		}
 	}
 
-	// Use base URL from config or environment, with default
 	baseURL := config.BaseURL
 	if baseURL == "" {
 		baseURL = os.Getenv("GEMINI_BASE_URL")
@@ -50,74 +88,75 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
 			baseURL = DefaultBaseURL
 		}
 	}
-
-	// Get logger from config with proper component wrapping
-	logger := config.Logger
-	if logger == nil {
-		logger = &core.NoOpLogger{}
-	} else if cal, ok := logger.(core.ComponentAwareLogger); ok {
-		logger = cal.WithComponent("framework/ai")
+	if err := validateGeminiBaseURL(baseURL); err != nil {
+		return nil, err
 	}
 
-	// Log provider initialization
+	logger := configuredGeminiLogger(config.Logger)
 	logger.Info("Gemini provider initialized", map[string]interface{}{
 		"operation":       "ai_provider_init",
 		"provider":        "gemini",
 		"custom_endpoint": baseURL != DefaultBaseURL,
 		"has_api_key":     apiKey != "",
+		"timeout":         config.Timeout.String(),
+		"max_retries":     config.MaxRetries,
 		"model":           config.Model,
 	})
 
-	// Create the client with full configuration
 	client := NewClient(apiKey, baseURL, logger)
+	if err := applyGeminiClientConfig(client, config); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
 
-	// Set telemetry for distributed tracing
+func configuredGeminiLogger(logger core.Logger) core.Logger {
+	if logger == nil {
+		return &core.NoOpLogger{}
+	}
+	if componentLogger, ok := logger.(core.ComponentAwareLogger); ok {
+		return componentLogger.WithComponent("framework/ai")
+	}
+	return logger
+}
+
+func applyGeminiClientConfig(client *Client, config *ai.AIConfig) error {
 	if config.Telemetry != nil {
 		client.SetTelemetry(config.Telemetry)
 	}
-
-	// Apply timeout if specified
 	if config.Timeout > 0 {
 		client.HTTPClient.Timeout = config.Timeout
+		client.requestTimeout = config.Timeout
 	}
-
-	// Apply retry configuration. Honors 0 ("no retries") as a valid setting —
-	// the AIConfig defaults to a sentinel before NewClient resolves it via
-	// option / env var / default precedence, so any non-negative value here
-	// means "operator chose this on purpose".
 	if config.MaxRetries >= 0 {
 		client.MaxRetries = config.MaxRetries
 	}
-
-	// Apply model defaults
 	if config.Model != "" {
 		client.DefaultModel = config.Model
 	}
-
-	// Apply temperature default
 	if config.Temperature > 0 {
 		client.DefaultTemperature = config.Temperature
 	}
-
-	// Apply max tokens default
 	if config.MaxTokens > 0 {
 		client.DefaultMaxTokens = config.MaxTokens
 	}
-
-	if len(config.Headers) > 0 {
-		client.defaultHeaders = providers.MergeStringMaps(nil, config.Headers)
+	if config.ReasoningEffort != "" {
+		client.defaultReasoning = config.ReasoningEffort
 	}
+	client.defaultHeaders = providers.MergeStringMaps(nil, config.Headers)
 	if len(config.Extra) > 0 {
-		client.defaultExtra = providers.MergeAnyMaps(nil, config.Extra)
+		cloned, err := providers.CloneAIOptions(&core.AIOptions{Extra: config.Extra})
+		if err != nil {
+			return fmt.Errorf("clone Gemini default request extras: %w", err)
+		}
+		client.defaultExtra = cloned.Extra
 	}
-
-	return client
+	return nil
 }
 
-// DetectEnvironment checks if Gemini is configured and returns priority
-func (f *Factory) DetectEnvironment() (priority int, available bool) {
-	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-		return f.Priority(), true
+func (factory *Factory) DetectEnvironment() (priority int, available bool) {
+	if os.Getenv("GOOGLE_API_KEY") != "" || os.Getenv("GEMINI_API_KEY") != "" {
+		return factory.Priority(), true
 	}
 	return 0, false
 }

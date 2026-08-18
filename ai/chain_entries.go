@@ -34,8 +34,8 @@ type ChainEntry struct {
 // entry. The provider alias is applied after all supplied options so an entry
 // cannot accidentally materialize a different provider. The selected factory
 // must support request-aware construction. Built-in support currently includes
-// Anthropic, Azure OpenAI, OpenAI, and Bedrock when the bedrock build tag is
-// enabled.
+// Anthropic, Azure OpenAI, Gemini, OpenAI, and Bedrock when the bedrock build
+// tag is enabled.
 func ProviderEntry(name, providerAlias string, options ...ClientOption) ChainEntry {
 	return ChainEntry{
 		name:          name,

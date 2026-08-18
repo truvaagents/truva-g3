@@ -11,10 +11,10 @@ func TestResolveModel(t *testing.T) {
 		expected string
 	}{
 		{"default", "gemini-2.5-flash"},
-		{"fast", "gemini-2.5-flash-lite"},
-		{"smart", "gemini-2.5-pro"},
-		{"premium", "gemini-3-pro-preview"},
-		{"code", "gemini-2.5-pro"},
+		{"fast", "gemini-3.5-flash-lite"},
+		{"smart", "gemini-3.1-pro-preview"},
+		{"premium", "gemini-3.1-pro-preview"},
+		{"code", "gemini-3.1-pro-preview"},
 		{"vision", "gemini-2.5-flash"},
 		{"gemini-3-pro", "gemini-3-pro"},   // Pass-through
 		{"unknown-model", "unknown-model"}, // Pass-through
@@ -36,7 +36,7 @@ func TestResolveModelEnvOverride(t *testing.T) {
 	defer os.Unsetenv("TRUVAG3_GEMINI_MODEL_FAST")
 
 	result := resolveModel("fast")
-	expected := "gemini-2.0-flash" // Env override takes precedence over gemini-2.5-flash-lite
+	expected := "gemini-2.0-flash" // Env override takes precedence over gemini-3.5-flash-lite
 	if result != expected {
 		t.Errorf("resolveModel with env override: got %q, want %q", result, expected)
 	}

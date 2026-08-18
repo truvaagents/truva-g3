@@ -230,7 +230,7 @@ The framework knows that `openai.groq` means:
 |-------|------|---------|-----------------|------------------|-------------|
 | `openai` | Native | OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
 | `anthropic` | Native | Anthropic Claude | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` |
-| `gemini` | Native | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` |
+| `gemini` | Native request-aware GenerateContent | Google Gemini | `GOOGLE_API_KEY` then `GEMINI_API_KEY` | `GEMINI_BASE_URL` or `EndpointResolver` | `https://generativelanguage.googleapis.com/v1beta` |
 | `azureopenai.v1` | Hosted request-aware profile | Azure OpenAI v1 | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
 | `azureopenai.classic` | Hosted request-aware profile | Azure OpenAI classic | `CredentialSource`, `WithAuthHeader`, or Azure `WithAPIKey` | Required `EndpointResolver` | Route-owned |
 | `anthropic.vertex` | Hosted request-aware profile | Claude on Vertex AI | Google `CredentialSource` or `WithAuthHeader` | Required `EndpointResolver` | Route-owned |
@@ -242,6 +242,12 @@ The framework knows that `openai.groq` means:
 | `openai.qwen` | OpenAI-compatible | Alibaba Qwen | `QWEN_API_KEY` | `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | `openai.together` | OpenAI-compatible | Together AI | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` |
 | `openai.ollama` | OpenAI-compatible | Ollama (local) | _(none)_ | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` |
+
+Gemini credentials are sent in the `x-goog-api-key` header and never in the
+request URL. Use an AI Studio auth key: Google rejects unrestricted Standard
+keys and has announced that all Standard keys stop working in September 2026.
+See Google's
+[Gemini API-key guide](https://ai.google.dev/gemini-api/docs/api-key).
 
 The Azure and Vertex aliases are request-aware-only, never auto-detected, and
 do not accept a static base URL. Their resolver and credential recipes are in
@@ -309,10 +315,10 @@ client, _ := ai.NewClient(
 | Alias | Purpose | OpenAI | Anthropic | Gemini | Groq | DeepSeek |
 |-------|---------|--------|-----------|--------|------|----------|
 | `default` | General catalog choice | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
-| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
-| `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ |
-| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `openai/gpt-oss-120b` | `deepseek-chat` |
+| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
+| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
+| `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ |
+| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` |
 | `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI, Anthropic, and Gemini.
@@ -334,11 +340,20 @@ override an alias with `TRUVAG3_<PROVIDER>_MODEL_<ALIAS>` when needed.
 > [V4 announcement](https://api-docs.deepseek.com/news/news260424/) and
 > [thinking-mode contract](https://api-docs.deepseek.com/guides/thinking_mode).
 >
-> The compiled Gemini `premium` mapping is also the legacy
-> `gemini-3-pro-preview` name. Google shut that preview down on March 9, 2026
-> and currently redirects the name to `gemini-3.1-pro-preview`; migrate the
-> catalog or use an approved explicit replacement instead of relying on that
-> redirect. See the official [Gemini release notes](https://ai.google.dev/gemini-api/docs/changelog).
+> The Gemini `premium` catalog entry names `gemini-3.1-pro-preview` directly.
+> Google shut down its predecessor, `gemini-3-pro-preview`, on March 9, 2026;
+> the catalog does not rely on Google's redirect from that retired ID. See the
+> official [Gemini release notes](https://ai.google.dev/gemini-api/docs/changelog).
+> Live GenerateContent validation on August 17, 2026 found that Google rejects
+> `gemini-2.5-flash-lite` and `gemini-2.5-pro` for new users and names
+> `gemini-3.5-flash-lite` and `gemini-3.1-pro-preview` as their replacements.
+> The portable `fast`, `smart`, and `code` aliases use those current targets;
+> exact Gemini 2.5 IDs remain available to grandfathered projects where Google
+> still permits them.
+> The provider's dated GenerateContent capability snapshot also covers current
+> in-scope models independently of the portable alias map. A model is removed
+> only when Google's same-surface schedule gives an authoritative shutdown less
+> than 45 calendar days away; refresh the snapshot and tests together.
 
 Portable aliases are catalog-backed, not universal. The built-in OpenAI,
 Anthropic, Gemini, and registered OpenAI-compatible aliases above resolve them;
@@ -1305,12 +1320,11 @@ be absent. If a provider or a legacy fallback cannot preserve that intent, the
 call returns `core.ErrAIRequestFeatureUnsupported`; it never silently drops the
 field.
 
-Request-aware built-in construction currently supports direct OpenAI and
-Anthropic, Azure OpenAI (`azureopenai.v1` and `azureopenai.classic`),
+Request-aware built-in construction currently supports direct OpenAI,
+Anthropic, and Gemini, Azure OpenAI (`azureopenai.v1` and `azureopenai.classic`),
 Google-hosted Claude (`anthropic.vertex`), and Bedrock when built with
 `-tags bedrock`. The Azure and Vertex profiles are request-aware-only and
-require endpoint and credential sources; they do not auto-detect. Gemini
-continues to use the legacy API. The legacy `NewClient`, `GenerateResponse`,
+require endpoint and credential sources; they do not auto-detect. The legacy `NewClient`, `GenerateResponse`,
 and `NewChainClient` APIs remain supported for existing and simple portable
 calls.
 
@@ -1744,7 +1758,7 @@ orch, _ := orchestration.CreateOrchestratorWithOptions(deps,
 ```bash
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-GEMINI_API_KEY=...          # or GOOGLE_API_KEY (either activates Gemini)
+GOOGLE_API_KEY=...          # wins over GEMINI_API_KEY when both are set
 DEEPSEEK_API_KEY=sk-...
 GROQ_API_KEY=gsk-...
 XAI_API_KEY=xai-...

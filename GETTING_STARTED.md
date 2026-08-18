@@ -266,7 +266,13 @@ Open `.env` and set **one** of the following:
 | OpenAI | `OPENAI_API_KEY=sk-...` | No |
 | Anthropic | `ANTHROPIC_API_KEY=sk-ant-...` | No |
 | Groq | `GROQ_API_KEY=gsk-...` | **Yes** — quick to start |
-| Google Gemini | `GEMINI_API_KEY=...` | Yes (limited) |
+| Google Gemini | `GOOGLE_API_KEY=...` | Yes (limited) |
+
+For Gemini, use a current Google AI Studio **auth key**. The provider also
+accepts `GEMINI_API_KEY`, but `GOOGLE_API_KEY` wins when both are set. Google
+already rejects unrestricted Standard keys and will reject every Standard key
+in September 2026; see the
+[Gemini API-key guide](https://ai.google.dev/gemini-api/docs/api-key).
 
 For multi-provider failover, custom model aliases, or other providers
 (DeepSeek, Bedrock, Ollama, etc.), see the
@@ -817,7 +823,7 @@ DEV_MODE=true                     # Enable development mode
 GROQ_API_KEY=gsk-...              # Groq (free tier available)
 OPENAI_API_KEY=sk-...             # OpenAI
 ANTHROPIC_API_KEY=sk-ant-...      # Anthropic
-GEMINI_API_KEY=...                # Google Gemini
+GOOGLE_API_KEY=...                # Google Gemini; preferred over GEMINI_API_KEY
 DEEPSEEK_API_KEY=...              # DeepSeek
 ```
 
