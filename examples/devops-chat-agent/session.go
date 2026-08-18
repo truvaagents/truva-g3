@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -113,7 +113,7 @@ func (s *SessionStore) Create(userID string, metadata map[string]interface{}) *S
 	// Add to user's session index (sorted by UpdatedAt)
 	if userID != "" {
 		indexKey := s.userIndexKey(userID)
-		if err := s.client.ZAdd(ctx, indexKey, &redis.Z{
+		if err := s.client.ZAdd(ctx, indexKey, redis.Z{
 			Score:  float64(now.UnixMilli()),
 			Member: session.ID,
 		}); err != nil {
@@ -244,7 +244,7 @@ func (s *SessionStore) AddMessage(sessionID string, msg Message) bool {
 	// Update score in user's index (bump UpdatedAt)
 	if session.UserID != "" {
 		indexKey := s.userIndexKey(session.UserID)
-		_ = s.client.ZAdd(ctx, indexKey, &redis.Z{
+		_ = s.client.ZAdd(ctx, indexKey, redis.Z{
 			Score:  float64(session.UpdatedAt.UnixMilli()),
 			Member: session.ID,
 		})
@@ -302,6 +302,8 @@ func (s *SessionStore) List(userID string, offset, limit int) ([]SessionSummary,
 	}
 
 	// Get session IDs from user's sorted set (descending by score = most recent first)
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRange remains supported by go-redis/v9.
 	ids, err := s.client.ZRevRange(ctx, indexKey, int64(offset), int64(offset+limit-1))
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list sessions: %w", err)
@@ -376,7 +378,7 @@ func (s *SessionStore) UpdateTitle(sessionID, title string) error {
 	// Update score in user's index
 	if session.UserID != "" {
 		indexKey := s.userIndexKey(session.UserID)
-		_ = s.client.ZAdd(ctx, indexKey, &redis.Z{
+		_ = s.client.ZAdd(ctx, indexKey, redis.Z{
 			Score:  float64(session.UpdatedAt.UnixMilli()),
 			Member: session.ID,
 		})

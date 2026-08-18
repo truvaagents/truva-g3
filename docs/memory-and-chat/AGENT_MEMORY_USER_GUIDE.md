@@ -209,14 +209,15 @@ Add these lines to your `main.go`, after the Redis client is available and befor
 
 ```go
 import (
-    "github.com/go-redis/redis/v8"
+    "github.com/redis/go-redis/v9"
+    "github.com/truvaagents/truva-g3/core"
     "github.com/truvaagents/truva-g3/memory"
     "github.com/truvaagents/truva-g3/orchestration"
 )
 
 // Create Redis client (you may already have one for discovery)
 redisOpt, _ := redis.ParseURL(os.Getenv("REDIS_URL"))
-redisClient := redis.NewClient(redisOpt)
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 // Step 1: memory module creates backends
 backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,

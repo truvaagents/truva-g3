@@ -410,6 +410,7 @@ These environment variables **must** be set for the framework to function:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
+| `core.DefaultRedisProtocol` | `2` | RESP version used by framework-owned go-redis/v9 clients |
 | `core.DefaultRedisPrefix` | `"truvag3:schema:"` | Default Redis key prefix for schema cache |
 | `core.DefaultSchemaCacheTTL` | `24 * time.Hour` | Default TTL for cached schemas |
 | `core.SchemaEndpointSuffix` | `"/schema"` | Auto-generated schema endpoint suffix |
@@ -436,6 +437,26 @@ cache := core.NewSchemaCache(redisClient,
     core.WithTTL(core.DefaultSchemaCacheTTL),
 )
 ```
+
+When your application creates the Redis client, apply the framework's stable
+defaults before injecting it:
+
+```go
+redisOptions, err := redis.ParseURL(redisURL)
+if err != nil {
+    log.Fatal(err)
+}
+redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOptions))
+```
+
+This keeps the default wire protocol on RESP2 and preserves the framework's
+established timeout, retry, and idle-connection behavior. The dialer
+implementation, TCP keepalive, and buffers use go-redis/v9 defaults unless you
+configure them. The helper returns a shallow copy, so it does not mutate the
+supplied options.
+Explicit non-zero settings and negative timeout sentinels are not overwritten;
+RESP3 remains an application-owned opt-in that must be tested against every
+Redis-backed feature in use.
 
 **❌ Avoid** - Magic strings are error-prone:
 
@@ -2010,7 +2031,7 @@ tool.RegisterCapability(core.Capability{
 // In your agent, enable schema caching for validation
 if redisURL := os.Getenv(core.EnvRedisURL); redisURL != "" {
     redisOpt, _ := redis.ParseURL(redisURL)
-    redisClient := redis.NewClient(redisOpt)
+    redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
     agent.SchemaCache = core.NewSchemaCache(redisClient)
 }
 

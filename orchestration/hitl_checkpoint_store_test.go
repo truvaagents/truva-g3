@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -46,30 +46,31 @@ type checkpointApprovalRaceHook struct {
 	err           error
 }
 
-func (hook *checkpointApprovalRaceHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
-	return ctx, nil
+func (*checkpointApprovalRaceHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
 }
 
-func (hook *checkpointApprovalRaceHook) AfterProcess(ctx context.Context, command redis.Cmder) error {
-	if command.Name() != "get" || len(command.Args()) < 2 || fmt.Sprint(command.Args()[1]) != hook.checkpointKey {
-		return nil
-	}
-	hook.once.Do(func() {
-		if err := hook.client.Set(ctx, hook.checkpointKey, hook.approved, time.Hour).Err(); err != nil {
-			hook.err = err
-			return
+func (hook *checkpointApprovalRaceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		if err := next(ctx, command); err != nil {
+			return err
 		}
-		hook.err = hook.client.SRem(ctx, hook.pendingKey, hook.checkpointID).Err()
-	})
-	return hook.err
+		if command.Name() != "get" || len(command.Args()) < 2 || fmt.Sprint(command.Args()[1]) != hook.checkpointKey {
+			return nil
+		}
+		hook.once.Do(func() {
+			if err := hook.client.Set(ctx, hook.checkpointKey, hook.approved, time.Hour).Err(); err != nil {
+				hook.err = err
+				return
+			}
+			hook.err = hook.client.SRem(ctx, hook.pendingKey, hook.checkpointID).Err()
+		})
+		return hook.err
+	}
 }
 
-func (hook *checkpointApprovalRaceHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
-	return ctx, nil
-}
-
-func (hook *checkpointApprovalRaceHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
-	return nil
+func (*checkpointApprovalRaceHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
 }
 
 // =============================================================================

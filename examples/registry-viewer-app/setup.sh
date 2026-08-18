@@ -342,7 +342,7 @@ run_redis() {
         echo "     kubectl port-forward -n truvag3-examples svc/redis 6379:6379 &"
         echo ""
         echo "  2. Start local Redis:"
-        echo "     docker run -d -p 6379:6379 --name redis redis:7-alpine"
+        echo "     docker run -d -p 6379:6379 --name redis redis:8.2.8-alpine"
         echo ""
         read -p "Continue anyway? (y/n) " -n 1 -r
         echo

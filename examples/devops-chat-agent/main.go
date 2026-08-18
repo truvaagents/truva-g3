@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
@@ -106,7 +106,7 @@ func main() {
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		redisOpt, err := redis.ParseURL(redisURL)
 		if err == nil {
-			redisClient := redis.NewClient(redisOpt)
+			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 			// Phase 2: create embedding client if configured (memory module can't import ai)
 			var embedOpt memory.SharedBackendsOption

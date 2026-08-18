@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -22,7 +22,7 @@ const (
 	executionCompressionThreshold = 100 * 1024  // 100KB
 	executionMaxPayloadSize       = 1024 * 1024 // 1MB
 
-	// go-redis/v8 preserves the Redis TTL sentinel integers as raw duration
+	// go-redis preserves the Redis TTL sentinel integers as raw duration
 	// values rather than multiplying them by the command's one-second
 	// precision.
 	redisTTLKeyMissing time.Duration = -2
@@ -186,7 +186,7 @@ func NewRedisExecutionDebugStoreWithConfig(
 	}
 	redisOpt.DB = cfg.redisDB
 
-	client := redis.NewClient(redisOpt)
+	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 	// Verify connection with actionable error message
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -310,7 +310,7 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 
 		// Update index for listing (sorted set by timestamp) - best effort
 		indexKey := s.indexKey()
-		if err := s.client.ZAdd(ctx, indexKey, &redis.Z{
+		if err := s.client.ZAdd(ctx, indexKey, redis.Z{
 			Score:  float64(storedExecution.CreatedAt.UnixNano()),
 			Member: storedExecution.RequestID,
 		}).Err(); err != nil {
@@ -576,6 +576,8 @@ func (s *RedisExecutionDebugStore) ListRecent(ctx context.Context, limit int) ([
 
 	// Get recent request IDs from sorted set (newest first)
 	indexKey := s.indexKey()
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRange remains supported by go-redis/v9.
 	ids, err := s.client.ZRevRange(ctx, indexKey, 0, int64(limit-1)).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list recent executions: %w", err)
@@ -623,6 +625,8 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 		if remaining := scanLimit - scanned; remaining < batchSize {
 			batchSize = remaining
 		}
+		// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+		//nolint:staticcheck // ZRevRange remains supported by go-redis/v9.
 		requestIDs, err := s.client.ZRevRange(
 			ctx,
 			indexKey,

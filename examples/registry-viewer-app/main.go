@@ -24,7 +24,7 @@ import (
 
 	"sync/atomic"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
@@ -1296,7 +1296,7 @@ func getExecutionDebugClient() (*redis.Client, error) {
 			return nil, fmt.Errorf("invalid redis URL: %w", err)
 		}
 		opt.DB = core.RedisDBExecutionDebug // Use DB 8 for Execution Debug
-		executionDebugClient = redis.NewClient(opt)
+		executionDebugClient = redis.NewClient(core.ApplyRedisClientDefaults(opt))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -3683,7 +3683,7 @@ func newRedisMemoryBackendFactory(redisURL string) MemoryBackendFactory {
 				return nil, fmt.Errorf("invalid redis URL: %w", err)
 			}
 			opt.DB = 0
-			client = redis.NewClient(opt)
+			client = redis.NewClient(core.ApplyRedisClientDefaults(opt))
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

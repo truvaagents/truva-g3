@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // HeartbeatStats tracks heartbeat statistics for periodic summaries
@@ -120,7 +120,7 @@ func NewRedisRegistryWithOptions(redisURL, namespace string, ttl time.Duration) 
 	opt.WriteTimeout = time.Second * 5           // 5s for write operations
 	opt.PoolTimeout = time.Second * 10           // 10s to get connection from pool
 
-	client := redis.NewClient(opt)
+	client := redis.NewClient(ApplyRedisClientDefaults(opt))
 
 	// Enhanced: Connection verification with retry (reduced to ~10s total)
 	// 3 attempts × 3s timeout + (2s + 2s) backoff = ~13 seconds

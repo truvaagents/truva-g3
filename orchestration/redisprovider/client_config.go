@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -137,7 +137,7 @@ func NewOwnedClients(config ClientConfig) (*OwnedClients, error) {
 				return nil, fmt.Errorf("redisprovider: invalid Redis URL: %w", core.ErrInvalidConfiguration)
 			}
 			redisOptions.DB = database
-			client = redis.NewClient(redisOptions)
+			client = redis.NewClient(core.ApplyRedisClientDefaults(redisOptions))
 			byDatabase[database] = client
 		}
 		roleOptions = append(roleOptions, WithRoleClient(role, client))

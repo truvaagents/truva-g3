@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -142,7 +142,7 @@ func NewRedisLLMDebugStore(opts ...RedisLLMDebugStoreOption) (*RedisLLMDebugStor
 	}
 	redisOpt.DB = cfg.redisDB
 
-	client := redis.NewClient(redisOpt)
+	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 	// Verify connection with actionable error message
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -274,7 +274,7 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		}
 		pipe.Expire(ctx, metaKey, ttl)
 		pipe.Expire(ctx, interKey, ttl)
-		pipe.ZAdd(ctx, s.indexKey(), &redis.Z{
+		pipe.ZAdd(ctx, s.indexKey(), redis.Z{
 			Score:  float64(now.Unix()),
 			Member: requestID,
 		})
@@ -466,6 +466,8 @@ func (s *RedisLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMDe
 		fetchLimit = 20
 	}
 
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 	ids, err := s.client.ZRevRangeByScore(ctx, s.indexKey(), &redis.ZRangeBy{
 		Min:   "-inf",
 		Max:   "+inf",

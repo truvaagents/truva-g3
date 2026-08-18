@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: redis
-        image: redis:7-alpine
+        image: redis:8.2.8-alpine
         ports:
         - containerPort: 6379
           name: redis
@@ -38,10 +38,15 @@ spec:
         - "no"
         resources:
           requests:
-            memory: "16Mi"
+            # Covers the measured local baseline while keeping the Kind setup
+            # lightweight on developer laptops.
+            memory: "64Mi"
             cpu: "25m"
           limits:
-            memory: "256Mi"
+            # Development burst allowance above the 256 MiB eviction ceiling.
+            # Production deployments must size persistence headroom for their
+            # dataset size and write rate.
+            memory: "512Mi"
             cpu: "250m"
         livenessProbe:
           tcpSocket:

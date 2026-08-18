@@ -607,7 +607,7 @@ cd examples/agent-with-resilience
 #### Step 2: Start Redis (if not running)
 
 ```bash
-docker run -d --name truvag3-redis -p 6379:6379 redis:7-alpine
+docker run -d --name truvag3-redis -p 6379:6379 redis:8.2.8-alpine
 ```
 
 #### Step 3: Build and Run

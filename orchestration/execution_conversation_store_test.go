@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -543,7 +543,7 @@ func TestDirectConversationIndexStaleCleanupHonorsScanCeiling(t *testing.T) {
 		}
 	}
 	for i := 0; i < 3; i++ {
-		if err := store.client.ZAdd(context.Background(), indexKey, &redis.Z{
+		if err := store.client.ZAdd(context.Background(), indexKey, redis.Z{
 			Score:  float64(base.Add(time.Duration(10+i) * time.Minute).UnixNano()),
 			Member: fmt.Sprintf("direct-stale-%d", i),
 		}).Err(); err != nil {
@@ -592,7 +592,7 @@ func TestDirectConversationIndexStaleCleanupHonorsScanCeiling(t *testing.T) {
 		t.Fatalf("limited Store: %v", err)
 	}
 	for i := 0; i < 3; i++ {
-		_ = limitedStore.client.ZAdd(context.Background(), limitedIndexKey, &redis.Z{
+		_ = limitedStore.client.ZAdd(context.Background(), limitedIndexKey, redis.Z{
 			Score:  float64(base.Add(time.Duration(10+i) * time.Minute).UnixNano()),
 			Member: fmt.Sprintf("direct-limited-stale-%d", i),
 		}).Err()
@@ -640,32 +640,21 @@ type conversationZRemFailureHook struct {
 	err error
 }
 
-func (h conversationZRemFailureHook) BeforeProcess(
-	ctx context.Context,
-	cmd redis.Cmder,
-) (context.Context, error) {
-	if cmd.Name() == "zrem" {
-		return ctx, h.err
+func (conversationZRemFailureHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h conversationZRemFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "zrem" {
+			return h.err
+		}
+		return next(ctx, cmd)
 	}
-	return ctx, nil
 }
 
-func (conversationZRemFailureHook) AfterProcess(context.Context, redis.Cmder) error {
-	return nil
-}
-
-func (conversationZRemFailureHook) BeforeProcessPipeline(
-	ctx context.Context,
-	_ []redis.Cmder,
-) (context.Context, error) {
-	return ctx, nil
-}
-
-func (conversationZRemFailureHook) AfterProcessPipeline(
-	context.Context,
-	[]redis.Cmder,
-) error {
-	return nil
+func (conversationZRemFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
 }
 
 func TestConversationIndexCleanupFailureIsNonFatalAndSanitized(t *testing.T) {
@@ -720,7 +709,7 @@ func TestConversationIndexCleanupFailureIsNonFatalAndSanitized(t *testing.T) {
 		if err := store.client.ZAdd(
 			context.Background(),
 			indexKey,
-			&redis.Z{Score: 1, Member: "stale-direct"},
+			redis.Z{Score: 1, Member: "stale-direct"},
 		).Err(); err != nil {
 			t.Fatalf("seed stale member: %v", err)
 		}
@@ -937,7 +926,7 @@ func TestDirectRedisIndexTTLHelperHandlesMissingAndPersistentKeys(t *testing.T) 
 	if err := store.client.ZAdd(
 		ctx,
 		persistentKey,
-		&redis.Z{Score: 1, Member: "member"},
+		redis.Z{Score: 1, Member: "member"},
 	).Err(); err != nil {
 		t.Fatalf("seed persistent index: %v", err)
 	}
@@ -1190,36 +1179,25 @@ type conversationZAddFailureHook struct {
 	err error
 }
 
-func (h conversationZAddFailureHook) BeforeProcess(
-	ctx context.Context,
-	cmd redis.Cmder,
-) (context.Context, error) {
-	if cmd.Name() == "eval" || cmd.Name() == "evalsha" {
-		for _, arg := range cmd.Args() {
-			if strings.Contains(fmt.Sprint(arg), ":conversation:") {
-				return ctx, h.err
+func (conversationZAddFailureHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h conversationZAddFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "eval" || cmd.Name() == "evalsha" {
+			for _, arg := range cmd.Args() {
+				if strings.Contains(fmt.Sprint(arg), ":conversation:") {
+					return h.err
+				}
 			}
 		}
+		return next(ctx, cmd)
 	}
-	return ctx, nil
 }
 
-func (conversationZAddFailureHook) AfterProcess(context.Context, redis.Cmder) error {
-	return nil
-}
-
-func (conversationZAddFailureHook) BeforeProcessPipeline(
-	ctx context.Context,
-	_ []redis.Cmder,
-) (context.Context, error) {
-	return ctx, nil
-}
-
-func (conversationZAddFailureHook) AfterProcessPipeline(
-	context.Context,
-	[]redis.Cmder,
-) error {
-	return nil
+func (conversationZAddFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
 }
 
 func TestDirectConversationIndexFailureIsNonFatalNilSafeAndSanitized(t *testing.T) {
@@ -1317,35 +1295,26 @@ type benchmarkRedisCommandHook struct {
 	preserveStale bool
 }
 
-func (h *benchmarkRedisCommandHook) BeforeProcess(
-	ctx context.Context,
-	cmd redis.Cmder,
-) (context.Context, error) {
-	h.commandCount.Add(1)
-	h.redirectStaleCleanup(cmd)
-	return ctx, nil
+func (*benchmarkRedisCommandHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
 }
 
-func (*benchmarkRedisCommandHook) AfterProcess(context.Context, redis.Cmder) error {
-	return nil
-}
-
-func (h *benchmarkRedisCommandHook) BeforeProcessPipeline(
-	ctx context.Context,
-	cmds []redis.Cmder,
-) (context.Context, error) {
-	h.commandCount.Add(uint64(len(cmds)))
-	for _, cmd := range cmds {
+func (h *benchmarkRedisCommandHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		h.commandCount.Add(1)
 		h.redirectStaleCleanup(cmd)
+		return next(ctx, cmd)
 	}
-	return ctx, nil
 }
 
-func (*benchmarkRedisCommandHook) AfterProcessPipeline(
-	context.Context,
-	[]redis.Cmder,
-) error {
-	return nil
+func (h *benchmarkRedisCommandHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		h.commandCount.Add(uint64(len(cmds)))
+		for _, cmd := range cmds {
+			h.redirectStaleCleanup(cmd)
+		}
+		return next(ctx, cmds)
+	}
 }
 
 func (h *benchmarkRedisCommandHook) redirectStaleCleanup(cmd redis.Cmder) {
@@ -1491,9 +1460,9 @@ func benchmarkDirectConversationStaleScanCeiling(b *testing.B) {
 	_, store := newRedisExecutionConversationTestStore(b, config)
 	conversationID := "conversation-direct-stale-benchmark"
 	indexKey := store.conversationIndexKey(conversationID)
-	members := make([]*redis.Z, 0, config.ConversationIndexScanLimit)
+	members := make([]redis.Z, 0, config.ConversationIndexScanLimit)
 	for i := 0; i < config.ConversationIndexScanLimit; i++ {
-		members = append(members, &redis.Z{
+		members = append(members, redis.Z{
 			Score:  float64(i),
 			Member: fmt.Sprintf("direct-stale-%04d", i),
 		})
@@ -1528,34 +1497,23 @@ type conversationTTLFailureHook struct {
 	err             error
 }
 
-func (h conversationTTLFailureHook) BeforeProcess(
-	ctx context.Context,
-	cmd redis.Cmder,
-) (context.Context, error) {
-	if cmd.Name() == "ttl" &&
-		len(cmd.Args()) > 1 &&
-		fmt.Sprint(cmd.Args()[1]) == h.conversationKey {
-		return ctx, h.err
+func (conversationTTLFailureHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h conversationTTLFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "ttl" &&
+			len(cmd.Args()) > 1 &&
+			fmt.Sprint(cmd.Args()[1]) == h.conversationKey {
+			return h.err
+		}
+		return next(ctx, cmd)
 	}
-	return ctx, nil
 }
 
-func (conversationTTLFailureHook) AfterProcess(context.Context, redis.Cmder) error {
-	return nil
-}
-
-func (conversationTTLFailureHook) BeforeProcessPipeline(
-	ctx context.Context,
-	_ []redis.Cmder,
-) (context.Context, error) {
-	return ctx, nil
-}
-
-func (conversationTTLFailureHook) AfterProcessPipeline(
-	context.Context,
-	[]redis.Cmder,
-) error {
-	return nil
+func (conversationTTLFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
 }
 
 func TestDirectConversationIndexStoreDoesNotUseRacyTTLProbe(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/truvaagents/truva-g3/core"
@@ -396,7 +396,7 @@ func TestRedisScheduleStore_GetDue_DefensiveSkipsDisabled(t *testing.T) {
 	require.NoError(t, s.Create(context.Background(), sch))
 
 	// Manually insert the stale entry into the due index.
-	_ = client.ZAdd(context.Background(), s.dueKey(), &redis.Z{
+	_ = client.ZAdd(context.Background(), s.dueKey(), redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Hour).Unix()),
 		Member: "stale",
 	}).Err()
@@ -414,7 +414,7 @@ func TestRedisScheduleStore_GetDue_SkipsRaceDeleted(t *testing.T) {
 	s := mustRedisStore(t, client, nil)
 
 	// Add a ghost entry to the due index without a corresponding data key.
-	_ = client.ZAdd(context.Background(), s.dueKey(), &redis.Z{
+	_ = client.ZAdd(context.Background(), s.dueKey(), redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Hour).Unix()),
 		Member: "ghost",
 	}).Err()
@@ -433,7 +433,7 @@ func TestRedisScheduleStore_GetDue_SkipsMalformedJSON(t *testing.T) {
 
 	// Add a stale due-index entry pointing at a data key containing garbage.
 	require.NoError(t, client.Set(context.Background(), s.dataKey("bad"), "{not-json", 0).Err())
-	_ = client.ZAdd(context.Background(), s.dueKey(), &redis.Z{
+	_ = client.ZAdd(context.Background(), s.dueKey(), redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Hour).Unix()),
 		Member: "bad",
 	}).Err()

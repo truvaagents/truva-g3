@@ -24,7 +24,7 @@ build:
 ## run: Run the agent locally (requires Redis)
 run: build
 	@echo "🚀 Starting $(BINARY_NAME)..."
-	@echo "📋 Make sure Redis is running: docker run -p 6379:6379 redis:7-alpine"
+	@echo "📋 Make sure Redis is running: docker run -p 6379:6379 redis:8.2.8-alpine"
 	@./$(BINARY_NAME)
 
 ## test: Run tests

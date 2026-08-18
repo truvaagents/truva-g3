@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -33,9 +33,9 @@ type RedisStateStore struct {
 func NewRedisStateStore(discovery core.Discovery) StateStore {
 	// In a real implementation, this would get Redis connection from discovery
 	// For now, using a default Redis connection
-	client := redis.NewClient(&redis.Options{
+	client := redis.NewClient(core.ApplyRedisClientDefaults(&redis.Options{
 		Addr: "localhost:6379",
-	})
+	}))
 
 	return &RedisStateStore{
 		client:    client,

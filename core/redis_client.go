@@ -52,7 +52,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // RedisClient provides a simplified Redis interface for modules with DB isolation
@@ -128,7 +128,7 @@ func NewRedisClient(opts RedisClientOptions) (*RedisClient, error) {
 		}
 	}
 
-	client := redis.NewClient(redisOpt)
+	client := redis.NewClient(ApplyRedisClientDefaults(redisOpt))
 
 	if opts.Logger != nil {
 		opts.Logger.Debug("Testing Redis connection", map[string]interface{}{
@@ -258,7 +258,7 @@ func (r *RedisClient) TTL(ctx context.Context, key string) (time.Duration, error
 // --- Sorted Set Operations (for sliding window) ---
 
 // ZAdd adds members to a sorted set
-func (r *RedisClient) ZAdd(ctx context.Context, key string, members ...*redis.Z) error {
+func (r *RedisClient) ZAdd(ctx context.Context, key string, members ...redis.Z) error {
 	return r.client.ZAdd(ctx, r.formatKey(key), members...).Err()
 }
 
@@ -279,6 +279,9 @@ func (r *RedisClient) ZCount(ctx context.Context, key string, min, max string) (
 
 // ZRevRange returns members by rank range in descending score order
 func (r *RedisClient) ZRevRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	// Keep the legacy command so external Redis-compatible servers do not need
+	// the Redis 6.2 ZRANGE REV syntax solely because the Go client was upgraded.
+	//nolint:staticcheck // ZRevRange remains supported by go-redis/v9.
 	return r.client.ZRevRange(ctx, r.formatKey(key), start, stop).Result()
 }
 

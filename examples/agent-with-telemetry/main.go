@@ -40,7 +40,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 
@@ -91,7 +91,7 @@ func main() {
 			log.Println("   Schema caching will be disabled")
 		} else {
 			// Create Redis client for schema cache
-			redisClient := redis.NewClient(redisOpt)
+			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 			// Test connection
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -260,7 +260,6 @@ func validateConfig() error {
 
 	return nil
 }
-
 
 // initTelemetry sets up telemetry based on environment with graceful degradation
 func initTelemetry(serviceName string) {

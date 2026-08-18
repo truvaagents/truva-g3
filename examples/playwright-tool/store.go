@@ -7,7 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // TestStore indexes test run metadata in Redis for fast querying.
@@ -45,7 +46,7 @@ func NewTestStore(redisURL string, db int) (*TestStore, error) {
 	}
 	opts.DB = db
 
-	rdb := redis.NewClient(opts)
+	rdb := redis.NewClient(core.ApplyRedisClientDefaults(opts))
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -75,7 +76,7 @@ func (s *TestStore) IndexRun(ctx context.Context, meta RunMetadata) error {
 	score := float64(ts.Unix())
 
 	siteKey := "truvag3:qa:runs:by_site:" + meta.Site
-	if err := s.rdb.ZAdd(ctx, siteKey, &redis.Z{
+	if err := s.rdb.ZAdd(ctx, siteKey, redis.Z{
 		Score:  score,
 		Member: meta.RunID,
 	}).Err(); err != nil {
@@ -114,6 +115,8 @@ func (s *TestStore) QueryRuns(ctx context.Context, filter RunFilter) ([]RunMetad
 			}
 		}
 
+		// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+		//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 		ids, err := s.rdb.ZRevRangeByScore(ctx, siteKey, &redis.ZRangeBy{
 			Min:   minScore,
 			Max:   maxScore,

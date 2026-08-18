@@ -73,7 +73,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/telemetry"
@@ -117,7 +117,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse REDIS_URL: %v", err)
 	}
-	redisClient := redis.NewClient(redisOpt)
+	redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := redisClient.Ping(ctx).Err(); err != nil {

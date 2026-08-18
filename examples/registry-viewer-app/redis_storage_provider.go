@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // RedisStorageProvider implements the StorageProvider interface using Redis.
@@ -55,7 +55,7 @@ func (r *RedisStorageProvider) Exists(ctx context.Context, key string) (bool, er
 // AddToIndex adds a member with score to a sorted index.
 // Redis implementation uses ZADD.
 func (r *RedisStorageProvider) AddToIndex(ctx context.Context, key string, score float64, member string) error {
-	return r.client.ZAdd(ctx, key, &redis.Z{
+	return r.client.ZAdd(ctx, key, redis.Z{
 		Score:  score,
 		Member: member,
 	}).Err()
@@ -64,6 +64,8 @@ func (r *RedisStorageProvider) AddToIndex(ctx context.Context, key string, score
 // ListByScoreDesc returns members from sorted index (highest score first) with pagination.
 // Redis implementation uses ZREVRANGEBYSCORE.
 func (r *RedisStorageProvider) ListByScoreDesc(ctx context.Context, key string, min, max string, offset, count int64) ([]string, error) {
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 	return r.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
 		Min:    min,
 		Max:    max,

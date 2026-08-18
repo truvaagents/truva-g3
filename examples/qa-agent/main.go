@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
@@ -58,7 +58,7 @@ func main() {
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		redisOpt, err := redis.ParseURL(redisURL)
 		if err == nil {
-			redisClient := redis.NewClient(redisOpt)
+			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 			memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger,
 				memory.WithAgentName("qa-agent"),
 				memory.WithDomain("infrastructure"),

@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -347,7 +347,7 @@ func (s *RedisScheduleStore) GetDue(ctx context.Context, now time.Time) ([]*core
 // addToDueIndex adds (or updates) a schedule's entry in the due-index
 // sorted set, with score = RunAt.Unix().
 func (s *RedisScheduleStore) addToDueIndex(ctx context.Context, schedule *core.Schedule) error {
-	err := s.client.ZAdd(ctx, s.dueKey(), &redis.Z{
+	err := s.client.ZAdd(ctx, s.dueKey(), redis.Z{
 		Score:  float64(schedule.RunAt.Unix()),
 		Member: schedule.ID,
 	}).Err()

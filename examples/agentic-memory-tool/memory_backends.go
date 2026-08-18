@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 )
 
@@ -25,7 +26,7 @@ func (t *MemoryTool) setupBackends() error {
 	if err != nil {
 		return fmt.Errorf("failed to parse REDIS_URL: %w", err)
 	}
-	redisClient := redis.NewClient(redisOpt)
+	redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 	episodic, err := memory.NewStreamEpisodicMemory(
 		memory.WithEpisodicRedisClient(redisClient),

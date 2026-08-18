@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 )
@@ -363,6 +363,8 @@ func (store *SkillStore) ListVersions(
 	if options.BeforeVersion > 0 {
 		maxVersion = "(" + strconv.FormatUint(options.BeforeVersion, 10)
 	}
+	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
+	//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 	versions, err := store.client.ZRevRangeByScore(ctx, store.versionsKey(ref), &redis.ZRangeBy{
 		Max: maxVersion, Min: "-inf", Offset: 0, Count: int64(limit + 1),
 	}).Result()
@@ -547,7 +549,7 @@ func (store *SkillStore) PutPublished(
 					encodedResource, _ := json.Marshal(resource)
 					pipe.Set(ctx, store.resourceKey(input.Ref, version, resource.Ref.Name), encodedResource, 0)
 				}
-				pipe.ZAdd(ctx, store.versionsKey(input.Ref), &redis.Z{Score: float64(version), Member: strconv.FormatUint(version, 10)})
+				pipe.ZAdd(ctx, store.versionsKey(input.Ref), redis.Z{Score: float64(version), Member: strconv.FormatUint(version, 10)})
 				pipe.SAdd(ctx, store.catalogKey(), input.Ref.String())
 				if input.IdempotencyKey != "" {
 					encodedIdempotency, _ := json.Marshal(storedSkillIdempotency{
@@ -702,7 +704,7 @@ func (store *SkillStore) RecordSkillAudit(ctx context.Context, event orchestrati
 		}
 		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 			pipe.Set(ctx, key, encoded, 0)
-			pipe.ZAdd(ctx, store.auditIndexKey(), &redis.Z{Score: float64(event.OccurredAt.UnixMilli()), Member: event.EventID})
+			pipe.ZAdd(ctx, store.auditIndexKey(), redis.Z{Score: float64(event.OccurredAt.UnixMilli()), Member: event.EventID})
 			return nil
 		})
 		return err
