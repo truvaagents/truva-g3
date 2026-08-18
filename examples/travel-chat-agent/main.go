@@ -16,6 +16,7 @@ import (
 
 	// Import AI providers for auto-detection
 	_ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
+	_ "github.com/truvaagents/truva-g3/ai/providers/gemini"
 	_ "github.com/truvaagents/truva-g3/ai/providers/openai"
 )
 
@@ -160,8 +161,11 @@ func main() {
 // validateConfig validates required configuration
 func validateConfig() error {
 	// At least one AI provider key is required
-	if os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {
-		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
+	if os.Getenv("OPENAI_API_KEY") == "" &&
+		os.Getenv("ANTHROPIC_API_KEY") == "" &&
+		os.Getenv("GOOGLE_API_KEY") == "" &&
+		os.Getenv("GEMINI_API_KEY") == "" {
+		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY")
 	}
 
 	// Redis is required for service discovery and session storage

@@ -4,14 +4,45 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+type geminiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn geminiRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+type geminiRecordingCapture struct {
+	mu      sync.Mutex
+	records []telemetry.LLMCallRecord
+}
+
+func (capture *geminiRecordingCapture) RecordLLMCall(
+	_ context.Context,
+	_ string,
+	record telemetry.LLMCallRecord,
+) error {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	capture.records = append(capture.records, record)
+	return nil
+}
+
+func (capture *geminiRecordingCapture) snapshot() []telemetry.LLMCallRecord {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return append([]telemetry.LLMCallRecord(nil), capture.records...)
+}
 
 type captureLogger struct {
 	fields []map[string]interface{}
@@ -133,11 +164,14 @@ func TestClient_GenerateResponse_MergesExtrasAndHeaders(t *testing.T) {
 	if got := genConfig["responseMimeType"]; got != "application/json" {
 		t.Fatalf("expected generationConfig.responseMimeType to be set, got %#v", got)
 	}
-	if got := captured["topK"]; got != float64(7) {
-		t.Fatalf("expected request extra topK to override default extra, got %#v", got)
+	if got := genConfig["topK"]; got != float64(7) {
+		t.Fatalf("expected request extra generationConfig.topK to override default extra, got %#v", got)
 	}
-	if got := captured["topP"]; got != 0.8 {
-		t.Fatalf("expected request extra topP to be present, got %#v", got)
+	if got := genConfig["topP"]; got != 0.8 {
+		t.Fatalf("expected request extra generationConfig.topP to be present, got %#v", got)
+	}
+	if _, exists := captured["topK"]; exists {
+		t.Fatal("provider generation field was left at the top level")
 	}
 	if got := captured["contents"]; got == "should-not-win" {
 		t.Fatalf("expected framework-managed contents field to win, got %#v", got)
@@ -204,8 +238,104 @@ func TestClient_StreamResponse_AppliesHeaders(t *testing.T) {
 	if got := capturedHeaders.Get("Content-Type"); got != "application/json" {
 		t.Fatalf("expected Content-Type header to be set, got %q", got)
 	}
-	if got := capturedHeaders.Get("x-default"); got != "" {
-		t.Fatalf("expected stream path to not apply default/request headers yet, got %q", got)
+	if got := capturedHeaders.Get("x-default"); got != "request" {
+		t.Fatalf("expected request header to override the stream default, got %q", got)
+	}
+}
+
+func TestClient_StreamResponse_UsesRetryTransport(t *testing.T) {
+	var attempts int
+	var bodies []string
+	client := NewClient("retry-key", "https://gemini.example/v1beta", &core.NoOpLogger{})
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.HTTPClient = &http.Client{Transport: geminiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read attempt body: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"retry"}}`)),
+				Request:    request,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\",\"index\":0}]}\n\n",
+			)),
+			Request: request,
+		}, nil
+	})}
+
+	response, err := client.StreamResponse(
+		context.Background(),
+		"hello",
+		&core.AIOptions{Model: "default"},
+		func(core.StreamChunk) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("StreamResponse returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("transport attempts = %d, want 2", attempts)
+	}
+	if len(bodies) != 2 || bodies[0] == "" || bodies[0] != bodies[1] {
+		t.Fatalf("replayed bodies = %#v, want two identical nonempty bodies", bodies)
+	}
+	if response == nil || response.Content != "ok" {
+		t.Fatalf("response = %#v, want streamed content", response)
+	}
+}
+
+func TestClient_StreamResponse_TransportErrorDoesNotExposeAPIKey(t *testing.T) {
+	const credential = "gemini-p0-secret-sentinel"
+	var attempts int
+	client := NewClient(credential, "https://gemini.example/v1beta", &core.NoOpLogger{})
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.HTTPClient = &http.Client{Transport: geminiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		_, _ = io.ReadAll(request.Body)
+		return nil, fmt.Errorf("dial failed for %s", request.URL.String())
+	})}
+
+	recorder := &geminiRecordingCapture{}
+	instrumented := ai.NewInstrumentedClient(client, recorder)
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "gemini-p0-request")
+	_, err := instrumented.StreamResponse(
+		ctx,
+		"hello",
+		&core.AIOptions{Model: "default"},
+		func(core.StreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("StreamResponse returned nil error")
+	}
+	if attempts != 2 {
+		t.Fatalf("transport attempts = %d, want 2", attempts)
+	}
+	if strings.Contains(err.Error(), credential) {
+		t.Fatalf("caller error exposed API key: %v", err)
+	}
+	if err := instrumented.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown instrumented client: %v", err)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("record count = %d, want 1", len(records))
+	}
+	if records[0].Success || records[0].Error == "" {
+		t.Fatalf("record = %#v, want failed call with error", records[0])
+	}
+	if strings.Contains(records[0].Error, credential) {
+		t.Fatalf("recorded error exposed API key: %q", records[0].Error)
 	}
 }
 

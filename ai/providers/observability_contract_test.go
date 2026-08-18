@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/truvaagents/truva-g3/ai/providers/openai"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type observationRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -25,8 +28,10 @@ func (roundTrip observationRoundTripFunc) RoundTrip(request *http.Request) (*htt
 }
 
 type observationLogEntry struct {
-	component string
-	fields    map[string]interface{}
+	component  string
+	fields     map[string]interface{}
+	contextual bool
+	trace      telemetry.TraceContext
 }
 
 type observationLogStore struct {
@@ -46,53 +51,72 @@ func (logger *observationLogger) WithComponent(component string) core.Logger {
 	return &observationLogger{store: logger.store, component: component}
 }
 
-func (logger *observationLogger) record(fields map[string]interface{}) {
+func (logger *observationLogger) record(ctx context.Context, contextual bool, fields map[string]interface{}) {
 	logger.store.entries = append(logger.store.entries, observationLogEntry{
-		component: logger.component,
-		fields:    fields,
+		component:  logger.component,
+		fields:     maps.Clone(fields),
+		contextual: contextual,
+		trace:      telemetry.GetTraceContext(ctx),
 	})
 }
 
 func (logger *observationLogger) Debug(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+	logger.record(nil, false, fields)
 }
 func (logger *observationLogger) Info(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+	logger.record(nil, false, fields)
 }
 func (logger *observationLogger) Warn(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+	logger.record(nil, false, fields)
 }
 func (logger *observationLogger) Error(_ string, fields map[string]interface{}) {
-	logger.record(fields)
+	logger.record(nil, false, fields)
 }
-func (logger *observationLogger) DebugWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *observationLogger) DebugWithContext(ctx context.Context, _ string, fields map[string]interface{}) {
+	logger.record(ctx, true, fields)
 }
-func (logger *observationLogger) InfoWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *observationLogger) InfoWithContext(ctx context.Context, _ string, fields map[string]interface{}) {
+	logger.record(ctx, true, fields)
 }
-func (logger *observationLogger) WarnWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *observationLogger) WarnWithContext(ctx context.Context, _ string, fields map[string]interface{}) {
+	logger.record(ctx, true, fields)
 }
-func (logger *observationLogger) ErrorWithContext(_ context.Context, _ string, fields map[string]interface{}) {
-	logger.record(fields)
+func (logger *observationLogger) ErrorWithContext(ctx context.Context, _ string, fields map[string]interface{}) {
+	logger.record(ctx, true, fields)
+}
+
+type observationParentKey struct{}
+
+type observationMetric struct {
+	name   string
+	value  float64
+	labels map[string]string
 }
 
 type observationTelemetry struct {
-	names []string
-	spans []*observationSpan
+	names   []string
+	spans   []*observationSpan
+	metrics []observationMetric
 }
 
 func (tracing *observationTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
-	span := &observationSpan{attributes: map[string]interface{}{}}
+	parent, ok := ctx.Value(observationParentKey{}).(int)
+	if !ok {
+		parent = -1
+	}
+	span := &observationSpan{name: name, parent: parent, attributes: map[string]interface{}{}}
 	tracing.names = append(tracing.names, name)
 	tracing.spans = append(tracing.spans, span)
-	return ctx, span
+	return context.WithValue(ctx, observationParentKey{}, len(tracing.spans)-1), span
 }
 
-func (*observationTelemetry) RecordMetric(string, float64, map[string]string) {}
+func (tracing *observationTelemetry) RecordMetric(name string, value float64, labels map[string]string) {
+	tracing.metrics = append(tracing.metrics, observationMetric{name: name, value: value, labels: maps.Clone(labels)})
+}
 
 type observationSpan struct {
+	name       string
+	parent     int
 	attributes map[string]interface{}
 	errors     []error
 	ended      int
@@ -212,6 +236,64 @@ func invokeVertexObservation(
 	return legacy.GenerateResponse(ctx, prompt, &core.AIOptions{Model: semanticModel, MaxTokens: 32})
 }
 
+func invokeRegisteredGeminiObservation(
+	ctx context.Context,
+	logger core.Logger,
+	tracing core.Telemetry,
+	prompt string,
+	responseContent string,
+	stream bool,
+) (*core.AIResponse, error) {
+	client, err := ai.NewRequestClient(
+		ai.WithProvider("gemini"),
+		ai.WithAPIKey("observation-credential-secret"),
+		ai.WithBaseURL("https://observation-endpoint-secret.example/v1beta"),
+		ai.WithModel("gemini-3.7-flash"),
+		ai.WithMaxTokens(32),
+		ai.WithMaxRetries(0),
+		ai.WithLogger(logger),
+		ai.WithTelemetry(tracing),
+		ai.WithHTTPClient(&http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if stream {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body: io.NopCloser(strings.NewReader(
+						`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"` + responseContent + `"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"totalTokenCount":5}}` + "\n\n",
+					)),
+					Request: request,
+				}, nil
+			}
+			return observationResponse(request, `{"candidates":[{"content":{"role":"model","parts":[{"text":"`+responseContent+`"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"totalTokenCount":5},"modelVersion":"observation-wire-model-secret"}`), nil
+		})}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if recorder, ok := logger.(*observationLogger); ok {
+		recorder.store.entries = nil
+	}
+	request := core.NewAIRequest(prompt, "observability-contract")
+	request.Generation.Model = "gemini-3.7-flash"
+	request.Generation.MaxTokens = core.SetAIParameter(32)
+	if !stream {
+		result, err := client.Generate(ctx, request)
+		if result != nil {
+			return result.Response, err
+		}
+		return nil, err
+	}
+	streaming, ok := client.(core.StreamingAIRequestClient)
+	if !ok {
+		return nil, fmt.Errorf("Gemini request client %T does not stream", client)
+	}
+	result, err := streaming.Stream(ctx, request, func(core.StreamChunk) error { return nil })
+	if result != nil {
+		return result.Response, err
+	}
+	return nil, err
+}
+
 func TestBuiltInProviderObservationContract(t *testing.T) {
 	const (
 		requestID       = "observation-request-id"
@@ -221,11 +303,15 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 		credential      = "observation-credential-secret"
 		credentialScope = "observation-credential-scope-secret"
 		wireModel       = "observation-wire-model-secret"
+		traceIDHex      = "0123456789abcdef0123456789abcdef"
+		spanIDHex       = "0123456789abcdef"
 	)
 
 	tests := []struct {
 		name          string
 		semanticModel string
+		stream        bool
+		wrapped       bool
 		invoke        func(context.Context, core.Logger, core.Telemetry) (*core.AIResponse, error)
 	}{
 		{
@@ -316,6 +402,23 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 				return client.GenerateResponse(ctx, promptSecret, &core.AIOptions{Model: "gemini-2.5-flash", MaxTokens: 32})
 			},
 		},
+		{
+			name:          "gemini.request-aware",
+			semanticModel: "gemini-3.7-flash",
+			wrapped:       true,
+			invoke: func(ctx context.Context, logger core.Logger, tracing core.Telemetry) (*core.AIResponse, error) {
+				return invokeRegisteredGeminiObservation(ctx, logger, tracing, promptSecret, responseSecret, false)
+			},
+		},
+		{
+			name:          "gemini.request-aware-stream",
+			semanticModel: "gemini-3.7-flash",
+			stream:        true,
+			wrapped:       true,
+			invoke: func(ctx context.Context, logger core.Logger, tracing core.Telemetry) (*core.AIResponse, error) {
+				return invokeRegisteredGeminiObservation(ctx, logger, tracing, promptSecret, responseSecret, true)
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -323,6 +426,17 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 			logger := newObservationLogger()
 			tracing := &observationTelemetry{}
 			ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+			traceID, err := oteltrace.TraceIDFromHex(traceIDHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spanID, err := oteltrace.SpanIDFromHex(spanIDHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx = oteltrace.ContextWithSpanContext(ctx, oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+				TraceID: traceID, SpanID: spanID, TraceFlags: oteltrace.FlagsSampled,
+			}))
 			response, err := test.invoke(ctx, logger, tracing)
 			if err != nil {
 				t.Fatalf("provider call returned error: %v", err)
@@ -343,8 +457,24 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 				if entry.fields["request_id"] != requestID {
 					t.Errorf("log %d request_id = %#v", index, entry.fields["request_id"])
 				}
+				if !entry.contextual || entry.trace.TraceID != traceIDHex || entry.trace.SpanID != spanIDHex {
+					t.Errorf("log %d lost active trace context: %#v", index, entry)
+				}
 			}
-			if len(tracing.names) != 2 || tracing.names[0] != "ai.generate_response" || tracing.names[1] != "ai.http_attempt" {
+			operationSpan := "ai.generate_response"
+			wantNames := []string{operationSpan, "ai.http_attempt"}
+			if test.stream {
+				operationSpan = "ai.stream_response"
+				wantNames[0] = operationSpan
+			}
+			if test.wrapped {
+				wrapperSpan := "ai.generate"
+				if test.stream {
+					wrapperSpan = "ai.stream"
+				}
+				wantNames = []string{wrapperSpan, operationSpan, "ai.http_attempt"}
+			}
+			if !slices.Equal(tracing.names, wantNames) {
 				t.Fatalf("span hierarchy = %#v", tracing.names)
 			}
 
@@ -363,6 +493,15 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 					t.Errorf("span %d request_id = %#v", index, span.attributes["request_id"])
 				}
 				fmt.Fprint(&observations, span.attributes)
+			}
+			for index, span := range tracing.spans {
+				wantParent := index - 1
+				if span.parent != wantParent {
+					t.Fatalf("span %d parent = %d, want %d", index, span.parent, wantParent)
+				}
+			}
+			for _, metric := range tracing.metrics {
+				fmt.Fprint(&observations, metric.name, metric.value, metric.labels)
 			}
 			if !strings.Contains(observations.String(), test.semanticModel) {
 				t.Errorf("semantic model missing from permitted observations: %s", observations.String())

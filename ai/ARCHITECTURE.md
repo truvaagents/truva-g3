@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.7
+**Version**: 1.8
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -393,7 +393,7 @@ The `detectBestProvider()` function delegates to `DetectAvailableProviders()` an
 |----------|-------|----------|------------------|
 | OpenAI | `openai` | 1000 | `OPENAI_API_KEY` exists |
 | Anthropic | `anthropic` | 900 | `ANTHROPIC_API_KEY` exists |
-| Gemini | `gemini` | 800 | `GEMINI_API_KEY` or `GOOGLE_API_KEY` exists |
+| Gemini | `gemini` | 800 | `GOOGLE_API_KEY` or `GEMINI_API_KEY` exists |
 | Groq | `openai.groq` | 700 | `GROQ_API_KEY` exists |
 | DeepSeek | `openai.deepseek` | 600 | `DEEPSEEK_API_KEY` exists |
 | xAI | `openai.xai` | 500 | `XAI_API_KEY` exists |
@@ -597,10 +597,10 @@ result, err := chain.Generate(ctx, request)
 
 Provider entries are framework-managed and are constructed through
 `NewRequestClient`; therefore the selected factory must support request-aware
-construction. OpenAI, Azure OpenAI, and Anthropic support it directly. Bedrock
+construction. OpenAI, Azure OpenAI, Anthropic, and Gemini support it directly. Bedrock
 supports it when the application is compiled with the `bedrock` build tag.
-Providers without a request-aware factory, currently including Gemini, can
-still be supplied through `ClientEntry` as legacy or application-local clients.
+Providers without a request-aware factory can still be supplied through
+`ClientEntry` as legacy or application-local clients.
 `ClientEntry` accepts any `core.AIClient`, including application-local
 request-aware or native adapters.
 Injected clients remain caller-owned: the chain invokes them but does not call
@@ -978,9 +978,9 @@ the healthy entry; a dynamic resolver failure remains fingerprint-unstable.
 
 `NewRequestClient` never silently discards integration behavior. A legacy
 factory may be used only when no integration options are supplied and its
-client already implements `core.AIRequestClient`. OpenAI, Azure OpenAI, and
-Anthropic have built-in request adapters, and Bedrock provides one behind its
-build tag. Providers without a request adapter return
+client already implements `core.AIRequestClient`. OpenAI, Azure OpenAI,
+Anthropic, and Gemini have built-in request adapters, and Bedrock provides one
+behind its build tag. Providers without a request adapter return
 `core.ErrAIRequestFeatureUnsupported`.
 
 ### Effective Request-Report Contract
@@ -1015,7 +1015,7 @@ raw bodies, credentials, endpoints, query values, or secret adjustment values.
 Provider tests must cover exact sent values, explicit zero, removal by policy,
 and any model behavior that routinely changes field presence—for example,
 Anthropic adaptive-thinking sampling removal. OpenAI-compatible, Azure OpenAI,
-Anthropic, Bedrock, and every future request-aware provider are subject to this
+Anthropic, Gemini, Bedrock, and every future request-aware provider are subject to this
 contract. A provider-parity plan must name these report fields explicitly in
 its implementation and verification scope.
 
@@ -1074,7 +1074,7 @@ excluded from request reports, fingerprints, spans, and framework logs.
 For simple dynamic headers, `WithAuthHeader(name, callback)` adapts a
 concurrency-safe callback into a credential source. Applications that need to
 invalidate cached credentials after early revocation should implement
-`CredentialRejectionObserver`; Anthropic, Azure OpenAI, and OpenAI notify it on
+`CredentialRejectionObserver`; Anthropic, Azure OpenAI, Gemini, and OpenAI notify it on
 HTTP 401 and 403 before returning the original provider error. Observer
 failures are diagnostic and do not replace that error. The providers do not
 perform an immediate authentication retry because generation acceptance cannot
@@ -1084,7 +1084,7 @@ failover semantics remain intact.
 `EndpointResolver` runs after portable request identity and concrete semantic
 model resolution, but before provider-draft construction and semantic request
 policy. This is the normative order for every provider that accepts the shared
-resolver, including Anthropic, Azure OpenAI, and OpenAI. It lets a trusted route
+resolver, including Anthropic, Azure OpenAI, Gemini, and OpenAI. It lets a trusted route
 supply a deployment or publisher-model identifier needed to construct
 protected wire structure without treating that identifier as the semantic
 model.
@@ -1131,7 +1131,18 @@ timeout. The configured transport sees the final serialized body, route,
 eligible application headers, and credential header, so mTLS and signing
 transports compose normally.
 
-Anthropic, Azure OpenAI, and OpenAI support these HTTP integrations. Bedrock
+Anthropic, Azure OpenAI, Gemini, and OpenAI support these HTTP integrations.
+Gemini uses the GenerateContent `v1beta` profile, validates complete
+`generateContent`/`streamGenerateContent?alt=sse` routes, and attaches static
+or dynamic credentials as an attempt-local `x-goog-api-key` header. It never
+places credentials in a URL. Every Gemini body pins protected top-level
+`store=false`; provider extras and request policy cannot enable Google-side
+request storage, background execution, or previous-interaction state. Exact
+model capability rows determine thinking levels, token limits, and fields that
+current Gemini families forbid; unknown pass-through IDs receive conservative
+validation without prefix-based capability inference.
+
+Bedrock
 accepts request rules, middleware, and an SDK-destination endpoint resolver. A
 Bedrock resolver supplies only the opaque Converse `modelId` through
 `Deployment` and a sanitized route identity; it must return no URL, query, or
@@ -1275,7 +1286,7 @@ ARN.
 | Azure OpenAI v1/classic | Profiled Chat Completions | Yes | Yes; resolver required |
 | OpenAI and compatible aliases | Chat Completions via `openaiwire` | Yes | Yes |
 | Bedrock (`bedrock` build tag) | Converse SDK draft | Yes | SDK destination resolver only; AWS SDK owns HTTP, credentials, signing, and region |
-| Gemini | Legacy client | No | No |
+| Gemini | GenerateContent `v1beta` | Yes | Yes |
 
 ### Common Logical Instrumentation
 
@@ -1301,10 +1312,14 @@ token counts, and a bounded error classification. Errors recorded on common or
 provider-local spans use sanitized messages rather than raw provider response
 material.
 
-Orchestration emits an `ai.request.prepared` event on its active phase span
-when a sanitized report is available. The event contains provider/surface,
-purpose, model identities, adjustment count, stability, and the fingerprint
-only when stable. It never contains prompt, body, endpoint, or credential data.
+Orchestration emits exactly one `ai.request.prepared` event on its active phase
+span for every effective invocation, including provider failures that return no
+sanitized report. The event always contains bounded effective identity,
+stability, adjustment count, and `ai.request.reported`; provider, alias,
+surface, and operation are present only when a report exists, and the
+fingerprint appears only when stable. It never contains prompt, body, endpoint,
+or credential data. Providers return reports when preparation succeeded but do
+not emit this orchestration-owned event themselves.
 
 Because the registered-provider constructors return the common decorator,
 code that needs a concrete provider type should construct that provider
@@ -1318,8 +1333,8 @@ directly. Ordinary framework code should depend on `core.AIClient` or
 | `OPENAI_API_KEY` | OpenAI | API key |
 | `OPENAI_BASE_URL` | OpenAI | Custom endpoint |
 | `ANTHROPIC_API_KEY` | Anthropic | API key |
-| `GEMINI_API_KEY` | Gemini | API key |
-| `GOOGLE_API_KEY` | Gemini | Alternative key |
+| `GOOGLE_API_KEY` | Gemini | Preferred API key; wins when both Gemini variables are set |
+| `GEMINI_API_KEY` | Gemini | Fallback API key |
 | `AWS_REGION` | Bedrock | AWS region |
 | `DEEPSEEK_API_KEY` | OpenAI.DeepSeek | API key |
 | `GROQ_API_KEY` | OpenAI.Groq | API key |
@@ -1561,7 +1576,7 @@ client, _ := ai.NewClient(
 **Common Causes**:
 1. Logger not passed to `NewClient`
 2. Factory not propagating logger to client
-3. Nil logger in factory (Gemini, Bedrock bug)
+3. A custom factory does not propagate the configured logger
 
 **Solution**: Ensure logger propagation through factory chain.
 
@@ -1583,6 +1598,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.8 | 2026-08-17 | Added Gemini's request-aware GenerateContent profile, static model-capability policy, HTTP integration seams, and corrected orchestration request-evidence semantics |
 | 1.7 | 2026-07-23 | Exported the bounded route-failure marker, aligned terminal generate/stream observability and success attributes, removed last-entry failover logs, and moved Bedrock additional-document rejection before stable fingerprinting |
 | 1.6 | 2026-07-23 | Split Bedrock semantic fingerprint preparation from invocation viability, made Fable legacy sampling policy-remediable and fail-closed, normalized Bedrock document numbers, added bounded route failover classification, direct-client model intent, and embedding override/semantic-family controls |
 | 1.5 | 2026-07-23 | Aligned Bedrock family sampling classification, implicit-region validation, failover-safe timeout scoping, and Titan V1 migration support |

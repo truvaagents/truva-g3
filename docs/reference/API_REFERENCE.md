@@ -1742,9 +1742,8 @@ unsupported feature returns
 `*core.AIRequestFeatureError` and matches
 `core.ErrAIRequestFeatureUnsupported`.
 
-Built-in request-aware factories currently include Anthropic, OpenAI, Azure
-OpenAI, Vertex-hosted Claude, and Bedrock with the `bedrock` build tag. Gemini
-remains legacy-only.
+Built-in request-aware factories currently include Anthropic, OpenAI, Gemini,
+Azure OpenAI, Vertex-hosted Claude, and Bedrock with the `bedrock` build tag.
 
 #### AIRequest and presence-aware generation
 
@@ -2411,7 +2410,7 @@ func MustNewClient(opts ...AIOption) core.AIClient  // Panics on error
 **Provider auto-detection order (by priority):**
 1. OpenAI (`OPENAI_API_KEY`) - Priority 1000
 2. Anthropic (`ANTHROPIC_API_KEY`) - Priority 900
-3. Google Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) - Priority 800
+3. Google Gemini (`GOOGLE_API_KEY` then `GEMINI_API_KEY`) - Priority 800
 4. Groq (`GROQ_API_KEY`) - Priority 700
 5. DeepSeek (`DEEPSEEK_API_KEY`) - Priority 600
 6. xAI Grok (`XAI_API_KEY`) - Priority 500
@@ -3026,7 +3025,7 @@ start of this module.
 |---|---|---|---|
 | **OpenAI** | `openai` | `NewClient`, `NewRequestClient` | Yes |
 | **Anthropic direct** | `anthropic` | `NewClient`, `NewRequestClient` | Yes |
-| **Google Gemini** | `gemini` | `NewClient` (legacy request contract) | Yes |
+| **Google Gemini** | `gemini` | `NewClient`, `NewRequestClient` | Yes |
 | **Azure OpenAI v1** | `azureopenai.v1` | `NewRequestClient` with route and credentials | No |
 | **Azure OpenAI classic** | `azureopenai.classic` | `NewRequestClient` with route and credentials | No |
 | **Vertex-hosted Claude** | `anthropic.vertex` | `NewRequestClient` with route and credentials | No |
@@ -6596,7 +6595,7 @@ TruvaG3 supports configuration through environment variables:
 ### AI Configuration
 - `OPENAI_API_KEY` - OpenAI API key
 - `ANTHROPIC_API_KEY` - Anthropic API key
-- `GEMINI_API_KEY` - Google Gemini API key
+- `GOOGLE_API_KEY` / `GEMINI_API_KEY` - Google Gemini API key (`GOOGLE_API_KEY` takes precedence)
 - `GROQ_API_KEY` - Groq API key
 - `TOGETHER_API_KEY` - Together AI API key
 - `DEEPSEEK_API_KEY` - DeepSeek API key

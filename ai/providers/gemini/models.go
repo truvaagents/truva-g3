@@ -5,44 +5,16 @@ import (
 	"strings"
 )
 
-// GeminiRequest represents the native Gemini GenerateContent API request
-type GeminiRequest struct {
-	Contents          []Content          `json:"contents"`
-	GenerationConfig  *GenerationConfig  `json:"generationConfig,omitempty"`
-	SafetySettings    []SafetySetting    `json:"safetySettings,omitempty"`
-	SystemInstruction *SystemInstruction `json:"systemInstruction,omitempty"`
-}
-
-// Content represents a content block in the request
+// Content represents a content block returned by Gemini.
 type Content struct {
 	Role  string `json:"role"` // "user" or "model"
 	Parts []Part `json:"parts"`
 }
 
-// Part represents a part of content
+// Part represents a text part returned by Gemini.
 type Part struct {
-	Text string `json:"text"`
-}
-
-// SystemInstruction represents system instructions
-type SystemInstruction struct {
-	Parts []Part `json:"parts"`
-}
-
-// GenerationConfig represents generation configuration
-type GenerationConfig struct {
-	Temperature      float32  `json:"temperature,omitempty"`
-	TopP             float32  `json:"topP,omitempty"`
-	TopK             int      `json:"topK,omitempty"`
-	MaxOutputTokens  int      `json:"maxOutputTokens,omitempty"`
-	ResponseMimeType string   `json:"responseMimeType,omitempty"`
-	StopSequences    []string `json:"stopSequences,omitempty"`
-}
-
-// SafetySetting represents safety configuration
-type SafetySetting struct {
-	Category  string `json:"category"`
-	Threshold string `json:"threshold"`
+	Text    string `json:"text"`
+	Thought bool   `json:"thought,omitempty"`
 }
 
 // GeminiResponse represents the response from Gemini API
@@ -69,18 +41,11 @@ type SafetyRating struct {
 
 // UsageMetadata represents token usage information
 type UsageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
-}
-
-// ErrorResponse represents an error from Gemini API
-type ErrorResponse struct {
-	Error struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
-	} `json:"error"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 }
 
 // StreamChunk represents a streaming response chunk from Gemini API
@@ -99,23 +64,19 @@ type StreamCandidate struct {
 
 // modelAliases maps portable names to Gemini model IDs.
 // These aliases enable portable model names across providers when using Chain Client.
-// Updated December 2025 with Gemini 2.5 and 3 family models.
+// Updated August 2026 with Gemini 2.5 and 3 family models.
 //
 // Source: https://ai.google.dev/gemini-api/docs/models/gemini
 //
-// Available models:
-//   - gemini-3-pro-preview: Best multimodal understanding (1M input, 65K output)
-//   - gemini-2.5-pro: State-of-the-art thinking model for complex reasoning
-//   - gemini-2.5-flash: Best price-performance, optimized for scale
-//   - gemini-2.5-flash-lite: Fastest flash model, cost-efficient
-//   - gemini-2.0-flash: Previous generation workhorse (1M context)
+// The full dated GenerateContent coverage inventory lives in capabilities.go;
+// aliases are a smaller, independent set of portable product choices.
 var modelAliases = map[string]string{
-	"default": "gemini-2.5-flash",      // Best price-performance for general use
-	"fast":    "gemini-2.5-flash-lite", // Fastest, most cost-efficient
-	"smart":   "gemini-2.5-pro",        // State-of-the-art reasoning
-	"premium": "gemini-3-pro-preview",  // Best multimodal understanding
-	"code":    "gemini-2.5-pro",        // Excellent for coding tasks
-	"vision":  "gemini-2.5-flash",      // Good vision + speed balance
+	"default": "gemini-2.5-flash",       // Best price-performance for general use
+	"fast":    "gemini-3.5-flash-lite",  // Current latency/cost-oriented replacement
+	"smart":   "gemini-3.1-pro-preview", // Current advanced reasoning model
+	"premium": "gemini-3.1-pro-preview", // Highest-tier current catalog choice
+	"code":    "gemini-3.1-pro-preview", // Current advanced reasoning model
+	"vision":  "gemini-2.5-flash",       // Good vision + speed balance
 }
 
 // resolveModel returns the actual model name for an alias.

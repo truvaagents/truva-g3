@@ -191,11 +191,10 @@ extending a built-in provider, then implementing a genuinely new one.
 Use Level 2 whenever the built-in provider still describes the service
 honestly. Move to Level 3 only when the provider itself is different.
 
-The request-aware OpenAI, Azure OpenAI, and Anthropic clients support Level 2
-HTTP integrations. Bedrock supports request policy and SDK-destination routing
+The request-aware OpenAI, Azure OpenAI, Anthropic, and Gemini clients support
+Level 2 HTTP integrations. Bedrock supports request policy and SDK-destination routing
 under the `bedrock` build tag, but rejects HTTP and credential hooks because
-the AWS SDK owns those concerns. Gemini remains legacy-only and can be included
-in a heterogeneous chain with `ClientEntry`.
+the AWS SDK owns those concerns.
 
 ### Choose a Scenario
 
@@ -2057,9 +2056,8 @@ in reports, logs, and traces.
 
 The chain invokes a `ClientEntry` client but never mutates it through optional
 logger, telemetry, or lifecycle setters. `ProviderEntry` currently supports
-OpenAI, Azure OpenAI, Anthropic (including `anthropic.vertex`), and build-tagged
-Bedrock; use `ClientEntry` to place a legacy-only provider such as Gemini in
-the chain. The second `ProviderEntry` argument is the exact provider alias, so
+OpenAI, Azure OpenAI, Anthropic (including `anthropic.vertex`), Gemini, and
+build-tagged Bedrock. The second `ProviderEntry` argument is the exact provider alias, so
 use `azureopenai.v1`, `azureopenai.classic`, or `anthropic.vertex` when that
 surface is required.
 
@@ -3141,11 +3139,12 @@ Section 7.
 ### Issue 1: `NewRequestClient` Returns "Feature Unsupported"
 
 **Cause:** The selected factory does not implement request-aware construction.
-Gemini is currently legacy-only, and custom factories must implement
-`RequestProviderFactory`.
+Custom factories must implement `RequestProviderFactory`; all default-build
+native providers, including Gemini, already do so.
 
-**Fix:** Use `NewClient` for a legacy call, inject the legacy client with
-`ClientEntry`, or add a request-aware factory implementation. Do not cast away
+**Fix:** Use `NewClient` for a legacy call, inject a legacy client with
+`ClientEntry`, or add a request-aware factory implementation to the selected
+custom provider. Do not cast away
 the error or silently discard request intent.
 
 ### Issue 2: A Request Fails During Legacy Fallback

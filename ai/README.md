@@ -196,7 +196,7 @@ client, _ := ai.NewClient(
 // Use native Gemini implementation
 client, _ := ai.NewClient(
     ai.WithProvider("gemini"),
-    ai.WithAPIKey(os.Getenv("GEMINI_API_KEY")),
+    ai.WithAPIKey(os.Getenv("GOOGLE_API_KEY")),
     ai.WithModel("smart"),
 )
 ```
@@ -338,7 +338,7 @@ The module automatically detects and configures based on environment:
 # Native providers (each has its own implementation)
 export OPENAI_API_KEY=sk-...          # OpenAI
 export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic Claude
-export GEMINI_API_KEY=...             # Google Gemini
+export GOOGLE_API_KEY=...             # Google Gemini (preferred when both Gemini variables are set)
 
 # OpenAI-compatible services with provider aliases (recommended)
 # Each gets its own namespace - no conflicts!
@@ -713,7 +713,7 @@ When using `ai.NewClient()` without specifying a provider (auto-detection mode),
 |----------|----------|-------|------------------|
 | 1000 | OpenAI | `openai` | `OPENAI_API_KEY` |
 | 900 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
-| 800 | Gemini | `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| 800 | Gemini | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | 700 | Groq | `openai.groq` | `GROQ_API_KEY` |
 | 600 | DeepSeek | `openai.deepseek` | `DEEPSEEK_API_KEY` |
 | 500 | xAI Grok | `openai.xai` | `XAI_API_KEY` |
@@ -944,14 +944,14 @@ groq, _ := ai.NewClient(
 | Alias | Purpose | OpenAI | Anthropic | Gemini | DeepSeek | Groq | xAI | Qwen |
 |-------|---------|--------|-----------|--------|----------|------|-----|------|
 | **`default`** | General use, balanced | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-plus` |
-| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-2.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
-| **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `gemini-2.5-pro` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
+| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
+| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
+| **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
+| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
 | **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI (`gpt-5.6-sol`),
-> Anthropic (`claude-fable-5`), and Gemini (`gemini-3-pro-preview`). Other
+> Anthropic (`claude-fable-5`), and Gemini (`gemini-3.1-pro-preview`). Other
 > built-in catalogs use `smart` for their reasoning-oriented choice.
 
 This table documents the catalog compiled into this branch; it is not a
@@ -969,11 +969,24 @@ availability. Check the current provider documentation and use the
 > DeepSeek's [V4 announcement](https://api-docs.deepseek.com/news/news260424/)
 > and [thinking-mode contract](https://api-docs.deepseek.com/guides/thinking_mode).
 >
-> The Gemini `premium` catalog entry is the legacy `gemini-3-pro-preview`
-> name. Google shut that preview down on March 9, 2026 and currently redirects
-> it to `gemini-3.1-pro-preview`; migrate the catalog or use an approved explicit
-> replacement instead of relying on that redirect. See the official
-> [Gemini release notes](https://ai.google.dev/gemini-api/docs/changelog).
+> The Gemini `premium` catalog entry names `gemini-3.1-pro-preview` directly.
+> Google shut down its predecessor, `gemini-3-pro-preview`, on March 9, 2026;
+> the catalog does not rely on Google's redirect from that retired ID. See the
+> official [Gemini release notes](https://ai.google.dev/gemini-api/docs/changelog).
+> Live GenerateContent validation on August 17, 2026 found that Google rejects
+> `gemini-2.5-flash-lite` and `gemini-2.5-pro` for new users and names
+> `gemini-3.5-flash-lite` and `gemini-3.1-pro-preview` as their replacements.
+> The portable `fast`, `smart`, and `code` aliases therefore use those current
+> targets, while callers with grandfathered access may still select an exact
+> Gemini 2.5 ID.
+> The provider's dated GenerateContent capability snapshot also covers
+> `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`,
+> `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`,
+> `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, and
+> `gemini-3.7-flash`. Coverage is independent of the portable alias map. A
+> current model is removed only when Google's same-surface schedule gives an
+> authoritative shutdown less than 45 calendar days away; the snapshot and
+> tests must be refreshed together.
 
 ### Environment Variable Overrides
 
@@ -1137,7 +1150,7 @@ client, _ := ai.NewClient(
 |---|---|---|---|---|
 | `openai` | OpenAI chat completions | `OPENAI_API_KEY`, optional `OPENAI_BASE_URL` | Yes | Default |
 | `anthropic` | Anthropic Messages | `ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL` | Yes | Default |
-| `gemini` | Gemini GenerateContent (legacy client API) | `GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_BASE_URL` | Yes | Default |
+| `gemini` | Gemini GenerateContent `v1beta` | `GOOGLE_API_KEY` then `GEMINI_API_KEY`, optional `GEMINI_BASE_URL` | Yes | Default |
 | `azureopenai.v1` / `azureopenai.classic` | Azure OpenAI chat profiles | Request-aware endpoint resolver and credential source | No | Default |
 | `anthropic.vertex` | Claude on Vertex AI | Request-aware endpoint resolver and Google credential source | No | Default |
 | `bedrock` | AWS Bedrock Converse | AWS SDK configuration; optional static credentials and SDK-destination resolver | Yes | `bedrock` tag |
@@ -1163,7 +1176,7 @@ When you use `ai.NewClient()` without specifying a provider, the module checks f
 
 1. **OpenAI** (priority: 1000) - Checks for `OPENAI_API_KEY`
 2. **Anthropic** (priority: 900) - Checks for `ANTHROPIC_API_KEY` (native implementation)
-3. **Gemini** (priority: 800) - Checks for `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+3. **Gemini** (priority: 800) - Checks for `GOOGLE_API_KEY` or `GEMINI_API_KEY`; the Google variable wins when both are set
 4. **Groq** (priority: 700) - Checks for `GROQ_API_KEY`, configures endpoint automatically
 5. **DeepSeek** (priority: 600) - Checks for `DEEPSEEK_API_KEY`, configures endpoint automatically
 6. **xAI Grok** (priority: 500) - Checks for `XAI_API_KEY`, configures endpoint automatically
@@ -1211,7 +1224,7 @@ export QWEN_API_KEY=your-key
 export ANTHROPIC_API_KEY=your-key
 
 # Google Gemini - Native implementation
-export GEMINI_API_KEY=your-key
+export GOOGLE_API_KEY=your-auth-key
 ```
 
 ### Key Benefits of the Reusable Provider
@@ -1264,7 +1277,7 @@ the registered `openai` factory, so `ListProviders` still reports `openai` once.
 # Native providers (each has its own implementation)
 export OPENAI_API_KEY=sk-...          # OpenAI
 export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic Claude
-export GEMINI_API_KEY=...             # Google Gemini
+export GOOGLE_API_KEY=...             # Google Gemini; takes precedence over GEMINI_API_KEY
 
 # OpenAI-compatible services with provider aliases (recommended)
 # Each gets its own namespace - no conflicts!
@@ -1571,11 +1584,11 @@ body sources, set `GetBody` explicitly so it returns a fresh `io.ReadCloser`.
 New providers should also implement `ValidatedProviderFactory` so construction
 errors can be returned, and `RequestProviderFactory` when they support
 presence-aware requests, policy, reports, or enterprise integrations.
-Request-aware construction is currently built into direct OpenAI and
-Anthropic, Azure OpenAI (`azureopenai.v1` and `azureopenai.classic`),
+Request-aware construction is currently built into direct OpenAI, Anthropic,
+and Gemini, Azure OpenAI (`azureopenai.v1` and `azureopenai.classic`),
 Google-hosted Claude (`anthropic.vertex`), and Bedrock with the `bedrock` build
 tag. Azure and Vertex are request-aware-only and require route and credential
-sources; Gemini remains legacy-only.
+sources.
 
 For the complete contracts, request-policy precedence, dynamic credentials and
 routing, heterogeneous chains, OpenAI-compatible codec reuse, and SDK-native
@@ -1718,6 +1731,16 @@ request.Generation.TopP = core.OmitAIParameter[float32]()
 
 result, err := core.GenerateAI(ctx, client, request)
 ```
+
+Gemini uses the same public request interface. Its adapter selects the
+GenerateContent `v1beta` profile, sends credentials in `x-goog-api-key`, pins
+protected `store=false`, and applies exact-model rules for thinking levels,
+token limits, Gemini 3.x `candidateCount`, and model families that no longer
+accept sampling fields. `GOOGLE_API_KEY` wins when both supported Gemini
+environment variables are present. Use a current Google AI Studio auth key:
+Google rejects unrestricted standard keys and has announced that all Standard
+keys stop working in September 2026. See Google's
+[API-key guide](https://ai.google.dev/gemini-api/docs/api-key).
 
 The zero value of `AIParameter` means inherit, `SetAIParameter` means explicitly
 send even a zero value, and `OmitAIParameter` means require absence. Core's

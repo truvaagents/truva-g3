@@ -491,7 +491,7 @@ linked providers:
 
 1. **OpenAI** (1000) - `OPENAI_API_KEY`
 2. **Anthropic** (900) - `ANTHROPIC_API_KEY`
-3. **Gemini** (800) - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+3. **Gemini** (800) - `GOOGLE_API_KEY` or `GEMINI_API_KEY`; `GOOGLE_API_KEY` wins when both are set
 4. **Groq** (700) - `GROQ_API_KEY`
 5. **DeepSeek** (600) - `DEEPSEEK_API_KEY`
 6. **xAI** (500) - `XAI_API_KEY`
