@@ -182,15 +182,16 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (result 
 	}()
 	c.observeCredentialRejection(ctx, credentialRequest, resp.StatusCode)
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resultWithReport(prepared, nil), fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
+		body, _ := providers.ReadErrorBody(resp.Body)
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return resultWithReport(prepared, nil), apiErr
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resultWithReport(prepared, nil), fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var anthropicResp AnthropicResponse
@@ -308,7 +309,7 @@ func (c *Client) Stream(
 
 	// Handle error responses
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := providers.ReadErrorBody(resp.Body)
 		apiErr := c.HandleError(resp.StatusCode, body, "Anthropic", prepared.Model)
 		span.SetAttribute("http.status_code", resp.StatusCode)
 		return resultWithReport(prepared, nil), apiErr

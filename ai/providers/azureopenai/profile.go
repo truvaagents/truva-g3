@@ -78,6 +78,7 @@ func (c *Client) requestProfile(
 	profile := openaiwire.RequestProfile{
 		SemanticModel:   semantics.SemanticModel,
 		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
 		Sampling:        openaiwire.SamplingOrdinary,
 	}
@@ -90,6 +91,7 @@ func (c *Client) requestProfile(
 			)
 		}
 		profile.TokenLimit = openaiwire.TokenLimitMaxCompletionTokens
+		profile.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
 		profile.Sampling = openaiwire.SamplingReasoningRestricted
 	}
 	if contract.supportsOpenAIReasoning && semantics.Capabilities.ReasoningStyle == "openai" {

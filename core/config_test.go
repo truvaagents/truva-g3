@@ -736,7 +736,7 @@ func TestGetContextBaggage(t *testing.T) {
 	})
 }
 
-func TestProductionLogger_ContextConversationIsLoggedButNotExplicitMetricLabel(t *testing.T) {
+func TestProductionLogger_ContextCorrelationIsLoggedButNotExplicitMetricLabel(t *testing.T) {
 	originalRegistry := globalMetricsRegistry
 	t.Cleanup(func() {
 		globalMetricsRegistry = originalRegistry
@@ -745,6 +745,9 @@ func TestProductionLogger_ContextConversationIsLoggedButNotExplicitMetricLabel(t
 	registry := &mockMetricsRegistry{
 		baggage: map[string]string{
 			"conversation_id": "conversation-log",
+			"request_id":      "request-log",
+			"user_id":         "user-log",
+			"session_id":      "session-log",
 		},
 	}
 	globalMetricsRegistry = registry
@@ -766,15 +769,17 @@ func TestProductionLogger_ContextConversationIsLoggedButNotExplicitMetricLabel(t
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output.String())), &entry); err != nil {
 		t.Fatalf("log output is not valid JSON: %v", err)
 	}
-	if got := entry["conversation_id"]; got != "conversation-log" {
-		t.Fatalf("conversation_id log field = %v", got)
+	for key, want := range registry.baggage {
+		if got := entry[key]; got != want {
+			t.Errorf("%s log field = %v, want %v", key, got, want)
+		}
 	}
 	if registry.emittedName != "truvag3.framework.operations" {
 		t.Fatalf("emitted metric = %q", registry.emittedName)
 	}
 	for i := 0; i < len(registry.emittedLabels)-1; i += 2 {
-		if registry.emittedLabels[i] == "conversation_id" {
-			t.Fatalf("conversation_id was added as an explicit metric label: %v", registry.emittedLabels)
+		if _, reserved := registry.baggage[registry.emittedLabels[i]]; reserved {
+			t.Fatalf("correlation was added as an explicit metric label: %v", registry.emittedLabels)
 		}
 	}
 }

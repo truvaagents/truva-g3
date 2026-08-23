@@ -1,6 +1,6 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.2
+**Version**: 1.3
 
 **Purpose**: Ensure consistency and maintainability across all framework development
 
@@ -392,7 +392,16 @@ func (a *Agent) Process(ctx context.Context) error {
 ```
 
 #### 3. **Circuit Breaker Integration**
-- External API calls must be protected by circuit breakers
+- External API calls must be protected by circuit breakers. When the caller
+  and breaker live in sibling optional modules, the caller exposes a
+  provider-neutral `core.CircuitBreaker` injection seam and its health-error
+  classifier; the application composition root supplies the implementation.
+  A framework module must not import a sibling implementation to make the
+  protection implicit.
+- Breaker state belongs to one stable downstream dependency or ordered
+  failover entry. Do not share one state machine across independent providers.
+- Caller/configuration errors and partial operations that already emitted
+  externally visible output must not degrade dependency-health state.
 - Discovery calls must have circuit breaker protection
 - Failed dependencies should not prevent startup (degrade gracefully)
 
@@ -638,6 +647,7 @@ func (t *BaseTool) processRequest() {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2026-08-20 | Defined application-composed circuit-breaker ownership across optional modules, per-dependency state isolation, and dependency-health classification boundaries |
 | 1.2 | 2026-08-09 | Defined the canonical framework-module DAG and extended its enforcement to production, test, and conformance code |
 | 1.1 | 2026-08-08 | Added safe-customization, invariant-boundary, and cache-identity principles |
 | 1.0 | 2025-09-28 | Initial framework design principles |

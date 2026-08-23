@@ -104,7 +104,7 @@ type AIOptions struct {
 	MaxTokens       int
 	SystemPrompt    string
 	ReasoningEffort string                 // Semantic reasoning intent; provider translation decides exact wire format
-	ResponseFormat  string                 // "", "json" (future: schema-capable structured form)
+	ResponseFormat  string                 // Portable values: "" or "json"; native formats belong in Extra
 	Extra           map[string]interface{} // Provider-specific request body fields
 	Headers         map[string]string      // Provider-specific request headers / beta flags
 }

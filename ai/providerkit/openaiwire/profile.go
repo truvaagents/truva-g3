@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const profileVersion = "profile-v1"
+const profileVersion = "profile-v2"
 
 // ModelFieldMode controls whether the OpenAI-compatible body carries a model.
 type ModelFieldMode uint8
@@ -26,6 +26,18 @@ const (
 	TokenLimitMaxTokens TokenLimitField = iota + 1
 	// TokenLimitMaxCompletionTokens emits max_completion_tokens.
 	TokenLimitMaxCompletionTokens
+)
+
+// TokenBudgetPolicy controls whether the portable max-token budget is sent
+// exactly or expanded to reserve tokens for active hidden reasoning.
+type TokenBudgetPolicy uint8
+
+const (
+	// TokenBudgetExact sends the portable max-token value unchanged.
+	TokenBudgetExact TokenBudgetPolicy = iota + 1
+	// TokenBudgetScaleForReasoning applies the configured multiplier only when
+	// a nonempty reasoning effort other than "none" is active.
+	TokenBudgetScaleForReasoning
 )
 
 // ReasoningEffortStyle selects the supported reasoning-effort spelling.
@@ -56,6 +68,7 @@ type RequestProfile struct {
 	WireModel       string
 	ModelField      ModelFieldMode
 	TokenLimit      TokenLimitField
+	TokenBudget     TokenBudgetPolicy
 	ReasoningEffort ReasoningEffortStyle
 	Sampling        SamplingPolicy
 }
@@ -80,6 +93,12 @@ func (p RequestProfile) Validate() error {
 	if p.TokenLimit != TokenLimitMaxTokens && p.TokenLimit != TokenLimitMaxCompletionTokens {
 		return errors.New("OpenAI wire token-limit field is invalid")
 	}
+	if p.TokenBudget != TokenBudgetExact && p.TokenBudget != TokenBudgetScaleForReasoning {
+		return errors.New("OpenAI wire token-budget policy is invalid")
+	}
+	if p.TokenBudget == TokenBudgetScaleForReasoning && p.TokenLimit != TokenLimitMaxCompletionTokens {
+		return errors.New("reasoning-scaled token budget requires max_completion_tokens")
+	}
 	if p.ReasoningEffort < ReasoningEffortOmitted || p.ReasoningEffort > ReasoningEffortNestedObject {
 		return errors.New("OpenAI wire reasoning-effort style is invalid")
 	}
@@ -94,11 +113,12 @@ func (p RequestProfile) Validate() error {
 
 func profileFingerprintIdentity(surfaceVersion string, profile RequestProfile) string {
 	return fmt.Sprintf(
-		"%s|%s|model=%d|tokens=%d|reasoning=%d|sampling=%d",
+		"%s|%s|model=%d|tokens=%d|budget=%d|reasoning=%d|sampling=%d",
 		surfaceVersion,
 		profileVersion,
 		profile.ModelField,
 		profile.TokenLimit,
+		profile.TokenBudget,
 		profile.ReasoningEffort,
 		profile.Sampling,
 	)

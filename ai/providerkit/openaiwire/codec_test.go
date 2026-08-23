@@ -101,6 +101,56 @@ func TestCodecBuildDraftPortableIntentAndIsolation(t *testing.T) {
 	}
 }
 
+func TestCodecPortableResponseFormatEncoding(t *testing.T) {
+	codec := mustCodec(t)
+
+	t.Run("legacy json becomes native json object", func(t *testing.T) {
+		request := core.NewAIRequestFromLegacy("hello", "json", &core.AIOptions{
+			ResponseFormat: " JSON ",
+		})
+		draft, err := codec.BuildDraft(request, "gpt-4.1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		format, ok := draft.Body()["response_format"].(map[string]interface{})
+		if !ok || format["type"] != "json_object" {
+			t.Fatalf("response_format = %#v, want type=json_object", draft.Body()["response_format"])
+		}
+	})
+
+	t.Run("presence aware json becomes native json object", func(t *testing.T) {
+		request := core.NewAIRequest("hello", "json")
+		request.Generation.ResponseFormat = core.SetAIParameter("json")
+		draft, err := codec.BuildDraft(request, "gpt-4.1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		format, ok := draft.Body()["response_format"].(map[string]interface{})
+		if !ok || format["type"] != "json_object" {
+			t.Fatalf("response_format = %#v, want type=json_object", draft.Body()["response_format"])
+		}
+	})
+
+	t.Run("native extra remains untouched", func(t *testing.T) {
+		native := map[string]interface{}{
+			"type": "json_schema",
+			"json_schema": map[string]interface{}{
+				"name": "answer",
+			},
+		}
+		request := core.NewAIRequestFromLegacy("hello", "native", &core.AIOptions{
+			Extra: map[string]interface{}{"response_format": native},
+		})
+		draft, err := codec.BuildDraft(request, "gpt-4.1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(draft.Body()["response_format"], native) {
+			t.Fatalf("native response_format = %#v, want %#v", draft.Body()["response_format"], native)
+		}
+	})
+}
+
 func TestCodecPolicyApplicationAndProtectedFields(t *testing.T) {
 	codec := mustCodec(t)
 	request := core.NewAIRequestFromLegacy("hello", "policy-test", &core.AIOptions{
@@ -201,10 +251,17 @@ func TestCodecPresenceAwareMaxTokensMatchesLegacyReasoningBudget(t *testing.T) {
 		wantTokens      int
 	}{
 		{
-			name:       "active reasoning applies multiplier",
+			name:       "empty reasoning effort keeps raw budget",
 			model:      "gpt-5",
 			wantPath:   "max_completion_tokens",
-			wantTokens: 1000 * openaiwire.DefaultReasoningTokenMultiplier,
+			wantTokens: 1000,
+		},
+		{
+			name:            "active reasoning applies multiplier",
+			model:           "gpt-5",
+			reasoningEffort: "high",
+			wantPath:        "max_completion_tokens",
+			wantTokens:      1000 * openaiwire.DefaultReasoningTokenMultiplier,
 		},
 		{
 			name:            "disabled reasoning keeps raw budget",
@@ -255,6 +312,74 @@ func TestCodecPresenceAwareMaxTokensMatchesLegacyReasoningBudget(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestProfiledCodecTokenBudgetPolicyControlsWireBudgetAndFingerprint(t *testing.T) {
+	codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{
+		SurfaceVersion: openaiwire.DefaultSurfaceVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := core.NewAIRequestFromLegacy("hello", "token-budget", &core.AIOptions{
+		MaxTokens:       100,
+		ReasoningEffort: "high",
+	})
+	base := openaiwire.RequestProfile{
+		SemanticModel:   "reasoning-model",
+		WireModel:       "wire-model",
+		ModelField:      openaiwire.ModelFieldRequired,
+		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
+		ReasoningEffort: openaiwire.ReasoningEffortTopLevel,
+		Sampling:        openaiwire.SamplingReasoningRestricted,
+	}
+	scaled := base
+	scaled.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
+
+	exactDraft, err := codec.BuildDraftWithProfile(request, base, false)
+	if err != nil {
+		t.Fatalf("exact draft: %v", err)
+	}
+	scaledDraft, err := codec.BuildDraftWithProfile(request, scaled, false)
+	if err != nil {
+		t.Fatalf("scaled draft: %v", err)
+	}
+	if got := exactDraft.Body()["max_completion_tokens"]; got != 100 {
+		t.Fatalf("exact budget = %#v, want 100", got)
+	}
+	if got := scaledDraft.Body()["max_completion_tokens"]; got != 100*openaiwire.DefaultReasoningTokenMultiplier {
+		t.Fatalf("scaled budget = %#v", got)
+	}
+	if exactDraft.PolicyFingerprintIdentity() == scaledDraft.PolicyFingerprintIdentity() {
+		t.Fatal("different token-budget policies shared a profile identity")
+	}
+
+	engine, err := requestpolicy.NewEngine(requestpolicy.Config{Mode: requestpolicy.CompatibilityCompatible})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fingerprints []string
+	for name, draft := range map[string]*openaiwire.Draft{"exact": exactDraft, "scaled": scaledDraft} {
+		if err := draft.BindIdentity("test", "test"); err != nil {
+			t.Fatalf("%s identity: %v", name, err)
+		}
+		report, err := engine.Apply(t.Context(), draft, nil)
+		if err != nil {
+			t.Fatalf("%s policy: %v", name, err)
+		}
+		want := 100
+		if name == "scaled" {
+			want *= openaiwire.DefaultReasoningTokenMultiplier
+		}
+		if report.EffectiveMaxTokens.Mode != core.AIParameterSet || report.EffectiveMaxTokens.Value != want {
+			t.Fatalf("%s effective max tokens = %#v, want %d", name, report.EffectiveMaxTokens, want)
+		}
+		fingerprints = append(fingerprints, report.Fingerprint)
+	}
+	if fingerprints[0] == fingerprints[1] {
+		t.Fatal("different token-budget policies shared a stable request fingerprint")
 	}
 }
 
@@ -323,6 +448,7 @@ func TestProfiledCodecUsesIndependentReasoningAndSamplingModes(t *testing.T) {
 		WireModel:       "gpt-5",
 		ModelField:      openaiwire.ModelFieldRequired,
 		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		TokenBudget:     openaiwire.TokenBudgetScaleForReasoning,
 		ReasoningEffort: openaiwire.ReasoningEffortTopLevel,
 		Sampling:        openaiwire.SamplingReasoningRestricted,
 	}, false)
@@ -344,6 +470,7 @@ func TestProfiledCodecUsesIndependentReasoningAndSamplingModes(t *testing.T) {
 		WireModel:       "gemma4:31b",
 		ModelField:      openaiwire.ModelFieldRequired,
 		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortNestedObject,
 		Sampling:        openaiwire.SamplingOrdinary,
 	}
@@ -375,12 +502,48 @@ func TestProfiledCodecUsesIndependentReasoningAndSamplingModes(t *testing.T) {
 	}
 }
 
+func TestProfiledCodecPreservesNativeReasoningSiblingsWithPortablePrecedence(t *testing.T) {
+	codec := mustProfiledCodec(t)
+	profile := openaiwire.RequestProfile{
+		SemanticModel:   "openrouter/auto",
+		WireModel:       "openrouter/auto",
+		ModelField:      openaiwire.ModelFieldRequired,
+		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
+		ReasoningEffort: openaiwire.ReasoningEffortNestedObject,
+		Sampling:        openaiwire.SamplingOrdinary,
+	}
+	nativeReasoning := map[string]interface{}{"effort": "low", "exclude": true}
+	request := core.NewAIRequestFromLegacy("hello", "reasoning-composition", &core.AIOptions{
+		Model: "openrouter/auto",
+		Extra: map[string]interface{}{"reasoning": nativeReasoning},
+	})
+	request.Generation.ReasoningEffort = core.SetAIParameter("high")
+	draft, err := codec.BuildDraftWithProfile(request, profile, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]interface{}{"effort": "high", "exclude": true}
+	if got := draft.Body()["reasoning"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reasoning = %#v, want %#v", got, want)
+	}
+	if !reflect.DeepEqual(nativeReasoning, map[string]interface{}{"effort": "low", "exclude": true}) {
+		t.Fatalf("native reasoning input was mutated: %#v", nativeReasoning)
+	}
+	adjustments := draft.Adjustments()
+	if len(adjustments) != 1 || adjustments[0].Path != "/reasoning/effort" ||
+		adjustments[0].Rule != "generation-precedence" || adjustments[0].Action != "set" {
+		t.Fatalf("adjustments = %#v", adjustments)
+	}
+}
+
 func TestProfiledCodecProtectsOmittedModelAndExcludesIdentityFromProfileFingerprint(t *testing.T) {
 	codec := mustProfiledCodec(t)
 	profile := openaiwire.RequestProfile{
 		SemanticModel:   "gpt-4.1",
 		ModelField:      openaiwire.ModelFieldOmitted,
 		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
 		Sampling:        openaiwire.SamplingOrdinary,
 	}
@@ -412,6 +575,7 @@ func TestRequestProfileValidationRejectsContradictions(t *testing.T) {
 		WireModel:       "gpt-5",
 		ModelField:      openaiwire.ModelFieldRequired,
 		TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+		TokenBudget:     openaiwire.TokenBudgetScaleForReasoning,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
 		Sampling:        openaiwire.SamplingReasoningRestricted,
 	}
@@ -420,6 +584,7 @@ func TestRequestProfileValidationRejectsContradictions(t *testing.T) {
 	}
 	ordinaryWithEffort := valid
 	ordinaryWithEffort.TokenLimit = openaiwire.TokenLimitMaxTokens
+	ordinaryWithEffort.TokenBudget = openaiwire.TokenBudgetExact
 	ordinaryWithEffort.ReasoningEffort = openaiwire.ReasoningEffortNestedObject
 	ordinaryWithEffort.Sampling = openaiwire.SamplingOrdinary
 	if err := ordinaryWithEffort.Validate(); err != nil {
@@ -428,9 +593,9 @@ func TestRequestProfileValidationRejectsContradictions(t *testing.T) {
 
 	tests := []openaiwire.RequestProfile{
 		{},
-		{SemanticModel: "gpt-4.1", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
-		{SemanticModel: "gpt-4.1", WireModel: "deployment", ModelField: openaiwire.ModelFieldOmitted, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
-		{SemanticModel: "gpt-5", WireModel: "gpt-5", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, ReasoningEffort: openaiwire.ReasoningEffortTopLevel, Sampling: openaiwire.SamplingReasoningRestricted},
+		{SemanticModel: "gpt-4.1", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, TokenBudget: openaiwire.TokenBudgetExact, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
+		{SemanticModel: "gpt-4.1", WireModel: "deployment", ModelField: openaiwire.ModelFieldOmitted, TokenLimit: openaiwire.TokenLimitMaxTokens, TokenBudget: openaiwire.TokenBudgetExact, ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary},
+		{SemanticModel: "gpt-5", WireModel: "gpt-5", ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens, TokenBudget: openaiwire.TokenBudgetExact, ReasoningEffort: openaiwire.ReasoningEffortTopLevel, Sampling: openaiwire.SamplingReasoningRestricted},
 	}
 	for index, profile := range tests {
 		if err := profile.Validate(); err == nil {
@@ -470,8 +635,8 @@ func TestCodecDecodeNormalizesUsageDetails(t *testing.T) {
 func TestCodecDecodeStreamNormalizesContentUsageAndFinish(t *testing.T) {
 	codec := mustCodec(t)
 	stream := strings.Join([]string{
+		`: keepalive`,
 		`data: {"model":"gpt-5","choices":[{"delta":{"reasoning_content":"think "}}]}`,
-		`data: malformed`,
 		`data: {"model":"gpt-5","choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}`,
 		`data: {"model":"gpt-5","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`,
 		`data: [DONE]`,
@@ -490,6 +655,165 @@ func TestCodecDecodeStreamNormalizesContentUsageAndFinish(t *testing.T) {
 	if len(chunks) != 3 || chunks[2].Delta || chunks[2].FinishReason != "stop" {
 		t.Fatalf("stream chunks = %#v", chunks)
 	}
+}
+
+func TestCodecDecodeReducesBufferedInBandErrors(t *testing.T) {
+	codec := mustCodec(t)
+	tests := []struct {
+		name       string
+		body       string
+		wantResult string
+		wantCode   int
+		wantType   string
+	}{
+		{
+			name:     "top level",
+			body:     `{"error":{"code":429,"message":"prompt-canary","metadata":{"error_type":" Rate_Limit ","flagged_input":"prompt-canary"}}}`,
+			wantCode: 429, wantType: "rate_limit",
+		},
+		{
+			name:       "choice preserves partial content",
+			body:       `{"model":"routed","choices":[{"message":{"content":"partial"},"finish_reason":"error","error":{"code":502,"metadata":{"error_type":"provider_error"}}}]}`,
+			wantResult: "partial", wantCode: 502, wantType: "provider_error",
+		},
+		{
+			name:       "finish error without envelope",
+			body:       `{"choices":[{"message":{"content":"partial"},"finish_reason":"error"}]}`,
+			wantResult: "partial", wantType: "unmapped",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := codec.Decode(strings.NewReader(test.body))
+			var endpointErr *openaiwire.EndpointError
+			if !errors.As(err, &endpointErr) {
+				t.Fatalf("Decode error = %v", err)
+			}
+			if endpointErr.Code != test.wantCode || endpointErr.Type != test.wantType {
+				t.Fatalf("endpoint error = %#v", endpointErr)
+			}
+			if strings.Contains(err.Error(), "prompt-canary") {
+				t.Fatalf("error leaked ignored metadata: %v", err)
+			}
+			if test.wantResult == "" {
+				if result != nil {
+					t.Fatalf("result = %#v, want nil", result)
+				}
+			} else if result == nil || result.Response == nil || result.Response.Content != test.wantResult {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestCodecDecodeBoundsInBandErrorType(t *testing.T) {
+	codec := mustCodec(t)
+	valid := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name     string
+		value    string
+		wantType string
+	}{
+		{name: "64 byte boundary", value: valid, wantType: valid},
+		{name: "65 bytes", value: valid + "a", wantType: "unmapped"},
+		{name: "invalid character", value: "provider-error", wantType: "unmapped"},
+		{name: "empty", value: "", wantType: "unmapped"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := `{"error":{"code":400,"metadata":{"error_type":` + string(mustJSON(t, test.value)) + `}}}`
+			_, err := codec.Decode(strings.NewReader(body))
+			var endpointErr *openaiwire.EndpointError
+			if !errors.As(err, &endpointErr) || endpointErr.Type != test.wantType {
+				t.Fatalf("endpoint error = %#v / %v", endpointErr, err)
+			}
+		})
+	}
+}
+
+func TestCodecDecodeStreamTerminalAndFailureMatrix(t *testing.T) {
+	codec := mustCodec(t)
+	tests := []struct {
+		name        string
+		stream      string
+		wantContent string
+		wantPartial bool
+		wantError   bool
+		wantType    string
+	}{
+		{
+			name:        "terminal finish without done",
+			stream:      `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\n",
+			wantContent: "ok",
+		},
+		{
+			name:      "error before content",
+			stream:    `data: {"error":{"code":429,"metadata":{"error_type":"rate_limit"}}}` + "\n\n",
+			wantError: true, wantType: "rate_limit",
+		},
+		{
+			name: "choice error after content",
+			stream: strings.Join([]string{
+				`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+				`data: {"choices":[{"finish_reason":"error","error":{"code":502,"metadata":{"error_type":"provider_error"}}}]}`,
+			}, "\n\n"),
+			wantContent: "partial", wantPartial: true, wantError: true, wantType: "provider_error",
+		},
+		{
+			name:      "malformed before content",
+			stream:    "data: malformed\n\n",
+			wantError: true,
+		},
+		{
+			name: "malformed after content",
+			stream: strings.Join([]string{
+				`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+				`data: malformed`,
+			}, "\n\n"),
+			wantContent: "partial", wantPartial: true, wantError: true,
+		},
+		{
+			name:      "premature EOF",
+			stream:    `data: {"choices":[]}` + "\n\n",
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var chunks []core.StreamChunk
+			result, err := codec.DecodeStream(strings.NewReader(test.stream), func(chunk core.StreamChunk) error {
+				chunks = append(chunks, chunk)
+				return nil
+			})
+			if (err != nil) != test.wantError {
+				t.Fatalf("DecodeStream error = %v, wantError=%t", err, test.wantError)
+			}
+			if errors.Is(err, core.ErrStreamPartiallyCompleted) != test.wantPartial {
+				t.Fatalf("partial classification = %v", err)
+			}
+			if test.wantType != "" {
+				var endpointErr *openaiwire.EndpointError
+				if !errors.As(err, &endpointErr) || endpointErr.Type != test.wantType {
+					t.Fatalf("endpoint error = %#v / %v", endpointErr, err)
+				}
+			}
+			if test.wantContent == "" {
+				if result != nil {
+					t.Fatalf("result = %#v, want nil", result)
+				}
+			} else if result == nil || result.Response == nil || result.Response.Content != test.wantContent {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, value interface{}) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestCodecRejectsUnsupportedPortableTopK(t *testing.T) {

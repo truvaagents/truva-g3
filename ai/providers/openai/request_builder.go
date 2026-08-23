@@ -223,11 +223,13 @@ func (c *Client) requestProfile(
 		WireModel:       semantics.SemanticModel,
 		ModelField:      openaiwire.ModelFieldRequired,
 		TokenLimit:      openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted,
 		Sampling:        openaiwire.SamplingOrdinary,
 	}
 	if semantics.ReasoningModel {
 		profile.TokenLimit = openaiwire.TokenLimitMaxCompletionTokens
+		profile.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
 		profile.Sampling = openaiwire.SamplingReasoningRestricted
 	}
 	// The stock OpenAI Chat Completions surface supports the top-level field

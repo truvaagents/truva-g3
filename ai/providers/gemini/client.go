@@ -177,7 +177,7 @@ func (client *Client) Generate(
 	defer func() { _ = response.Body.Close() }()
 	client.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body := readGeminiError(response)
+		body, _ := providers.ReadErrorBody(response.Body)
 		providerErr := client.HandleError(response.StatusCode, body, "Gemini", prepared.Model)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultFromPrepared(prepared, nil, nil), providerErr
@@ -273,7 +273,7 @@ func (client *Client) Stream(
 	defer func() { _ = response.Body.Close() }()
 	client.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body := readGeminiError(response)
+		body, _ := providers.ReadErrorBody(response.Body)
 		providerErr := client.HandleError(response.StatusCode, body, "Gemini", prepared.Model)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultFromPrepared(prepared, nil, nil), providerErr

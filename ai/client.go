@@ -27,6 +27,32 @@ const maxRetriesUnset = -1
 const defaultMaxRetries = 3
 
 const defaultRequestTimeout = 180 * time.Second
+const defaultSSEEventMaxBytes = 1 << 20
+const defaultRetryDelay = time.Second
+
+func resolveSSEEventMaxBytes(current int) int {
+	if current > 0 {
+		return current
+	}
+	if value := os.Getenv("TRUVAG3_AI_SSE_EVENT_MAX_BYTES"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultSSEEventMaxBytes
+}
+
+func resolveRetryDelay(current time.Duration) time.Duration {
+	if current > 0 {
+		return current
+	}
+	if value := os.Getenv("TRUVAG3_AI_RETRY_DELAY"); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultRetryDelay
+}
 
 // resolveMaxRetries applies the single-client MaxRetries precedence chain.
 // Single clients (no chain failover layer below) absorb transient blips via
@@ -182,6 +208,12 @@ func instrumentProviderClient(
 	client core.AIClient,
 	config *AIConfig,
 ) *InstrumentedAIClient {
+	if config.CircuitBreaker != nil {
+		client = &circuitBreakerAIClient{
+			wrapped: client,
+			breaker: config.CircuitBreaker,
+		}
+	}
 	return NewInstrumentedClient(
 		client,
 		nil,
@@ -192,9 +224,14 @@ func instrumentProviderClient(
 }
 
 func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {
+	if config.CircuitBreaker != nil && isNilCircuitBreaker(config.CircuitBreaker) {
+		return nil, fmt.Errorf("%w: AI circuit breaker is a typed nil", core.ErrInvalidConfiguration)
+	}
 	// Resolve MaxRetries precedence after all options so an explicit value wins
 	// over the environment and hard-coded default.
 	config.MaxRetries = resolveMaxRetries(config.MaxRetries)
+	config.RetryDelay = resolveRetryDelay(config.RetryDelay)
+	config.SSEEventMaxBytes = resolveSSEEventMaxBytes(config.SSEEventMaxBytes)
 	providerWasAutoDetected := config.Provider == string(ProviderAuto)
 
 	if config.Logger != nil {

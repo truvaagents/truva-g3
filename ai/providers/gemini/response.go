@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -167,12 +166,4 @@ func (decoder *generateContentStreamDecoder) Next(ctx context.Context) (decodedS
 		}
 		return event, nil
 	}
-}
-
-func readGeminiError(response *http.Response) []byte {
-	if response == nil || response.Body == nil {
-		return nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	return body
 }

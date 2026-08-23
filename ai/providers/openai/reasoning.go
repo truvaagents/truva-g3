@@ -37,7 +37,7 @@ const DefaultReasoningTokenMultiplier = openaiwire.DefaultReasoningTokenMultipli
 //   - Always uses max_completion_tokens (max_tokens is rejected by the API)
 //   - When reasoningEffort is "none": no token multiplier, temperature included
 //   - When reasoningEffort is non-empty and not "none": multiplier applied, temperature omitted
-//   - When reasoningEffort is empty: multiplier applied, temperature omitted, no reasoning object sent
+//   - When reasoningEffort is empty: no multiplier, temperature omitted, no reasoning object sent
 //   - If reasoningEffort is set, a "reasoning": {"effort": value} object is included in the body
 //
 // The reasoningTokenMultiplier parameter allows callers to configure the multiplier.

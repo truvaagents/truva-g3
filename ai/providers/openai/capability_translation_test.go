@@ -121,8 +121,8 @@ func TestClient_GenerateResponse_AllowsAdvancedFieldsForNativeOpenAIReasoningMod
 	if !ok {
 		t.Fatalf("expected response_format object, got %#v", captured["response_format"])
 	}
-	if responseFormat["type"] != "json" {
-		t.Fatalf("expected response_format.type=json, got %#v", responseFormat["type"])
+	if responseFormat["type"] != "json_object" {
+		t.Fatalf("expected response_format.type=json_object, got %#v", responseFormat["type"])
 	}
 }
 
@@ -157,6 +157,9 @@ func TestClient_GenerateResponse_GroqGPTOSSAllowsJSONButStripsReasoning(t *testi
 	}
 	if _, ok := captured["response_format"]; !ok {
 		t.Fatalf("expected response_format field for groq gpt-oss model, got %#v", captured)
+	}
+	if got := captured["response_format"].(map[string]interface{})["type"]; got != "json_object" {
+		t.Fatalf("response_format.type = %#v, want json_object", got)
 	}
 }
 
@@ -197,6 +200,9 @@ func TestClient_GenerateResponse_GroqGPTOSSSlashedIDAllowsJSON(t *testing.T) {
 	}
 	if _, ok := captured["response_format"]; !ok {
 		t.Fatalf("expected response_format field for groq gpt-oss slashed-ID model, got %#v", captured)
+	}
+	if got := captured["response_format"].(map[string]interface{})["type"]; got != "json_object" {
+		t.Fatalf("response_format.type = %#v, want json_object", got)
 	}
 }
 

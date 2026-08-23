@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
@@ -227,8 +229,9 @@ func (m *mockTelemetryAIClientForInstr) SetTelemetry(provider core.Telemetry) {
 
 // mockLoggerForInstr captures warning messages for testing
 type mockLoggerForInstr struct {
-	mu       sync.Mutex
-	warnings []string
+	mu            sync.Mutex
+	warnings      []string
+	warningFields []map[string]interface{}
 }
 
 func (m *mockLoggerForInstr) Debug(_ string, _ map[string]interface{}) {}
@@ -243,10 +246,11 @@ func (m *mockLoggerForInstr) DebugWithContext(_ context.Context, _ string, _ map
 }
 func (m *mockLoggerForInstr) InfoWithContext(_ context.Context, _ string, _ map[string]interface{}) {
 }
-func (m *mockLoggerForInstr) WarnWithContext(_ context.Context, msg string, _ map[string]interface{}) {
+func (m *mockLoggerForInstr) WarnWithContext(_ context.Context, msg string, fields map[string]interface{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.warnings = append(m.warnings, msg)
+	m.warningFields = append(m.warningFields, fields)
 }
 func (m *mockLoggerForInstr) ErrorWithContext(_ context.Context, _ string, _ map[string]interface{}) {
 }
@@ -440,6 +444,83 @@ func TestInstrumentedClient_GenerateResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("sanitizes errors before handing them to the recorder", func(t *testing.T) {
+		const secret = "debug-store-secret"
+		mock := &mockAIClientForInstr{
+			generateErr: errors.New("provider failed: api_key=" + secret),
+		}
+		rec := &mockRecorder{}
+		client := NewInstrumentedClient(mock, rec)
+
+		ctx := core.WithRequestID(context.Background(), "req-redacted")
+		_, _ = client.GenerateResponse(ctx, "prompt", nil)
+		client.Shutdown(context.Background())
+
+		records := rec.getRecords()
+		if len(records) != 1 {
+			t.Fatalf("records = %d, want 1", len(records))
+		}
+		if strings.Contains(records[0].Error, secret) || !strings.Contains(records[0].Error, "[REDACTED]") {
+			t.Fatalf("recorded error was not sanitized: %q", records[0].Error)
+		}
+	})
+
+	t.Run("provider response body cannot reach observations or persisted error", func(t *testing.T) {
+		canaries := []string{
+			"sk-error-body-canary",
+			"prompt-fragment-error-body-canary",
+			"moderation-error-body-canary",
+			"html-error-body-canary",
+		}
+		body := []byte(`{"error":{"message":"prompt-fragment-error-body-canary",` +
+			`"api_key":"sk-error-body-canary",` +
+			`"flagged_input":"moderation-error-body-canary",` +
+			`"html":"<html>html-error-body-canary</html>"}}`)
+		providerErr := providers.NewBaseClient(time.Second, nil).HandleError(
+			http.StatusBadRequest,
+			body,
+			"OpenAI",
+			"test-model",
+		)
+		mock := &mockAIClientForInstr{generateErr: providerErr}
+		recorder := &mockRecorder{}
+		logger := &mockLoggerForInstr{}
+		tracing := &phase6InstrumentedTelemetry{}
+		client := NewInstrumentedClient(
+			mock,
+			recorder,
+			WithInstrumentedLogger(logger),
+			WithInstrumentedTelemetry(tracing),
+		)
+
+		_, returnedErr := client.GenerateResponse(
+			core.WithRequestID(t.Context(), "req-error-body"),
+			"intentionally captured request prompt",
+			nil,
+		)
+		if returnedErr == nil {
+			t.Fatal("GenerateResponse() error = nil")
+		}
+		client.Shutdown(t.Context())
+
+		records := recorder.getRecords()
+		if len(records) != 1 || len(tracing.spans) != 1 {
+			t.Fatalf("records = %d, spans = %d; want 1 each", len(records), len(tracing.spans))
+		}
+		observed := fmt.Sprint(
+			returnedErr,
+			logger.warningFields,
+			tracing.spans[0].attributes,
+			tracing.spans[0].errors,
+			records[0].Error,
+		)
+		for _, canary := range canaries {
+			if strings.Contains(observed, canary) {
+				t.Fatalf("provider response body reached observations or persisted error: %q in %s", canary, observed)
+			}
+		}
+	})
+
 	t.Run("logs warning when recorder fails", func(t *testing.T) {
 		mock := &mockAIClientForInstr{
 			generateResp: &core.AIResponse{Content: "ok"},
@@ -457,6 +538,17 @@ func TestInstrumentedClient_GenerateResponse(t *testing.T) {
 		defer logger.mu.Unlock()
 		if len(logger.warnings) == 0 {
 			t.Error("expected warning log when recorder fails")
+		}
+		fields := logger.warningFields[0]
+		if fields["operation"] != "ai_debug_record" || fields["request_id"] != "req-log" ||
+			fields["status"] != "error" {
+			t.Fatalf("warning fields = %#v", fields)
+		}
+		if _, ok := fields["duration_ms"]; !ok {
+			t.Fatalf("warning lacks duration_ms: %#v", fields)
+		}
+		if fields["error"] != "AI provider request failed: unknown" || fields["error_type"] != "unknown" {
+			t.Fatalf("warning error fields = %#v", fields)
 		}
 	})
 

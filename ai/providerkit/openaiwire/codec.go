@@ -4,12 +4,12 @@
 package openaiwire
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -24,6 +24,9 @@ const (
 	// DefaultReasoningTokenMultiplier reserves room for reasoning tokens while
 	// retaining the legacy OpenAI provider behavior.
 	DefaultReasoningTokenMultiplier = 5
+	// DefaultMaxSSEEventBytes bounds one decoded server-sent event to 1 MiB.
+	DefaultMaxSSEEventBytes = 1 << 20
+	maxWireErrorTypeBytes   = 64
 )
 
 // Codec builds and decodes OpenAI-compatible chat completion requests without
@@ -49,6 +52,9 @@ type Config struct {
 	ReasoningTokenMultiplier int
 	DefaultReasoningEffort   string
 	ForceReasoningObject     bool
+	// MaxSSEEventBytes bounds one complete server-sent event. Non-positive
+	// values use DefaultMaxSSEEventBytes.
+	MaxSSEEventBytes int
 }
 
 type codec struct {
@@ -56,6 +62,7 @@ type codec struct {
 	reasoningTokenMultiplier int
 	defaultReasoningEffort   string
 	forceReasoningObject     bool
+	maxSSEEventBytes         int
 }
 
 // NewCodec constructs a reusable codec with stock OpenAI reasoning defaults.
@@ -82,11 +89,16 @@ func newConfiguredCodec(config Config) (*codec, error) {
 	if multiplier <= 0 {
 		multiplier = DefaultReasoningTokenMultiplier
 	}
+	maxSSEEventBytes := config.MaxSSEEventBytes
+	if maxSSEEventBytes <= 0 {
+		maxSSEEventBytes = DefaultMaxSSEEventBytes
+	}
 	return &codec{
 		surfaceVersion:           version,
 		reasoningTokenMultiplier: multiplier,
 		defaultReasoningEffort:   config.DefaultReasoningEffort,
 		forceReasoningObject:     config.ForceReasoningObject,
+		maxSSEEventBytes:         maxSSEEventBytes,
 	}, nil
 }
 
@@ -258,11 +270,13 @@ func (c *codec) BuildDraft(request *core.AIRequest, resolvedModel string, stream
 		WireModel:       resolvedModel,
 		ModelField:      ModelFieldRequired,
 		TokenLimit:      TokenLimitMaxTokens,
+		TokenBudget:     TokenBudgetExact,
 		ReasoningEffort: ReasoningEffortOmitted,
 		Sampling:        SamplingOrdinary,
 	}
 	if IsReasoningModel(resolvedModel) {
 		profile.TokenLimit = TokenLimitMaxCompletionTokens
+		profile.TokenBudget = TokenBudgetScaleForReasoning
 		profile.ReasoningEffort = ReasoningEffortNestedObject
 		profile.Sampling = SamplingReasoningRestricted
 	} else if c.forceReasoningObject || request != nil && request.Generation.ReasoningEffort.Mode == core.AIParameterSet {
@@ -330,6 +344,14 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		responseFormat = value
 		explicit["/response_format"] = struct{}{}
 	}
+	if request.Generation.ResponseFormat.Mode == core.AIParameterOmit {
+		responseFormat = ""
+	} else {
+		responseFormat, err = portableResponseFormatType(responseFormat)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if request.Generation.TopK.Mode == core.AIParameterSet {
 		return nil, &core.AIRequestFeatureError{ClientType: "openaiwire.Codec", Feature: "generation.top_k"}
 	}
@@ -367,6 +389,11 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		c.reasoningTokenMultiplier,
 		reasoningEffort,
 	)
+	nativeReasoningOverridden := false
+	if profile.ReasoningEffort == ReasoningEffortNestedObject &&
+		reasoningEffort != "" && request.Generation.ReasoningEffort.Mode != core.AIParameterOmit {
+		nativeReasoningOverridden = mergeNativeReasoningSiblings(body, options.Extra, reasoningEffort)
+	}
 	if responseFormat != "" {
 		body["response_format"] = map[string]interface{}{"type": responseFormat}
 	}
@@ -389,10 +416,18 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 	}
 	if request.Generation.ResponseFormat.Mode == core.AIParameterSet {
 		removeKeyFold(body, "response_format")
-		body["response_format"] = map[string]interface{}{"type": responseFormat}
+		if responseFormat != "" {
+			body["response_format"] = map[string]interface{}{"type": responseFormat}
+		}
 	}
 
-	adjustments := make([]core.AIRequestAdjustment, 0, 7)
+	adjustments := make([]core.AIRequestAdjustment, 0, 8)
+	if nativeReasoningOverridden {
+		adjustments = append(adjustments, core.AIRequestAdjustment{
+			Source: "portable", Rule: "generation-precedence", Path: "/reasoning/effort",
+			Action: "set", Reason: "portable reasoning effort overrides native effort",
+		})
+	}
 	omits := []struct {
 		mode core.AIParameterMode
 		path string
@@ -462,6 +497,17 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 	return draft, nil
 }
 
+func portableResponseFormatType(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return "", nil
+	case "json":
+		return "json_object", nil
+	default:
+		return "", errors.New("unsupported portable response format")
+	}
+}
+
 func (c *codec) Encode(draft *Draft) ([]byte, error) {
 	if draft == nil {
 		return nil, errors.New("OpenAI wire draft is nil")
@@ -485,16 +531,24 @@ func (c *codec) Decode(response io.Reader) (*core.AIResult, error) {
 	}
 	var decoded responseEnvelope
 	if err := json.NewDecoder(response).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("decode OpenAI wire response: %w", err)
+		return nil, errors.New("decode OpenAI wire response")
+	}
+	if decoded.Error != nil {
+		return nil, endpointError(decoded.Error)
 	}
 	if len(decoded.Choices) == 0 {
 		return nil, errors.New("no response from OpenAI-compatible endpoint")
 	}
-	content := decoded.Choices[0].Message.Content
+	choice := decoded.Choices[0]
+	content := choice.Message.Content
 	if content == "" {
-		content = decoded.Choices[0].Message.ReasoningContent
+		content = choice.Message.ReasoningContent
 	}
-	return resultFor(content, decoded.Model, decoded.Usage), nil
+	result := resultFor(content, decoded.Model, decoded.Usage)
+	if choice.Error != nil || strings.EqualFold(strings.TrimSpace(choice.FinishReason), "error") {
+		return result, endpointErrorOrUnmapped(choice.Error)
+	}
+	return result, nil
 }
 
 func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (*core.AIResult, error) {
@@ -504,53 +558,63 @@ func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (
 	if callback == nil {
 		return nil, errors.New("OpenAI wire stream callback is nil")
 	}
-	reader := bufio.NewReader(response)
+	parser := newSSEParser(response, c.maxSSEEventBytes)
 	var content strings.Builder
 	var model string
 	var usage usage
 	var finishReason string
 	chunkIndex := 0
+	terminal := false
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			if content.Len() > 0 {
-				return resultFor(content.String(), model, usage), core.ErrStreamPartiallyCompleted
+		event, err := parser.Next()
+		if errors.Is(err, io.EOF) {
+			if terminal {
+				break
 			}
-			return nil, fmt.Errorf("read OpenAI wire stream: %w", err)
+			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+				errors.New("OpenAI wire stream ended before a terminal event"))
 		}
-		line = strings.TrimSpace(line)
-		if line == "data: [DONE]" {
+		if err != nil {
+			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0, err)
+		}
+		if event.Done {
 			break
 		}
-		if strings.HasPrefix(line, "data: ") {
-			var chunk streamEnvelope
-			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk) == nil {
-				if model == "" && chunk.Model != "" {
-					model = chunk.Model
-				}
-				if chunk.Usage != nil {
-					usage = *chunk.Usage
-				}
-				for _, choice := range chunk.Choices {
-					delta := choice.Delta.Content
-					if delta == "" {
-						delta = choice.Delta.ReasoningContent
-					}
-					if delta != "" {
-						content.WriteString(delta)
-						if callback(core.StreamChunk{Content: delta, Delta: true, Index: chunkIndex, Model: model}) != nil {
-							return resultFor(content.String(), model, usage), nil
-						}
-						chunkIndex++
-					}
-					if choice.FinishReason != "" {
-						finishReason = choice.FinishReason
-					}
-				}
-			}
+		var chunk streamEnvelope
+		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+				errors.New("decode OpenAI wire stream event"))
 		}
-		if err == io.EOF {
-			break
+		if chunk.Error != nil {
+			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+				endpointError(chunk.Error))
+		}
+		if model == "" && chunk.Model != "" {
+			model = chunk.Model
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
+		}
+		for _, choice := range chunk.Choices {
+			delta := choice.Delta.Content
+			if delta == "" {
+				delta = choice.Delta.ReasoningContent
+			}
+			if delta != "" {
+				content.WriteString(delta)
+				if callback(core.StreamChunk{Content: delta, Delta: true, Index: chunkIndex, Model: model}) != nil {
+					return resultFor(content.String(), model, usage), nil
+				}
+				chunkIndex++
+			}
+			if strings.EqualFold(strings.TrimSpace(choice.FinishReason), "error") || choice.Error != nil {
+				return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+					endpointErrorOrUnmapped(choice.Error))
+			}
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+				terminal = true
+			}
 		}
 	}
 	if finishReason != "" {
@@ -564,6 +628,13 @@ func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (
 		})
 	}
 	return resultFor(content.String(), model, usage), nil
+}
+
+func streamDecodeFailure(result *core.AIResult, emitted bool, err error) (*core.AIResult, error) {
+	if !emitted {
+		return nil, err
+	}
+	return result, errors.Join(core.ErrStreamPartiallyCompleted, err)
 }
 
 // IsReasoningModel reports whether model uses the OpenAI reasoning parameter
@@ -614,7 +685,11 @@ func buildBody(
 			body["temperature"] = temperature
 		} else {
 			if maxTokens > 0 {
-				body["max_completion_tokens"] = maxTokens * reasoningTokenMultiplier
+				budget := maxTokens
+				if reasoningEffort != "" {
+					budget *= reasoningTokenMultiplier
+				}
+				body["max_completion_tokens"] = budget
 			}
 		}
 		if reasoningEffort != "" {
@@ -655,7 +730,8 @@ func buildProfiledBody(
 			body["max_tokens"] = maxTokens
 		case TokenLimitMaxCompletionTokens:
 			budget := maxTokens
-			if reasoningEffort != "none" {
+			if profile.TokenBudget == TokenBudgetScaleForReasoning &&
+				reasoningEffort != "" && reasoningEffort != "none" {
 				budget *= reasoningTokenMultiplier
 			}
 			body["max_completion_tokens"] = budget
@@ -675,14 +751,90 @@ func buildProfiledBody(
 }
 
 func applyReasoningEffort(body map[string]interface{}, style ReasoningEffortStyle, effort string) {
-	removeKeyFold(body, "reasoning")
 	removeKeyFold(body, "reasoning_effort")
 	switch style {
 	case ReasoningEffortTopLevel:
+		removeKeyFold(body, "reasoning")
 		body["reasoning_effort"] = effort
 	case ReasoningEffortNestedObject:
-		body["reasoning"] = map[string]interface{}{"effort": effort}
+		reasoning := foldedStringMap(body, "reasoning")
+		removeKeyFold(reasoning, "effort")
+		reasoning["effort"] = effort
+		removeKeyFold(body, "reasoning")
+		body["reasoning"] = reasoning
 	}
+}
+
+// mergeNativeReasoningSiblings preserves provider-native controls such as
+// OpenRouter's reasoning.exclude while giving portable reasoning_effort
+// deterministic precedence over a duplicate native effort value.
+func mergeNativeReasoningSiblings(
+	body map[string]interface{},
+	extra map[string]interface{},
+	effort string,
+) bool {
+	reasoning := foldedStringMap(body, "reasoning")
+	overridden := false
+	keys := make([]string, 0, len(extra))
+	for key := range extra {
+		if strings.EqualFold(key, "reasoning") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		native, ok := stringMap(extra[key])
+		if !ok {
+			overridden = true
+			continue
+		}
+		nativeKeys := make([]string, 0, len(native))
+		for nativeKey := range native {
+			nativeKeys = append(nativeKeys, nativeKey)
+		}
+		sort.Strings(nativeKeys)
+		for _, nativeKey := range nativeKeys {
+			if strings.EqualFold(nativeKey, "effort") {
+				nativeEffort, sameType := native[nativeKey].(string)
+				if !sameType || nativeEffort != effort {
+					overridden = true
+				}
+				continue
+			}
+			if !hasKeyFold(reasoning, nativeKey) {
+				reasoning[nativeKey] = native[nativeKey]
+			}
+		}
+	}
+	removeKeyFold(reasoning, "effort")
+	reasoning["effort"] = effort
+	removeKeyFold(body, "reasoning")
+	body["reasoning"] = reasoning
+	return overridden
+}
+
+func foldedStringMap(body map[string]interface{}, key string) map[string]interface{} {
+	for existing, value := range body {
+		if strings.EqualFold(existing, key) {
+			if mapped, ok := stringMap(value); ok {
+				return mapped
+			}
+		}
+	}
+	return make(map[string]interface{})
+}
+
+func stringMap(value interface{}) (map[string]interface{}, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Map || reflected.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+	clone := make(map[string]interface{}, reflected.Len())
+	iterator := reflected.MapRange()
+	for iterator.Next() {
+		clone[fmt.Sprint(iterator.Key().Interface())] = iterator.Value().Interface()
+	}
+	return clone, true
 }
 
 func tokenLimitPath(field TokenLimitField) string {
@@ -896,9 +1048,10 @@ func validatePositiveInteger(path string, value interface{}) error {
 }
 
 type responseEnvelope struct {
-	Model   string           `json:"model"`
-	Choices []responseChoice `json:"choices"`
-	Usage   usage            `json:"usage"`
+	Model   string             `json:"model"`
+	Choices []responseChoice   `json:"choices"`
+	Usage   usage              `json:"usage"`
+	Error   *wireErrorEnvelope `json:"error,omitempty"`
 }
 
 type responseChoice struct {
@@ -906,13 +1059,15 @@ type responseChoice struct {
 		Content          string `json:"content"`
 		ReasoningContent string `json:"reasoning_content,omitempty"`
 	} `json:"message"`
-	FinishReason string `json:"finish_reason"`
+	FinishReason string             `json:"finish_reason"`
+	Error        *wireErrorEnvelope `json:"error,omitempty"`
 }
 
 type streamEnvelope struct {
-	Model   string         `json:"model"`
-	Choices []streamChoice `json:"choices"`
-	Usage   *usage         `json:"usage,omitempty"`
+	Model   string             `json:"model"`
+	Choices []streamChoice     `json:"choices"`
+	Usage   *usage             `json:"usage,omitempty"`
+	Error   *wireErrorEnvelope `json:"error,omitempty"`
 }
 
 type streamChoice struct {
@@ -920,7 +1075,57 @@ type streamChoice struct {
 		Content          string `json:"content,omitempty"`
 		ReasoningContent string `json:"reasoning_content,omitempty"`
 	} `json:"delta"`
-	FinishReason string `json:"finish_reason,omitempty"`
+	FinishReason string             `json:"finish_reason,omitempty"`
+	Error        *wireErrorEnvelope `json:"error,omitempty"`
+}
+
+type wireErrorMetadata struct {
+	ErrorType string `json:"error_type"`
+}
+
+type wireErrorEnvelope struct {
+	Code     int                `json:"code"`
+	Metadata *wireErrorMetadata `json:"metadata,omitempty"`
+}
+
+// EndpointError is the provider-neutral, bounded reduction of an in-band
+// OpenAI-compatible endpoint error.
+type EndpointError struct {
+	Code int
+	Type string
+}
+
+// Error deliberately excludes all network-controlled error text.
+func (*EndpointError) Error() string {
+	return "OpenAI-compatible endpoint returned an in-band error"
+}
+
+func endpointError(wire *wireErrorEnvelope) *EndpointError {
+	if wire == nil {
+		return &EndpointError{Type: "unmapped"}
+	}
+	errorType := ""
+	if wire.Metadata != nil {
+		errorType = wire.Metadata.ErrorType
+	}
+	return &EndpointError{Code: wire.Code, Type: normalizeWireErrorType(errorType)}
+}
+
+func endpointErrorOrUnmapped(wire *wireErrorEnvelope) *EndpointError {
+	return endpointError(wire)
+}
+
+func normalizeWireErrorType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) == 0 || len(value) > maxWireErrorTypeBytes {
+		return "unmapped"
+	}
+	for _, char := range value {
+		if char != '_' && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+			return "unmapped"
+		}
+	}
+	return value
 }
 
 type usage struct {

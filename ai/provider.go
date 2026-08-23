@@ -41,6 +41,13 @@ type AIConfig struct {
 	// Connection settings
 	Timeout    time.Duration
 	MaxRetries int
+	// RetryDelay is the initial exponential retry delay. Zero uses
+	// TRUVAG3_AI_RETRY_DELAY, then the framework's one-second default.
+	RetryDelay time.Duration
+	// SSEEventMaxBytes bounds one complete server-sent event for compatible
+	// streaming providers. Zero uses TRUVAG3_AI_SSE_EVENT_MAX_BYTES, then the
+	// framework's 1 MiB default.
+	SSEEventMaxBytes int
 
 	// Model configuration
 	Model       string
@@ -63,6 +70,11 @@ type AIConfig struct {
 
 	Logger    core.Logger
 	Telemetry core.Telemetry
+
+	// CircuitBreaker optionally protects this client's logical provider calls.
+	// Applications compose an implementation through the provider-neutral core
+	// contract; the ai module does not depend on a resilience implementation.
+	CircuitBreaker core.CircuitBreaker
 
 	// Advanced options
 	Headers map[string]string
@@ -311,6 +323,16 @@ func WithLogger(logger core.Logger) AIOption {
 func WithTelemetry(telemetry core.Telemetry) AIOption {
 	return func(c *AIConfig) {
 		c.Telemetry = telemetry
+	}
+}
+
+// WithCircuitBreaker protects logical calls made by the constructed client.
+// The breaker must use ShouldCountAICircuitBreakerFailure (or equivalent
+// semantics) so client/configuration and partial-stream errors do not affect
+// provider-health state. A nil breaker leaves the client unprotected.
+func WithCircuitBreaker(breaker core.CircuitBreaker) AIOption {
+	return func(c *AIConfig) {
+		c.CircuitBreaker = breaker
 	}
 }
 

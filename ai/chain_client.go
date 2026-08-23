@@ -28,7 +28,9 @@ type ChainClient struct {
 // FOLLOWS FRAMEWORK PRINCIPLES:
 // - Fail-Fast Configuration: Invalid provider aliases fail immediately at creation time
 // - Resilient Runtime: Missing API keys are warnings, not errors (allows partial chains)
-// - Circuit Breaker Integration: Each provider already has circuit breaker protection
+// Provider-local retries, per-entry circuit breakers, and ordered
+// cross-provider failover are separate layers. A circuit breaker is installed
+// only when WithChainCircuitBreakerFactory is supplied.
 func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 	// MaxRetries starts as the unset sentinel so per-provider NewClient calls
 	// can fall back to TRUVAG3_AI_RETRY_ATTEMPTS or the historical default of 3.
@@ -93,6 +95,27 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 			WithLogger(config.Logger),
 			WithTelemetry(config.Telemetry),
 		}
+		if config.CircuitBreakerFactory != nil {
+			breaker, err := config.CircuitBreakerFactory(
+				alias,
+				alias,
+				ShouldCountAICircuitBreakerFailure,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"configuration error: create AI circuit breaker for entry %q: %w",
+					alias,
+					err,
+				)
+			}
+			if isNilCircuitBreaker(breaker) {
+				return nil, fmt.Errorf(
+					"configuration error: circuit breaker factory returned nil for entry %q",
+					alias,
+				)
+			}
+			opts = append(opts, WithCircuitBreaker(breaker))
+		}
 		// Apply an explicit chain timeout when configured. Otherwise the
 		// materializer supplies the framework's failover-safe 180s default.
 		if config.Timeout > 0 {
@@ -108,16 +131,16 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 		}
 		// Per-provider MaxRetries with chain-specific default of 0.
 		//
-		// Why 0 for chain clients (vs 3 for single clients): the chain client's
-		// failover loop IS the retry mechanism. When a provider fails on a
-		// retryable error, the chain walks to the next provider. Per-provider
-		// in-provider retries (BaseClient.ExecuteWithRetry) just amplify
-		// wasted token spend on the dead provider before failover kicks in.
+		// Why 0 for chain clients (vs 3 for single clients): provider-local
+		// retries and ordered cross-provider failover are separate attempt
+		// layers. Defaulting the inner layer to zero avoids multiplying attempts
+		// before failover. Neither layer substitutes for the separately injected
+		// per-entry circuit breaker.
 		//
 		// Precedence (resolved by resolveMaxRetriesWithDefault):
 		//   1. Explicit WithChainMaxRetries(n) — wins, any non-negative integer
 		//   2. TRUVAG3_AI_RETRY_ATTEMPTS env var — only positive values honored
-		//   3. Chain default of 0 — failover is the retry layer
+		//   3. Chain default of 0 — avoid multiplying provider and failover attempts
 		//
 		// Always propagate as WithMaxRetries so the per-provider NewClient
 		// sees an explicit option and bypasses its own (single-client) default.
@@ -199,17 +222,19 @@ func (c *ChainClient) SetTelemetry(provider core.Telemetry) {
 	}
 }
 
-// GenerateResponse tries each provider until one succeeds
-// FOLLOWS FRAMEWORK PRINCIPLE: Circuit Breaker Integration for external API calls
+// GenerateResponse tries each provider until one succeeds. Provider-local
+// retries, an optional per-entry circuit breaker, and ordered failover remain
+// separate layers. Breaker rejection is eligible for the next chain entry.
 //
 // Behavior:
-// - Clones options for each provider to avoid mutation bleeding across providers
-// - Preserves original model setting so each provider can apply its own defaults/resolution
-// - Tries each provider in order until one succeeds
-// - Fails fast on client errors (4xx) - these are not retryable
-// - Continues on server errors (5xx) - these might work on different provider
-// - Returns first successful response
-// - Comprehensive telemetry and logging for failover debugging
+//   - Clones options for each provider to avoid mutation bleeding across providers
+//   - Preserves original model setting so each provider can apply its own defaults/resolution
+//   - Tries each provider in order until one succeeds
+//   - Fails fast on ordinary client errors; authentication and provider-specific
+//     billing failures may continue according to the classification contract
+//   - Continues on server errors (5xx) - these might work on different provider
+//   - Returns first successful response
+//   - Comprehensive telemetry and logging for failover debugging
 //
 // See: ai/MODEL_ALIAS_CROSS_PROVIDER_PROPOSAL.md for the options mutation bug fix
 func (c *ChainClient) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
@@ -315,6 +340,9 @@ type ChainConfig struct {
 	Timeout                  time.Duration
 	ReasoningTokenMultiplier int    // Token multiplier for reasoning models (0 = use default 5x)
 	ReasoningEffort          string // Default reasoning effort: "none", "low", "medium", "high", "xhigh" (empty = model default)
+	// CircuitBreakerFactory constructs an independent breaker for each requested
+	// provider entry. Nil leaves the chain unprotected.
+	CircuitBreakerFactory CircuitBreakerFactory
 	// MaxRetries controls the per-provider HTTP retry count for every provider
 	// in the chain. The maxRetriesUnset sentinel (NewChainClient initializes
 	// this) means "let each per-provider NewClient resolve via env var or
@@ -349,6 +377,16 @@ func WithChainLogger(logger core.Logger) ChainOption {
 func WithChainTelemetry(telemetry core.Telemetry) ChainOption {
 	return func(c *ChainConfig) {
 		c.Telemetry = telemetry
+	}
+}
+
+// WithChainCircuitBreakerFactory installs one independently constructed
+// circuit breaker per provider entry. The factory receives the stable entry
+// name, provider alias, and the required AI provider-health classifier. A
+// factory error or nil breaker is a fail-fast configuration error.
+func WithChainCircuitBreakerFactory(factory CircuitBreakerFactory) ChainOption {
+	return func(c *ChainConfig) {
+		c.CircuitBreakerFactory = factory
 	}
 }
 
@@ -393,13 +431,11 @@ func WithChainReasoningEffort(effort string) ChainOption {
 // it does NOT change how many providers the chain walks, only how many times
 // each provider retries before giving up and letting the chain move on.
 //
-// Chain default is 0 (no per-provider retries) because the chain client's
-// failover loop is the retry mechanism: when a provider fails on a retryable
-// error, the chain walks to the next provider. In-provider retries inside a
-// chain just amplify wasted token spend on the dead provider before failover
-// kicks in. Use this option to override the default when you specifically
-// want to absorb transient blips inside a single provider before the chain
-// moves on (e.g. flaky network, brief 5xx during a deploy).
+// Chain default is 0 (no per-provider retries) to avoid multiplying the
+// provider-local retry layer by the ordered cross-provider failover layer.
+// These are separate attempt layers, and neither substitutes for the optional
+// per-entry circuit breaker. Use this option when a provider should absorb
+// transient blips before the chain moves on (e.g. a brief 5xx during a deploy).
 //
 // Configuration precedence:
 //  1. Explicit WithChainMaxRetries(n) (highest) — any non-negative integer
@@ -479,6 +515,8 @@ func classifyFailoverReason(err error) string {
 		return "unknown"
 	}
 	switch {
+	case errors.Is(err, core.ErrCircuitBreakerOpen):
+		return "circuit_open"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.Is(err, context.Canceled):

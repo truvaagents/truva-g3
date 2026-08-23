@@ -24,10 +24,12 @@
 //
 // Architecture:
 // This interface enables:
-// 1. Multiple implementation strategies (in-memory, distributed)
-// 2. Pluggable failure detection algorithms
-// 3. Integration with telemetry and logging systems
-// 4. Graceful degradation of service functionality
+//  1. Multiple implementation strategies (in-memory, distributed)
+//  2. Pluggable failure detection algorithms
+//  3. Integration with telemetry and logging systems
+//  4. Graceful degradation of service functionality
+//  5. Application-layer composition across optional framework modules without
+//     creating sibling-module dependency edges
 //
 // Usage:
 // Implementations wrap service calls with Execute() or ExecuteWithTimeout()
@@ -43,12 +45,16 @@ import (
 
 // CircuitBreaker provides circuit breaker functionality for fault tolerance.
 // Implementations should protect against cascading failures by temporarily
-// blocking requests when a threshold of failures is reached.
+// blocking requests when a threshold of failures is reached. Callers own the
+// operation-specific error classifier; implementations must not import a
+// higher-level module merely to interpret its error taxonomy.
 type CircuitBreaker interface {
 	// Execute runs the provided function with circuit breaker protection.
 	// If the circuit is open, it returns ErrCircuitBreakerOpen immediately.
 	// If the circuit is closed or half-open, it executes the function and
-	// records the result to update the circuit state.
+	// records the result to update the circuit state. Implementations may use a
+	// configured classifier to decide whether fn's error represents dependency
+	// health; the returned error must retain errors.Is/errors.As compatibility.
 	Execute(ctx context.Context, fn func() error) error
 
 	// ExecuteWithTimeout runs the function with both circuit breaker protection

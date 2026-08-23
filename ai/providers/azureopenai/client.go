@@ -45,6 +45,7 @@ func newClient(
 		SurfaceVersion:           version,
 		ReasoningTokenMultiplier: config.ReasoningTokenMultiplier,
 		DefaultReasoningEffort:   config.ReasoningEffort,
+		MaxSSEEventBytes:         config.SSEEventMaxBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Azure OpenAI wire codec: %w", err)
@@ -80,6 +81,9 @@ func newClient(
 	}
 	if config.MaxRetries >= 0 {
 		base.MaxRetries = config.MaxRetries
+	}
+	if config.RetryDelay > 0 {
+		base.RetryDelay = config.RetryDelay
 	}
 	if config.Telemetry != nil {
 		base.SetTelemetry(config.Telemetry)
@@ -216,7 +220,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (result 
 	defer func() { _ = response.Body.Close() }()
 	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
+		body, _ := providers.ReadErrorBody(response.Body)
 		providerErr := c.HandleError(response.StatusCode, body, "Azure OpenAI", prepared.SemanticModel)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr
@@ -299,7 +303,7 @@ func (c *Client) Stream(
 	defer func() { _ = response.Body.Close() }()
 	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
+		body, _ := providers.ReadErrorBody(response.Body)
 		providerErr := c.HandleError(response.StatusCode, body, "Azure OpenAI", prepared.SemanticModel)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr

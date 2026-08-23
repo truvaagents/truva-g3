@@ -33,6 +33,14 @@ func (b *trackingReadCloser) Close() error {
 	return nil
 }
 
+type errorReader struct {
+	err error
+}
+
+func (reader errorReader) Read([]byte) (int, error) {
+	return 0, reader.err
+}
+
 // mockLogger for testing
 type mockLogger struct {
 	debugCalls []map[string]interface{}
@@ -211,6 +219,8 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 		wantErr        bool
 		errContains    string // if wantErr, assert error message contains this
 		expectedCalls  int
+		wantStatus     int
+		wantBody       string
 	}{
 		{
 			name: "success on first try",
@@ -248,9 +258,10 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 				w.Write([]byte("server error"))
 			},
 			maxRetries:    2,
-			wantErr:       true,
-			errContains:   "server error: status 500",
+			wantErr:       false,
 			expectedCalls: 3, // Initial + 2 retries
+			wantStatus:    http.StatusInternalServerError,
+			wantBody:      "server error",
 		},
 		{
 			name: "non-retryable error",
@@ -271,9 +282,22 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 				w.Write([]byte("<html><head><title>400 Bad Request</title></head><body><center><h1>400 Bad Request</h1></center><hr><center>cloudflare</center></body></html>"))
 			},
 			maxRetries:    2,
-			wantErr:       true,                     // All retries exhausted
-			errContains:   "non-API error response", // Must be proxy_error, not client_error
-			expectedCalls: 3,                        // Initial + 2 retries (not 1)
+			wantErr:       true,                        // All retries exhausted
+			errContains:   "non-API provider response", // Must be proxy_error, not client_error
+			expectedCalls: 3,                           // Initial + 2 retries (not 1)
+		},
+		{
+			name: "HTML 500 from gateway remains a transport failure",
+			serverBehavior: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("<html><body>gateway failure</body></html>"))
+			},
+			maxRetries:    1,
+			wantErr:       true,
+			errContains:   "non-API provider response",
+			expectedCalls: 2,
+			wantStatus:    http.StatusInternalServerError,
 		},
 		{
 			name: "HTML 400 then success recovers",
@@ -336,7 +360,7 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
 				}
 				// ORCH-008: Verify transient proxy errors satisfy core.ProviderError
-				if err != nil && tt.errContains == "non-API error response" {
+				if err != nil && tt.errContains == "non-API provider response" {
 					var pe core.ProviderError
 					if !errors.As(err, &pe) {
 						t.Fatal("proxy error should satisfy core.ProviderError")
@@ -344,8 +368,12 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 					if !pe.IsTransient() {
 						t.Error("proxy error should have IsTransient() == true")
 					}
-					if pe.StatusCode() != http.StatusBadRequest {
-						t.Errorf("expected status 400, got %d", pe.StatusCode())
+					wantStatus := tt.wantStatus
+					if wantStatus == 0 {
+						wantStatus = http.StatusBadRequest
+					}
+					if pe.StatusCode() != wantStatus {
+						t.Errorf("expected status %d, got %d", wantStatus, pe.StatusCode())
 					}
 					if pe.Provider() == "" {
 						t.Error("proxy error should have non-empty Provider()")
@@ -356,7 +384,16 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				if resp != nil {
-					resp.Body.Close()
+					if tt.wantStatus != 0 && resp.StatusCode != tt.wantStatus {
+						t.Errorf("response status = %d, want %d", resp.StatusCode, tt.wantStatus)
+					}
+					if tt.wantBody != "" {
+						body, readErr := io.ReadAll(resp.Body)
+						if readErr != nil || string(body) != tt.wantBody {
+							t.Errorf("response body = %q, %v; want %q", body, readErr, tt.wantBody)
+						}
+					}
+					_ = resp.Body.Close()
 				}
 			}
 
@@ -442,6 +479,264 @@ func TestBaseClient_ExecuteWithRetry_ReplaysCompleteBodyForEveryAttempt(t *testi
 	}
 	if !originalBody.closed {
 		t.Error("original request body was not closed")
+	}
+}
+
+func TestBaseClient_RetryExhaustionReturnsFinalAPIResponseOpen(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+
+	var bodies []*trackingReadCloser
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := &trackingReadCloser{Reader: strings.NewReader(`{"error":{"type":"provider_error"}}`)}
+		bodies = append(bodies, body)
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header: http.Header{
+				"Content-Type":    {"application/json"},
+				"X-Generation-Id": {"generation-final"},
+			},
+			Body: body, Request: request,
+		}, nil
+	})}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ExecuteWithRetry(t.Context(), request)
+	if err != nil {
+		t.Fatalf("ExecuteWithRetry error = %v", err)
+	}
+	if response == nil || response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("X-Generation-Id") != "generation-final" {
+		t.Fatalf("final response = %#v", response)
+	}
+	if len(bodies) != 2 || !bodies[0].closed || bodies[1].closed {
+		t.Fatalf("response body ownership = %#v", bodies)
+	}
+	decoded, readErr := io.ReadAll(response.Body)
+	if readErr != nil || !strings.Contains(string(decoded), "provider_error") {
+		t.Fatalf("final body = %q, %v", decoded, readErr)
+	}
+	_ = response.Body.Close()
+}
+
+func TestRetryDelayUsesGreaterApplicableRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		status     int
+		header     string
+		backoff    time.Duration
+		want       time.Duration
+		wantSource string
+	}{
+		{name: "429 seconds greater", status: 429, header: "5", backoff: 2 * time.Second, want: 5 * time.Second, wantSource: "retry_after"},
+		{name: "503 HTTP date greater", status: 503, header: now.Add(7 * time.Second).Format(http.TimeFormat), backoff: time.Second, want: 7 * time.Second, wantSource: "retry_after"},
+		{name: "server value below backoff", status: 429, header: "1", backoff: 2 * time.Second, want: 2 * time.Second, wantSource: "exponential"},
+		{name: "other status ignores header", status: 500, header: "30", backoff: 2 * time.Second, want: 2 * time.Second, wantSource: "exponential"},
+		{name: "negative ignored", status: 429, header: "-1", backoff: 2 * time.Second, want: 2 * time.Second, wantSource: "exponential"},
+		{name: "invalid ignored", status: 503, header: "later", backoff: 2 * time.Second, want: 2 * time.Second, wantSource: "exponential"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := &http.Response{StatusCode: test.status, Header: http.Header{"Retry-After": {test.header}}}
+			got, source := retryDelay(test.backoff, response, now)
+			if got != test.want || source != test.wantSource {
+				t.Fatalf("retryDelay = %s, %q; want %s, %q", got, source, test.want, test.wantSource)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfterSaturatesDeltaSecondsOverflow(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	maxSeconds := uint64(maxDuration / time.Second)
+	boundary, ok := parseRetryAfter(fmt.Sprint(maxSeconds), time.Time{})
+	if !ok || boundary != time.Duration(maxSeconds)*time.Second {
+		t.Fatalf("boundary = %s, %t", boundary, ok)
+	}
+	for _, value := range []string{
+		fmt.Sprint(maxSeconds + 1),
+		"184467440737095516160000000000000000000",
+	} {
+		got, valid := parseRetryAfter(value, time.Time{})
+		if !valid || got != maxDuration {
+			t.Fatalf("parseRetryAfter(%q) = %s, %t; want saturation", value, got, valid)
+		}
+	}
+}
+
+func TestBaseClient_RetryAfterBeyondDeadlineDoesNotIssueEarlyAttempt(t *testing.T) {
+	client := NewBaseClient(time.Second, nil)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = time.Millisecond
+	calls := 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": {"3600"}},
+			Body:       io.NopCloser(strings.NewReader("rate limited")),
+			Request:    request,
+		}, nil
+	})}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ExecuteWithRetry(ctx, request)
+	if response != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("response=%#v error=%v", response, err)
+	}
+	if calls != 1 {
+		t.Fatalf("transport calls = %d, want 1", calls)
+	}
+}
+
+func TestBaseClient_RetryAfterWithoutCallerDeadlineUsesAbsoluteWaitCap(t *testing.T) {
+	client := NewBaseClient(25*time.Millisecond, nil)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = time.Millisecond
+	calls := 0
+	client.HTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": {"18446744073709551615"}},
+			Body:       io.NopCloser(strings.NewReader("rate limited")),
+			Request:    request,
+		}, nil
+	})
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	response, err := client.ExecuteWithRetry(t.Context(), request)
+	if response != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("response=%#v error=%v", response, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("deadline-free retry wait took %s", elapsed)
+	}
+	if calls != 1 {
+		t.Fatalf("transport calls = %d, want 1", calls)
+	}
+}
+
+func TestBaseClient_RetryAfterLongCallerDeadlineUsesAbsoluteWaitCap(t *testing.T) {
+	client := NewBaseClient(25*time.Millisecond, nil)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = time.Millisecond
+	calls := 0
+	client.HTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": {"3600"}},
+			Body:       io.NopCloser(strings.NewReader("rate limited")),
+			Request:    request,
+		}, nil
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	response, err := client.ExecuteWithRetry(ctx, request)
+	if response != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("response=%#v error=%v", response, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("long caller deadline retry wait took %s", elapsed)
+	}
+	if calls != 1 {
+		t.Fatalf("transport calls = %d, want 1", calls)
+	}
+}
+
+func TestBaseClient_AttemptSpansAndRetryLogsUseBoundedContract(t *testing.T) {
+	logger := &mockLogger{}
+	tracing := &mockTelemetry{}
+	client := NewBaseClient(time.Second, logger)
+	client.ProviderName = "openai"
+	client.MaxRetries = 1
+	client.RetryDelay = 0
+	client.SetTelemetry(tracing)
+	calls := 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		status := http.StatusTooManyRequests
+		if calls == 2 {
+			status = http.StatusOK
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("response")), Request: request}, nil
+	})}
+	request, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://provider.example", nil)
+	response, err := client.ExecuteWithRetry(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if len(tracing.spans) != 2 {
+		t.Fatalf("attempt spans = %d", len(tracing.spans))
+	}
+	for index, span := range tracing.spans {
+		if !span.ended || span.attributes["ai.attempt"] != index+1 || span.attributes["ai.max_retries"] != 1 ||
+			span.attributes["ai.is_retry"] != (index > 0) || span.attributes["ai.attempt_duration_ms"] == nil {
+			t.Fatalf("attempt %d attributes = %#v, ended=%t", index+1, span.attributes, span.ended)
+		}
+	}
+	if tracing.spans[0].attributes["ai.attempt_status"] != "server_error" ||
+		tracing.spans[0].attributes["http.status_code"] != http.StatusTooManyRequests ||
+		len(tracing.spans[0].errors) != 1 {
+		t.Fatalf("first attempt = %#v / %#v", tracing.spans[0].attributes, tracing.spans[0].errors)
+	}
+	if tracing.spans[1].attributes["ai.attempt_status"] != "success" ||
+		tracing.spans[1].attributes["http.status_code"] != http.StatusOK {
+		t.Fatalf("second attempt = %#v", tracing.spans[1].attributes)
+	}
+	for _, fields := range append(append([]map[string]interface{}{}, logger.warnCalls...), logger.infoCalls...) {
+		status, present := fields["status"]
+		if present && status != "retry" && status != "recovered" {
+			t.Fatalf("unbounded log status: %#v", fields)
+		}
+	}
+}
+
+func TestBaseClient_FirstAttemptSuccessUsesSuccessStatus(t *testing.T) {
+	logger := &mockLogger{}
+	client := NewBaseClient(time.Second, logger)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Request:    request,
+		}, nil
+	})}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://provider.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ExecuteWithRetry(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if len(logger.debugCalls) != 1 || logger.debugCalls[0]["operation"] != "ai_http_success" ||
+		logger.debugCalls[0]["status"] != "success" {
+		t.Fatalf("first-attempt success log = %#v", logger.debugCalls)
 	}
 }
 
@@ -714,7 +1009,7 @@ func TestBaseClient_HandleError(t *testing.T) {
 			statusCode: http.StatusBadRequest,
 			body:       []byte(`{"error": "invalid request"}`),
 			provider:   "TestProvider",
-			wantErr:    "TestProvider API error: invalid request - {\"error\": \"invalid request\"}",
+			wantErr:    "TestProvider API error: invalid request",
 		},
 		{
 			name:       "unauthorized",
@@ -843,6 +1138,31 @@ func TestBaseClient_Logging(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(fields), "provider-body-secret") {
 		t.Fatalf("legacy error log leaked provider detail: %#v", fields)
+	}
+}
+
+func TestResponseMetricProjectionExcludesProviderResponseIdentity(t *testing.T) {
+	baseline := ResponseObservation{
+		Provider: "openai",
+		Usage: core.TokenUsage{
+			PromptTokens:     10,
+			CompletionTokens: 20,
+		},
+		Duration: 125 * time.Millisecond,
+	}
+	withIdentity := baseline
+	withIdentity.ProviderAlias = "openai.openrouter"
+	withIdentity.SemanticModel = "openrouter/auto"
+	withIdentity.ResponseModel = "publisher/private-deployment"
+	withIdentity.ProviderRequestID = "gen-private-request"
+
+	got := projectResponseMetrics(withIdentity)
+	want := projectResponseMetrics(baseline)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("response identity changed metric projection: got %#v, want %#v", got, want)
+	}
+	if got.Provider != "openai" || got.DurationMillis != 125 || got.PromptTokens != 10 || got.CompletionTokens != 20 {
+		t.Fatalf("metric projection = %#v", got)
 	}
 }
 
@@ -1123,9 +1443,96 @@ func TestHandleError_DefaultCase(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	expected := "TestProvider API error (status 418): I'm a teapot"
+	expected := "TestProvider API error (status 418)"
 	if err.Error() != expected {
 		t.Errorf("expected error %q, got %q", expected, err.Error())
+	}
+}
+
+func TestReadErrorBody(t *testing.T) {
+	t.Parallel()
+
+	t.Run("boundary", func(t *testing.T) {
+		t.Parallel()
+		want := bytes.Repeat([]byte("a"), maxProviderErrorBodyBytes)
+		got, err := ReadErrorBody(bytes.NewReader(want))
+		if err != nil {
+			t.Fatalf("ReadErrorBody() error = %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("ReadErrorBody() returned %d bytes, want %d", len(got), len(want))
+		}
+	})
+
+	t.Run("overflow discards prefix", func(t *testing.T) {
+		t.Parallel()
+		got, err := ReadErrorBody(bytes.NewReader(bytes.Repeat(
+			[]byte("b"), maxProviderErrorBodyBytes+1,
+		)))
+		if err == nil {
+			t.Fatal("ReadErrorBody() error = nil")
+		}
+		if got != nil {
+			t.Fatalf("ReadErrorBody() retained %d bytes after overflow", len(got))
+		}
+	})
+
+	t.Run("read failure discards prefix and cause text", func(t *testing.T) {
+		t.Parallel()
+		const canary = "reader-error-secret"
+		got, err := ReadErrorBody(io.MultiReader(
+			strings.NewReader("captured-prefix"),
+			errorReader{err: errors.New(canary)},
+		))
+		if err == nil {
+			t.Fatal("ReadErrorBody() error = nil")
+		}
+		if got != nil {
+			t.Fatalf("ReadErrorBody() retained %q after read failure", got)
+		}
+		if strings.Contains(err.Error(), canary) {
+			t.Fatalf("ReadErrorBody() exposed reader error: %v", err)
+		}
+	})
+
+	t.Run("nil reader", func(t *testing.T) {
+		t.Parallel()
+		if body, err := ReadErrorBody(nil); err == nil || body != nil {
+			t.Fatalf("ReadErrorBody(nil) = %q, %v", body, err)
+		}
+	})
+}
+
+func TestHandleErrorNeverExposesResponseBody(t *testing.T) {
+	t.Parallel()
+	logger := &mockLogger{}
+	client := NewBaseClient(180*time.Second, logger)
+	canaries := []string{
+		"sk-error-body-canary",
+		"prompt-fragment-error-body-canary",
+		"moderation-error-body-canary",
+		"html-error-body-canary",
+	}
+	body := []byte(`{"error":{"message":"prompt-fragment-error-body-canary",` +
+		`"api_key":"sk-error-body-canary",` +
+		`"flagged_input":"moderation-error-body-canary",` +
+		`"html":"<html>html-error-body-canary</html>"}}`)
+
+	for _, status := range []int{http.StatusBadRequest, http.StatusTeapot} {
+		err := client.HandleError(status, body, "TestProvider", "test-model")
+		span := &mockSpan{}
+		errorType := RecordObservationError(span, err, "unknown")
+		client.LogErrorMetadata(t.Context(), ErrorObservation{
+			Operation: "ai_generate", Provider: "openai", ProviderAlias: "openai",
+			ErrorType: errorType,
+		})
+
+		observed := fmt.Sprint(err, span.attributes, span.errors, logger.errorCalls)
+		for _, canary := range canaries {
+			if strings.Contains(observed, canary) {
+				t.Fatalf("status %d observations exposed %q: %s", status, canary, observed)
+			}
+		}
 	}
 }
 
@@ -1323,6 +1730,18 @@ func TestHandleError_BillingExhausted402IsRetryable(t *testing.T) {
 	}
 	if !pe.IsRetryable() {
 		t.Error("402 Payment Required must be marked retryable")
+	}
+}
+
+func TestHandleError_Bare402IsRetryable(t *testing.T) {
+	client := NewBaseClient(180*time.Second, nil)
+	err := client.HandleError(http.StatusPaymentRequired, nil, "TestProvider", "test-model")
+	var providerErr core.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected core.ProviderError, got %T", err)
+	}
+	if !providerErr.IsRetryable() {
+		t.Fatal("bare 402 must be status-authoritative for provider-chain failover")
 	}
 }
 

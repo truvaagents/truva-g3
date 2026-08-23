@@ -38,8 +38,11 @@ type LLMCallRecord struct {
 	TotalTokens      int    `json:"total_tokens"`
 
 	// Status
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
+	Success bool `json:"success"`
+	// Error is an observation-only string sanitized by the producing caller
+	// before recording. Recorders store it verbatim and do not parse provider
+	// payloads.
+	Error string `json:"error,omitempty"`
 }
 
 // LLMCallRecorder records LLM calls for debugging.
