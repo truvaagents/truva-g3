@@ -294,11 +294,11 @@ func (v *VectorUserMemory) Recall(ctx context.Context, userID string, namespace 
 	defer cancel()
 
 	searchLimit := safeOverfetchLimit(limit, v.overfetchMul)
-	results, err := v.pointsClient.Search(searchCtx, &pb.SearchPoints{
+	results, err := v.pointsClient.Query(searchCtx, &pb.QueryPoints{
 		CollectionName: v.config.CollectionName,
-		Vector:         embResp.Embeddings[0],
+		Query:          pb.NewQueryDense(embResp.Embeddings[0]),
 		Filter:         filter,
-		Limit:          searchLimit,
+		Limit:          &searchLimit,
 		WithPayload:    &pb.WithPayloadSelector{SelectorOptions: &pb.WithPayloadSelector_Enable{Enable: true}},
 	})
 	if err != nil {

@@ -285,10 +285,11 @@ func (q *VectorSharedKnowledge) SearchKnowledgeByVector(
 	searchCtx, cancel := context.WithTimeout(ctx, q.config.SearchTimeout)
 	defer cancel()
 
-	result, err := q.pointsClient.Search(searchCtx, &pb.SearchPoints{
+	queryLimit := uint64(topK)
+	result, err := q.pointsClient.Query(searchCtx, &pb.QueryPoints{
 		CollectionName: q.config.CollectionName,
-		Vector:         queryVector,
-		Limit:          uint64(topK),
+		Query:          pb.NewQueryDense(queryVector),
+		Limit:          &queryLimit,
 		Filter:         scopeFilter,
 		WithPayload:    &pb.WithPayloadSelector{SelectorOptions: &pb.WithPayloadSelector_Enable{Enable: true}},
 	})
