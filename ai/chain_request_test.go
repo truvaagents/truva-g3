@@ -16,6 +16,28 @@ import (
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
+func TestFrameworkManagedChainEntryPropagatesSSEEventLimit(t *testing.T) {
+	t.Setenv("TRUVAG3_AI_SSE_EVENT_MAX_BYTES", "16384")
+	factory := withRecordingFactory(t)
+	if _, err := NewChainClient(WithProviderChain("mock-recording")); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.SSEEventMaxBytes != 16384 {
+		t.Fatalf("chain entry config = %#v", factory.lastConfig)
+	}
+}
+
+func TestFrameworkManagedChainEntryPropagatesRetryDelay(t *testing.T) {
+	t.Setenv("TRUVAG3_AI_RETRY_DELAY", "75ms")
+	factory := withRecordingFactory(t)
+	if _, err := NewChainClient(WithProviderChain("mock-recording")); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.RetryDelay != 75*time.Millisecond {
+		t.Fatalf("chain entry config = %#v", factory.lastConfig)
+	}
+}
+
 type phase5RequestClient struct {
 	generate func(context.Context, *core.AIRequest) (*core.AIResult, error)
 	stream   func(context.Context, *core.AIRequest, core.StreamCallback) (*core.AIResult, error)

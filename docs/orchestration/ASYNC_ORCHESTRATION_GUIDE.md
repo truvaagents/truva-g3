@@ -1741,6 +1741,7 @@ See [examples/k8-deployment/grafana.yaml](https://github.com/truvaagents/truva-g
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint | - | `http://otel-collector:4318` |
 | `OPENAI_API_KEY` | OpenAI API key (enables AI orchestration) | - | `sk-...` |
 | `ANTHROPIC_API_KEY` | Anthropic API key (fallback provider) | - | `sk-ant-...` |
+| `OPENROUTER_API_KEY` | OpenRouter API key (multi-provider routing) | - | `sk-or-...` |
 | `GROQ_API_KEY` | Groq API key (alternative provider) | - | `gsk-...` |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Enable execution storage for DAG visualization | `false` | `true` |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` | `true` |
@@ -1748,7 +1749,7 @@ See [examples/k8-deployment/grafana.yaml](https://github.com/truvaagents/truva-g
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Retention for error records | `168h` | `336h` |
 
 > 📖 **AI Provider Configuration**: For comprehensive information on configuring AI providers, model aliases, provider chains with failover, and environment variable overrides for models, see the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md). It covers:
-> - All supported providers (OpenAI, Anthropic, Groq, DeepSeek, Gemini, Ollama, etc.)
+> - All supported providers (OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Gemini, Ollama, etc.)
 > - Model aliases (`smart`, `fast`, `default`) and how to override them
 > - Chain Client for production-grade failover between providers
 > - Cost-optimized and privacy-first deployment scenarios

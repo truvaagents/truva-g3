@@ -1,0 +1,83 @@
+{
+  "checked_at": "2026-08-21",
+  "models": {
+    "openrouter/auto": {
+      "present": true,
+      "supported_parameters": [
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "structured_outputs"
+      ],
+      "live_probe": "pass",
+      "json_mode_probe": "intermittent_404",
+      "json_schema_probe": "intermittent_404"
+    },
+    "openrouter/auto:nitro": {
+      "live_probe": "pass",
+      "reasoning_probe": "pass",
+      "json_mode_probe": "intermittent_404",
+      "json_schema_probe": "intermittent_404"
+    },
+    "openrouter/pareto-code": {
+      "present": true,
+      "supported_parameters": [],
+      "live_probe": "pass"
+    },
+    "openrouter/free": {
+      "present": true,
+      "supported_parameters": [
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "structured_outputs"
+      ],
+      "live_probe": "privacy_404"
+    },
+    "sample_free_variant": {
+      "id": "liquid/lfm-2.5-2.6b:free",
+      "present": true,
+      "supported_parameters": [
+        "max_completion_tokens",
+        "response_format",
+        "structured_outputs"
+      ],
+      "live_probe": "privacy_404"
+    },
+    "fast_concrete_model": {
+      "id": "openai/gpt-5.6-luna",
+      "present": true,
+      "supported_parameters": [
+        "max_completion_tokens",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "structured_outputs"
+      ],
+      "live_probe": "pass",
+      "reasoning_probe": "pass",
+      "json_mode_probe": "pass",
+      "json_schema_probe": "pass"
+    },
+    "sample_concrete_model": {
+      "id": "openai/gpt-5.6-sol",
+      "present": true,
+      "supported_parameters": [
+        "max_completion_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs"
+      ],
+      "live_probe": "pass"
+    }
+  },
+  "reasoning_efforts": [
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "none"
+  ]
+}

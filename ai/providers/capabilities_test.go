@@ -87,3 +87,32 @@ func TestLookupModelCapabilities_CaseInsensitiveMatching(t *testing.T) {
 		t.Fatalf("expected deepseek reasoning style for case-insensitive match, got %q", caps.ReasoningStyle)
 	}
 }
+
+func TestLookupModelCapabilities_OpenRouterVerifiedConcreteModel(t *testing.T) {
+	caps := LookupModelCapabilities("openai.openrouter", "OPENAI/GPT-5.6-LUNA")
+	if !caps.ExactModel || caps.ReasoningStyle != "openai" ||
+		!caps.SupportsJSONMode || !caps.SupportsJSONSchema ||
+		!caps.SupportsHeaderPassthrough {
+		t.Fatalf("OpenRouter capabilities for concrete fast model = %#v", caps)
+	}
+}
+
+func TestLookupModelCapabilities_OpenRouterSimilarAndUnverifiedModelsStayConservative(t *testing.T) {
+	for _, model := range []string{
+		"openrouter/auto",
+		"openrouter/auto:nitro",
+		"openrouter/auto-beta",
+		"openrouter/auto:nitro-extra",
+		"openrouter/pareto-code",
+		"openrouter/free",
+		"openai/gpt-5.6-sol",
+	} {
+		caps := LookupModelCapabilities("openai.openrouter", model)
+		if caps.ExactModel || caps.ReasoningStyle != "" || caps.SupportsJSONMode || caps.SupportsJSONSchema {
+			t.Fatalf("unverified OpenRouter model %q received positive capabilities: %#v", model, caps)
+		}
+		if !caps.SupportsHeaderPassthrough {
+			t.Fatalf("OpenRouter fallback for %q must preserve header passthrough", model)
+		}
+	}
+}

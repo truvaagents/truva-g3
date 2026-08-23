@@ -41,7 +41,7 @@ Or "Not used — fully autonomous."`
 ```bash
 # 1. Configure an AI provider key (REQUIRED)
 cp .env.example .env
-# Edit .env, uncomment + fill ONE of OPENAI_API_KEY / ANTHROPIC_API_KEY / GROQ_API_KEY / GEMINI_API_KEY
+# Edit .env, uncomment + fill ONE of OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY / GEMINI_API_KEY
 
 # 2. Cold-start full deployment (cluster + infra + agent)
 ./setup.sh full-deploy

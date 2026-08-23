@@ -21,7 +21,7 @@ Two coordination layers fall out of the design:
 - **Between participants — decentralized coordination.** Each agent reads the shared registry, resolves capabilities to endpoints, and calls peers directly over HTTP/REST. No process in the middle routes, sequences, or coordinates.
 
 **Provider-neutral by design**: registered profiles cover OpenAI, Anthropic,
-Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, and several
+OpenRouter, Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, and several
 OpenAI-compatible services. Other compatible endpoints, including vLLM and
 llama.cpp, can reuse the OpenAI adapter after the application verifies the
 request, response, and streaming fields it depends on. Agent and orchestration
@@ -171,9 +171,9 @@ anthropic, _ := ai.NewClient(ai.WithProviderAlias("anthropic"))
 selfHosted, _ := ai.NewClient(ai.WithProviderAlias("openai.ollama")) // Your own models
 ```
 
-Registered providers and profiles include OpenAI, Anthropic Claude, Google
-Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, Groq, DeepSeek, xAI
-Grok, Qwen, Mistral, Together AI, and Ollama. Google Cloud's OpenAI-compatible
+Registered providers and profiles include OpenAI, Anthropic Claude, OpenRouter,
+Google Gemini, Azure OpenAI, Claude on Vertex AI, AWS Bedrock, Groq, DeepSeek,
+xAI Grok, Qwen, Mistral, Together AI, and Ollama. Google Cloud's OpenAI-compatible
 endpoint and other compatible services reuse the request-aware OpenAI adapter
 with application-owned routing and credentials. Azure and Vertex profiles are
 explicitly constructed rather than auto-detected, and Bedrock requires the

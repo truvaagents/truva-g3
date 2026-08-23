@@ -23,6 +23,7 @@ import (
 
 	// Import AI providers for auto-detection
 	_ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
+	_ "github.com/truvaagents/truva-g3/ai/providers/gemini"
 	_ "github.com/truvaagents/truva-g3/ai/providers/openai"
 )
 

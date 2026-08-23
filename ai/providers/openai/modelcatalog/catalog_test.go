@@ -25,6 +25,40 @@ func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
 	if got := modelcatalog.Resolve("openai.groq", "default"); got != "openai/gpt-oss-120b" {
 		t.Fatalf("Groq default = %q", got)
 	}
+	if got := modelcatalog.Resolve("openai.together", "default"); got != "deepseek-ai/DeepSeek-V4-Flash-0731" {
+		t.Fatalf("Together default = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.together", "fast"); got != "google/gemma-4-31B-it" {
+		t.Fatalf("Together fast = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.together", "smart"); got != "moonshotai/Kimi-K3" {
+		t.Fatalf("Together smart = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.together", "code"); got != "moonshotai/Kimi-K3" {
+		t.Fatalf("Together code = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "default"); got != "openrouter/auto" {
+		t.Fatalf("OpenRouter default = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "smart"); got != "openrouter/auto" {
+		t.Fatalf("OpenRouter smart = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "fast"); got != "openai/gpt-5.6-luna" {
+		t.Fatalf("OpenRouter fast = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "code"); got != "openrouter/pareto-code" {
+		t.Fatalf("OpenRouter code = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "openai/gpt-5.6-sol"); got != "openai/gpt-5.6-sol" {
+		t.Fatalf("OpenRouter concrete pass-through = %q", got)
+	}
+	if got := modelcatalog.Resolve("openai.openrouter", "liquid/lfm-2.5-2.6b:free"); got != "liquid/lfm-2.5-2.6b:free" {
+		t.Fatalf("OpenRouter :free pass-through = %q", got)
+	}
+	t.Setenv("TRUVAG3_OPENROUTER_MODEL_DEFAULT", "openai/gpt-5.6-sol")
+	if got := modelcatalog.Resolve("openai.openrouter", "default"); got != "openai/gpt-5.6-sol" {
+		t.Fatalf("OpenRouter environment override = %q", got)
+	}
 	if got := modelcatalog.Resolve("openai", "deployment-name"); got != "deployment-name" {
 		t.Fatalf("unknown model pass-through = %q", got)
 	}

@@ -692,6 +692,7 @@ show_help() {
     echo "  PORT              HTTP server port (default: 8372)"
     echo "  OPENAI_API_KEY    OpenAI API key (optional)"
     echo "  ANTHROPIC_API_KEY Anthropic API key (optional)"
+    echo "  OPENROUTER_API_KEY OpenRouter API key (optional)"
     echo "  GROQ_API_KEY      Groq API key (optional)"
     echo ""
     echo "Examples:"

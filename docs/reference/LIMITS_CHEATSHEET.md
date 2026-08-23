@@ -39,6 +39,12 @@ environment variable > constructor/config default.
 | Heterogeneous `ProviderEntry` provider alias | 1–256 bytes; no surrounding whitespace or controls | — | Second argument to `ai.ProviderEntry` |
 | HTTP-provider resolver route identity | 1–256 bytes; non-secret, no control characters | — | `ai.ResolvedEndpoint.RouteIdentity` |
 | Bedrock resolver route identity | 1–256 bytes; non-secret, no surrounding whitespace or controls | — | `ai.ResolvedEndpoint.RouteIdentity` |
+| Provider error body used for internal classification | 64 KiB; one additional byte is read only to detect overflow, after which captured bytes are discarded | — | Fixed security/privacy boundary; not operator-configurable |
+| OpenAI-compatible SSE event | 1 MiB | `TRUVAG3_AI_SSE_EVENT_MAX_BYTES` when positive | `AIConfig.SSEEventMaxBytes`; applies per complete event |
+| OpenAI-compatible in-band `error_type` | 64 bytes, lowercase ASCII letters/digits/underscore | — | Fixed syntax/cardinality boundary; malformed values become `unmapped` |
+| OpenRouter provider request ID observation | 128 bytes and `gen-[A-Za-z0-9_-]+` syntax | — | Fixed security/cardinality boundary; invalid `X-Generation-Id` values are omitted |
+| OpenRouter response model observation | 256 bytes and validated public `publisher/model` slug syntax | — | Fixed security/cardinality boundary; invalid provider-reported values are omitted |
+| OpenRouter request-body `session_id` | 256 Unicode code points, valid UTF-8 string | — | Upstream routing constraint; distinct from framework correlation baggage |
 
 Provider rule model selectors use a case-insensitive glob in which `*` is the
 only wildcard. An unscoped rule is rejected unless
@@ -258,9 +264,10 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Semantic retry (Layer 4) | 2 | `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` | — |
 | Step execution retry | 2 | — | — |
 | AI provider retry (`NewClient` / `NewRequestClient`) | 3 | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)`; explicit 0 disables |
-| AI provider retry (legacy `NewChainClient`) | 0 per provider (failover is the retry layer) | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithChainMaxRetries(n)`; explicit 0 disables |
+| AI provider retry (legacy `NewChainClient`) | 0 per provider (avoids multiplying provider retries and ordered failover attempts) | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithChainMaxRetries(n)`; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ProviderEntry`) | 3 per independently constructed entry | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)` on each entry; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ClientEntry`) | Caller-owned client behavior | Caller-owned | Configure the injected client |
+| AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503 may increase it with `Retry-After`. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
 
 ## Circuit Breaker
 

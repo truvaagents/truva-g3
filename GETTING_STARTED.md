@@ -6,7 +6,7 @@ TruvaG3 is a Kubernetes-native framework for building AI agents and tools. Compo
 
 **Why TruvaG3?**
 - Ultra-lightweight: 15-44MB containers, ~100ms startup
-- AI-native: Built-in support for Groq, OpenAI, Anthropic, Gemini, and more
+- AI-native: Built-in support for OpenAI, Anthropic, OpenRouter, Gemini, Groq, and more
 - Auto-discovery: Components find each other automatically via Redis
 - Kubernetes-native: Designed for K8s with health checks, metrics, easy deployment
 - Batteries included: HTTP server, routing, middleware built-in
@@ -265,6 +265,7 @@ Open `.env` and set **one** of the following:
 |----------|----------|------------|
 | OpenAI | `OPENAI_API_KEY=sk-...` | No |
 | Anthropic | `ANTHROPIC_API_KEY=sk-ant-...` | No |
+| OpenRouter | `OPENROUTER_API_KEY=...` | Route-dependent; no built-in `free` alias |
 | Groq | `GROQ_API_KEY=gsk-...` | **Yes** — quick to start |
 | Google Gemini | `GOOGLE_API_KEY=...` | Yes (limited) |
 
@@ -273,6 +274,26 @@ accepts `GEMINI_API_KEY`, but `GOOGLE_API_KEY` wins when both are set. Google
 already rejects unrestricted Standard keys and will reject every Standard key
 in September 2026; see the
 [Gemini API-key guide](https://ai.google.dev/gemini-api/docs/api-key).
+
+OpenRouter auto-detects immediately after Anthropic. Its framework default is
+the `openrouter/auto` router; set
+`TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol` to pin that concrete model.
+The framework does not currently advertise a `free` alias because tested free
+routes failed under its mandatory privacy constraints. Exact `:free` model IDs
+remain experimental and are subject to OpenRouter's
+[current free-model and account limits](https://openrouter.ai/docs/faq).
+
+Adding `OPENROUTER_API_KEY` can change an unpinned `ai.NewClient()` or
+`ai.NewRequestClient()` selection: when neither OpenAI nor Anthropic is
+available, OpenRouter is selected ahead of Gemini and the remaining providers.
+Pin it when provider identity must not depend on which keys happen to exist:
+
+```go
+client, err := ai.NewClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("default"),
+)
+```
 
 For multi-provider failover, custom model aliases, or other providers
 (DeepSeek, Bedrock, Ollama, etc.), see the
@@ -372,15 +393,15 @@ runs in — no third-party APIs to provision, no external credentials.
 
 #### Step 1: Configure an AI provider
 
-Same provider table as the travel quickstart's Step 2. If you already set
-`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the travel agent, the same value
-works here:
+Same provider table as the travel quickstart's Step 2. If you already set a
+provider key such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
+`OPENROUTER_API_KEY` for the travel agent, the same value works here:
 
 ```bash
 # From the truva-g3 repo root (clone first if you skipped the travel quickstart):
 cd examples/devops-chat-agent
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY or ANTHROPIC_API_KEY
+# Edit .env and set one provider key, for example OPENROUTER_API_KEY
 ```
 
 > 💾 **Optional: persistent agentic memory.** The devops agent (like the travel agent) wires per-user memory and also uses the `agentic-memory-tool` deployed in Step 3 for semantic recall. Both rely on an embedding endpoint, pre-configured in `.env.example` for a local Ollama. Install Ollama and pull `nomic-embed-text` to enable it — see [Optional: Ollama (for persistent agentic memory)](#optional-ollama-for-persistent-agentic-memory). The agent works without Ollama; the tool still deploys but semantic recall isn't available.
@@ -823,6 +844,7 @@ DEV_MODE=true                     # Enable development mode
 GROQ_API_KEY=gsk-...              # Groq (free tier available)
 OPENAI_API_KEY=sk-...             # OpenAI
 ANTHROPIC_API_KEY=sk-ant-...      # Anthropic
+OPENROUTER_API_KEY=...            # OpenRouter (priority 850)
 GOOGLE_API_KEY=...                # Google Gemini; preferred over GEMINI_API_KEY
 DEEPSEEK_API_KEY=...              # DeepSeek
 ```

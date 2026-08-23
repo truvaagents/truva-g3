@@ -58,7 +58,7 @@ setup_redis() {
 
 check_api_keys() {
     local found=""
-    for var in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY; do
+    for var in OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY GROQ_API_KEY; do
         if [ -n "${!var}" ]; then
             [ -n "$found" ] && found="$found, "
             found="${found}${var%_API_KEY} (env)"

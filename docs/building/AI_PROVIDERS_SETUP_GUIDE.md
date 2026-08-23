@@ -139,8 +139,10 @@ client, err := ai.NewChainClient(
 client, err := ai.NewChainClient(
     ai.WithChainLogger(logger),
 )
-// With OPENAI_API_KEY + ANTHROPIC_API_KEY + GROQ_API_KEY set:
-// → chain = ["openai" (1000), "anthropic" (900), "openai.groq" (700)]
+// With OPENAI_API_KEY + ANTHROPIC_API_KEY + OPENROUTER_API_KEY +
+// GROQ_API_KEY set:
+// → chain = ["openai" (1000), "anthropic" (900),
+//            "openai.openrouter" (850), "openai.groq" (700)]
 
 // Use it exactly like a single client
 response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
@@ -149,9 +151,10 @@ response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
 **Behind the scenes**, when you make a request:
 1. Chain Client tries Provider 1 (OpenAI)
 2. If it fails with a retryable error, it tries Provider 2 (Anthropic)
-3. If that fails too, it tries Provider 3 (Groq)
-4. Returns the first successful response
-5. If all fail, returns one joined error containing every annotated entry
+3. If that fails too, it tries Provider 3 (OpenRouter)
+4. It then tries Provider 4 (Groq)
+5. Returns the first successful response
+6. If all fail, returns one joined error containing every annotated entry
    failure (entry name and attempt number)
 
 **Auto-detect provider priorities** (when no explicit chain is specified):
@@ -160,6 +163,7 @@ response, err := client.GenerateResponse(ctx, "Analyze this data...", nil)
 |----------|-------|----------|
 | OpenAI | `openai` | 1000 |
 | Anthropic | `anthropic` | 900 |
+| OpenRouter | `openai.openrouter` | 850 |
 | Gemini | `gemini` | 800 |
 | Groq | `openai.groq` | 700 |
 | DeepSeek | `openai.deepseek` | 600 |
@@ -236,11 +240,12 @@ The framework knows that `openai.groq` means:
 | `anthropic.vertex` | Hosted request-aware profile | Claude on Vertex AI | Google `CredentialSource` or `WithAuthHeader` | Required `EndpointResolver` | Route-owned |
 | `bedrock` | Native SDK | AWS Bedrock | AWS SDK default configuration or `WithAWSCredentials` | AWS region/configuration plus optional SDK-destination `EndpointResolver` | Region-owned |
 | `openai.groq` | OpenAI-compatible | Groq | `GROQ_API_KEY` | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
+| `openai.openrouter` | OpenAI-compatible | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` |
 | `openai.deepseek` | OpenAI-compatible | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `openai.xai` | OpenAI-compatible | xAI Grok | `XAI_API_KEY` | `XAI_BASE_URL` | `https://api.x.ai/v1` |
 | `openai.mistral` | OpenAI-compatible | Mistral | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` |
 | `openai.qwen` | OpenAI-compatible | Alibaba Qwen | `QWEN_API_KEY` | `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
-| `openai.together` | OpenAI-compatible | Together AI | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` |
+| `openai.together` | OpenAI-compatible | Together AI | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL` | `https://api.together.ai/v1` |
 | `openai.ollama` | OpenAI-compatible | Ollama (local) | _(none)_ | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` |
 
 Gemini credentials are sent in the `x-goog-api-key` header and never in the
@@ -255,6 +260,135 @@ do not accept a static base URL. Their resolver and credential recipes are in
 Bedrock is build-tagged and SDK-native: its optional resolver selects an AWS
 `modelId`, not an HTTP endpoint. See
 [AWS Bedrock SDK-Native Routing](#aws-bedrock-sdk-native-routing).
+
+### OpenRouter configuration
+
+For auto-detection, a `.env` file needs only the key:
+
+```bash
+OPENROUTER_API_KEY=...
+# Optional; omit to use https://openrouter.ai/api/v1
+# OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+OpenRouter has priority 850, immediately after Anthropic. If both
+`OPENROUTER_API_KEY` and `TOGETHER_API_KEY` are present, an auto-detected
+single client or chain tries OpenRouter first. Use an explicit provider chain
+when environment presence should not determine order.
+
+Adding `OPENROUTER_API_KEY` can change an unpinned `ai.NewClient()` or
+`ai.NewRequestClient()` selection. When neither OpenAI nor Anthropic is
+available, OpenRouter is selected ahead of Gemini and every remaining
+provider. Use `ai.WithProviderAlias("openai.openrouter")` when provider
+identity must be stable.
+
+An OpenRouter model selection may be either a framework alias or an exact
+OpenRouter model slug. The built-in mappings and their independent environment
+overrides are:
+
+| Framework selection | Built-in OpenRouter model | Environment override |
+|---|---|---|
+| `default` or an unspecified model | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_DEFAULT` |
+| `smart` | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_SMART` |
+| `fast` | `openai/gpt-5.6-luna` | `TRUVAG3_OPENROUTER_MODEL_FAST` |
+| `code` | `openrouter/pareto-code` | `TRUVAG3_OPENROUTER_MODEL_CODE` |
+
+Set only the aliases you want to change. For example, this `.env` pins GPT as
+the application default, uses Kimi K3 for `smart` and `code`, and uses Gemini
+for `fast`:
+
+```bash
+OPENROUTER_API_KEY=...
+TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol
+TRUVAG3_OPENROUTER_MODEL_SMART=moonshotai/kimi-k3
+TRUVAG3_OPENROUTER_MODEL_FAST=google/gemini-2.5-flash
+TRUVAG3_OPENROUTER_MODEL_CODE=moonshotai/kimi-k3
+```
+
+Model mappings are non-secret configuration: the same variables may live in a
+local `.env`, a Kubernetes ConfigMap, or a Deployment `env` stanza. Keep only
+`OPENROUTER_API_KEY` in a Secret.
+
+These variables alter OpenRouter's model aliases; they do not force provider
+selection when higher-priority provider keys are also present. Pin
+`openai.openrouter` in code when the provider itself must be deterministic.
+
+To make one exact model the constructor default for every call that omits a
+model:
+
+```go
+client, err := ai.NewClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("moonshotai/kimi-k3"),
+)
+```
+
+To select an alias in code while retaining its `.env` override and built-in
+fallback:
+
+```go
+fastClient, err := ai.NewClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("fast"), // _FAST override, otherwise openai/gpt-5.6-luna
+)
+```
+
+To override the constructor default for one legacy-style call, supply an exact
+model or alias in `AIOptions`:
+
+```go
+response, err := client.GenerateResponse(ctx, prompt, &core.AIOptions{
+    Model: "google/gemini-2.5-flash",
+})
+```
+
+The request-aware equivalent sets `Generation.Model`:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("default"),
+)
+request := core.NewAIRequest(prompt, "plan_generation")
+request.Generation.Model = "moonshotai/kimi-k3"
+result, err := client.Generate(ctx, request)
+```
+
+Selection precedence is per-request model, then constructor `WithModel`, then
+the constructor's implicit `default` alias. After an alias is selected, its
+non-empty `TRUVAG3_OPENROUTER_MODEL_{ALIAS}` value wins over the built-in
+mapping; an exact model slug passes through unchanged. Model availability is
+provider-owned and can change, so confirm production slugs in OpenRouter's
+[model browser](https://openrouter.ai/models). The concrete Kimi and Gemini
+examples above correspond to OpenRouter's current
+[Kimi K3](https://openrouter.ai/moonshotai/kimi-k3) and
+[Gemini 2.5 Flash](https://openrouter.ai/google/gemini-2.5-flash) entries.
+
+Every OpenRouter request protects `provider.data_collection="deny"` and
+`provider.zdr=true`; portable reasoning or JSON output also protects
+`provider.require_parameters=true`. A caller or request policy that conflicts
+with or weakens those values is rejected before HTTP. Request-policy paths use
+the documented canonical casing: variants such as `/provider/ZDR` or `/Models`
+are rejected rather than emitted beside canonical fields. OpenRouter's top-level
+request-body `session_id` controls upstream sticky routing; it is unrelated to
+framework `session_id` baggage used for application correlation.
+
+The built-in `default`, `smart`, and `code` aliases resolve to routers, so
+requests using them are not AI-output-cache eligible. `fast` resolves to the
+live-verified concrete `openai/gpt-5.6-luna` model and can be cache-eligible
+when no native `models` fallback list is present. In a failover chain, one unstable
+OpenRouter entry makes the entire ordered chain cache-ineligible.
+
+The framework does not advertise a built-in `free` alias because the protected
+privacy live probe failed for the tested free routes. Exact `:free` model IDs
+and `TRUVAG3_OPENROUTER_MODEL_FREE` remain experimental pass-through options;
+verify that the chosen route works with the protected privacy values before
+depending on it, and consult OpenRouter's
+[current free-model and account limits](https://openrouter.ai/docs/faq) rather
+than assuming a fixed quota. When OpenRouter's native top-level `models` field
+is present, it must be an array on every route. A free primary route additionally
+requires every fallback to be an exact `:free` route; malformed or paid
+fallbacks are rejected before transport.
 
 ### How Auto-Configuration Works
 
@@ -312,14 +446,14 @@ client, _ := ai.NewClient(
 
 ### Standard Model Aliases
 
-| Alias | Purpose | OpenAI | Anthropic | Gemini | Groq | DeepSeek |
-|-------|---------|--------|-----------|--------|------|----------|
-| `default` | General catalog choice | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` |
-| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` |
-| `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ |
-| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` |
-| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ |
+| Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | Groq | DeepSeek | Together |
+|-------|---------|--------|-----------|------------|--------|------|----------|----------|
+| `default` | General catalog choice | `gpt-5.6-terra` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
+| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `openai/gpt-5.6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
+| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
+| `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
+| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` | `moonshotai/Kimi-K3` |
+| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI, Anthropic, and Gemini.
 > Other built-in catalogs use `smart` for their reasoning-oriented choice.
@@ -376,6 +510,9 @@ export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
 
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
+
+# Use one concrete OpenRouter model as the default instead of its auto router
+export TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol
 
 # Do not override DeepSeek to V4 until the framework's V4 capability and
 # thinking-mode translation has been updated and tested; see the alert above.
@@ -850,6 +987,7 @@ type: Opaque
 stringData:
   OPENAI_API_KEY: "sk-prod-..."
   ANTHROPIC_API_KEY: "sk-ant-prod-..."
+  OPENROUTER_API_KEY: "..."
   GROQ_API_KEY: "gsk-prod-..."
 ```
 
@@ -868,6 +1006,19 @@ spec:
         name: ai-api-keys
 ```
 
+The repository example setup scripts normally copy every configured provider
+credential from `.env` into the example's Kubernetes Secret, enabling ordered
+failover. For an isolated provider test, select one credential group for that
+setup invocation without editing `.env`:
+
+```bash
+TRUVAG3_SETUP_AI_PROVIDER=together ./setup.sh rollout
+```
+
+`TRUVAG3_SETUP_AI_PROVIDER` is consumed only by
+`examples/k8-deployment/setup-env-lib.sh` and is excluded from the runtime
+ConfigMap. Omit it on the next rollout to restore all configured providers.
+
 ### Managing Model Aliases with ConfigMaps
 
 Model aliases aren't secrets—they can go in ConfigMaps:
@@ -882,6 +1033,8 @@ metadata:
 data:
   TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-terra"
   TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-haiku-4-5"
+  TRUVAG3_OPENROUTER_MODEL_DEFAULT: "google/gemini-2.5-flash"
+  TRUVAG3_OPENROUTER_MODEL_SMART: "google/gemini-2.5-flash"
   TRUVAG3_GROQ_MODEL_DEFAULT: "llama-3.1-8b-instant"
 
 ---
@@ -894,6 +1047,8 @@ metadata:
 data:
   TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-sol"
   TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-opus-5"
+  TRUVAG3_OPENROUTER_MODEL_DEFAULT: "moonshotai/kimi-k3"
+  TRUVAG3_OPENROUTER_MODEL_SMART: "moonshotai/kimi-k3"
   TRUVAG3_GROQ_MODEL_DEFAULT: "openai/gpt-oss-120b"
 ```
 
@@ -1765,6 +1920,7 @@ XAI_API_KEY=xai-...
 MISTRAL_API_KEY=...
 QWEN_API_KEY=...
 TOGETHER_API_KEY=...
+OPENROUTER_API_KEY=...
 ```
 
 **Base URL Overrides**:
@@ -1778,6 +1934,7 @@ XAI_BASE_URL=https://...
 MISTRAL_BASE_URL=https://...
 QWEN_BASE_URL=https://...
 TOGETHER_BASE_URL=https://...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OLLAMA_BASE_URL=http://...
 ```
 

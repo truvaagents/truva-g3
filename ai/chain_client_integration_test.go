@@ -122,6 +122,7 @@ func TestPhase3_PartialChainSupport(t *testing.T) {
 func TestPhase3_ProviderAliasValidation(t *testing.T) {
 	validAliases := []string{
 		"openai",
+		"openai.openrouter",
 		"anthropic",
 		"gemini",
 		"openai.deepseek",

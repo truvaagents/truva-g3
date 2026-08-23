@@ -110,6 +110,15 @@ check_api_keys() {
         found_keys="${found_keys}Anthropic (.env)"
     fi
 
+    # Check OpenRouter (priority: 850)
+    if [ -n "$OPENROUTER_API_KEY" ]; then
+        [ -n "$found_keys" ] && found_keys="$found_keys, "
+        found_keys="${found_keys}OpenRouter (env)"
+    elif [ -f .env ] && grep -q "^OPENROUTER_API_KEY=" .env; then
+        [ -n "$found_keys" ] && found_keys="$found_keys, "
+        found_keys="${found_keys}OpenRouter (.env)"
+    fi
+
     # Check Gemini (priority: 800)
     if [ -n "$GEMINI_API_KEY" ] || [ -n "$GOOGLE_API_KEY" ]; then
         [ -n "$found_keys" ] && found_keys="$found_keys, "
@@ -189,6 +198,7 @@ check_api_keys() {
         echo -e "${YELLOW}│                                                            │${NC}"
         echo -e "${YELLOW}│    OPENAI_API_KEY=sk-your-key                              │${NC}"
         echo -e "${YELLOW}│    ANTHROPIC_API_KEY=sk-ant-your-key                       │${NC}"
+        echo -e "${YELLOW}│    OPENROUTER_API_KEY=your-key                             │${NC}"
         echo -e "${YELLOW}│    GROQ_API_KEY=gsk_your-key                               │${NC}"
         echo -e "${YELLOW}│                                                            │${NC}"
         echo -e "${YELLOW}│  Multiple providers enable automatic failover.             │${NC}"

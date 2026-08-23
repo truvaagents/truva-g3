@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
-	_ "github.com/truvaagents/truva-g3/ai/providers/openai" // Register OpenAI provider
+	_ "github.com/truvaagents/truva-g3/ai/providers/anthropic" // Register Anthropic provider.
+	_ "github.com/truvaagents/truva-g3/ai/providers/gemini"    // Register Gemini provider.
+	_ "github.com/truvaagents/truva-g3/ai/providers/openai"    // Register OpenAI-compatible providers.
 	"github.com/truvaagents/truva-g3/core"
 )
 

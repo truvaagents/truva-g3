@@ -1228,7 +1228,9 @@ Use these field names across all your services:
 | `checkpoint_id` | string | HITL checkpoint identity | "cp-abc123" |
 | `status` | string | Bounded result status defined by the operation; terminal request records may also use `partial` or `interrupted`, while diagnostics may use `fallback`, `accepted`, or `rejected` | "success", "error", "retry", "partial", "interrupted", "fallback" |
 | `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
-| `error_type` | string | Bounded error classification for filtering and alerting | "timeout", "validation", "network", "marshal", "unmarshal", "integrity", "backend_read", "framework", "stream_write", "store_read", "store_write", "index_write", "ttl_update", "index_read", "episodic_read", "episodic_recent_read", "episodic_write", "embedding", "llm_unavailable", "parse_failure", "knowledge_store", "claim", "claim_release", "release", "notification", "session_read", "cache_read", "cache_write", "cache_unmarshal", "activity_announce", "activity_discover", "activity_complete", "summarizer_error", "debug_recording", "lock_acquire", "entity_discovery", "count_tokens", "compaction", "watermark_mismatch", "preparation", "route", "request_failed", "callback_panic", "runnable_exit", "runnable_drain_timeout", "plan_validation_exhausted" |
+| `error_type` | string | Bounded error classification for filtering and alerting. AI observations use `ai/providers.NormalizeObservationErrorType` as authoritative: `invalid_request`, `route`, `policy`, `credential`, `transport`, `provider_client`, `provider_rate_limit`, `provider_server`, `decode`, `callback`, `partial_stream`, `cancelled`, `deadline`, or `unknown` | "timeout", "validation", "provider_rate_limit", "store_write" |
+| `response_model` | string | Optional provider-reported public model identity admitted by an explicit provider-scoped validation contract; currently OpenRouter only, bounded to 256 bytes, never route-owned request/deployment identity, and not a metric or stream label | "anthropic/claude-sonnet-4" |
+| `provider_request_id` | string | Optional provider-reported request identity admitted by an explicit provider-scoped validation contract; currently OpenRouter `X-Generation-Id` matching `gen-[A-Za-z0-9_-]+` and bounded to 128 bytes, distinct from framework `request_id`, and not a metric or stream label | "gen-1234" |
 | `store_operation` | string | Bounded backend sub-operation when `operation` identifies the overall store | "list_metadata" |
 | `duration_ms` | number | Operation duration in milliseconds | 125 |
 | `method` | string | HTTP method | "GET", "POST" |
@@ -1638,9 +1640,19 @@ When telemetry is enabled, framework logs emit
    metric-eligible.
 
 The five explicit fields are therefore not a closed list of all possible
-labels. Generic baggage is metric-eligible unless the member carries the
-framework’s exclusion property. Existing unmarked `request_id`, `user_id`, and
-`session_id` behavior is tracked separately for a broader cardinality cleanup.
+labels. Non-reserved application baggage is metric-eligible unless the member
+carries the framework’s exclusion property. High-cardinality correlation
+baggage is always excluded from automatic metric enrichment:
+`request_id`, `original_request_id`, `conversation_id`, `checkpoint_id`,
+`user_id`, `session_id`, `trace_id`, `span_id`, `plan_id`, `step_id`, `pass_id`,
+`investigation_owner`, and `provider_request_id`. An incoming or locally
+created `truvag3_metric_label=true` property cannot override this deny-list.
+The deny-list is defensive for arbitrary application or incoming baggage; it
+does not declare every name to be canonical framework baggage. Exclusion does
+not remove an existing baggage member or prevent a subsystem from emitting its
+documented structured log or span fields. Framework AI code does not add
+`provider_request_id` to baggage. Applications remain responsible for labels
+they pass explicitly to a metric API.
 
 ```go
 // Canonical conversation correlation remains available to logs, spans, and
@@ -1660,7 +1672,7 @@ agent.Logger.ErrorWithContext(ctx, "Request failed", map[string]interface{}{
     "error_type": "timeout",
 })
 
-// The emitted metric includes operation and error_type, but not conversation_id:
+// The emitted metric includes operation and error_type, but no correlation IDs:
 // truvag3.framework.operations{level="ERROR", service="my-agent", operation="get_weather", error_type="timeout"}
 ```
 

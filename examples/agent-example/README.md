@@ -668,7 +668,7 @@ make help       # Show all commands
 ## What This Example Demonstrates
 
 - **Agent Pattern**: Active component that can discover and orchestrate other components
-- **AI Integration**: Auto-detecting AI providers (OpenAI, Anthropic, Groq, etc.)
+- **AI Integration**: Auto-detecting AI providers (OpenAI, Anthropic, OpenRouter, Groq, etc.)
 - **Service Discovery**: Finding and calling available tools dynamically
 - **Intelligent Orchestration**: Using AI to plan and execute multi-step workflows
 - **3-Phase Schema Discovery**: AI-powered payload generation with progressive enhancement

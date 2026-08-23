@@ -34,6 +34,10 @@
 #   TRUVAG3_DEV_DISABLE_OPENAPI - Optional: set to "true" to suppress the dev-only
 #                               default of TRUVAG3_ENABLE_OPENAPI=true injected
 #                               into every tool/agent ConfigMap. See docs/operations/DEV_TOOLS_GUIDE.md.
+#   TRUVAG3_SETUP_AI_PROVIDER - Optional setup-process-only provider selector.
+#                              When set, truvag3_create_secret includes only that
+#                              provider's credential variables. This supports
+#                              isolated live tests without editing .env.
 #
 # Dev-only defaults injected by this library:
 #   TRUVAG3_ENABLE_OPENAPI=true - Enables the /openapi.json endpoint on every
@@ -54,7 +58,7 @@
 
 # AI provider API keys (go into K8s Secrets)
 # Source: ai/providers/*/factory.go
-TRUVAG3_AI_PROVIDER_KEYS="OPENAI_API_KEY ANTHROPIC_API_KEY GROQ_API_KEY DEEPSEEK_API_KEY XAI_API_KEY MISTRAL_API_KEY QWEN_API_KEY TOGETHER_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
+TRUVAG3_AI_PROVIDER_KEYS="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY DEEPSEEK_API_KEY XAI_API_KEY MISTRAL_API_KEY QWEN_API_KEY TOGETHER_API_KEY GEMINI_API_KEY GOOGLE_API_KEY"
 
 # AWS credential keys (go into K8s Secrets)
 # Source: ai/providers/bedrock/factory.go
@@ -79,7 +83,7 @@ TRUVAG3_ALL_SECRET_KEYS="$TRUVAG3_AI_PROVIDER_KEYS $TRUVAG3_AWS_KEYS"
 # values (e.g., localhost:4318, localhost:6379) would override the correct
 # K8s values from the static ConfigMap or explicit env entries in the
 # deployment spec. Pass them as extra_vars if explicitly needed.
-TRUVAG3_CONFIG_INCLUDE_VARS="APP_ENV DEV_MODE OTEL_SERVICE_NAME TELEMETRY_DEBUG CAPABILITY_SERVICE_URL OPENAI_BASE_URL ANTHROPIC_BASE_URL GROQ_BASE_URL DEEPSEEK_BASE_URL XAI_BASE_URL MISTRAL_BASE_URL QWEN_BASE_URL TOGETHER_BASE_URL GEMINI_BASE_URL OLLAMA_BASE_URL WORKER_COUNT"
+TRUVAG3_CONFIG_INCLUDE_VARS="APP_ENV DEV_MODE OTEL_SERVICE_NAME TELEMETRY_DEBUG CAPABILITY_SERVICE_URL OPENAI_BASE_URL ANTHROPIC_BASE_URL OPENROUTER_BASE_URL GROQ_BASE_URL DEEPSEEK_BASE_URL XAI_BASE_URL MISTRAL_BASE_URL QWEN_BASE_URL TOGETHER_BASE_URL GEMINI_BASE_URL OLLAMA_BASE_URL WORKER_COUNT"
 
 # ─── LOGGING SHIM ───────────────────────────────────────────────────────────
 # Delegates to the caller's logging functions if available.
@@ -661,6 +665,55 @@ truvag3_prepare_agent_skills() {
     return 0
 }
 
+# _truvag3_selected_ai_provider_keys <provider>
+#
+# Resolves the setup-only provider selector to credential variable names. The
+# matching intentionally avoids Bash-4-only lowercase expansion because macOS
+# still ships Bash 3.2. Bedrock's AWS variables are one credential group;
+# Gemini accepts either documented key name.
+_truvag3_selected_ai_provider_keys() {
+    case "$1" in
+        openai|OPENAI|OpenAI)
+            echo "OPENAI_API_KEY"
+            ;;
+        anthropic|ANTHROPIC|Anthropic)
+            echo "ANTHROPIC_API_KEY"
+            ;;
+        openrouter|OPENROUTER|OpenRouter)
+            echo "OPENROUTER_API_KEY"
+            ;;
+        gemini|GEMINI|Gemini|google|GOOGLE|Google)
+            echo "GEMINI_API_KEY GOOGLE_API_KEY"
+            ;;
+        groq|GROQ|Groq)
+            echo "GROQ_API_KEY"
+            ;;
+        deepseek|DEEPSEEK|DeepSeek)
+            echo "DEEPSEEK_API_KEY"
+            ;;
+        xai|XAI|xAI)
+            echo "XAI_API_KEY"
+            ;;
+        mistral|MISTRAL|Mistral)
+            echo "MISTRAL_API_KEY"
+            ;;
+        qwen|QWEN|Qwen)
+            echo "QWEN_API_KEY"
+            ;;
+        together|TOGETHER|Together)
+            echo "TOGETHER_API_KEY"
+            ;;
+        bedrock|BEDROCK|Bedrock)
+            echo "$TRUVAG3_AWS_KEYS"
+            ;;
+        *)
+            echo "Unsupported TRUVAG3_SETUP_AI_PROVIDER '$1'" >&2
+            echo "Supported values: openai, anthropic, openrouter, gemini, groq, deepseek, xai, mistral, qwen, together, bedrock" >&2
+            return 1
+            ;;
+    esac
+}
+
 # truvag3_create_secret <secret_name> <namespace> [extra_keys...]
 #
 # Creates a K8s Secret containing AI provider keys + AWS keys.
@@ -681,8 +734,15 @@ truvag3_create_secret() {
     shift 2
     local extra_keys=("$@")
 
-    # Combine standard keys with any extras
+    # Combine the selected standard keys with any extras. With no setup-time
+    # selector this remains the historical all-configured-providers behavior.
     local all_keys="$TRUVAG3_ALL_SECRET_KEYS"
+    if [ -n "${TRUVAG3_SETUP_AI_PROVIDER:-}" ]; then
+        if ! all_keys="$(_truvag3_selected_ai_provider_keys "$TRUVAG3_SETUP_AI_PROVIDER")"; then
+            return 1
+        fi
+        _truvag3_log_info "Restricting K8s AI credentials to provider: $TRUVAG3_SETUP_AI_PROVIDER"
+    fi
     for key in "${extra_keys[@]}"; do
         all_keys="$all_keys $key"
     done
@@ -774,6 +834,10 @@ truvag3_create_configmap() {
 
         key=$(echo "$key" | xargs)
         [[ -z "$key" ]] && continue
+
+        # This variable controls the setup process itself and must never become
+        # runtime application configuration, even if a user stores it in .env.
+        [[ "$key" == "TRUVAG3_SETUP_AI_PROVIDER" ]] && continue
 
         # Include: TRUVAG3_* or in include_vars list
         local should_include=false

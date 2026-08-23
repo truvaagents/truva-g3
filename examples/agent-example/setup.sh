@@ -109,7 +109,7 @@ cmd_run() {
     print_success "Binary built"
 
     # Check for API keys
-    if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$GROQ_API_KEY" ]; then
+    if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENROUTER_API_KEY" ] && [ -z "$GROQ_API_KEY" ]; then
         print_warning "No AI API keys found in .env file"
         echo "Add at least one API key to enable AI features"
         echo ""
@@ -689,6 +689,7 @@ ${BLUE}Environment Variables:${NC}
   ${GREEN}AI Provider Keys (set in .env file):${NC}
   OPENAI_API_KEY
   ANTHROPIC_API_KEY
+  OPENROUTER_API_KEY
   GROQ_API_KEY
 
 ${BLUE}Examples:${NC}

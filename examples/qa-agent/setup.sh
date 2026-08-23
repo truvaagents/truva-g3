@@ -322,6 +322,7 @@ cmd_help() {
     echo "  PORT                  HTTP server port (default: 8358)"
     echo "  OPENAI_API_KEY        OpenAI API key"
     echo "  ANTHROPIC_API_KEY     Anthropic API key"
+    echo "  OPENROUTER_API_KEY    OpenRouter API key"
     echo "  GROQ_API_KEY          Groq API key"
     echo "  TRUVAG3_GROQ_MODEL_*   Groq model overrides"
     echo ""

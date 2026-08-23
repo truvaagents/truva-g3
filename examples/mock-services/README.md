@@ -8,6 +8,7 @@ This directory contains mock backend services used by TruvaG3 examples for testi
 |---------|------|-------------|
 | [grocery-store-api](./grocery-store-api/) | 8081 | Mock grocery store with error injection for resilience testing |
 | [product-catalog-api](./product-catalog-api/) | 8081 | Product catalog microservice with Prometheus metrics for E2E incident response testing |
+| [enterprise-ollama-gateway](./enterprise-ollama-gateway/) | 18080 | Enterprise OAuth + Azure-style chat API simulator backed by local Ollama |
 
 ## Purpose
 

@@ -2,6 +2,7 @@ package providers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
@@ -87,16 +89,31 @@ func (logger *observationLogger) ErrorWithContext(ctx context.Context, _ string,
 
 type observationParentKey struct{}
 
-type observationMetric struct {
-	name   string
-	value  float64
-	labels map[string]string
+type observationTelemetry struct {
+	names []string
+	spans []*observationSpan
 }
 
-type observationTelemetry struct {
-	names   []string
-	spans   []*observationSpan
-	metrics []observationMetric
+type observationRecorder struct {
+	mu      sync.Mutex
+	records []telemetry.LLMCallRecord
+}
+
+func (recorder *observationRecorder) RecordLLMCall(
+	_ context.Context,
+	_ string,
+	record telemetry.LLMCallRecord,
+) error {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.records = append(recorder.records, record)
+	return nil
+}
+
+func (recorder *observationRecorder) snapshot() []telemetry.LLMCallRecord {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]telemetry.LLMCallRecord(nil), recorder.records...)
 }
 
 func (tracing *observationTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
@@ -110,9 +127,7 @@ func (tracing *observationTelemetry) StartSpan(ctx context.Context, name string)
 	return context.WithValue(ctx, observationParentKey{}, len(tracing.spans)-1), span
 }
 
-func (tracing *observationTelemetry) RecordMetric(name string, value float64, labels map[string]string) {
-	tracing.metrics = append(tracing.metrics, observationMetric{name: name, value: value, labels: maps.Clone(labels)})
-}
+func (*observationTelemetry) RecordMetric(string, float64, map[string]string) {}
 
 type observationSpan struct {
 	name       string
@@ -500,9 +515,6 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 					t.Fatalf("span %d parent = %d, want %d", index, span.parent, wantParent)
 				}
 			}
-			for _, metric := range tracing.metrics {
-				fmt.Fprint(&observations, metric.name, metric.value, metric.labels)
-			}
 			if !strings.Contains(observations.String(), test.semanticModel) {
 				t.Errorf("semantic model missing from permitted observations: %s", observations.String())
 			}
@@ -519,5 +531,217 @@ func TestBuiltInProviderObservationContract(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOpenRouterResponseIdentityIsProviderLocalAndMetricIneligible(t *testing.T) {
+	const (
+		requestID         = "openrouter-observation-request"
+		responseModel     = "anthropic/claude-sonnet-4"
+		providerRequestID = "gen-1234"
+	)
+	logger := newObservationLogger()
+	tracing := &observationTelemetry{}
+	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
+	client.SetLogger(logger)
+	client.SetTelemetry(tracing)
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response := observationResponse(request,
+			`{"model":"`+responseModel+`","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
+		response.Header.Set("X-Generation-Id", providerRequestID)
+		return response, nil
+	})}
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", requestID)
+	response, err := client.GenerateResponse(ctx, "private prompt", &core.AIOptions{Model: "openrouter/auto", MaxTokens: 32})
+	if err != nil || response == nil || response.Model != responseModel || response.Provider != "openai.openrouter" {
+		t.Fatalf("response=%#v error=%v", response, err)
+	}
+
+	if !slices.Equal(tracing.names, []string{"ai.generate_response", "ai.http_attempt"}) {
+		t.Fatalf("span hierarchy = %#v", tracing.names)
+	}
+	providerSpan := tracing.spans[0]
+	if providerSpan.attributes["request_id"] != requestID ||
+		providerSpan.attributes["ai.response.model"] != responseModel ||
+		providerSpan.attributes["ai.provider_request_id"] != providerRequestID {
+		t.Fatalf("provider span attributes = %#v", providerSpan.attributes)
+	}
+	for _, span := range tracing.spans[1:] {
+		if span.attributes["ai.response.model"] != nil || span.attributes["ai.provider_request_id"] != nil {
+			t.Fatalf("response identity escaped provider span: %#v", span.attributes)
+		}
+	}
+
+	responseLogs := 0
+	for _, entry := range logger.store.entries {
+		if entry.fields["operation"] != "ai_response" {
+			continue
+		}
+		responseLogs++
+		if entry.fields["response_model"] != responseModel || entry.fields["provider_request_id"] != providerRequestID ||
+			entry.fields["request_id"] != requestID {
+			t.Fatalf("response log fields = %#v", entry.fields)
+		}
+	}
+	if responseLogs != 1 {
+		t.Fatalf("response log count = %d", responseLogs)
+	}
+}
+
+func TestOpenRouterResponseIdentityGateRejectsOtherOpenAICompatibleAliases(t *testing.T) {
+	const (
+		responseModel     = "anthropic/claude-sonnet-4"
+		providerRequestID = "gen-should-not-escape"
+	)
+	for _, alias := range []string{"openai", "openai.together"} {
+		t.Run(alias, func(t *testing.T) {
+			logger := newObservationLogger()
+			tracing := &observationTelemetry{}
+			client := openai.NewClient("credential", "https://endpoint.example/v1", alias, logger)
+			client.SetLogger(logger)
+			client.SetTelemetry(tracing)
+			client.MaxRetries = 0
+			client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				response := observationResponse(request,
+					`{"model":"`+responseModel+`","choices":[{"message":{"content":"ok"}}]}`)
+				response.Header.Set("X-Generation-Id", providerRequestID)
+				return response, nil
+			})}
+			response, err := client.GenerateResponse(t.Context(), "prompt", &core.AIOptions{Model: "gpt-4.1", MaxTokens: 32})
+			if err != nil || response == nil || response.Model != responseModel {
+				t.Fatalf("response=%#v error=%v", response, err)
+			}
+			for _, span := range tracing.spans {
+				if span.attributes["ai.response.model"] != nil || span.attributes["ai.provider_request_id"] != nil {
+					t.Fatalf("alias %q emitted OpenRouter-only span identity: %#v", alias, span.attributes)
+				}
+			}
+			for _, entry := range logger.store.entries {
+				if entry.fields["response_model"] != nil || entry.fields["provider_request_id"] != nil {
+					t.Fatalf("alias %q emitted OpenRouter-only log identity: %#v", alias, entry.fields)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenRouterHTTP200InBandErrorHasSuccessfulAttemptAndFailedProviderSpan(t *testing.T) {
+	logger := newObservationLogger()
+	tracing := &observationTelemetry{}
+	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
+	client.SetLogger(logger)
+	client.SetTelemetry(tracing)
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return observationResponse(request, `{
+			"model":"anthropic/claude-sonnet-4",
+			"choices":[{"message":{"content":"partial"},"finish_reason":"error",
+				"error":{"code":429,"metadata":{"error_type":"rate_limit_exceeded"}}}]
+		}`), nil
+	})}
+	result, err := client.Generate(t.Context(), core.NewAIRequestFromLegacy("prompt", "", &core.AIOptions{
+		Model: "openai/gpt-5.6-sol", MaxTokens: 32,
+	}))
+	var providerErr core.ProviderError
+	if result == nil || result.Response == nil || result.Response.Content != "partial" ||
+		!errors.As(err, &providerErr) || providerErr.StatusCode() != http.StatusTooManyRequests {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	if !slices.Equal(tracing.names, []string{"ai.generate_response", "ai.http_attempt"}) {
+		t.Fatalf("span hierarchy = %#v", tracing.names)
+	}
+	providerSpan, attemptSpan := tracing.spans[0], tracing.spans[1]
+	if providerSpan.attributes["ai.status"] != "error" ||
+		providerSpan.attributes["ai.error_type"] != "provider_rate_limit" || len(providerSpan.errors) != 1 {
+		t.Fatalf("provider span = %#v errors=%#v", providerSpan.attributes, providerSpan.errors)
+	}
+	if attemptSpan.attributes["ai.attempt_status"] != "success" || len(attemptSpan.errors) != 0 {
+		t.Fatalf("attempt span = %#v errors=%#v", attemptSpan.attributes, attemptSpan.errors)
+	}
+	for _, entry := range logger.store.entries {
+		if entry.fields["operation"] == "ai_response" {
+			t.Fatalf("partial buffered error emitted success response log: %#v", entry.fields)
+		}
+	}
+}
+
+func TestOpenRouterPartialStreamSuppressesSuccessResponseLog(t *testing.T) {
+	logger := newObservationLogger()
+	tracing := &observationTelemetry{}
+	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
+	client.SetLogger(logger)
+	client.SetTelemetry(tracing)
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"model\":\"anthropic/claude-sonnet-4\",\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" +
+					"data: {\"choices\":[{\"finish_reason\":\"error\",\"error\":{\"code\":503,\"metadata\":{\"error_type\":\"provider_overloaded\"}}}]}\n\n",
+			)),
+			Request: request,
+		}, nil
+	})}
+	result, err := client.Stream(t.Context(), core.NewAIRequestFromLegacy("prompt", "", &core.AIOptions{
+		Model: "openai/gpt-5.6-sol", MaxTokens: 32,
+	}), func(core.StreamChunk) error { return nil })
+	if !errors.Is(err, core.ErrStreamPartiallyCompleted) || result == nil || result.Response == nil ||
+		result.Response.Content != "partial" {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	for _, entry := range logger.store.entries {
+		if entry.fields["operation"] == "ai_response" {
+			t.Fatalf("partial stream emitted success response log: %#v", entry.fields)
+		}
+	}
+}
+
+func TestOpenRouterErrorBodyCanariesStayOutOfLogsSpansAndDebugRecord(t *testing.T) {
+	canaries := []string{"openrouter-message-canary", "openrouter-flagged-input-canary", "openrouter-raw-canary"}
+	logger := newObservationLogger()
+	tracing := &observationTelemetry{}
+	recorder := &observationRecorder{}
+	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
+	client.SetLogger(logger)
+	client.SetTelemetry(tracing)
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response := observationResponse(request, `{"error":{"code":403,"message":"`+canaries[0]+`",`+
+			`"metadata":{"error_type":"permission_denied","flagged_input":"`+canaries[1]+`","raw":"`+canaries[2]+`"}}}`)
+		response.StatusCode = http.StatusForbidden
+		return response, nil
+	})}
+	instrumented := ai.NewInstrumentedClient(
+		client,
+		recorder,
+		ai.WithInstrumentedLogger(logger),
+		ai.WithInstrumentedTelemetry(tracing),
+	)
+	_, returnedErr := instrumented.GenerateResponse(
+		core.WithRequestID(t.Context(), "openrouter-error-body"),
+		"safe prompt",
+		&core.AIOptions{Model: "openai/gpt-5.6-sol", MaxTokens: 32},
+	)
+	if returnedErr == nil {
+		t.Fatal("GenerateResponse() error = nil")
+	}
+	if err := instrumented.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("debug records = %d, want 1", len(records))
+	}
+	var observed strings.Builder
+	fmt.Fprint(&observed, returnedErr, logger.store.entries, records[0].Error)
+	for _, span := range tracing.spans {
+		fmt.Fprint(&observed, span.attributes, span.errors)
+	}
+	for _, canary := range canaries {
+		if strings.Contains(observed.String(), canary) {
+			t.Fatalf("OpenRouter error-body canary %q reached observations: %s", canary, observed.String())
+		}
 	}
 }

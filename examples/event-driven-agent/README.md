@@ -732,7 +732,7 @@ Copy `.env.example` to `.env` and configure your settings:
 
 The `.env.example` file contains comprehensive documentation for all options including:
 
-- **AI Provider Keys** - Supports provider chain for failover (OpenAI → Anthropic → Groq)
+- **AI Provider Keys** - Supports auto-detected provider-chain failover (OpenAI → Anthropic → OpenRouter → Gemini → Groq, then remaining configured compatible providers)
 - **Model Aliases** - Override default/smart/fast model mappings per provider
 - **Service Configuration** - Port, Redis URL, deployment mode, worker count
 - **Event Agent Configuration** - Dedup TTL, Slack webhook

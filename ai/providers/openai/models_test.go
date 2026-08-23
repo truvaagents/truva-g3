@@ -37,9 +37,19 @@ func TestResolveModel(t *testing.T) {
 		{"groq code", "openai.groq", "code", "openai/gpt-oss-120b"},
 		{"groq default", "openai.groq", "default", "openai/gpt-oss-120b"},
 
-		// Together - Llama models
-		{"together fast", "openai.together", "fast", "meta-llama/Llama-3.1-8B-Instruct-Turbo"},
-		{"together smart", "openai.together", "smart", "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+		// Together - current serverless recommendations
+		{"together fast", "openai.together", "fast", "google/gemma-4-31B-it"},
+		{"together smart", "openai.together", "smart", "moonshotai/Kimi-K3"},
+		{"together code", "openai.together", "code", "moonshotai/Kimi-K3"},
+		{"together default", "openai.together", "default", "deepseek-ai/DeepSeek-V4-Flash-0731"},
+
+		// OpenRouter - router-backed semantic defaults and concrete pass-through
+		{"openrouter default", "openai.openrouter", "default", "openrouter/auto"},
+		{"openrouter smart", "openai.openrouter", "smart", "openrouter/auto"},
+		{"openrouter fast", "openai.openrouter", "fast", "openai/gpt-5.6-luna"},
+		{"openrouter code", "openai.openrouter", "code", "openrouter/pareto-code"},
+		{"openrouter concrete pass-through", "openai.openrouter", "openai/gpt-5.6-sol", "openai/gpt-5.6-sol"},
+		{"openrouter free variant pass-through", "openai.openrouter", "liquid/lfm-2.5-2.6b:free", "liquid/lfm-2.5-2.6b:free"},
 
 		// xAI - Grok 2/3 family
 		{"xai fast", "openai.xai", "fast", "grok-2"},
@@ -105,6 +115,14 @@ func TestResolveModelEnvOverride(t *testing.T) {
 			envKey:        "TRUVAG3_GROQ_MODEL_FAST",
 			envValue:      "llama-3.2-90b",
 			expected:      "llama-3.2-90b",
+		},
+		{
+			name:          "OpenRouter env override",
+			providerAlias: "openai.openrouter",
+			model:         "default",
+			envKey:        "TRUVAG3_OPENROUTER_MODEL_DEFAULT",
+			envValue:      "openai/gpt-5.6-sol",
+			expected:      "openai/gpt-5.6-sol",
 		},
 		{
 			name:          "xAI env override",

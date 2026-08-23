@@ -161,11 +161,28 @@ func main() {
 // validateConfig validates required configuration
 func validateConfig() error {
 	// At least one AI provider key is required
-	if os.Getenv("OPENAI_API_KEY") == "" &&
-		os.Getenv("ANTHROPIC_API_KEY") == "" &&
-		os.Getenv("GOOGLE_API_KEY") == "" &&
-		os.Getenv("GEMINI_API_KEY") == "" {
-		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY")
+	providerKeys := []string{
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+		"GROQ_API_KEY",
+		"DEEPSEEK_API_KEY",
+		"XAI_API_KEY",
+		"MISTRAL_API_KEY",
+		"QWEN_API_KEY",
+		"TOGETHER_API_KEY",
+	}
+	foundProvider := false
+	for _, key := range providerKeys {
+		if os.Getenv(key) != "" {
+			foundProvider = true
+			break
+		}
+	}
+	if !foundProvider {
+		log.Println("Warning: No AI provider API key found. Configure a supported provider key in .env")
 	}
 
 	// Redis is required for service discovery and session storage

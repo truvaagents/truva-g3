@@ -14,6 +14,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
+	"github.com/truvaagents/truva-g3/resilience"
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -48,6 +49,7 @@ func NewTravelChatAgent() (*TravelChatAgent, error) {
 	chainClient, err := ai.NewChainClient(
 		ai.WithChainTelemetry(telemetry.GetTelemetryProvider()),
 		ai.WithChainLogger(agent.Logger),
+		ai.WithChainCircuitBreakerFactory(travelAICircuitBreakerFactory(agent.Logger)),
 		ai.WithChainTimeout(240*time.Second), // Extended timeout for reasoning models
 	)
 	if err != nil {
@@ -55,9 +57,18 @@ func NewTravelChatAgent() (*TravelChatAgent, error) {
 			"error": err.Error(),
 		})
 		// Fallback to single provider - returns core.AIClient interface
+		breaker, breakerErr := travelAICircuitBreakerFactory(agent.Logger)(
+			"single-provider",
+			"auto",
+			ai.ShouldCountAICircuitBreakerFailure,
+		)
+		if breakerErr != nil {
+			return nil, fmt.Errorf("create single-provider AI circuit breaker: %w", breakerErr)
+		}
 		singleClient, err := ai.NewClient(
 			ai.WithTimeout(240*time.Second),                    // Extended timeout for reasoning models
 			ai.WithTelemetry(telemetry.GetTelemetryProvider()), // AI span visibility in Jaeger
+			ai.WithCircuitBreaker(breaker),
 		)
 		if err != nil {
 			// AI is optional - some orchestration features still work without it
@@ -134,6 +145,24 @@ func NewTravelChatAgent() (*TravelChatAgent, error) {
 	chatAgent.registerCapabilities()
 
 	return chatAgent, nil
+}
+
+func travelAICircuitBreakerFactory(logger core.Logger) ai.CircuitBreakerFactory {
+	return func(
+		entryName string,
+		_ string,
+		shouldCountFailure func(error) bool,
+	) (core.CircuitBreaker, error) {
+		config := resilience.DefaultConfig()
+		config.Name = "ai-provider-" + entryName
+		config.ErrorClassifier = shouldCountFailure
+		if componentLogger, ok := logger.(core.ComponentAwareLogger); ok {
+			config.Logger = componentLogger.WithComponent("framework/resilience")
+		} else {
+			config.Logger = logger
+		}
+		return resilience.NewCircuitBreaker(config)
+	}
 }
 
 // InitializeOrchestrator sets up the orchestrator after Discovery is available.

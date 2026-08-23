@@ -31,7 +31,7 @@ A backend autonomous agent that explores websites, generates Playwright test scr
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
 | **Go** | 1.25+ | `brew install go` | `choco install golang` |
-| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [Groq](https://console.groq.com/keys) | Same as macOS |
+| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [OpenRouter](https://openrouter.ai/settings/keys), or [Groq](https://console.groq.com/keys) | Same as macOS |
 
 > **Note:** The qa-agent is a backend agent — it does not have a chat UI. Interact with it via its REST API or trigger it through event-driven integrations.
 
@@ -57,6 +57,7 @@ nano .env    # or: code .env / vim .env
 At minimum, uncomment and set ONE of these in your `.env` file:
 - `OPENAI_API_KEY=sk-your-key`
 - `ANTHROPIC_API_KEY=sk-ant-your-key`
+- `OPENROUTER_API_KEY=sk-or-your-key`
 
 ```bash
 # 2. Build and deploy the qa-agent
@@ -368,7 +369,7 @@ cp .env.example .env
 
 The `.env.example` file contains comprehensive documentation for all options including:
 
-- **AI Provider Keys** — Supports provider chain for failover (OpenAI → Anthropic → Groq)
+- **AI Provider Keys** — Supports auto-detected provider-chain failover (OpenAI → Anthropic → OpenRouter → Gemini → Groq, then remaining configured compatible providers)
 - **Model Aliases** — Override default/smart/fast model mappings per provider
 - **Orchestration Model Overrides** — Route plan generation to "smart", micro-resolution to "fast"
 - **Timeout Configuration** — Extended for browser automation workflows
