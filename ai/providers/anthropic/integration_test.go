@@ -159,6 +159,81 @@ const phase4SuccessBody = `{
   "usage":{"input_tokens":1,"output_tokens":1}
 }`
 
+func TestClientErrorBodyIsNotExposed(t *testing.T) {
+	const canary = "anthropic-prompt-fragment-canary"
+	client := NewClient("static-key", "https://gateway.example", &core.NoOpLogger{})
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: phase4RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return phase4Response(
+			request,
+			http.StatusBadRequest,
+			`{"type":"error","error":{"type":"invalid_request_error","message":"`+canary+`"}}`,
+		), nil
+	})}
+
+	_, err := client.Generate(t.Context(), core.NewAIRequest("hello", "privacy"))
+	if err == nil {
+		t.Fatal("Generate() error = nil")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("Generate() exposed provider body: %v", err)
+	}
+}
+
+func TestClientStreamErrorBodyIsNotExposed(t *testing.T) {
+	const canary = "anthropic-stream-prompt-fragment-canary"
+	client := NewClient("static-key", "https://gateway.example", &core.NoOpLogger{})
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: phase4RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return phase4Response(
+			request,
+			http.StatusBadRequest,
+			`{"type":"error","error":{"type":"invalid_request_error","message":"`+canary+`"}}`,
+		), nil
+	})}
+
+	request := core.NewAIRequest("hello", "privacy")
+	request.Generation.Model = "claude-sonnet-4-5-20250929"
+	result, err := client.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+	var providerErr core.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("Stream() result=%#v provider error=%#v / %v", result, providerErr, err)
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("Stream() exposed provider body: %v", err)
+	}
+}
+
+func TestClientRetryExhaustionPreservesFinalProviderStatus(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			const canary = "anthropic-retry-body-canary"
+			calls := 0
+			client := NewClient("static-key", "https://gateway.example", &core.NoOpLogger{})
+			client.MaxRetries = 1
+			client.RetryDelay = 0
+			client.HTTPClient = &http.Client{Transport: phase4RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				response := phase4Response(request, status, `{"type":"error","error":{"message":"`+canary+`"}}`)
+				response.Header.Set("X-Provider-Secret", "anthropic-header-canary")
+				return response, nil
+			})}
+
+			_, err := client.GenerateResponse(t.Context(), "hello", &core.AIOptions{Model: "claude-sonnet-4-5-20250929", MaxTokens: 10})
+			var providerErr core.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode() != status {
+				t.Fatalf("provider error = %#v / %v", providerErr, err)
+			}
+			if calls != 2 {
+				t.Fatalf("transport calls = %d, want 2", calls)
+			}
+			if strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), "anthropic-header-canary") {
+				t.Fatalf("retry error leaked provider data: %v", err)
+			}
+		})
+	}
+}
+
 func TestNewRequestClient_Phase4TransportIntegration(t *testing.T) {
 	endpointURL, err := url.Parse("https://gateway.example/custom/messages?existing=kept")
 	if err != nil {
@@ -511,7 +586,7 @@ func TestNewRequestClient_Phase4FrameworkTimeoutDoesNotMutateHTTPClient(t *testi
 func TestNewRequestClient_Phase4NilTransportUsesDefaultWithoutMutatingCaller(t *testing.T) {
 	callerClient := &http.Client{Timeout: 3 * time.Second}
 	requestClient, err := (&Factory{}).CreateRequestClient(
-		&ai.AIConfig{APIKey: "static-key", Timeout: 180 * time.Second},
+		&ai.AIConfig{APIKey: "static-key", Timeout: 180 * time.Second, RetryDelay: 250 * time.Millisecond},
 		ai.ProviderIntegrationConfig{HTTPClient: callerClient},
 	)
 	if err != nil {
@@ -523,6 +598,9 @@ func TestNewRequestClient_Phase4NilTransportUsesDefaultWithoutMutatingCaller(t *
 	}
 	if client.HTTPClient == callerClient || client.HTTPClient.Transport != http.DefaultTransport || client.HTTPClient.Timeout != callerClient.Timeout {
 		t.Fatalf("provider HTTP client = %#v", client.HTTPClient)
+	}
+	if client.RetryDelay != 250*time.Millisecond {
+		t.Fatalf("retry delay = %s, want 250ms", client.RetryDelay)
 	}
 }
 

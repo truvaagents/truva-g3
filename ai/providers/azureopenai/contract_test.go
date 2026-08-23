@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/ai/providers/openai"
@@ -145,7 +146,11 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 	}, ai.ProviderIntegrationConfig{
 		EndpointResolver: resolver, HTTPClient: &http.Client{Transport: transport},
 	})
-	result, err := client.Generate(t.Context(), core.NewAIRequest("hello", "contract"))
+	result, err := client.Generate(t.Context(), core.NewAIRequestFromLegacy(
+		"hello",
+		"contract",
+		&core.AIOptions{ResponseFormat: "json"},
+	))
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
@@ -165,6 +170,10 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 	if request.body["model"] != "prod-o3-west" || request.body["reasoning_effort"] != "high" || request.body["max_completion_tokens"] != float64(500) {
 		t.Fatalf("request body = %#v", request.body)
 	}
+	responseFormat, ok := request.body["response_format"].(map[string]interface{})
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("response_format = %#v, want type=json_object", request.body["response_format"])
+	}
 	for _, absent := range []string{"reasoning", "max_tokens", "temperature"} {
 		if _, present := request.body[absent]; present {
 			t.Fatalf("request body unexpectedly contains %q: %#v", absent, request.body)
@@ -174,9 +183,84 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 		result.RequestReport.RequestedModel != "smart" || result.RequestReport.ResolvedModel != "gpt-5.6-sol" {
 		t.Fatalf("result = %#v", result)
 	}
+	if result.RequestReport.EffectiveMaxTokens.Mode != core.AIParameterSet ||
+		result.RequestReport.EffectiveMaxTokens.Value != 500 {
+		t.Fatalf("effective max tokens = %#v, want 500", result.RequestReport.EffectiveMaxTokens)
+	}
 	encodedReport, _ := json.Marshal(result.RequestReport)
 	if bytes.Contains(encodedReport, []byte("prod-o3-west")) || bytes.Contains(encodedReport, []byte("static-secret")) {
 		t.Fatalf("request report leaked route or credential: %s", encodedReport)
+	}
+}
+
+func TestAzureErrorBodyIsNotExposed(t *testing.T) {
+	const canary = "azure-prompt-fragment-canary"
+	resolver := &testResolver{resolved: ai.ResolvedEndpoint{
+		URL:        mustURL(t, "https://resource.openai.azure.com/openai/v1/chat/completions"),
+		Deployment: "prod-gpt-west", RouteIdentity: "azure-v1-error-route",
+	}}
+	transport := &recordingTransport{respond: func(_ int, request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"` + canary + `","code":"invalid_request"}}`,
+			)),
+			Request: request,
+		}, nil
+	}}
+	client := mustClient(t, &ai.AIConfig{
+		ProviderAlias: "azureopenai.v1", APIKey: "static-secret", Model: "gpt-4.1",
+		MaxTokens: 100, MaxRetries: 0,
+	}, ai.ProviderIntegrationConfig{
+		EndpointResolver: resolver,
+		HTTPClient:       &http.Client{Transport: transport},
+	})
+
+	_, err := client.Generate(t.Context(), core.NewAIRequest("hello", "privacy"))
+	if err == nil {
+		t.Fatal("Generate() error = nil")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("Generate() exposed provider body: %v", err)
+	}
+}
+
+func TestAzureRetryExhaustionPreservesFinalProviderStatus(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			const canary = "azure-retry-body-canary"
+			resolver := &testResolver{resolved: ai.ResolvedEndpoint{
+				URL:        mustURL(t, "https://resource.openai.azure.com/openai/v1/chat/completions"),
+				Deployment: "prod-chat", RouteIdentity: "retry-exhaustion-route-v1",
+			}}
+			transport := &recordingTransport{respond: func(_ int, request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: status,
+					Header: http.Header{
+						"Content-Type":      {"application/json"},
+						"X-Provider-Secret": {"azure-header-canary"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"` + canary + `"}}`)),
+					Request: request,
+				}, nil
+			}}
+			client := mustClient(t, &ai.AIConfig{
+				ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxRetries: 1,
+			}, ai.ProviderIntegrationConfig{EndpointResolver: resolver, HTTPClient: &http.Client{Transport: transport}})
+			client.RetryDelay = 0
+			_, err := client.Generate(t.Context(), core.NewAIRequest("hello", "retry-exhaustion"))
+			var providerErr core.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode() != status {
+				t.Fatalf("provider error = %#v / %v", providerErr, err)
+			}
+			if len(transport.requests) != 2 {
+				t.Fatalf("transport calls = %d, want 2", len(transport.requests))
+			}
+			if strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), "azure-header-canary") {
+				t.Fatalf("retry error leaked provider data: %v", err)
+			}
+		})
 	}
 }
 
@@ -513,6 +597,37 @@ func TestAzureStreamUsesProfiledBodyAndGracefulCallbackStop(t *testing.T) {
 	body := transport.requests[0].body
 	if body["stream"] != true || body["model"] != "prod-chat" {
 		t.Fatalf("stream body = %#v", body)
+	}
+}
+
+func TestAzureCodecReceivesSSEEventLimit(t *testing.T) {
+	resolver := &testResolver{resolved: ai.ResolvedEndpoint{
+		URL:        mustURL(t, "https://resource.openai.azure.com/openai/v1/chat/completions"),
+		Deployment: "prod-chat", RouteIdentity: "sse-limit-route-v1",
+	}}
+	transport := &recordingTransport{respond: func(_ int, request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"choices":[{"delta":{"content":"` + strings.Repeat("x", 128) + `"}}]}` + "\n\n",
+			)),
+			Request: request,
+		}, nil
+	}}
+	client := mustClient(t, &ai.AIConfig{
+		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxRetries: 0,
+		SSEEventMaxBytes: 64, RetryDelay: 250 * time.Millisecond,
+	}, ai.ProviderIntegrationConfig{EndpointResolver: resolver, HTTPClient: &http.Client{Transport: transport}})
+	if client.RetryDelay != 250*time.Millisecond {
+		t.Fatalf("retry delay = %s, want 250ms", client.RetryDelay)
+	}
+	result, err := client.Stream(t.Context(), core.NewAIRequest("hello", "sse-limit"), func(core.StreamChunk) error { return nil })
+	if err == nil || result == nil || result.RequestReport == nil {
+		t.Fatalf("Stream result=%#v error=%v", result, err)
+	}
+	if errors.Is(err, core.ErrStreamPartiallyCompleted) {
+		t.Fatalf("oversized first event was classified partial: %v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
@@ -285,12 +286,15 @@ func TestFactoryUsesGoogleEnvironmentPrecedenceAndCopiesIntegrationHTTPClient(t 
 	t.Setenv("GOOGLE_API_KEY", "google-wins")
 	t.Setenv("GEMINI_API_KEY", "gemini-loses")
 	factory := &Factory{}
-	legacy, err := factory.CreateValidated(&ai.AIConfig{})
+	legacy, err := factory.CreateValidated(&ai.AIConfig{RetryDelay: 250 * time.Millisecond})
 	if err != nil {
 		t.Fatalf("CreateValidated: %v", err)
 	}
 	if got := legacy.(*Client).apiKey; got != "google-wins" {
 		t.Fatalf("environment precedence selected %q", got)
+	}
+	if got := legacy.(*Client).RetryDelay; got != 250*time.Millisecond {
+		t.Fatalf("retry delay = %s, want 250ms", got)
 	}
 
 	owned := &http.Client{}

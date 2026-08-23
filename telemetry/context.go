@@ -84,7 +84,8 @@ type BaggageMemberOption func(*baggageMemberOptions)
 
 // WithMetricLabelEligibility controls whether a baggage member may
 // automatically enrich context-aware metric labels. The decision is stored as
-// a W3C baggage-member property so it survives standard propagation.
+// a W3C baggage-member property so it survives standard propagation. Reserved
+// correlation keys remain metric-ineligible even when explicitly opted in.
 func WithMetricLabelEligibility(eligible bool) BaggageMemberOption {
 	return func(options *baggageMemberOptions) {
 		options.metricLabelEligible = &eligible
@@ -330,6 +331,13 @@ func updateBaggageTotalSize(bag baggage.Baggage) {
 }
 
 func metricLabelEligible(member baggage.Member) bool {
+	if isReservedCorrelationKey(member.Key()) {
+		return false
+	}
+	return metricLabelPropertyAllows(member)
+}
+
+func metricLabelPropertyAllows(member baggage.Member) bool {
 	for _, property := range member.Properties() {
 		if property.Key() != metricLabelEligibilityProperty {
 			continue
@@ -338,6 +346,18 @@ func metricLabelEligible(member baggage.Member) bool {
 		return !hasValue || value != metricLabelExcludedValue
 	}
 	return true
+}
+
+func isReservedCorrelationKey(key string) bool {
+	switch key {
+	case "request_id", "original_request_id", "conversation_id",
+		"checkpoint_id", "user_id", "session_id", "trace_id", "span_id",
+		"plan_id", "step_id", "pass_id", "investigation_owner",
+		"provider_request_id":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetBaggage retrieves the current baggage from context as a map.

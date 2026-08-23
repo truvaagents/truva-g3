@@ -614,9 +614,9 @@ func TestClient_GenerateResponse_ReasoningModelParams(t *testing.T) {
 	if _, ok := capturedRequest["temperature"]; ok {
 		t.Error("Reasoning model should NOT have temperature")
 	}
-	// Verify multiplier was applied (1000 * 5 = 5000)
-	if capturedRequest["max_completion_tokens"] != float64(5000) {
-		t.Errorf("max_completion_tokens = %v, want 5000 (1000 * 5 default multiplier)", capturedRequest["max_completion_tokens"])
+	// An empty reasoning effort does not opt into hidden-reasoning expansion.
+	if capturedRequest["max_completion_tokens"] != float64(1000) {
+		t.Errorf("max_completion_tokens = %v, want exact budget 1000", capturedRequest["max_completion_tokens"])
 	}
 }
 
@@ -640,8 +640,9 @@ func TestClient_GenerateResponse_CustomReasoningMultiplier(t *testing.T) {
 	client.ReasoningTokenMultiplier = 3 // Custom multiplier
 
 	_, err := client.GenerateResponse(context.Background(), "test", &core.AIOptions{
-		Model:     "gpt-5-mini",
-		MaxTokens: 1000,
+		Model:           "gpt-5-mini",
+		MaxTokens:       1000,
+		ReasoningEffort: "high",
 	})
 
 	if err != nil {

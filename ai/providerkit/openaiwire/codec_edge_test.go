@@ -74,6 +74,7 @@ func TestRequestProfileValidationMatrix(t *testing.T) {
 	valid := openaiwire.RequestProfile{
 		SemanticModel: "gpt-4.1", WireModel: "deployment",
 		ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary,
 	}
 	if err := valid.Validate(); err != nil {
@@ -89,6 +90,10 @@ func TestRequestProfileValidationMatrix(t *testing.T) {
 		{name: "omitted wire model present", mutate: func(profile *openaiwire.RequestProfile) { profile.ModelField = openaiwire.ModelFieldOmitted }},
 		{name: "invalid model field", mutate: func(profile *openaiwire.RequestProfile) { profile.ModelField = openaiwire.ModelFieldMode(255) }},
 		{name: "invalid token field", mutate: func(profile *openaiwire.RequestProfile) { profile.TokenLimit = openaiwire.TokenLimitField(255) }},
+		{name: "invalid token budget", mutate: func(profile *openaiwire.RequestProfile) { profile.TokenBudget = openaiwire.TokenBudgetPolicy(255) }},
+		{name: "scaled budget with max tokens", mutate: func(profile *openaiwire.RequestProfile) {
+			profile.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
+		}},
 		{name: "reasoning style below range", mutate: func(profile *openaiwire.RequestProfile) { profile.ReasoningEffort = 0 }},
 		{name: "reasoning style above range", mutate: func(profile *openaiwire.RequestProfile) {
 			profile.ReasoningEffort = openaiwire.ReasoningEffortStyle(255)
@@ -166,6 +171,23 @@ func TestCodecRejectsEveryInvalidPortableMode(t *testing.T) {
 	}
 }
 
+func TestCodecRejectsNativeSpellingsInPortableResponseFormat(t *testing.T) {
+	codec := mustCodec(t)
+	for _, value := range []string{"json_object", "json_schema", "text", "yaml", "response-format-canary"} {
+		t.Run(value, func(t *testing.T) {
+			request := core.NewAIRequestFromLegacy("hello", "invalid-response-format", &core.AIOptions{
+				ResponseFormat: value,
+			})
+			if _, err := codec.BuildDraft(request, "gpt-4.1", false); err == nil ||
+				!strings.Contains(err.Error(), "unsupported portable response format") {
+				t.Fatalf("BuildDraft() error = %v", err)
+			} else if strings.Contains(err.Error(), value) {
+				t.Fatalf("BuildDraft() exposed caller-controlled response format: %v", err)
+			}
+		})
+	}
+}
+
 func TestCodecTopPSetClonesNilLegacyExtra(t *testing.T) {
 	codec := mustCodec(t)
 	request := core.NewAIRequestFromLegacy("hello", "top-p", &core.AIOptions{Model: "gpt-4.1"})
@@ -187,6 +209,7 @@ func TestCodecDraftReasoningAndIntegerValidationMatrix(t *testing.T) {
 	base := openaiwire.RequestProfile{
 		SemanticModel: "gpt-4.1", WireModel: "wire-model",
 		ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens,
+		TokenBudget:     openaiwire.TokenBudgetExact,
 		ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary,
 	}
 

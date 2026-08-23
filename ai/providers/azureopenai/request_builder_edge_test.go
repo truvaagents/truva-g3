@@ -132,6 +132,7 @@ func TestAzureDraftProtectsAPIKeyForEveryPolicyOperation(t *testing.T) {
 		openaiwire.RequestProfile{
 			SemanticModel: "gpt-4.1", WireModel: "deployment",
 			ModelField: openaiwire.ModelFieldRequired, TokenLimit: openaiwire.TokenLimitMaxTokens,
+			TokenBudget:     openaiwire.TokenBudgetExact,
 			ReasoningEffort: openaiwire.ReasoningEffortOmitted, Sampling: openaiwire.SamplingOrdinary,
 		},
 		false,
@@ -196,6 +197,25 @@ func TestValidateAzurePortableIntentEdgeCases(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestAzureRejectsNativeResponseFormatSpellingInPortableField(t *testing.T) {
+	resolver := &testResolver{resolved: ai.ResolvedEndpoint{
+		URL:        mustURL(t, "https://resource.openai.azure.com/openai/v1/chat/completions"),
+		Deployment: "prod-chat", RouteIdentity: "portable-response-format-route",
+	}}
+	client := mustClient(t, &ai.AIConfig{
+		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1",
+		MaxRetries: 0,
+	}, ai.ProviderIntegrationConfig{EndpointResolver: resolver})
+	request := core.NewAIRequestFromLegacy("hello", "portable-json", &core.AIOptions{
+		ResponseFormat: "json_object",
+	})
+
+	if _, err := client.prepareInvocation(t.Context(), request, false); err == nil ||
+		!strings.Contains(err.Error(), "unsupported portable response format") {
+		t.Fatalf("prepareInvocation() error = %v", err)
 	}
 }
 
@@ -288,7 +308,7 @@ func TestAzureLegacyAdaptersAndStreamingCapability(t *testing.T) {
 		return successResponse(request, "prod-chat", "generated"), nil
 	})
 	client := mustClient(t, &ai.AIConfig{
-		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxRetries: 0,
+		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxTokens: 100, MaxRetries: 0,
 	}, ai.ProviderIntegrationConfig{
 		EndpointResolver: resolver,
 		HTTPClient:       &http.Client{Transport: transport},
@@ -318,7 +338,7 @@ func TestAzureLegacyAdaptersRetainErrorsAndAvoidTransport(t *testing.T) {
 	resolver := &testResolver{err: resolverFailure}
 	transportCalls := 0
 	client := mustClient(t, &ai.AIConfig{
-		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxRetries: 0,
+		ProviderAlias: "azureopenai.v1", APIKey: "key", Model: "gpt-4.1", MaxTokens: 100, MaxRetries: 0,
 	}, ai.ProviderIntegrationConfig{
 		EndpointResolver: resolver,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -360,11 +380,17 @@ func TestAzureStreamProviderErrorRetainsRequestReport(t *testing.T) {
 			}, nil
 		})},
 	})
-	result, err := client.Stream(t.Context(), core.NewAIRequest("hello", "stream-error"), func(core.StreamChunk) error { return nil })
+	request := core.NewAIRequest("hello", "stream-error")
+	request.Generation.MaxTokens = core.SetAIParameter(100)
+	result, err := client.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
 	if err == nil || result == nil || result.RequestReport == nil {
 		t.Fatalf("Stream result = %#v, error = %v", result, err)
 	}
 	if result.RequestReport.Operation != "stream" || result.RequestReport.ResolvedModel != "gpt-4.1" {
 		t.Fatalf("request report = %#v", result.RequestReport)
+	}
+	if result.RequestReport.EffectiveMaxTokens.Mode != core.AIParameterSet ||
+		result.RequestReport.EffectiveMaxTokens.Value != 100 {
+		t.Fatalf("effective max tokens = %#v, want exact budget 100", result.RequestReport.EffectiveMaxTokens)
 	}
 }

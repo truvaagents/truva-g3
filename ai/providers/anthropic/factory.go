@@ -198,6 +198,9 @@ func applyAnthropicClientConfig(client *Client, config *ai.AIConfig) error {
 	if config.MaxRetries >= 0 {
 		client.MaxRetries = config.MaxRetries
 	}
+	if config.RetryDelay > 0 {
+		client.RetryDelay = config.RetryDelay
+	}
 
 	// Apply model defaults
 	if config.Model != "" {

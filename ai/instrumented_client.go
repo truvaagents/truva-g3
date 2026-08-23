@@ -273,28 +273,35 @@ func (c *InstrumentedAIClient) RequestFingerprint(
 ) (string, bool) {
 	fingerprinter, ok := c.wrapped.(core.AIRequestFingerprinter)
 	if !ok {
-		if request == nil || !request.LegacyRepresentable() {
-			return "", false
-		}
-		if _, requestAware := c.wrapped.(core.AIRequestClient); requestAware {
-			return "", false
-		}
-		// The legacy client has no policy or route report. Preserve its existing
-		// cache behavior under a stable adapter namespace while distinguishing
-		// different concrete client implementations and portable call purposes.
-		model := request.Generation.Model
-		if options := request.LegacyOptions(); model == "" && options != nil {
-			model = options.Model
-		}
-		sum := sha256.Sum256([]byte(fmt.Sprintf(
-			"legacy-instrumented-v1\nclient=%T\npurpose=%s\nmodel=%s",
-			c.wrapped,
-			request.Purpose,
-			model,
-		)))
-		return fmt.Sprintf("%x", sum[:]), true
+		return legacyClientRequestFingerprint(c.wrapped, request)
 	}
 	return fingerprinter.RequestFingerprint(ctx, request)
+}
+
+func legacyClientRequestFingerprint(
+	client core.AIClient,
+	request *core.AIRequest,
+) (string, bool) {
+	if request == nil || !request.LegacyRepresentable() {
+		return "", false
+	}
+	if _, requestAware := client.(core.AIRequestClient); requestAware {
+		return "", false
+	}
+	// The legacy client has no policy or route report. Preserve its existing
+	// cache behavior under a stable adapter namespace while distinguishing
+	// different concrete client implementations and portable call purposes.
+	model := request.Generation.Model
+	if options := request.LegacyOptions(); model == "" && options != nil {
+		model = options.Model
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf(
+		"legacy-instrumented-v1\nclient=%T\npurpose=%s\nmodel=%s",
+		client,
+		request.Purpose,
+		model,
+	)))
+	return fmt.Sprintf("%x", sum[:]), true
 }
 
 func (c *InstrumentedAIClient) attachLegacyFingerprint(
@@ -471,7 +478,7 @@ func (c *InstrumentedAIClient) recordResult(
 		record.TotalTokens = response.Usage.TotalTokens
 	}
 	if err != nil {
-		record.Error = err.Error()
+		record.Error = core.RedactSensitiveText(err.Error())
 		if result == nil || result.Response == nil {
 			var providerError core.ProviderError
 			if errors.As(err, &providerError) {
@@ -530,13 +537,19 @@ func (c *InstrumentedAIClient) recordAsync(ctx context.Context, requestID string
 		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 
+		recordStarted := time.Now()
 		if recErr := c.recorder.RecordLLMCall(recordCtx, requestID, record); recErr != nil {
+			if c.logger == nil {
+				return
+			}
 			errorType, safeError := providers.SanitizedObservationError(recErr, "unknown")
 			c.logger.WarnWithContext(recordCtx, "Failed to record LLM debug interaction", map[string]interface{}{
 				"operation":        "ai_debug_record",
 				"request_id":       requestID,
 				"source_component": c.componentName,
 				"call_type":        c.defaultType,
+				"status":           "error",
+				"duration_ms":      time.Since(recordStarted).Milliseconds(),
 				"error":            safeError.Error(),
 				"error_type":       errorType,
 			})

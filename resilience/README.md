@@ -55,7 +55,10 @@ Let me show you the simplest way to protect your code from failures. It's like a
 // Create a circuit breaker with default production settings
 config := resilience.DefaultConfig()
 config.Name = "payment-service"
-cb := resilience.NewCircuitBreaker(config)
+cb, err := resilience.NewCircuitBreaker(config)
+if err != nil {
+    return err
+}
 
 // Wrap any fallible operation
 err := cb.Execute(ctx, func() error {
@@ -70,6 +73,38 @@ if err != nil {
     // Handle other errors
 }
 ```
+
+### Protecting AI Providers Without Coupling Modules
+
+The `ai` and `resilience` packages are sibling optional modules and do not
+import each other. Compose them in application code through
+`core.CircuitBreaker`. For a provider chain, create a new breaker for every
+factory call and install the AI-owned classifier supplied to the factory:
+
+```go
+breakerFactory := func(
+    entryName string,
+    providerAlias string,
+    shouldCount func(error) bool,
+) (core.CircuitBreaker, error) {
+    config := resilience.DefaultConfig()
+    config.Name = "ai-provider-" + entryName
+    config.ErrorClassifier = shouldCount
+    config.Logger = logger
+    return resilience.NewCircuitBreaker(config)
+}
+
+client, err := ai.NewChainClient(
+    ai.WithProviderChain("anthropic", "openai"),
+    ai.WithChainCircuitBreakerFactory(breakerFactory),
+)
+```
+
+Do not cache or return one shared breaker from this factory: each ordered entry
+must have independent provider-health state. For a single factory-created
+client use `ai.WithCircuitBreaker`; for a directly constructed provider client
+use `ai.NewCircuitBreakerClient`. The classifier excludes caller/configuration
+errors and partial streams while counting provider availability failures.
 
 ### Smart Retry with Backoff
 

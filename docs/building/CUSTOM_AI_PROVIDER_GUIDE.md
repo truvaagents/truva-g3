@@ -2373,7 +2373,8 @@ Create the codec and policy engine once when constructing the client:
 
 ```go
 codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{
-    SurfaceVersion: "acme-chat-completions-v1",
+    SurfaceVersion:   "acme-chat-completions-v1",
+    MaxSSEEventBytes: config.SSEEventMaxBytes,
 })
 if err != nil {
     return nil, fmt.Errorf("create Acme wire codec: %w", err)
@@ -2393,6 +2394,11 @@ if err != nil {
 The surface version is an adapter-contract version, not a release version.
 Change it when the same logical request could produce a meaningfully different
 wire request after an adapter change.
+
+`MaxSSEEventBytes` is an operational memory/safety ceiling for one complete
+server-sent event. Pass the resolved `AIConfig.SSEEventMaxBytes`; a
+non-positive codec value uses the shared 1 MiB default. Do not implement
+streaming with a separate unbounded scanner.
 
 Then use one preparation function for sync, stream, and fingerprint preflight:
 
@@ -2477,6 +2483,31 @@ resolver before draft construction, validate the complete URL and operation,
 and snapshot the result. `requestProfile` must keep the semantic model separate
 from any route-owned wire model or deployment and return a fully populated
 `openaiwire.RequestProfile`.
+
+For example, a provider whose wire contract sends the caller's budget exactly
+can construct this profile:
+
+```go
+func (client *Client) requestProfile(model string, route resolvedRoute) (openaiwire.RequestProfile, error) {
+    profile := openaiwire.RequestProfile{
+        SemanticModel:   model,
+        WireModel:       route.wireModel,
+        ModelField:      openaiwire.ModelFieldRequired,
+        TokenLimit:      openaiwire.TokenLimitMaxCompletionTokens,
+        TokenBudget:     openaiwire.TokenBudgetExact,
+        ReasoningEffort: openaiwire.ReasoningEffortTopLevel,
+        Sampling:        openaiwire.SamplingOrdinary,
+    }
+    return profile, profile.Validate()
+}
+```
+
+`TokenBudgetExact` sends the portable maximum unchanged. Use
+`TokenBudgetScaleForReasoning` only for a verified reasoning-model contract
+where an explicit, active reasoning effort reserves hidden-reasoning tokens;
+that policy requires `TokenLimitMaxCompletionTokens`. Empty effort and
+`"none"` never scale. The selected policy is part of the stable request
+fingerprint, and the request report records the final wire token value.
 
 Do not infer that a model is a reasoning family merely because a capability
 row says which reasoning-control spelling a surface accepts. Classify the

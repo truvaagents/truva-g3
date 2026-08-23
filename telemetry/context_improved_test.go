@@ -234,6 +234,10 @@ func TestOpenTelemetryIntegration(t *testing.T) {
 	if bag.Member("span_id").Value() != "456" {
 		t.Error("span_id not found in OTel baggage")
 	}
+	metricLabels := appendBaggageToLabels(ctx, nil)
+	if labelsContainKey(metricLabels, "trace_id") || labelsContainKey(metricLabels, "span_id") {
+		t.Fatalf("trace correlation reached metric labels: %v", metricLabels)
+	}
 
 	// Verify our GetBaggage still works
 	ourBag := GetBaggage(ctx)

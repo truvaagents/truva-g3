@@ -55,6 +55,97 @@ func TestRequestAwareGenerateReturnsReportAndDetailedUsage(t *testing.T) {
 	}
 }
 
+func TestRetryExhaustionPreservesFinalProviderStatus(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			const canary = "gemini-retry-body-canary"
+			calls := 0
+			client := NewClient("static-key", "https://gemini.example/v1beta", &core.NoOpLogger{})
+			client.MaxRetries = 1
+			client.RetryDelay = 0
+			client.HTTPClient = &http.Client{Transport: geminiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: status,
+					Header: http.Header{
+						"Content-Type":      {"application/json"},
+						"X-Provider-Secret": {"gemini-header-canary"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"` + canary + `"}}`)),
+					Request: request,
+				}, nil
+			})}
+
+			request := core.NewAIRequest("hello", "retry-exhaustion")
+			request.Generation.Model = "gemini-2.5-flash"
+			_, err := client.Generate(t.Context(), request)
+			var providerErr core.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode() != status {
+				t.Fatalf("provider error = %#v / %v", providerErr, err)
+			}
+			if calls != 2 {
+				t.Fatalf("transport calls = %d, want 2", calls)
+			}
+			if strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), "gemini-header-canary") {
+				t.Fatalf("retry error leaked provider data: %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestAwareGenerateErrorBodyIsNotExposed(t *testing.T) {
+	const canary = "gemini-prompt-fragment-canary"
+	client := NewClient("key", "https://gemini.example/v1beta", &core.NoOpLogger{})
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: geminiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"` + canary + `","status":"INVALID_ARGUMENT"}}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+
+	request := core.NewAIRequest("hello", "privacy")
+	request.Generation.Model = "gemini-2.5-flash"
+	_, err := client.Generate(t.Context(), request)
+	if err == nil {
+		t.Fatal("Generate() error = nil")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("Generate() exposed provider body: %v", err)
+	}
+}
+
+func TestRequestAwareStreamErrorBodyIsNotExposed(t *testing.T) {
+	const canary = "gemini-stream-prompt-fragment-canary"
+	client := NewClient("key", "https://gemini.example/v1beta", &core.NoOpLogger{})
+	client.MaxRetries = 0
+	client.HTTPClient = &http.Client{Transport: geminiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"` + canary + `","status":"INVALID_ARGUMENT"}}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+
+	request := core.NewAIRequest("hello", "privacy")
+	request.Generation.Model = "gemini-2.5-flash"
+	result, err := client.Stream(t.Context(), request, func(core.StreamChunk) error { return nil })
+	var providerErr core.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("Stream() result=%#v provider error=%#v / %v", result, providerErr, err)
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("Stream() exposed provider body: %v", err)
+	}
+}
+
 func TestRequestAwareStreamReturnsCallbackErrorsWithPartialResultAndReport(t *testing.T) {
 	callbackErr := errors.New("application stopped stream")
 	client := NewClient("key", "https://gemini.example/v1beta", &core.NoOpLogger{})

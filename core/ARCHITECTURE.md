@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.3
+**Version**: 1.4
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -79,6 +79,15 @@ func (c *OpenAIClient) GenerateResponse(...) (*AIResponse, error) { ... }
 // ❌ Bad: Core depending on concrete implementations
 import "github.com/truvaagents/truva-g3/ai" // NEVER in core
 ```
+
+#### Portable AI request semantics
+
+`AIOptions.ResponseFormat` is deliberately narrow: `""` means unspecified and
+`"json"` is the only non-empty portable value. Provider adapters translate that
+semantic value into the provider's native wire spelling. Native objects such as
+OpenAI-compatible `json_object` or `json_schema` requests belong in
+`AIOptions.Extra`; their native spellings are not aliases for the portable
+field.
 
 **Benefits**:
 - Testability through mocking
@@ -990,6 +999,7 @@ their packages or vocabulary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2026-08-20 | Defined `AIOptions.ResponseFormat="json"` as the sole non-empty portable structured-output value and reserved native formats for `Extra` |
 | 1.3 | 2026-08-17 | Migrated the included Redis implementation to go-redis/v9 with explicit RESP2 compatibility defaults and application-owned RESP3 opt-in |
 | 1.2 | 2026-08-09 | Added generic provenance-aware pipeline short-circuit and named cache-variation contracts without changing legacy hook payloads |
 | 1.1 | 2026-07-27 | Established the pre-release opaque conversation-correlation context and validation contract |

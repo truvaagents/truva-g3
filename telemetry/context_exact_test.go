@@ -77,6 +77,24 @@ func TestWithBaggageExact_UnmarkedMemberRemainsMetricEligible(t *testing.T) {
 	}
 }
 
+func TestWithBaggageExact_ReservedMemberCannotOptIntoMetricLabels(t *testing.T) {
+	ctx, err := WithBaggageExact(
+		context.Background(),
+		"request_id",
+		"request-exact",
+		WithMetricLabelEligibility(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if GetBaggage(ctx)["request_id"] != "request-exact" {
+		t.Fatal("request_id was not preserved in baggage")
+	}
+	if labelsContainKey(appendBaggageToLabels(ctx, nil), "request_id") {
+		t.Fatal("reserved request_id property overrode the metric deny-list")
+	}
+}
+
 func TestWithBaggageExact_ValidationFailureIsTypedAndUnchanged(t *testing.T) {
 	base := WithBaggage(context.Background(), "preserved", "value")
 	ResetBaggageStats()

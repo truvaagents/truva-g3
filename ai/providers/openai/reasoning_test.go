@@ -103,7 +103,7 @@ func TestBuildRequestBody_ReasoningModel(t *testing.T) {
 	}
 
 	// Use 0 for multiplier to test default (5x) behavior
-	reqBody := buildRequestBody("gpt-5-mini", messages, 2000, 0.7, false, 0, "")
+	reqBody := buildRequestBody("gpt-5-mini", messages, 2000, 0.7, false, 0, "high")
 
 	// Should have max_completion_tokens (not max_tokens)
 	if _, ok := reqBody["max_completion_tokens"]; !ok {
@@ -133,7 +133,7 @@ func TestBuildRequestBody_ReasoningModelCustomMultiplier(t *testing.T) {
 	}
 
 	// Test with custom multiplier of 3
-	reqBody := buildRequestBody("gpt-5-mini", messages, 2000, 0.7, false, 3, "")
+	reqBody := buildRequestBody("gpt-5-mini", messages, 2000, 0.7, false, 3, "high")
 
 	// Verify max_completion_tokens uses custom multiplier
 	expectedTokens := 2000 * 3
@@ -341,8 +341,8 @@ func TestBuildRequestBody_ReasoningEffortEmpty(t *testing.T) {
 	// Empty effort = use model default, no reasoning object in body
 	reqBody := buildRequestBody("o3", messages, 2000, 0.7, false, 0, "")
 
-	// Should apply multiplier (default behavior for reasoning models)
-	expectedTokens := 2000 * DefaultReasoningTokenMultiplier
+	// Empty effort preserves the caller's exact budget.
+	expectedTokens := 2000
 	if reqBody["max_completion_tokens"] != expectedTokens {
 		t.Errorf("max_completion_tokens = %v, expected %d", reqBody["max_completion_tokens"], expectedTokens)
 	}

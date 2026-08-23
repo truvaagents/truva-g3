@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.2
+**Version**: 1.4
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -415,6 +415,27 @@ created by those factories are wrapped normally.
    framework fallback, not a replacement for standard propagation.
 
 6. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
+
+7. **Sanitized error ownership**: `LLMCallRecord.Error` is observation-only.
+   The producing caller—`ai.InstrumentedAIClient` for provider calls—must
+   sanitize the string before invoking `RecordLLMCall`. Telemetry recorders
+   store the supplied value verbatim; they do not parse provider-specific
+   payloads or attempt to recover safe text from raw error bodies. Provider
+   adapters must therefore keep raw response bodies out of returned errors,
+   while the producer applies credential redaction as defense in depth.
+
+8. **Correlation is not a metric dimension**: The centralized
+   metric-enrichment boundary excludes reserved request-, user-, session-,
+   trace-, plan-, step-, checkpoint-, investigation-, pass-, conversation-, and
+   provider-request names even when an incoming baggage member carries
+   `truvag3_metric_label=true`. The deny-list is defensive: it neither declares
+   every name to be canonical framework baggage or a common span attribute nor
+   removes application-supplied baggage. Each subsystem exposes identifiers
+   only through its documented log, span, context, or propagation contract;
+   framework AI code keeps `provider_request_id` provider-local and does not add
+   it to baggage. Non-reserved application baggage retains the
+   property-controlled behavior, and explicit labels passed directly to a
+   metric API remain the application's responsibility.
 
 ### Interface
 
@@ -1644,6 +1665,8 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2026-08-20 | Excluded reserved correlation and provider-observation names from automatic metric-label enrichment without stripping existing baggage or changing documented log/span emission |
+| 1.3 | 2026-08-20 | Documented caller-owned sanitization and recorder-verbatim storage for `LLMCallRecord.Error` |
 | 1.2 | 2026-08-12 | Documented the provider-neutral Agent Skills span, metric-cardinality, and content-exclusion contract |
 | 1.1 | 2026-07-27 | Established exact/property-preserving baggage, metric-eligibility, conversation propagation, and format-twin LLM-recording contracts |
 | 1.0 | 2025-09-28 | Initial architecture documentation |

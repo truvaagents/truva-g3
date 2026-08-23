@@ -445,8 +445,9 @@ func TestResolveMaxRetries_EnvVarZeroIsRejected(t *testing.T) {
 }
 
 func TestResolveMaxRetriesWithDefault_ChainFallbackIsZero(t *testing.T) {
-	// The chain client uses resolveMaxRetriesWithDefault with fallback=0
-	// because chain failover is the retry layer. Verify that branch directly.
+	// The chain client uses resolveMaxRetriesWithDefault with fallback=0 so the
+	// provider-local retry layer does not multiply ordered failover attempts.
+	// Verify that branch directly.
 	t.Setenv("TRUVAG3_AI_RETRY_ATTEMPTS", "")
 	if got := resolveMaxRetriesWithDefault(maxRetriesUnset, 0); got != 0 {
 		t.Errorf("chain default fallback: got %d, want 0", got)
@@ -498,6 +499,96 @@ func TestResolveMaxRetries_NoEnvVarFallsBackToDefault(t *testing.T) {
 	t.Setenv("TRUVAG3_AI_RETRY_ATTEMPTS", "")
 	if got := resolveMaxRetries(maxRetriesUnset); got != defaultMaxRetries {
 		t.Errorf("unset env var should fall back to default: got %d, want %d", got, defaultMaxRetries)
+	}
+}
+
+func TestResolveSSEEventMaxBytesPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit int
+		env      string
+		want     int
+	}{
+		{name: "explicit wins", explicit: 2048, env: "4096", want: 2048},
+		{name: "environment", env: "4096", want: 4096},
+		{name: "unset default", want: defaultSSEEventMaxBytes},
+		{name: "invalid environment", env: "large", want: defaultSSEEventMaxBytes},
+		{name: "zero environment", env: "0", want: defaultSSEEventMaxBytes},
+		{name: "negative environment", env: "-1", want: defaultSSEEventMaxBytes},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TRUVAG3_AI_SSE_EVENT_MAX_BYTES", test.env)
+			if got := resolveSSEEventMaxBytes(test.explicit); got != test.want {
+				t.Fatalf("resolveSSEEventMaxBytes(%d) = %d, want %d", test.explicit, got, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveRetryDelayPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit time.Duration
+		env      string
+		want     time.Duration
+	}{
+		{name: "explicit wins", explicit: 250 * time.Millisecond, env: "2s", want: 250 * time.Millisecond},
+		{name: "environment", env: "125ms", want: 125 * time.Millisecond},
+		{name: "unset default", want: defaultRetryDelay},
+		{name: "invalid environment", env: "later", want: defaultRetryDelay},
+		{name: "zero environment", env: "0s", want: defaultRetryDelay},
+		{name: "negative environment", env: "-1s", want: defaultRetryDelay},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TRUVAG3_AI_RETRY_DELAY", test.env)
+			if got := resolveRetryDelay(test.explicit); got != test.want {
+				t.Fatalf("resolveRetryDelay(%s) = %s, want %s", test.explicit, got, test.want)
+			}
+		})
+	}
+}
+
+func TestNewClientPropagatesResolvedRetryDelay(t *testing.T) {
+	t.Setenv("TRUVAG3_AI_RETRY_DELAY", "125ms")
+	factory := withRecordingFactory(t)
+	if _, err := NewClient(WithProvider("mock-recording")); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.RetryDelay != 125*time.Millisecond {
+		t.Fatalf("factory config = %#v", factory.lastConfig)
+	}
+
+	if _, err := NewClient(
+		WithProvider("mock-recording"),
+		AIOption(func(config *AIConfig) { config.RetryDelay = 20 * time.Millisecond }),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig.RetryDelay != 20*time.Millisecond {
+		t.Fatalf("explicit retry delay = %s", factory.lastConfig.RetryDelay)
+	}
+}
+
+func TestNewClientPropagatesResolvedSSEEventMaxBytes(t *testing.T) {
+	t.Setenv("TRUVAG3_AI_SSE_EVENT_MAX_BYTES", "8192")
+	factory := withRecordingFactory(t)
+	if _, err := NewClient(WithProvider("mock-recording")); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig == nil || factory.lastConfig.SSEEventMaxBytes != 8192 {
+		t.Fatalf("factory config = %#v", factory.lastConfig)
+	}
+
+	if _, err := NewClient(
+		WithProvider("mock-recording"),
+		AIOption(func(config *AIConfig) { config.SSEEventMaxBytes = 2048 }),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if factory.lastConfig.SSEEventMaxBytes != 2048 {
+		t.Fatalf("explicit SSE event limit = %d", factory.lastConfig.SSEEventMaxBytes)
 	}
 }
 

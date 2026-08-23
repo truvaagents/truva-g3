@@ -5,13 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+const defaultRetryWaitCap = 180 * time.Second
 
 // BaseClient provides common functionality for all AI providers
 type BaseClient struct {
@@ -112,14 +116,37 @@ type RequestObservation struct {
 	PromptLength  int
 }
 
-// ResponseObservation is safe response metadata for framework logs and
-// bounded AI metrics.
+// ResponseObservation is safe response metadata for framework logs. Metric
+// emission deliberately projects only the bounded base provider, status,
+// duration, usage, and token type; response identity is never a label.
 type ResponseObservation struct {
-	Provider      string
-	ProviderAlias string
-	SemanticModel string
-	Usage         core.TokenUsage
-	Duration      time.Duration
+	Provider          string
+	ProviderAlias     string
+	SemanticModel     string
+	ResponseModel     string
+	ProviderRequestID string
+	Usage             core.TokenUsage
+	Duration          time.Duration
+}
+
+// responseMetricProjection is the complete response metadata allowed to reach
+// the bounded AI metric APIs. Keeping the projection as a separate value makes
+// it testable that provider aliases and provider-reported identity cannot alter
+// metric labels.
+type responseMetricProjection struct {
+	Provider         string
+	DurationMillis   float64
+	PromptTokens     int64
+	CompletionTokens int64
+}
+
+func projectResponseMetrics(observation ResponseObservation) responseMetricProjection {
+	return responseMetricProjection{
+		Provider:         normalizeObservationProvider(observation.Provider),
+		DurationMillis:   float64(observation.Duration.Milliseconds()),
+		PromptTokens:     int64(observation.Usage.PromptTokens),
+		CompletionTokens: int64(observation.Usage.CompletionTokens),
+	}
 }
 
 // ErrorObservation is safe provider-error metadata for framework logs.
@@ -248,27 +275,27 @@ func (b *BaseClient) LogRequestMetadata(ctx context.Context, observation Request
 
 // LogResponseMetadata emits context-correlated metadata and bounded metrics.
 func (b *BaseClient) LogResponseMetadata(ctx context.Context, observation ResponseObservation) {
-	provider := normalizeObservationProvider(observation.Provider)
+	metrics := projectResponseMetrics(observation)
 	telemetry.RecordAIRequest(
 		telemetry.ModuleAI,
-		provider,
-		float64(observation.Duration.Milliseconds()),
+		metrics.Provider,
+		metrics.DurationMillis,
 		"success",
 	)
-	if observation.Usage.PromptTokens > 0 {
+	if metrics.PromptTokens > 0 {
 		telemetry.RecordAITokens(
 			telemetry.ModuleAI,
-			provider,
+			metrics.Provider,
 			"input",
-			int64(observation.Usage.PromptTokens),
+			metrics.PromptTokens,
 		)
 	}
-	if observation.Usage.CompletionTokens > 0 {
+	if metrics.CompletionTokens > 0 {
 		telemetry.RecordAITokens(
 			telemetry.ModuleAI,
-			provider,
+			metrics.Provider,
 			"output",
-			int64(observation.Usage.CompletionTokens),
+			metrics.CompletionTokens,
 		)
 	}
 	if b == nil || b.Logger == nil {
@@ -276,7 +303,7 @@ func (b *BaseClient) LogResponseMetadata(ctx context.Context, observation Respon
 	}
 	fields := map[string]interface{}{
 		"operation":         "ai_response",
-		"provider":          provider,
+		"provider":          metrics.Provider,
 		"provider_alias":    observation.ProviderAlias,
 		"model":             observation.SemanticModel,
 		"prompt_tokens":     observation.Usage.PromptTokens,
@@ -284,6 +311,12 @@ func (b *BaseClient) LogResponseMetadata(ctx context.Context, observation Respon
 		"total_tokens":      observation.Usage.TotalTokens,
 		"duration_ms":       observation.Duration.Milliseconds(),
 		"status":            "success",
+	}
+	if observation.ResponseModel != "" {
+		fields["response_model"] = observation.ResponseModel
+	}
+	if observation.ProviderRequestID != "" {
+		fields["provider_request_id"] = observation.ProviderRequestID
 	}
 	ctx = normalizeObservationContext(ctx)
 	AddObservationRequestID(ctx, fields)
@@ -414,7 +447,6 @@ func (b *BaseClient) executeWithRetry(
 	}
 
 	for attempt := 0; attempt <= b.MaxRetries; attempt++ {
-		// Create a span for each attempt (visible in Jaeger as child spans)
 		attemptCtx, attemptSpan := b.StartSpan(ctx, "ai.http_attempt")
 		attemptSpan.SetAttribute("ai.attempt", attempt+1)
 		attemptSpan.SetAttribute("ai.max_retries", b.MaxRetries)
@@ -431,6 +463,7 @@ func (b *BaseClient) executeWithRetry(
 
 			b.logWarnWithContext(attemptCtx, "AI request retry attempt", map[string]interface{}{
 				"operation":   "ai_request_retry",
+				"status":      "retry",
 				"attempt":     attempt,
 				"max_retries": b.MaxRetries,
 				"error":       previousError.Error(),
@@ -480,7 +513,6 @@ func (b *BaseClient) executeWithRetry(
 			err = &transportRequestError{cause: err}
 		}
 		attemptDuration := time.Since(attemptStart)
-
 		attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())
 
 		// Success - return if no error and status is not retryable
@@ -494,13 +526,16 @@ func (b *BaseClient) executeWithRetry(
 					// Retry recovery - log at INFO level
 					b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
 						"operation":          "ai_request_recovery",
+						"status":             "recovered",
 						"successful_attempt": attempt + 1,
 						"total_attempts":     attempt + 1,
+						"duration_ms":        attemptDuration.Milliseconds(),
 					})
 				} else {
 					// First attempt success - log at DEBUG level
 					b.logDebugWithContext(ctx, "AI HTTP request completed", map[string]interface{}{
 						"operation":   "ai_http_success",
+						"status":      "success",
 						"status_code": resp.StatusCode,
 						"duration_ms": attemptDuration.Milliseconds(),
 					})
@@ -509,38 +544,34 @@ func (b *BaseClient) executeWithRetry(
 			return resp, nil
 		}
 
-		// Handle 4xx client errors (except 429 rate limit which is always retried).
-		// All LLM API providers return application/json for error responses.
-		// A text/html response means the request was intercepted by a CDN/proxy
-		// (e.g., Cloudflare returning HTML 400 after rate limiting) and never
-		// reached the actual API. These are retried like server errors.
-		if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
-			contentType := resp.Header.Get("Content-Type")
-			if !strings.Contains(contentType, "text/html") {
-				// Real API error — non-retryable, return immediately
-				RecordObservationError(
-					attemptSpan,
-					errors.New("AI provider returned a non-retryable client response"),
-					"provider_client",
-				)
-				attemptSpan.SetAttribute("ai.attempt_status", "client_error")
-				attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
-				attemptSpan.SetAttribute("ai.retryable", false)
-				attemptSpan.End()
+		isHTMLResponse := err == nil && strings.Contains(
+			strings.ToLower(resp.Header.Get("Content-Type")),
+			"text/html",
+		)
+		if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+			resp.StatusCode != http.StatusTooManyRequests && !isHTMLResponse {
+			// Real API error — non-retryable, return immediately
+			RecordObservationError(
+				attemptSpan,
+				errors.New("AI provider returned a non-retryable client response"),
+				"provider_client",
+			)
+			attemptSpan.SetAttribute("ai.attempt_status", "client_error")
+			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
+			attemptSpan.SetAttribute("ai.retryable", false)
+			attemptSpan.End()
 
-				b.LogErrorMetadata(ctx, ErrorObservation{
-					Operation: "ai_request_error",
-					Provider:  b.ProviderName,
-					ErrorType: "provider_client",
-				})
-				return resp, nil
-			}
-
-			// CDN/proxy HTML error — treat as retryable (transient proxy/infra issue)
+			b.LogErrorMetadata(ctx, ErrorObservation{
+				Operation: "ai_request_error",
+				Provider:  b.ProviderName,
+				ErrorType: "provider_client",
+			})
+			return resp, nil
+		} else if isHTMLResponse {
 			lastErr = &providerError{
 				statusCode: resp.StatusCode,
 				provider:   b.ProviderName,
-				message:    fmt.Sprintf("non-API error response (status %d, content-type: %s)", resp.StatusCode, contentType),
+				message:    fmt.Sprintf("non-API provider response (status %d)", resp.StatusCode),
 				transient:  true,
 			}
 			lastErrorType = "transport"
@@ -550,15 +581,14 @@ func (b *BaseClient) executeWithRetry(
 			attemptSpan.SetAttribute("http.content_type", "text/html")
 			attemptSpan.SetAttribute("ai.retryable", true)
 			attemptSpan.End()
-			_ = resp.Body.Close()
 
-			if b.Logger != nil {
+			if attempt < b.MaxRetries && b.Logger != nil {
 				b.logWarnWithContext(attemptCtx, "Non-API error response, retrying", map[string]interface{}{
-					"operation":    "ai_proxy_error",
-					"status_code":  resp.StatusCode,
-					"content_type": "text/html",
-					"attempt":      attempt + 1,
-					"max_retries":  b.MaxRetries,
+					"operation":   "ai_proxy_error",
+					"status":      "retry",
+					"status_code": resp.StatusCode,
+					"attempt":     attempt + 1,
+					"max_retries": b.MaxRetries,
 				})
 			}
 		} else if err != nil {
@@ -570,81 +600,237 @@ func (b *BaseClient) executeWithRetry(
 			attemptSpan.SetAttribute("ai.retryable", true)
 			attemptSpan.End()
 		} else {
-			// Server error (5xx) or 429 rate limit — retryable
-			lastErr = fmt.Errorf("server error: status %d", resp.StatusCode)
+			// Server error (5xx) or 429 rate limit — retryable. Keep the final
+			// response open so the provider can decode its bounded error envelope.
 			lastErrorType = "provider_server"
 			if resp.StatusCode == http.StatusTooManyRequests {
 				lastErrorType = "provider_rate_limit"
+			}
+			lastErr = &providerError{
+				statusCode: resp.StatusCode,
+				provider:   b.ProviderName,
+				message:    "AI provider returned a retryable response",
 			}
 			RecordObservationError(attemptSpan, lastErr, lastErrorType)
 			attemptSpan.SetAttribute("ai.attempt_status", "server_error")
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
 			attemptSpan.SetAttribute("ai.retryable", true)
 			attemptSpan.End()
-			_ = resp.Body.Close()
+			if attempt == b.MaxRetries {
+				b.recordRetryExhaustion(ctx, lastErr, lastErrorType)
+				return resp, nil
+			}
 		}
 
-		// Check if we should retry
-		if attempt < b.MaxRetries {
-			// Calculate delay with exponential backoff
-			// Ensure safe conversion to uint to prevent overflow
-			var shiftAmount uint
-			if attempt >= 0 && attempt < 32 {
-				shiftAmount = uint(attempt)
-			} else {
-				shiftAmount = 31 // Cap at max reasonable value
-			}
-			delay := b.RetryDelay * time.Duration(1<<shiftAmount)
+		if attempt == b.MaxRetries {
+			closeResponse(resp)
+			b.recordRetryExhaustion(ctx, lastErr, lastErrorType)
+			return nil, fmt.Errorf("request failed after %d retries: %w", b.MaxRetries, lastErr)
+		}
 
+		backoff := exponentialDelay(b.RetryDelay, attempt)
+		delay, source := retryDelay(backoff, resp, time.Now())
+		waitCap := b.retryWaitCap()
+		effectiveDelay := retryDelayWithinDeadline(ctx, min(delay, waitCap))
+		closeResponse(resp)
+		if b.Logger != nil {
+			_, safeError := SanitizedObservationError(lastErr, lastErrorType)
+			b.logWarnWithContext(ctx, "AI request failed, retrying", map[string]interface{}{
+				"operation":        "ai_request_retry_wait",
+				"status":           "retry",
+				"attempt":          attempt + 1,
+				"max_retries":      b.MaxRetries,
+				"retry_delay_ms":   effectiveDelay.Milliseconds(),
+				"error":            safeError.Error(),
+				"error_type":       NormalizeObservationErrorType(lastErrorType),
+				"backoff_strategy": source,
+			})
+		}
+		if err := waitForRetry(ctx, delay, waitCap); err != nil {
 			if b.Logger != nil {
-				_, safeError := SanitizedObservationError(lastErr, lastErrorType)
-				b.logWarnWithContext(ctx, "AI request failed, retrying", map[string]interface{}{
-					"operation":        "ai_request_retry_wait",
-					"attempt":          attempt + 1,
-					"max_retries":      b.MaxRetries,
-					"retry_delay_ms":   delay.Milliseconds(),
-					"error":            safeError.Error(),
-					"error_type":       NormalizeObservationErrorType(lastErrorType),
-					"backoff_strategy": "exponential",
+				errorType, safeError := SanitizedObservationError(err, "cancelled")
+				b.logErrorWithContext(ctx, "AI request cancelled during retry", map[string]interface{}{
+					"operation":    "ai_request_cancelled",
+					"status":       "error",
+					"cancelled_at": attempt + 1,
+					"error":        safeError.Error(),
+					"error_type":   errorType,
 				})
 			}
-
-			// Wait before retry
-			select {
-			case <-time.After(delay):
-				// Continue to next attempt
-			case <-ctx.Done():
-				if b.Logger != nil {
-					errorType, safeError := SanitizedObservationError(ctx.Err(), "cancelled")
-					b.logErrorWithContext(ctx, "AI request cancelled during retry", map[string]interface{}{
-						"operation":    "ai_request_cancelled",
-						"cancelled_at": attempt + 1,
-						"error":        safeError.Error(),
-						"error_type":   errorType,
-					})
-				}
-				return nil, ctx.Err()
-			}
+			return nil, err
 		}
 	}
+	return nil, errors.New("AI retry loop terminated unexpectedly")
+}
 
-	// Record final failure metric
+// retryWaitCap bounds a single retry sleep by the configured HTTP timeout, or
+// the framework operation default when that timeout is disabled. It does not
+// wrap the transport context: a successful streaming response keeps using that
+// context after ExecuteWithRetry returns.
+func (b *BaseClient) retryWaitCap() time.Duration {
+	waitCap := defaultRetryWaitCap
+	if b != nil && b.HTTPClient != nil && b.HTTPClient.Timeout > 0 {
+		waitCap = b.HTTPClient.Timeout
+	}
+	return waitCap
+}
+
+func (b *BaseClient) recordRetryExhaustion(ctx context.Context, err error, errorType string) {
 	telemetry.Counter("ai.request.failures",
 		"module", telemetry.ModuleAI,
 		"reason", "exhausted_retries",
 	)
-
-	if b.Logger != nil {
-		_, safeError := SanitizedObservationError(lastErr, lastErrorType)
-		b.logErrorWithContext(ctx, "AI request failed after all retries", map[string]interface{}{
-			"operation":      "ai_request_final_failure",
-			"total_attempts": b.MaxRetries + 1,
-			"error":          safeError.Error(),
-			"error_type":     NormalizeObservationErrorType(lastErrorType),
-		})
+	if b == nil || b.Logger == nil {
+		return
 	}
+	_, safeError := SanitizedObservationError(err, errorType)
+	b.logErrorWithContext(ctx, "AI request failed after all retries", map[string]interface{}{
+		"operation":      "ai_request_final_failure",
+		"status":         "error",
+		"total_attempts": b.MaxRetries + 1,
+		"error":          safeError.Error(),
+		"error_type":     NormalizeObservationErrorType(errorType),
+	})
+}
 
-	return nil, fmt.Errorf("request failed after %d retries: %w", b.MaxRetries, lastErr)
+func closeResponse(response *http.Response) {
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+}
+
+func exponentialDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt <= 0 {
+		return base
+	}
+	if attempt >= 63 {
+		return time.Duration(1<<63 - 1)
+	}
+	multiplier := time.Duration(uint64(1) << uint(attempt))
+	if base > time.Duration(1<<63-1)/multiplier {
+		return time.Duration(1<<63 - 1)
+	}
+	return base * multiplier
+}
+
+func retryDelay(backoff time.Duration, response *http.Response, now time.Time) (time.Duration, string) {
+	if backoff < 0 {
+		backoff = 0
+	}
+	if response == nil || response.Header == nil ||
+		(response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusServiceUnavailable) {
+		return backoff, "exponential"
+	}
+	serverDelay, ok := parseRetryAfter(response.Header.Get("Retry-After"), now)
+	if !ok || serverDelay <= backoff {
+		return backoff, "exponential"
+	}
+	return serverDelay, "retry_after"
+}
+
+func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if isASCIIDecimal(value) {
+		const maxSeconds = uint64((1<<63 - 1) / int64(time.Second))
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return time.Duration(1<<63 - 1), true
+		}
+		if seconds > maxSeconds {
+			return time.Duration(1<<63 - 1), true
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	date, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := date.Sub(now)
+	if delay < 0 {
+		return 0, false
+	}
+	return delay, true
+}
+
+func isASCIIDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func retryDelayWithinDeadline(ctx context.Context, delay time.Duration) time.Duration {
+	if delay < 0 {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return delay
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0
+	}
+	if delay > remaining {
+		return remaining
+	}
+	return delay
+}
+
+func waitForRetry(ctx context.Context, delay, waitCap time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if waitCap <= 0 {
+		waitCap = defaultRetryWaitCap
+	}
+	capReached := delay >= waitCap
+	delay = min(delay, waitCap)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded
+		}
+		if delay >= remaining {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	}
+	timer := time.NewTimer(max(delay, 0))
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-timer.C:
+		if capReached {
+			return context.DeadlineExceeded
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // LogError logs a sanitized error with provider context.
@@ -743,6 +929,28 @@ var billingExhaustedPhrases = []string{
 	"payment_required",   // structured error code variant
 }
 
+// maxProviderErrorBodyBytes bounds error-body inspection used for internal
+// provider classification. Error bodies are never an observation payload.
+const maxProviderErrorBodyBytes = 64 << 10
+
+// ReadErrorBody reads a bounded provider error response for internal
+// classification. It reads one byte beyond the limit to detect overflow and
+// discards all captured bytes when the read fails or the limit is exceeded.
+// Returned errors contain no reader-provided text.
+func ReadErrorBody(reader io.Reader) ([]byte, error) {
+	if reader == nil {
+		return nil, errors.New("AI provider error body reader is nil")
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, maxProviderErrorBodyBytes+1))
+	if err != nil {
+		return nil, errors.New("read AI provider error body")
+	}
+	if len(body) > maxProviderErrorBodyBytes {
+		return nil, errors.New("AI provider error body exceeds the supported size")
+	}
+	return body, nil
+}
+
 // isBillingExhausted reports whether the response body contains any of the
 // well-known billing/quota exhaustion markers. The check is case-insensitive
 // and operates on raw bytes without allocating an intermediate string.
@@ -769,7 +977,8 @@ func isBillingExhausted(body []byte) bool {
 // core.ProviderError that carries status code, provider, and model metadata.
 //
 // Retryability classification:
-//   - 4xx with a billing/quota marker in the body → IsRetryable() = true
+//   - HTTP 402, or another 4xx with a billing/quota marker in the body
+//     → IsRetryable() = true
 //     (terminal on this provider but may succeed on a different one in a chain)
 //   - everything else → IsRetryable() = false
 //   - IsTransient() is always false here (those are CDN/proxy errors detected
@@ -782,17 +991,18 @@ func (b *BaseClient) HandleError(statusCode int, body []byte, provider, model st
 	case http.StatusTooManyRequests:
 		msg = fmt.Sprintf("%s API error: rate limit exceeded", provider)
 	case http.StatusBadRequest:
-		msg = fmt.Sprintf("%s API error: invalid request - %s", provider, string(body))
+		msg = fmt.Sprintf("%s API error: invalid request", provider)
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 		msg = fmt.Sprintf("%s API error: service temporarily unavailable (status %d)", provider, statusCode)
 	default:
-		msg = fmt.Sprintf("%s API error (status %d): %s", provider, statusCode, string(body))
+		msg = fmt.Sprintf("%s API error (status %d)", provider, statusCode)
 	}
 
 	// Classify billing exhaustion as retryable so the chain client fails over.
 	// This is the only case where a 4xx error body matters for routing — every
 	// other classification is based on status code alone.
-	retryable := statusCode >= 400 && statusCode < 500 && isBillingExhausted(body)
+	retryable := statusCode == http.StatusPaymentRequired ||
+		(statusCode >= 400 && statusCode < 500 && isBillingExhausted(body))
 
 	return &providerError{
 		statusCode: statusCode,
