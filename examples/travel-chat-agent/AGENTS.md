@@ -11,7 +11,7 @@ This is the recommended **first** example to run from a cold start. Its
 deploys **both this agent and the [chat-ui](../chat-ui/)** in one step.
 
 ```bash
-cp .env.example .env           # then set ONE provider key (quick-start: OPENAI_API_KEY / ANTHROPIC_API_KEY / GROQ_API_KEY / GEMINI_API_KEY)
+cp .env.example .env           # then set ONE provider key (quick-start: OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY / GEMINI_API_KEY)
 ./setup.sh full-deploy         # cold start (~5–15 min first run)
 ```
 

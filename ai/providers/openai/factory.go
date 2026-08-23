@@ -28,15 +28,16 @@ type subProviderConfig struct {
 }
 
 // subProviders is the canonical list of all OpenAI-compatible sub-providers.
-// Priority order: OpenAI(1000) > Groq(700) > DeepSeek(600) > xAI(500) > Mistral(450) > Qwen(400) > Together(300) > Ollama(100)
+// Priority order: OpenAI(1000) > OpenRouter(850) > Groq(700) > DeepSeek(600) > xAI(500) > Mistral(450) > Qwen(400) > Together(300) > Ollama(100)
 var subProviders = []subProviderConfig{
 	{"openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "https://api.openai.com/v1", 1000, false},
+	{"openai.openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1", 850, false},
 	{"openai.groq", "GROQ_API_KEY", "GROQ_BASE_URL", "https://api.groq.com/openai/v1", 700, false},
 	{"openai.deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com", 600, false},
 	{"openai.xai", "XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1", 500, false},
 	{"openai.mistral", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1", 450, false},
 	{"openai.qwen", "QWEN_API_KEY", "QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", 400, false},
-	{"openai.together", "TOGETHER_API_KEY", "TOGETHER_BASE_URL", "https://api.together.xyz/v1", 300, false},
+	{"openai.together", "TOGETHER_API_KEY", "TOGETHER_BASE_URL", "https://api.together.ai/v1", 300, false},
 	{"openai.ollama", "", "OLLAMA_BASE_URL", "http://localhost:11434/v1", 100, true},
 }
 
@@ -127,6 +128,9 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 
 	// Create the client with resolved configuration
 	client := NewClient(apiKey, baseURL, config.ProviderAlias, logger)
+	if config.SSEEventMaxBytes > 0 {
+		client.sseEventMaxBytes = config.SSEEventMaxBytes
+	}
 
 	// Set telemetry for distributed tracing
 	if config.Telemetry != nil {
@@ -145,6 +149,9 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 	// means "operator chose this on purpose".
 	if config.MaxRetries >= 0 {
 		client.MaxRetries = config.MaxRetries
+	}
+	if config.RetryDelay > 0 {
+		client.RetryDelay = config.RetryDelay
 	}
 
 	// Apply model defaults

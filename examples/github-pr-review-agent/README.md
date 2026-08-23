@@ -48,7 +48,8 @@ Local dev without Kubernetes:
 - **Go 1.26.4** (both workspace and standalone Docker builds use it).
 - **Docker** for the local Redis container and for image builds.
 - **Kind** + **kubectl** for the Kubernetes path.
-- An **AI provider key** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `GROQ_API_KEY`).
+- An **AI provider key** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, or `GROQ_API_KEY`).
   Multiple keys enable provider chain failover.
 - A **GitHub webhook secret** (`openssl rand -hex 32`) to sign webhook deliveries.
 - The companion **[`github-tool`](../github-tool/)** deployed in the same cluster
@@ -115,7 +116,7 @@ manifests when you switch.
 
 All knobs live in [`.env.example`](./.env.example). Notable groups:
 
-- **AI providers** — OpenAI / Anthropic / Gemini / Groq + OpenAI-compatible
+- **AI providers** — OpenAI / Anthropic / OpenRouter / Gemini / Groq + OpenAI-compatible
   drop-ins (DeepSeek, xAI, Together, Qwen, Mistral, Ollama). Configure one;
   more enables chain failover.
 - **Model aliases** — `TRUVAG3_PR_REVIEW_MANIFEST_MODEL=fast`,

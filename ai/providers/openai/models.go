@@ -83,7 +83,7 @@ type StreamResponse struct {
 //   - OpenAI: https://platform.openai.com/docs/models
 //   - DeepSeek: https://api-docs.deepseek.com/quick_start/pricing
 //   - Groq: https://console.groq.com/docs/models
-//   - Together: https://docs.together.ai/docs/chat-models
+//   - Together: https://docs.together.ai/docs/inference/recommended-models
 //   - xAI: https://docs.x.ai/docs/models
 //   - Mistral: https://docs.mistral.ai/getting-started/models/models_overview/
 //   - Qwen: https://www.alibabacloud.com/help/en/model-studio/models

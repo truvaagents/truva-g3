@@ -59,6 +59,28 @@ func TestFactoryInitializationLogDoesNotExposeEndpoint(t *testing.T) {
 	}
 }
 
+func TestFactoryPropagatesSSEEventLimit(t *testing.T) {
+	created, err := (&Factory{}).CreateValidated(&ai.AIConfig{
+		ProviderAlias:    "openai",
+		APIKey:           "test-key",
+		RetryDelay:       250 * time.Millisecond,
+		SSEEventMaxBytes: 321,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ok := created.(*Client)
+	if !ok {
+		t.Fatalf("client type = %T", created)
+	}
+	if client.sseEventMaxBytes != 321 {
+		t.Fatalf("SSE event limit = %d, want 321", client.sseEventMaxBytes)
+	}
+	if client.RetryDelay != 250*time.Millisecond {
+		t.Fatalf("retry delay = %s, want 250ms", client.RetryDelay)
+	}
+}
+
 func TestFactory_Priority(t *testing.T) {
 	factory := &Factory{}
 	// OpenAI factory should have default priority of 1000
@@ -88,6 +110,19 @@ func TestFactory_DetectEnvironment(t *testing.T) {
 				os.Unsetenv("OPENAI_BASE_URL")
 			},
 			wantPrio:  1000,
+			wantAvail: true,
+		},
+		{
+			name: "with OPENROUTER_API_KEY",
+			setup: func() {
+				os.Setenv("OPENROUTER_API_KEY", "test-key")
+			},
+			cleanup: func() {
+				os.Unsetenv("OPENROUTER_API_KEY")
+				os.Unsetenv("OPENROUTER_BASE_URL")
+				os.Unsetenv("OPENAI_API_KEY")
+			},
+			wantPrio:  850,
 			wantAvail: true,
 		},
 		{
@@ -156,6 +191,8 @@ func TestFactory_DetectEnvironment(t *testing.T) {
 			// Clear all relevant env vars first
 			os.Unsetenv("OPENAI_API_KEY")
 			os.Unsetenv("OPENAI_BASE_URL")
+			os.Unsetenv("OPENROUTER_API_KEY")
+			os.Unsetenv("OPENROUTER_BASE_URL")
 			os.Unsetenv("GROQ_API_KEY")
 			os.Unsetenv("DEEPSEEK_API_KEY")
 			os.Unsetenv("XAI_API_KEY")
@@ -183,6 +220,7 @@ func TestFactory_DetectAvailableAliases(t *testing.T) {
 	t.Run("multiple env vars set", func(t *testing.T) {
 		// Clear all first
 		os.Unsetenv("OPENAI_API_KEY")
+		os.Unsetenv("OPENROUTER_API_KEY")
 		os.Unsetenv("GROQ_API_KEY")
 		os.Unsetenv("DEEPSEEK_API_KEY")
 		os.Unsetenv("XAI_API_KEY")
@@ -248,6 +286,124 @@ func TestFactory_DetectAvailableAliases(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestFactoryOpenRouterConfigurationPrecedenceAndValidation(t *testing.T) {
+	factory := &Factory{}
+	t.Setenv("OPENROUTER_API_KEY", "environment-key")
+	t.Setenv("OPENROUTER_BASE_URL", "https://environment.openrouter.example/v1")
+
+	created, err := factory.CreateValidated(&ai.AIConfig{
+		ProviderAlias: "openai.openrouter",
+		APIKey:        "explicit-key",
+		BaseURL:       "https://explicit.openrouter.example/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := created.(*Client)
+	if client.apiKey != "explicit-key" || client.baseURL != "https://explicit.openrouter.example/v1" {
+		t.Fatalf("explicit OpenRouter config lost precedence: key=%q base=%q", client.apiKey, client.baseURL)
+	}
+
+	created, err = factory.CreateValidated(&ai.AIConfig{ProviderAlias: "openai.openrouter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client = created.(*Client)
+	if client.apiKey != "environment-key" || client.baseURL != "https://environment.openrouter.example/v1" {
+		t.Fatalf("OpenRouter environment config not resolved: key=%q base=%q", client.apiKey, client.baseURL)
+	}
+
+	t.Setenv("OPENROUTER_BASE_URL", "://malformed")
+	if _, err := factory.CreateValidated(&ai.AIConfig{ProviderAlias: "openai.openrouter"}); err == nil {
+		t.Fatal("malformed OpenRouter environment base URL must fail construction")
+	}
+	if _, err := factory.CreateValidated(&ai.AIConfig{
+		ProviderAlias: "openai.openrouter",
+		APIKey:        "explicit-key",
+		BaseURL:       "https://valid.example/v1?credential=forbidden",
+	}); err == nil {
+		t.Fatal("malformed explicit OpenRouter base URL must fail construction")
+	}
+}
+
+func TestFactoryOpenRouterDefaultsAndOptionalDetection(t *testing.T) {
+	factory := &Factory{}
+	for _, key := range []string{
+		"OPENAI_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY",
+		"MISTRAL_API_KEY", "QWEN_API_KEY", "TOGETHER_API_KEY", "OPENROUTER_API_KEY",
+		"OLLAMA_BASE_URL",
+	} {
+		t.Setenv(key, "")
+	}
+	created, err := factory.CreateValidated(&ai.AIConfig{
+		ProviderAlias: "openai.openrouter",
+		APIKey:        "explicit-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := created.(*Client).baseURL; got != "https://openrouter.ai/api/v1" {
+		t.Fatalf("OpenRouter default base URL = %q", got)
+	}
+	for _, availability := range factory.DetectAvailableAliases() {
+		if availability.Alias == "openai.openrouter" {
+			t.Fatal("absent OpenRouter key must leave optional provider unavailable")
+		}
+	}
+
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	aliases := factory.DetectAvailableAliases()
+	count := 0
+	for _, availability := range aliases {
+		if availability.Alias == "openai.openrouter" {
+			count++
+			if availability.Priority != 850 || availability.ProviderName != "openai" {
+				t.Fatalf("OpenRouter availability = %#v", availability)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("OpenRouter enumerated %d times, want once", count)
+	}
+}
+
+func TestFactoryOpenRouterConcurrentConstructionIsCallLocal(t *testing.T) {
+	factory := &Factory{}
+	const clients = 24
+	results := make(chan *Client, clients)
+	errorsFound := make(chan error, clients)
+	for index := 0; index < clients; index++ {
+		index := index
+		go func() {
+			created, err := factory.CreateValidated(&ai.AIConfig{
+				ProviderAlias: "openai.openrouter",
+				APIKey:        fmt.Sprintf("key-%d", index),
+				BaseURL:       fmt.Sprintf("https://router-%d.example/v1", index),
+			})
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			results <- created.(*Client)
+		}()
+	}
+	seen := make(map[string]string, clients)
+	for completed := 0; completed < clients; completed++ {
+		select {
+		case err := <-errorsFound:
+			t.Fatal(err)
+		case client := <-results:
+			seen[client.apiKey] = client.baseURL
+		}
+	}
+	for index := 0; index < clients; index++ {
+		key := fmt.Sprintf("key-%d", index)
+		if got := seen[key]; got != fmt.Sprintf("https://router-%d.example/v1", index) {
+			t.Fatalf("client %q base URL = %q", key, got)
+		}
+	}
 }
 
 func TestFactory_Create(t *testing.T) {
@@ -396,7 +552,7 @@ func TestFactory_Create(t *testing.T) {
 		{
 			// Pins the >= 0 factory check that allows operators to disable
 			// per-provider retries entirely (e.g. for cost-sensitive
-			// deployments where chain failover is doing all the retry work
+			// deployments that avoid provider-local retries before chain failover
 			// and per-provider retries just amplify token waste). Before
 			// the >= 0 change, the factory used > 0 and silently fell back
 			// to BaseClient's hard-coded default of 3, ignoring the explicit 0.

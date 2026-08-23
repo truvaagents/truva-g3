@@ -217,6 +217,12 @@ func TestPhase3_ErrorClassification(t *testing.T) {
 			isClientErr: false,
 			description: "403 should try next provider",
 		},
+		{
+			name:        "Payment required allows failover when provider marks it retryable",
+			err:         &testProviderError{statusCode: 402, message: "payment required", provider: "test", retryable: true},
+			isClientErr: false,
+			description: "bare 402 errors are provider-specific and should try the next provider",
+		},
 		// 5xx ProviderError should allow failover (boundary: status >= 500 is NOT < 500)
 		{
 			name:        "ProviderError 500 allows failover",
@@ -649,6 +655,7 @@ func TestClassifyFailoverReasonAcceptsOnlyBoundedProviderReasons(t *testing.T) {
 func saveChainEnvironment() map[string]string {
 	vars := []string{
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
+		"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
 		"GROQ_API_KEY", "GROQ_BASE_URL",
 		"DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL",
 		"XAI_API_KEY", "XAI_BASE_URL",
@@ -685,6 +692,7 @@ func restoreChainEnvironment(saved map[string]string) {
 func clearAllChainEnvVars() {
 	vars := []string{
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
+		"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
 		"GROQ_API_KEY", "GROQ_BASE_URL",
 		"DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL",
 		"XAI_API_KEY", "XAI_BASE_URL",
@@ -825,12 +833,11 @@ func TestWithChainMaxRetries_ZeroIsHonored(t *testing.T) {
 
 // --- Chain client per-provider MaxRetries default (Option C) ---
 //
-// The chain client's failover loop IS the retry mechanism. Per-provider
-// in-provider retries inside a chain just amplify wasted token spend on
-// failing providers before failover kicks in. So unlike single clients
-// (default 3), chain clients default to 0 in-provider retries and let
-// failover do the work. These tests pin that contract end-to-end through
-// NewChainClient → factory.lastConfig.
+// Provider-local retries and ordered cross-provider failover are separate
+// attempt layers. Unlike single clients (default 3), chain clients default to
+// zero provider-local retries so those layers do not multiply attempts. These
+// tests pin that contract end-to-end through NewChainClient →
+// factory.lastConfig.
 
 func TestNewChainClient_DefaultPerProviderRetriesIsZero(t *testing.T) {
 	// No env var, no WithChainMaxRetries — chain default of 0 must apply.

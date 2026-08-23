@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/ai/providerkit/openaiwire"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
@@ -30,6 +31,7 @@ type Client struct {
 	credentialSource         ai.CredentialSource
 	endpointResolver         ai.EndpointResolver
 	requestTimeout           time.Duration
+	sseEventMaxBytes         int
 }
 
 // NewClient creates an OpenAI-compatible client with the stock policy engine.
@@ -41,12 +43,13 @@ func NewClient(apiKey, baseURL, providerAlias string, logger core.Logger) *Clien
 	base.ProviderName = "openai"
 	base.DefaultModel = "default"
 	return &Client{
-		BaseClient:     base,
-		apiKey:         apiKey,
-		baseURL:        strings.TrimRight(baseURL, "/"),
-		providerAlias:  providerAlias,
-		requestPolicy:  newRequestPolicyEngine(),
-		requestTimeout: 180 * time.Second,
+		BaseClient:       base,
+		apiKey:           apiKey,
+		baseURL:          strings.TrimRight(baseURL, "/"),
+		providerAlias:    providerAlias,
+		requestPolicy:    newRequestPolicyEngine(),
+		requestTimeout:   180 * time.Second,
+		sseEventMaxBytes: openaiwire.DefaultMaxSSEEventBytes,
 	}
 }
 
@@ -117,12 +120,14 @@ func filterOpenAIExtraFields(
 	for key, value := range extra {
 		switch strings.ToLower(key) {
 		case "reasoning":
-			if caps.ReasoningStyle != "openai" || providerAlias != "openai.ollama" {
+			allow := providerAlias == openRouterProviderAlias ||
+				(providerAlias == "openai.ollama" && caps.ReasoningStyle == "openai")
+			if !allow {
 				providers.LogTranslationDegraded(ctx, logger, providerAlias, model, "extra_reasoning_stripped", "reasoning")
 				continue
 			}
 		case "reasoning_effort":
-			if caps.ReasoningStyle != "openai" || providerAlias == "openai.ollama" {
+			if providerAlias == openRouterProviderAlias || caps.ReasoningStyle != "openai" || providerAlias == "openai.ollama" {
 				providers.LogTranslationDegraded(ctx, logger, providerAlias, model, "extra_reasoning_effort_stripped", "reasoning_effort")
 				continue
 			}
@@ -216,20 +221,24 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (result 
 		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI request: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	providerRequestID := c.observeProviderRequestID(span, response.Header.Get("X-Generation-Id"))
 	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		providerErr := c.HandleError(response.StatusCode, body, "OpenAI", prepared.Model)
+		body, _ := providers.ReadErrorBody(response.Body)
+		providerErr := c.compatibleHTTPError(response.StatusCode, body, prepared.Model)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr
 	}
 
 	result, err = prepared.Codec.Decode(response.Body)
-	if err != nil {
-		return resultWithReport(prepared, nil), err
+	if result != nil && result.Response != nil {
+		result.Response.Provider = c.getProviderName()
+		c.observeResponseIdentity(span, result.Response, providerRequestID)
 	}
-	result.Response.Provider = c.getProviderName()
-	c.recordResponse(ctx, span, prepared.Model, result.Response, started)
+	if err != nil {
+		return resultWithReport(prepared, result), c.normalizeCompatibleError(err, prepared.Model)
+	}
+	c.recordSuccessfulResponse(ctx, span, prepared.Model, result.Response, providerRequestID, started)
 	return resultWithReport(prepared, result), nil
 }
 
@@ -306,10 +315,11 @@ func (c *Client) Stream(
 		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI stream request: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	providerRequestID := c.observeProviderRequestID(span, response.Header.Get("X-Generation-Id"))
 	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		providerErr := c.HandleError(response.StatusCode, body, "OpenAI", prepared.Model)
+		body, _ := providers.ReadErrorBody(response.Body)
+		providerErr := c.compatibleHTTPError(response.StatusCode, body, prepared.Model)
 		span.SetAttribute("http.status_code", response.StatusCode)
 		return resultWithReport(prepared, nil), providerErr
 	}
@@ -329,9 +339,26 @@ func (c *Client) Stream(
 	}
 	if result != nil && result.Response != nil {
 		result.Response.Provider = c.getProviderName()
-		c.recordResponse(ctx, span, prepared.Model, result.Response, started)
+		c.observeResponseIdentity(span, result.Response, providerRequestID)
+		if err == nil {
+			c.recordSuccessfulResponse(ctx, span, prepared.Model, result.Response, providerRequestID, started)
+		}
+	}
+	if err != nil {
+		normalized := c.normalizeCompatibleError(err, prepared.Model)
+		if errors.Is(err, core.ErrStreamPartiallyCompleted) {
+			normalized = errors.Join(core.ErrStreamPartiallyCompleted, normalized)
+		}
+		err = normalized
 	}
 	return resultWithReport(prepared, result), err
+}
+
+func (c *Client) compatibleHTTPError(status int, body []byte, model string) error {
+	if c.getProviderName() == openRouterProviderAlias {
+		return normalizeOpenRouterHTTPError(status, body, model)
+	}
+	return c.HandleError(status, body, "OpenAI", model)
 }
 
 func preparedFromInvocation(invocation *preparedInvocation) *preparedRequest {
@@ -366,11 +393,65 @@ func (c *Client) finishProviderSpan(
 	span.SetAttribute("ai.response_length", len(result.Response.Content))
 }
 
-func (c *Client) recordResponse(
+const (
+	maxOpenRouterGenerationIDBytes  = 128
+	maxOpenRouterResponseModelBytes = 256
+)
+
+var (
+	openRouterGenerationIDPattern  = regexp.MustCompile(`^gen-[A-Za-z0-9_-]+$`)
+	openRouterResponseModelPattern = regexp.MustCompile(`^~?[A-Za-z0-9][A-Za-z0-9._+-]*/[A-Za-z0-9][A-Za-z0-9._~:+-]*$`)
+)
+
+func sanitizeGenerationID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > maxOpenRouterGenerationIDBytes || !openRouterGenerationIDPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+func sanitizeResponseModel(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > maxOpenRouterResponseModelBytes || !openRouterResponseModelPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+func (c *Client) observeProviderRequestID(span core.Span, value string) string {
+	if c.getProviderName() != openRouterProviderAlias {
+		return ""
+	}
+	sanitized := sanitizeGenerationID(value)
+	if sanitized != "" {
+		span.SetAttribute("ai.provider_request_id", sanitized)
+	}
+	return sanitized
+}
+
+func (c *Client) observeResponseIdentity(
+	span core.Span,
+	response *core.AIResponse,
+	providerRequestID string,
+) {
+	if c.getProviderName() != openRouterProviderAlias || response == nil {
+		return
+	}
+	if responseModel := sanitizeResponseModel(response.Model); responseModel != "" {
+		span.SetAttribute("ai.response.model", responseModel)
+	}
+	if providerRequestID != "" {
+		span.SetAttribute("ai.provider_request_id", providerRequestID)
+	}
+}
+
+func (c *Client) recordSuccessfulResponse(
 	ctx context.Context,
 	span core.Span,
 	semanticModel string,
 	response *core.AIResponse,
+	providerRequestID string,
 	started time.Time,
 ) {
 	if response == nil {
@@ -381,13 +462,18 @@ func (c *Client) recordResponse(
 	span.SetAttribute("ai.total_tokens", response.Usage.TotalTokens)
 	span.SetAttribute("ai.response_length", len(response.Content))
 	span.SetAttribute("ai.duration_ms", time.Since(started).Milliseconds())
-	c.LogResponseMetadata(ctx, providers.ResponseObservation{
+	observation := providers.ResponseObservation{
 		Provider:      "openai",
 		ProviderAlias: c.getProviderName(),
 		SemanticModel: semanticModel,
 		Usage:         response.Usage,
 		Duration:      time.Since(started),
-	})
+	}
+	if c.getProviderName() == openRouterProviderAlias {
+		observation.ResponseModel = sanitizeResponseModel(response.Model)
+		observation.ProviderRequestID = providerRequestID
+	}
+	c.LogResponseMetadata(ctx, observation)
 }
 
 func (c *Client) SupportsStreaming() bool { return true }

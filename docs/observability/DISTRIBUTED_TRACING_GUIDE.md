@@ -263,8 +263,15 @@ taxonomy. An application may map one chat-session UUID to
 `conversation_id`, as the reference chat agents do, but a session may instead
 represent authentication, browser state, or another lifecycle. The framework
 therefore does not infer conversation identity from `session_id`.
-Framework-created `conversation_id` baggage is metric-ineligible; existing
-unmarked `session_id` baggage retains the generic baggage metric behavior.
+Automatic metric enrichment treats correlation and provider-observation names
+as reserved even when an incoming baggage member is unmarked or carries
+`truvag3_metric_label=true`. This includes request, request-family,
+conversation, session, user, trace/span, checkpoint, plan/step, pass,
+investigation-owner, and provider-request identifiers. The deny-list neither
+declares every name to be canonical framework baggage nor adds it to the common
+span-attribute set; each subsystem exposes an identifier only through its
+documented context, log, span, or propagation contract. Bounded non-reserved
+application baggage retains the generic property-controlled metric behavior.
 
 ---
 
@@ -1348,6 +1355,15 @@ Both construction paths enforce 64 members, 128-byte keys, 512-byte values,
 and an 8192-byte complete serialized W3C baggage value. The total includes
 separators, encoding, and member properties.
 
+Metric enrichment applies a separate centralized cardinality boundary.
+`request_id`, `original_request_id`, `conversation_id`, `checkpoint_id`,
+`user_id`, `session_id`, `trace_id`, `span_id`, `plan_id`, `step_id`, `pass_id`,
+`investigation_owner`, and `provider_request_id` are never copied
+automatically from baggage into metric labels. This does not remove or rewrite
+an existing baggage member. Membership in this defensive deny-list does not
+make a name framework-created baggage or a common span attribute; in
+particular, framework AI code does not add `provider_request_id` to baggage.
+
 `telemetry.WithBaggage` accepts multiple pairs, enforces the member cap for
 each candidate as it is added, truncates overlong key/value input to the
 per-item limits, and silently skips invalid or over-limit candidates.
@@ -2306,7 +2322,7 @@ When properly configured, the AI module emits these spans:
 | `ai.stream` | Logical normalized streaming call | Same normalized identity, usage, and policy attributes as `ai.generate` |
 | `ai.chain.generate` / `ai.chain.stream` | Ordered provider failover | Shared success attributes `ai.chain.attempt`, `ai.chain.entry_name`, `ai.chain.successful_entry`, and `ai.chain.total_duration_ms`, plus bounded status, `ai.chain.abort_reason` for aborted calls, and `ai.chain.failover_reason`; recovered, aborted, and exhausted local route-resolution or invocation-viability failures use `route` rather than `unknown`. Provider-specific billing/quota failures use `provider_retryable`, including an `IsRetryable` HTTP 429; ordinary 429 responses remain `rate_limit`. Exhaustion classification comes from the final attempted error |
 | `ai.chain.provider_attempt` / `ai.chain.stream_attempt` | One provider entry attempt | Stable non-secret entry name, attempt status/duration, retry marker, and sanitized bounded failure metadata; route failures use `ai.error_type=route` |
-| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Semantic provider/model, optional sanitized route identity, and provider-specific execution attributes |
+| `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Semantic provider/model, optional sanitized route identity, and provider-specific execution attributes. OpenRouter may additionally record bounded `ai.response.model` and `ai.provider_request_id` as described below |
 | `ai.get_embeddings` | Bedrock Titan embedding operation | `ai.provider`, bounded Titan V1/V2 semantic family, `ai.text_length`, embedding dimensions, bounded error classification |
 | `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; the embedding child carries only the bounded Titan V1/V2 semantic family, and raw SDK model/profile IDs are omitted |
 | `ai.request.prepared` (event) | Single metadata-only evidence event for the effective orchestration request, including the no-report/provider-failure path | `request_id` first, purpose, requested/resolved model, report presence, adjustment count, policy stability, optional provider/surface/operation, and stable policy fingerprint. Prompt/system bodies, provider patches, credentials, and adjustment details are excluded |
@@ -2322,11 +2338,30 @@ original error remains available to the caller through `errors.Is` and
 
 Provider-local spans distinguish the semantic model from a route-owned wire
 deployment. A stable application-sanitized route identity may be attached as
-`ai.request.route_identity`; raw deployment names, publisher-model IDs,
-inference-profile IDs/ARNs, endpoint URLs, query values, and credential scopes
-must not be recorded. Bedrock's public direct `InvokeModel` surface therefore
-omits `ai.model`. When that operation is the child of `GetEmbeddings`, both
-spans record only the bounded Titan V1 or V2 semantic family.
+`ai.request.route_identity`; raw route-owned deployment names,
+publisher-model IDs, inference-profile IDs/ARNs, endpoint URLs, query values,
+and credential scopes must not be recorded.
+
+Provider-reported response identity is a separate, opt-in observation
+contract. An adapter may expose it only through an explicit provider-scoped
+allow-list that bounds and validates the value and whose tests prove that
+sibling provider aliases cannot emit it. OpenRouter is currently the only
+allowed adapter: a syntactically validated public model slug of at most 256
+bytes may be recorded as `ai.response.model`, and an `X-Generation-Id` matching
+`gen-[A-Za-z0-9_-]+` and bounded to 128 bytes may be recorded as
+`ai.provider_request_id`. Invalid values are omitted.
+
+Within traces, those attributes exist only on the OpenRouter provider-local
+span. The same validated values may appear as `response_model` and
+`provider_request_id` in structured successful-response logs. Framework code
+does not add them to baggage or metric labels, the reference Loki configuration
+does not promote them to stream labels, and deployments must preserve that
+label-cardinality boundary. Neither identifier replaces framework
+`request_id`.
+
+Bedrock's public direct `InvokeModel` surface therefore omits `ai.model`. When
+that operation is the child of `GetEmbeddings`, both spans record only the
+bounded Titan V1 or V2 semantic family.
 
 The AI layer reports provider token usage but does not derive or emit an
 `ai.cost_usd` value. Provider prices, discounts, cached-token rules, and billing

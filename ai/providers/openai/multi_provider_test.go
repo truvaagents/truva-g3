@@ -1,12 +1,58 @@
 package openai
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 )
+
+func TestPortableJSONWireEncodingAcrossCompatibleProviders(t *testing.T) {
+	tests := []struct {
+		alias string
+		model string
+		sends bool
+	}{
+		{alias: "openai", model: "gpt-4.1", sends: true},
+		{alias: "openai.groq", model: "openai/gpt-oss-120b", sends: true},
+		{alias: "openai.deepseek", model: "deepseek-chat", sends: true},
+		{alias: "openai.xai", model: "grok-4", sends: false},
+		{alias: "openai.mistral", model: "mistral-large-latest", sends: false},
+		{alias: "openai.qwen", model: "qwen-plus", sends: false},
+		{alias: "openai.together", model: "google/gemma-4-31B-it", sends: false},
+		{alias: "openai.ollama", model: "gemma4:31b", sends: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.alias, func(t *testing.T) {
+			client := NewClient("test-key", "https://provider.example/v1", test.alias, &core.NoOpLogger{})
+			invocation, err := client.prepareInvocation(t.Context(), core.NewAIRequestFromLegacy(
+				"hello",
+				"portable-json",
+				&core.AIOptions{Model: test.model, ResponseFormat: "json"},
+			), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			format, present := body["response_format"].(map[string]interface{})
+			if !test.sends {
+				if _, exists := body["response_format"]; exists {
+					t.Fatalf("unsupported alias sent response_format: %#v", body["response_format"])
+				}
+				return
+			}
+			if !present || format["type"] != "json_object" {
+				t.Fatalf("response_format = %#v, want type=json_object", body["response_format"])
+			}
+		})
+	}
+}
 
 // ================================
 // Phase 1 Tests: Environment Mutation Fix + Configuration Hierarchy
@@ -173,7 +219,7 @@ func TestPhase1_AllProvidersConfiguration(t *testing.T) {
 		{"openai.xai", "XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1"},
 		{"openai.mistral", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"},
 		{"openai.qwen", "QWEN_API_KEY", "QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
-		{"openai.together", "TOGETHER_API_KEY", "TOGETHER_BASE_URL", "https://api.together.xyz/v1"},
+		{"openai.together", "TOGETHER_API_KEY", "TOGETHER_BASE_URL", "https://api.together.ai/v1"},
 		{"openai.ollama", "", "OLLAMA_BASE_URL", "http://localhost:11434/v1"},
 	}
 
@@ -399,10 +445,11 @@ func TestPhase2_ModelAliasResolution(t *testing.T) {
 		{"openai.groq", "fast", "llama-3.1-8b-instant", "Groq fast model"},
 		{"openai.groq", "smart", "openai/gpt-oss-120b", "Groq smart model"},
 
-		// Together AI aliases - Llama models
-		{"openai.together", "fast", "meta-llama/Llama-3.1-8B-Instruct-Turbo", "Together fast model"},
-		{"openai.together", "smart", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "Together smart model"},
-		{"openai.together", "code", "Qwen/Qwen2.5-Coder-32B-Instruct", "Together code model"},
+		// Together AI aliases - current serverless recommendations
+		{"openai.together", "fast", "google/gemma-4-31B-it", "Together fast model"},
+		{"openai.together", "smart", "moonshotai/Kimi-K3", "Together smart model"},
+		{"openai.together", "code", "moonshotai/Kimi-K3", "Together code model"},
+		{"openai.together", "default", "deepseek-ai/DeepSeek-V4-Flash-0731", "Together default model"},
 
 		// xAI aliases - Grok 2/3 family
 		{"openai.xai", "fast", "grok-2", "xAI fast model"},

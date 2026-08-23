@@ -123,6 +123,7 @@ setup_namespace() {
             --namespace="${NAMESPACE}" \
             --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
             --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+            --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
             --from-literal=GROQ_API_KEY="${GROQ_API_KEY:-}" \
             --from-literal=GOOGLE_AI_API_KEY="${GOOGLE_AI_API_KEY:-}" \
             --from-literal=GEMINI_API_KEY="${GOOGLE_AI_API_KEY:-}" \
@@ -143,6 +144,7 @@ setup_namespace() {
             --namespace="${NAMESPACE}" \
             --from-literal=OPENAI_API_KEY="" \
             --from-literal=ANTHROPIC_API_KEY="" \
+            --from-literal=OPENROUTER_API_KEY="" \
             --from-literal=GROQ_API_KEY="" \
             --dry-run=client -o yaml | kubectl apply -f -
 

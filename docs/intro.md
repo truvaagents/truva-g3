@@ -42,7 +42,7 @@ framework treats them differently:
 ## What you get out of the box
 
 - **Provider-neutral AI.** Keep agent and orchestration logic on Core
-  interfaces while using registered profiles for OpenAI, Anthropic, Gemini,
+  interfaces while using registered profiles for OpenAI, Anthropic, OpenRouter, Gemini,
   Azure OpenAI, Claude on Vertex AI, build-tagged AWS Bedrock, and several
   OpenAI-compatible services. Other compatible endpoints, including vLLM and
   llama.cpp, can reuse the OpenAI adapter after application-level contract
@@ -80,7 +80,7 @@ control plane isn't an option.
 - **Go 1.26.6+** (the framework's `go.mod` declares 1.26.6)
 - **Docker** (or [Podman](https://podman.io/) as a drop-in)
 - **Kind + kubectl** — for the local Kubernetes cluster
-- **One AI provider API key** — [Groq](https://groq.com/) has a free tier and is the fastest to start; OpenAI, Anthropic, Gemini, and others are supported
+- **One AI provider API key** — OpenAI, Anthropic, OpenRouter, Gemini, Groq, and other compatible providers are supported
 
 Step-by-step install commands for macOS, Linux, and Windows are in
 [**Getting started → Prerequisites**](./getting-started.md#1-prerequisites).

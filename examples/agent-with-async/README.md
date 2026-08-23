@@ -493,13 +493,14 @@ This agent requires at least one AI provider API key for AI-driven orchestration
 |----------|-------------|-------|
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | GPT-4o recommended |
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | Claude models |
+| **OpenRouter** | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) | Unified hosted-model routing |
 | **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | Fast inference, free tier |
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Gemini models |
 | **DeepSeek** | [platform.deepseek.com](https://platform.deepseek.com/) | Advanced reasoning |
 
 **Chain Client:** The agent uses Chain Client for automatic failover between AI providers. Configure multiple providers for higher availability.
 
-**Failover Order:** OpenAI -> Anthropic -> Groq (configurable)
+**Auto-detected order:** OpenAI -> Anthropic -> OpenRouter -> Gemini -> Groq, followed by remaining configured compatible providers (configurable)
 
 ---
 
@@ -892,6 +893,7 @@ cp .env.example .env
 | `NAMESPACE` | - | Kubernetes namespace for discovery |
 | `OPENAI_API_KEY` | - | OpenAI API key for AI orchestration |
 | `ANTHROPIC_API_KEY` | - | Anthropic API key for AI orchestration |
+| `OPENROUTER_API_KEY` | - | OpenRouter API key for AI orchestration |
 | `GROQ_API_KEY` | - | Groq API key for AI orchestration |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | - | OpenTelemetry collector endpoint |
 | `APP_ENV` | development | Environment (development/staging/production) |
@@ -905,11 +907,12 @@ The agent uses **Chain Client** for automatic failover between AI providers. You
 |----------|---------------------|-------------|-------|
 | **OpenAI** (recommended) | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) | Best quality, most features |
 | **Anthropic** | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) | Excellent reasoning |
+| **OpenRouter** | `OPENROUTER_API_KEY` | [openrouter.ai](https://openrouter.ai/settings/keys) | Unified hosted-model routing |
 | **Groq** | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com/keys) | Ultra-fast, free tier available |
 | **Google Gemini** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/apikey) | Good multimodal |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | [platform.deepseek.com](https://platform.deepseek.com/) | Advanced reasoning |
 
-**Failover Order**: OpenAI -> Anthropic -> Groq (configurable)
+**Auto-detected order**: OpenAI -> Anthropic -> OpenRouter -> Gemini -> Groq, followed by remaining configured compatible providers (configurable)
 
 **Model Aliases**: Use `TRUVAG3_{PROVIDER}_MODEL_DEFAULT` to override models without code changes:
 ```bash

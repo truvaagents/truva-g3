@@ -488,9 +488,10 @@ This agent requires at least one AI provider API key for AI-powered orchestratio
 |----------|-------------|-------|
 | **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | GPT-4o recommended |
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) | Claude models |
+| **OpenRouter** | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) | Unified hosted-model routing |
 | **Groq** | [console.groq.com/keys](https://console.groq.com/keys) | Fast inference, free tier |
 
-**Provider Chain:** Supports automatic failover (OpenAI -> Anthropic -> Groq). Configure multiple providers for higher availability.
+**Provider Chain:** Supports automatic failover (OpenAI -> Anthropic -> OpenRouter -> Gemini -> Groq, followed by remaining configured compatible providers). Configure multiple providers for higher availability.
 
 ---
 
@@ -1081,7 +1082,7 @@ cp .env.example .env
 
 The `.env.example` file contains comprehensive documentation for all options including:
 
-- **AI Provider Keys** - Supports provider chain for failover (OpenAI -> Anthropic -> Groq)
+- **AI Provider Keys** - Supports auto-detected provider-chain failover (OpenAI -> Anthropic -> OpenRouter -> Gemini -> Groq, then remaining configured compatible providers)
 - **Model Aliases** - Override default/smart/fast model mappings per provider
 - **Orchestration Settings** - Mode, capability matching thresholds
 - **Telemetry Configuration** - Environment profiles and OTLP endpoints

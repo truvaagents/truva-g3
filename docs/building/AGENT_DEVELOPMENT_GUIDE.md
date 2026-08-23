@@ -1897,7 +1897,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 |----------|----------|---------|---------|
 | `REDIS_URL` | Yes | — | Service discovery and session storage |
 | `PORT` | Yes | — | HTTP server port ([port allocation](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md)) |
-| AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc. |
+| AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, etc. |
 | `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type,Authorization` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `5000` | Max output tokens for LLM synthesis. Chat agents typically need `10000` for detailed responses |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in Redis DB 8 for [Registry Viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) inspection |

@@ -288,7 +288,9 @@ construction. `core.Config.LoadFromEnv` reads rows marked **Implemented** into
 constructors must pass the corresponding `ai.With*` options. Rows marked
 **Struct Tag Only** are metadata declarations that `LoadFromEnv` does not
 currently read. Provider-specific variables in the next section and
-`TRUVAG3_AI_RETRY_ATTEMPTS` are read directly by the `ai` module as documented.
+`TRUVAG3_AI_RETRY_ATTEMPTS`, `TRUVAG3_AI_RETRY_DELAY`, and
+`TRUVAG3_AI_SSE_EVENT_MAX_BYTES` are read directly by the `ai` module as
+documented.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
@@ -301,8 +303,9 @@ currently read. Provider-specific variables in the next section and
 | `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature declaration; permitted values and field support are provider/model-specific | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_TIMEOUT` | `30s` in `core.DefaultConfig` (the unused struct tag says `180s`) | Struct Tag Only | `core.Config.LoadFromEnv` does not read this variable. Direct `ai.NewClient` / `ai.NewRequestClient` construction also does not read it: those constructors use 180s unless an explicitly selected standalone provider declares another default (Bedrock: 60m) or `ai.WithTimeout(d)` supplies a positive override. Auto-detected clients and framework-managed chain entries use 180s. Programmatic zero and negative values mean unset and do not disable provider deadlines. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go), [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/registry.go](https://github.com/truvaagents/truva-g3/blob/main/ai/registry.go) |
-| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 because failover is its retry layer. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
-| `TRUVAG3_AI_RETRY_DELAY` | `1s` | Struct Tag Only | Delay between retries | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 so provider retries do not multiply ordered failover attempts. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
+| `TRUVAG3_AI_SSE_EVENT_MAX_BYTES` | `1048576` (1 MiB) | **Implemented** | Maximum bytes in one OpenAI-compatible server-sent event. A positive `AIConfig.SSEEventMaxBytes` wins; invalid, zero, and negative environment values fall back to 1 MiB. The ceiling is per event, not per response. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providerkit/openaiwire/sse.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providerkit/openaiwire/sse.go) |
+| `TRUVAG3_AI_RETRY_DELAY` | `1s` | **Implemented** | Initial exponential delay between provider attempts. A positive `AIConfig.RetryDelay` wins over a positive Go-duration environment value, then the one-second default. Invalid, zero, and negative environment values fall back safely. For HTTP 429/503, a valid `Retry-After` seconds/date value is honored only when it is greater than exponential backoff. Every retry wait ends at the earlier caller deadline or an absolute wait cap: the positive HTTP-client timeout, or the 180-second framework fallback when that timeout is disabled. The cap applies to the wait timer rather than the transport context, so it does not make a successful streaming response body unreadable. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providers/base.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/base.go) |
 
 ### Example
 
@@ -337,6 +340,48 @@ for the registration pattern.
 |----------|---------|--------|-------------|--------|
 | `ANTHROPIC_API_KEY` | (none) | **Implemented** | Anthropic API key | [ai/providers/anthropic/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/factory.go) |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | **Implemented** | Anthropic API base URL | [ai/providers/anthropic/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/client.go), [ai/providers/anthropic/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/anthropic/factory.go) |
+
+### OpenRouter (Priority: 850)
+
+| Variable | Default | Status | Description | Source |
+|----------|---------|--------|-------------|--------|
+| `OPENROUTER_API_KEY` | (none) | **Implemented** | OpenRouter API key; activates `openai.openrouter` auto-detection | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | **Implemented** | OpenRouter API base URL | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
+
+Built-in aliases are `default=smart=openrouter/auto`,
+`fast=openai/gpt-5.6-luna`, and `code=openrouter/pareto-code`. Every alias can
+be overridden independently without code changes:
+
+```bash
+OPENROUTER_API_KEY=...
+TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol
+TRUVAG3_OPENROUTER_MODEL_SMART=moonshotai/kimi-k3
+TRUVAG3_OPENROUTER_MODEL_FAST=google/gemini-2.5-flash
+TRUVAG3_OPENROUTER_MODEL_CODE=moonshotai/kimi-k3
+```
+
+`_DEFAULT` applies when a call leaves its model unspecified or selects
+`default`; `_SMART`, `_FAST`, and `_CODE` apply only when that alias is
+selected. A per-request exact model wins over the constructor default. See the
+[OpenRouter configuration examples](../building/AI_PROVIDERS_SETUP_GUIDE.md#openrouter-configuration)
+for programmatic and request-aware forms.
+
+Repository example setup scripts also accept the shell-only selector below for
+an isolated live test when `.env` contains multiple provider keys:
+
+```bash
+TRUVAG3_SETUP_AI_PROVIDER=together ./setup.sh rollout
+```
+
+The shared setup helper excludes this selector from application ConfigMaps.
+Without it, all configured provider keys are deployed for normal failover.
+
+The framework intentionally has no built-in `free` alias at this time: the
+protected privacy probe failed for the tested free routes. Exact `:free` IDs or
+`TRUVAG3_OPENROUTER_MODEL_FREE` remain experimental pass-through options, and
+must support the framework's mandatory `data_collection=deny` and `zdr=true`
+request constraints. Their availability and quotas follow OpenRouter's
+[current free-model and account limits](https://openrouter.ai/docs/faq).
 
 ### Google Gemini (Priority: 800)
 
@@ -386,7 +431,13 @@ for the registration pattern.
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TOGETHER_API_KEY` | (none) | **Implemented** | Together AI API key | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
-| `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` | **Implemented** | Together AI API base URL | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
+| `TOGETHER_BASE_URL` | `https://api.together.ai/v1` | **Implemented** | Together AI API base URL | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
+
+The built-in Together aliases, authenticated and live-tested on August 20,
+2026, are `default=deepseek-ai/DeepSeek-V4-Flash-0731`,
+`fast=google/gemma-4-31B-it`, and
+`smart=code=moonshotai/Kimi-K3`. Exact caller-supplied model IDs continue to
+pass through unchanged.
 
 ### Ollama (Priority: 100 - Local)
 
@@ -441,6 +492,7 @@ Only a non-empty environment value overrides the built-in mapping.
 | OpenAI, Azure OpenAI, Google-hosted OpenAI compatibility | `TRUVAG3_OPENAI_MODEL_{ALIAS}` | `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`; Azure resolver maps are keyed by the resulting semantic model |
 | DeepSeek | `TRUVAG3_DEEPSEEK_MODEL_{ALIAS}` | Applies to `openai.deepseek` |
 | Groq | `TRUVAG3_GROQ_MODEL_{ALIAS}` | Applies to `openai.groq` |
+| OpenRouter | `TRUVAG3_OPENROUTER_MODEL_{ALIAS}` | Applies to `openai.openrouter`; e.g. `TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol` |
 | Together AI | `TRUVAG3_TOGETHER_MODEL_{ALIAS}` | Applies to `openai.together` |
 | xAI | `TRUVAG3_XAI_MODEL_{ALIAS}` | Applies to `openai.xai` |
 | Mistral | `TRUVAG3_MISTRAL_MODEL_{ALIAS}` | Applies to `openai.mistral` |
@@ -491,19 +543,26 @@ linked providers:
 
 1. **OpenAI** (1000) - `OPENAI_API_KEY`
 2. **Anthropic** (900) - `ANTHROPIC_API_KEY`
-3. **Gemini** (800) - `GOOGLE_API_KEY` or `GEMINI_API_KEY`; `GOOGLE_API_KEY` wins when both are set
-4. **Groq** (700) - `GROQ_API_KEY`
-5. **DeepSeek** (600) - `DEEPSEEK_API_KEY`
-6. **xAI** (500) - `XAI_API_KEY`
-7. **Mistral** (450) - `MISTRAL_API_KEY`
-8. **Qwen** (400) - `QWEN_API_KEY`
-9. **Together AI** (300) - `TOGETHER_API_KEY`
-10. **Bedrock** (200, or 250 when detected through Lambda/ECS indicators) - AWS credentials; static credential/profile indicators take precedence; available only with `-tags bedrock`
-11. **Ollama** (100) - Requires `OLLAMA_BASE_URL` to be explicitly set
+3. **OpenRouter** (850) - `OPENROUTER_API_KEY`
+4. **Gemini** (800) - `GOOGLE_API_KEY` or `GEMINI_API_KEY`; `GOOGLE_API_KEY` wins when both are set
+5. **Groq** (700) - `GROQ_API_KEY`
+6. **DeepSeek** (600) - `DEEPSEEK_API_KEY`
+7. **xAI** (500) - `XAI_API_KEY`
+8. **Mistral** (450) - `MISTRAL_API_KEY`
+9. **Qwen** (400) - `QWEN_API_KEY`
+10. **Together AI** (300) - `TOGETHER_API_KEY`
+11. **Bedrock** (200, or 250 when detected through Lambda/ECS indicators) - AWS credentials; static credential/profile indicators take precedence; available only with `-tags bedrock`
+12. **Ollama** (100) - Requires `OLLAMA_BASE_URL` to be explicitly set
 
 Azure OpenAI, Vertex-hosted Claude, and Google Cloud OpenAI compatibility are
 not additional auto-detection candidates. They require explicit request-aware
 construction as described above.
+
+Adding `OPENROUTER_API_KEY` can therefore change an unpinned
+`ai.NewClient()` or `ai.NewRequestClient()` selection: when neither OpenAI nor
+Anthropic is available, OpenRouter wins over Gemini and every lower-priority
+provider. Pin `ai.WithProviderAlias("openai.openrouter")` when that selection
+must not depend on the process environment.
 
 ### Overriding Auto-Detection Priority
 

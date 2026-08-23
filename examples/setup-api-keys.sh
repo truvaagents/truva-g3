@@ -60,6 +60,7 @@ setup_local_env() {
     # Prompt for each API key
     prompt_for_key "OPENAI_API_KEY" "OpenAI API Key (for GPT models)" "false"
     prompt_for_key "ANTHROPIC_API_KEY" "Anthropic API Key (for Claude models)" "true"
+    prompt_for_key "OPENROUTER_API_KEY" "OpenRouter API Key (multi-provider routing)" "true"
     prompt_for_key "GROQ_API_KEY" "Groq API Key (for fast inference)" "true"
     prompt_for_key "GOOGLE_AI_API_KEY" "Google AI API Key (for Gemini models)" "true"
     prompt_for_key "DEEPSEEK_API_KEY" "DeepSeek API Key (for DeepSeek models)" "true"
@@ -107,6 +108,7 @@ setup_kubernetes_secrets() {
         --namespace=truvag3-examples \
         --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
         --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+        --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
         --from-literal=GROQ_API_KEY="${GROQ_API_KEY:-}" \
         --from-literal=GOOGLE_AI_API_KEY="${GOOGLE_AI_API_KEY:-}" \
         --from-literal=GEMINI_API_KEY="${GOOGLE_AI_API_KEY:-}" \

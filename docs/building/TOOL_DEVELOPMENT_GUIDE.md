@@ -1480,7 +1480,7 @@ The library exposes these helpers (read [setup-env-lib.sh](https://github.com/tr
 |---|---|
 | `truvag3_create_configmap <name> <ns> <env_file> [extra_vars…]` | ConfigMap from `.env` (auto-includes `TRUVAG3_*` + curated config vars; pass extras for tool-specific non-secret config). **API keys are deliberately excluded** — they belong in a Secret, not a ConfigMap |
 | `truvag3_create_tool_secret <name> <ns> <KEY1> [KEY2…]` | Secret containing only the specified env-var keys (use for tool API keys, e.g. `FINNHUB_API_KEY`). Does **not** include AI provider keys |
-| `truvag3_create_secret <name> <ns> [extra_keys…]` | Secret containing the standard set of AI provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`) plus AWS creds, plus any extras you append. Use this only if your tool actually calls an LLM — most tools should use `truvag3_create_tool_secret` instead |
+| `truvag3_create_secret <name> <ns> [extra_keys…]` | Secret containing the configured standard AI-provider credentials (OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, xAI, Mistral, Qwen, Together, Gemini/Google, and AWS), plus any extras you append. Set setup-only `TRUVAG3_SETUP_AI_PROVIDER` to restrict the Secret to one supported provider during an isolated deployment. Use this only if your tool actually calls an LLM — most tools should use `truvag3_create_tool_secret` instead |
 
 **Service access:**
 

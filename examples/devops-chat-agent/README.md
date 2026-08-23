@@ -37,7 +37,7 @@ Before running this example in your local machine, ensure you have the following
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` or [Download](https://kind.sigs.k8s.io/docs/user/quick-start/) |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` or [Download](https://kubernetes.io/docs/tasks/tools/) |
 | **Go** | 1.25+ | `brew install go` | `choco install golang` or [Download](https://golang.org/dl/) |
-| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [Groq](https://console.groq.com/keys), [Gemini](https://aistudio.google.com/apikey), or any [OpenAI-compatible](#openai-compatible-providers) provider | Same as macOS |
+| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [OpenRouter](https://openrouter.ai/settings/keys), [Groq](https://console.groq.com/keys), [Gemini](https://aistudio.google.com/apikey), or any [OpenAI-compatible](#openai-compatible-providers) provider | Same as macOS |
 
 > **Note:** This agent serves as the backend for the [chat-ui](../chat-ui/) example (the DevOps view is at `http://chat.localhost/devops.html`). The chat-ui provides a web interface that connects to this agent's SSE streaming API. While the agent can be used standalone via its REST API, the chat-ui offers a convenient way to interact with it.
 
@@ -484,7 +484,7 @@ cp .env.example .env
 
 The `.env.example` file contains comprehensive documentation for all options including:
 
-- **AI Provider Keys** - Supports provider chain for failover (OpenAI → Anthropic → Groq)
+- **AI Provider Keys** - Supports auto-detected provider-chain failover (OpenAI → Anthropic → OpenRouter → Gemini → Groq, then remaining configured compatible providers)
 - **Model Aliases** - Override default/smart/fast model mappings per provider
 - **Orchestration Settings** - Mode, capability matching thresholds
 - **HITL Settings** - Sensitive capability list, timeouts, default action

@@ -2141,8 +2141,9 @@ failover is allowed only before the first chunk is delivered.
 implementations.
 
 Retry defaults differ deliberately. A legacy `NewChainClient` gives each
-provider zero in-provider retries by default because failover is its retry
-layer. Each `ProviderEntry` in `NewChain` is independently materialized through
+provider zero in-provider retries by default so provider retries do not multiply
+ordered failover attempts. Each `ProviderEntry` in `NewChain` is independently
+materialized through
 `NewRequestClient`, so it uses the single-client default of three retries unless
 that entry supplies `WithMaxRetries(0)` or another explicit value. A
 `ClientEntry` keeps whatever retry behavior its caller-owned client implements.
@@ -2339,11 +2340,13 @@ type RequestObservation struct {
 }
 
 type ResponseObservation struct {
-    Provider      string
-    ProviderAlias string
-    SemanticModel string
-    Usage         core.TokenUsage
-    Duration      time.Duration
+    Provider          string
+    ProviderAlias     string
+    SemanticModel     string
+    ResponseModel     string
+    ProviderRequestID string
+    Usage             core.TokenUsage
+    Duration          time.Duration
 }
 
 type ErrorObservation struct {
@@ -2388,6 +2391,13 @@ func LogTranslationDegraded(
 )
 ```
 
+`ResponseModel` and `ProviderRequestID` are optional, bounded provider-response
+identifiers. The built-in OpenRouter client populates them only after validation;
+`LogResponseMetadata` may emit them as the `response_model` and
+`provider_request_id` log fields. They are never metric labels. OpenRouter's
+provider-local span uses the corresponding `ai.response.model` and
+`ai.provider_request_id` attributes; other provider aliases leave them empty.
+
 Request bodies must be replayable before `ExecuteWithRetry` performs network
 I/O. `ExecuteWithRetryPrepared` invokes its preparer once per attempt on a fresh
 request, which is the supported point for rotating credentials. Observation
@@ -2410,17 +2420,18 @@ func MustNewClient(opts ...AIOption) core.AIClient  // Panics on error
 **Provider auto-detection order (by priority):**
 1. OpenAI (`OPENAI_API_KEY`) - Priority 1000
 2. Anthropic (`ANTHROPIC_API_KEY`) - Priority 900
-3. Google Gemini (`GOOGLE_API_KEY` then `GEMINI_API_KEY`) - Priority 800
-4. Groq (`GROQ_API_KEY`) - Priority 700
-5. DeepSeek (`DEEPSEEK_API_KEY`) - Priority 600
-6. xAI Grok (`XAI_API_KEY`) - Priority 500
-7. Mistral (`MISTRAL_API_KEY`) - Priority 450
-8. Qwen (`QWEN_API_KEY`) - Priority 400
-9. Together AI (`TOGETHER_API_KEY`) - Priority 300
-10. AWS Bedrock (AWS credentials, `-tags bedrock`) - Priority 200; priority
+3. OpenRouter (`OPENROUTER_API_KEY`) - Priority 850
+4. Google Gemini (`GOOGLE_API_KEY` then `GEMINI_API_KEY`) - Priority 800
+5. Groq (`GROQ_API_KEY`) - Priority 700
+6. DeepSeek (`DEEPSEEK_API_KEY`) - Priority 600
+7. xAI Grok (`XAI_API_KEY`) - Priority 500
+8. Mistral (`MISTRAL_API_KEY`) - Priority 450
+9. Qwen (`QWEN_API_KEY`) - Priority 400
+10. Together AI (`TOGETHER_API_KEY`) - Priority 300
+11. AWS Bedrock (AWS credentials, `-tags bedrock`) - Priority 200; priority
     250 when availability is detected from a Lambda/ECS-style managed-runtime
     indicator (static credential and profile indicators are checked first)
-11. Ollama (`OLLAMA_BASE_URL` must be set) - Priority 100
+12. Ollama (`OLLAMA_BASE_URL` must be set) - Priority 100
 
 Azure OpenAI and Vertex-hosted Claude deliberately do not participate in
 environment auto-detection. Their route and short-lived credential contracts
@@ -2431,7 +2442,7 @@ must be supplied explicitly through `NewRequestClient`.
 // Automatically uses first available provider
 client, err := ai.NewClient()
 if err != nil {
-    log.Fatal("No AI provider available. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
+    log.Fatal("No AI provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY")
 }
 
 response, _ := client.GenerateResponse(ctx, "Explain quantum computing", nil)
@@ -2471,6 +2482,7 @@ func WithProviderAlias(alias string) AIOption
 **Automatically configured OpenAI-compatible aliases:**
 
 - `"openai"` - Standard OpenAI (default)
+- `"openai.openrouter"` - OpenRouter with protected privacy/routing defaults
 - `"openai.deepseek"` - DeepSeek with reasoning models
 - `"openai.groq"` - Groq for ultra-fast inference
 - `"openai.together"` - Together AI for open models
@@ -2516,9 +2528,33 @@ client, _ := ai.NewClient(
 // Use Together AI with explicit model
 client, _ := ai.NewClient(
     ai.WithProviderAlias("openai.together"),
-    ai.WithModel("meta-llama/Llama-3-70b-chat-hf"), // Explicit model name
+    ai.WithModel("deepseek-ai/DeepSeek-V4-Flash-0731"), // Explicit model name
 )
+
+// Use OpenRouter with a concrete default model
+client, _ := ai.NewClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("openai/gpt-5.6-sol"),
+)
+
+// Retain the environment-overridable fast alias. This resolves
+// TRUVAG3_OPENROUTER_MODEL_FAST first, then the built-in fast model.
+fastClient, _ := ai.NewClient(
+    ai.WithProviderAlias("openai.openrouter"),
+    ai.WithModel("fast"),
+)
+
+// Override the constructor default for one call with an exact OpenRouter slug.
+response, err := client.GenerateResponse(ctx, prompt, &core.AIOptions{
+    Model: "moonshotai/kimi-k3",
+})
 ```
+
+For OpenRouter, constructor and per-call model selections accept `default`,
+`smart`, `fast`, and `code`, or an exact OpenRouter slug. Alias environment
+variables use `TRUVAG3_OPENROUTER_MODEL_{ALIAS}`. Per-call selection wins over
+`WithModel`; a selected alias then resolves through its non-empty environment
+override before the built-in catalog.
 
 **Configuration priority:**
 ```go
@@ -2563,6 +2599,7 @@ accepted by every entry.
 ai.WithProviderAlias("openai")          // → gpt-5.6-sol
 ai.WithProviderAlias("openai.deepseek") // → deepseek-reasoner
 ai.WithProviderAlias("openai.groq")     // → openai/gpt-oss-120b
+ai.WithProviderAlias("openai.openrouter") // → openrouter/auto
 
 // "fast" for quick responses
 ai.WithProviderAlias("openai")          // → gpt-5.6-luna
@@ -2594,7 +2631,8 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error)
 **Example - Auto-Detect (recommended for development):**
 ```go
 // Auto-detects available providers from environment API keys,
-// ordered by priority: OpenAI(1000) > Anthropic(900) > Gemini(800) > Groq(700) > ...
+// ordered by priority: OpenAI(1000) > Anthropic(900) > OpenRouter(850) >
+// Gemini(800) > Groq(700) > ...
 chain, err := ai.NewChainClient(
     ai.WithChainLogger(logger),
     ai.WithChainTimeout(120*time.Second),
@@ -2647,6 +2685,41 @@ chain, _ := ai.NewChainClient(
     ai.WithChainTimeout(120*time.Second),
 )
 ```
+
+### AI Circuit-Breaker Composition
+
+The `ai` module accepts the provider-neutral `core.CircuitBreaker` interface;
+applications may supply an implementation from `resilience` without coupling
+the two optional framework modules.
+
+```go
+type CircuitBreakerFactory func(
+    entryName string,
+    providerAlias string,
+    shouldCountFailure func(error) bool,
+) (core.CircuitBreaker, error)
+
+func WithCircuitBreaker(breaker core.CircuitBreaker) AIOption
+func WithChainCircuitBreakerFactory(factory CircuitBreakerFactory) ChainOption
+func NewCircuitBreakerClient(
+    client core.AIClient,
+    breaker core.CircuitBreaker,
+) (core.AIClient, error)
+func ShouldCountAICircuitBreakerFailure(err error) bool
+```
+
+Use `WithCircuitBreaker` for clients created by `NewClient`,
+`NewRequestClient`, or a heterogeneous `ProviderEntry`. Use
+`NewCircuitBreakerClient` to decorate a directly constructed provider client.
+For `NewChainClient`, the factory must create a fresh breaker for every entry
+and configure it with the supplied classifier; shared breaker state across
+providers is unsupported. The classifier counts provider-health and transport
+failures while excluding caller/configuration errors, ordinary non-transient
+4xx responses, and post-output streaming failures. Breaker wrappers preserve
+the wrapped client's request-fingerprint behavior.
+
+See [resilience/README.md](https://github.com/truvaagents/truva-g3/blob/main/resilience/README.md#protecting-ai-providers-without-coupling-modules)
+for a complete application-composition example.
 
 ### Client Configuration Options
 
@@ -2736,6 +2809,7 @@ chainClient, _ := ai.NewChainClient(
 | `WithMaxTokens(n)` | `int` | 1000 | Default max tokens (per `ai/providers/base.go`) |
 | `WithTimeout(d)` | `time.Duration` | 180s; explicit standalone Bedrock 60m | Provider request timeout |
 | `WithMaxRetries(n)` | `int` | 3 | In-provider retries; explicit 0 disables |
+| `WithCircuitBreaker(breaker)` | `core.CircuitBreaker` | none | Protect each logical provider call; configure it with `ShouldCountAICircuitBreakerFailure` semantics |
 | `WithReasoningTokenMultiplier(n)` | `int` | 5 | Token multiplier for reasoning models |
 | `WithReasoningEffort(effort)` | `string` | model default | OpenAI-compatible reasoning effort, model dependent |
 | `WithHeaders(headers)` | `map[string]string` | none | Snapshot custom eligible request headers |
@@ -3037,6 +3111,7 @@ start of this module.
 | **Mistral** | `openai.mistral` | `NewClient`, `NewRequestClient` | Yes |
 | **Qwen** | `openai.qwen` | `NewClient`, `NewRequestClient` | Yes |
 | **Together AI** | `openai.together` | `NewClient`, `NewRequestClient` | Yes |
+| **OpenRouter** | `openai.openrouter` | `NewClient`, `NewRequestClient` | Yes |
 | **Ollama** | `openai.ollama` | `NewClient`, `NewRequestClient` | Only when `OLLAMA_BASE_URL` is set |
 
 Azure and Vertex model-selection environment overrides affect the semantic
@@ -6598,16 +6673,18 @@ TruvaG3 supports configuration through environment variables:
 - `GOOGLE_API_KEY` / `GEMINI_API_KEY` - Google Gemini API key (`GOOGLE_API_KEY` takes precedence)
 - `GROQ_API_KEY` - Groq API key
 - `TOGETHER_API_KEY` - Together AI API key
+- `OPENROUTER_API_KEY` - OpenRouter API key
 - `DEEPSEEK_API_KEY` - DeepSeek API key
 - `XAI_API_KEY` - xAI Grok API key
 - `QWEN_API_KEY` - Qwen API key
 
 ### OpenAI-Compatible Provider URLs (Optional)
 - `GROQ_BASE_URL` - Override Groq endpoint (default: https://api.groq.com/openai/v1)
-- `TOGETHER_BASE_URL` - Override Together endpoint (default: https://api.together.xyz/v1)
-- `DEEPSEEK_BASE_URL` - Override DeepSeek endpoint (default: https://api.deepseek.com/v1)
+- `TOGETHER_BASE_URL` - Override Together endpoint (default: https://api.together.ai/v1)
+- `OPENROUTER_BASE_URL` - Override OpenRouter endpoint (default: https://openrouter.ai/api/v1)
+- `DEEPSEEK_BASE_URL` - Override DeepSeek endpoint (default: https://api.deepseek.com)
 - `XAI_BASE_URL` - Override xAI endpoint (default: https://api.x.ai/v1)
-- `QWEN_BASE_URL` - Override Qwen endpoint (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
+- `QWEN_BASE_URL` - Override Qwen endpoint (default: https://dashscope-intl.aliyuncs.com/compatible-mode/v1)
 
 ### Kubernetes Configuration
 - `TRUVAG3_K8S_SERVICE_NAME` - Kubernetes service name
@@ -6652,7 +6729,8 @@ TruvaG3 supports configuration through environment variables:
 ### Common Issues
 
 **"No AI provider available"**
-- Set one of: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`
+- Set one of: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`,
+  `GEMINI_API_KEY`, `GROQ_API_KEY`
 
 **"Failed to connect to Redis"**
 - Check `REDIS_URL` is correct

@@ -36,7 +36,7 @@ Running this example locally is the best way to see HITL checkpoints, approval f
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
 | **Go** | 1.26+ | `brew install go` | `choco install golang` |
-| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), or [Groq](https://console.groq.com/keys) | Same as macOS |
+| **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [OpenRouter](https://openrouter.ai/settings/keys), or [Groq](https://console.groq.com/keys) | Same as macOS |
 
 > **Note:** This agent serves as the backend for the [chat-ui](../chat-ui/) example (HITL view at `http://chat.localhost/hitl.html`). While the agent can be exercised standalone via curl / the REST API, the chat-ui's approval dialog makes the demo much easier to follow.
 
@@ -51,7 +51,7 @@ cd examples/agent-with-human-approval
 [ ! -f .env ] && cp .env.example .env
 ```
 
-**⚠️ STOP HERE** — open `.env` and paste ONE real provider key after the `=` sign for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GROQ_API_KEY`. Leave the others blank.
+**⚠️ STOP HERE** — open `.env` and paste ONE real provider key after the `=` sign for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `GROQ_API_KEY`. Leave the others blank.
 
 > **Important:** Do not paste placeholder strings like `sk-your-key`. The AI module treats any non-empty value as "this provider is configured" and will route calls to it, so a fake key fails every request.
 
@@ -245,7 +245,7 @@ Edit `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` to add or remove gated operation
 │         │                │                      │                │
 │  ┌──────▼────────────────▼──────────────────────▼──────────────┐│
 │  │                   HITLChatAgent                              ││
-│  │  - AI Chain Client (OpenAI → Anthropic → Groq)              ││
+│  │  - AI Chain Client (auto-detected provider priority)        ││
 │  │  - Orchestrator with HITL Controller                         ││
 │  │  - Checkpoint Store (Redis DB 6)                             ││
 │  └──────────────────────────────────────────────────────────────┘│

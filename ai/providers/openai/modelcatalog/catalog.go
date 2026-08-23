@@ -16,13 +16,17 @@ var defaultAliases = map[string]map[string]string{
 		"fast": "deepseek-chat", "smart": "deepseek-reasoner",
 		"code": "deepseek-chat", "default": "deepseek-chat",
 	},
+	"openai.openrouter": {
+		"fast": "openai/gpt-5.6-luna", "smart": "openrouter/auto",
+		"code": "openrouter/pareto-code", "default": "openrouter/auto",
+	},
 	"openai.groq": {
 		"fast": "llama-3.1-8b-instant", "smart": "openai/gpt-oss-120b",
 		"code": "openai/gpt-oss-120b", "default": "openai/gpt-oss-120b",
 	},
 	"openai.together": {
-		"fast": "meta-llama/Llama-3.1-8B-Instruct-Turbo", "smart": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-		"code": "Qwen/Qwen2.5-Coder-32B-Instruct", "default": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+		"fast": "google/gemma-4-31B-it", "smart": "moonshotai/Kimi-K3",
+		"code": "moonshotai/Kimi-K3", "default": "deepseek-ai/DeepSeek-V4-Flash-0731",
 	},
 	"openai.xai": {
 		"fast": "grok-2", "smart": "grok-3-beta", "code": "grok-3-mini-beta",

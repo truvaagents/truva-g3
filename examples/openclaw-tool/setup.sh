@@ -138,7 +138,7 @@ setup_api_keys() {
     # Inject whichever AI provider key(s) are set in .env. openclaw.json's model.apiKeyEnv
     # selects which one OpenClaw actually uses. The adapter gets NONE of these (pure wrapper, §2).
     local found=0
-    for k in OPENAI_API_KEY ANTHROPIC_API_KEY GROQ_API_KEY GEMINI_API_KEY DEEPSEEK_API_KEY XAI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY QWEN_API_KEY; do
+    for k in OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY DEEPSEEK_API_KEY XAI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY QWEN_API_KEY; do
         if [ -n "${!k:-}" ]; then
             args+=(--from-literal="$k=${!k}")
             found=1

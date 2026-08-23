@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.8
+**Version**: 1.9
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -82,10 +82,47 @@
 | `AIConfig` | Configuration options for clients | `provider.go` |
 | `BaseClient` | Shared functionality (retry, logging) | `providers/base.go` |
 | `ChainClient` | Multi-provider failover | `chain_client.go` |
+| `circuitBreakerAIClient` | Application-injected, per-provider dependency-health protection | `circuit_breaker_client.go` |
 | `requestpolicy.Engine` | Deterministic provider-request policy evaluation | `requestpolicy/` |
 | `openaiwire.Codec` | Reusable OpenAI-compatible request/response translation | `providerkit/openaiwire/` |
 | `AIAgent` | Agent with AI + discovery capabilities | `ai_agent.go` |
 | `AITool` | Tool with AI capabilities (no discovery) | `ai_tool.go` |
+
+### Explicit OpenAI-Wire Token Budgets
+
+Every `openaiwire.RequestProfile` declares both its token-field spelling and
+its token-budget policy. `TokenBudgetExact` sends the portable maximum
+unchanged. `TokenBudgetScaleForReasoning` is valid only with
+`max_completion_tokens` and expands the value only for an explicit active
+reasoning effort; empty effort and `none` remain exact. Only verified OpenAI
+and Azure OpenAI reasoning profiles use scaling. A future compatible-provider
+profile starts from exact semantics unless its upstream contract proves
+otherwise.
+
+The policy is included in the versioned prepared-wire profile identity
+(`profile-v2`), so exact and scaled requests cannot share a stable request
+fingerprint. `AIRequestReport.EffectiveMaxTokens` is read from the final draft
+after policy evaluation and therefore records the actual wire value, including
+on later transport, provider-response, or decode failure paths that retain a
+prepared request report.
+
+### OpenAI-Compatible Decode and SSE Boundary
+
+`providerkit/openaiwire` owns one bounded SSE parser for every compatible
+provider. It handles comments, CRLF, multiline `data`, optional value
+whitespace, `[DONE]`, terminal finish choices, and usage-only trailing chunks.
+One event is limited by the resolved `AIConfig.SSEEventMaxBytes` value (1 MiB
+by default); malformed, oversized, read-failed, or prematurely terminated
+streams fail explicitly. A failure is joined with
+`ErrStreamPartiallyCompleted` only after content has been delivered.
+
+Buffered and streaming in-band errors are decoded through narrow structural
+DTOs. The codec retains only numeric `code` and a normalized `error_type`
+candidate of at most 64 lowercase ASCII letters, digits, or underscores;
+everything else becomes `unmapped`. Provider messages, flagged input, routing
+metadata, and other network-controlled strings never cross the codec boundary.
+Buffered choice-level errors return any partial content together with the
+bounded `openaiwire.EndpointError`.
 
 ---
 
@@ -220,6 +257,13 @@ The AI module should expose a small portable core that TruvaG3 itself can rely o
 - system prompt
 - reasoning intent
 - response format / structured output intent
+
+For the OpenAI-compatible shared codec, portable `ResponseFormat="json"` is
+encoded as `response_format.type="json_object"`. The portable field rejects
+native `json_object` and `json_schema` spellings; callers use provider-specific
+`Extra["response_format"]` objects when they need those native forms. Native
+extras remain byte-for-byte semantic input to the policy draft unless a
+provider capability guard removes the field.
 
 At the same time, it should preserve flexibility through escape hatches:
 
@@ -393,6 +437,7 @@ The `detectBestProvider()` function delegates to `DetectAvailableProviders()` an
 |----------|-------|----------|------------------|
 | OpenAI | `openai` | 1000 | `OPENAI_API_KEY` exists |
 | Anthropic | `anthropic` | 900 | `ANTHROPIC_API_KEY` exists |
+| OpenRouter | `openai.openrouter` | 850 | `OPENROUTER_API_KEY` exists |
 | Gemini | `gemini` | 800 | `GOOGLE_API_KEY` or `GEMINI_API_KEY` exists |
 | Groq | `openai.groq` | 700 | `GROQ_API_KEY` exists |
 | DeepSeek | `openai.deepseek` | 600 | `DEEPSEEK_API_KEY` exists |
@@ -519,12 +564,63 @@ client, _ := ai.NewClient(
 **Supported Aliases**:
 | Alias | Base URL | API Key Env |
 |-------|----------|-------------|
+| `openai.openrouter` | `openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 | `openai.deepseek` | `api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `openai.groq` | `api.groq.com/openai/v1` | `GROQ_API_KEY` |
 | `openai.xai` | `api.x.ai/v1` | `XAI_API_KEY` |
-| `openai.together` | `api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `openai.together` | `api.together.ai/v1` | `TOGETHER_API_KEY` |
 | `openai.qwen` | `dashscope-intl.aliyuncs.com/...` | `QWEN_API_KEY` |
 | `openai.ollama` | `localhost:11434/v1` | (none required) |
+
+#### OpenRouter profile and invariants
+
+`openai.openrouter` is a registered OpenAI-compatible alias. Built-in semantic
+aliases are catalog-owned because their concrete mappings can change without
+changing the architecture; the [provider catalog](providers/openai/catalog.go)
+and its contract tests are the source of truth. Exact OpenRouter model IDs pass
+through unchanged. Router models remain capability-conservative unless the
+catalog carries positive, offline-enforced evidence for the requested portable
+feature.
+
+The adapter always uses `max_completion_tokens` with an exact token budget and
+translates supported portable reasoning to `reasoning.effort`. Portable effort
+preserves provider-native sibling controls such as `reasoning.exclude`. If
+native and portable effort values conflict, the portable value wins and
+`AIRequestReport.Adjustments` records the sanitized `/reasoning/effort`
+override. Portable JSON becomes `response_format.type=json_object`.
+
+Every OpenRouter request includes protected
+`provider.data_collection="deny"` and `provider.zdr=true`. Portable reasoning
+or response-format intent additionally requires
+`provider.require_parameters=true`. Caller defaults, application middleware,
+and per-request patches may add native routing fields, but a conflicting or
+post-policy weakened protected value fails before transport. Noncanonical
+case variants of protected provider members, `models`, `session_id`, or
+structural top-level fields also fail before encoding; they cannot coexist with
+the canonical member and bypass privacy, free-route, or cache-identity checks.
+When present, canonical `models` must be an array on every OpenRouter route;
+malformed scalar/object values fail post-policy validation and make the request
+cache-ineligible rather than inheriting a stable fingerprint. Top-level
+OpenRouter request `session_id` is a provider routing value, not framework
+correlation baggage; it must be a valid UTF-8 string no longer than 256 Unicode
+code points.
+
+Non-2xx OpenRouter error envelopes retain `metadata.error_type` even when a
+proxied OpenAI-shaped `code` arrives as a numeric string. Numeric and numeric-
+string codes are accepted only as status candidates; malformed codes fall back
+to the HTTP status without discarding the bounded canonical error type. Thus a
+`permission_denied` guardrail response still normalizes to fail-fast status
+400 rather than inheriting 403 chain-failover behavior.
+
+The framework does not publish a built-in `free` semantic alias. Exact `:free`
+IDs and an explicit `TRUVAG3_OPENROUTER_MODEL_FREE` override remain
+pass-through escape hatches, but are experimental and never weaken the
+mandatory privacy constraints. A free primary route rejects any non-free
+native `models` fallback before transport, so an opt-in free request cannot
+silently incur paid model inference. Route availability and capability evidence
+belong to the
+[provider contract snapshot](providers/openai/testdata/openrouter_contract_snapshot.json)
+rather than this architecture.
 
 ---
 
@@ -659,9 +755,12 @@ chain, err := ai.NewChainClient(
 
 | Error Type | Behavior | Rationale |
 |------------|----------|-----------|
-| **Client errors (4xx)** | Fail fast, no retry | Request is invalid for all providers |
+| **Ordinary client errors (4xx except 401/402/403/429)** | Fail fast, no retry | A non-transient, non-provider-specific request error is expected to fail across providers |
+| **Authentication errors (401)** | Try next provider | Credentials differ by provider |
+| **Access errors (403)** | Try next provider | Access policy and model entitlement can differ by provider |
+| **Payment required (402)** | Try next provider | Status alone is authoritative for provider/account billing exhaustion, even when the body is empty or unrecognized |
 | **Transient proxy errors (4xx, `IsTransient`)** | Try next provider | Proxy/infra issue (e.g., Cloudflare), not a request problem |
-| **Provider-specific terminal errors (4xx, `IsRetryable`)** | Try next provider | Billing exhausted, account suspended, or similar — terminal on this provider but may succeed on a different one. Detected by `BaseClient.HandleError` from a narrow set of structured response markers (`credit balance`, `insufficient_quota`, `payment required`, and case/underscore variants); see [providers/base.go](providers/base.go) `billingExhaustedPhrases` for the authoritative list. |
+| **Other provider-specific terminal errors (4xx, `IsRetryable`)** | Try next provider | Billing exhausted, account suspended, or similar — terminal on this provider but may succeed on a different one. For statuses other than 402, `BaseClient.HandleError` detects this from the narrow marker list (`credit balance`, `insufficient_quota`, `payment required`, and case/underscore variants); see [providers/base.go](providers/base.go) `billingExhaustedPhrases` for the authoritative list. |
 | **Server errors (5xx)** | Try next provider | Provider-specific issue |
 | **Rate limits (429)** | Try next provider | Provider at capacity |
 | **Network errors** | Try next provider | Transient connectivity |
@@ -678,19 +777,97 @@ reported as HTTP 429 remains `provider_retryable`; an ordinary 429 remains
 both non-terminal failover and terminal exhaustion events. Operations whose
 names say “failover” are emitted only when another entry actually remains.
 
+Provider error bodies are internal classification input, never returned error
+or observation text. Every HTTP provider reads at most 64 KiB through
+`providers.ReadErrorBody`, using one additional byte only to detect overflow.
+Read failure or overflow discards the captured bytes and falls back to
+status-only classification. `HandleError` may inspect the bounded body for the
+marker list above, but returned `core.ProviderError`, logs, spans, and debug
+record errors never contain the body.
+
+### Application-Composed Circuit Breakers
+
+AI circuit breaking is provider-neutral and application-composed. The `ai`
+module depends only on `core.CircuitBreaker`; it never imports the sibling
+`resilience` implementation. `NewClient`, `NewRequestClient`, and
+`ProviderEntry` accept `ai.WithCircuitBreaker`. Direct provider constructors
+use `ai.NewCircuitBreakerClient`. `NewChainClient` accepts
+`ai.WithChainCircuitBreakerFactory`, which invokes the application factory once
+per requested entry with the entry name, provider alias, and
+`ai.ShouldCountAICircuitBreakerFailure`.
+
+The factory must return a fresh breaker for every invocation. Its stable state
+key is the chain entry name (the provider alias for homogeneous
+`NewChainClient` chains), and its lifetime is the lifetime of that materialized
+entry/client. There is no process-global breaker registry and no state sharing
+between providers. A factory error, typed-nil breaker, or nil direct dependency
+fails construction. Omitting the option leaves the library client unprotected;
+an application that makes external AI calls must compose the seam to satisfy
+the framework reliability principle.
+
+Construction order is logical instrumentation -> circuit breaker -> provider
+client -> provider-local transport retries. Consequently one breaker execution
+observes the final outcome of one logical provider-entry call, not every HTTP
+attempt, and an open circuit is still recorded by the common AI instrumentation
+before the chain moves to the next entry. The breaker does not install another
+timeout; request contexts and provider timeouts remain authoritative.
+
+The required health classifier counts transport failures, request deadlines,
+HTTP 408/429, transient proxy failures, and provider 5xx responses. It excludes
+configuration/not-found/state errors, unsupported request features, ordinary
+4xx responses (including auth, access, billing, and guardrail/request errors),
+caller cancellation, application callback errors, and any error joined with
+`core.ErrStreamPartiallyCompleted`. The breaker sees a fixed safe wrapper that
+retains `errors.Is`/`errors.As`; callers receive the original error. A breaker
+rejection may fail over to the next entry. A post-output stream failure neither
+counts against health nor permits replay/failover, preserving the chain's
+commit-after-first-visible-chunk rule.
+
+Application composition examples belong in
+[resilience/README.md](../resilience/README.md); this document defines the
+dependency, lifecycle, ordering, and classification contracts they must obey.
+
 ### Per-Provider Retry Budget
 
-Inside each provider, `BaseClient.ExecuteWithRetry` may retry on transient errors (5xx, 429, network, CDN) with exponential backoff before returning the final error. When a chain client sits above the provider, a returned error triggers failover to the next provider. The retry count and its default depend on whether the provider was created standalone or inside a chain.
+Inside each provider, `BaseClient.ExecuteWithRetry` may retry transient errors
+(5xx, 429, network, CDN) with exponential backoff. On exhausted JSON/API 429
+or 5xx attempts, it returns the final response with its body open so the
+provider-owned bounded decoder preserves the real status and classification.
+Prior response bodies are closed. Transport failures and response formats that
+cannot reach a provider API decoder return sanitized structured errors. When a
+chain client sits above the provider, the provider-decoded error triggers
+failover to the next provider. The retry count and its default depend on
+whether the provider was created standalone or inside a chain.
 
 **Single client (`ai.NewClient`)** — default `MaxRetries = 3`. Single clients have no failover layer below them, so in-provider retries are the only mechanism for absorbing transient blips (5xx, 429, network errors, brief CDN hiccups). The historical default of 3 is preserved.
 
-**Chain client (`ai.NewChainClient`)** — default per-provider `MaxRetries = 0`. The chain client's failover loop IS the retry mechanism inside a chain: when a provider fails on a retryable error, the chain walks to the next provider. Per-provider in-provider retries inside a chain just amplify wasted token spend on the dead provider before failover kicks in. Operators who want in-provider retries inside a chain (e.g. flaky network during a deploy where one provider should retry once before failover) must opt in via `ai.WithChainMaxRetries(n)` or `TRUVAG3_AI_RETRY_ATTEMPTS=n`.
+**Chain client (`ai.NewChainClient`)** — default per-provider `MaxRetries = 0`.
+Provider-local retries and ordered cross-provider failover are separate attempt
+layers; defaulting the inner layer to zero avoids multiplying attempts before
+failover. Neither layer substitutes for the separately composed per-entry
+circuit breaker. Operators who want a provider to absorb a transient failure
+before the chain moves on must opt in via `ai.WithChainMaxRetries(n)` or
+`TRUVAG3_AI_RETRY_ATTEMPTS=n`.
 
 **Configuration knobs:**
 
 - **`ai.WithMaxRetries(n)`** — single-client option. Programmatic Go API; any non-negative integer is honored, including `0` (no retries).
 - **`ai.WithChainMaxRetries(n)`** — chain option. Applies uniformly to every provider in the chain. Same semantics as `WithMaxRetries`; overrides the chain default of 0.
 - **`TRUVAG3_AI_RETRY_ATTEMPTS`** — env var fallback for both client types. Per FRAMEWORK_DESIGN_PRINCIPLES §3.5 rule 3, env var values are guarded with `val > 0`. Zero, negative, and non-integer values are silently rejected and fall through to the appropriate default (3 for single, 0 for chain).
+- **`AIConfig.RetryDelay` / `TRUVAG3_AI_RETRY_DELAY`** — positive explicit
+  duration, then positive Go-duration environment value, then one second.
+  Exponential backoff is the baseline. A valid `Retry-After` seconds or HTTP
+  date value may increase it only for 429/503. Parsing saturates on overflow,
+  and the earlier caller deadline or retry-wait cap prevents a late server
+  delay from issuing an early retry. Every reusable `BaseClient` retry wait is
+  capped by its positive HTTP-client timeout, or by the 180-second framework
+  fallback when that timeout is disabled. The cap does not cancel the
+  transport context attached to a successfully returned streaming body.
+
+For every HTTP error status (`>=400`), a `text/html` response is treated as a
+transient proxy/transport failure rather than decoded as a provider API
+envelope. This cross-provider rule covers CDN and gateway pages at both 4xx and
+5xx statuses; the body still remains bounded and excluded from observations.
 
 **Precedence (highest to lowest):**
 
@@ -820,7 +997,9 @@ bodies, credentials, credential scopes, complete endpoint URLs, query values,
 or route-owned deployment/publisher-model identifiers. Prompt and response
 lengths and token counts are safe metadata. The optional application-controlled
 `LLMCallRecorder` is a separate debug-capture facility and is not permission for
-provider/common logs to record content.
+provider/common logs to record content. `InstrumentedAIClient` sanitizes the
+observation-only `LLMCallRecord.Error` string before calling a recorder; a
+recorder stores that field verbatim and does not parse provider payloads.
 
 ### Telemetry Guidelines
 
@@ -890,7 +1069,7 @@ Priority order (highest to lowest):
 
 ```
 1. Explicit options     → ai.WithAPIKey("sk-...")
-2. Provider-specific    → OPENAI_API_KEY, ANTHROPIC_API_KEY
+2. Provider-specific    → OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY
 3. TRUVAG3 prefixed      → TRUVAG3_AI_PROVIDER
 4. Defaults             → "auto" detection
 ```
@@ -970,7 +1149,13 @@ fingerprint returns `stable=false`; AI-output caches must bypass rather than
 reuse an incomplete namespace. The common instrumentation wrapper delegates
 this capability and supplies a stable adapter namespace for faithfully
 representable legacy clients. A chain fingerprint covers every ordered
-failover entry. Provider-local invocation viability checks that do not change
+failover entry and is stable only when every entry is stable. OpenRouter
+requests are fingerprint-unstable when their resolved model begins with
+`openrouter/` or `~`, or when policy leaves a non-empty native `models` fallback
+list. Thus one such OpenRouter entry makes the entire failover chain
+cache-ineligible even when every other entry is a stable concrete
+OpenAI/Anthropic model. An explicit concrete OpenRouter model outside those
+dynamic forms remains eligible. Provider-local invocation viability checks that do not change
 semantic policy or route identity run after fingerprint preparation. A
 deterministic failure at that later boundary may therefore return a stable
 request report and permit chain failover without disabling cache identity for
@@ -1598,6 +1783,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.9 | 2026-08-22 | Added the OpenRouter provider contract and priority, application-composed circuit breaking, explicit OpenAI-wire token/response/SSE boundaries, and shared retry, failover, error-sanitization, observability, and cache-identity hardening; corrected the Together endpoint |
 | 1.8 | 2026-08-17 | Added Gemini's request-aware GenerateContent profile, static model-capability policy, HTTP integration seams, and corrected orchestration request-evidence semantics |
 | 1.7 | 2026-07-23 | Exported the bounded route-failure marker, aligned terminal generate/stream observability and success attributes, removed last-entry failover logs, and moved Bedrock additional-document rejection before stable fingerprinting |
 | 1.6 | 2026-07-23 | Split Bedrock semantic fingerprint preparation from invocation viability, made Fable legacy sampling policy-remediable and fail-closed, normalized Bedrock document numbers, added bounded route failover classification, direct-client model intent, and embedding override/semantic-family controls |

@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,58 @@ func TestClient_GenerateResponse(t *testing.T) {
 			// Validate request if provided
 			if tt.validateReq != nil && capturedRequest != nil {
 				tt.validateReq(t, capturedRequest)
+			}
+		})
+	}
+}
+
+func TestClient_ErrorBodyNotExposed(t *testing.T) {
+	const canary = "openai-prompt-fragment-canary"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + canary + `","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "", nil)
+	client.MaxRetries = 0
+	_, err := client.GenerateResponse(t.Context(), "test prompt", &core.AIOptions{Model: "gpt-4"})
+	if err == nil {
+		t.Fatal("GenerateResponse() error = nil")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("GenerateResponse() exposed provider body: %v", err)
+	}
+}
+
+func TestClient_RetryExhaustionPreservesFinalProviderStatus(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			const canary = "openai-retry-body-canary"
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				calls++
+				writer.Header().Set("Content-Type", "application/json")
+				writer.Header().Set("X-Provider-Secret", "openai-header-canary")
+				writer.WriteHeader(status)
+				_, _ = writer.Write([]byte(`{"error":{"message":"` + canary + `"}}`))
+			}))
+			defer server.Close()
+
+			client := NewClient("key", server.URL, "openai", &core.NoOpLogger{})
+			client.MaxRetries = 1
+			client.RetryDelay = 0
+			_, err := client.GenerateResponse(t.Context(), "hello", &core.AIOptions{Model: "gpt-4.1", MaxTokens: 10})
+			var providerErr core.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode() != status {
+				t.Fatalf("provider error = %#v / %v", providerErr, err)
+			}
+			if calls != 2 {
+				t.Fatalf("transport calls = %d, want 2", calls)
+			}
+			if strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), "openai-header-canary") {
+				t.Fatalf("retry error leaked provider data: %v", err)
 			}
 		})
 	}

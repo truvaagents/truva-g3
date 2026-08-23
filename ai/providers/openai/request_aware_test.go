@@ -124,6 +124,74 @@ func TestFactoryCreateRequestClientAppliesPolicyAndReturnsReport(t *testing.T) {
 	}
 }
 
+func TestReasoningTokenBudgetReportSurvivesDecodeFailure(t *testing.T) {
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&capturedBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"model":`))
+	}))
+	defer server.Close()
+
+	client, err := (&Factory{}).CreateRequestClient(&ai.AIConfig{
+		APIKey:          "static-key",
+		BaseURL:         server.URL,
+		ProviderAlias:   "openai",
+		Model:           "gpt-5.6-sol",
+		MaxTokens:       100,
+		ReasoningEffort: "high",
+		MaxRetries:      0,
+	}, ai.ProviderIntegrationConfig{})
+	if err != nil {
+		t.Fatalf("CreateRequestClient returned error: %v", err)
+	}
+	result, err := client.Generate(t.Context(), core.NewAIRequest("hello", "decode-failure"))
+	if err == nil || result == nil || result.RequestReport == nil {
+		t.Fatalf("Generate result=%#v error=%v", result, err)
+	}
+	want := 100 * 5
+	if capturedBody["max_completion_tokens"] != float64(want) {
+		t.Fatalf("wire budget = %#v, want %d", capturedBody["max_completion_tokens"], want)
+	}
+	if result.RequestReport.EffectiveMaxTokens.Mode != core.AIParameterSet ||
+		result.RequestReport.EffectiveMaxTokens.Value != want {
+		t.Fatalf("effective max tokens = %#v, want %d", result.RequestReport.EffectiveMaxTokens, want)
+	}
+}
+
+func TestOpenAIRequestPathPropagatesSSEEventLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte(`data: {"choices":[{"delta":{"content":"` + strings.Repeat("x", 128) + `"}}]}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	client, err := (&Factory{}).CreateRequestClient(&ai.AIConfig{
+		APIKey:           "static-key",
+		BaseURL:          server.URL,
+		ProviderAlias:    "openai",
+		Model:            "gpt-4.1",
+		MaxRetries:       0,
+		SSEEventMaxBytes: 64,
+	}, ai.ProviderIntegrationConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streaming, ok := client.(core.StreamingAIRequestClient)
+	if !ok {
+		t.Fatalf("client type %T is not streaming", client)
+	}
+	result, err := streaming.Stream(t.Context(), core.NewAIRequest("hello", "sse-limit"), func(core.StreamChunk) error { return nil })
+	if err == nil || result == nil || result.RequestReport == nil {
+		t.Fatalf("Stream result=%#v error=%v", result, err)
+	}
+	if errors.Is(err, core.ErrStreamPartiallyCompleted) {
+		t.Fatalf("oversized first event was classified partial: %v", err)
+	}
+}
+
 func TestFactoryCreateRequestClientResolvesRouteAndCredentialAfterPolicy(t *testing.T) {
 	var authorization string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

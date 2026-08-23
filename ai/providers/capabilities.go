@@ -7,6 +7,7 @@ import "strings"
 type ModelCapabilities struct {
 	ProviderAlias             string
 	ModelPrefix               string
+	ExactModel                bool
 	ReasoningStyle            string // "", "openai", "anthropic", "gemini", "deepseek"
 	SupportsJSONMode          bool
 	SupportsJSONSchema        bool
@@ -22,6 +23,9 @@ var modelCapabilities = []ModelCapabilities{
 
 	{ProviderAlias: "anthropic", ModelPrefix: "claude-", ReasoningStyle: "anthropic", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "gemini", ModelPrefix: "gemini-", ReasoningStyle: "gemini", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
+
+	{ProviderAlias: "openai.openrouter", ModelPrefix: "", SupportsHeaderPassthrough: true},
+	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-5.6-luna", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 
 	{ProviderAlias: "openai.groq", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.groq", ModelPrefix: "gpt-oss", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
@@ -54,7 +58,9 @@ func LookupModelCapabilities(providerAlias, model string) ModelCapabilities {
 		}
 
 		prefixLower := strings.ToLower(candidate.ModelPrefix)
-		if prefixLower == "" || strings.HasPrefix(modelLower, prefixLower) {
+		matches := prefixLower == "" || candidate.ExactModel && modelLower == prefixLower ||
+			!candidate.ExactModel && strings.HasPrefix(modelLower, prefixLower)
+		if matches {
 			if len(prefixLower) > bestLen {
 				best = candidate
 				bestLen = len(prefixLower)

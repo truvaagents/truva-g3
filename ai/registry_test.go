@@ -308,6 +308,33 @@ func TestDetectAvailableProviders_Empty(t *testing.T) {
 	}
 }
 
+func TestDetectAvailableProvidersBuiltInPriorityContract(t *testing.T) {
+	registry.mu.Lock()
+	registry.providers = map[string]ProviderFactory{
+		"openai": &MockEnumeratingFactory{
+			name: "openai",
+			aliases: []AliasAvailability{
+				{Alias: "openai", ProviderName: "openai", Priority: 1000},
+				{Alias: "openai.openrouter", ProviderName: "openai", Priority: 850},
+			},
+		},
+		"anthropic": &MockProviderFactory{name: "anthropic", priority: 900, available: true},
+		"gemini":    &MockProviderFactory{name: "gemini", priority: 800, available: true},
+	}
+	registry.mu.Unlock()
+
+	available := DetectAvailableProviders(nil)
+	want := []string{"openai", "anthropic", "openai.openrouter", "gemini"}
+	if len(available) != len(want) {
+		t.Fatalf("available = %#v", available)
+	}
+	for index, alias := range want {
+		if available[index].Alias != alias {
+			t.Fatalf("available[%d] = %q, want %q", index, available[index].Alias, alias)
+		}
+	}
+}
+
 func TestDetectBestProviderWithAlias(t *testing.T) {
 	// Setup registry with an enumerating factory
 	registry.mu.Lock()

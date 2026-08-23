@@ -338,6 +338,7 @@ The module automatically detects and configures based on environment:
 # Native providers (each has its own implementation)
 export OPENAI_API_KEY=sk-...          # OpenAI
 export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic Claude
+export OPENROUTER_API_KEY=...         # OpenRouter
 export GOOGLE_API_KEY=...             # Google Gemini (preferred when both Gemini variables are set)
 
 # OpenAI-compatible services with provider aliases (recommended)
@@ -596,12 +597,13 @@ different construction contracts and are listed in
 | Alias | What It Is | Environment Variables | Auto-Configured URL |
 |-------|-----------|----------------------|-------------------|
 | `"openai"` | Vanilla OpenAI | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+| `"openai.openrouter"` | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` |
 | `"openai.deepseek"` | DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `"openai.groq"` | Groq | `GROQ_API_KEY`, `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
 | `"openai.xai"` | xAI Grok | `XAI_API_KEY`, `XAI_BASE_URL` | `https://api.x.ai/v1` |
 | `"openai.mistral"` | Mistral | `MISTRAL_API_KEY`, `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` |
 | `"openai.qwen"` | Qwen (Alibaba) | `QWEN_API_KEY`, `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
-| `"openai.together"` | Together AI | `TOGETHER_API_KEY`, `TOGETHER_BASE_URL` | `https://api.together.xyz/v1` |
+| `"openai.together"` | Together AI | `TOGETHER_API_KEY`, `TOGETHER_BASE_URL` | `https://api.together.ai/v1` |
 | `"openai.ollama"` | Local Ollama | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` |
 
 > **Ollama note**: `openai.ollama` does not require an API key. Use the exact
@@ -635,6 +637,35 @@ client, _ := ai.NewClient(ai.WithProviderAlias("openai.groq"))
 
 **The Old Problem:** Manually configured OpenAI-compatible services can end up
 sharing the wrong `OPENAI_API_KEY` or base URL.
+
+For OpenRouter, the minimal environment is `OPENROUTER_API_KEY=...`; the
+default URL is `https://openrouter.ai/api/v1`. Its built-in `default` and
+`smart` aliases use `openrouter/auto`, `fast` uses
+`openai/gpt-5.6-luna`, and `code` uses `openrouter/pareto-code`. Override the
+aliases independently when deterministic or task-specific model selection
+matters:
+
+```bash
+TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol
+TRUVAG3_OPENROUTER_MODEL_SMART=moonshotai/kimi-k3
+TRUVAG3_OPENROUTER_MODEL_FAST=google/gemini-2.5-flash
+TRUVAG3_OPENROUTER_MODEL_CODE=moonshotai/kimi-k3
+```
+
+`ai.WithModel("moonshotai/kimi-k3")` sets a concrete constructor default;
+`&core.AIOptions{Model: "google/gemini-2.5-flash"}` overrides it for one
+legacy-style call. `ai.WithModel("fast")` instead retains the `_FAST`
+environment override and falls back to the built-in fast mapping. See
+[OpenRouter configuration](../docs/building/AI_PROVIDERS_SETUP_GUIDE.md#openrouter-configuration)
+for complete constructor, per-call, request-aware, and precedence examples.
+
+The adapter protects `provider.data_collection=deny` and `provider.zdr=true`
+on every request. The `default`, `smart`, and `code` aliases are routers and
+bypass AI-output caches; `fast` is a concrete model and can be cache-eligible
+when no native fallback list is present. One unstable router entry makes its
+whole failover chain cache-ineligible. No built-in `free` alias is advertised because the required
+privacy-constrained live probe failed. Exact `:free` IDs remain experimental
+pass-through values.
 
 **The New Solution:** Each alias has its own namespace!
 
@@ -713,6 +744,7 @@ When using `ai.NewClient()` without specifying a provider (auto-detection mode),
 |----------|----------|-------|------------------|
 | 1000 | OpenAI | `openai` | `OPENAI_API_KEY` |
 | 900 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+| 850 | OpenRouter | `openai.openrouter` | `OPENROUTER_API_KEY` |
 | 800 | Gemini | `gemini` | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | 700 | Groq | `openai.groq` | `GROQ_API_KEY` |
 | 600 | DeepSeek | `openai.deepseek` | `DEEPSEEK_API_KEY` |
@@ -941,14 +973,14 @@ groq, _ := ai.NewClient(
 
 ### Standard Model Aliases
 
-| Alias | Purpose | OpenAI | Anthropic | Gemini | DeepSeek | Groq | xAI | Qwen |
-|-------|---------|--------|-----------|--------|----------|------|-----|------|
-| **`default`** | General use, balanced | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-plus` |
-| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `grok-3-beta` | `qwen-max` |
-| **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `grok-3-mini-beta` | `qwen3-coder-plus` |
-| **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
+| Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | DeepSeek | Groq | Together | xAI | Qwen |
+|-------|---------|--------|-----------|------------|--------|----------|------|----------|-----|------|
+| **`default`** | General use, balanced | `gpt-5.6-terra` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
+| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `openai/gpt-5.6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
+| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
+| **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
+| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-mini-beta` | `qwen3-coder-plus` |
+| **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI (`gpt-5.6-sol`),
 > Anthropic (`claude-fable-5`), and Gemini (`gemini-3.1-pro-preview`). Other
@@ -1160,10 +1192,11 @@ client, _ := ai.NewClient(
 | `openai.mistral` | OpenAI-compatible | `MISTRAL_API_KEY`, optional `MISTRAL_BASE_URL` | Yes | Default |
 | `openai.qwen` | OpenAI-compatible | `QWEN_API_KEY`, optional `QWEN_BASE_URL` | Yes | Default |
 | `openai.together` | OpenAI-compatible | `TOGETHER_API_KEY`, optional `TOGETHER_BASE_URL` | Yes | Default |
+| `openai.openrouter` | OpenAI-compatible with protected privacy/routing policy | `OPENROUTER_API_KEY`, optional `OPENROUTER_BASE_URL` | Yes | Default |
 | `openai.ollama` | OpenAI-compatible | `OLLAMA_BASE_URL`; no key | Loopback URL must be set and `/models` must respond | Default |
 
-Perplexity, OpenRouter, vLLM, llama.cpp, and other endpoints are not registered
-aliases in this module. Configure a generic OpenAI client with explicit
+Perplexity, vLLM, llama.cpp, and other endpoints are not registered aliases in
+this module. Configure a generic OpenAI client with explicit
 `WithBaseURL`, `WithAPIKey`, and model, then verify the endpoint accepts every
 request and streaming field your application uses. Azure OpenAI and
 Vertex-hosted Claude are first-class request-aware profiles, not generic
@@ -1176,16 +1209,17 @@ When you use `ai.NewClient()` without specifying a provider, the module checks f
 
 1. **OpenAI** (priority: 1000) - Checks for `OPENAI_API_KEY`
 2. **Anthropic** (priority: 900) - Checks for `ANTHROPIC_API_KEY` (native implementation)
-3. **Gemini** (priority: 800) - Checks for `GOOGLE_API_KEY` or `GEMINI_API_KEY`; the Google variable wins when both are set
-4. **Groq** (priority: 700) - Checks for `GROQ_API_KEY`, configures endpoint automatically
-5. **DeepSeek** (priority: 600) - Checks for `DEEPSEEK_API_KEY`, configures endpoint automatically
-6. **xAI Grok** (priority: 500) - Checks for `XAI_API_KEY`, configures endpoint automatically
-7. **Mistral** (priority: 450) - Checks for `MISTRAL_API_KEY`, configures endpoint automatically
-8. **Qwen** (priority: 400) - Checks for `QWEN_API_KEY`, configures endpoint automatically
-9. **Together AI** (priority: 300) - Checks for `TOGETHER_API_KEY`, configures endpoint automatically
-10. **AWS Bedrock** (priority: 200+) - Checks for AWS credentials, IAM roles, or profiles
+3. **OpenRouter** (priority: 850) - Checks for `OPENROUTER_API_KEY`, configures endpoint and protected privacy policy automatically
+4. **Gemini** (priority: 800) - Checks for `GOOGLE_API_KEY` or `GEMINI_API_KEY`; the Google variable wins when both are set
+5. **Groq** (priority: 700) - Checks for `GROQ_API_KEY`, configures endpoint automatically
+6. **DeepSeek** (priority: 600) - Checks for `DEEPSEEK_API_KEY`, configures endpoint automatically
+7. **xAI Grok** (priority: 500) - Checks for `XAI_API_KEY`, configures endpoint automatically
+8. **Mistral** (priority: 450) - Checks for `MISTRAL_API_KEY`, configures endpoint automatically
+9. **Qwen** (priority: 400) - Checks for `QWEN_API_KEY`, configures endpoint automatically
+10. **Together AI** (priority: 300) - Checks for `TOGETHER_API_KEY`, configures endpoint automatically
+11. **AWS Bedrock** (priority: 200+) - Checks for AWS credentials, IAM roles, or profiles
    - Gets +50 priority when running on AWS infrastructure (EC2/ECS/Lambda)
-11. **Ollama** (priority: 100) - Requires `OLLAMA_BASE_URL` to be explicitly set (does not auto-probe localhost)
+12. **Ollama** (priority: 100) - Requires `OLLAMA_BASE_URL` to be explicitly set (does not auto-probe localhost)
 
 ### Environment Variable Configuration
 
@@ -1277,6 +1311,7 @@ the registered `openai` factory, so `ListProviders` still reports `openai` once.
 # Native providers (each has its own implementation)
 export OPENAI_API_KEY=sk-...          # OpenAI
 export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic Claude
+export OPENROUTER_API_KEY=...         # OpenRouter
 export GOOGLE_API_KEY=...             # Google Gemini; takes precedence over GEMINI_API_KEY
 
 # OpenAI-compatible services with provider aliases (recommended)
