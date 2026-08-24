@@ -348,33 +348,41 @@ func BenchmarkLabelPool(b *testing.B) {
 	})
 }
 
-// TestLargeBaggagePerformance tests performance with maximum baggage
-func TestLargeBaggagePerformance(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping large baggage performance test in short mode (benchmark test)")
-	}
-
-	// Fill baggage to near maximum
+// TestLargeBaggageExpansion verifies that near-maximum baggage is expanded
+// completely and deterministically. Runtime performance is tracked separately
+// by BenchmarkAppendBaggageWithMaxItems; wall-clock thresholds are too
+// sensitive to runner load and race-detector overhead for a reliable unit test.
+func TestLargeBaggageExpansion(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < MaxBaggageItems-1; i++ {
 		ctx = WithBaggage(ctx, fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i))
 	}
 
-	// Time operations with full baggage
-	start := testing.Benchmark(func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			labels := appendBaggageToLabels(ctx, []string{"custom", "label"})
-			returnLabelSlice(labels)
-		}
-	})
+	labels := appendBaggageToLabels(ctx, []string{"custom", "label"})
+	defer returnLabelSlice(labels)
 
-	// Threshold is intentionally generous to accommodate slower CI hardware
-	// and -race mode overhead. Goal is to catch catastrophic regressions
-	// (e.g., accidental O(n^2) blowup), not measure real-world performance.
-	const maxNsPerOp = int64(100000) // 100µs
-	nsPerOp := start.NsPerOp()
-	if nsPerOp > maxNsPerOp {
-		t.Errorf("Operation too slow with full baggage: %d ns/op (max: %d)", nsPerOp, maxNsPerOp)
+	wantLabelCount := MaxBaggageItems * 2
+	if len(labels) != wantLabelCount {
+		t.Fatalf("label count = %d, want %d", len(labels), wantLabelCount)
+	}
+	for i := 2; i < len(labels); i += 2 {
+		if labels[i-2] >= labels[i] {
+			t.Fatalf("labels are not strictly key-sorted at pair %d: %q >= %q", i/2, labels[i-2], labels[i])
+		}
+	}
+}
+
+func BenchmarkAppendBaggageWithMaxItems(b *testing.B) {
+	ctx := context.Background()
+	for i := 0; i < MaxBaggageItems-1; i++ {
+		ctx = WithBaggage(ctx, fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i))
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		labels := appendBaggageToLabels(ctx, []string{"custom", "label"})
+		returnLabelSlice(labels)
 	}
 }
 
