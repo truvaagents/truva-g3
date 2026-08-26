@@ -34,9 +34,9 @@ type WBDataPoint struct {
 
 // WBCountry represents country metadata from the World Bank API
 type WBCountry struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Region      struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Region struct {
 		Value string `json:"value"`
 	} `json:"region"`
 	IncomeLevel struct {

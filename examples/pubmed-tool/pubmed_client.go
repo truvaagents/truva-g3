@@ -83,7 +83,7 @@ type ESearchPayload struct {
 // ESummaryResult represents the esummary.fcgi JSON response.
 // The "result" field is a map where each PMID is a dynamic key.
 type ESummaryResult struct {
-	Header ESummaryHeader                `json:"header"`
+	Header ESummaryHeader             `json:"header"`
 	Result map[string]json.RawMessage `json:"result"`
 	// result.uids is a JSON array of PMID strings
 	// result["38000000"] is the article data object
@@ -96,19 +96,19 @@ type ESummaryHeader struct {
 
 // ESummaryArticle represents a single article in the esummary response.
 type ESummaryArticle struct {
-	UID             string              `json:"uid"`             // PMID as string
-	PubDate         string              `json:"pubdate"`         // e.g., "2023 Nov 16" (inconsistent format)
-	Source          string              `json:"source"`          // Abbreviated journal name
+	UID             string              `json:"uid"`     // PMID as string
+	PubDate         string              `json:"pubdate"` // e.g., "2023 Nov 16" (inconsistent format)
+	Source          string              `json:"source"`  // Abbreviated journal name
 	Authors         []ESummaryAuthor    `json:"authors"`
 	Title           string              `json:"title"`
 	Volume          string              `json:"volume"`
 	Issue           string              `json:"issue"`
 	Pages           string              `json:"pages"`
 	FullJournalName string              `json:"fulljournalname"`
-	SortPubDate     string              `json:"sortpubdate"`     // e.g., "2023/04/14 00:00" (different format)
+	SortPubDate     string              `json:"sortpubdate"` // e.g., "2023/04/14 00:00" (different format)
 	ArticleIDs      []ESummaryArticleID `json:"articleids"`
-	PMCRefCount     int                 `json:"pmcrefcount"`     // One of few actual integers
-	Attributes      []string            `json:"attributes"`      // Check for "Has Abstract"
+	PMCRefCount     int                 `json:"pmcrefcount"` // One of few actual integers
+	Attributes      []string            `json:"attributes"`  // Check for "Has Abstract"
 }
 
 type ESummaryAuthor struct {
@@ -136,7 +136,7 @@ type ELinkHeader struct {
 // WARNING: linksetdbs key is COMPLETELY ABSENT when no citations -- not null, not empty.
 type ELinkLinkSet struct {
 	DBFrom     string          `json:"dbfrom"`
-	IDList     []string        `json:"ids"`                 // Plain string array of PMIDs
+	IDList     []string        `json:"ids"`                  // Plain string array of PMIDs
 	LinkSetDBs json.RawMessage `json:"linksetdbs,omitempty"` // Use RawMessage to check existence
 }
 

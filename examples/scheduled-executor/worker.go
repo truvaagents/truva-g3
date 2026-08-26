@@ -37,8 +37,8 @@ const (
 	discoveryMaxRetries   = 3
 	discoveryBaseDelay    = 1 * time.Second
 	discoveryMaxDelay     = 4 * time.Second
-	defaultQueueName       = "scheduled-executor"
-	scheduledEndpointPath  = "/api/v1/scheduled"
+	defaultQueueName      = "scheduled-executor"
+	scheduledEndpointPath = "/api/v1/scheduled"
 )
 
 // Environment variable names for executor numeric tuning.

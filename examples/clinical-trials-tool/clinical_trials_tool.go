@@ -17,7 +17,7 @@ type SearchTrialsRequest struct {
 	Intervention string `json:"intervention,omitempty"` // Optional: drug or treatment (e.g., "pembrolizumab")
 	Phase        string `json:"phase,omitempty"`        // Optional: PHASE1, PHASE2, PHASE3, PHASE4, EARLY_PHASE1
 	Status       string `json:"status,omitempty"`       // Optional: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, etc.
-	MaxResults   int    `json:"max_results,omitempty"`   // Optional: 1-1000, default 10
+	MaxResults   int    `json:"max_results,omitempty"`  // Optional: 1-1000, default 10
 }
 
 // GetTrialRequest represents the input for retrieving a specific trial
@@ -27,8 +27,8 @@ type GetTrialRequest struct {
 
 // SearchByLocationRequest represents the input for location-based trial search
 type SearchByLocationRequest struct {
-	Condition  string `json:"condition"`            // Required: disease or condition
-	Country    string `json:"country"`              // Required: country name (e.g., "Japan")
+	Condition  string `json:"condition"`             // Required: disease or condition
+	Country    string `json:"country"`               // Required: country name (e.g., "Japan")
 	City       string `json:"city,omitempty"`        // Optional: city name (e.g., "Tokyo")
 	Status     string `json:"status,omitempty"`      // Optional: trial status filter
 	MaxResults int    `json:"max_results,omitempty"` // Optional: 1-1000, default 10
@@ -47,13 +47,13 @@ type ClinicalTrial struct {
 	NCTID          string   `json:"nct_id"`
 	Title          string   `json:"title"`
 	Status         string   `json:"status"`
-	Phase          string   `json:"phase"`           // Joined from phases array (e.g., "PHASE2, PHASE3")
+	Phase          string   `json:"phase"` // Joined from phases array (e.g., "PHASE2, PHASE3")
 	Conditions     []string `json:"conditions"`
 	Interventions  []string `json:"interventions"`
-	Locations      []string `json:"locations"`       // Formatted as "Facility, City, Country"
-	StartDate      string   `json:"start_date"`      // API returns "YYYY-MM" or "YYYY-MM-DD" inconsistently
+	Locations      []string `json:"locations"`  // Formatted as "Facility, City, Country"
+	StartDate      string   `json:"start_date"` // API returns "YYYY-MM" or "YYYY-MM-DD" inconsistently
 	CompletionDate string   `json:"completion_date"`
-	Enrollment     int      `json:"enrollment"`      // From enrollmentInfo.count (integer)
+	Enrollment     int      `json:"enrollment"` // From enrollmentInfo.count (integer)
 	Sponsor        string   `json:"sponsor"`
 	Source         string   `json:"source"`
 }
@@ -93,7 +93,7 @@ func NewClinicalTrialsTool() *ClinicalTrialsTool {
 func (t *ClinicalTrialsTool) registerCapabilities() {
 	// Capability 1: search_trials
 	t.RegisterCapability(core.Capability{
-		Name: "search_trials",
+		Name:        "search_trials",
 		Description: "Searches clinical trials on ClinicalTrials.gov by condition, intervention, phase, and status.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -146,7 +146,7 @@ func (t *ClinicalTrialsTool) registerCapabilities() {
 
 	// Capability 2: get_trial
 	t.RegisterCapability(core.Capability{
-		Name: "get_trial",
+		Name:        "get_trial",
 		Description: "Retrieves detailed information for a specific clinical trial by NCT identifier.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -171,7 +171,7 @@ func (t *ClinicalTrialsTool) registerCapabilities() {
 
 	// Capability 3: search_by_location
 	t.RegisterCapability(core.Capability{
-		Name: "search_by_location",
+		Name:        "search_by_location",
 		Description: "Finds clinical trials near a geographic location by country and optionally city.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

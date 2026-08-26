@@ -80,7 +80,7 @@ type ctGovDate struct {
 }
 
 type ctGovDesignModule struct {
-	Phases         []string        `json:"phases"`        // Array, e.g., ["PHASE2", "PHASE3"]
+	Phases         []string        `json:"phases"` // Array, e.g., ["PHASE2", "PHASE3"]
 	EnrollmentInfo ctGovEnrollment `json:"enrollmentInfo"`
 }
 

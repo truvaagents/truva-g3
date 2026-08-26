@@ -62,19 +62,19 @@ type FREDSeriesResponse struct {
 }
 
 type FREDSeries struct {
-	ID                   string `json:"id"`
-	Title                string `json:"title"`
-	ObservationStart     string `json:"observation_start"`
-	ObservationEnd       string `json:"observation_end"`
-	Frequency            string `json:"frequency"`
-	FrequencyShort       string `json:"frequency_short"`
-	Units                string `json:"units"`
-	UnitsShort           string `json:"units_short"`
-	SeasonalAdjustment   string `json:"seasonal_adjustment"`
-	SeasonalAdjShort     string `json:"seasonal_adjustment_short"`
-	LastUpdated          string `json:"last_updated"`
-	Popularity           int    `json:"popularity"`
-	Notes                string `json:"notes"`
+	ID                 string `json:"id"`
+	Title              string `json:"title"`
+	ObservationStart   string `json:"observation_start"`
+	ObservationEnd     string `json:"observation_end"`
+	Frequency          string `json:"frequency"`
+	FrequencyShort     string `json:"frequency_short"`
+	Units              string `json:"units"`
+	UnitsShort         string `json:"units_short"`
+	SeasonalAdjustment string `json:"seasonal_adjustment"`
+	SeasonalAdjShort   string `json:"seasonal_adjustment_short"`
+	LastUpdated        string `json:"last_updated"`
+	Popularity         int    `json:"popularity"`
+	Notes              string `json:"notes"`
 }
 
 // NewFREDClient creates a configured API client with distributed tracing

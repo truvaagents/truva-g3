@@ -20,7 +20,7 @@ type AlertManagerPayload struct {
 	Version           string            `json:"version"`
 	GroupKey          string            `json:"groupKey"`
 	TruncatedAlerts   int               `json:"truncatedAlerts"`
-	Status            string            `json:"status"`  // "firing" or "resolved"
+	Status            string            `json:"status"` // "firing" or "resolved"
 	Receiver          string            `json:"receiver"`
 	GroupLabels       map[string]string `json:"groupLabels"`
 	CommonLabels      map[string]string `json:"commonLabels"`
@@ -32,8 +32,8 @@ type AlertManagerPayload struct {
 // Alert represents a single alert within the AlertManager payload.
 type Alert struct {
 	Status       string            `json:"status"`      // "firing" or "resolved"
-	Labels       map[string]string `json:"labels"`       // alertname, severity, job, instance, etc.
-	Annotations  map[string]string `json:"annotations"`  // summary, description, runbook_url, etc.
+	Labels       map[string]string `json:"labels"`      // alertname, severity, job, instance, etc.
+	Annotations  map[string]string `json:"annotations"` // summary, description, runbook_url, etc.
 	StartsAt     time.Time         `json:"startsAt"`
 	EndsAt       time.Time         `json:"endsAt"`
 	GeneratorURL string            `json:"generatorURL"` // Link back to Prometheus query
@@ -92,12 +92,12 @@ func (a *EventDrivenAgent) handleAlertManagerWebhook(w http.ResponseWriter, r *h
 	)
 
 	a.Logger.InfoWithContext(ctx, "AlertManager webhook received", map[string]interface{}{
-		"status":              payload.Status,
-		"alert_count":         len(payload.Alerts),
-		"group_key":           payload.GroupKey,
-		"receiver":            payload.Receiver,
-		"operation":           "webhook_receive",
-		"request_id":          upstreamRequestID,
+		"status":      payload.Status,
+		"alert_count": len(payload.Alerts),
+		"group_key":   payload.GroupKey,
+		"receiver":    payload.Receiver,
+		"operation":   "webhook_receive",
+		"request_id":  upstreamRequestID,
 	})
 
 	// Process each alert through the deterministic pipeline

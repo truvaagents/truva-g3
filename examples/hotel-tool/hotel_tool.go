@@ -97,7 +97,7 @@ type HotelRatingsResponse struct {
 // HotelSentiment represents sentiment analysis derived from review scores.
 type HotelSentiment struct {
 	HotelID         string             `json:"hotel_id"`
-	OverallRating   float64            `json:"overall_rating"`   // 0-10 average
+	OverallRating   float64            `json:"overall_rating"`    // 0-10 average
 	NumberOfReviews int                `json:"number_of_reviews"` // Reviews returned in this call
 	NumberOfRatings int                `json:"number_of_ratings"` // Total reviews on file for this hotel
 	Sentiments      map[string]float64 `json:"sentiments"`        // e.g., {"average_score": 8.5}

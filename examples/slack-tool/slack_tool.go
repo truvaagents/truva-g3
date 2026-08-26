@@ -47,11 +47,11 @@ type SearchMessagesRequest struct {
 
 // SendMessageResponse represents the output after sending a message
 type SendMessageResponse struct {
-	Channel   string `json:"channel"`              // Channel where message was posted
-	Timestamp string `json:"timestamp"`            // Message timestamp (unique ID)
-	Text      string `json:"text"`                 // Message text as sent
-	ThreadTS  string `json:"thread_ts,omitempty"`  // Thread timestamp if threaded
-	Source    string `json:"source"`               // "Slack Web API"
+	Channel   string `json:"channel"`             // Channel where message was posted
+	Timestamp string `json:"timestamp"`           // Message timestamp (unique ID)
+	Text      string `json:"text"`                // Message text as sent
+	ThreadTS  string `json:"thread_ts,omitempty"` // Thread timestamp if threaded
+	Source    string `json:"source"`              // "Slack Web API"
 }
 
 // SendRichMessageResponse represents the output after sending a Block Kit message

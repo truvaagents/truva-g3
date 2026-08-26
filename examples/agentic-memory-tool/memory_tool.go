@@ -33,7 +33,7 @@ type QueryEventsRequest struct {
 
 // QueryKnowledgeRequest represents the input for query_knowledge.
 type QueryKnowledgeRequest struct {
-	Query     string `json:"query"`              // Required: natural language search query
+	Query     string `json:"query"`               // Required: natural language search query
 	Namespace string `json:"namespace,omitempty"` // Optional: filter by namespace
 	Limit     int    `json:"limit,omitempty"`     // Optional: max results (default: 5, max: 20)
 }

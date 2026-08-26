@@ -45,37 +45,37 @@ type S2Client struct {
 
 // S2SearchResponse represents the raw search API response
 type S2SearchResponse struct {
-	Total int          `json:"total"`
-	Data  []S2Paper    `json:"data"`
-	Next  *int         `json:"next,omitempty"` // ABSENT when no more results, not null
+	Total int       `json:"total"`
+	Data  []S2Paper `json:"data"`
+	Next  *int      `json:"next,omitempty"` // ABSENT when no more results, not null
 }
 
 // S2Paper represents a paper from the API
 type S2Paper struct {
-	PaperID         string      `json:"paperId"`
-	Title           string      `json:"title"`
-	Authors         []S2Author  `json:"authors"`
-	Year            int         `json:"year"`
-	CitationCount   int         `json:"citationCount"`
-	Abstract        string      `json:"abstract"`
-	URL             string      `json:"url"`
-	PublicationDate string      `json:"publicationDate"`
-	TLDR            *S2TLDR     `json:"tldr"`
-	OpenAccessPdf   *S2PDF      `json:"openAccessPdf"`
-	ReferenceCount  int         `json:"referenceCount"`
-	InfluentialCitationCount int `json:"influentialCitationCount"`
-	References      []S2PaperRef `json:"references"`
-	Citations       []S2PaperRef `json:"citations"`
+	PaperID                  string       `json:"paperId"`
+	Title                    string       `json:"title"`
+	Authors                  []S2Author   `json:"authors"`
+	Year                     int          `json:"year"`
+	CitationCount            int          `json:"citationCount"`
+	Abstract                 string       `json:"abstract"`
+	URL                      string       `json:"url"`
+	PublicationDate          string       `json:"publicationDate"`
+	TLDR                     *S2TLDR      `json:"tldr"`
+	OpenAccessPdf            *S2PDF       `json:"openAccessPdf"`
+	ReferenceCount           int          `json:"referenceCount"`
+	InfluentialCitationCount int          `json:"influentialCitationCount"`
+	References               []S2PaperRef `json:"references"`
+	Citations                []S2PaperRef `json:"citations"`
 }
 
 // S2PaperRef represents a reference/citation entry where paperId can be NULL
 type S2PaperRef struct {
-	PaperID         *string    `json:"paperId"` // Can be NULL -- use *string
-	Title           string     `json:"title"`
-	Authors         []S2Author `json:"authors"`
-	Year            int        `json:"year"`
-	CitationCount   int        `json:"citationCount"`
-	URL             string     `json:"url"`
+	PaperID       *string    `json:"paperId"` // Can be NULL -- use *string
+	Title         string     `json:"title"`
+	Authors       []S2Author `json:"authors"`
+	Year          int        `json:"year"`
+	CitationCount int        `json:"citationCount"`
+	URL           string     `json:"url"`
 }
 
 // S2Author represents an author from the API
@@ -98,14 +98,14 @@ type S2PDF struct {
 
 // S2AuthorProfile represents the raw author profile API response
 type S2AuthorProfile struct {
-	AuthorID      string     `json:"authorId"`
-	Name          string     `json:"name"`
-	Affiliations  []string   `json:"affiliations"`
-	PaperCount    int        `json:"paperCount"`
-	CitationCount int        `json:"citationCount"`
-	HIndex        int        `json:"hIndex"`
-	URL           string     `json:"url"`
-	Papers        []S2Paper  `json:"papers"`
+	AuthorID      string    `json:"authorId"`
+	Name          string    `json:"name"`
+	Affiliations  []string  `json:"affiliations"`
+	PaperCount    int       `json:"paperCount"`
+	CitationCount int       `json:"citationCount"`
+	HIndex        int       `json:"hIndex"`
+	URL           string    `json:"url"`
+	Papers        []S2Paper `json:"papers"`
 }
 
 // S2CitationsResponse represents the raw citations API response

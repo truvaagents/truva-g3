@@ -44,14 +44,14 @@ type foursquarePlace struct {
 }
 
 type foursquareLocation struct {
-	Address     string  `json:"address"`
-	Locality    string  `json:"locality"`
-	Region      string  `json:"region"`
-	Country     string  `json:"country"`
-	PostCode    string  `json:"post_code"`
+	Address          string `json:"address"`
+	Locality         string `json:"locality"`
+	Region           string `json:"region"`
+	Country          string `json:"country"`
+	PostCode         string `json:"post_code"`
 	FormattedAddress string `json:"formatted_address"`
-	Latitude    float64
-	Longitude   float64
+	Latitude         float64
+	Longitude        float64
 }
 
 type foursquareCategory struct {

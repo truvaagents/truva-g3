@@ -103,15 +103,15 @@ type SpendingRecord struct {
 // Global fiscal response types
 
 type GlobalFiscalResponse struct {
-	Country              string   `json:"country"`
-	CountryCode          string   `json:"country_code"`
-	Region               string   `json:"region"`
-	IncomeLevel          string   `json:"income_level"`
-	DebtToGDPPct         *float64 `json:"debt_to_gdp_pct,omitempty"`
-	RevenueToGDPPct      *float64 `json:"revenue_to_gdp_pct,omitempty"`
-	ExpenditureToGDPPct  *float64 `json:"expenditure_to_gdp_pct,omitempty"`
-	DataYear             string   `json:"data_year"`
-	Source               string   `json:"source"`
+	Country             string   `json:"country"`
+	CountryCode         string   `json:"country_code"`
+	Region              string   `json:"region"`
+	IncomeLevel         string   `json:"income_level"`
+	DebtToGDPPct        *float64 `json:"debt_to_gdp_pct,omitempty"`
+	RevenueToGDPPct     *float64 `json:"revenue_to_gdp_pct,omitempty"`
+	ExpenditureToGDPPct *float64 `json:"expenditure_to_gdp_pct,omitempty"`
+	DataYear            string   `json:"data_year"`
+	Source              string   `json:"source"`
 }
 
 type CompareCountryFiscalResponse struct {
@@ -140,7 +140,7 @@ func NewFiscalDataTool() *FiscalDataTool {
 
 func (t *FiscalDataTool) registerCapabilities() {
 	t.RegisterCapability(core.Capability{
-		Name: "national_debt",
+		Name:        "national_debt",
 		Description: "Gets the current U.S. national debt from the Treasury Department, broken down into debt held by the public and intragovernmental holdings.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -160,7 +160,7 @@ func (t *FiscalDataTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "treasury_rates",
+		Name:        "treasury_rates",
 		Description: "Gets average interest rates on U.S. Treasury securities including Treasury Bills, Notes, Bonds, and TIPS.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -181,7 +181,7 @@ func (t *FiscalDataTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "exchange_rates",
+		Name:        "exchange_rates",
 		Description: "Gets official U.S. Treasury exchange rates for foreign currencies. These are quarterly Treasury reporting rates used for federal government reporting, not real-time market rates.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -202,7 +202,7 @@ func (t *FiscalDataTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "federal_spending",
+		Name:        "federal_spending",
 		Description: "Gets a summary of federal government receipts (revenue) and outlays (spending) from the Monthly Treasury Statement.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -222,7 +222,7 @@ func (t *FiscalDataTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "global_fiscal_data",
+		Name:        "global_fiscal_data",
 		Description: "Gets government fiscal data (debt, revenue, expenditure as percentage of GDP) for any country worldwide from the World Bank. Covers 200+ countries. For detailed U.S. Treasury data, use national_debt or federal_spending instead.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -253,7 +253,7 @@ func (t *FiscalDataTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "compare_country_fiscal",
+		Name:        "compare_country_fiscal",
 		Description: "Compares government fiscal health across multiple countries using World Bank data, covering debt-to-GDP, revenue-to-GDP, and expenditure-to-GDP ratios.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

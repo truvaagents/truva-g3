@@ -16,13 +16,13 @@ type FlightTool struct {
 
 // SearchFlightsRequest represents the input for flight search requests
 type SearchFlightsRequest struct {
-	Origin        string `json:"origin"`                    // IATA airport code (e.g., "JFK")
-	Destination   string `json:"destination"`               // IATA airport code (e.g., "NRT")
-	DepartureDate string `json:"departure_date"`            // YYYY-MM-DD format
-	ReturnDate    string `json:"return_date,omitempty"`     // YYYY-MM-DD format (for round trips)
-	Adults        int    `json:"adults,omitempty"`          // Number of adult travelers (default 1)
-	MaxResults    int    `json:"max_results,omitempty"`     // Max number of offers to return (default 5)
-	TravelClass   string `json:"travel_class,omitempty"`    // ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST
+	Origin        string `json:"origin"`                 // IATA airport code (e.g., "JFK")
+	Destination   string `json:"destination"`            // IATA airport code (e.g., "NRT")
+	DepartureDate string `json:"departure_date"`         // YYYY-MM-DD format
+	ReturnDate    string `json:"return_date,omitempty"`  // YYYY-MM-DD format (for round trips)
+	Adults        int    `json:"adults,omitempty"`       // Number of adult travelers (default 1)
+	MaxResults    int    `json:"max_results,omitempty"`  // Max number of offers to return (default 5)
+	TravelClass   string `json:"travel_class,omitempty"` // ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST
 }
 
 // SearchFlightsResponse represents the output for flight search
@@ -60,8 +60,8 @@ type FlightSegment struct {
 
 // SearchAirportsRequest represents the input for airport search requests
 type SearchAirportsRequest struct {
-	Keyword string `json:"keyword"`             // City or airport name (e.g., "Tokyo")
-	SubType string `json:"sub_type,omitempty"`  // AIRPORT, CITY, or both (default both)
+	Keyword string `json:"keyword"`            // City or airport name (e.g., "Tokyo")
+	SubType string `json:"sub_type,omitempty"` // AIRPORT, CITY, or both (default both)
 }
 
 // SearchAirportsResponse represents the output for airport search
@@ -84,17 +84,17 @@ type AirportResult struct {
 
 // CheapestDatesRequest represents the input for cheapest dates requests
 type CheapestDatesRequest struct {
-	Origin        string `json:"origin"`                    // IATA airport code
-	Destination   string `json:"destination"`               // IATA airport code
-	DepartureDate string `json:"departure_date,omitempty"`  // YYYY-MM-DD starting search date
+	Origin        string `json:"origin"`                   // IATA airport code
+	Destination   string `json:"destination"`              // IATA airport code
+	DepartureDate string `json:"departure_date,omitempty"` // YYYY-MM-DD starting search date
 }
 
 // CheapestDatesResponse represents the output for cheapest dates
 type CheapestDatesResponse struct {
-	Origin      string          `json:"origin"`
-	Destination string          `json:"destination"`
-	Dates       []CheapestDate  `json:"dates"`
-	Source      string          `json:"source"`
+	Origin      string         `json:"origin"`
+	Destination string         `json:"destination"`
+	Dates       []CheapestDate `json:"dates"`
+	Source      string         `json:"source"`
 }
 
 // CheapestDate represents a single cheapest travel date

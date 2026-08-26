@@ -50,7 +50,7 @@ type WHOResponse struct {
 type WHOValue struct {
 	ID            int      `json:"Id"`
 	IndicatorCode string   `json:"IndicatorCode"`
-	SpatialDim    string   `json:"SpatialDim"`  // ISO alpha-3 country code
+	SpatialDim    string   `json:"SpatialDim"`   // ISO alpha-3 country code
 	TimeDim       int      `json:"TimeDim"`      // Year as integer
 	Dim1Type      *string  `json:"Dim1Type"`     // e.g., "SEX"
 	Dim1          *string  `json:"Dim1"`         // e.g., "BTSX", "MLE", "FMLE"
@@ -77,8 +77,8 @@ type WorldBankDataPoint struct {
 	Indicator   WorldBankRef `json:"indicator"`
 	Country     WorldBankRef `json:"country"`
 	CountryISO3 string       `json:"countryiso3code"`
-	Date        string       `json:"date"`      // Year as string
-	Value       *float64     `json:"value"`      // Nullable float64
+	Date        string       `json:"date"`  // Year as string
+	Value       *float64     `json:"value"` // Nullable float64
 	Unit        string       `json:"unit"`
 	ObsStatus   string       `json:"obs_status"`
 	Decimal     int          `json:"decimal"`

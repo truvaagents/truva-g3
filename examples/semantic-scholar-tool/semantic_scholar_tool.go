@@ -31,9 +31,9 @@ func NewSemanticScholarTool() *SemanticScholarTool {
 
 // SearchPapersRequest represents the input for paper search
 type SearchPapersRequest struct {
-	Query         string `json:"query"`                    // Required: search query
-	MaxResults    int    `json:"max_results,omitempty"`    // Optional: 1-100, default 10
-	Year          string `json:"year,omitempty"`           // Optional: year range filter e.g. "2023-2026"
+	Query         string `json:"query"`                     // Required: search query
+	MaxResults    int    `json:"max_results,omitempty"`     // Optional: 1-100, default 10
+	Year          string `json:"year,omitempty"`            // Optional: year range filter e.g. "2023-2026"
 	FieldsOfStudy string `json:"fields_of_study,omitempty"` // Optional: field of study filter e.g. "Computer Science"
 }
 
@@ -73,42 +73,42 @@ type Author struct {
 
 // SearchPapersResponse represents the output for paper search
 type SearchPapersResponse struct {
-	Query      string        `json:"query"`
-	Total      int           `json:"total"`
-	Papers     []PaperResult `json:"papers"`
-	Source     string        `json:"source"`
+	Query  string        `json:"query"`
+	Total  int           `json:"total"`
+	Papers []PaperResult `json:"papers"`
+	Source string        `json:"source"`
 }
 
 // PaperDetailsResponse represents detailed paper information
 type PaperDetailsResponse struct {
-	PaperID                   string        `json:"paper_id"`
-	Title                     string        `json:"title"`
-	Authors                   []Author      `json:"authors"`
-	Year                      int           `json:"year"`
-	Abstract                  string        `json:"abstract,omitempty"`
-	URL                       string        `json:"url"`
-	CitationCount             int           `json:"citation_count"`
-	ReferenceCount            int           `json:"reference_count"`
-	InfluentialCitationCount  int           `json:"influential_citation_count"`
-	TLDR                      string        `json:"tldr,omitempty"`
-	OpenAccessPDF             string        `json:"open_access_pdf,omitempty"`
-	PublicationDate           string        `json:"publication_date,omitempty"`
-	References                []PaperResult `json:"references,omitempty"`
-	Citations                 []PaperResult `json:"citations,omitempty"`
-	Source                    string        `json:"source"`
+	PaperID                  string        `json:"paper_id"`
+	Title                    string        `json:"title"`
+	Authors                  []Author      `json:"authors"`
+	Year                     int           `json:"year"`
+	Abstract                 string        `json:"abstract,omitempty"`
+	URL                      string        `json:"url"`
+	CitationCount            int           `json:"citation_count"`
+	ReferenceCount           int           `json:"reference_count"`
+	InfluentialCitationCount int           `json:"influential_citation_count"`
+	TLDR                     string        `json:"tldr,omitempty"`
+	OpenAccessPDF            string        `json:"open_access_pdf,omitempty"`
+	PublicationDate          string        `json:"publication_date,omitempty"`
+	References               []PaperResult `json:"references,omitempty"`
+	Citations                []PaperResult `json:"citations,omitempty"`
+	Source                   string        `json:"source"`
 }
 
 // AuthorResponse represents an author profile
 type AuthorResponse struct {
-	AuthorID     string        `json:"author_id"`
-	Name         string        `json:"name"`
-	Affiliations []string      `json:"affiliations,omitempty"`
-	PaperCount   int           `json:"paper_count"`
-	CitationCount int          `json:"citation_count"`
-	HIndex       int           `json:"h_index"`
-	Papers       []PaperResult `json:"papers,omitempty"`
-	URL          string        `json:"url"`
-	Source       string        `json:"source"`
+	AuthorID      string        `json:"author_id"`
+	Name          string        `json:"name"`
+	Affiliations  []string      `json:"affiliations,omitempty"`
+	PaperCount    int           `json:"paper_count"`
+	CitationCount int           `json:"citation_count"`
+	HIndex        int           `json:"h_index"`
+	Papers        []PaperResult `json:"papers,omitempty"`
+	URL           string        `json:"url"`
+	Source        string        `json:"source"`
 }
 
 // CitationsResponse represents citing papers

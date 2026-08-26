@@ -28,23 +28,23 @@ type GetPodsRequest struct {
 // GetPodLogsRequest represents the input for get_pod_logs
 type GetPodLogsRequest struct {
 	PodName   string `json:"pod_name"`             // Required: name of the pod
-	Namespace string `json:"namespace,omitempty"`   // Optional: namespace (default: truvag3-examples)
-	Container string `json:"container,omitempty"`   // Optional: container name (for multi-container pods)
-	TailLines int    `json:"tail_lines,omitempty"`  // Optional: number of lines from end (default: 100)
-	Previous  bool   `json:"previous,omitempty"`    // Optional: get logs from previous container instance
+	Namespace string `json:"namespace,omitempty"`  // Optional: namespace (default: truvag3-examples)
+	Container string `json:"container,omitempty"`  // Optional: container name (for multi-container pods)
+	TailLines int    `json:"tail_lines,omitempty"` // Optional: number of lines from end (default: 100)
+	Previous  bool   `json:"previous,omitempty"`   // Optional: get logs from previous container instance
 }
 
 // DescribeResourceRequest represents the input for describe_resource
 type DescribeResourceRequest struct {
-	ResourceType string `json:"resource_type"`        // Required: pod, deployment, service, node, configmap, secret, etc.
-	ResourceName string `json:"resource_name"`        // Required: name of the resource
-	Namespace    string `json:"namespace,omitempty"`   // Optional: namespace (default: truvag3-examples)
+	ResourceType string `json:"resource_type"`       // Required: pod, deployment, service, node, configmap, secret, etc.
+	ResourceName string `json:"resource_name"`       // Required: name of the resource
+	Namespace    string `json:"namespace,omitempty"` // Optional: namespace (default: truvag3-examples)
 }
 
 // ScaleDeploymentRequest represents the input for scale_deployment
 type ScaleDeploymentRequest struct {
-	DeploymentName string `json:"deployment_name"` // Required: name of the deployment
-	Replicas       int    `json:"replicas"`        // Required: desired replica count
+	DeploymentName string `json:"deployment_name"`     // Required: name of the deployment
+	Replicas       int    `json:"replicas"`            // Required: desired replica count
 	Namespace      string `json:"namespace,omitempty"` // Optional: namespace (default: truvag3-examples)
 }
 
@@ -74,11 +74,11 @@ type KubectlResponse struct {
 
 // Error codes
 const (
-	ErrCodeInvalidRequest    = "INVALID_REQUEST"
-	ErrCodeMissingField      = "MISSING_FIELD"
-	ErrCodeKubectlError      = "KUBECTL_ERROR"
-	ErrCodeTimeout           = "COMMAND_TIMEOUT"
-	ErrCodeForbiddenCommand  = "FORBIDDEN_COMMAND"
+	ErrCodeInvalidRequest   = "INVALID_REQUEST"
+	ErrCodeMissingField     = "MISSING_FIELD"
+	ErrCodeKubectlError     = "KUBECTL_ERROR"
+	ErrCodeTimeout          = "COMMAND_TIMEOUT"
+	ErrCodeForbiddenCommand = "FORBIDDEN_COMMAND"
 )
 
 // Default namespace for operations

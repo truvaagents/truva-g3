@@ -62,10 +62,10 @@ func main() {
 	}
 
 	tool.Logger.Info("JIRA Tool Service starting", map[string]interface{}{
-		"operation":    "startup",
-		"port":         port,
+		"operation":     "startup",
+		"port":          port,
 		"jira_base_url": os.Getenv("JIRA_BASE_URL"),
-		"capabilities": len(tool.Capabilities),
+		"capabilities":  len(tool.Capabilities),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

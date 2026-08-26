@@ -61,8 +61,8 @@ func main() {
 	}
 
 	tool.Logger.Info("Demographics tool starting", map[string]interface{}{
-		"operation": "startup",
-		"port":      port,
+		"operation":   "startup",
+		"port":        port,
 		"has_api_key": tool.apiKey != "",
 	})
 
