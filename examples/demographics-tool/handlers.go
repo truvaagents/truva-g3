@@ -90,10 +90,10 @@ func (t *DemographicsTool) handleAreaStatistics(w http.ResponseWriter, r *http.R
 	if req.Location == "" {
 		telemetry.Counter("demographics.errors.total", "capability", "area_statistics", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty location provided", map[string]interface{}{
-			"operation":   "area_statistics",
-			"request_id":  requestID,
-			"error":       "location field is required",
-			"error_type":  "validation_error",
+			"operation":  "area_statistics",
+			"request_id": requestID,
+			"error":      "location field is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "location field is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -170,10 +170,10 @@ func (t *DemographicsTool) handleCompareAreas(w http.ResponseWriter, r *http.Req
 	if req.Locations == "" {
 		telemetry.Counter("demographics.errors.total", "capability", "compare_areas", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty locations provided", map[string]interface{}{
-			"operation":   "compare_areas",
-			"request_id":  requestID,
-			"error":       "locations field is required",
-			"error_type":  "validation_error",
+			"operation":  "compare_areas",
+			"request_id": requestID,
+			"error":      "locations field is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "locations field is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -183,11 +183,11 @@ func (t *DemographicsTool) handleCompareAreas(w http.ResponseWriter, r *http.Req
 	if len(locations) < 2 {
 		telemetry.Counter("demographics.errors.total", "capability", "compare_areas", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Insufficient locations for comparison", map[string]interface{}{
-			"operation":       "compare_areas",
-			"request_id":      requestID,
-			"error":           "at least 2 locations required for comparison",
-			"error_type":      "validation_error",
-			"location_count":  len(locations),
+			"operation":      "compare_areas",
+			"request_id":     requestID,
+			"error":          "at least 2 locations required for comparison",
+			"error_type":     "validation_error",
+			"location_count": len(locations),
 		})
 		t.sendError(w, "at least 2 locations required for comparison", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -195,11 +195,11 @@ func (t *DemographicsTool) handleCompareAreas(w http.ResponseWriter, r *http.Req
 	if len(locations) > 10 {
 		telemetry.Counter("demographics.errors.total", "capability", "compare_areas", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Too many locations for comparison", map[string]interface{}{
-			"operation":       "compare_areas",
-			"request_id":      requestID,
-			"error":           "maximum 10 locations allowed",
-			"error_type":      "validation_error",
-			"location_count":  len(locations),
+			"operation":      "compare_areas",
+			"request_id":     requestID,
+			"error":          "maximum 10 locations allowed",
+			"error_type":     "validation_error",
+			"location_count": len(locations),
 		})
 		t.sendError(w, "maximum 10 locations allowed", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -292,10 +292,10 @@ func (t *DemographicsTool) handlePopulationRanking(w http.ResponseWriter, r *htt
 	if req.Metric == "" {
 		telemetry.Counter("demographics.errors.total", "capability", "population_ranking", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty metric provided", map[string]interface{}{
-			"operation":   "population_ranking",
-			"request_id":  requestID,
-			"error":       "metric field is required",
-			"error_type":  "validation_error",
+			"operation":  "population_ranking",
+			"request_id": requestID,
+			"error":      "metric field is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "metric field is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -305,11 +305,11 @@ func (t *DemographicsTool) handlePopulationRanking(w http.ResponseWriter, r *htt
 	if !ok {
 		telemetry.Counter("demographics.errors.total", "capability", "population_ranking", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Invalid metric provided", map[string]interface{}{
-			"operation":   "population_ranking",
-			"request_id":  requestID,
-			"error":       fmt.Sprintf("invalid metric: %s", req.Metric),
-			"error_type":  "validation_error",
-			"metric":      req.Metric,
+			"operation":  "population_ranking",
+			"request_id": requestID,
+			"error":      fmt.Sprintf("invalid metric: %s", req.Metric),
+			"error_type": "validation_error",
+			"metric":     req.Metric,
 		})
 		t.sendError(w, fmt.Sprintf("invalid metric: %s (valid: population, median_income, home_value, median_rent, poverty_rate, unemployment_rate, median_age)", req.Metric), http.StatusBadRequest, ErrCodeInvalidInput)
 		return

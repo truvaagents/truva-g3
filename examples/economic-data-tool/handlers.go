@@ -85,10 +85,10 @@ func (t *EconomicDataTool) handleEconomicIndicator(w http.ResponseWriter, r *htt
 	if req.Indicator == "" {
 		telemetry.Counter("economic.errors.total", "capability", "economic_indicator", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty indicator provided", map[string]interface{}{
-			"operation":   "economic_indicator",
-			"request_id":  requestID,
-			"error":       "indicator is required",
-			"error_type":  "validation_error",
+			"operation":  "economic_indicator",
+			"request_id": requestID,
+			"error":      "indicator is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "indicator is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -238,10 +238,10 @@ func (t *EconomicDataTool) handleCompareIndicators(w http.ResponseWriter, r *htt
 	if strings.TrimSpace(req.Indicators) == "" {
 		telemetry.Counter("economic.errors.total", "capability", "compare_indicators", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty indicators provided", map[string]interface{}{
-			"operation":   "compare_indicators",
-			"request_id":  requestID,
-			"error":       "indicators is required",
-			"error_type":  "validation_error",
+			"operation":  "compare_indicators",
+			"request_id": requestID,
+			"error":      "indicators is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "indicators is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -405,10 +405,10 @@ func (t *EconomicDataTool) handleSearchIndicators(w http.ResponseWriter, r *http
 	if strings.TrimSpace(req.Query) == "" {
 		telemetry.Counter("economic.errors.total", "capability", "search_indicators", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty query provided", map[string]interface{}{
-			"operation":   "search_indicators",
-			"request_id":  requestID,
-			"error":       "query is required",
-			"error_type":  "validation_error",
+			"operation":  "search_indicators",
+			"request_id": requestID,
+			"error":      "query is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "query is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return
@@ -539,10 +539,10 @@ func (t *EconomicDataTool) handleIndicatorInfo(w http.ResponseWriter, r *http.Re
 	if strings.TrimSpace(req.Indicator) == "" {
 		telemetry.Counter("economic.errors.total", "capability", "indicator_info", "error_type", "validation_error")
 		t.Logger.ErrorWithContext(ctx, "Empty indicator provided", map[string]interface{}{
-			"operation":   "indicator_info",
-			"request_id":  requestID,
-			"error":       "indicator is required",
-			"error_type":  "validation_error",
+			"operation":  "indicator_info",
+			"request_id": requestID,
+			"error":      "indicator is required",
+			"error_type": "validation_error",
 		})
 		t.sendError(w, "indicator is required", http.StatusBadRequest, ErrCodeInvalidInput)
 		return

@@ -20,8 +20,8 @@ type GetAdvisoryRequest struct {
 type GetAdvisoryResponse struct {
 	Country     string `json:"country"`
 	ISOCode     string `json:"iso_code"`
-	Level       int    `json:"level"`       // 1-4
-	LevelText   string `json:"level_text"`  // e.g., "Exercise Increased Caution"
+	Level       int    `json:"level"`      // 1-4
+	LevelText   string `json:"level_text"` // e.g., "Exercise Increased Caution"
 	Description string `json:"description"`
 	LastUpdated string `json:"last_updated"`
 	Source      string `json:"source"`
@@ -64,7 +64,7 @@ func NewAdvisoryTool() *AdvisoryTool {
 func (a *AdvisoryTool) registerCapabilities() {
 	// Capability 1: Get Travel Advisory
 	a.RegisterCapability(core.Capability{
-		Name: "get_travel_advisory",
+		Name:        "get_travel_advisory",
 		Description: "Gets the official US State Department travel safety advisory for a specific country.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -96,7 +96,7 @@ func (a *AdvisoryTool) registerCapabilities() {
 
 	// Capability 2: List Advisories
 	a.RegisterCapability(core.Capability{
-		Name: "list_advisories",
+		Name:        "list_advisories",
 		Description: "Lists all country travel advisories, optionally filtered by risk level.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

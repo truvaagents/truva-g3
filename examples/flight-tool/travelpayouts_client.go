@@ -47,10 +47,10 @@ func NewTravelpayoutsClient(token string) *TravelpayoutsClient {
 // tpCheapResponse — /v1/prices/cheap returns data keyed by destination IATA,
 // then by transfer-count ("0", "1", "2").
 type tpCheapResponse struct {
-	Success  bool                                `json:"success"`
-	Data     map[string]map[string]tpCheapOffer  `json:"data"`
-	Currency string                              `json:"currency"`
-	Error    string                              `json:"error,omitempty"`
+	Success  bool                               `json:"success"`
+	Data     map[string]map[string]tpCheapOffer `json:"data"`
+	Currency string                             `json:"currency"`
+	Error    string                             `json:"error,omitempty"`
 }
 
 type tpCheapOffer struct {

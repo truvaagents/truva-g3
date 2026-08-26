@@ -347,7 +347,7 @@ func (s *StockTool) registerCapabilities() {
 	// Auto-generated endpoint: /api/capabilities/basic_financials
 	// Schema endpoint: /api/capabilities/basic_financials/schema
 	s.RegisterCapability(core.Capability{
-		Name: "basic_financials",
+		Name:        "basic_financials",
 		Description: "Gets comprehensive financial metrics including PE ratios, margins, growth rates, and valuation metrics.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -383,7 +383,7 @@ func (s *StockTool) registerCapabilities() {
 	// Auto-generated endpoint: /api/capabilities/company_earnings
 	// Schema endpoint: /api/capabilities/company_earnings/schema
 	s.RegisterCapability(core.Capability{
-		Name: "company_earnings",
+		Name:        "company_earnings",
 		Description: "Gets historical quarterly earnings showing actual vs estimated EPS and earnings surprises.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -418,7 +418,7 @@ func (s *StockTool) registerCapabilities() {
 	// Schema endpoint: /api/capabilities/annual_revenue/schema
 	// Note: Free tier only provides annual 10-K filings, not quarterly 10-Q
 	s.RegisterCapability(core.Capability{
-		Name: "annual_revenue",
+		Name:        "annual_revenue",
 		Description: "Gets annual revenue figures from SEC 10-K filings showing historical revenue in dollars.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

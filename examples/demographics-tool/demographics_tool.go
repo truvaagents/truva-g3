@@ -185,7 +185,7 @@ func NewDemographicsTool() *DemographicsTool {
 
 func (t *DemographicsTool) registerCapabilities() {
 	t.RegisterCapability(core.Capability{
-		Name: "area_statistics",
+		Name:        "area_statistics",
 		Description: "Gets comprehensive demographic and socioeconomic statistics for a U.S. geographic area from the Census Bureau's American Community Survey.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -210,7 +210,7 @@ func (t *DemographicsTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "compare_areas",
+		Name:        "compare_areas",
 		Description: "Compares demographic statistics across multiple U.S. geographic areas side by side.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -229,7 +229,7 @@ func (t *DemographicsTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "population_ranking",
+		Name:        "population_ranking",
 		Description: "Ranks U.S. states by a specific demographic metric from the Census Bureau.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -289,7 +289,7 @@ func (t *DemographicsTool) registerCapabilities() {
 	})
 
 	t.RegisterCapability(core.Capability{
-		Name: "compare_countries_demographics",
+		Name:        "compare_countries_demographics",
 		Description: "Compares demographic indicators across multiple countries using World Bank data.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -437,52 +437,52 @@ var countyFIPSMap = map[string]string{
 	"48:fort bend":  "157",
 	"48:el paso":    "141",
 	// California
-	"06:los angeles":  "037",
-	"06:san diego":    "073",
-	"06:orange":       "059",
-	"06:san francisco":"075",
-	"06:santa clara":  "085",
-	"06:alameda":      "001",
-	"06:sacramento":   "067",
-	"06:riverside":    "065",
-	"06:san bernardino":"071",
-	"06:san mateo":    "081",
+	"06:los angeles":    "037",
+	"06:san diego":      "073",
+	"06:orange":         "059",
+	"06:san francisco":  "075",
+	"06:santa clara":    "085",
+	"06:alameda":        "001",
+	"06:sacramento":     "067",
+	"06:riverside":      "065",
+	"06:san bernardino": "071",
+	"06:san mateo":      "081",
 	// New York
-	"36:new york":  "061",
-	"36:kings":     "047",
-	"36:queens":    "081",
-	"36:bronx":     "005",
-	"36:richmond":  "085",
-	"36:nassau":    "059",
-	"36:suffolk":   "103",
-	"36:westchester":"119",
-	"36:erie":      "029",
+	"36:new york":    "061",
+	"36:kings":       "047",
+	"36:queens":      "081",
+	"36:bronx":       "005",
+	"36:richmond":    "085",
+	"36:nassau":      "059",
+	"36:suffolk":     "103",
+	"36:westchester": "119",
+	"36:erie":        "029",
 	// Florida
-	"12:miami-dade":  "086",
-	"12:broward":     "011",
-	"12:palm beach":  "099",
-	"12:hillsborough":"057",
-	"12:orange":      "095",
-	"12:duval":       "031",
-	"12:pinellas":    "103",
+	"12:miami-dade":   "086",
+	"12:broward":      "011",
+	"12:palm beach":   "099",
+	"12:hillsborough": "057",
+	"12:orange":       "095",
+	"12:duval":        "031",
+	"12:pinellas":     "103",
 	// Illinois
-	"17:cook":    "031",
-	"17:dupage":  "043",
-	"17:lake":    "097",
-	"17:will":    "197",
-	"17:kane":    "089",
+	"17:cook":   "031",
+	"17:dupage": "043",
+	"17:lake":   "097",
+	"17:will":   "197",
+	"17:kane":   "089",
 	// Washington
-	"53:king":     "033",
-	"53:pierce":   "053",
-	"53:snohomish":"061",
-	"53:clark":    "011",
+	"53:king":      "033",
+	"53:pierce":    "053",
+	"53:snohomish": "061",
+	"53:clark":     "011",
 	// Colorado
-	"08:denver":   "031",
-	"08:arapahoe": "005",
-	"08:jefferson":"059",
-	"08:adams":    "001",
-	"08:el paso":  "041",
-	"08:douglas":  "035",
+	"08:denver":    "031",
+	"08:arapahoe":  "005",
+	"08:jefferson": "059",
+	"08:adams":     "001",
+	"08:el paso":   "041",
+	"08:douglas":   "035",
 	// Georgia
 	"13:fulton":   "121",
 	"13:gwinnett": "135",
@@ -492,41 +492,41 @@ var countyFIPSMap = map[string]string{
 	"04:maricopa": "013",
 	"04:pima":     "019",
 	// Massachusetts
-	"25:middlesex":  "017",
-	"25:suffolk":    "025",
-	"25:norfolk":    "021",
-	"25:worcester":  "027",
+	"25:middlesex": "017",
+	"25:suffolk":   "025",
+	"25:norfolk":   "021",
+	"25:worcester": "027",
 	// Pennsylvania
 	"42:philadelphia": "101",
 	"42:allegheny":    "003",
 	"42:montgomery":   "091",
 	"42:bucks":        "017",
 	// Ohio
-	"39:franklin":  "049",
-	"39:cuyahoga":  "035",
-	"39:hamilton":  "061",
-	"39:summit":    "153",
+	"39:franklin": "049",
+	"39:cuyahoga": "035",
+	"39:hamilton": "061",
+	"39:summit":   "153",
 	// Michigan
-	"26:wayne":    "163",
-	"26:oakland":  "125",
-	"26:macomb":   "099",
+	"26:wayne":   "163",
+	"26:oakland": "125",
+	"26:macomb":  "099",
 	// North Carolina
 	"37:mecklenburg": "119",
 	"37:wake":        "183",
 	"37:guilford":    "081",
 	// Virginia
-	"51:fairfax":      "059",
-	"51:prince william":"153",
-	"51:loudoun":      "107",
+	"51:fairfax":        "059",
+	"51:prince william": "153",
+	"51:loudoun":        "107",
 	// Maryland
-	"24:montgomery": "031",
-	"24:prince georges":"033",
-	"24:baltimore":  "005",
+	"24:montgomery":     "031",
+	"24:prince georges": "033",
+	"24:baltimore":      "005",
 	// Nevada
 	"32:clark": "003",
 	// Minnesota
-	"27:hennepin":  "053",
-	"27:ramsey":    "123",
+	"27:hennepin": "053",
+	"27:ramsey":   "123",
 	// Oregon
 	"41:multnomah": "051",
 	// Tennessee
@@ -550,4 +550,3 @@ var fipsToStateName = map[string]string{
 	"49": "Utah", "50": "Vermont", "51": "Virginia", "53": "Washington",
 	"54": "West Virginia", "55": "Wisconsin", "56": "Wyoming", "72": "Puerto Rico",
 }
-

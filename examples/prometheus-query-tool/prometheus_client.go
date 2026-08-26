@@ -29,8 +29,8 @@ type PrometheusResponse struct {
 
 // PrometheusQueryData represents the "data" field for /api/v1/query and /api/v1/query_range
 type PrometheusQueryData struct {
-	ResultType string            `json:"resultType"` // "vector", "matrix", "scalar", "string"
-	Result     json.RawMessage   `json:"result"`     // Varies by resultType
+	ResultType string          `json:"resultType"` // "vector", "matrix", "scalar", "string"
+	Result     json.RawMessage `json:"result"`     // Varies by resultType
 }
 
 // PrometheusVectorResult represents a single instant vector result
@@ -58,7 +58,7 @@ type PrometheusAlertsData struct {
 type PrometheusAlert struct {
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
-	State       string            `json:"state"`    // "firing", "pending", "inactive"
+	State       string            `json:"state"` // "firing", "pending", "inactive"
 	ActiveAt    string            `json:"activeAt"`
 	Value       string            `json:"value"`
 }

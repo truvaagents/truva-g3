@@ -217,7 +217,7 @@ type CompareCountriesResponse struct {
 func (t *WorldHealthTool) registerCapabilities() {
 	// Capability 1: get_health_indicator
 	t.RegisterCapability(core.Capability{
-		Name: "get_health_indicator",
+		Name:        "get_health_indicator",
 		Description: "Gets a health indicator value for a specific country. Supports friendly names (life_expectancy, infant_mortality) or raw WHO codes.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -271,7 +271,7 @@ func (t *WorldHealthTool) registerCapabilities() {
 
 	// Capability 2: list_indicators
 	t.RegisterCapability(core.Capability{
-		Name: "list_indicators",
+		Name:        "list_indicators",
 		Description: "Lists available health indicators from the WHO Global Health Observatory catalog.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -303,7 +303,7 @@ func (t *WorldHealthTool) registerCapabilities() {
 
 	// Capability 3: compare_countries
 	t.RegisterCapability(core.Capability{
-		Name: "compare_countries",
+		Name:        "compare_countries",
 		Description: "Compares a health indicator across multiple countries side by side.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

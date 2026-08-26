@@ -17,14 +17,14 @@ type PlacesTool struct {
 
 // SearchPlacesRequest represents the input for place search
 type SearchPlacesRequest struct {
-	Query      string  `json:"query"`                    // Search term (e.g., "sushi restaurants")
-	Lat        float64 `json:"lat,omitempty"`            // Latitude
-	Lon        float64 `json:"lon,omitempty"`            // Longitude
-	Location   string  `json:"location,omitempty"`       // City name (alternative to lat/lon)
-	Radius     int     `json:"radius,omitempty"`         // Search radius in meters (default 1000)
-	Categories string  `json:"categories,omitempty"`     // Comma-separated categories
-	Limit      int     `json:"limit,omitempty"`          // Max results (default 10)
-	Provider   string  `json:"provider,omitempty"`       // "foursquare" or "geoapify"
+	Query      string  `json:"query"`                // Search term (e.g., "sushi restaurants")
+	Lat        float64 `json:"lat,omitempty"`        // Latitude
+	Lon        float64 `json:"lon,omitempty"`        // Longitude
+	Location   string  `json:"location,omitempty"`   // City name (alternative to lat/lon)
+	Radius     int     `json:"radius,omitempty"`     // Search radius in meters (default 1000)
+	Categories string  `json:"categories,omitempty"` // Comma-separated categories
+	Limit      int     `json:"limit,omitempty"`      // Max results (default 10)
+	Provider   string  `json:"provider,omitempty"`   // "foursquare" or "geoapify"
 }
 
 // SearchPlacesResponse represents the output for place search
@@ -49,34 +49,34 @@ type PlaceResult struct {
 
 // PlaceDetailsRequest represents the input for place details
 type PlaceDetailsRequest struct {
-	PlaceID  string `json:"place_id"`            // Provider-specific ID
-	Provider string `json:"provider,omitempty"`   // "foursquare" or "geoapify"
+	PlaceID  string `json:"place_id"`           // Provider-specific ID
+	Provider string `json:"provider,omitempty"` // "foursquare" or "geoapify"
 }
 
 // PlaceDetailsResponse represents the output for place details
 type PlaceDetailsResponse struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Address     string   `json:"address"`
-	Lat         float64  `json:"lat"`
-	Lon         float64  `json:"lon"`
-	Categories  []string `json:"categories"`
-	Phone       string   `json:"phone,omitempty"`
-	Website     string   `json:"website,omitempty"`
-	Hours       string   `json:"hours,omitempty"`
-	Rating      float64  `json:"rating,omitempty"`
-	Provider    string   `json:"provider"`
-	Source      string   `json:"source"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Address    string   `json:"address"`
+	Lat        float64  `json:"lat"`
+	Lon        float64  `json:"lon"`
+	Categories []string `json:"categories"`
+	Phone      string   `json:"phone,omitempty"`
+	Website    string   `json:"website,omitempty"`
+	Hours      string   `json:"hours,omitempty"`
+	Rating     float64  `json:"rating,omitempty"`
+	Provider   string   `json:"provider"`
+	Source     string   `json:"source"`
 }
 
 // NearbyPlacesRequest represents the input for nearby places search
 type NearbyPlacesRequest struct {
-	Lat        float64 `json:"lat"`                      // Required: latitude
-	Lon        float64 `json:"lon"`                      // Required: longitude
-	Categories string  `json:"categories,omitempty"`     // Comma-separated categories
-	Radius     int     `json:"radius,omitempty"`         // Search radius in meters (default 1000)
-	Limit      int     `json:"limit,omitempty"`          // Max results (default 10)
-	Provider   string  `json:"provider,omitempty"`       // "foursquare" or "geoapify"
+	Lat        float64 `json:"lat"`                  // Required: latitude
+	Lon        float64 `json:"lon"`                  // Required: longitude
+	Categories string  `json:"categories,omitempty"` // Comma-separated categories
+	Radius     int     `json:"radius,omitempty"`     // Search radius in meters (default 1000)
+	Limit      int     `json:"limit,omitempty"`      // Max results (default 10)
+	Provider   string  `json:"provider,omitempty"`   // "foursquare" or "geoapify"
 }
 
 // NearbyPlacesResponse represents the output for nearby places
@@ -112,7 +112,7 @@ func NewPlacesTool() *PlacesTool {
 func (p *PlacesTool) registerCapabilities() {
 	// Capability 1: Search Places
 	p.RegisterCapability(core.Capability{
-		Name: "search_places",
+		Name:        "search_places",
 		Description: "Searches for restaurants, attractions, cafes, nightlife, and other places near a location.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -184,7 +184,7 @@ func (p *PlacesTool) registerCapabilities() {
 
 	// Capability 2: Place Details
 	p.RegisterCapability(core.Capability{
-		Name: "place_details",
+		Name:        "place_details",
 		Description: "Gets detailed information about a specific place by its provider ID.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -230,7 +230,7 @@ func (p *PlacesTool) registerCapabilities() {
 
 	// Capability 3: Nearby Places
 	p.RegisterCapability(core.Capability{
-		Name: "nearby_places",
+		Name:        "nearby_places",
 		Description: "Finds places by category near specific coordinates.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

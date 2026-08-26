@@ -462,16 +462,16 @@ func (d *DevOpsTool) handleDescribeResource(w http.ResponseWriter, r *http.Reque
 		)
 		if d.Logger != nil {
 			d.Logger.ErrorWithContext(ctx, "kubectl describe failed", map[string]interface{}{
-				"operation":      "describe_resource",
-				"resource_type":  req.ResourceType,
-				"resource_name":  req.ResourceName,
-				"namespace":      ns,
-				"exit_code":      result.ExitCode,
-				"error":          result.Stderr,
-				"error_type":     "kubectl_error",
-				"request_id":     requestID,
-				"status":         "failure",
-				"duration_ms":    time.Since(startTime).Milliseconds(),
+				"operation":     "describe_resource",
+				"resource_type": req.ResourceType,
+				"resource_name": req.ResourceName,
+				"namespace":     ns,
+				"exit_code":     result.ExitCode,
+				"error":         result.Stderr,
+				"error_type":    "kubectl_error",
+				"request_id":    requestID,
+				"status":        "failure",
+				"duration_ms":   time.Since(startTime).Milliseconds(),
 			})
 		}
 	}
@@ -548,12 +548,12 @@ func (d *DevOpsTool) handleScaleDeployment(w http.ResponseWriter, r *http.Reques
 		)
 		if d.Logger != nil {
 			d.Logger.WarnWithContext(ctx, "Invalid replica count", map[string]interface{}{
-				"operation":       "scale_deployment",
-				"replicas":        req.Replicas,
-				"error_type":      "validation_error",
-				"request_id":      requestID,
-				"status":          "failure",
-				"duration_ms":     time.Since(startTime).Milliseconds(),
+				"operation":   "scale_deployment",
+				"replicas":    req.Replicas,
+				"error_type":  "validation_error",
+				"request_id":  requestID,
+				"status":      "failure",
+				"duration_ms": time.Since(startTime).Milliseconds(),
 			})
 		}
 		sendError(w, ErrCodeInvalidRequest, "replicas must be between 0 and 10", http.StatusBadRequest)

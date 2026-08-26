@@ -19,7 +19,7 @@ type PubMedTool struct {
 // --- search_articles ---
 
 type SearchArticlesRequest struct {
-	Query      string `json:"query"`                // PubMed search query (supports MeSH terms)
+	Query      string `json:"query"`                 // PubMed search query (supports MeSH terms)
 	MaxResults int    `json:"max_results,omitempty"` // 1-100, default 10
 	Sort       string `json:"sort,omitempty"`        // "relevance" (default) or "date"
 }
@@ -34,12 +34,12 @@ type SearchArticlesResponse struct {
 type ArticleSummary struct {
 	PMID        string   `json:"pmid"`
 	Title       string   `json:"title"`
-	Authors     []string `json:"authors"`        // Flattened from authors[].name
-	Journal     string   `json:"journal"`        // fulljournalname
-	PubDate     string   `json:"pub_date"`       // Normalized from inconsistent formats
-	DOI         string   `json:"doi,omitempty"`  // Extracted from articleids where idtype=="doi"
-	PMCRefCount int      `json:"pmc_ref_count"`  // Citation count in PMC (one of few actual ints)
-	HasAbstract bool     `json:"has_abstract"`   // Derived from attributes containing "Has Abstract"
+	Authors     []string `json:"authors"`       // Flattened from authors[].name
+	Journal     string   `json:"journal"`       // fulljournalname
+	PubDate     string   `json:"pub_date"`      // Normalized from inconsistent formats
+	DOI         string   `json:"doi,omitempty"` // Extracted from articleids where idtype=="doi"
+	PMCRefCount int      `json:"pmc_ref_count"` // Citation count in PMC (one of few actual ints)
+	HasAbstract bool     `json:"has_abstract"`  // Derived from attributes containing "Has Abstract"
 }
 
 // --- get_article_details ---
@@ -57,7 +57,7 @@ type ArticleDetail struct {
 	PMID        string      `json:"pmid"`
 	Title       string      `json:"title"`
 	Authors     []Author    `json:"authors"`
-	Journal     string      `json:"journal"`          // fulljournalname
+	Journal     string      `json:"journal"` // fulljournalname
 	PubDate     string      `json:"pub_date"`
 	DOI         string      `json:"doi,omitempty"`
 	Volume      string      `json:"volume,omitempty"`
@@ -113,7 +113,7 @@ func (t *PubMedTool) registerCapabilities() {
 	// Capability 1: search_articles
 	// Auto-generated endpoint: /api/capabilities/search_articles
 	t.RegisterCapability(core.Capability{
-		Name: "search_articles",
+		Name:        "search_articles",
 		Description: "Searches PubMed for biomedical articles by keyword or MeSH term.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -155,7 +155,7 @@ func (t *PubMedTool) registerCapabilities() {
 	// Capability 2: get_article_details
 	// Auto-generated endpoint: /api/capabilities/get_article_details
 	t.RegisterCapability(core.Capability{
-		Name: "get_article_details",
+		Name:        "get_article_details",
 		Description: "Retrieves detailed metadata for specific PubMed articles by their PMIDs.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -181,7 +181,7 @@ func (t *PubMedTool) registerCapabilities() {
 	// Capability 3: get_citations
 	// Auto-generated endpoint: /api/capabilities/get_citations
 	t.RegisterCapability(core.Capability{
-		Name: "get_citations",
+		Name:        "get_citations",
 		Description: "Finds articles that cite a given PubMed article.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},

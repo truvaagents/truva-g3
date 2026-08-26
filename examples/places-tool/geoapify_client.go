@@ -27,9 +27,9 @@ type geoapifySearchResponse struct {
 }
 
 type geoapifyFeature struct {
-	Type       string              `json:"type"`
-	Properties geoapifyProperties  `json:"properties"`
-	Geometry   geoapifyGeometry    `json:"geometry"`
+	Type       string             `json:"type"`
+	Properties geoapifyProperties `json:"properties"`
+	Geometry   geoapifyGeometry   `json:"geometry"`
 }
 
 type geoapifyProperties struct {

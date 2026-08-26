@@ -62,8 +62,8 @@ type FDAAdverseEventResponse struct {
 // FDAAdverseEvent represents a single adverse event from the raw API
 type FDAAdverseEvent struct {
 	SafetyReportID string     `json:"safetyreportid"`
-	ReceiveDate    string     `json:"receivedate"`  // YYYYMMDD
-	Serious        string     `json:"serious"`      // "1" or "2" (STRING)
+	ReceiveDate    string     `json:"receivedate"` // YYYYMMDD
+	Serious        string     `json:"serious"`     // "1" or "2" (STRING)
 	Patient        FDAPatient `json:"patient"`
 }
 
@@ -177,8 +177,8 @@ type FDAOpenFDADevice struct {
 
 // FDADevicePatient represents patient outcome in device events
 type FDADevicePatient struct {
-	PatientSequenceNumber  string   `json:"patient_sequence_number,omitempty"`
-	SequenceNumberOutcome  []string `json:"sequence_number_outcome,omitempty"` // e.g., ["Death", "Hospitalization"]
+	PatientSequenceNumber string   `json:"patient_sequence_number,omitempty"`
+	SequenceNumberOutcome []string `json:"sequence_number_outcome,omitempty"` // e.g., ["Death", "Hospitalization"]
 }
 
 // FDAMDRText represents the MDR text narrative

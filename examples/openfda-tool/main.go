@@ -67,10 +67,10 @@ func main() {
 
 	// Display startup information
 	tool.Logger.Info("OpenFDA Tool Service Starting", map[string]interface{}{
-		"operation": "startup",
-		"service":   "openfda-tool",
-		"port":      port,
-		"telemetry": "enabled",
+		"operation":   "startup",
+		"service":     "openfda-tool",
+		"port":        port,
+		"telemetry":   "enabled",
 		"has_api_key": os.Getenv("OPENFDA_API_KEY") != "",
 	})
 

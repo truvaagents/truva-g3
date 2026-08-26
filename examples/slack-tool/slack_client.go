@@ -37,7 +37,7 @@ type ResponseMetadata struct {
 type SlackPostMessageResponse struct {
 	SlackResponse
 	Channel string       `json:"channel"`
-	TS      string       `json:"ts"`      // Timestamp (STRING) = unique message ID
+	TS      string       `json:"ts"` // Timestamp (STRING) = unique message ID
 	Message *SlackPosted `json:"message,omitempty"`
 }
 
@@ -93,7 +93,7 @@ type SlackSearchMatch struct {
 	Channel   SlackSearchChannel `json:"channel"`
 	Text      string             `json:"text"`
 	Username  string             `json:"username"`
-	TS        string             `json:"ts"`        // Timestamp STRING = message ID
+	TS        string             `json:"ts"` // Timestamp STRING = message ID
 	Permalink string             `json:"permalink"`
 }
 
@@ -247,7 +247,7 @@ func (c *SlackClient) PostBlockMessage(ctx context.Context, channel, text string
 
 	payload := map[string]interface{}{
 		"channel": channel,
-		"text":    text,   // Fallback text, required even with blocks
+		"text":    text, // Fallback text, required even with blocks
 		"blocks":  blocks,
 	}
 

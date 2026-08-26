@@ -684,7 +684,7 @@ func (r *ResearchAgent) handleFinancialAnalysis(rw http.ResponseWriter, req *htt
 			if r.Logger != nil {
 				r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
 					"operation":    "financial_analysis",
-					"request_id":  requestID,
+					"request_id":   requestID,
 					"error":        pe.Error(),
 					"error_type":   "provider_client_error",
 					"status_code":  pe.StatusCode(),
@@ -881,7 +881,7 @@ func (r *ResearchAgent) handleSentimentAnalysis(rw http.ResponseWriter, req *htt
 			if r.Logger != nil {
 				r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
 					"operation":    "sentiment_analysis",
-					"request_id":  requestID,
+					"request_id":   requestID,
 					"error":        pe.Error(),
 					"error_type":   "provider_client_error",
 					"status_code":  pe.StatusCode(),
@@ -1077,7 +1077,7 @@ func (r *ResearchAgent) handleComparativeAnalysis(rw http.ResponseWriter, req *h
 			if r.Logger != nil {
 				r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
 					"operation":    "comparative_analysis",
-					"request_id":  requestID,
+					"request_id":   requestID,
 					"error":        pe.Error(),
 					"error_type":   "provider_client_error",
 					"status_code":  pe.StatusCode(),
@@ -1481,7 +1481,7 @@ func (r *ResearchAgent) handleMathAnalysis(rw http.ResponseWriter, req *http.Req
 			if r.Logger != nil {
 				r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
 					"operation":    "math_analysis",
-					"request_id":  requestID,
+					"request_id":   requestID,
 					"error":        pe.Error(),
 					"error_type":   "provider_client_error",
 					"status_code":  pe.StatusCode(),

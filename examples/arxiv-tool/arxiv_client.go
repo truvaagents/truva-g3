@@ -28,10 +28,10 @@ const (
 // AtomFeed represents the top-level <feed> element in the arXiv Atom response.
 // Contains OpenSearch pagination metadata and a list of Entry elements.
 type AtomFeed struct {
-	XMLName xml.Name    `xml:"http://www.w3.org/2005/Atom feed"`
-	Title   string      `xml:"http://www.w3.org/2005/Atom title"`
-	ID      string      `xml:"http://www.w3.org/2005/Atom id"`
-	Updated string      `xml:"http://www.w3.org/2005/Atom updated"`
+	XMLName xml.Name `xml:"http://www.w3.org/2005/Atom feed"`
+	Title   string   `xml:"http://www.w3.org/2005/Atom title"`
+	ID      string   `xml:"http://www.w3.org/2005/Atom id"`
+	Updated string   `xml:"http://www.w3.org/2005/Atom updated"`
 
 	// OpenSearch namespace elements for pagination metadata
 	TotalResults int `xml:"http://a9.com/-/spec/opensearch/1.1/ totalResults"`

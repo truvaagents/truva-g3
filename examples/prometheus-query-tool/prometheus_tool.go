@@ -98,19 +98,19 @@ type AlertGroup struct {
 
 // GetAlertsResponse represents the output for listing alerts
 type GetAlertsResponse struct {
-	Groups     []AlertGroup `json:"groups"`
-	TotalAlerts int         `json:"total_alerts"`
-	Source     string       `json:"source"`
+	Groups      []AlertGroup `json:"groups"`
+	TotalAlerts int          `json:"total_alerts"`
+	Source      string       `json:"source"`
 }
 
 // TargetInfo represents a single scrape target
 type TargetInfo struct {
-	Labels         map[string]string `json:"labels"`
-	ScrapeURL      string            `json:"scrape_url"`
-	Health         string            `json:"health"` // "up", "down", "unknown"
-	LastError      string            `json:"last_error,omitempty"`
-	LastScrape     string            `json:"last_scrape"`
-	LastScrapeDur  float64           `json:"last_scrape_duration_seconds"`
+	Labels        map[string]string `json:"labels"`
+	ScrapeURL     string            `json:"scrape_url"`
+	Health        string            `json:"health"` // "up", "down", "unknown"
+	LastError     string            `json:"last_error,omitempty"`
+	LastScrape    string            `json:"last_scrape"`
+	LastScrapeDur float64           `json:"last_scrape_duration_seconds"`
 }
 
 // GetTargetsResponse represents the output for listing scrape targets

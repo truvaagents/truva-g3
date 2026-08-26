@@ -254,8 +254,8 @@ func (p *PrometheusTool) handleQueryMetrics(rw http.ResponseWriter, r *http.Requ
 			if err != nil {
 				p.Logger.ErrorWithContext(ctx, "Failed to parse sample value", map[string]interface{}{
 					"operation": "query_metrics",
-					"error":    err.Error(),
-					"metric":   fmt.Sprintf("%v", vr.Metric),
+					"error":     err.Error(),
+					"metric":    fmt.Sprintf("%v", vr.Metric),
 				})
 				continue // Skip unparseable samples rather than failing the whole request
 			}
@@ -666,10 +666,10 @@ func (p *PrometheusTool) handleGetAlerts(rw http.ResponseWriter, r *http.Request
 	}
 
 	p.Logger.InfoWithContext(ctx, "Prometheus API call successful", map[string]interface{}{
-		"operation":    "get_alerts",
-		"alert_count":  len(alertsData.Alerts),
-		"duration_ms":  apiDuration.Milliseconds(),
-		"request_id":   upstreamRequestID,
+		"operation":   "get_alerts",
+		"alert_count": len(alertsData.Alerts),
+		"duration_ms": apiDuration.Milliseconds(),
+		"request_id":  upstreamRequestID,
 	})
 
 	// 10. Convert to response format
@@ -850,23 +850,23 @@ func (p *PrometheusTool) handleGetTargets(rw http.ResponseWriter, r *http.Reques
 	}
 
 	p.Logger.InfoWithContext(ctx, "Prometheus API call successful", map[string]interface{}{
-		"operation":       "get_targets",
-		"active_count":    len(targetsData.ActiveTargets),
-		"dropped_count":   len(targetsData.DroppedTargets),
-		"duration_ms":     apiDuration.Milliseconds(),
-		"request_id":      upstreamRequestID,
+		"operation":     "get_targets",
+		"active_count":  len(targetsData.ActiveTargets),
+		"dropped_count": len(targetsData.DroppedTargets),
+		"duration_ms":   apiDuration.Milliseconds(),
+		"request_id":    upstreamRequestID,
 	})
 
 	// 10. Convert to response format
 	activeTargets := make([]TargetInfo, len(targetsData.ActiveTargets))
 	for i, t := range targetsData.ActiveTargets {
 		activeTargets[i] = TargetInfo{
-			Labels:         t.Labels,
-			ScrapeURL:      t.ScrapeURL,
-			Health:         t.Health,
-			LastError:      t.LastError,
-			LastScrape:     t.LastScrape,
-			LastScrapeDur:  t.LastScrapeDuration,
+			Labels:        t.Labels,
+			ScrapeURL:     t.ScrapeURL,
+			Health:        t.Health,
+			LastError:     t.LastError,
+			LastScrape:    t.LastScrape,
+			LastScrapeDur: t.LastScrapeDuration,
 		}
 	}
 

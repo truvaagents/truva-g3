@@ -22,9 +22,9 @@ type vectorKnowledgeSearcher interface {
 
 // Error codes
 const (
-	ErrCodeInvalidRequest     = "INVALID_REQUEST"
-	ErrCodeMissingField       = "MISSING_FIELD"
-	ErrCodeBackendError = "BACKEND_ERROR"
+	ErrCodeInvalidRequest = "INVALID_REQUEST"
+	ErrCodeMissingField   = "MISSING_FIELD"
+	ErrCodeBackendError   = "BACKEND_ERROR"
 )
 
 // ---------------------------------------------------------------------------

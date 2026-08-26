@@ -15,7 +15,7 @@ type ArxivTool struct {
 
 // SearchPapersRequest represents the input for paper search requests
 type SearchPapersRequest struct {
-	Query      string `json:"query"`                // Required: search query (e.g., "transformer attention mechanism")
+	Query      string `json:"query"`                 // Required: search query (e.g., "transformer attention mechanism")
 	Category   string `json:"category,omitempty"`    // Optional: arXiv category filter (e.g., "cs.AI")
 	MaxResults int    `json:"max_results,omitempty"` // Optional: max results 1-30000, default 10
 	SortBy     string `json:"sort_by,omitempty"`     // Optional: relevance, lastUpdatedDate, submittedDate
@@ -34,19 +34,19 @@ type RecentPapersRequest struct {
 
 // PaperResult represents a single arXiv paper in the JSON response
 type PaperResult struct {
-	ArxivID         string   `json:"arxiv_id"`                  // e.g., "2301.07041v2"
-	Title           string   `json:"title"`                     // Paper title (whitespace-normalized)
-	Authors         []string `json:"authors"`                   // List of author names
-	Abstract        string   `json:"abstract"`                  // Paper abstract (whitespace-normalized)
-	Categories      []string `json:"categories"`                // All category terms (e.g., ["cs.AI", "cs.CL"])
-	PrimaryCategory string   `json:"primary_category"`          // Primary category term
-	PublishedDate   string   `json:"published_date"`            // ISO 8601 date string
-	UpdatedDate     string   `json:"updated_date"`              // ISO 8601 date string
-	PDFURL          string   `json:"pdf_url"`                   // Direct PDF link
-	AbsURL          string   `json:"abs_url"`                   // Abstract page URL
-	Comment         string   `json:"comment,omitempty"`         // Optional: author comment
-	JournalRef      string   `json:"journal_ref,omitempty"`     // Optional: journal reference
-	DOI             string   `json:"doi,omitempty"`             // Optional: DOI
+	ArxivID         string   `json:"arxiv_id"`              // e.g., "2301.07041v2"
+	Title           string   `json:"title"`                 // Paper title (whitespace-normalized)
+	Authors         []string `json:"authors"`               // List of author names
+	Abstract        string   `json:"abstract"`              // Paper abstract (whitespace-normalized)
+	Categories      []string `json:"categories"`            // All category terms (e.g., ["cs.AI", "cs.CL"])
+	PrimaryCategory string   `json:"primary_category"`      // Primary category term
+	PublishedDate   string   `json:"published_date"`        // ISO 8601 date string
+	UpdatedDate     string   `json:"updated_date"`          // ISO 8601 date string
+	PDFURL          string   `json:"pdf_url"`               // Direct PDF link
+	AbsURL          string   `json:"abs_url"`               // Abstract page URL
+	Comment         string   `json:"comment,omitempty"`     // Optional: author comment
+	JournalRef      string   `json:"journal_ref,omitempty"` // Optional: journal reference
+	DOI             string   `json:"doi,omitempty"`         // Optional: DOI
 }
 
 // SearchPapersResponse represents the output for paper search
@@ -86,7 +86,7 @@ func (a *ArxivTool) registerCapabilities() {
 	// Capability 1: Search Papers
 	// Auto-generated endpoint: /api/capabilities/search_papers
 	a.RegisterCapability(core.Capability{
-		Name: "search_papers",
+		Name:        "search_papers",
 		Description: "Searches arXiv preprints by query with optional category filter and sorting.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -136,7 +136,7 @@ func (a *ArxivTool) registerCapabilities() {
 	// Capability 2: Get Paper
 	// Auto-generated endpoint: /api/capabilities/get_paper
 	a.RegisterCapability(core.Capability{
-		Name: "get_paper",
+		Name:        "get_paper",
 		Description: "Gets detailed information for a specific arXiv paper by its ID.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
@@ -164,7 +164,7 @@ func (a *ArxivTool) registerCapabilities() {
 	// Capability 3: Recent Papers
 	// Auto-generated endpoint: /api/capabilities/recent_papers
 	a.RegisterCapability(core.Capability{
-		Name: "recent_papers",
+		Name:        "recent_papers",
 		Description: "Gets the most recently submitted papers in an arXiv category.",
 		InputTypes:  []string{"json"},
 		OutputTypes: []string{"json"},
