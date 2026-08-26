@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules (uses local core and telemetry)
 # Usage (from truvag3 root): docker build -f examples/prometheus-query-tool/Dockerfile.workspace -t prometheus-query-tool:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

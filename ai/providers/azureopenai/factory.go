@@ -32,12 +32,8 @@ func (*Factory) Description() string { return "Azure OpenAI" }
 func (*Factory) DetectEnvironment() (int, bool) { return 0, false }
 
 // Create is an unsupported direct-call-only path and always panics.
-func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-	client, err := f.CreateValidated(config)
-	if err != nil {
-		panic(fmt.Sprintf("create Azure OpenAI client: %v", err))
-	}
-	return client
+func (*Factory) Create(*ai.AIConfig) core.AIClient {
+	panic("create Azure OpenAI client: legacy construction is unsupported; use ai.NewRequestClient with an endpoint resolver")
 }
 
 // CreateValidated rejects legacy construction because a resolver is required.

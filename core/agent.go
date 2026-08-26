@@ -1036,7 +1036,7 @@ func applyConfigToComponent(component HTTPComponent, config *Config) {
 
 	// If direct assertion failed, use reflection to find embedded BaseAgent or BaseTool
 	v := reflect.ValueOf(component)
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return // Component must be a pointer
 	}
 
@@ -1189,7 +1189,7 @@ func findEmbeddedBaseAgent(component interface{}) *BaseAgent {
 	// Reflection walk for embedded *BaseAgent — matches the production
 	// pattern used by the agent examples.
 	v := reflect.ValueOf(component)
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return nil
 	}
 	v = v.Elem()

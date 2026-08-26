@@ -27,7 +27,7 @@ A `BaseTool` that exposes **delayed and recurring task scheduling** to any Truva
 | **Docker Desktop** | Latest | [Download](https://www.docker.com/products/docker-desktop/) | [Download](https://www.docker.com/products/docker-desktop/) |
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
-| **Go** | 1.25+ | `brew install go` | `choco install golang` |
+| **Go** | 1.27+ | `brew install go` | `choco install golang` |
 
 > **Note:** The scheduler-tool has no API keys -- it only needs Redis for schedule persistence, task dispatch, and service discovery.
 

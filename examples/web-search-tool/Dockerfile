@@ -1,6 +1,6 @@
 # Production Dockerfile for web-search-tool
 # Uses published modules from GitHub
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 

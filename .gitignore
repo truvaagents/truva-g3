@@ -74,6 +74,13 @@ examples/*/[a-z]*-[a-z]*-[a-z]*-[a-z]*
 !examples/*/.gitignore
 !examples/*/nginx.conf
 
+# Nested source modules whose hyphenated directory names match the binary rules above.
+# Keep their generated binaries ignored explicitly.
+!examples/openclaw-tool/mock-openclaw/
+examples/openclaw-tool/mock-openclaw/openclaw-mock
+!examples/mock-services/enterprise-ollama-gateway/
+examples/mock-services/enterprise-ollama-gateway/enterprise-ollama-gateway
+
 # Screenshots (local testing artifacts)
 Screenshot *.png
 

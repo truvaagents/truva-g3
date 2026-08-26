@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/scheduled-executor
 
-go 1.26.4
+go 1.27.0
 
 require (
 	github.com/redis/go-redis/v9 v9.22.0

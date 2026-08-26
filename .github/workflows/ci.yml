@@ -61,9 +61,10 @@ jobs:
         with:
           go-version-file: go.work
       - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+          install-only: true
       - name: Lint all workspace modules
         run: |
           set -e

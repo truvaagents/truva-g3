@@ -39,7 +39,7 @@ Running this example locally is the best way to understand how the TruvaG3 frame
 
 ### Prerequisites
 
-This agent needs the standard TruvaG3 local-dev toolchain (Docker, Kind, kubectl, Go ≥ 1.26) plus an AI provider API key. If you haven't set these up yet, follow **[Prerequisites in GETTING_STARTED.md](../../GETTING_STARTED.md#1-prerequisites)** — it has full macOS/Linux install instructions, a Podman alternative, a verification script, and an optional Kubernetes UI section.
+This agent needs the standard TruvaG3 local-dev toolchain (Docker, Kind, kubectl, Go ≥ 1.27) plus an AI provider API key. If you haven't set these up yet, follow **[Prerequisites in GETTING_STARTED.md](../../GETTING_STARTED.md#1-prerequisites)** — it has full macOS/Linux install instructions, a Podman alternative, a verification script, and an optional Kubernetes UI section.
 
 **Quick install (macOS):**
 

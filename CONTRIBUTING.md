@@ -83,7 +83,7 @@ By participating in this project, you agree to abide by our Code of Conduct:
 
 ### Prerequisites
 
-- **Go 1.26.6 or higher** (the module is pinned to `go 1.26.6` in `go.mod`)
+- **Go 1.27.0 or higher** (every framework module is pinned to `go 1.27.0`)
 - **Docker** (recommended) for running the in-tree Redis/Valkey backend used by integration tests and example deployments
 - **kind** (Kubernetes-in-Docker) for running the example multi-agent system locally
 
@@ -365,7 +365,7 @@ Do not include AI/assistant attribution lines (`Co-Authored-By: <bot>`, "Generat
 3. **Run Pre-commit Gates**: All gates listed in [Pre-commit Gates](#pre-commit-gates) must pass locally.
 4. **Pass CI**: The repository runs four jobs on every PR:
    - **test** — `go build ./...` + `go test -race -coverprofile=coverage.out -covermode=atomic ./...` across the root module and each sub-module (`ai`, `core`, `memory`, `orchestration`, `resilience`, `telemetry`)
-   - **lint** — `golangci-lint` (currently pinned to v2.11.4 in [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+   - **lint** — `golangci-lint` (currently pinned to v2.13.1 in [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
    - **vuln** — `govulncheck` against the current dependency tree
    - **examples** — build-only smoke check on every example to catch framework changes that break consumers
 5. **Mark Ready for Review** once CI is green.

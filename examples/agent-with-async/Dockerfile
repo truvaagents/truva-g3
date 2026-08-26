@@ -2,7 +2,7 @@
 # This Dockerfile builds the agent independently without workspace dependencies
 # Usage (from agent-with-async directory): docker build -t async-travel-agent:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

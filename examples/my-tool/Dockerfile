@@ -2,7 +2,7 @@
 # Use this when building OUTSIDE the truvag3 workspace (e.g., from a published version of core/telemetry).
 # For local development, prefer Dockerfile.workspace which uses local module sources.
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 WORKDIR /app
 COPY go.mod go.sum* ./

@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules (includes local fixes)
 # Usage (from truvag3 root): docker build -f examples/devops-chat-agent/Dockerfile.workspace -t devops-chat-agent:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 # Install build dependencies (CGO disabled, so no C toolchain needed)
 RUN apk add --no-cache git ca-certificates

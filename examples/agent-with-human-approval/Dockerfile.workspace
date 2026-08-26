@@ -2,7 +2,7 @@
 # This Dockerfile builds with LOCAL modules using go.work (Go workspaces)
 # Usage (from truvag3 root): docker build -f examples/agent-with-human-approval/Dockerfile.workspace -t agent-with-human-approval:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
@@ -20,7 +20,7 @@ COPY resilience/ ./resilience/
 COPY examples/agent-with-human-approval/ ./examples/agent-with-human-approval/
 
 # Create go.work to use local modules (Go workspace best practice)
-RUN echo 'go 1.26.4' > go.work && \
+RUN echo 'go 1.27.0' > go.work && \
     echo '' >> go.work && \
     echo 'use (' >> go.work && \
     echo '    ./ai' >> go.work && \

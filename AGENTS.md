@@ -64,7 +64,7 @@ before considering the change done: `go vet`, `go build ./...`, `go test ./...`,
 `goimports`, `golangci-lint run`, `gosec`, `govulncheck`. Partial passes are not
 acceptable. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-This is a Go workspace (`go.work`); the framework requires **Go 1.26+**.
+This is a Go workspace (`go.work`); the framework requires **Go 1.27+**.
 
 ## Conventions
 

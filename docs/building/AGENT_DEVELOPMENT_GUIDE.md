@@ -1828,7 +1828,7 @@ modules: `ai`, `core`, `orchestration`, and `telemetry`.
 ```go
 module github.com/truvaagents/truva-g3/examples/your-agent
 
-go 1.26.6
+go 1.27.0
 
 require (
     github.com/google/uuid v1.6.0

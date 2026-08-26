@@ -50,13 +50,13 @@ func normalizedUsageFromGemini(usage UsageMetadata) normalizedUsage {
 
 func (usage normalizedUsage) coreUsage() (core.TokenUsage, *core.AIUsageDetails) {
 	return core.TokenUsage{
-			PromptTokens:     usage.Input,
-			CompletionTokens: usage.Output,
-			TotalTokens:      usage.Total,
-		}, &core.AIUsageDetails{
-			CachedInputTokens: usage.CachedInput,
-			ReasoningTokens:   usage.Reasoning,
-		}
+		PromptTokens:     usage.Input,
+		CompletionTokens: usage.Output,
+		TotalTokens:      usage.Total,
+	}, &core.AIUsageDetails{
+		CachedInputTokens: usage.CachedInput,
+		ReasoningTokens:   usage.Reasoning,
+	}
 }
 
 func (profile wireProfile) decodeBuffered(body io.Reader, requestedModel string) (*decodedResponse, error) {

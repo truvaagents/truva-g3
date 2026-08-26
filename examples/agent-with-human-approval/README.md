@@ -35,7 +35,7 @@ Running this example locally is the best way to see HITL checkpoints, approval f
 | **Docker Desktop** | Latest | [Download](https://www.docker.com/products/docker-desktop/) | [Download](https://www.docker.com/products/docker-desktop/) |
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
-| **Go** | 1.26+ | `brew install go` | `choco install golang` |
+| **Go** | 1.27+ | `brew install go` | `choco install golang` |
 | **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [OpenRouter](https://openrouter.ai/settings/keys), or [Groq](https://console.groq.com/keys) | Same as macOS |
 
 > **Note:** This agent serves as the backend for the [chat-ui](../chat-ui/) example (HITL view at `http://chat.localhost/hitl.html`). While the agent can be exercised standalone via curl / the REST API, the chat-ui's approval dialog makes the demo much easier to follow.
