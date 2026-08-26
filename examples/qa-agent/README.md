@@ -30,7 +30,7 @@ A backend autonomous agent that explores websites, generates Playwright test scr
 | **Docker Desktop** | Latest | [Download](https://www.docker.com/products/docker-desktop/) | [Download](https://www.docker.com/products/docker-desktop/) |
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
-| **Go** | 1.25+ | `brew install go` | `choco install golang` |
+| **Go** | 1.27+ | `brew install go` | `choco install golang` |
 | **AI Provider API Key** | - | At least one: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [OpenRouter](https://openrouter.ai/settings/keys), or [Groq](https://console.groq.com/keys) | Same as macOS |
 
 > **Note:** The qa-agent is a backend agent — it does not have a chat UI. Interact with it via its REST API or trigger it through event-driven integrations.

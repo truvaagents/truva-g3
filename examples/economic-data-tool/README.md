@@ -303,7 +303,7 @@ brew install go
 **Verify installation:**
 ```bash
 go version
-# Expected: go version go1.26.x darwin/arm64 (or darwin/amd64)
+# Expected: go version go1.27.x darwin/arm64 (or darwin/amd64)
 ```
 
 </details>
@@ -319,7 +319,7 @@ choco install golang
 **Verify installation:**
 ```powershell
 go version
-# Expected: go version go1.26.x windows/amd64
+# Expected: go version go1.27.x windows/amd64
 ```
 
 </details>
@@ -329,16 +329,16 @@ go version
 
 **Manual installation (recommended for latest version):**
 ```bash
-curl -LO https://go.dev/dl/go1.26.4.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.4.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 ```
 
 **Verify installation:**
 ```bash
 go version
-# Expected: go version go1.26.x linux/amd64
+# Expected: go version go1.27.x linux/amd64
 ```
 
 </details>

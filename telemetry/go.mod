@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/telemetry
 
-go 1.26.4
+go 1.27.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0

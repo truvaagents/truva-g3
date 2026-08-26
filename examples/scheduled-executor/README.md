@@ -26,7 +26,7 @@ This is an internal coordinator, not an LLM-facing agent. It does not expose dom
 | **Docker Desktop** | Latest | [Download](https://www.docker.com/products/docker-desktop/) | [Download](https://www.docker.com/products/docker-desktop/) |
 | **Kind** | v0.20+ | `brew install kind` | `choco install kind` |
 | **kubectl** | v1.28+ | `brew install kubectl` | `choco install kubernetes-cli` |
-| **Go** | 1.25+ | `brew install go` | `choco install golang` |
+| **Go** | 1.27+ | `brew install go` | `choco install golang` |
 
 > **Note:** The scheduled-executor has no API keys -- it only needs Redis for task consumption and service discovery. No AI provider required.
 

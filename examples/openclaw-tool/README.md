@@ -244,6 +244,7 @@ openclaw-tool/
 ├── setup.sh              # build + deploy + smoke-test
 ├── Dockerfile            # adapter image
 ├── Dockerfile.workspace  # adapter image built from the repo root (local module replaces)
+├── mock-openclaw/        # small Go test double for the unavailable gateway image
 ├── .env.example          # environment template
 ├── ANALYSIS.md           # full design & analysis
 └── README.md             # this file

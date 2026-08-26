@@ -45,7 +45,7 @@ Local dev without Kubernetes:
 
 ## Prerequisites
 
-- **Go 1.26.4** (both workspace and standalone Docker builds use it).
+- **Go 1.27.0** (both workspace and standalone Docker builds use it).
 - **Docker** for the local Redis container and for image builds.
 - **Kind** + **kubectl** for the Kubernetes path.
 - An **AI provider key** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,

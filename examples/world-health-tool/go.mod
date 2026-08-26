@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/world-health-tool
 
-go 1.26.4
+go 1.27.0
 
 require (
 	github.com/truvaagents/truva-g3/core v0.3.0

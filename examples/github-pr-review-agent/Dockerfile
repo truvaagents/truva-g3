@@ -3,7 +3,7 @@
 # Usage (from github-pr-review-agent directory):
 #   docker build -t github-pr-review-agent:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 # Build dependencies (CGO disabled, so no C toolchain needed)
 RUN apk add --no-cache git ca-certificates

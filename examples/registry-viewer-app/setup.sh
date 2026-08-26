@@ -86,7 +86,7 @@ check_prerequisites() {
     # Check Go
     if ! command -v go &> /dev/null; then
         log_error "Go is not installed"
-        echo "Please install Go 1.26+ from https://golang.org/dl/"
+        echo "Please install Go 1.27+ from https://golang.org/dl/"
         exit 1
     fi
     log_success "Go installed: $(go version)"

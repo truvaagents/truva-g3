@@ -12,10 +12,10 @@ own `setup.sh`, `k8-deployment.yaml`, and a `Dockerfile` (a few use
 example takes configuration — static UIs like `chat-ui` have none. A few
 directories are **shared/support infrastructure, not directly runnable** and have
 no top-level `setup.sh` — e.g. `k8-deployment/` (the shared deploy helper sourced
-by every example), `mock-services/` (shared mock backends that paired examples
-deploy as test dependencies — `grocery-store-api` for `agent-with-resilience` /
-`grocery-tool`, `product-catalog-api` for `event-driven-agent` / `my-async-agent`;
-see [mock-services/AGENTS.md](mock-services/AGENTS.md)), and `slack-gateway/`
+by every example), `mock-services/` (shared mock backends and local simulators —
+`grocery-store-api` for `agent-with-resilience` / `grocery-tool`,
+`product-catalog-api` for `event-driven-agent` / `my-async-agent`, and the local-only
+`enterprise-ollama-gateway`; see [mock-services/AGENTS.md](mock-services/AGENTS.md)), and `slack-gateway/`
 (a guide only). To run a runnable example, `cd` into it and
 use **its** `setup.sh` — never hand-run the image build
 (`docker build`/`podman build`), `kind load`, or `kubectl apply` to deploy. The script orders the

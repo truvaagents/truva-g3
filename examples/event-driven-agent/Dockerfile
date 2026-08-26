@@ -1,7 +1,7 @@
 # Standalone Dockerfile for event-driven-agent
 # Usage (from event-driven-agent directory): docker build -t event-driven-agent:latest .
 
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
