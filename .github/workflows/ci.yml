@@ -53,15 +53,28 @@ jobs:
               exit 1
             fi
 
-            module_name="${module_path#github.com/truvaagents/truva-g3/}"
-            release_tag="${module_name}/${module_version}"
-            if git ls-remote --exit-code --tags "$repository_url" "refs/tags/${release_tag}" >/dev/null 2>&1; then
-              echo "::error::go.work still replaces ${module_path} ${module_version}, but ${release_tag} is already published"
-              exit 1
+            if [[ "$module_path" == "github.com/truvaagents/truva-g3" ]]; then
+              release_tag="${module_version}"
+            else
+              module_name="${module_path#github.com/truvaagents/truva-g3/}"
+              release_tag="${module_name}/${module_version}"
             fi
+
+            git ls-remote --exit-code --tags "$repository_url" "refs/tags/${release_tag}" >/dev/null 2>&1 && ls_status=0 || ls_status=$?
+            case "$ls_status" in
+              0)
+                echo "::error::go.work still replaces ${module_path} ${module_version}, but ${release_tag} is already published"
+                exit 1
+                ;;
+              2) ;; # Tag is absent, so the bootstrap replacement remains valid.
+              *)
+                echo "::error::could not determine whether ${release_tag} is published (git ls-remote exited ${ls_status})"
+                exit 1
+                ;;
+            esac
           done < <(
             go work edit -json |
-              jq -r '.Replace[]? | select(.Old.Path | startswith("github.com/truvaagents/truva-g3/")) | [.Old.Path, (.Old.Version // "")] | @tsv'
+              jq -r '.Replace[]? | select(.Old.Path == "github.com/truvaagents/truva-g3" or (.Old.Path | startswith("github.com/truvaagents/truva-g3/"))) | [.Old.Path, (.Old.Version // "")] | @tsv'
           )
 
   test:
