@@ -865,9 +865,9 @@ If you have an existing agent based on [agent-example](../agent-example), follow
 **go.mod**:
 ```go
 require (
-    github.com/truvaagents/truva-g3/core v0.6.5
-    github.com/truvaagents/truva-g3/ai v0.6.5
-    github.com/truvaagents/truva-g3/telemetry v0.6.5  // Add this
+    github.com/truvaagents/truva-g3/core v0.4.0
+    github.com/truvaagents/truva-g3/ai v0.4.0
+    github.com/truvaagents/truva-g3/telemetry v0.4.0  // Add this
 )
 ```
 

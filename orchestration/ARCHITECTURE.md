@@ -209,8 +209,8 @@ Applications wire memory implementations into orchestration hooks at startup.
 module github.com/truvaagents/truva-g3/orchestration
 
 require (
-    github.com/truvaagents/truva-g3/core v0.1.0
-    github.com/truvaagents/truva-g3/telemetry v0.1.0  // Allowed for observability
+    github.com/truvaagents/truva-g3/core v0.4.0
+    github.com/truvaagents/truva-g3/telemetry v0.4.0  // Allowed for observability
     // NO direct imports of ai or resilience modules
 )
 ```
