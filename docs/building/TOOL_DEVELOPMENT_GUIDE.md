@@ -1106,9 +1106,9 @@ module github.com/truvaagents/truva-g3/examples/your-tool
 go 1.27.0
 
 require (
-    github.com/truvaagents/truva-g3/core v0.9.1
-    github.com/truvaagents/truva-g3/telemetry v0.9.1
-    go.opentelemetry.io/otel v1.38.0
+    github.com/truvaagents/truva-g3/core v0.4.0
+    github.com/truvaagents/truva-g3/telemetry v0.4.0
+    go.opentelemetry.io/otel v1.45.0
 )
 
 // Use local workspace modules for development
@@ -1118,7 +1118,9 @@ replace (
 )
 ```
 
-> **Note:** The `require` versions (e.g., `v0.9.1`) don't matter when `replace` directives are active — Go uses the local paths. The versions are there for when the module is consumed from a registry without replace directives.
+> **Note:** The `replace` directives make local development use the workspace
+> copies. The declared versions still matter for standalone builds, including
+> the Dockerfile below, so they must name published framework releases.
 
 ### Dockerfile (standalone)
 
