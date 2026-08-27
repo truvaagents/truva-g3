@@ -9,8 +9,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.0
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/truvaagents/truva-g3/core v0.3.0
-	github.com/truvaagents/truva-g3/telemetry v0.3.0
+	github.com/truvaagents/truva-g3/core v0.4.0
+	github.com/truvaagents/truva-g3/telemetry v0.4.0
 	go.opentelemetry.io/otel v1.45.0
 )
 

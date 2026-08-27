@@ -2,7 +2,7 @@ module github.com/truvaagents/truva-g3
 
 go 1.27.0
 
-require github.com/truvaagents/truva-g3/core v0.3.0
+require github.com/truvaagents/truva-g3/core v0.4.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
