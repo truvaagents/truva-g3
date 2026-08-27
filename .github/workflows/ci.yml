@@ -21,6 +21,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-state:
+    name: release state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - name: Verify local workspace resolution and release bootstraps
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r workspace_dir; do
+            module_path="$(cd "$workspace_dir" && GOWORK=off go list -m -f '{{.Path}}')"
+            resolved_dir="$(go list -m -f '{{.Dir}}' "$module_path")"
+            resolved_dir="$(cd "$resolved_dir" && pwd -P)"
+            expected_dir="$(cd "$workspace_dir" && pwd -P)"
+            if [[ "$resolved_dir" != "$expected_dir" ]]; then
+              echo "::error::${module_path} resolved to ${resolved_dir}; expected local workspace directory ${expected_dir}"
+              exit 1
+            fi
+          done < <(go work edit -json | jq -r '.Use[].DiskPath')
+
+          repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
+          while IFS=$'\t' read -r module_path module_version; do
+            [[ -n "$module_path" ]] || continue
+            if [[ -z "$module_version" ]]; then
+              echo "::error::first-party workspace replacement for ${module_path} must be version-scoped"
+              exit 1
+            fi
+
+            module_name="${module_path#github.com/truvaagents/truva-g3/}"
+            release_tag="${module_name}/${module_version}"
+            if git ls-remote --exit-code --tags "$repository_url" "refs/tags/${release_tag}" >/dev/null 2>&1; then
+              echo "::error::go.work still replaces ${module_path} ${module_version}, but ${release_tag} is already published"
+              exit 1
+            fi
+          done < <(
+            go work edit -json |
+              jq -r '.Replace[]? | select(.Old.Path | startswith("github.com/truvaagents/truva-g3/")) | [.Old.Path, (.Old.Version // "")] | @tsv'
+          )
+
   test:
     name: test
     runs-on: ubuntu-latest
