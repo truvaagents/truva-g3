@@ -3,8 +3,8 @@ module github.com/truvaagents/truva-g3/resilience
 go 1.27.0
 
 require (
-	github.com/truvaagents/truva-g3/core v0.3.0
-	github.com/truvaagents/truva-g3/telemetry v0.3.0
+	github.com/truvaagents/truva-g3/core v0.4.0
+	github.com/truvaagents/truva-g3/telemetry v0.4.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/metric v1.45.0
 )

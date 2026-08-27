@@ -8,8 +8,8 @@ require (
 	github.com/qdrant/go-client v1.19.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/stretchr/testify v1.12.1
-	github.com/truvaagents/truva-g3/core v0.3.0
-	github.com/truvaagents/truva-g3/telemetry v0.3.0
+	github.com/truvaagents/truva-g3/core v0.4.0
+	github.com/truvaagents/truva-g3/telemetry v0.4.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0

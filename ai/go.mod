@@ -9,8 +9,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.57.4
 	github.com/aws/smithy-go v1.27.8
 	github.com/stretchr/testify v1.12.1
-	github.com/truvaagents/truva-g3/core v0.3.0
-	github.com/truvaagents/truva-g3/telemetry v0.3.0
+	github.com/truvaagents/truva-g3/core v0.4.0
+	github.com/truvaagents/truva-g3/telemetry v0.4.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
 )
