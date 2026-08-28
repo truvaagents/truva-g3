@@ -20,6 +20,8 @@ data:
   PORT: "8361"
   APP_ENV: "development"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+  JAEGER_QUERY_URL: "http://jaeger-query"
+  JAEGER_UI_URL: "http://jaeger.localhost"
   TRUVAG3_VIEWER_MEMORY_DOMAINS: "infrastructure"
   TRUVAG3_SKILLS_REDIS_DB: "9"
 ---
@@ -81,6 +83,16 @@ spec:
             configMapKeyRef:
               name: registry-viewer-config
               key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: JAEGER_QUERY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: JAEGER_QUERY_URL
+        - name: JAEGER_UI_URL
+          valueFrom:
+            configMapKeyRef:
+              name: registry-viewer-config
+              key: JAEGER_UI_URL
         - name: TRUVAG3_VIEWER_MEMORY_DOMAINS
           valueFrom:
             configMapKeyRef:

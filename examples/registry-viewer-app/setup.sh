@@ -234,6 +234,8 @@ deploy_k8s() {
         --from-literal=PORT="${APP_PORT}" \
         --from-literal=APP_ENV="${APP_ENV:-development}" \
         --from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}" \
+        --from-literal=JAEGER_QUERY_URL="${JAEGER_QUERY_URL:-http://jaeger-query}" \
+        --from-literal=JAEGER_UI_URL="${JAEGER_UI_URL:-http://jaeger.localhost}" \
         --from-literal=TRUVAG3_VIEWER_MEMORY_DOMAINS="${TRUVAG3_VIEWER_MEMORY_DOMAINS:-infrastructure}" \
         --from-literal=TRUVAG3_SKILLS_REDIS_DB="${TRUVAG3_SKILLS_REDIS_DB:-9}" \
         --dry-run=client -o yaml | kubectl apply -f -
@@ -504,6 +506,8 @@ Environment Variables:
                     Default: Extracted from ../k8-deployment/redis.yaml
                     (service name + port from Redis Service definition)
   REDIS_NAMESPACE   Redis key namespace (default: truvag3)
+  JAEGER_QUERY_URL  Jaeger Query base URL (default: http://jaeger-query)
+  JAEGER_UI_URL     Browser-facing Jaeger UI base URL (default: http://jaeger.localhost)
   DOCKER_NO_CACHE   Set to 'true' to build Docker with --no-cache
 
 Redis Configuration:
