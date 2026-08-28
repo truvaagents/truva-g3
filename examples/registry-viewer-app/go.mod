@@ -3,6 +3,7 @@ module github.com/truvaagents/truva-g3/examples/registry-viewer-app
 go 1.27.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/truvaagents/truva-g3/core v0.4.0
 	github.com/truvaagents/truva-g3/memory v0.4.0
@@ -21,6 +22,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/qdrant/go-client v1.18.3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect

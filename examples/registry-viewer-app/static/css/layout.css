@@ -2010,6 +2010,64 @@ tr.expandable td:nth-child(2)::before {
     color: var(--accent-teal);
     font-weight: 500;
 }
+
+/* HITL checkpoint details: neutral dark glass keeps nested content distinct
+   from status-tinted checkpoint cards without competing with status color. */
+.hitl-context-panel {
+    --hitl-context-accent: rgba(100, 210, 255, 0.72);
+    position: relative;
+    margin-top: 12px;
+    padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(4, 8, 14, 0.82) 0%, rgba(12, 17, 25, 0.68) 100%);
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+}
+.hitl-context-panel-decision {
+    --hitl-context-accent: rgba(255, 179, 64, 0.78);
+}
+.hitl-context-panel-step {
+    --hitl-context-accent: rgba(100, 210, 255, 0.78);
+}
+.hitl-context-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding-bottom: 10px;
+    margin-bottom: 11px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+}
+.hitl-context-title::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: var(--hitl-context-accent);
+    box-shadow: 0 0 8px var(--hitl-context-accent);
+}
+.hitl-context-grid {
+    margin-bottom: 0;
+}
+.hitl-context-grid .dag-step-label {
+    color: var(--text-muted);
+}
+.hitl-context-grid .dag-step-value {
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+.hitl-context-grid .dag-step-value.highlight {
+    color: var(--accent-teal);
+}
 .instruction-collapsible { width: 100%; }
 .instruction-text {
     white-space: pre-wrap;
@@ -2249,6 +2307,19 @@ tr.expandable td:nth-child(2)::before {
     border: 1px solid rgba(255, 255, 255, 0.08);
     font-size: 11px;
 }
+.dag-viz-meta-item.dag-viz-trace-link,
+.dag-viz-meta-item.dag-viz-trace-link:visited {
+    background: rgba(10, 132, 255, 0.2);
+    border-color: rgba(100, 210, 255, 0.5);
+    color: #f2f8ff;
+    text-decoration: none;
+}
+.dag-viz-meta-item.dag-viz-trace-link:hover,
+.dag-viz-meta-item.dag-viz-trace-link:focus-visible {
+    background: rgba(10, 132, 255, 0.34);
+    border-color: rgba(142, 220, 255, 0.8);
+    color: #ffffff;
+}
 .dag-viz-meta-item.success {
     background: rgba(50, 215, 75, 0.15);
     border-color: rgba(50, 215, 75, 0.4);
@@ -2375,6 +2446,12 @@ tr.expandable td:nth-child(2)::before {
     border: 2px dashed rgba(100, 210, 255, 0.6);
     box-shadow: 0 0 8px rgba(100, 210, 255, 0.4), 0 0 16px rgba(100, 210, 255, 0.15);
     color: rgba(100, 210, 255, 0.6);
+}
+.dag-legend-dot.implicit-dependency {
+    background: rgba(182, 133, 244, 0.15);
+    border: 2px dotted rgba(182, 133, 244, 0.75);
+    box-shadow: 0 0 8px rgba(182, 133, 244, 0.4), 0 0 16px rgba(182, 133, 244, 0.15);
+    color: rgba(182, 133, 244, 0.7);
 }
 .dag-phase-divider {
     background: linear-gradient(135deg, rgba(25, 25, 35, 0.6) 0%, rgba(15, 15, 22, 0.6) 100%);
