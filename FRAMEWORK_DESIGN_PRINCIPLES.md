@@ -1,6 +1,6 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.3
+**Version**: 1.6
 
 **Purpose**: Ensure consistency and maintainability across all framework development
 
@@ -111,6 +111,74 @@ agent.Run()                                // no way to replace one part without
 ```
 
 **Framework is domain-agnostic.** A corollary of "each module does its job" — the framework provides indexing primitives, storage interfaces, and hook contracts; **domain semantics come from the agent or its tools**. The framework has no opinion about what counts as a "pod", "order", "flight", or "patient". Hardcoding domain-specific patterns into framework defaults (e.g., a regex extractor that matches K8s pod names) is a layering violation: the framework default leaks into every agent regardless of whether it's actually a K8s agent. The right pattern is a framework-level no-op default that the agent or tool overrides with domain-aware logic. See [orchestration/ARCHITECTURE.md:367](orchestration/ARCHITECTURE.md#L367) for the same principle applied to parameter resolution.
+
+#### Payload Fidelity and Application Data Ownership
+
+The framework transports, executes, and records application data; it does not
+decide what that data means. An adopter must be able to inspect the exact input,
+output, error, and model interaction that passed through a local or deployed
+system. Framework-owned observability and persistence must therefore preserve
+application payload fidelity.
+
+1. **Do not silently rewrite application data.** Framework execution,
+   checkpoint, debug, persistence, and observability paths must not
+   automatically redact, mask, filter, summarize, or otherwise replace values
+   in application-owned parameters, prompts, model responses, tool responses,
+   final responses, metadata, or errors. A stored or displayed record must not
+   claim to represent an interaction while containing framework-altered
+   content.
+2. **Do not infer application secrets.** The framework must not maintain field
+   names, patterns, result codes, or heuristics that classify domain data as
+   sensitive. A value such as a proof, account reference, medical identifier,
+   or domain token has meaning only to the application that owns it.
+3. **Sanitization is adopter-owned behavior.** Applications that require
+   redaction or other data-loss prevention must apply it explicitly through
+   their chosen logger, telemetry pipeline, storage implementation, recorder,
+   middleware, or application processing hook. Existing injection interfaces
+   are the customization seam; the framework must not silently install a
+   sanitization policy on the adopter's behalf.
+4. **Configured transformation must be explicit.** If an adopter deliberately
+   supplies a transforming implementation, the transformation and its effect on
+   fidelity belong to that application configuration. A framework default must
+   remain identity-preserving.
+5. **Framework envelopes remain framework-owned.** Validation and normalization
+   of protocol fields such as request IDs, capability schemas, wire envelopes,
+   TTLs, and lifecycle state are still framework responsibilities. That does
+   not authorize mutation of the application payload carried by the envelope.
+6. **Raw debug persistence is an informed opt-in.** Built-in debug stores are
+   disabled by default where documented. When enabled, they preserve payloads
+   without application-specific redaction. Adopters are responsible for access
+   control, retention, encryption, and any required sanitizing store or recorder
+   before using those facilities with sensitive workloads.
+
+**Known transitional exceptions — pending dedicated audit.** Some framework
+call sites that predate this policy still transform error text automatically.
+The known categories are downstream tool/agent failure bodies and errors in the
+orchestration executor; skills AI errors returned by the authoring path or
+recorded for debugging; and selected Redis/provider construction or operational
+diagnostics. These are documented implementation facts, not approved extensions
+of the policy:
+
+- new persistence, execution, checkpoint, debug, or observability paths must
+  comply with the fidelity rules above immediately;
+- existing exception paths must not be copied, broadened, or treated as a
+  security guarantee for adopters;
+- `core.RedactSensitiveText` and `core.RedactSensitiveError` remain available as
+  explicit primitives, but framework defaults must not newly apply them to
+  application-owned content; and
+- removing the legacy calls requires a separate audit of retry decisions, Go
+  error identity, persisted evidence, returned observations, and log/trace
+  behavior. That audit must inventory every framework call site rather than
+  assuming the categories above are exhaustive.
+
+Until that audit is completed, documentation for an affected module must label
+the behavior as legacy and pending removal or redesign. It must not claim that
+the framework generally sanitizes adopter payloads or that adopters can rely on
+automatic redaction.
+
+Tests for execution and observability boundaries must assert this ownership:
+the value dispatched, the value returned, and the value recorded remain the
+same unless the test explicitly installs an adopter-provided transformation.
 
 #### Patterns That Endure
 
@@ -515,7 +583,15 @@ return fmt.Errorf("connection failed: %w", err)
 ## Security Considerations
 
 ### Secrets Management
-- Never log secrets or API keys
+- Framework code must not deliberately add framework-owned credentials to
+  logs, traces, errors, or persisted records.
+- Application payload classification and redaction belong to the adopter; the
+  framework must not guess which application fields are secrets or silently
+  alter application data at an observability boundary.
+- Built-in debug persistence may contain the exact application and model
+  payloads supplied to it. It must remain an informed opt-in, and its
+  documentation must state that the adopter owns access control, retention,
+  encryption, and sanitization requirements.
 - Support secret rotation without restart
 - Use secure defaults (TLS, authentication)
 
@@ -647,6 +723,9 @@ func (t *BaseTool) processRequest() {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6 | 2026-08-28 | Made the transitional redaction inventory explicitly include both returned skills-authoring AI errors and skills errors recorded for debugging |
+| 1.5 | 2026-08-28 | Recorded the narrowly scoped legacy error-redaction exceptions pending a dedicated audit without weakening the exact-payload end-state policy for new or modified paths |
+| 1.4 | 2026-08-28 | Established exact application-payload fidelity, prohibited framework-inferred domain secrets and automatic observability redaction, and assigned sanitization and debug-data controls to adopters |
 | 1.3 | 2026-08-20 | Defined application-composed circuit-breaker ownership across optional modules, per-dependency state isolation, and dependency-health classification boundaries |
 | 1.2 | 2026-08-09 | Defined the canonical framework-module DAG and extended its enforcement to production, test, and conformance code |
 | 1.1 | 2026-08-08 | Added safe-customization, invariant-boundary, and cache-identity principles |

@@ -2,6 +2,8 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,35 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+func TestRedisLLMDebugStore_PreservesApplicationPayloads(t *testing.T) {
+	_, store := setupRedisLLMDebugTestStore(t)
+	payload := "password=local-debug-value"
+	requestID := "req-payload-fidelity"
+	if err := store.RecordInteraction(context.Background(), requestID, LLMInteraction{
+		Type: "semantic_retry", Prompt: "prompt " + payload,
+		Response: "response " + payload, Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadata(context.Background(), requestID, "application_value", payload); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.GetRecord(context.Background(), requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), payload) || strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("redis debug record changed application payloads: %s", encoded)
+	}
+	if record.Metadata["application_value"] != payload {
+		t.Fatalf("redis debug metadata = %q, want %q", record.Metadata["application_value"], payload)
+	}
+}
 
 // setupRedisLLMDebugTestStore creates a RedisLLMDebugStore backed by
 // miniredis. Mirrors the pattern in hitl_checkpoint_store_test.go. No
@@ -31,6 +62,70 @@ func setupRedisLLMDebugTestStore(t *testing.T) (*miniredis.Miniredis, *RedisLLMD
 		errorTTL: 7 * 24 * time.Hour,
 	}
 	return mr, store
+}
+
+func TestRedisLLMDebugStoreOptionsNormalizeNonPositiveTTLs(t *testing.T) {
+	mr := miniredis.RunT(t)
+
+	ownedStore, err := NewRedisLLMDebugStore(
+		WithDebugRedisURL(mr.Addr()),
+		WithDebugTTL(0),
+		WithDebugErrorTTL(-time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewRedisLLMDebugStore: %v", err)
+	}
+	t.Cleanup(func() { _ = ownedStore.Close() })
+	if ownedStore.ttl != defaultDebugTTL || ownedStore.errorTTL != errorDebugTTL {
+		t.Fatalf(
+			"owned store TTLs = (%v, %v), want (%v, %v)",
+			ownedStore.ttl,
+			ownedStore.errorTTL,
+			defaultDebugTTL,
+			errorDebugTTL,
+		)
+	}
+
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	injectedStore, err := NewRedisLLMDebugStoreWithClient(
+		client,
+		WithDebugTTL(0),
+		WithDebugErrorTTL(-time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewRedisLLMDebugStoreWithClient: %v", err)
+	}
+	if injectedStore.ttl != defaultDebugTTL || injectedStore.errorTTL != errorDebugTTL {
+		t.Fatalf(
+			"injected store TTLs = (%v, %v), want (%v, %v)",
+			injectedStore.ttl,
+			injectedStore.errorTTL,
+			defaultDebugTTL,
+			errorDebugTTL,
+		)
+	}
+
+	for _, test := range []struct {
+		requestID string
+		success   bool
+		wantTTL   time.Duration
+	}{
+		{requestID: "normalized-success", success: true, wantTTL: defaultDebugTTL},
+		{requestID: "normalized-error", success: false, wantTTL: errorDebugTTL},
+	} {
+		if err := injectedStore.RecordInteraction(
+			context.Background(),
+			test.requestID,
+			LLMInteraction{Type: "test", Success: test.success},
+		); err != nil {
+			t.Fatalf("RecordInteraction(%s): %v", test.requestID, err)
+		}
+		metaKey := llmDebugKeyPrefix + test.requestID + llmDebugMetaSuffix
+		if got := mr.TTL(metaKey); got != test.wantTTL {
+			t.Fatalf("TTL(%s) = %v, want %v", metaKey, got, test.wantTTL)
+		}
+	}
 }
 
 // TestRedisLLMDebugStore_ListRecent_DedupeShadowsInSummary is the

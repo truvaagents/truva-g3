@@ -3,7 +3,9 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -341,6 +343,73 @@ func TestLLMDebugRedisWritersUseCompatibleConversationField(t *testing.T) {
 		if got := LLMDebugConversationID(record); got != "conversation-format" {
 			t.Fatalf("%s typed conversation ID = %q", requestID, got)
 		}
+	}
+}
+
+func TestLLMDebugRedisWritersShareMinimumRetentionContract(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	orchestrationStore := &RedisLLMDebugStore{
+		client:   redis.NewClient(&redis.Options{Addr: mr.Addr()}),
+		logger:   &core.NoOpLogger{},
+		ttl:      defaultDebugTTL,
+		errorTTL: errorDebugTTL,
+	}
+	recorder, err := telemetry.NewRedisLLMCallRecorder(
+		telemetry.WithRecorderRedisURL("redis://"+mr.Addr()),
+		telemetry.WithRecorderRedisDB(0),
+	)
+	if err != nil {
+		t.Fatalf("NewRedisLLMCallRecorder: %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+
+	const requestID = "request-shared-retention"
+	const promotedTTL = 14 * 24 * time.Hour
+	if err := orchestrationStore.PreserveRetention(
+		context.Background(),
+		requestID,
+		promotedTTL,
+	); err != nil {
+		t.Fatalf("establish retention floor: %v", err)
+	}
+	if _, err := orchestrationStore.GetRecord(context.Background(), requestID); !errors.Is(err, ErrLLMDebugRecordNotFound) {
+		t.Fatalf("retention floor created a visible record: %v", err)
+	}
+	if err := recorder.RecordLLMCall(
+		context.Background(),
+		requestID,
+		telemetry.LLMCallRecord{CallType: "agent_llm_call", Success: true},
+	); err != nil {
+		t.Fatalf("telemetry writer: %v", err)
+	}
+	if err := orchestrationStore.RecordInteraction(
+		context.Background(),
+		requestID,
+		LLMInteraction{Type: "plan_generation", Success: true},
+	); err != nil {
+		t.Fatalf("orchestration writer: %v", err)
+	}
+
+	for _, key := range []string{
+		llmDebugKeyPrefix + requestID + llmDebugFloorSuffix,
+		llmDebugKeyPrefix + requestID + llmDebugMetaSuffix,
+		llmDebugKeyPrefix + requestID + llmDebugInterSuffix,
+	} {
+		if got := mr.TTL(key); got != promotedTTL {
+			t.Fatalf("%s TTL = %v, want %v", key, got, promotedTTL)
+		}
+	}
+	record, err := orchestrationStore.GetRecord(context.Background(), requestID)
+	if err != nil {
+		t.Fatalf("GetRecord: %v", err)
+	}
+	if got := len(record.Interactions); got != 2 {
+		t.Fatalf("interaction count = %d, want 2", got)
 	}
 }
 

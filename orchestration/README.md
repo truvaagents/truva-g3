@@ -1840,12 +1840,16 @@ These features are not yet implemented but could be added:
 - `StreamingOrchestratorResponse` - Streaming response with accumulated content and metadata
 - `StepCallback` - Callback type for per-step progress notifications
 - `LLMDebugStore` - Interface for LLM debug payload storage
+- `LLMDebugRetentionPreserver` - Optional late/cross-process retention-floor capability
 - `LLMInteraction` - Single LLM call record with `SourceComponent` and `CallDescription` attribution
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
+- `ErrExecutionRecordNotFound` - Typed absence for optional execution evidence
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
 - `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
+- `KeyTTLManager` - Atomic minimum-retention extension and TTL-preserving value rewrites
+- `ExecutionStorageProvider` - Required composite provider contract: `StorageProvider` + `KeyTTLManager`
 - `ExecutionStoreConfig` - Includes conversation query and stale-index scan limits
 - `OrchestrationBackends` - Provider-neutral bundle of optional storage and coordination capabilities
 - `BackendRequirements` / `BackendFeature` - Effective capability requirements and validation inputs
@@ -1885,20 +1889,29 @@ if lister, ok := store.(orchestration.ConversationExecutionLister); ok {
 }
 ```
 
-Do capability discovery with a type assertion. `ExecutionStore` and
-`StorageProvider` deliberately keep their existing required method sets, and
-the NoOp store does not claim conversation lookup support.
+Do conversation-listing capability discovery with a type assertion. The NoOp
+store does not claim conversation lookup support.
 
-Provider-backed stores may additionally implement `IndexTTLManager`. If they
-do not, writes and queries still work; bounded lazy cleanup removes stale
-membership as records expire. Execution record metadata is the source of truth
-and the hashed conversation index is only an accelerator. Optional
-conversation-index or TTL failures never fail the orchestration request.
+Provider-backed execution stores require `ExecutionStorageProvider`, which
+composes the base `StorageProvider` operations with `KeyTTLManager`'s atomic
+minimum-retention operations. This makes lineage promotion and
+rewrite-with-retention preservation compile-time requirements. Providers may
+additionally implement `IndexTTLManager` to extend conversation-index
+retention. Without it, bounded lazy cleanup removes stale membership as
+records expire. Execution record metadata is the source of truth and the
+hashed conversation index is only an accelerator.
 
 `MetadataConversationID` should be supplied whenever a conversation exists,
 including the first turn when `MetadataConversationTurns` is empty. It is
 separate from application `session_id`; an application may intentionally map
 the same opaque UUID to both concepts.
+
+`ExecutionStore.ExtendTTL` extends the requested execution and every available
+retained ancestor with cycle protection. A missing requested execution returns
+`ErrExecutionRecordNotFound`. If only a later ancestor has expired, the method
+returns success after extending the available chain and does not recreate the
+missing record. Non-positive direct Redis TTL options are normalized to the
+framework defaults after all options are applied.
 
 ### Configuration Options
 - `WithCapabilityProvider(type, url)` - Configure capability provider type and URL
@@ -2124,7 +2137,8 @@ This is the **same reasoning a human developer would apply** when debugging a fa
 The orchestration module captures complete LLM request/response payloads for production debugging. Unlike Jaeger spans which truncate large payloads, the debug store preserves full prompts and responses.
 
 **Key Features:**
-- **Complete Payload Visibility**: No truncation of prompts or responses
+- **Complete Payload Visibility**: No truncation or framework-inferred
+  redaction of prompts or responses
 - **Request Correlation**: Query by the stable prefix-aware `request_id` carried
   across logs, traces, and execution records
 - **Typed Recording Families**: core orchestration calls include `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, and `hallucination_detection`; optional memory/compaction features add their own types, and `ai.InstrumentedAIClient` contributes `agent_llm_call`
@@ -2132,7 +2146,16 @@ The orchestration module captures complete LLM request/response payloads for pro
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
 - **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
-- **Atomic Storage**: List-based storage (RPUSH) safe for concurrent writes from orchestrator and agents
+- **Atomic Storage and Retention**: One Redis operation appends the interaction,
+  updates metadata/index data, and preserves any longer or persistent TTL from
+  final execution, HITL, lineage, or investigation retention
+- **Adopter-Owned Protection**: Built-in writers preserve exact application
+  and model payloads. Applications that require sanitization must supply it
+  through their logger, telemetry pipeline, store, recorder, middleware, or
+  processing hooks
+- **Lineage Retention**: Final execution recording promotes current and root
+  LLM evidence through a non-displayable retention floor. Late agent-pod and
+  orchestrator writes inherit it atomically without creating an empty record
 
 **Configuration:**
 ```bash
@@ -2172,6 +2195,15 @@ aiClient := ai.NewInstrumentedClient(baseClient, recorder,
 ```
 
 The orchestrator propagates `X-TruvaG3-Request-ID` and `X-TruvaG3-Step-ID` headers to agents during plan execution. Agents extract these via `core.ExtractRequestContext()` in their HTTP handlers, which enables `InstrumentedAIClient` to correlate recordings back to the orchestration request.
+
+`telemetry.RedisLLMCallRecorder` is a persistence-format twin of
+`orchestration.RedisLLMDebugStore`. Both preserve exact payloads and apply the
+same atomic minimum-retention rules, so either writer can append to a shared
+request record without reducing retention already promoted by the other. Both
+also consult the same request-scoped retention-floor key, so the guarantee does
+not depend on which process writes first. Enabling either built-in writer is an
+informed opt-in: the adopter owns access control, encryption, retention, and
+any required sanitization.
 
 **LLMCallRecorderAdapter:**
 

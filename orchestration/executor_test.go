@@ -365,6 +365,9 @@ func TestSmartExecutor_Retry(t *testing.T) {
 	if !result.Success {
 		t.Errorf("Expected successful execution after retries, got: %s", result.Error)
 	}
+	if result.Error != "" {
+		t.Errorf("successful retry retained stale error: %q", result.Error)
+	}
 
 	if result.Attempts != 2 {
 		t.Errorf("Expected 2 attempts (succeeds on retry 1), got %d", result.Attempts)
@@ -426,6 +429,153 @@ func TestSmartExecutor_OrchestratorNoRetry(t *testing.T) {
 	}
 	if result.Success {
 		t.Error("Expected failure (orchestrator should not retry)")
+	}
+}
+
+func TestSmartExecutor_PreservesNonRetryableComponentError(t *testing.T) {
+	catalog := &AgentCatalog{agents: map[string]*AgentInfo{
+		"tool-1": {
+			Registration: &core.ServiceRegistration{ID: "tool-1", Name: "guarded-tool", Address: "localhost", Port: 8080},
+			Capabilities: []EnhancedCapability{{Name: "execute_guarded_action", Endpoint: "/execute"}},
+		},
+	}}
+	executor := NewSmartExecutor(catalog)
+	mockRT := NewMockRoundTripper()
+	mockRT.SetResponse("http://localhost:8080/execute", http.StatusConflict, `{"success":false,"error":{"code":"DECISION_BASIS_CHANGED","message":"decision basis changed","retryable":false}}`)
+	executor.httpClient = &http.Client{Transport: mockRT}
+	step := RoutingStep{StepID: "execute", AgentName: "guarded-tool", Metadata: map[string]interface{}{
+		"capability": "execute_guarded_action", "parameters": map[string]interface{}{"operation_reference": "ref-1"},
+	}}
+
+	result := executor.executeStep(context.Background(), step)
+	if result.Success {
+		t.Fatal("expected guarded component failure")
+	}
+	if !strings.Contains(result.Error, "DECISION_BASIS_CHANGED") {
+		t.Fatalf("result error lost guarded component code: %q", result.Error)
+	}
+}
+
+func TestSmartExecutor_PreservesPreResolvedApplicationData(t *testing.T) {
+	catalog := &AgentCatalog{agents: map[string]*AgentInfo{
+		"tool-1": {
+			Registration: &core.ServiceRegistration{ID: "tool-1", Name: "guarded-tool", Address: "localhost", Port: 8080},
+			Capabilities: []EnhancedCapability{{Name: "execute_guarded_action", Endpoint: "/execute"}},
+		},
+	}}
+	executor := NewSmartExecutor(catalog)
+	logger := &TestLogger{}
+	executor.SetLogger(logger)
+	var capturedBody []byte
+	executor.httpClient = &http.Client{Transport: &paramCapturingRoundTripper{capturedBody: &capturedBody}}
+	applicationParameters := map[string]interface{}{
+		"operation_reference": "ref-1",
+		"application_value":   "password=local-debug-value",
+	}
+	step := RoutingStep{StepID: "execute", AgentName: "guarded-tool", Metadata: map[string]interface{}{
+		"capability": "execute_guarded_action",
+		"parameters": map[string]interface{}{"operation_reference": "{{evaluate.response.data.reference}}"},
+	}}
+
+	ctx := WithPreResolvedParams(context.Background(), applicationParameters, step.StepID)
+	result := executor.executeStep(ctx, step)
+	if !result.Success {
+		t.Fatalf("executeStep failed: %s", result.Error)
+	}
+	if result.Parameters["application_value"] != applicationParameters["application_value"] {
+		t.Fatalf("recorded parameters changed application data: %#v", result.Parameters)
+	}
+	if !strings.Contains(string(capturedBody), `"application_value":"password=local-debug-value"`) {
+		t.Fatalf("dispatch did not receive the exact application value: %s", capturedBody)
+	}
+	resolution, ok := result.Metadata["resolution"].(*ResolutionMetadata)
+	if !ok {
+		t.Fatalf("resolution metadata type = %T", result.Metadata["resolution"])
+	}
+	foundApplicationValue := false
+	for _, parameter := range resolution.Parameters {
+		if parameter.Name == "application_value" {
+			foundApplicationValue = true
+			if parameter.Value != applicationParameters["application_value"] {
+				t.Fatalf("resolution metadata changed application data: %#v", parameter.Value)
+			}
+		}
+	}
+	if !foundApplicationValue {
+		t.Fatal("application value is missing from resolution metadata")
+	}
+	logged := fmt.Sprint(logger.GetLogs())
+	if !strings.Contains(logged, "password=local-debug-value") {
+		t.Fatalf("executor observability did not preserve application data: %s", logged)
+	}
+}
+
+func TestSmartExecutor_ApplicationDataDoesNotDisableLLMErrorAnalysis(t *testing.T) {
+	catalog := &AgentCatalog{agents: map[string]*AgentInfo{
+		"tool-1": {
+			Registration: &core.ServiceRegistration{ID: "tool-1", Name: "guarded-tool", Address: "localhost", Port: 8080},
+			Capabilities: []EnhancedCapability{{Name: "execute_guarded_action", Endpoint: "/execute"}},
+		},
+	}}
+	executor := NewSmartExecutor(catalog)
+	aiClient := NewMockAIClient()
+	executor.SetErrorAnalyzer(NewErrorAnalyzer(aiClient, nil))
+	mockRT := NewMockRoundTripper()
+	mockRT.SetResponse("http://localhost:8080/execute", http.StatusConflict, `{"success":false,"error":{"code":"RESOURCE_VERSION_CHANGED","message":"resource changed","retryable":false}}`)
+	executor.httpClient = &http.Client{Transport: mockRT}
+	step := RoutingStep{StepID: "execute", AgentName: "guarded-tool", Metadata: map[string]interface{}{
+		"capability": "execute_guarded_action",
+		"parameters": map[string]interface{}{"operation_reference": "{{evaluate.response.data.reference}}"},
+	}}
+	applicationParameters := map[string]interface{}{
+		"operation_reference": "ref-1",
+		"application_value":   "password=local-debug-value",
+	}
+
+	result := executor.executeStep(WithPreResolvedParams(context.Background(), applicationParameters, step.StepID), step)
+	if result.Success || !strings.Contains(result.Error, "RESOURCE_VERSION_CHANGED") {
+		t.Fatalf("expected authoritative guarded failure, got %+v", result)
+	}
+	if len(aiClient.calls) == 0 {
+		t.Fatal("application data unexpectedly disabled LLM error analysis")
+	}
+}
+
+// The sanitized component error is recorded before the analyzer branches so
+// guarded 4xx exits keep it. That branch retries via `continue` and skips the
+// end-of-loop error assignment, so a repaired attempt must still clear the
+// first attempt's error rather than report success and failure together.
+func TestSmartExecutor_ClearsErrorAfterSuccessfulLLMRepairRetry(t *testing.T) {
+	catalog := &AgentCatalog{agents: map[string]*AgentInfo{
+		"tool-1": {
+			Registration: &core.ServiceRegistration{ID: "tool-1", Name: "weather-tool", Address: "localhost", Port: 8080},
+			Capabilities: []EnhancedCapability{{Name: "get_weather", Endpoint: "/weather"}},
+		},
+	}}
+	executor := NewSmartExecutor(catalog)
+	executor.SetErrorAnalyzer(NewErrorAnalyzer(&errorAnalyzerMockAI{
+		response: `{"should_retry": true, "reason": "Location typo", "suggested_changes": {"city": "Tokyo"}}`,
+	}, nil))
+	mockRT := NewMockRoundTripper()
+	mockRT.SetRetryResponses("http://localhost:8080/weather", []struct {
+		StatusCode int
+		Body       string
+	}{
+		{StatusCode: http.StatusBadRequest, Body: `{"error":"unknown city Tokyoo"}`},
+		{StatusCode: http.StatusOK, Body: `{"result":"sunny"}`},
+	})
+	executor.httpClient = &http.Client{Transport: mockRT}
+	step := RoutingStep{StepID: "weather", AgentName: "weather-tool", Metadata: map[string]interface{}{
+		"capability": "get_weather",
+		"parameters": map[string]interface{}{"city": "Tokyoo"},
+	}}
+
+	result := executor.executeStep(context.Background(), step)
+	if !result.Success {
+		t.Fatalf("expected success after LLM parameter repair, got error %q", result.Error)
+	}
+	if result.Error != "" {
+		t.Fatalf("repaired step reports success and error together: %q", result.Error)
 	}
 }
 
@@ -654,6 +804,9 @@ func TestSmartExecutor_NonOrchestratorRetryUnaffected(t *testing.T) {
 
 	if !result.Success {
 		t.Errorf("Expected success after retry, got: %s", result.Error)
+	}
+	if result.Error != "" {
+		t.Errorf("successful retry retained stale error: %q", result.Error)
 	}
 	if result.Attempts != 2 {
 		t.Errorf("Expected 2 attempts for tool capability, got %d", result.Attempts)

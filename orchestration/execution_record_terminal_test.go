@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func (hook *terminalHook) AfterSynthesis(
 	hook.mu.Lock()
 	hook.finished = true
 	hook.mu.Unlock()
-	return response, nil
+	return "governed: " + response, nil
 }
 
 func (hook *terminalHook) Finished() bool {
@@ -231,9 +232,11 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 
 			records, terminalBeforeHookEnd := store.snapshot()
 			terminalCount := 0
+			var terminalRecord *StoredExecution
 			for _, record := range records {
 				if storedExecutionHasResultTrim(record) {
 					terminalCount++
+					terminalRecord = record
 				}
 			}
 			if terminalCount != 1 {
@@ -244,6 +247,17 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			}
 			if hook.Finished() != test.wantHookCalls {
 				t.Fatalf("AfterSynthesis finished = %v, want %v", hook.Finished(), test.wantHookCalls)
+			}
+			if test.wantHookCalls {
+				if terminalRecord == nil || terminalRecord.FinalResponse == nil ||
+					!strings.HasPrefix(*terminalRecord.FinalResponse, "governed: ") {
+					t.Fatalf("terminal final response = %#v, want governed post-hook output", terminalRecord)
+				}
+				if terminalRecord.FinalResponseSource != FinalResponseSourceAfterSynthesisHooks {
+					t.Errorf("final response source = %q", terminalRecord.FinalResponseSource)
+				}
+			} else if terminalRecord != nil && terminalRecord.FinalResponse != nil {
+				t.Errorf("partial/failed synthesis stored authoritative final response: %q", *terminalRecord.FinalResponse)
 			}
 		})
 	}

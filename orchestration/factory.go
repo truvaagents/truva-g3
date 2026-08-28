@@ -1120,9 +1120,9 @@ func WithExecutionStore(store ExecutionStore) OrchestratorOption {
 	}
 }
 
-// WithExecutionStoreProvider is a convenience function that creates an ExecutionStore
-// from a StorageProvider. The application provides the StorageProvider implementation.
-func WithExecutionStoreProvider(provider StorageProvider, logger core.Logger) OrchestratorOption {
+// WithExecutionStoreProvider is a convenience function that creates an
+// ExecutionStore from an ExecutionStorageProvider supplied by the application.
+func WithExecutionStoreProvider(provider ExecutionStorageProvider, logger core.Logger) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.ExecutionStore.Enabled = true // Auto-enable when provider is provided
 		c.ExecutionStoreBackend = NewExecutionStoreWithProvider(provider, c.ExecutionStore, logger)

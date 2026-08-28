@@ -3865,6 +3865,17 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 
 **Built-in resilience:** Layer 1 retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures within 30s triggers cooldown).
 
+The Redis write is an atomic append/metadata/index/minimum-TTL operation. It
+does not shorten a longer lifetime or make a persistent record expiring, so it
+can safely share a request record with `orchestration.RedisLLMDebugStore` after
+execution or lineage retention has been promoted. The built-in recorder
+preserves the prompt, system prompt, response, description, and error text it
+receives; it does not infer sensitive application fields or silently redact
+their values. Applications that require sanitization must supply it explicitly
+through their logger, telemetry pipeline, recorder, storage implementation, or
+middleware and must govern access, encryption, and retention for this opt-in
+debug data.
+
 **Example:**
 ```go
 recorder, err := telemetry.NewRedisLLMCallRecorder(
@@ -5602,7 +5613,20 @@ type LLMDebugStore interface {
     // ListRecent returns recent records for UI listing (newest first)
     ListRecent(ctx context.Context, limit int) ([]LLMDebugRecordSummary, error)
 }
+
+// Optional capability used by final execution recording. It establishes a
+// minimum lifetime for existing and future writes without creating an empty
+// debug record.
+type LLMDebugRetentionPreserver interface {
+    PreserveRetention(ctx context.Context, requestID string, duration time.Duration) error
+}
 ```
+
+`RedisLLMDebugStore` implements `LLMDebugRetentionPreserver` with a small
+request-scoped retention-floor key. Both the orchestration writer and
+`telemetry.RedisLLMCallRecorder` consult it atomically, so late or
+cross-process writes inherit the final execution lifetime. Custom stores that
+do not implement the optional capability continue through `ExtendTTL`.
 
 #### LLMInteraction Type
 
@@ -5762,12 +5786,46 @@ type IndexTTLManager interface {
         minTTL time.Duration,
     ) error
 }
+
+type KeyTTLManager interface {
+    // ExtendKeyTTL preserves an existing key for at least minTTL. It does not
+    // create a missing key, shorten a longer TTL, or expire a persistent key.
+    ExtendKeyTTL(ctx context.Context, key string, minTTL time.Duration) error
+
+    // SetKeyWithMinimumTTL writes value atomically while preserving the larger
+    // of the previous remaining TTL and minTTL. Persistent keys stay persistent.
+    SetKeyWithMinimumTTL(
+        ctx context.Context,
+        key string,
+        value string,
+        minTTL time.Duration,
+    ) error
+}
+
+type ExecutionStorageProvider interface {
+    StorageProvider
+    KeyTTLManager
+}
 ```
 
 Use `lister, ok := store.(ConversationExecutionLister)`; the NoOp store does
 not advertise the capability. Provider-backed stores may implement
 `IndexTTLManager`, but its absence is supported through bounded lazy index
-cleanup.
+cleanup. `NewExecutionStoreWithProvider` and `WithExecutionStoreProvider`
+require `ExecutionStorageProvider`, making atomic lineage promotion and
+TTL-preserving content rewrites compile-time provider requirements.
+
+Interrupted executions receive at least the maximum of normal retention, error
+retention, and the checkpoint's remaining approval lifetime. Storing a related
+execution promotes its existing root execution, trace mapping, conversation
+index, and current/root LLM-debug evidence to the selected minimum lifetime.
+`ExtendTTL` follows retained root links recursively with cycle protection.
+Normal extension reads a small retention-link projection instead of decoding
+the full execution payload, and direct Redis performs the related key updates
+inside its retry/circuit-breaker boundary. A missing requested execution returns
+`ErrExecutionRecordNotFound`. If the requested execution exists but a later
+ancestor has expired, the available retained chain is extended successfully
+and traversal stops without recreating the ancestor.
 
 `StoredExecution.Metadata` and `ExecutionSummary.Metadata` carry the
 framework-owned `MetadataConversationID`. Read it with
@@ -5784,6 +5842,10 @@ type ExecutionStoreConfig struct {
     ConversationIndexScanLimit int // default 5000
 }
 ```
+
+Non-positive `TTL` and `ErrorTTL` values in programmatic configuration are
+normalized to the standard 24-hour and 7-day defaults. They do not disable
+persistence or produce an invalid Redis expiry.
 
 The included direct Redis adapter exposes both store-owned and
 application-owned construction paths:
@@ -5822,7 +5884,8 @@ options apply afterward. `WithExecutionDebugRedisURL` and
 
 Positive programmatic values are authoritative. Per-call result limits are
 clamped to `ConversationQueryLimit`, and stale-index work is bounded by
-`ConversationIndexScanLimit`.
+`ConversationIndexScanLimit`. After explicit adapter options are applied,
+non-positive normal or error TTLs are normalized to the framework defaults.
 
 | Variable | Default |
 |---|---:|

@@ -220,7 +220,6 @@ func (h *HITLHandler) HandleCommand(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to process command: %s", err.Error()))
 		return
 	}
-
 	// Add span event for successful processing
 	telemetry.AddSpanEvent(ctx, "hitl.api.command.processed",
 		attribute.String("checkpoint_id", command.CheckpointID),

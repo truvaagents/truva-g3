@@ -913,12 +913,12 @@ func TestDirectRedisIndexTTLHelperHandlesMissingAndPersistentKeys(t *testing.T) 
 	)
 	ctx := context.Background()
 
-	if err := store.extendIndexTTLWithoutDowngrade(
+	if exists, err := extendRedisKeyMinimumTTL(
 		ctx,
+		store.client,
 		"missing-index",
 		time.Hour,
-		false,
-	); err != nil {
+	); err != nil || exists {
 		t.Fatalf("missing index: %v", err)
 	}
 
@@ -930,12 +930,12 @@ func TestDirectRedisIndexTTLHelperHandlesMissingAndPersistentKeys(t *testing.T) 
 	).Err(); err != nil {
 		t.Fatalf("seed persistent index: %v", err)
 	}
-	if err := store.extendIndexTTLWithoutDowngrade(
+	if exists, err := extendRedisKeyMinimumTTL(
 		ctx,
+		store.client,
 		persistentKey,
 		time.Hour,
-		false,
-	); err != nil {
+	); err != nil || !exists {
 		t.Fatalf("preserve persistent index: %v", err)
 	}
 	if got, err := store.client.TTL(ctx, persistentKey).Result(); err != nil ||
@@ -943,17 +943,6 @@ func TestDirectRedisIndexTTLHelperHandlesMissingAndPersistentKeys(t *testing.T) 
 		t.Fatalf("persistent TTL = (%v, %v), want Redis persistent sentinel", got, err)
 	}
 
-	if err := store.extendIndexTTLWithoutDowngrade(
-		ctx,
-		persistentKey,
-		time.Hour,
-		true,
-	); err != nil {
-		t.Fatalf("expire newly-created persistent index: %v", err)
-	}
-	if got, err := store.client.TTL(ctx, persistentKey).Result(); err != nil || got != time.Hour {
-		t.Fatalf("initialized TTL = (%v, %v), want 1h", got, err)
-	}
 }
 
 func TestExecutionStoreCanonicalKeysMatchAcrossImplementations(t *testing.T) {
@@ -1081,7 +1070,9 @@ func TestExecutionStoreConversationLimitConfiguration(t *testing.T) {
 	normalized := normalizeExecutionStoreConfig(ExecutionStoreConfig{})
 	if normalized.ConversationQueryLimit != defaultConversationQueryLimit ||
 		normalized.ConversationIndexScanLimit != defaultConversationIndexScanLimit ||
-		normalized.KeyPrefix != DefaultExecutionKeyPrefix {
+		normalized.KeyPrefix != DefaultExecutionKeyPrefix ||
+		normalized.TTL != defaults.TTL ||
+		normalized.ErrorTTL != defaults.ErrorTTL {
 		t.Fatalf("zero-value normalization = %+v", normalized)
 	}
 }
