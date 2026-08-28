@@ -93,7 +93,7 @@ func (s *MemoryLLMDebugStore) GetRecord(ctx context.Context, requestID string) (
 
 	record, exists := s.records[requestID]
 	if !exists {
-		return nil, fmt.Errorf("record not found: %s", requestID)
+		return nil, fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 	}
 
 	// Return a copy to prevent external modification
@@ -121,7 +121,7 @@ func (s *MemoryLLMDebugStore) SetMetadata(ctx context.Context, requestID string,
 
 	record, exists := s.records[requestID]
 	if !exists {
-		return fmt.Errorf("record not found: %s", requestID)
+		return fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 	}
 
 	if record.Metadata == nil {
@@ -138,7 +138,23 @@ func (s *MemoryLLMDebugStore) ExtendTTL(ctx context.Context, requestID string, d
 	defer s.mu.RUnlock()
 
 	if _, exists := s.records[requestID]; !exists {
-		return fmt.Errorf("record not found: %s", requestID)
+		return fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
+	}
+	return nil
+}
+
+// PreserveRetention is a validated no-op because in-memory records do not
+// expire. It deliberately does not create an empty record.
+func (s *MemoryLLMDebugStore) PreserveRetention(
+	ctx context.Context,
+	requestID string,
+	duration time.Duration,
+) error {
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	if duration <= 0 {
+		return fmt.Errorf("duration must be positive")
 	}
 	return nil
 }
@@ -223,6 +239,8 @@ func (s *MemoryLLMDebugStore) Count() int {
 	defer s.mu.RUnlock()
 	return len(s.records)
 }
+
+var _ LLMDebugRetentionPreserver = (*MemoryLLMDebugStore)(nil)
 
 // getTraceIDFromContext extracts trace ID from context if available.
 func getTraceIDFromContext(ctx context.Context) string {

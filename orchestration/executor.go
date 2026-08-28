@@ -3333,6 +3333,11 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				})
 			}
 			result.Success = true
+			// A StepResult describes the terminal attempt, not its retry
+			// history. Clear an earlier attempt's error before publishing a
+			// successful result so consumers never receive Success=true and a
+			// stale failure at the same time.
+			result.Error = ""
 			result.Response = response
 
 			// Aggregate child orchestrator's token usage into parent accumulator
@@ -3355,7 +3360,12 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// in an upstream URL or error body from spreading through the lifecycle.
 		responseBody = core.RedactSensitiveText(responseBody)
 		err = sanitizeExecutionError(err)
-
+		// Preserve the sanitized component failure before any analyzer or
+		// non-retryable branch can exit the loop. Several intentional 4xx
+		// guards (including stale HITL decision bases) stop before the legacy
+		// retry block below; leaving Error empty makes downstream callbacks
+		// unable to classify the authoritative tool outcome.
+		result.Error = err.Error()
 		// Layer 3: LLM-based Error Analysis (Phase 4 Enhancement)
 		// When ErrorAnalyzer is configured, use LLM to determine if error can be fixed
 		// with different parameters. This replaces the need for tools to set Retryable flags.

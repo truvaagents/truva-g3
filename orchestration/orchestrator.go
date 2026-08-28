@@ -1332,6 +1332,40 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	result *ExecutionResult,
 	checkpoint *ExecutionCheckpoint,
 ) {
+	o.storeExecutionSnapshotAsync(ctx, request, requestID, plan, result, checkpoint, nil, "")
+}
+
+func (o *AIOrchestrator) storeExecutionWithFinalResponseAsync(
+	ctx context.Context,
+	request string,
+	requestID string,
+	plan *RoutingPlan,
+	result *ExecutionResult,
+	finalResponse string,
+) {
+	responseCopy := finalResponse
+	o.storeExecutionSnapshotAsync(
+		ctx,
+		request,
+		requestID,
+		plan,
+		result,
+		nil,
+		&responseCopy,
+		FinalResponseSourceAfterSynthesisHooks,
+	)
+}
+
+func (o *AIOrchestrator) storeExecutionSnapshotAsync(
+	ctx context.Context,
+	request string,
+	requestID string,
+	plan *RoutingPlan,
+	result *ExecutionResult,
+	checkpoint *ExecutionCheckpoint,
+	finalResponse *string,
+	finalResponseSource string,
+) {
 	if o.executionStore == nil {
 		return
 	}
@@ -1362,16 +1396,18 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	resumeCheckpointID, isResume := IsResumeMode(ctx)
 
 	stored := &StoredExecution{
-		RequestID:         requestID,
-		OriginalRequestID: originalRequestID,
-		TraceID:           traceID,
-		AgentName:         agentName,
-		OriginalRequest:   request,
-		Plan:              plan,
-		Result:            result,
-		Interrupted:       checkpoint != nil,
-		Checkpoint:        checkpoint,
-		CreatedAt:         createdAt,
+		RequestID:           requestID,
+		OriginalRequestID:   originalRequestID,
+		TraceID:             traceID,
+		AgentName:           agentName,
+		OriginalRequest:     request,
+		Plan:                plan,
+		Result:              result,
+		Interrupted:         checkpoint != nil,
+		Checkpoint:          checkpoint,
+		CreatedAt:           createdAt,
+		FinalResponse:       finalResponse,
+		FinalResponseSource: finalResponseSource,
 	}
 	if holder, ok := skillExecutionHolderFromContext(ctx); ok {
 		skillState, _ := holder.Snapshot()
@@ -1436,12 +1472,17 @@ func (o *AIOrchestrator) storeExecutionAsync(
 		ConversationID:     conversationID,
 		CheckpointID:       checkpointID,
 		Interrupted:        checkpoint != nil,
+		RetentionTTL: executionRetentionTTL(
+			stored,
+			o.config.ExecutionStore.TTL,
+			o.config.ExecutionStore.ErrorTTL,
+		),
 	})
 }
 
 func (o *AIOrchestrator) executionRecorderFor(requestID string) *executionRecorder {
 	created := newExecutionRecorder(
-		o.recordingCtx, o.executionStore, o.logger, &o.executionWg,
+		o.recordingCtx, o.executionStore, o.debugStore, o.logger, &o.executionWg,
 		o.config.executionStoreWriteTimeout,
 	)
 	actual, _ := o.executionRecorders.LoadOrStore(requestID, created)
@@ -2861,7 +2902,14 @@ func (o *AIOrchestrator) synthesizeBuffered(state *executionRunState) (*Orchestr
 	// Second store: persist result_trim metadata written by Synthesize into StepResult.Metadata.
 	// The first store (inside executePhaseLoop) fires before synthesis runs, so result_trim is absent.
 	// This second fire-and-forget write picks up the metadata without blocking the response path.
-	o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
+	o.storeExecutionWithFinalResponseAsync(
+		ctx,
+		request,
+		requestID,
+		loopResult.LastPlan,
+		loopResult.CombinedResult,
+		synthesizedResponse,
+	)
 
 	// --- Build response ---
 	totalUsage, usageByPhase := usageAcc.Snapshot()
@@ -3114,7 +3162,14 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	// and AfterSynthesis hooks reach their terminal outcome. Request-local
 	// ordering prevents this view from being overwritten by an earlier phase
 	// snapshot.
-	o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
+	o.storeExecutionWithFinalResponseAsync(
+		ctx,
+		request,
+		requestID,
+		loopResult.LastPlan,
+		loopResult.CombinedResult,
+		finalContent,
+	)
 
 	// Build final response with all enhanced fields
 	totalUsage, usageByPhase := usageAcc.Snapshot()

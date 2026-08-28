@@ -299,8 +299,8 @@ func TestRebuildCheckpointCompletedSteps_NilOrEmpty(t *testing.T) {
 // Set call so tests can assert on it.
 type ttlCapturingProvider struct {
 	mockStorageProvider
-	ttlsMu sync.Mutex
-	ttls   map[string]time.Duration
+	ttlsMu       sync.Mutex
+	capturedTTLs map[string]time.Duration
 }
 
 func newTTLCapturingProvider() *ttlCapturingProvider {
@@ -309,22 +309,40 @@ func newTTLCapturingProvider() *ttlCapturingProvider {
 			data:    make(map[string]string),
 			indexes: make(map[string]map[string]float64),
 		},
-		ttls: make(map[string]time.Duration),
+		capturedTTLs: make(map[string]time.Duration),
 	}
 	return p
 }
 
 func (p *ttlCapturingProvider) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	p.ttlsMu.Lock()
-	p.ttls[key] = ttl
+	p.capturedTTLs[key] = ttl
 	p.ttlsMu.Unlock()
 	return p.mockStorageProvider.Set(ctx, key, value, ttl)
+}
+
+func (p *ttlCapturingProvider) SetKeyWithMinimumTTL(
+	ctx context.Context,
+	key string,
+	value string,
+	minTTL time.Duration,
+) error {
+	if err := p.mockStorageProvider.SetKeyWithMinimumTTL(ctx, key, value, minTTL); err != nil {
+		return err
+	}
+	p.mu.RLock()
+	retention := p.ttls[key]
+	p.mu.RUnlock()
+	p.ttlsMu.Lock()
+	p.capturedTTLs[key] = retention
+	p.ttlsMu.Unlock()
+	return nil
 }
 
 func (p *ttlCapturingProvider) lastTTL(key string) time.Duration {
 	p.ttlsMu.Lock()
 	defer p.ttlsMu.Unlock()
-	return p.ttls[key]
+	return p.capturedTTLs[key]
 }
 
 func ttlStoreFixture(t *testing.T) (*ttlCapturingProvider, ExecutionStore) {

@@ -361,7 +361,8 @@ const (
 	// RedisDBTelemetry is for telemetry data
 	RedisDBTelemetry = 6
 
-	// RedisDBLLMDebug is for LLM debug payload storage (orchestration module)
+	// RedisDBLLMDebug is for framework LLM debug payload storage.
+	// Orchestration and telemetry recorders share this persistence format.
 	RedisDBLLMDebug = 7
 
 	// RedisDBExecutionDebug is for execution debug store (DAG visualization)

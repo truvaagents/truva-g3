@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.4
+**Version**: 1.9
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -1607,7 +1607,8 @@ The orchestration module includes a debug store that captures complete LLM reque
 │                                                                  │
 │  Alternative Writer (no orchestration import needed):            │
 │  └── telemetry.RedisLLMCallRecorder — write-only Redis recorder  │
-│      for standalone agents. Same Redis DB 7 format.              │
+│      for standalone agents. Same Redis DB 7 format and atomic    │
+│      minimum-retention rules.                                     │
 │                                                                  │
 │  Three-Layer Resilience:                                         │
 │  ├── Layer 1: Built-in retry (3 attempts, 50ms backoff)         │
@@ -1620,9 +1621,24 @@ The orchestration module includes a debug store that captures complete LLM reque
 **Key Design Decisions:**
 - **Disabled by default**: Must explicitly enable via `TRUVAG3_LLM_DEBUG_ENABLED=true`
 - **Dedicated Redis DB**: Uses `core.RedisDBLLMDebug` (DB 7) to isolate debug data
-- **TTL-based cleanup**: 24h for success, 168h (7 days) for errors
+- **TTL-based cleanup**: 24h for success and 168h (7 days) for errors;
+  final execution outcome and lineage promotion may retain the current and
+  root records longer
 - **Async recording**: Uses goroutines with WaitGroup for non-blocking capture
 - **Graceful fallback**: Never fails orchestration if debug store fails
+- **Payload fidelity**: Built-in stores preserve application and model
+  payloads without framework-inferred redaction. Sanitization, access control,
+  encryption, and retention policy for sensitive workloads belong to the
+  adopter, as required by the root framework design principles. The legacy
+  executor and skills error transformations documented below occur before
+  storage and remain pending a separate audit; they are not part of the store
+  contract or precedent for new paths
+- **Atomic minimum retention**: Both Redis writers preserve a longer or
+  persistent lifetime in the same atomic operation that appends an interaction
+- **Late-writer retention floor**: Final execution recording stores a small,
+  non-displayable retention-floor key. Orchestrator and standalone-agent
+  writers consult that key atomically, so a write that starts later or in a
+  different pod still receives the required audit lifetime
 
 The store name is historical: it now carries both true LLM calls and selected non-LLM hook interactions when they materially improve production debugging. Examples include `conversation_history_prepare` (`Category: "logic"`), `user_memory_similarity_search` (`Category: "vector_db"`), and persistence-policy decisions (`Category: "logic"`). The registry viewer uses `HookPhase` plus `Category` to route these uniformly into LLM Debug, Pre-Execution, and Post-Execution views.
 
@@ -1636,10 +1652,20 @@ record field sets remain unchanged.
 `ExecutionStore` keeps its minimal required method set.
 `ConversationExecutionLister` is a separate optional capability discovered by
 type assertion. `NoOpExecutionStore` intentionally does not advertise it.
-Similarly, `StorageProvider` remains backend-neutral and unchanged;
-`IndexTTLManager` is an optional capability for providers that can extend a
-sorted index TTL without shortening it. A provider without that capability
-remains supported and relies on bounded lazy stale-member cleanup.
+`StorageProvider` remains the backend-neutral base storage contract.
+`KeyTTLManager` separately defines atomic minimum-retention operations on
+ordinary values. Its two operations
+extend an existing key without creating it, and rewrite a value while
+preserving the larger of its prior remaining lifetime and the requested
+minimum. Neither operation may shorten a longer lifetime or make a persistent
+key expiring.
+
+`ExecutionStorageProvider` composes `StorageProvider` and `KeyTTLManager` and
+is the compile-time requirement for the provider-backed execution store. This
+makes lineage promotion and TTL-preserving rewrites correctness invariants,
+not optional backend behavior. `IndexTTLManager` remains optional because a
+conversation index is only an accelerator; providers without index-TTL support
+rely on bounded lazy stale-member cleanup.
 
 Both the provider-backed store and direct Redis store:
 
@@ -1657,6 +1683,56 @@ returned records. `ConversationIndexScanLimit` defaults to 5000 and bounds
 work when stale entries are encountered. Explicit positive config values win;
 otherwise environment values are normalized by the factory and invalid or
 non-positive values fall back to defaults.
+
+#### Lineage-aware debug retention
+
+Execution and LLM-debug evidence are retained as one audit lineage rather than
+as unrelated records. The shared execution-retention selector applies these
+rules:
+
+- a successful execution receives the configured normal TTL;
+- a failed execution receives the configured error TTL; and
+- an interrupted execution receives at least the maximum of normal TTL, error
+  TTL, and the checkpoint's remaining approval lifetime.
+
+Each execution `Store` also attempts to persist a small retention-link record
+containing only its trace ID, conversation ID, and related-root ID. Normal TTL
+extension reads this projection instead of decompressing and unmarshalling the
+full execution payload. A projection-write failure after the authoritative
+record succeeds is a sanitized warning, not a false `Store` failure; indexing
+continues, and later extension falls back to the full record when the projection
+is absent. Direct Redis extends the execution, link, trace mapping, and optional
+conversation index in one Lua operation inside the store's retry/circuit-
+breaker boundary. `ExtendTTL` follows related-root links recursively with a
+cycle guard, so an investigation extension on a retained descendant promotes
+the complete available lineage. Promotion never creates a missing execution
+and never fails the business request. A missing requested execution returns the
+typed `ErrExecutionRecordNotFound`; a missing later ancestor ends successful
+available-chain traversal. Expected absence is surfaced only after an injected
+breaker operation succeeds, so it cannot count against storage health; other
+failures remain inside resilience handling and are sanitized at logging
+boundaries. `Store`, `Update`, and `SetMetadata` use atomic rewrite operations
+to avoid undoing a prior promotion. Direct Redis `Update` replaces its
+authoritative record and retention projection together through one MSET-backed
+Lua operation. Non-positive programmatic `TTL` and `ErrorTTL` values, including
+values supplied by direct Redis functional options, are normalized to the
+framework defaults before either store is used.
+
+Final execution recording coordinates LLM evidence through the optional
+`LLMDebugRetentionPreserver` capability. The Redis implementation creates or
+extends a small retention-floor marker without creating an empty debug record,
+and applies the same floor to any existing metadata, interaction, or legacy
+record keys. Both DB 7 writers read that marker in their append script, which
+covers writes that begin after execution recording and writes from another
+process. Execution storage and each current/root LLM-retention target use
+separate bounded timeouts.
+Within one request, the recorder skips duplicate floor writes and repeats only
+when the selected retention increases. A failed execution-store write is
+logged but does not prevent the independent LLM-retention attempt. Custom
+stores without this capability fall back to `LLMDebugStore.ExtendTTL`; typed
+`ErrLLMDebugRecordNotFound` remains an expected no-op. Recorder goroutines are
+owned and drained by the existing orchestrator lifecycle; they are request
+work, not independent background `core.Runnable` jobs.
 
 HITL checkpoints use a framework-owned shallow clone of top-level application
 metadata. Framework additions, including `conversation_id` and
@@ -2375,17 +2451,24 @@ different by design: both checkpoint constructors resolve
 override. Task and workflow adapter constructors take their namespace through
 their explicit prefix or configuration arguments.
 
-Errors crossing downstream execution and backend observation boundaries are
-sanitized before entering logs, trace attributes/events, execution-debug
-records, or returned tool observations. `core.RedactSensitiveText` supplies the
-shared defense-in-depth transformation. While an error remains in in-process Go
-control flow, `core.RedactSensitiveError` protects its observable message and
-retains the original cause for `errors.Is` and `errors.As`. When orchestration
-normalizes a failure into string-only step, checkpoint, debug, or API state,
-only the sanitized message is carried and Go error identity is intentionally
-not serialized. This does not authorize recording raw endpoints, prompts,
-payloads, or provider diagnostics—callers and adapters must still avoid placing
-secrets in those values.
+**Legacy exception — pending dedicated audit:** Some error paths that predate
+the framework payload-fidelity policy still sanitize downstream failure bodies
+or error messages before they reach retry prompts, logs, trace events,
+execution-debug records, skills debug records, or returned observations. The
+executor currently uses `core.RedactSensitiveText` for a failed component body
+and `core.RedactSensitiveError` for its Go error; the latter retains the original
+cause for `errors.Is` and `errors.As` while exposing a transformed message.
+Skills authoring transforms an AI error returned to its caller, and skills AI
+observability transforms error text recorded for debugging. Selected
+Redis/provider construction and operational diagnostics contain similar legacy
+calls.
+
+This paragraph records current implementation behavior; it is not a normative
+sanitization guarantee and must not be copied into new or modified paths.
+Adopters remain responsible for payload classification and protection. Removal
+or redesign is deferred to a dedicated audit that must check retry behavior, Go
+error identity, stored evidence, returned observations, and log/trace output
+across every framework call site.
 
 ---
 
@@ -2540,6 +2623,11 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.9 | 2026-08-28 | Clarified available-lineage retention extension and direct Redis option normalization, documented coupled record/projection updates, and explicitly inventoried the returned skills-authoring AI error among the legacy payload-fidelity exceptions pending audit |
+| 1.8 | 2026-08-28 | Reconciled exact-payload ownership with explicitly labeled legacy error transformations pending a separate audit; prohibited treating those paths as an adopter-facing sanitization guarantee |
+| 1.7 | 2026-08-28 | Made missing lineage evidence breaker-neutral and retention-link-only Store failures best-effort while preserving full-record fallback and sanitized diagnostics |
+| 1.6 | 2026-08-28 | Replaced request-local LLM write ordering with a cross-process retention floor; documented recursive retention links, typed execution absence, independent timeouts, and bounded floor writes |
+| 1.5 | 2026-08-28 | Documented atomic minimum retention, execution/HITL lineage promotion, final-outcome LLM retention, provider capability, and adopter-owned debug-data protection |
 | 1.4 | 2026-08-12 | Added the shipped Agent Skills V1 ownership, request pinning, progressive-disclosure, prompt, management, backend, and observability contracts |
 | 1.3 | 2026-08-09 | Documented canonical configuration/cache eligibility, shared request recording, authoritative HITL suspension, and provider-neutral expiry lifecycle contracts |
 | 1.2 | 2026-08-07 | Corrected the summary to state the canonical `orchestration -> core + telemetry` module boundary |
