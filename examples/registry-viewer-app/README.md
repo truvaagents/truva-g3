@@ -1,6 +1,10 @@
 # Registry Viewer App
 
-A standalone, real-time web dashboard for viewing services registered in a Redis-based service registry. This app is designed to be fully independent and can be extracted to its own repository without any modifications.
+An independently deployable, real-time web dashboard for inspecting the TruvaG3
+service registry, execution records, LLM debug data, HITL checkpoints, skills,
+memory, and traces. The backend currently imports TruvaG3 framework modules;
+moving its source to another repository therefore requires the dependency and
+container-build changes described below.
 
 ## Table of Contents
 
@@ -49,7 +53,7 @@ A standalone, real-time web dashboard for viewing services registered in a Redis
 ### UI Features
 - Dark theme optimized for monitoring
 - Navigation for Registry, LLM Debug, HITL, Execution DAG, Skills, and Memory
-- Zero external framework dependencies
+- Vanilla HTML, CSS, and JavaScript frontend with no browser framework dependency
 
 ### Skills Management
 
@@ -94,9 +98,9 @@ Once complete, the dashboard is available at:
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **Registry Viewer** | http://localhost:8100 | Web dashboard for service registry |
-| **API** | http://localhost:8100/api/services | JSON list of registered services |
-| **Health** | http://localhost:8100/api/health | Health check endpoint |
+| **Registry Viewer** | http://localhost:8361 | Web dashboard for service registry |
+| **API** | http://localhost:8361/api/services | JSON list of registered services |
+| **Health** | http://localhost:8361/api/health | Health check endpoint |
 
 ### Run Locally with Mock Data
 
@@ -109,7 +113,7 @@ cd examples/registry-viewer-app
 ./setup.sh run
 ```
 
-Open http://localhost:8100 in your browser.
+Open http://localhost:8361 in your browser.
 
 ## Setup Script Commands
 
@@ -129,7 +133,7 @@ Docker:
 Kubernetes Deployment:
   deploy        Build, load to Kind, and deploy to K8s
   rebuild       Rebuild with --no-cache and redeploy
-  forward       Port forward from K8s to localhost:8100
+  forward       Port forward from K8s to localhost:8361
   logs          Stream logs from K8s pod
   cleanup       Remove deployed resources
 ```
@@ -143,7 +147,7 @@ Kubernetes Deployment:
 | `-mock` | `true` | Use mock data instead of Redis |
 | `-redis-url` | `redis://localhost:6379` | Redis connection URL |
 | `-namespace` | `truvag3` | Redis key namespace for service discovery |
-| `-port` | `8100` | HTTP server port |
+| `-port` | `8361` | HTTP server port |
 
 ### Environment Variables
 
@@ -157,6 +161,8 @@ Environment variables override command-line flags, making the app easy to config
 | `PORT` | HTTP server port (overrides `-port`) |
 | `APP_ENV` | Selects the `development` (default), `staging`, or `production` telemetry profile |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP endpoint used by Registry Viewer and framework telemetry |
+| `JAEGER_QUERY_URL` | Server-side Jaeger Query base URL used to enrich execution details. A direct binary start leaves enrichment disabled; `setup.sh deploy` supplies `http://jaeger-query` by default. |
+| `JAEGER_UI_URL` | Browser-facing Jaeger UI base URL used by trace redirects (default `http://jaeger.localhost`) |
 | `TRUVAG3_SKILLS_REDIS_DB` | Redis role database for skill packages (default `9`) |
 | `TRUVAG3_SKILL_AUTHORING_MAX_NAME_CHARS` | Maximum namespace/name/domain/tag/resource slug length (default `64`) |
 | `TRUVAG3_SKILL_AUTHORING_MAX_DESCRIPTION_CHARS` | Maximum main skill catalog-description length (default `1024`) |
@@ -208,6 +214,7 @@ REDIS_URL=redis://custom-redis:6379 ./setup.sh deploy
 | `GET /api/executions` | List recent executions in the existing flat response shape |
 | `GET /api/executions?group_conversations=true` | List server-owned conversation groups; stable DB 8 sorts support filter-aware cursor pagination |
 | `GET /api/executions/{request_id}/unified` | Get the unified execution, DAG, LLM, HITL, trace, and conversation detail |
+| `GET /api/traces/{trace_id}` | Temporarily redirect the browser to the trace page under the configured `JAEGER_UI_URL` |
 | `GET /api/conversations?conversation_id={id}` | Get one verified chronological conversation timeline |
 | `GET /api/v1/skills` | List body-free published skill metadata; optional `namespace`, `domain`, `tag`, and `limit` filters |
 | `GET /api/v1/skills/schema` | Get the complete authoring JSON Schema with its active constraints |
@@ -329,7 +336,7 @@ The app expects services to be stored in Redis with keys matching the pattern `{
 # Deploy to existing Kind cluster (build + load into Kind + apply manifest)
 ./setup.sh deploy
 
-# Port forward the app to localhost:8100
+# Port forward the app to localhost:8361
 ./setup.sh forward
 ```
 
@@ -339,40 +346,58 @@ The app expects services to be stored in Redis with keys matching the pattern `{
 
 ```
 registry-viewer-app/
-├── main.go              # Go backend with embedded static files
-├── go.mod               # Go module (standalone, no framework deps)
-├── go.sum               # Dependency checksums
-├── static/
-│   └── index.html       # Single-page frontend (HTML/CSS/JS)
-├── Dockerfile           # Container build
-├── k8-deployment.yaml   # Kubernetes manifests
-├── setup.sh             # Setup and deployment script
-└── README.md            # This file
+├── main.go                  # HTTP server, registry, execution, HITL, and memory APIs
+├── conversation_api.go      # Conversation grouping and timeline API
+├── jaeger_trace.go          # Jaeger enrichment and browser redirect
+├── skills_api.go            # Skills management API host
+├── redis_storage_provider.go # Redis adapter used by viewer APIs
+├── go.mod                   # Module plus local framework replacements
+├── go.sum                   # Dependency checksums
+├── static/                  # HTML, CSS, JavaScript, and image assets
+├── tests/                   # Frontend Node.js tests
+├── Dockerfile.workspace     # Supported in-repository container build
+├── Dockerfile               # Prepared standalone-checkout container build
+├── k8-deployment.yaml       # Kubernetes manifests
+├── setup.sh                 # Local and Kind deployment commands
+└── README.md                # This file
 ```
 
 ## Extracting to Standalone Repository
 
-This app is designed to be fully portable. To use it as a standalone project:
+The application is independently deployable, but its source is not currently a
+single-folder standalone module. Its module path is
+`github.com/truvaagents/truva-g3/examples/registry-viewer-app`, and `go.mod`
+imports `core`, `memory`, `orchestration`, and `telemetry` through local
+`../../...` replacements.
 
-1. Copy the entire `registry-viewer-app` folder
-2. No modifications needed - just build and run
-3. The module path is generic (`registry-viewer-app`)
-4. Only direct runtime dependency is `github.com/redis/go-redis/v9`
+To move it to a separate repository:
+
+1. Copy the complete `registry-viewer-app` directory, including `static/` and
+   the frontend tests.
+2. Choose the new module path and update the `module` directive.
+3. Remove the local `replace` directives and depend on released TruvaG3 module
+   versions that contain the APIs used by the viewer, or copy and maintain those
+   modules in the new repository.
+4. Update the container build. In this repository, `setup.sh` deliberately uses
+   `Dockerfile.workspace` so it can copy the local framework modules. The
+   source-level `Dockerfile` is usable only after the dependencies above resolve
+   without reaching outside its build context.
+5. Run the Go and frontend tests before building the binary or image.
 
 ```bash
-# In a new location/repo
+# After updating the module dependencies in the new repository
+GOWORK=off go test ./...
 go build -o registry-viewer .
 ./registry-viewer
 ```
 
 ## Port Allocation
 
-Default port `8100` was chosen to avoid conflicts with common service ports:
-- 8080-8099: Reserved for example tools and agents
-- 3000: Grafana
-- 6379: Redis
-- 9090: Prometheus
-- 16686: Jaeger
+Port `8361` is reserved for Registry Viewer in the central
+[examples port catalog](../README.md#ports). Keep the binary, container,
+Kubernetes manifest, setup script, and documentation on that value unless the
+catalog allocation is deliberately changed. Shared infrastructure such as
+Redis, Grafana, Prometheus, and Jaeger retains its own ports and ingress routes.
 
 ## Build Environment Variables
 
@@ -380,6 +405,8 @@ Default port `8100` was chosen to avoid conflicts with common service ports:
 |----------|-------------|
 | `REDIS_URL` | Override Redis URL for deployment (default: extracted from redis.yaml) |
 | `REDIS_NAMESPACE` | Redis key namespace (default: `truvag3`) |
+| `JAEGER_QUERY_URL` | Jaeger Query base URL supplied to the Deployment (default: `http://jaeger-query`) |
+| `JAEGER_UI_URL` | Browser-facing Jaeger UI base URL supplied to the Deployment (default: `http://jaeger.localhost`) |
 | `DOCKER_NO_CACHE` | Set to `true` for fresh Docker build |
 
 ## Related Orchestration Environment Variables

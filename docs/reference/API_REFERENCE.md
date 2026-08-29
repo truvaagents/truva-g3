@@ -3885,8 +3885,13 @@ recorder, err := telemetry.NewRedisLLMCallRecorder(
 if err != nil {
     log.Printf("LLM recording disabled: %v", err)
     recorder = nil // InstrumentedClient falls back to NoOp
+} else {
+    defer func() {
+        if closeErr := recorder.Close(); closeErr != nil {
+            log.Printf("LLM recorder close failed: %v", closeErr)
+        }
+    }()
 }
-defer recorder.Close()
 ```
 
 ### Distributed Tracing
@@ -5816,13 +5821,17 @@ require `ExecutionStorageProvider`, making atomic lineage promotion and
 TTL-preserving content rewrites compile-time provider requirements.
 
 Interrupted executions receive at least the maximum of normal retention, error
-retention, and the checkpoint's remaining approval lifetime. Storing a related
-execution promotes its existing root execution, trace mapping, conversation
-index, and current/root LLM-debug evidence to the selected minimum lifetime.
-`ExtendTTL` follows retained root links recursively with cycle protection.
-Normal extension reads a small retention-link projection instead of decoding
-the full execution payload, and direct Redis performs the related key updates
-inside its retry/circuit-breaker boundary. A missing requested execution returns
+retention, and the checkpoint's remaining approval lifetime. Within the
+execution store, storing a related execution promotes its existing root
+execution, trace mapping, and conversation index to the selected minimum
+lifetime. Final execution recording separately promotes current/root LLM-debug
+evidence through `LLMDebugRetentionPreserver`, with
+`LLMDebugStore.ExtendTTL` used as a compatibility fallback.
+`ExecutionStore.ExtendTTL` follows retained root links recursively with cycle
+protection. Normal extension reads a small
+retention-link projection instead of decoding the full execution payload, and
+direct Redis performs the related key updates inside its retry/circuit-breaker
+boundary. A missing requested execution returns
 `ErrExecutionRecordNotFound`. If the requested execution exists but a later
 ancestor has expired, the available retained chain is extended successfully
 and traversal stops without recreating the ancestor.

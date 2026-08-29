@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # setup.sh - Setup and deployment script for registry-viewer-app
-# This is a standalone app that visualizes the TruvaG3 Redis service registry
-# No infrastructure setup required - just build, deploy, and run
+# This independently deployable app visualizes TruvaG3 runtime data. Its source
+# imports framework modules from the repository; setup.sh builds them together.
+# No infrastructure setup is performed here: build, deploy, and run the app
+# after shared infrastructure is available.
 
 set -e
 
@@ -130,7 +132,7 @@ build_app() {
 
     cd "$SCRIPT_DIR"
 
-    # Disable Go workspace to build standalone
+    # Build this module through the local framework replacements in go.mod.
     export GOWORK=off
 
     # Download dependencies
@@ -325,9 +327,9 @@ run_local() {
     echo ""
 
     if [ "$1" = "redis" ]; then
-        ./registry-viewer -mock=false -redis-url="${REDIS_URL:-redis://localhost:6379}"
+        ./registry-viewer -port="$APP_PORT" -mock=false -redis-url="${REDIS_URL:-redis://localhost:6379}"
     else
-        ./registry-viewer -mock=true
+        ./registry-viewer -port="$APP_PORT" -mock=true
     fi
 }
 
