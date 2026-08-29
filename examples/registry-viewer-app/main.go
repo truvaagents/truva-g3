@@ -518,7 +518,7 @@ func init() {
 	flag.BoolVar(&useMock, "mock", true, "Use mock data instead of Redis")
 	flag.StringVar(&redisURL, "redis-url", "", "Redis/Valkey URL (required when -mock=false, or set REDIS_URL env var)")
 	flag.StringVar(&namespace, "namespace", "truvag3", "Redis key namespace")
-	flag.IntVar(&port, "port", 8100, "HTTP server port")
+	flag.IntVar(&port, "port", 8361, "HTTP server port")
 }
 
 // getEnvOrDefault returns environment variable value or default
