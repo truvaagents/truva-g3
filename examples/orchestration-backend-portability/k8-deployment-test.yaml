@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orchestration-backend-portability
+  namespace: truvag3-examples
+  labels:
+    app: orchestration-backend-portability
+    app.kubernetes.io/component: conformance
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app: orchestration-backend-portability
+        app.kubernetes.io/component: conformance
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+      - name: conformance
+        image: truvag3-orchestration-portability:local
+        imagePullPolicy: Never
+        envFrom:
+        - configMapRef:
+            name: portability-backend-config
+        - secretRef:
+            name: portability-postgres
+        env:
+        - name: PORTABILITY_INTEGRATION
+          value: "1"
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]

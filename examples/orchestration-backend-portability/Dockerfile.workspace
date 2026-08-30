@@ -1,0 +1,30 @@
+# Local-development image built from the TruvaG3 repository root.
+FROM golang:1.27.0-alpine AS builder
+
+RUN apk add --no-cache ca-certificates git
+WORKDIR /app
+
+COPY core/ ./core/
+COPY orchestration/ ./orchestration/
+COPY telemetry/ ./telemetry/
+COPY examples/orchestration-backend-portability/ ./examples/orchestration-backend-portability/
+
+WORKDIR /app/examples/orchestration-backend-portability
+ENV GOWORK=off CGO_ENABLED=0 GOOS=linux
+RUN go mod download && \
+    go build -trimpath -ldflags="-s -w" -o /out/orchestration-backend-portability .
+
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+WORKDIR /app
+COPY --from=builder /out/orchestration-backend-portability ./orchestration-backend-portability
+RUN chown appuser:appgroup /app/orchestration-backend-portability && \
+    chmod 0555 /app/orchestration-backend-portability
+
+USER appuser
+ENV PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["/app/orchestration-backend-portability"]
