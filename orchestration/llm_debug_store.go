@@ -277,6 +277,8 @@ type LLMDebugConfig struct {
 
 	// RedisDB is the Redis database number for storage.
 	// Default: 7 (core.RedisDBLLMDebug). Override via TRUVAG3_LLM_DEBUG_REDIS_DB
+	// Deprecated: configure Redis client roles through redisprovider.ClientConfig.
+	// This field remains for the legacy compatibility factory.
 	RedisDB int `json:"redis_db"`
 }
 

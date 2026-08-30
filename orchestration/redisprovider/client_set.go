@@ -27,6 +27,15 @@ var knownClientRoles = map[ClientRole]struct{}{
 	ClientRoleSkills: {},
 }
 
+var orderedClientRoles = []ClientRole{
+	ClientRoleExecution,
+	ClientRoleLLMDebug,
+	ClientRoleHITL,
+	ClientRoleWorkflow,
+	ClientRoleScheduling,
+	ClientRoleSkills,
+}
+
 type ClientSet struct {
 	defaultClient redis.UniversalClient
 	roleClients   map[ClientRole]redis.UniversalClient
@@ -50,6 +59,10 @@ func WithRoleClient(role ClientRole, client redis.UniversalClient) ClientSetOpti
 	})
 }
 
+// NewClientSet creates an inspectable role-to-client set. A non-nil default is
+// an explicit fallback for every role. Pass a nil default with one or more
+// WithRoleClient options to construct only the capability groups a process
+// needs.
 func NewClientSet(defaultClient redis.UniversalClient, options ...ClientSetOption) (*ClientSet, error) {
 	clients := &ClientSet{defaultClient: defaultClient, roleClients: make(map[ClientRole]redis.UniversalClient)}
 	for index, option := range options {

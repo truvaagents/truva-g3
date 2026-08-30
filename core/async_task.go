@@ -58,7 +58,9 @@ var ErrTaskNotFound = errors.New("task not found")
 // (already completed, failed, or cancelled)
 var ErrTaskNotCancellable = errors.New("task not cancellable")
 
-// ErrTaskQueueEmpty is returned when Dequeue times out with no task available
+// ErrTaskQueueEmpty is retained for compatibility with early TaskQueue
+// implementations. The current TaskQueue contract returns (nil, nil) on an
+// ordinary dequeue timeout and reserves errors for cancellation/backend failure.
 var ErrTaskQueueEmpty = errors.New("task queue empty")
 
 // ErrInvalidTaskStatus is returned when a task status transition is invalid
@@ -258,7 +260,6 @@ type TaskQueue interface {
 	// Dequeue retrieves the next task from the queue.
 	// Blocks until a task is available or timeout expires.
 	// Returns nil, nil if timeout expires with no task.
-	// Returns ErrTaskQueueEmpty if queue is empty after timeout.
 	Dequeue(ctx context.Context, timeout time.Duration) (*Task, error)
 
 	// Acknowledge marks a task as successfully processed.

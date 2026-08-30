@@ -1222,7 +1222,11 @@ The core module also defines interfaces for the **scheduled-execution subsystem*
 | `TaskDispatcher` | Enqueue a task for async consumption |
 | `ScheduleStore` | Persist schedule definitions with time-indexed due queries |
 
-The `core/conformance/` sub-package provides `RunTaskConsumerConformance(t, factory)` -- a contract test suite that validates any `TaskConsumer` implementation in ~5 lines. See [Scheduled Tasks Guide](../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).
+The test-support `core/conformance/` sub-package provides reusable suites for
+`TaskConsumer` delivery profiles, `TaskStore`, `ScheduleStore`, and the legacy
+`TaskQueue`. Provider tests import the package and run the suites for every
+capability they advertise; runtime code does not import it. See the
+[Scheduled Tasks Guide](../docs/orchestration/SCHEDULED_TASKS_GUIDE.md).
 
 ### 🚦 CORS Middleware: Opening Doors Safely
 

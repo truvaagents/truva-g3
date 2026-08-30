@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/core/conformance"
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -18,6 +19,15 @@ import (
 
 func TestInMemoryScheduleStore_ImplementsInterface(t *testing.T) {
 	var _ core.ScheduleStore = NewInMemoryScheduleStore()
+}
+
+func TestInMemoryScheduleStoreConformance(t *testing.T) {
+	conformance.RunScheduleStoreConformance(t, func(*testing.T) conformance.ScheduleStoreFixture {
+		shared := NewInMemoryScheduleStore()
+		return conformance.ScheduleStoreFixture{
+			First: shared, Second: shared, Isolated: NewInMemoryScheduleStore(),
+		}
+	})
 }
 
 func TestInMemoryScheduleStore_NewIsEmpty(t *testing.T) {

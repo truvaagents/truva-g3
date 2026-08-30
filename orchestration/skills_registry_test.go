@@ -64,6 +64,21 @@ func TestSkillBackendCompositionUsesNarrowTypedCapabilities(t *testing.T) {
 	if err := backends.ValidateFor(requirements); err != nil {
 		t.Fatalf("ValidateFor(BackendSkills) error = %v", err)
 	}
+	adminRequirements, err := RequirementsForFeatures(nil, BackendFeatureSkillsAdministration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(adminRequirements); err != nil {
+		t.Fatalf("complete skill control-plane composition was rejected: %v", err)
+	}
+	dependencies, err := backends.SkillAdministrationDependencies()
+	if err != nil {
+		t.Fatalf("SkillAdministrationDependencies() error = %v", err)
+	}
+	if dependencies.Registry != backend || dependencies.RevisionReader != backend ||
+		dependencies.Administration != backend || dependencies.Deletions != backend || dependencies.Audit != backend {
+		t.Fatal("skill administration wiring did not unpack all narrow dependencies")
+	}
 
 	override := &skillContractTestBackend{}
 	updated, err := backends.With(WithSkillRegistryBackend(override))
@@ -72,6 +87,28 @@ func TestSkillBackendCompositionUsesNarrowTypedCapabilities(t *testing.T) {
 	}
 	if backends.SkillRegistry() != backend || updated.SkillRegistry() != override {
 		t.Fatal("skill registry override mutated the base composition")
+	}
+}
+
+func TestSkillRuntimeAndAdministrationCapabilitiesAreDistinct(t *testing.T) {
+	backend := &skillContractTestBackend{}
+	backends, err := NewOrchestrationBackends(WithSkillRegistryBackend(backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeRequirements, err := RequirementsForFeatures(nil, BackendFeatureSkillsRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(runtimeRequirements); err != nil {
+		t.Fatalf("registry-only runtime composition was rejected: %v", err)
+	}
+	adminRequirements, err := RequirementsForFeatures(nil, BackendFeatureSkillsAdministration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(adminRequirements); err == nil {
+		t.Fatal("registry-only composition advertised full skill administration")
 	}
 }
 

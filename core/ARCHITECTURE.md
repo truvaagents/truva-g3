@@ -673,6 +673,29 @@ func TestToolCannotDiscover(t *testing.T) {
 }
 ```
 
+### Reusable Contract Conformance
+
+Provider-neutral interfaces owned by Core may ship reusable executable suites
+under the separately importable `core/conformance` package. This placement
+keeps the contract beside its owner without making `core` depend on an optional
+framework module or forcing provider tests to duplicate behavioral rules.
+
+The conformance package is test support, not runtime framework behavior:
+
+- it may import only the standard library and the root `core` package;
+- it must not import orchestration or another optional framework module;
+- runtime packages must not import it;
+- exported `Run*Conformance` functions accept factories for implementations
+  and test observable contract behavior rather than implementation details;
+- provider and in-memory implementations run every suite corresponding to the
+  capabilities they advertise.
+
+Current suites cover AI-options cloning, `TaskConsumer` delivery profiles,
+`TaskStore`, `ScheduleStore`, and the legacy `TaskQueue`. Orchestration-owned
+persistence and coordination contracts remain in
+`orchestration/backendconformance`; moving those suites into Core would move
+ownership in the wrong direction.
+
 ### Integration Testing Patterns
 
 #### 1. **Discovery System Testing**
@@ -1007,6 +1030,7 @@ their packages or vocabulary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6 | 2026-08-30 | Documented the module-owned `core/conformance` test-support package and its dependency, ownership, and runtime-import constraints |
 | 1.5 | 2026-08-29 | Clarified that redaction helpers are explicit adopter/subsystem transformations and documented the remaining automatic framework uses as legacy exceptions |
 | 1.4 | 2026-08-20 | Defined `AIOptions.ResponseFormat="json"` as the sole non-empty portable structured-output value and reserved native formats for `Extra` |
 | 1.3 | 2026-08-17 | Migrated the included Redis implementation to go-redis/v9 with explicit RESP2 compatibility defaults and application-owned RESP3 opt-in |

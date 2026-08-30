@@ -17,11 +17,24 @@ type ClientConfig struct {
 type ClientConfigOption interface{ applyClientConfig(*ClientConfig) error }
 type clientConfigOption func(*ClientConfig) error
 
+var clientRoleDatabaseVariables = map[ClientRole]string{
+	ClientRoleExecution:  "TRUVAG3_EXECUTION_DEBUG_REDIS_DB",
+	ClientRoleLLMDebug:   "TRUVAG3_LLM_DEBUG_REDIS_DB",
+	ClientRoleHITL:       "TRUVAG3_HITL_REDIS_DB",
+	ClientRoleWorkflow:   "TRUVAG3_WORKFLOW_REDIS_DB",
+	ClientRoleScheduling: "TRUVAG3_SCHEDULING_REDIS_DB",
+	ClientRoleSkills:     "TRUVAG3_SKILLS_REDIS_DB",
+}
+
 func (option clientConfigOption) applyClientConfig(config *ClientConfig) error { return option(config) }
 
 func DefaultClientConfig() ClientConfig {
 	return ClientConfig{
 		url: "redis://localhost:6379",
+		// These database assignments preserve the behavior of the legacy
+		// constructors and examples. They are compatibility defaults, not
+		// recommendations for a new Redis deployment. Role-specific environment
+		// variables or WithRoleDatabase may isolate them differently.
 		roleDB: map[ClientRole]int{
 			ClientRoleExecution:  core.RedisDBExecutionDebug,
 			ClientRoleLLMDebug:   core.RedisDBLLMDebug,
@@ -86,14 +99,7 @@ func LoadClientConfigFromEnvironment(base ClientConfig, lookup func(string) (str
 	} else if value, ok := lookup("TRUVAG3_REDIS_URL"); ok {
 		options = append(options, WithClientURL(value))
 	}
-	for role, name := range map[ClientRole]string{
-		ClientRoleExecution:  "TRUVAG3_EXECUTION_DEBUG_REDIS_DB",
-		ClientRoleLLMDebug:   "TRUVAG3_LLM_DEBUG_REDIS_DB",
-		ClientRoleHITL:       "TRUVAG3_HITL_REDIS_DB",
-		ClientRoleWorkflow:   "TRUVAG3_WORKFLOW_REDIS_DB",
-		ClientRoleScheduling: "TRUVAG3_SCHEDULING_REDIS_DB",
-		ClientRoleSkills:     "TRUVAG3_SKILLS_REDIS_DB",
-	} {
+	for role, name := range clientRoleDatabaseVariables {
 		if value, ok := lookup(name); ok {
 			database, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil {
@@ -118,14 +124,70 @@ type OwnedClients struct {
 	clients   []redis.UniversalClient
 }
 
-func NewOwnedClients(config ClientConfig) (*OwnedClients, error) {
+type ownedClientsConfig struct {
+	restricted bool
+	roles      map[ClientRole]struct{}
+}
+
+// OwnedClientsOption controls which configured Redis roles receive owned
+// clients. It does not alter database assignments in ClientConfig.
+type OwnedClientsOption interface {
+	applyOwnedClients(*ownedClientsConfig) error
+}
+
+type ownedClientsOptionFunc func(*ownedClientsConfig) error
+
+func (option ownedClientsOptionFunc) applyOwnedClients(config *ownedClientsConfig) error {
+	return option(config)
+}
+
+// WithOwnedClientRoles limits owned-client construction to the listed roles.
+// This is the feature-aware path for processes such as an agent that needs only
+// the runtime skill registry.
+func WithOwnedClientRoles(roles ...ClientRole) OwnedClientsOption {
+	snapshot := append([]ClientRole(nil), roles...)
+	return ownedClientsOptionFunc(func(config *ownedClientsConfig) error {
+		if len(snapshot) == 0 {
+			return fmt.Errorf("redisprovider: at least one owned-client role is required")
+		}
+		selected := make(map[ClientRole]struct{}, len(snapshot))
+		for _, role := range snapshot {
+			if _, ok := knownClientRoles[role]; !ok {
+				return fmt.Errorf("redisprovider: unknown client role %q", role)
+			}
+			if _, duplicate := selected[role]; duplicate {
+				return fmt.Errorf("redisprovider: duplicate owned-client role %q", role)
+			}
+			selected[role] = struct{}{}
+		}
+		config.restricted = true
+		config.roles = selected
+		return nil
+	})
+}
+
+func NewOwnedClients(config ClientConfig, options ...OwnedClientsOption) (*OwnedClients, error) {
 	configured, err := ConfigureClientConfig(config)
 	if err != nil {
 		return nil, err
 	}
+	ownedConfig := ownedClientsConfig{}
+	for index, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("redisprovider: owned-client option %d is nil", index)
+		}
+		if err := option.applyOwnedClients(&ownedConfig); err != nil {
+			return nil, err
+		}
+	}
 	byDatabase := make(map[int]redis.UniversalClient)
 	roleOptions := make([]ClientSetOption, 0, len(configured.roleDB))
-	for _, role := range []ClientRole{ClientRoleExecution, ClientRoleLLMDebug, ClientRoleHITL, ClientRoleWorkflow, ClientRoleScheduling, ClientRoleSkills} {
+	for _, role := range orderedClientRoles {
+		if ownedConfig.restricted {
+			if _, selected := ownedConfig.roles[role]; !selected {
+				continue
+			}
+		}
 		database, ok := configured.roleDB[role]
 		if !ok {
 			continue

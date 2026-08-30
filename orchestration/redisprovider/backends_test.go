@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +91,38 @@ func TestRedisPresetPreservesServiceScopedTaskQueueDefault(t *testing.T) {
 	}
 }
 
+func TestRedisPresetTaskQueuePreservesInflightListRepresentation(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	clients, err := NewClientSet(nil, WithRoleClient(ClientRoleScheduling, client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NewOptions(WithNamespace("settlement"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends, err := NewOrchestrationBackends(clients, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := &core.Task{ID: "inflight-list", Status: core.TaskStatusQueued}
+	if err := backends.TaskQueue().Enqueue(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	dequeued, err := backends.TaskQueue().Dequeue(t.Context(), time.Second)
+	if err != nil || dequeued == nil {
+		t.Fatalf("Dequeue = %#v, %v", dequeued, err)
+	}
+	if got := server.Type("settlement:tasks:processing"); got != "list" {
+		t.Fatalf("in-flight Redis type = %q, want list", got)
+	}
+	if err := backends.TaskQueue().Acknowledge(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRedisPresetPreservesAgentScopedCheckpointPrefixDefault(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -166,9 +199,100 @@ func TestRedisPresetTaskDeliveryConformance(t *testing.T) {
 	})
 }
 
+func TestRedisPresetStorageConformance(t *testing.T) {
+	newSchedulingFixture := func(t *testing.T) (*orchestration.OrchestrationBackends, *orchestration.OrchestrationBackends, *orchestration.OrchestrationBackends) {
+		server := miniredis.RunT(t)
+		build := func(namespace string) *orchestration.OrchestrationBackends {
+			client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+			t.Cleanup(func() { _ = client.Close() })
+			clients, err := NewClientSet(nil, WithRoleClient(ClientRoleScheduling, client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			options, err := NewOptions(WithNamespace(namespace))
+			if err != nil {
+				t.Fatal(err)
+			}
+			backends, err := NewOrchestrationBackends(clients, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return backends
+		}
+		return build("conformance"), build("conformance"), build("isolated")
+	}
+
+	t.Run("TaskStore", func(t *testing.T) {
+		conformance.RunTaskStoreConformance(t, func(t *testing.T) conformance.TaskStoreFixture {
+			first, second, isolated := newSchedulingFixture(t)
+			return conformance.TaskStoreFixture{
+				First: first.Tasks(), Second: second.Tasks(), Isolated: isolated.Tasks(),
+			}
+		})
+	})
+	t.Run("ScheduleStore", func(t *testing.T) {
+		conformance.RunScheduleStoreConformance(t, func(t *testing.T) conformance.ScheduleStoreFixture {
+			first, second, isolated := newSchedulingFixture(t)
+			return conformance.ScheduleStoreFixture{
+				First: first.Schedules(), Second: second.Schedules(), Isolated: isolated.Schedules(),
+			}
+		})
+	})
+	t.Run("TaskQueue", func(t *testing.T) {
+		conformance.RunTaskQueueConformance(t, func(t *testing.T) conformance.TaskQueueFixture {
+			first, second, isolated := newSchedulingFixture(t)
+			return conformance.TaskQueueFixture{
+				First: first.TaskQueue(), Second: second.TaskQueue(), Isolated: isolated.TaskQueue(),
+			}
+		})
+	})
+}
+
 type overrideExecutionStore struct{}
 
 func (*overrideExecutionStore) Store(context.Context, *orchestration.StoredExecution) error {
+	return nil
+}
+
+type recordingCheckpointPersistence struct {
+	updates chan orchestration.CheckpointStatus
+}
+
+func (*recordingCheckpointPersistence) SaveCheckpoint(context.Context, *orchestration.ExecutionCheckpoint) error {
+	return nil
+}
+func (*recordingCheckpointPersistence) LoadCheckpoint(context.Context, string) (*orchestration.ExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (persistence *recordingCheckpointPersistence) UpdateCheckpointStatus(_ context.Context, _ string, status orchestration.CheckpointStatus) error {
+	persistence.updates <- status
+	return nil
+}
+func (*recordingCheckpointPersistence) ListPendingCheckpoints(context.Context, orchestration.CheckpointFilter) ([]*orchestration.ExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (*recordingCheckpointPersistence) DeleteCheckpoint(context.Context, string) error { return nil }
+
+type recordingExpiredCheckpointSource struct {
+	once sync.Once
+}
+
+type providerTestRunnable struct{}
+
+func (*providerTestRunnable) Start(context.Context) error { return nil }
+
+func (source *recordingExpiredCheckpointSource) ClaimExpiredCheckpoints(context.Context, orchestration.ExpiredCheckpointClaimRequest) ([]*orchestration.ExecutionCheckpoint, error) {
+	var checkpoints []*orchestration.ExecutionCheckpoint
+	source.once.Do(func() {
+		checkpoints = []*orchestration.ExecutionCheckpoint{{
+			CheckpointID: "override-checkpoint",
+			Status:       orchestration.CheckpointStatusPending,
+			RequestMode:  orchestration.RequestModeNonStreaming,
+		}}
+	})
+	return checkpoints, nil
+}
+func (*recordingExpiredCheckpointSource) ReleaseExpiredCheckpointClaim(context.Context, string, string) error {
 	return nil
 }
 
@@ -353,6 +477,13 @@ func TestRedisPresetPopulatesCapabilitiesAndAppliesCallerOverrideLast(t *testing
 		backends.TaskConsumer() == nil || backends.Lock() == nil {
 		t.Fatal("Redis preset did not populate all supported capabilities")
 	}
+	expiryRequirements, err := orchestration.RequirementsForFeatures(nil, orchestration.BackendFeatureCheckpointExpiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(expiryRequirements); err == nil {
+		t.Fatal("Redis preset advertised checkpoint expiry without an enabled processor")
+	}
 
 	providerDefaults, err := NewOrchestrationBackends(clients, options)
 	if err != nil {
@@ -398,6 +529,13 @@ func TestRedisPresetExposesExpiryLifecycleWithoutStartingIt(t *testing.T) {
 	if len(backends.Runnables()) != 1 {
 		t.Fatalf("runnables = %d, want one application-owned expiry processor", len(backends.Runnables()))
 	}
+	requirements, err := orchestration.RequirementsForFeatures(nil, orchestration.BackendFeatureCheckpointExpiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(requirements); err != nil {
+		t.Fatalf("enabled checkpoint expiry composition is incomplete: %v", err)
+	}
 	// Construction must not start the processor. A checkpoint saved immediately
 	// afterward remains pending until the application starts the runnable.
 	checkpoint := &orchestration.ExecutionCheckpoint{
@@ -410,6 +548,75 @@ func TestRedisPresetExposesExpiryLifecycleWithoutStartingIt(t *testing.T) {
 	loaded, err := backends.Checkpoints().LoadCheckpoint(t.Context(), checkpoint.CheckpointID)
 	if err != nil || loaded.Status != orchestration.CheckpointStatusPending {
 		t.Fatalf("checkpoint after construction = %#v, %v", loaded, err)
+	}
+}
+
+func TestRedisPresetRebuildsExpiryProcessorAgainstCheckpointOverrides(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	clients, err := NewClientSet(nil, WithRoleClient(ClientRoleHITL, client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NewOptions(WithCheckpointExpiry(orchestration.ExpiryProcessorConfig{
+		Enabled: true, ScanInterval: time.Second, BatchSize: 1,
+	}, nil, orchestration.WithCheckpointExpiryOwner("override-test")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistence := &recordingCheckpointPersistence{updates: make(chan orchestration.CheckpointStatus, 1)}
+	source := &recordingExpiredCheckpointSource{}
+	backends, err := NewOrchestrationBackends(
+		clients,
+		options,
+		orchestration.WithCheckpointPersistence(persistence),
+		orchestration.WithCheckpointExpiry(source),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- backends.CheckpointExpiryProcessor().Start(ctx) }()
+	select {
+	case status := <-persistence.updates:
+		if status != orchestration.CheckpointStatusExpiredRejected {
+			t.Fatalf("expiry status = %q, want %q", status, orchestration.CheckpointStatusExpiredRejected)
+		}
+	case <-ctx.Done():
+		t.Fatal("expiry processor did not use the overridden checkpoint dependencies")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("expiry processor shutdown: %v", err)
+	}
+}
+
+func TestRedisPresetRejectsProcessorBeforeCheckpointDependencyOverride(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	clients, err := NewClientSet(nil, WithRoleClient(ClientRoleHITL, client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NewOptions(WithCheckpointExpiry(orchestration.ExpiryProcessorConfig{
+		Enabled: true, ScanInterval: time.Second, BatchSize: 1,
+	}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewOrchestrationBackends(
+		clients,
+		options,
+		orchestration.WithCheckpointExpiryProcessor(&providerTestRunnable{}),
+		orchestration.WithCheckpointPersistence(&recordingCheckpointPersistence{}),
+	)
+	if err == nil {
+		t.Fatal("processor before checkpoint dependency override was silently substituted")
 	}
 }
 
@@ -459,6 +666,59 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	}
 }
 
+func TestOwnedClientsCanConstructOnlySelectedRoles(t *testing.T) {
+	owned, err := NewOwnedClients(
+		DefaultClientConfig(),
+		WithOwnedClientRoles(ClientRoleSkills),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owned.Close() })
+	if len(owned.clients) != 1 {
+		t.Fatalf("owned Redis clients = %d, want one", len(owned.clients))
+	}
+	if owned.ClientSet().Resolve(ClientRoleSkills) == nil {
+		t.Fatal("selected skills role was not constructed")
+	}
+	for _, role := range orderedClientRoles {
+		if role != ClientRoleSkills && owned.ClientSet().Resolve(role) != nil {
+			t.Fatalf("unselected role %q resolved through the client set", role)
+		}
+	}
+
+	options, err := NewOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends, err := NewOrchestrationBackends(owned.ClientSet(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backends.SkillRegistry() == nil || backends.SkillAdministrationStore() == nil {
+		t.Fatal("selected skills role did not construct the skills capability group")
+	}
+	if backends.Execution() != nil || backends.Workflow() != nil || backends.Schedules() != nil {
+		t.Fatal("skills-only clients constructed unrelated backend capability groups")
+	}
+}
+
+func TestOwnedClientRoleSelectionValidation(t *testing.T) {
+	tests := []OwnedClientsOption{
+		WithOwnedClientRoles(),
+		WithOwnedClientRoles(ClientRole("unknown")),
+		WithOwnedClientRoles(ClientRoleSkills, ClientRoleSkills),
+	}
+	for index, option := range tests {
+		if _, err := NewOwnedClients(DefaultClientConfig(), option); err == nil {
+			t.Errorf("invalid owned-client role option %d was accepted", index)
+		}
+	}
+	if _, err := NewOwnedClients(DefaultClientConfig(), nil); err == nil {
+		t.Fatal("nil owned-client option was accepted")
+	}
+}
+
 func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 	base, err := NewOptions()
 	if err != nil {
@@ -469,6 +729,9 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 			"TRUVAG3_WORKFLOW_STATE_TTL":        "48h",
 			"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "5",
 			"TRUVAG3_TASK_QUEUE_RETRY_DELAY":    "250ms",
+			"TRUVAG3_LLM_DEBUG_TTL":             "2h",
+			"TRUVAG3_LLM_DEBUG_ERROR_TTL":       "96h",
+			"TRUVAG3_HITL_CHECKPOINT_TTL":       "36h",
 		}
 		value, present := values[name]
 		return value, present
@@ -484,6 +747,8 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 	}
 	configured, err := ConfigureOptions(fromEnvironment,
 		WithExecutionStoreConfig(executionConfig),
+		WithLLMDebugRetention(3*time.Hour, 120*time.Hour),
+		WithCheckpointTTL(48*time.Hour),
 		WithWorkflowStateTTL(72*time.Hour),
 		WithTaskQueueRetryPolicy(7, 500*time.Millisecond),
 	)
@@ -491,7 +756,8 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if configured.executionConfig != executionConfig || configured.workflowTTL != 72*time.Hour || configured.taskRetryCount != 7 ||
-		configured.taskRetryDelay != 500*time.Millisecond {
+		configured.taskRetryDelay != 500*time.Millisecond || configured.llmDebugTTL != 3*time.Hour ||
+		configured.llmDebugErrorTTL != 120*time.Hour || configured.checkpointTTL != 48*time.Hour {
 		t.Fatalf("code precedence = %#v", configured)
 	}
 
@@ -499,6 +765,9 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 		"TRUVAG3_WORKFLOW_STATE_TTL":        "0s",
 		"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "0",
 		"TRUVAG3_TASK_QUEUE_RETRY_DELAY":    "invalid",
+		"TRUVAG3_LLM_DEBUG_TTL":             "0s",
+		"TRUVAG3_LLM_DEBUG_ERROR_TTL":       "invalid",
+		"TRUVAG3_HITL_CHECKPOINT_TTL":       "-1h",
 	} {
 		t.Run(variable, func(t *testing.T) {
 			if _, err := LoadOptionsFromEnvironment(base, func(name string) (string, bool) {
@@ -507,6 +776,57 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 				t.Fatalf("invalid %s was accepted", variable)
 			}
 		})
+	}
+	if _, err := NewOptions(WithLLMDebugRetention(0, time.Hour)); err == nil {
+		t.Fatal("non-positive LLM debug retention was accepted")
+	}
+	if _, err := NewOptions(WithCheckpointTTL(0)); err == nil {
+		t.Fatal("non-positive checkpoint retention was accepted")
+	}
+}
+
+func TestRedisPresetAppliesDebugAndCheckpointRetention(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	clients, err := NewClientSet(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NewOptions(
+		WithNamespace("retention"),
+		WithLLMDebugRetention(2*time.Hour, 6*time.Hour),
+		WithCheckpointTTL(4*time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends, err := NewOrchestrationBackends(clients, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, interaction := range map[string]orchestration.LLMInteraction{
+		"success": {Type: "test", Timestamp: time.Now(), Success: true},
+		"failure": {Type: "test", Timestamp: time.Now(), Success: false},
+	} {
+		if err := backends.LLMDebug().RecordInteraction(t.Context(), id, interaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := server.TTL("retention:llm:debug:success:meta"); got != 2*time.Hour {
+		t.Fatalf("successful LLM debug TTL = %v, want %v", got, 2*time.Hour)
+	}
+	if got := server.TTL("retention:llm:debug:failure:meta"); got != 6*time.Hour {
+		t.Fatalf("failed LLM debug TTL = %v, want %v", got, 6*time.Hour)
+	}
+	checkpoint := &orchestration.ExecutionCheckpoint{
+		CheckpointID: "retained", Status: orchestration.CheckpointStatusPending,
+	}
+	if err := backends.Checkpoints().SaveCheckpoint(t.Context(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.TTL("retention:hitl:checkpoint:retained"); got != 4*time.Hour {
+		t.Fatalf("checkpoint TTL = %v, want %v", got, 4*time.Hour)
 	}
 }
 

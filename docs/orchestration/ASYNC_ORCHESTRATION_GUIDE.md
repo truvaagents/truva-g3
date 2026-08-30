@@ -191,18 +191,19 @@ The solution is elegantly simple: **return immediately with a task ID, process i
 │                         REDIS QUEUE                                  │
 │                                                                      │
 │  Queue: [task-abc123, task-def456, ...]                             │
+│  In-flight list: dequeued payloads awaiting Ack/Reject               │
 └───────────────────────────┬─────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      BACKGROUND WORKER                               │
 │                                                                      │
-│  1. BRPOP from queue (blocks waiting for tasks)                     │
+│  1. BRPOP from queue and record the in-flight payload                │
 │  2. Load task from Redis                                             │
 │  3. Execute handler (AI orchestration)                               │
 │  4. Report progress via ProgressReporter                             │
 │  5. Save result to Redis                                             │
-│  6. Mark task complete                                               │
+│  6. Mark task complete and acknowledge the in-flight payload         │
 └─────────────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -925,7 +926,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 | Worker pool | `orchestration/task_worker.go` | `processTask()`, `executeHandler()`, `failTask()` |
 | Telemetry helpers | `orchestration/task_telemetry.go` | `EmitTaskStarted()`, `EmitTaskCompleted()`, etc. |
 | API handler | `orchestration/task_api.go` | `HandleSubmit()`, `HandleGetTask()`, `HandleCancel()` |
-| Redis queue | `orchestration/redis_task_queue.go` | `Enqueue()`, `Dequeue()`, `Acknowledge()` |
+| Redis queue | `orchestration/redis_task_queue.go` | `Enqueue()`, `Dequeue()`, `Acknowledge()`, `Reject()` |
 | Redis store | `orchestration/redis_task_store.go` | `Create()`, `Get()`, `Update()`, `Cancel()` |
 | Linked spans | `telemetry/async_span.go` | `StartLinkedSpan()` |
 
@@ -1774,7 +1775,7 @@ type TaskWorkerConfig struct {
 ```go
 type RedisTaskQueueConfig struct {
     QueueKey       string         // Redis key for queue list (default: "truvag3:tasks:queue")
-    ProcessingKey  string         // Redis key for processing list (default: "truvag3:tasks:processing")
+    ProcessingKey  string         // Redis list for in-flight payloads (service-scoped by default)
     RetryAttempts  int            // Retry count for Redis operations (default: 3)
     RetryDelay     time.Duration  // Delay between retries (default: 100ms)
     CircuitBreaker CircuitBreaker // Optional circuit breaker for Redis operations

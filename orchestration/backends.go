@@ -19,23 +19,26 @@ const (
 	BackendLLMDebug         BackendCapability = "llm_debug"
 	BackendCheckpoints      BackendCapability = "checkpoints"
 	BackendCheckpointExpiry BackendCapability = "checkpoint_expiry"
-	BackendCommands         BackendCapability = "commands"
-	BackendWorkflowState    BackendCapability = "workflow_state"
-	BackendSchedules        BackendCapability = "schedules"
-	BackendTasks            BackendCapability = "tasks"
-	BackendTaskQueue        BackendCapability = "task_queue"
-	BackendTaskDispatcher   BackendCapability = "task_dispatcher"
-	BackendTaskConsumer     BackendCapability = "task_consumer"
-	BackendLock             BackendCapability = "lock"
-	BackendSkills           BackendCapability = "skills"
+	// BackendCheckpointExpiryProcessor is the application-owned lifecycle
+	// component that polls BackendCheckpointExpiry and updates BackendCheckpoints.
+	BackendCheckpointExpiryProcessor BackendCapability = "checkpoint_expiry_processor"
+	BackendCommands                  BackendCapability = "commands"
+	BackendWorkflowState             BackendCapability = "workflow_state"
+	BackendSchedules                 BackendCapability = "schedules"
+	BackendTasks                     BackendCapability = "tasks"
+	BackendTaskQueue                 BackendCapability = "task_queue"
+	BackendTaskDispatcher            BackendCapability = "task_dispatcher"
+	BackendTaskConsumer              BackendCapability = "task_consumer"
+	BackendLock                      BackendCapability = "lock"
+	// BackendSkills is the source-compatible name for the runtime skill-registry
+	// capability. Control-plane skill contracts have their own capabilities.
+	BackendSkills                BackendCapability = "skills"
+	BackendSkillRegistry         BackendCapability = BackendSkills
+	BackendSkillRevisionReader   BackendCapability = "skill_revision_reader"
+	BackendSkillAdministration   BackendCapability = "skill_administration"
+	BackendSkillRevisionDeletion BackendCapability = "skill_revision_deletion"
+	BackendSkillAudit            BackendCapability = "skill_audit"
 )
-
-var knownBackendCapabilities = map[BackendCapability]struct{}{
-	BackendExecutionDebug: {}, BackendLLMDebug: {}, BackendCheckpoints: {},
-	BackendCheckpointExpiry: {}, BackendCommands: {}, BackendWorkflowState: {},
-	BackendSchedules: {}, BackendTasks: {}, BackendTaskQueue: {},
-	BackendTaskDispatcher: {}, BackendTaskConsumer: {}, BackendLock: {}, BackendSkills: {},
-}
 
 // BackendRequirements is an immutable set of capabilities required by an
 // effective feature configuration.
@@ -57,24 +60,34 @@ const (
 	BackendFeatureTaskStorage           BackendFeature = "task_storage"
 	BackendFeatureTaskQueue             BackendFeature = "task_queue"
 	BackendFeatureDistributedLock       BackendFeature = "distributed_lock"
+	BackendFeatureSkillsRuntime         BackendFeature = "skills_runtime"
+	BackendFeatureSkillsAdministration  BackendFeature = "skills_administration"
 )
 
 var knownBackendFeatures = map[BackendFeature][]BackendCapability{
 	BackendFeatureCheckpointPersistence: {BackendCheckpoints},
 	BackendFeatureCrossInstanceHITL:     {BackendCheckpoints, BackendCommands},
-	BackendFeatureCheckpointExpiry:      {BackendCheckpoints, BackendCheckpointExpiry},
+	BackendFeatureCheckpointExpiry:      {BackendCheckpoints, BackendCheckpointExpiry, BackendCheckpointExpiryProcessor},
 	BackendFeatureWorkflow:              {BackendWorkflowState},
-	BackendFeatureSchedulerProducer:     {BackendSchedules, BackendTaskDispatcher},
+	BackendFeatureSchedulerProducer:     {BackendSchedules, BackendTasks, BackendTaskDispatcher, BackendLock},
 	BackendFeatureScheduledWorker:       {BackendTaskConsumer},
 	BackendFeatureTaskStorage:           {BackendTasks},
 	BackendFeatureTaskQueue:             {BackendTaskQueue},
 	BackendFeatureDistributedLock:       {BackendLock},
+	BackendFeatureSkillsRuntime:         {BackendSkillRegistry},
+	BackendFeatureSkillsAdministration: {
+		BackendSkillRegistry,
+		BackendSkillRevisionReader,
+		BackendSkillAdministration,
+		BackendSkillRevisionDeletion,
+		BackendSkillAudit,
+	},
 }
 
 func NewBackendRequirements(capabilities ...BackendCapability) (BackendRequirements, error) {
 	required := make(map[BackendCapability]struct{}, len(capabilities))
 	for _, capability := range capabilities {
-		if _, ok := knownBackendCapabilities[capability]; !ok {
+		if _, ok := backendCapabilityChecks[capability]; !ok {
 			return BackendRequirements{}, fmt.Errorf("orchestration: unknown backend capability %q", capability)
 		}
 		if _, duplicate := required[capability]; duplicate {
@@ -99,7 +112,7 @@ func RequirementsForFeatures(config *OrchestratorConfig, features ...BackendFeat
 			required[BackendLLMDebug] = struct{}{}
 		}
 		if config.Skills.Enabled && len(config.Skills.Bindings) > 0 {
-			required[BackendSkills] = struct{}{}
+			required[BackendSkillRegistry] = struct{}{}
 		}
 	}
 	seen := make(map[BackendFeature]struct{}, len(features))
@@ -136,34 +149,72 @@ func (r BackendRequirements) Capabilities() []BackendCapability {
 // OrchestrationBackends is a provider-neutral composition value. Its private
 // layout may grow without exposing provider concepts or exported struct fields.
 type OrchestrationBackends struct {
-	execution        ExecutionStore
-	llmDebug         LLMDebugStore
-	checkpoints      CheckpointPersistence
-	checkpointExpiry ExpiredCheckpointSource
-	commands         CommandStore
-	workflow         StateStore
-	schedules        core.ScheduleStore
-	tasks            core.TaskStore
-	taskQueue        core.TaskQueue
-	taskDispatcher   core.TaskDispatcher
-	taskConsumer     core.TaskConsumer
-	lock             core.DistributedLock
-	skillRegistry    SkillRegistry
-	skillRevisions   SkillRevisionReader
-	skillAdmin       SkillAdministrationStore
-	skillDeletions   SkillRevisionDeletionStore
-	skillAudit       SkillAuditSink
-	runnables        []core.Runnable
+	execution                 ExecutionStore
+	llmDebug                  LLMDebugStore
+	checkpoints               CheckpointPersistence
+	checkpointExpiry          ExpiredCheckpointSource
+	checkpointExpiryProcessor core.Runnable
+	commands                  CommandStore
+	workflow                  StateStore
+	schedules                 core.ScheduleStore
+	tasks                     core.TaskStore
+	taskQueue                 core.TaskQueue
+	taskDispatcher            core.TaskDispatcher
+	taskConsumer              core.TaskConsumer
+	lock                      core.DistributedLock
+	skillRegistry             SkillRegistry
+	skillRevisions            SkillRevisionReader
+	skillAdmin                SkillAdministrationStore
+	skillDeletions            SkillRevisionDeletionStore
+	skillAudit                SkillAuditSink
+	runnables                 []core.Runnable
+}
+
+// backendCapabilityChecks is the single runtime registry for known
+// capabilities and their concrete composition predicates. Keeping recognition
+// and validation together prevents an added capability from being accepted by
+// NewBackendRequirements but silently rejected by ValidateFor.
+var backendCapabilityChecks = map[BackendCapability]func(*OrchestrationBackends) bool{
+	BackendExecutionDebug:            func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.execution) },
+	BackendLLMDebug:                  func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.llmDebug) },
+	BackendCheckpoints:               func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.checkpoints) },
+	BackendCheckpointExpiry:          func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.checkpointExpiry) },
+	BackendCheckpointExpiryProcessor: func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.checkpointExpiryProcessor) },
+	BackendCommands:                  func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.commands) },
+	BackendWorkflowState:             func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.workflow) },
+	BackendSchedules:                 func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.schedules) },
+	BackendTasks:                     func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.tasks) },
+	BackendTaskQueue:                 func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.taskQueue) },
+	BackendTaskDispatcher:            func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.taskDispatcher) },
+	BackendTaskConsumer:              func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.taskConsumer) },
+	BackendLock:                      func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.lock) },
+	BackendSkillRegistry:             func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.skillRegistry) },
+	BackendSkillRevisionReader:       func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.skillRevisions) },
+	BackendSkillAdministration:       func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.skillAdmin) },
+	BackendSkillRevisionDeletion:     func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.skillDeletions) },
+	BackendSkillAudit:                func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.skillAudit) },
 }
 
 type OrchestrationBackendOption interface {
 	applyBackend(*OrchestrationBackends) error
 }
 
-type orchestrationBackendOption func(*OrchestrationBackends) error
+type backendOptionKind uint8
+
+const (
+	backendOptionGeneral backendOptionKind = iota
+	backendOptionCheckpointPersistence
+	backendOptionCheckpointExpiry
+	backendOptionCheckpointExpiryProcessor
+)
+
+type orchestrationBackendOption struct {
+	apply func(*OrchestrationBackends) error
+	kind  backendOptionKind
+}
 
 func (option orchestrationBackendOption) applyBackend(backends *OrchestrationBackends) error {
-	return option(backends)
+	return option.apply(backends)
 }
 
 func NewOrchestrationBackends(options ...OrchestrationBackendOption) (*OrchestrationBackends, error) {
@@ -177,25 +228,45 @@ func (b *OrchestrationBackends) With(overrides ...OrchestrationBackendOption) (*
 	}
 	clone := *b
 	clone.runnables = append([]core.Runnable(nil), b.runnables...)
+	checkpointProcessorSet := false
 	for index, override := range overrides {
 		if isNilBackendValue(override) {
 			return nil, fmt.Errorf("orchestration: backend option %d is nil", index)
 		}
+		if option, ok := override.(orchestrationBackendOption); ok {
+			if checkpointProcessorSet && (option.kind == backendOptionCheckpointPersistence || option.kind == backendOptionCheckpointExpiry) {
+				return nil, fmt.Errorf(
+					"orchestration: checkpoint expiry processor option must follow checkpoint dependency options",
+				)
+			}
+		}
 		if err := override.applyBackend(&clone); err != nil {
 			return nil, err
+		}
+		if option, ok := override.(orchestrationBackendOption); ok && option.kind == backendOptionCheckpointExpiryProcessor {
+			checkpointProcessorSet = true
 		}
 	}
 	return &clone, nil
 }
 
 func backendOption[T any](name string, value T, assign func(*OrchestrationBackends, T)) OrchestrationBackendOption {
-	return orchestrationBackendOption(func(backends *OrchestrationBackends) error {
+	return backendOptionWithKind(name, value, backendOptionGeneral, assign)
+}
+
+func backendOptionWithKind[T any](
+	name string,
+	value T,
+	kind backendOptionKind,
+	assign func(*OrchestrationBackends, T),
+) OrchestrationBackendOption {
+	return orchestrationBackendOption{kind: kind, apply: func(backends *OrchestrationBackends) error {
 		if isNilBackendValue(value) {
 			return fmt.Errorf("orchestration: %s backend is nil", name)
 		}
 		assign(backends, value)
 		return nil
-	})
+	}}
 }
 
 func WithExecutionBackend(value ExecutionStore) OrchestrationBackendOption {
@@ -205,10 +276,26 @@ func WithLLMDebugBackend(value LLMDebugStore) OrchestrationBackendOption {
 	return backendOption("llm debug", value, func(b *OrchestrationBackends, v LLMDebugStore) { b.llmDebug = v })
 }
 func WithCheckpointPersistence(value CheckpointPersistence) OrchestrationBackendOption {
-	return backendOption("checkpoint persistence", value, func(b *OrchestrationBackends, v CheckpointPersistence) { b.checkpoints = v })
+	return backendOptionWithKind("checkpoint persistence", value, backendOptionCheckpointPersistence, func(b *OrchestrationBackends, v CheckpointPersistence) {
+		b.checkpoints = v
+		// A previously composed processor may still be bound to the old store.
+		// Require it to be supplied again after either dependency changes.
+		b.checkpointExpiryProcessor = nil
+	})
 }
 func WithCheckpointExpiry(value ExpiredCheckpointSource) OrchestrationBackendOption {
-	return backendOption("checkpoint expiry", value, func(b *OrchestrationBackends, v ExpiredCheckpointSource) { b.checkpointExpiry = v })
+	return backendOptionWithKind("checkpoint expiry", value, backendOptionCheckpointExpiry, func(b *OrchestrationBackends, v ExpiredCheckpointSource) {
+		b.checkpointExpiry = v
+		b.checkpointExpiryProcessor = nil
+	})
+}
+
+// WithCheckpointExpiryProcessor supplies the lifecycle component bound to the
+// currently composed checkpoint persistence and expiry-source dependencies.
+func WithCheckpointExpiryProcessor(value core.Runnable) OrchestrationBackendOption {
+	return backendOptionWithKind("checkpoint expiry processor", value, backendOptionCheckpointExpiryProcessor, func(b *OrchestrationBackends, v core.Runnable) {
+		b.checkpointExpiryProcessor = v
+	})
 }
 func WithCommandBackend(value CommandStore) OrchestrationBackendOption {
 	return backendOption("command", value, func(b *OrchestrationBackends, v CommandStore) { b.commands = v })
@@ -255,15 +342,15 @@ func WithSkillAuditSink(value SkillAuditSink) OrchestrationBackendOption {
 
 func WithRunnables(values ...core.Runnable) OrchestrationBackendOption {
 	snapshot := append([]core.Runnable(nil), values...)
-	return orchestrationBackendOption(func(backends *OrchestrationBackends) error {
+	return orchestrationBackendOption{apply: func(backends *OrchestrationBackends) error {
 		for index, value := range snapshot {
 			if isNilBackendValue(value) {
 				return fmt.Errorf("orchestration: runnable %d is nil", index)
 			}
 		}
-		backends.runnables = append([]core.Runnable(nil), snapshot...)
+		backends.runnables = append(backends.runnables, snapshot...)
 		return nil
-	})
+	}}
 }
 
 func (b *OrchestrationBackends) Execution() ExecutionStore {
@@ -289,6 +376,15 @@ func (b *OrchestrationBackends) CheckpointExpiry() ExpiredCheckpointSource {
 		return nil
 	}
 	return b.checkpointExpiry
+}
+
+// CheckpointExpiryProcessor returns the lifecycle component for canonical
+// checkpoint expiry, if one has been composed.
+func (b *OrchestrationBackends) CheckpointExpiryProcessor() core.Runnable {
+	if b == nil {
+		return nil
+	}
+	return b.checkpointExpiryProcessor
 }
 func (b *OrchestrationBackends) Commands() CommandStore {
 	if b == nil {
@@ -372,7 +468,11 @@ func (b *OrchestrationBackends) Runnables() []core.Runnable {
 	if b == nil {
 		return nil
 	}
-	return append([]core.Runnable(nil), b.runnables...)
+	runnables := make([]core.Runnable, 0, len(b.runnables)+1)
+	if !isNilBackendValue(b.checkpointExpiryProcessor) {
+		runnables = append(runnables, b.checkpointExpiryProcessor)
+	}
+	return append(runnables, b.runnables...)
 }
 
 func (b *OrchestrationBackends) ValidateFor(requirements BackendRequirements) error {
@@ -392,36 +492,11 @@ func (b *OrchestrationBackends) ValidateFor(requirements BackendRequirements) er
 }
 
 func (b *OrchestrationBackends) has(capability BackendCapability) bool {
-	switch capability {
-	case BackendExecutionDebug:
-		return !isNilBackendValue(b.execution)
-	case BackendLLMDebug:
-		return !isNilBackendValue(b.llmDebug)
-	case BackendCheckpoints:
-		return !isNilBackendValue(b.checkpoints)
-	case BackendCheckpointExpiry:
-		return !isNilBackendValue(b.checkpointExpiry)
-	case BackendCommands:
-		return !isNilBackendValue(b.commands)
-	case BackendWorkflowState:
-		return !isNilBackendValue(b.workflow)
-	case BackendSchedules:
-		return !isNilBackendValue(b.schedules)
-	case BackendTasks:
-		return !isNilBackendValue(b.tasks)
-	case BackendTaskQueue:
-		return !isNilBackendValue(b.taskQueue)
-	case BackendTaskDispatcher:
-		return !isNilBackendValue(b.taskDispatcher)
-	case BackendTaskConsumer:
-		return !isNilBackendValue(b.taskConsumer)
-	case BackendLock:
-		return !isNilBackendValue(b.lock)
-	case BackendSkills:
-		return !isNilBackendValue(b.skillRegistry)
-	default:
+	if b == nil {
 		return false
 	}
+	check, ok := backendCapabilityChecks[capability]
+	return ok && check(b)
 }
 
 func isNilBackendValue(value interface{}) bool {
