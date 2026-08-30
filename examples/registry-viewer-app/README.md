@@ -231,10 +231,19 @@ REDIS_URL=redis://custom-redis:6379 ./setup.sh deploy
 default. The framework does not add authentication or authorization—the host,
 ingress, service mesh, and platform policy own endpoint protection.
 
-The conversation endpoints read the existing framework-owned Redis DB 7 and
-DB 8 data. The Registry Viewer does not create, repair, expire, or otherwise
-mutate execution or conversation indexes, so read-only DB 7/8 credentials are
-sufficient.
+This applies to the complete Viewer, not only Skills. When LLM or execution
+debugging is enabled, the UI can expose full prompts, model responses, tool
+results, errors, metadata, and user context that actually reached the recorder.
+Built-in stores preserve those payloads rather than inferring redaction. Do not
+expose the bundled local ingress to an untrusted network without an application-
+owned authentication, authorization, and data-protection layer.
+
+The conversation endpoints read framework-owned LLM evidence from Redis DB 7
+and execution evidence from DB 8. DB 7 is read-only to the Viewer. DB 8 is not:
+grouped and timeline reads remove only index members whose authoritative
+execution key has been confirmed missing. They never delete an execution record
+or invent a relationship. The Viewer therefore needs read access to DB 7 and
+read/write access to the DB 8 sorted-set indexes.
 
 ### Grouped execution safety bounds
 
@@ -254,17 +263,25 @@ Viewer implementation limits, not `TRUVAG3_*` framework configuration:
 | LLM Debug interactions accepted per execution | 100 |
 | LLM Debug interaction bytes accepted per execution | 4 MiB |
 | Maximum encoded grouped cursor length | 2048 bytes |
+| Background stale global-index scan | 200 members, at most once per 30 seconds per Viewer process |
 
 When a DB 8 membership or grouping bound is reached, the response sets
 `partial=true` and omits a grouped continuation cursor. The existing flat
 execution list remains available for request-by-request troubleshooting.
 
-Combined duration sorting (`sort=total_duration_ms`) includes LLM duration read
-from mutable DB 7 data. It is therefore a bounded point-in-time sort: when more
-groups exist than the requested limit, the response is partial and does not
-provide a continuation cursor. A supplied duration-sort cursor is rejected.
-Created and request-text sorts use immutable DB 8 values and retain grouped
-keyset pagination.
+Elapsed-duration sorting (`sort=total_duration_ms`, retained as the compatible
+query name) uses a non-additive wall-clock envelope. The baseline is the stored
+phase-loop duration. Step timestamps may extend that envelope, and bounded DB 7
+enrichment may extend it to include LLM calls that occurred outside the first
+and last recorded step. The Viewer takes the largest credible envelope; it does
+not add step and LLM durations that may overlap. Aggregate LLM call time is
+reported separately.
+
+Because the elapsed envelope can depend on mutable DB 7 evidence, duration
+sorting is a bounded point-in-time sort: when more groups exist than the
+requested limit, the response is partial and does not provide a continuation
+cursor. A supplied duration-sort cursor is rejected. Created and request-text
+sorts use immutable DB 8 values and retain grouped keyset pagination.
 
 If a DB 7 enrichment read fails or reaches any enrichment bound, timeline and
 grouped responses set `llm_enrichment_incomplete=true`. Created and request-text
@@ -273,6 +290,36 @@ optional DB 7 details do not suppress their valid `next_cursor`. Combined
 duration sorting sets `partial=true` when enrichment is incomplete because DB 7
 contributes to its ordering. The Viewer does not publish a partial per-execution
 LLM duration or call count as though it were complete.
+
+For HITL resume records, elapsed observation ignores restored pre-checkpoint
+steps and uses resume-owned steps/phases plus later LLM evidence. This prevents
+the human approval wait from being presented as active compute time.
+
+### Raw synthesis and terminal application response
+
+The LLM Calls tab shows the synthesis interaction as model evidence. The card is
+labeled **Pre-hook LLM synthesis output**, and its response expander says **View
+Pre-hook Output**, because application `AfterSynthesis` hooks may change that
+content. When the execution record contains `final_response` with source
+`after_synthesis_hooks`, the Post-Execution tab shows that post-hook application
+response separately.
+
+Workflow-mode `ExecutePlanWithSynthesis` does not run pipeline hooks and does
+not currently store a post-hook final response. Older records also predate this
+field. In both cases, the absence message means only that no governed terminal
+response was stored; it does not convert the synthesis draft into proof of the
+business outcome.
+
+### Unified-detail enrichment cost
+
+Each `GET /api/executions/{request_id}/unified` load is assembled on demand and
+is not cached by the Viewer. It reads the DB 8 execution, reads bounded DB 7 LLM
+evidence, may fan out to agent checkpoint APIs for HITL state, and may inspect
+up to 200 recent execution summaries to find an HITL sibling. When
+`JAEGER_QUERY_URL` is configured, it also makes one synchronous Jaeger request
+with a three-second HTTP client timeout and an 8 MiB response limit. Jaeger
+failure marks trace enrichment unavailable but does not fail the Redis-backed
+execution detail.
 
 ## Service Data Structure
 
@@ -420,8 +467,8 @@ Enable LLM debug storage to capture full request/response payloads for troublesh
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload storage |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Retention period for successful debug records |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | Retention period for error debug records |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base retention for successful debug records; lineage promotion may extend it |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | Base retention for error debug records; HITL or investigation retention may extend it |
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database number for debug storage |
 
 **Example:**

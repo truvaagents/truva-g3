@@ -514,7 +514,14 @@ Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger 
 
 ## 7. Registry Viewer Overview
 
-Open [http://registry.localhost](http://registry.localhost) against the local kind cluster and you land in a single-page web app with six tabs across the top: **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, **Skills**, and **Memory**. Each tab is its own view of the system, backed by a framework store or management API and refreshing on demand or on a timer. Most views are observational. The two deliberate mutation surfaces are HITL Approve/Reject commands and skill validation, publication, and guarded version deletion.
+Open [http://registry.localhost](http://registry.localhost) against the local
+kind cluster and you land in a single-page web app with six tabs across the top:
+**Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, **Skills**,
+and **Memory**. Each tab is backed by a framework store, management API, or
+optional trace query. Most activity is observational. Deliberate business/control
+mutations are HITL Approve/Reject and skill publication/deletion; execution
+grouping also performs bounded maintenance by removing confirmed-dead IDs from
+DB 8 indexes.
 
 The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. It demonstrates how framework interfaces and the included Redis/Valkey and optional Qdrant adapters can back a small Go + vanilla-JS operational UI. The Skills view calls the provider-neutral `SkillAdminHandler`; it does not make raw Redis writes.
 
@@ -535,21 +542,43 @@ All six views use a consistent list-and-detail visual language. Most have a **li
 
 ### How It Gets Its Data
 
-The Registry Viewer does not scrape logs or talk to Prometheus. Its observational views read the included Redis and Qdrant-backed stores. HITL actions proxy a command to the owning agent, while Skills actions call the framework's management handler. Its data comes from these sources:
+The Registry Viewer does not scrape logs or query Prometheus. Its observational
+views read the included Redis and Qdrant-backed stores, and the execution detail
+endpoint optionally queries Jaeger for linked traces and deterministic pipeline-
+hook spans. HITL actions proxy a command to the owning agent, while Skills
+actions call the framework's management handler. Grouped execution reads also
+perform bounded DB 8 index hygiene as described below. Its data comes from these
+sources:
 
 | Source | What it holds | Which views use it |
 |--------|---------------|--------------------|
 | Redis `truvag3:services:*` (DB 0) | Service registrations (tools and agents) with TTL refresh | Registry view; also feeds `/swagger-urls.json` for the Swagger UI dropdown |
 | Redis `truvag3:llm:debug:*` (DB 7) | Full LLM interaction records (prompt, response, tokens, duration, type, category, success). The store has two writers (see `truvag3:llm:debug:*` row in §7 view summary above): the orchestration module's `RedisLLMDebugStore` and `telemetry.RedisLLMCallRecorder`. Both write the same record format. | LLM Debug view; DAG detail panel's LLM Calls tab fetches the same record by request ID |
 | Redis HITL checkpoint store (`{base-prefix}[:{agent-name}]:checkpoint:*`; base defaults to `truvag3:hitl`) | Pending and expired checkpoints with plan, current step, resolved parameters, decision, status, agent name, agent address, request mode. Configure the base with `TRUVAG3_HITL_KEY_PREFIX`; the framework appends `TRUVAG3_AGENT_NAME` or `TRUVAG3_K8S_SERVICE_NAME` when present. | HITL Interrupted view; DAG detail panel's HITL tab |
-| Redis `truvag3:execution:debug:*` (DB 8) | Full execution records (plan, per-step results, LLM interactions for pre/post hooks, HITL events, phase count, regeneration events). Written by `orchestration.RedisExecutionDebugStore` independently of the LLM debug store — the two have separate enable flags and separate Redis databases. | Execution DAG view |
+| Redis `truvag3:execution:debug:*` (DB 8) | Full execution records (plan, per-step results, HITL state, phase history, skill evidence, metadata, and optional post-`AfterSynthesis` application response). Written by `orchestration.RedisExecutionDebugStore` independently of DB 7. Grouped/timeline reads may remove a confirmed-missing member from execution/conversation sorted-set indexes, but never delete an execution record. | Execution DAG view |
+| Jaeger Query API (optional) | Execution trace, linked trigger traces, and deterministic `BeforePlanning`, `AfterPlanning`, `AfterExecution`, and `AfterSynthesis` hook spans. Configured with `JAEGER_QUERY_URL`; trace links redirect through `JAEGER_UI_URL`. | Execution DAG full-flow graph and hook tabs |
 | Provider-neutral skill management API; included Redis keys under `truvag3:skills:{store}:*` (DB 9) | Published skill metadata, immutable manifests/resources, version history and tombstones, revision tokens, and body-free audit records | Skills view; Execution DAG's Skills tab reads the separate execution-debug evidence for a request |
 | Redis shared memory keys (episodic events, activities, investigations, digest cache) | Source agents' episodic events; live activity signals from `ActivityCoordinator`; investigation locks from `InvestigationCoordinator`; cached compaction digests | Memory view |
 | Qdrant collections (when `TRUVAG3_VECTOR_DB_URL` is set) | Semantic knowledge vectors (Phase 2 shared memory) | Memory view (knowledge detail) — currently behind feature flag |
 
-Registry Viewer is not the source of truth: restarting it loses no persisted data. Its Registry, LLM Debug, execution, and memory surfaces are lenses over framework state. Its Skills surface is also the bundled management client and host, so successful publication or deletion intentionally changes the authoritative skill store through framework concurrency, validation, protection, and audit rules.
+Registry Viewer is not the source of truth: restarting it loses no persisted
+data. Its Registry, LLM Debug, execution, and memory surfaces are lenses over
+framework state. The execution list has one maintenance side effect: after an
+authoritative DB 8 record is confirmed absent, the Viewer removes that stale ID
+from the affected sorted-set index. Consequently DB 7 may be read-only to the
+Viewer, while DB 8 requires index-write permission. Its Skills surface is also
+the bundled management client and host, so successful publication or deletion
+intentionally changes the authoritative skill store through framework
+concurrency, validation, protection, and audit rules.
 
-> **Privacy design note — user memory.** You'll notice the Memory view only shows **shared memory** (domain-scoped events and investigations). There is no tab, list, or browser for **user memory** (per-user facts). This is intentional: user memory holds potentially personal or sensitive data, and exposing it in a general-purpose developer dashboard would be the wrong default. If a developer legitimately needs to inspect what's stored for a given user, they query the vector DB (Qdrant) and the user-memory Redis keys directly with the credentials they already have. The dashboard stays generic; the privacy-bearing data stays behind an explicit access step. The Execution DAG view still surfaces **user-memory activity** during a specific execution — which recall and extraction calls ran, how long they took, whether reconciliation fired — but it never shows the *contents* of the facts stored, only the hook invocations.
+> **User-memory boundary.** The Memory view exposes shared memory only; there is
+> no per-user fact browser. Pre/Post-Execution hook cards show lifecycle activity
+> without rendering stored fact bodies. However, opt-in LLM debug persistence
+> preserves complete prompts and responses. A planning prompt can therefore
+> contain user-memory enrichment that was actually supplied to the model, and
+> the LLM Debug or execution LLM Calls view can display it. Protect Registry
+> Viewer and DB 7 accordingly; the framework does not silently redact those
+> payloads.
 
 ### Prerequisites
 
@@ -560,7 +589,7 @@ For the views to show data, the underlying features have to be enabled in your c
 | Registry | Services must register with a shared Redis via `core.WithDiscovery(true, "redis")`. This is the default for every example tool/agent in the repo. |
 | LLM Debug | Two enablement paths, often both at once: (a) **Orchestrator-internal calls** (`plan_generation`, `tiered_selection`, `synthesis_streaming`, memory hooks, error analysis, etc.) populate the store automatically when the orchestrator is constructed with `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's `RedisLLMDebugStore` is wired up by the factory. (b) **Direct agent AI calls** (an agent that calls `ai.GenerateResponse(...)` outside of an orchestration step) populate the store only when the agent wraps its AI client with `ai.NewInstrumentedClient(..., debugRecorder, ...)` using `telemetry.NewRedisLLMCallRecorder`. See [`examples/agent-with-telemetry/research_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-telemetry/research_agent.go) for the wiring. Most chat agents in the kind cluster don't need (b) because their LLM calls go through the orchestrator and are captured by (a). |
 | HITL Interrupted | At least one agent must run the orchestration module with HITL enabled (`HITLConfig.Enabled: true` and a configured checkpoint store). See [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md). |
-| Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED` — the execution debug store and the LLM debug store live in separate Redis databases (DB 8 and DB 7) and are wired by separate factory branches. In practice you almost always want both enabled, because the DAG view's LLM Calls tab pulls data from the LLM debug store. See the per-agent enablement table below — not every example chat agent in the kind cluster has both set, and the asymmetric setups are the most common gotchas. |
+| Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED`—DB 8 supplies execution evidence and DB 7 supplies LLM/hook interactions. Configure Registry Viewer `JAEGER_QUERY_URL` for optional trace-backed hook and linked-trace enrichment and `JAEGER_UI_URL` for the Trace link. Redis evidence remains usable when Jaeger is unavailable. |
 | Skills | The Registry Viewer must compose its skills backend and `SkillAdminHandler`; the bundled deployment does this with `TRUVAG3_SKILLS_REDIS_DB=9`. Runtime skill evidence inside an execution also requires that agent to enable skills and `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. Full skill-bearing prompts require `TRUVAG3_LLM_DEBUG_ENABLED=true`. |
 | Memory | Agents must be wired with shared memory via `memory.NewSharedBackends(...)` and `orchestration.BuildMemoryHooks(...)`. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). `TRUVAG3_AGENT_DOMAIN` must be set so the view has a domain to pick from in its dropdown. |
 
@@ -568,13 +597,19 @@ On the local kind cluster, **enablement varies per agent** because the env vars 
 
 | Agent | `TRUVAG3_LLM_DEBUG_ENABLED` | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Implication |
 |-------|:--:|:--:|---|
-| `travel-chat-agent` | ❌ | ✅ | Appears in Execution DAG view; its orchestrator-internal LLM calls are NOT recorded to LLM Debug, so the DAG's LLM Calls tab is empty for its records |
+| `travel-chat-agent` | ✅ | ✅ | Fully populated across execution, LLM, skill, and configured hook evidence; actual visibility still depends on which features ran for a request |
 | `devops-chat-agent` | ✅ | ✅ | Fully populated across both views |
 | `qa-agent` | ✅ | ✅ | Fully populated |
 | `event-driven-agent` | ✅ | ✅ | Fully populated |
 | `agent-with-telemetry` (research-agent-telemetry) | ✅ | ❌ | Its direct AI calls (instrumented client) appear in LLM Debug, but it does NOT appear in the Execution DAG view at all because the execution store isn't enabled |
 
-So the most common gotchas are exactly the asymmetric setups above: a request that shows up in DAG but has an empty LLM Calls tab (executor enabled, LLM debug disabled), or a record that shows up in LLM Debug but has no corresponding row in DAG (LLM debug enabled, executor disabled). Always check both env vars on a new agent.
+The asymmetric setup shown above explains why `agent-with-telemetry` can have a
+record in LLM Debug without a corresponding Execution DAG row. The reverse
+configuration is also possible for a custom or newly created agent: enabling
+the execution store but disabling LLM debug produces a DAG row whose LLM Calls
+tab has no DB 7 interactions. None of the other agents in this table currently
+uses that reverse configuration. Always check both environment variables when
+diagnosing a new agent.
 
 ---
 
@@ -588,7 +623,7 @@ This section walks through each view in detail: what the list panel shows, what 
 
 This is the simplest view and the one you'll open first when checking whether a deployment succeeded. It lists every tool and agent currently registered in Redis under `truvag3:services:*`, with the Redis TTL driving health — a service that stops sending heartbeats drops off the list within 30 seconds.
 
-**List panel.** A sortable table with columns:
+**List panel.** A sortable table of registered service rows with these columns:
 - **Type** — `tool` or `agent` (with an icon for quick scanning)
 - **Name** — service name as registered (e.g. `weather-tool-v2`)
 - **Health** — color-coded badge: `healthy`, `degraded`, `unhealthy`, or `unknown`
@@ -674,11 +709,20 @@ This is the operational queue for Human-in-the-Loop checkpoints. Every time an a
 
 This is the view you open when logs aren't enough. It takes a single orchestration execution and assembles **every piece of data the orchestrator recorded about it** into one interactive timeline: the planned DAG, per-step results, skill lifecycle evidence, all LLM calls grouped by phase, pre-execution hooks, post-execution hooks, HITL checkpoints that fired during the run, and any plan regenerations that happened mid-flight. This is the most information-dense view in the app and where most debugging time is spent.
 
-**List panel.** A sortable table with columns:
+**List panel.** Conversation grouping is the default. A conversation header
+shows its matching/total turn count and can be expanded into chronological user
+turns. HITL resumes and delegated work appear as related executions under their
+owner when that relationship is verifiable. If the owner record has expired,
+the row is kept visible without drawing a false parent branch and is labeled
+**Parent execution unavailable**. Incomplete lineage metadata is labeled
+separately from confirmed retention loss. A **Grouped / Flat** control exposes
+the legacy one-row-per-execution list when needed.
+
+Each execution row retains these sortable columns:
 - **Status** — success / failed / interrupted (with colored icon)
 - **Request** — the original user query text (sortable by request text)
 - **Steps** — how many steps the plan had
-- **Duration** — total execution time (sortable)
+- **Duration** — best available non-additive elapsed envelope (sortable)
 - **Created** — when the request started (sortable, default-sorted descending so the newest is at the top)
 
 **Filters.** Search box (matches request ID or query text) plus **All / Success / Failed / Interrupted**.
@@ -687,15 +731,29 @@ This is the view you open when logs aren't enough. It takes a single orchestrati
 
 #### Tab 1: DAG Visualization
 
-The headline tab. Renders the execution as an interactive graph using Cytoscape.js with the Dagre layout algorithm. Each node is a step, each edge is a dependency (explicit `depends_on` or implicit sequential). Click a node to see that step's details inline; click an edge to see the template binding that ties the two steps together.
+The headline tab renders the execution as an interactive graph using
+Cytoscape.js with the Dagre layout algorithm. Tool nodes have unique displayed
+step numbers across the selected execution, including an HITL continuation;
+phase-local step IDs remain visible as identifiers. Click a node for details or
+an edge for its relationship.
+
+Edges do not all mean the same thing. Scheduler dependencies control execution
+order within a plan. Cross-phase data-lineage edges show that a later step read
+prior-phase results but do not impose scheduler order. Phase-transition and
+pipeline-hook edges describe lifecycle flow. The popup and legend identify the
+edge type so visual provenance is not mistaken for a planner or scheduler
+contract.
 
 The header strip above the canvas shows a comprehensive metadata line:
 - Original request text (click to expand/collapse if truncated)
 - Agent name (which agent owned this execution)
-- Request ID and trace ID (W3C trace ID for Jaeger cross-reference)
-- Step count and total duration (executor time + LLM time, both measured and displayed)
+- Request ID and one compact **Trace** link to the configured Jaeger UI
+- Step count and **Elapsed** time: the largest credible phase-loop,
+  step-timestamp, and LLM/step wall-clock envelope, without adding overlapping
+  durations
 - Success / failed / interrupted badge
-- LLM call count (if any)
+- LLM call count and aggregate call time (if any); aggregate call time is a
+  workload measure and may overlap elapsed time
 - HITL badge (if HITL fired but didn't interrupt)
 - Phase count (for iterative multi-phase plans — shown when > 1)
 - Forced-terminal badge (when the orchestrator had to force-terminate a phase)
@@ -704,16 +762,24 @@ Below the header, if the plan was regenerated mid-flight, a warning strip shows 
 
 A **Steps Only / Full Flow toggle** at the top switches between two modes:
 - **Steps Only** — just the tool-invocation steps, clean and compact
-- **Full Flow** — steps + every LLM planning/synthesis call + every HITL checkpoint, interleaved in chronological order. This is the full timeline of the execution from the orchestrator's point of view
+- **Full Flow** — steps + orchestration/agent LLM calls + HITL checkpoints +
+  trace-backed deterministic pipeline hooks, interleaved by lifecycle and
+  timing evidence. Jaeger enrichment is optional; its absence does not remove
+  the Redis-backed execution record.
 
 #### Tab 2: Pre-Execution
 
-Only visible when the execution had `BeforePlanning` hooks that ran. Shows the hook activity that happened *before* the planner even saw the prompt:
+Visible when trace or debug evidence contains `BeforePlanning` or
+`AfterPlanning` activity. It shows context preparation before planning and
+deterministic/LLM-backed plan governance around the planner:
 
 - **User Memory Enrichment** — which recall calls ran (`user_memory_recall_identity`, `user_memory_recall_summary`, `user_memory_recall_query`, `user_memory_recall_universal`), how long each took, and whether the `user_memory_enrichment_injected` step succeeded (meaning the `<user_profile>` XML fragment made it into the plan-generation prompt). Note: this tab shows that the enrichment ran, not the contents of the profile itself — see the privacy note in §7.
 - **Memory Compaction** — `activity_compaction_incremental` calls and their durations. Useful for diagnosing slow first-requests where the digest cache was cold.
 
-This tab is the place to look when you suspect the LLM didn't see the context you expected.
+Trace-backed hook cards can prove that a deterministic hook ran even when it
+made no LLM call. This tab is the place to look when you suspect the planner did
+not receive expected context or a post-planning policy altered/validated its
+plan.
 
 #### Tab 3: Step Details
 
@@ -723,20 +789,42 @@ When a step retried, you can see exactly how many attempts happened and which re
 
 #### Tab 4: LLM Calls
 
-Only visible when the execution had LLM interactions recorded. Shows every LLM call the orchestrator made during this execution, in order, with full prompts and responses. This is functionally a filtered slice of LLM Debug constrained to one execution, rendered inline alongside the DAG context.
+Only visible when the execution had LLM interactions recorded. This tab shows
+the orchestration-level calls for the execution—planning, selection,
+continuation, error-analysis, synthesis, and similar calls—in contiguous display
+order. Hook-internal interactions are intentionally routed to Pre-Execution or
+Post-Execution so the same call is not presented twice. The cross-request LLM
+Debug view remains the place to inspect every stored interaction family.
 
-Each call shows: type (e.g. `plan_generation`, `continuation_plan_generation`, `continuation_plan_regeneration`, `tiered_selection`, `synthesis_streaming`, plus the `user_memory_*` family — `user_memory_recall_identity`, `user_memory_recall_summary`, `user_memory_recall_query`, `user_memory_recall_universal`, `user_memory_enrichment_injected`, `user_memory_extraction`, `user_memory_similarity_search`, `user_memory_reconciliation`, `user_memory_remember`, `user_memory_summary`, `user_memory_summary_remember`), category (`llm`, `embedding`), model, token counts (prompt + completion + total), duration, attempt number, temperature, max tokens, success flag, full prompt, and full response. Click an interaction to expand the prompt or response; they're long.
+Each call shows its type, category, model, token counts, aggregate call duration,
+attempt number, generation settings, success state, prompt, and response. Click
+an interaction to expand long content. The synthesis card is labeled **Pre-hook
+LLM synthesis output**, and its response expander says **View Pre-hook Output**,
+because the model output precedes application `AfterSynthesis` hooks. This
+pre-hook output is never presented as proof of the final business response.
 
 **When to open this tab vs. the LLM Debug view:** use this tab when you already have the request ID open and want to see the LLM calls in the context of the steps they produced. Use the LLM Debug view when you want to search across requests (e.g., "show me every synthesis call that errored yesterday").
 
 #### Tab 5: Post-Execution
 
-Only visible when the execution had `AfterSynthesis` hooks that ran. The mirror image of Pre-Execution:
+Visible when an `AfterExecution`/`AfterSynthesis` hook ran or when the execution
+contains a stored post-hook application response. It is the mirror image of
+Pre-Execution:
+
+- **Post-hook application response** — the `StoredExecution.FinalResponse`
+  captured after `AfterSynthesis` hooks, with its source label. If it differs
+  from non-streaming synthesis, the application changed the draft. On native
+  streaming, the card also warns that post-hook text can differ from content
+  already streamed to the client.
 
 - **Event Summarization** — LLM calls that generated the episodic event text written to shared memory
 - **User Memory Write-back** — `user_memory_extraction`, `user_memory_embed_candidate`, `user_memory_similarity_search`, `user_memory_reconciliation` (per-candidate path) or `user_memory_reconciliation_batch` + per-item `user_memory_reconciliation_batch_item` rows (batched path), `user_memory_reconciliation_skip` (no neighbors), and `user_memory_remember`. The batched path emits ONE `user_memory_reconciliation_batch` row with category `llm` carrying the full token usage, plus N lightweight `_batch_item` rows with category `derived` so the registry viewer's LLM-call totals are not double-counted. Same privacy rule as Pre-Execution: you see the invocations, not the fact contents.
 
-This tab answers "what did the system learn from this request?"
+This tab answers both "what did the system learn from this request?" and "what
+application response existed after post-synthesis governance?" Workflow-mode
+`ExecutePlanWithSynthesis` and older records can legitimately lack the latter;
+the UI states that no post-hook evidence was stored instead of treating the raw
+synthesis as the outcome.
 
 #### Tab 6: HITL
 
@@ -745,6 +833,14 @@ Only visible when a checkpoint fired during this execution. Shows the checkpoint
 - What decision triggered it (policy match, sensitive-capability match, semantic retry request)
 - When and how it was resolved (approve / reject / expire with default action)
 - The resumed execution path, if any
+
+For current complete records, lifecycle joins use the exact checkpoint ID. The
+initial interruption and its resume are linked when their checkpoint identities
+agree; unrelated interrupted siblings are not attached merely because they
+share an `original_request_id`. For an older or partial interrupted record that
+has no checkpoint identity at all, the Viewer falls back to the shared initial
+request ID and can therefore attach multiple siblings from that request family.
+Treat that fallback as less precise than an identity-backed lifecycle.
 
 Useful for tracing "the user approved X, then what happened?"
 
@@ -791,7 +887,13 @@ This view is for inspecting the state of **shared memory** (domain-scoped). It a
 
 **Header stats.** Domain, Events, Investigations.
 
-**What this view does not show.** As noted in §7, **user memory is not surfaced here by design**. There is no per-user fact list, no browser for the vector DB entries, and no "what does this system remember about alice@example.com" lookup. User-memory activity is visible in the Execution DAG view (Pre-Execution and Post-Execution tabs) at the hook-invocation level, but never at the fact-contents level. If you need to inspect the actual facts stored for a user, query Qdrant directly using the collection name and user ID key — credentials are the same ones the agent uses.
+**What this view does not show.** The Memory view has no per-user fact list,
+vector-entry browser, or identity lookup. Pre/Post-Execution presents user-
+memory hook activity without fact bodies. This does not make Registry Viewer a
+payload-redaction boundary: when LLM debug is enabled, full planning and hook
+prompts/responses can contain the user context supplied to a model and are
+visible in LLM Debug or LLM Calls. Direct Qdrant inspection is still required
+to enumerate authoritative stored facts.
 
 **Typical workflow.** Two agents keep making conflicting decisions about the same entity (say, the same Kubernetes deployment). You open Memory view, pick the `infrastructure` domain, widen the time range to 7 days, and scroll the event list looking for what each agent recorded about that entity. The Digest tab tells you what the LLM is currently reading about the domain; the Live Activity tab tells you whether one of the agents is mid-investigation right now.
 
@@ -878,7 +980,7 @@ When you're stuck and not sure which tab to open, scan this table.
 - **[`examples/registry-viewer-app/static/js/views/registry.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/registry.js)** — Registry view (§8.1).
 - **[`examples/registry-viewer-app/static/js/views/llm-debug.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/llm-debug.js)** — LLM Debug view (§8.2).
 - **[`examples/registry-viewer-app/static/js/views/hitl.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/hitl.js)** — HITL Interrupted view (§8.3).
-- **[`examples/registry-viewer-app/static/js/views/dag.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/dag.js)** — Execution DAG view (§8.4) — the largest view, ~3,300 lines.
+- **[`examples/registry-viewer-app/static/js/views/dag.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/dag.js)** — Execution DAG view (§8.4), including grouped lineage, full-flow graph, and all detail tabs. Treat its size as implementation detail rather than a stable contract.
 - **[`examples/registry-viewer-app/static/js/views/skills.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/skills.js)** — Skill package-management view (§8.6).
 - **[`examples/registry-viewer-app/static/js/views/memory.js`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/static/js/views/memory.js)** — Memory view (§8.5).
 - **[`examples/registry-viewer-app/k8-deployment.yaml`](https://github.com/truvaagents/truva-g3/blob/main/examples/registry-viewer-app/k8-deployment.yaml)** — Kubernetes deployment and service.

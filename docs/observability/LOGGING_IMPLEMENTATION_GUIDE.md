@@ -1227,7 +1227,7 @@ Use these field names across all your services:
 | `span_id` | string | Active W3C span identity | "e75ad960517fa8fe" |
 | `checkpoint_id` | string | HITL checkpoint identity | "cp-abc123" |
 | `status` | string | Bounded result status defined by the operation; terminal request records may also use `partial` or `interrupted`, while diagnostics may use `fallback`, `accepted`, or `rejected` | "success", "error", "retry", "partial", "interrupted", "fallback" |
-| `error` | string | Error message safe for structured logging; sanitize external/provider errors | "connection refused" |
+| `error` | string | Error text selected by the log owner; avoid copying arbitrary external bodies and apply an explicit application sanitizer when policy requires it | "connection refused" |
 | `error_type` | string | Bounded error classification for filtering and alerting. AI observations use `ai/providers.NormalizeObservationErrorType` as authoritative: `invalid_request`, `route`, `policy`, `credential`, `transport`, `provider_client`, `provider_rate_limit`, `provider_server`, `decode`, `callback`, `partial_stream`, `cancelled`, `deadline`, or `unknown` | "timeout", "validation", "provider_rate_limit", "store_write" |
 | `response_model` | string | Optional provider-reported public model identity admitted by an explicit provider-scoped validation contract; currently OpenRouter only, bounded to 256 bytes, never route-owned request/deployment identity, and not a metric or stream label | "anthropic/claude-sonnet-4" |
 | `provider_request_id` | string | Optional provider-reported request identity admitted by an explicit provider-scoped validation contract; currently OpenRouter `X-Generation-Id` matching `gen-[A-Za-z0-9_-]+` and bounded to 128 bytes, distinct from framework `request_id`, and not a metric or stream label | "gen-1234" |
@@ -1500,23 +1500,23 @@ Before submitting code, verify:
 - [ ] Using standard field names (see table above)
 
 Errors crossing an external-service or AI-provider boundary may contain response
-bodies, endpoint query values, credential diagnostics, or other sensitive
-material. Framework code must not put the original `err.Error()` on an
-observation surface in those cases. It must preserve the original error for the
-caller while logging a sanitized error message and a bounded `error_type`. The
-AI module implements this boundary with
-`providers.SanitizedObservationError`.
+bodies, endpoint query values, credential diagnostics, or other application
+data. Prefer bounded classifications such as `error_type`, provider, and status
+code instead of copying an arbitrary body into a framework-owned log.
 
-For other framework and application boundaries, use
-`core.RedactSensitiveText(err.Error())` as defense in depth. It covers common
-authorization values, credential assignments, secret-bearing URL user
-information, and credential query parameters. The returned error remains
-unchanged for callers. When the error itself must cross a boundary with a safe
-observable message, wrap `core.RedactSensitiveError(err)` with `%w`; its
-`Unwrap` method preserves `errors.Is` and `errors.As` control flow. Because no
-redactor can recognize arbitrary domain
-secrets, continue to avoid raw endpoint URLs, request/response bodies, prompts,
-and provider diagnostics on observation surfaces.
+`core.RedactSensitiveText` and `core.RedactSensitiveError` are optional, lossy
+primitives. An adopter or subsystem may call them explicitly after choosing
+that fidelity trade-off; they are not automatically installed at every logging,
+trace, or persistence boundary. When chosen, `RedactSensitiveError` preserves
+`errors.Is` and `errors.As` through `Unwrap`.
+
+The AI module currently uses `providers.SanitizedObservationError` on selected
+provider observation paths, and a few orchestration, skills, and backend paths
+also transform errors. These are legacy exceptions pending the framework-wide
+payload-fidelity audit. They are not complete coverage and applications must
+not rely on them as a security boundary. Built-in debug stores preserve the
+values supplied to them; adopters own classification, access control, and any
+required sanitization policy.
 
 ---
 
@@ -2322,7 +2322,7 @@ func (r *Agent) handleRequest(w http.ResponseWriter, req *http.Request) {
 | `conversation_id` | When available | Multiple top-level turns; validated and metric-ineligible in framework flows |
 | `trace_id` / `span_id` | Automatic in context-aware JSON | Log-to-trace correlation |
 | `checkpoint_id` | HITL | One checkpoint |
-| `error` | On errors | Error message; sanitize external/provider errors before logging |
+| `error` | On errors | Error message chosen by the log owner; do not copy arbitrary external bodies, and apply explicit application sanitization when required |
 | `duration_ms` | Recommended | How long it took |
 | `status` | Recommended | success, error, retry |
 | `method` | For HTTP | HTTP method |

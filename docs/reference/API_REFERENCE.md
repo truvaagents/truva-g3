@@ -1494,8 +1494,8 @@ func (h *HotelHandler) handleSearch(rw http.ResponseWriter, r *http.Request) {
 
 #### RedactSensitiveText
 
-Sanitizes untrusted diagnostic text before it is written to logs, traces,
-execution/debug state, or another model prompt:
+Explicit helpers that an application, adapter, or framework subsystem may call
+when it has deliberately chosen to transform diagnostic text:
 
 ```go
 func RedactSensitiveText(value string) string
@@ -1513,13 +1513,21 @@ basic authorization values, credential-bearing URL user information, and common
 credential query parameters. It retains surrounding diagnostic structure and
 replaces values with `[REDACTED]`.
 
-This is defense in depth, not a general secret detector. Applications should
-still avoid placing credentials in URLs, response bodies, errors, prompts, or
-logs. The orchestration executor applies the helper to downstream failure text
-before retry/error-analysis prompts, state, logs, traces, checkpoints, and
-execution debug records. Successful tool payloads are not rewritten because
-they are application data. Tools that return logs or other observability data
-should sanitize those lines before returning them.
+This is a lossy, pattern-based transformation, not a general secret detector
+and not a framework-wide persistence guarantee. Built-in debug stores and
+recorders preserve the values supplied to them. Applications that require
+redaction must choose and install that policy explicitly through their logger,
+telemetry pipeline, recorder, storage implementation, middleware, or processing
+hooks.
+
+Some older framework paths still invoke these helpers before storage or
+observation. In particular, the orchestration executor currently transforms
+downstream failure text used by retry/error-analysis and error surfaces, and
+selected skills and provider diagnostics have similar behavior. These are
+legacy implementation exceptions pending the audit required by
+`FRAMEWORK_DESIGN_PRINCIPLES.md`; adopters must not rely on them as complete or
+stable sanitization. Successful application payloads are not automatically
+rewritten.
 
 Use `RedactSensitiveText` when only an observation field needs sanitization.
 Use `RedactSensitiveError` when the sanitized error is returned: its `Error`
@@ -1568,6 +1576,8 @@ func WithStepID(ctx context.Context, id string) context.Context
 func GetStepID(ctx context.Context) string
 
 // Validate and carry opaque multi-turn correlation.
+const MetadataConversationID = "conversation_id"
+
 func ValidateConversationID(id string) ConversationIDValidationReason
 func WithConversationID(ctx context.Context, id string) context.Context
 func GetConversationID(ctx context.Context) string
@@ -1577,6 +1587,10 @@ func WithoutConversationID(ctx context.Context) context.Context
 
 `ValidateConversationID` accepts 1–512 bytes from the documented
 W3C-baggage-safe visible-ASCII subset and returns a bounded reason enum.
+`MetadataConversationID` is the shared framework-owned metadata and baggage
+key. `orchestration.MetadataConversationID` remains an alias so applications
+can continue to set orchestration request metadata without importing a second
+package.
 `WithConversationID` records a programmatic candidate. An explicit
 `X-TruvaG3-Conversation-ID` candidate has precedence regardless of call order;
 invalid raw values are not retained. `WithoutConversationID` shadows inherited
@@ -3860,8 +3874,8 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 | `WithRecorderRedisURL(url)` | Redis connection URL |
 | `WithRecorderRedisDB(db)` | Redis database number (default: 7) |
 | `WithRecorderLogger(logger)` | Logger for recorder operations |
-| `WithRecorderTTL(ttl)` | TTL for successful records (default: 24h) |
-| `WithRecorderErrorTTL(ttl)` | TTL for error records (default: 7 days) |
+| `WithRecorderTTL(ttl)` | Base TTL for successful records (default: 24h); an existing longer/persistent lifetime or retention floor wins |
+| `WithRecorderErrorTTL(ttl)` | Base TTL for error records (default: 7 days); an existing longer/persistent lifetime or retention floor wins |
 
 **Built-in resilience:** Layer 1 retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures within 30s triggers cooldown).
 
@@ -4756,6 +4770,7 @@ type Orchestrator interface {
     // 2. Returns a complete OrchestratorResponse (not raw ExecutionResult)
     // 3. Stores execution to ExecutionStore for DAG visualization
     // 4. Sets up context baggage for request_id propagation
+    // It does not run pipeline hooks or store a post-hook FinalResponse.
     ExecutePlanWithSynthesis(ctx context.Context, plan *RoutingPlan, originalRequest string) (*OrchestratorResponse, error)
 
     // GetExecutionHistory returns recent execution history
@@ -4772,7 +4787,7 @@ type Orchestrator interface {
 |--------|----------|
 | `ProcessRequest` | Natural language requests with AI-driven planning |
 | `ExecutePlan` | Pre-defined workflows when you need raw results for custom synthesis |
-| `ExecutePlanWithSynthesis` | Pre-defined workflows with full observability (DAG visualization, LLM debug store) |
+| `ExecutePlanWithSynthesis` | Pre-defined workflow execution with synthesis, DAG visualization, and LLM debug evidence; no application pipeline hooks or post-hook `FinalResponse` |
 
 **Example - ExecutePlanWithSynthesis:**
 ```go
@@ -5766,14 +5781,45 @@ type LLMDebugRecordSummary struct {
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful records |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error records (7 days) |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index |
 
 ### Execution Debug Store
 
 `ExecutionStore` remains the required request-oriented persistence contract.
 Conversation lookup is additive capability discovery:
+
+```go
+type StoredExecution struct {
+    // Existing correlation, request, plan, result, HITL, phase, skill, and
+    // metadata fields are omitted here for brevity.
+
+    // FinalResponse is the terminal application response captured after
+    // AfterSynthesis hooks on the normal ProcessRequest paths.
+    FinalResponse       *string `json:"final_response,omitempty"`
+    FinalResponseSource string  `json:"final_response_source,omitempty"`
+}
+
+const FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+```
+
+The LLM debug store retains the model's synthesis output. That output is a raw
+LLM draft, not proof of what the application ultimately returned. When the
+normal buffered or native-streaming `ProcessRequest` path reaches its terminal
+response, the execution recorder stores the post-`AfterSynthesis` value in
+`FinalResponse` and labels its source with
+`FinalResponseSourceAfterSynthesisHooks`. Registry Viewer displays that value
+under Post-Execution and keeps the synthesis interaction under LLM Calls.
+On native streaming, tokens were already emitted before `AfterSynthesis` ran;
+the stored value is the post-hook response object and may differ from text the
+client already received.
+
+`ExecutePlanWithSynthesis` is workflow mode: it executes a supplied plan and
+performs synthesis, but it does not run application pipeline hooks and does not
+currently store `FinalResponse`. Consumers must therefore treat its synthesis
+record as model output, not as post-hook application evidence. Historical
+records written before these fields existed also legitimately omit them.
 
 ```go
 type ConversationExecutionLister interface {
