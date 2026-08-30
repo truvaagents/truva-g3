@@ -301,6 +301,8 @@ type ExecutionStoreConfig struct {
 	// Override via TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX.
 	// This allows multi-tenant deployments or custom namespacing.
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
+	// Deprecated: configure provider namespacing with redisprovider.WithNamespace.
+	// This field remains for the legacy compatibility factory.
 	KeyPrefix string `json:"key_prefix"`
 
 	// ConversationQueryLimit bounds the most recent execution window returned

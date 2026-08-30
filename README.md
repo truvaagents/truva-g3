@@ -617,6 +617,7 @@ Each framework module ships with its own README covering interfaces, usage patte
 
 **Orchestration:**
 - [Agent Skills Guide](docs/orchestration/AGENT_SKILLS_GUIDE.md) — reusable instruction packages, progressive disclosure, management, and operations
+- [Orchestration Backend Portability Guide](docs/orchestration/ORCHESTRATION_BACKEND_PORTABILITY_GUIDE.md) — Redis presets, capability overrides, mixed providers, and conformance testing
 - [Orchestration Modes Guide](docs/orchestration/ORCHESTRATION_MODES_GUIDE.md) — dynamic, predefined, and custom modes
 - [LLM Planning Prompt Guide](docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md) — prompt customization
 - [Error Handling Guide](docs/orchestration/ERROR_HANDLING_GUIDE.md) — structured errors, retry layers, recovery

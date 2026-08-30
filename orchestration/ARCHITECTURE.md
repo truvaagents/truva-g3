@@ -1601,7 +1601,8 @@ The orchestration module includes a debug store that captures complete LLM reque
 │      when non-empty, falls back to SourceComponents otherwise.   │
 │                                                                  │
 │  Storage Layer:                                                  │
-│  ├── RedisLLMDebugStore (production) - Redis DB 7               │
+│  ├── Redis preset role (included production default; legacy      │
+│  │   parity default is Redis DB 7)                               │
 │  ├── MemoryLLMDebugStore (testing)                               │
 │  └── NoOpLLMDebugStore (disabled/fallback)                       │
 │                                                                  │
@@ -1620,7 +1621,9 @@ The orchestration module includes a debug store that captures complete LLM reque
 
 **Key Design Decisions:**
 - **Disabled by default**: Must explicitly enable via `TRUVAG3_LLM_DEBUG_ENABLED=true`
-- **Dedicated Redis DB**: Uses `core.RedisDBLLMDebug` (DB 7) to isolate debug data
+- **Provider-neutral runtime contract**: Runtime behavior consumes
+  `LLMDebugStore`; the included Redis preset uses DB 7 only as a legacy-parity
+  role default, not as a neutral storage requirement
 - **TTL-based cleanup**: 24h for success and 168h (7 days) for errors;
   final execution outcome and lineage promotion may retain the current and
   root records longer
@@ -1779,27 +1782,44 @@ export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h       # Success records
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h # Error records (7 days)
 
-# Redis database index
+# Included Redis preset / compatibility database assignment.
+# This is provider configuration, not an LLMDebugStore contract.
 export TRUVAG3_LLM_DEBUG_REDIS_DB=7
 ```
 
-**Programmatic Usage:**
+**Canonical Programmatic Usage:**
 ```go
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleLLMDebug),
+)
+if err != nil {
+    return err
+}
+defer ownedBackends.Close()
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.LLMDebug.Enabled = true
+if err := orchestration.WireOrchestratorBackends(
+    config,
+    ownedBackends.Backends(),
+); err != nil {
+    return err
+}
+
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
     AIClient:  aiClient,
+    Logger:    logger,
 }
-
-// Enable debug capture
-orchestrator, _ := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebug(true),
-)
-
-// Or inject custom store
-orchestrator, _ := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebugStore(customStore),
-)
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
 ```
+
+For a custom implementation, assign `config.LLMDebugStore` directly before
+`CreateResolvedOrchestrator`; no Redis package or setting is involved.
+`CreateOrchestratorWithOptions(..., WithLLMDebug(true))` remains a supported
+compatibility path and retains its historical Redis-from-environment bootstrap,
+but new composition code should inject the store explicitly as above.
 
 ### Implementation Checklist
 
@@ -2233,12 +2253,27 @@ func hybridOrchestration(
 }
 ```
 
-`OrchestrationBackends` is supplied by the application composition root. An
-application may assemble it from custom implementations or select the included
-Redis preset through `redisprovider.NewOrchestrationBackends`. Runtime workflow
+`OrchestrationBackends` is supplied by the application composition root. The
+Layer-1 `redisprovider.NewDefaultBackends` path resolves environment
+configuration, constructs and validates selected roles, and returns an
+ownership handle that the application closes after framework shutdown. Layer 2
+keeps client configuration, owned clients, provider options, and
+`redisprovider.NewOrchestrationBackends` separately callable. An application
+may also assemble Layer-3 domain adapters directly. Runtime workflow
 code consumes only the narrow `StateStore` returned by `Workflow()` and never
 imports or infers a storage provider. `NewRedisStateStore` remains a supported
 compatibility constructor, but it is not the preferred pattern for new code.
+The proof-only `examples/orchestration-backend-portability` module implements
+PostgreSQL workflow state and NATS command/task adapters using only these public
+contracts, then validates a mixed Redis/PostgreSQL/NATS composition in an
+isolated Kind cluster. Those internal example adapters are architectural
+evidence, not advertised framework providers.
+The preset is exercised by the in-tree skill-enabled applications. Processes
+that need only skills use `WithDefaultBackendRoles(ClientRoleSkills)` so the
+convenience path neither constructs nor validates unrelated backend groups, and
+then pass only the narrow interfaces onward. `WireOrchestratorBackends` and
+`SkillAdministrationDependencies` provide fail-fast composition-boundary
+unpacking without passing the aggregate into runtime behavior.
 
 ---
 
@@ -2455,13 +2490,28 @@ The claim lease is operational runtime configuration, while the claim-owner
 length cap is a fixed coordination-protocol invariant.
 
 The optional `redisprovider` preset owns only Redis adapter composition.
+`NewDefaultBackends` is its Layer-1 path: it delegates to the lower layers,
+constructs only explicitly selected roles when requested, validates every
+capability promised by those roles, and returns `OwnedBackends` for deterministic
+client cleanup. `WithDefaultBackendClientConfig`,
+`WithDefaultBackendProviderOptions`, and `WithDefaultBackendOverrides` retain
+code-over-environment precedence and per-capability replacement without forcing
+the caller to abandon the convenience layer.
 `NewOptions` is deterministic; `LoadOptionsFromEnvironment` applies the preset's
-workflow TTL and task-queue retry limits; `ConfigureOptions` applies later code
-overrides. `WithLogger` propagates one application-owned logger to every
+LLM-debug retention, checkpoint retention, workflow TTL, and task-queue retry
+limits; `ConfigureOptions` applies later code overrides. `WithLogger` propagates one application-owned logger to every
 logging-capable adapter assembled by the preset; each adapter retains its
 standard `framework/orchestration` component attribution and NoOp behavior when
 no logger is supplied. Root orchestration contracts and lifecycle code do not
 import the preset package or Redis clients.
+
+Backend validation is closed over actual runtime dependencies. A scheduler
+producer requires schedule and task stores, a dispatcher, and a distributed
+lock. Canonical checkpoint expiry requires persistence, an atomic expired-item
+source, and a runnable processor. The processor occupies a typed composition
+slot; generic runnables append to the lifecycle set. Replacing either checkpoint
+dependency invalidates the previous processor, and the Redis preset reconstructs
+its default against final caller overrides.
 
 Direct Redis constructors that receive an application-owned client never close
 that client. For the execution-debug, LLM-debug, checkpoint, and command stores,
@@ -2651,6 +2701,8 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.12 | 2026-08-30 | Recorded the external PostgreSQL/NATS mixed-composition proof and its non-provider status |
+| 1.11 | 2026-08-30 | Added the layered Redis backend composition contract, explicit ownership handle, role-selective Layer-1 construction, and canonical LLM-debug preset wiring |
 | 1.10 | 2026-08-29 | Documented governed terminal-response evidence separately from raw LLM synthesis, including workflow-mode and historical-record absence cases |
 | 1.9 | 2026-08-28 | Clarified available-lineage retention extension and direct Redis option normalization, documented coupled record/projection updates, and explicitly inventoried the returned skills-authoring AI error among the legacy payload-fidelity exceptions pending audit |
 | 1.8 | 2026-08-28 | Reconciled exact-payload ownership with explicitly labeled legacy error transformations pending a separate audit; prohibited treating those paths as an adopter-facing sanitization guarantee |

@@ -952,32 +952,24 @@ package defines provider-neutral capabilities; the included Redis preset is
 selected explicitly at the application boundary:
 
 ```go
-redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
-    &redis.Options{Addr: "redis:6379"},
-))
-defer redisClient.Close()
-
-clients, err := redisprovider.NewClientSet(redisClient)
-if err != nil {
-    log.Fatal(err)
-}
-providerOptions, err := redisprovider.NewOptions(
-    redisprovider.WithNamespace("travel-chat-agent"),
-    redisprovider.WithLogger(logger),
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendProviderOptions(
+        redisprovider.WithNamespace("travel-chat-agent"),
+    ),
 )
 if err != nil {
     log.Fatal(err)
 }
-backends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
-if err != nil {
-    log.Fatal(err)
-}
+defer ownedBackends.Close()
+backends := ownedBackends.Backends()
 
 config := orchestration.NewDefaultOrchestratorConfig()
 config.ExecutionStore.Enabled = true
-config.ExecutionStoreBackend = backends.Execution()
 config.LLMDebug.Enabled = true
-config.LLMDebugStore = backends.LLMDebug()
+if err := orchestration.WireOrchestratorBackends(config, backends); err != nil {
+    log.Fatal(err)
+}
 
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
@@ -1005,9 +997,27 @@ engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger
 
 Applications register every value returned by `backends.Runnables()` with
 `core.Framework` before calling `Run`, and close their clients only after the
-framework stops. The preset constructs adapters but does not start goroutines
-or close application-owned clients. A non-Redis provider supplies the same
-root options and getters, so runtime consumers do not change.
+framework stops. `NewDefaultBackends` returns the explicit ownership handle
+shown above and delegates to the separately callable client configuration,
+owned-client, provider-option, and preset constructors. The preset constructs
+adapters but does not start goroutines or close application-owned clients. A
+non-Redis provider supplies the same root options and getters, so runtime
+consumers do not change.
+
+Runnable composition is additive. Checkpoint expiry is a typed capability:
+validation requires persistence, an expired-checkpoint source, and its runnable
+processor. Checkpoint dependency options must precede an explicit processor;
+the reverse order fails construction instead of silently replacing the
+processor. The Redis preset constructs any missing default processor only after
+the final dependencies are known. Provider-owned
+retention can be configured with `redisprovider.WithLLMDebugRetention` and
+`redisprovider.WithCheckpointTTL`.
+
+In-tree skill-enabled agents and Registry Viewer use the Redis preset directly.
+They call `NewDefaultBackends` with
+`WithDefaultBackendRoles(ClientRoleSkills)`, so a skills-only process neither
+creates nor advertises unrelated backend groups while client ownership remains
+explicit.
 
 #### Benefits of This Design
 
@@ -1325,7 +1335,7 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index for debug storage |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of the provider-neutral `LLMDebugStore` contract |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
@@ -2187,21 +2197,37 @@ export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h
 
-# Redis database (default: 7)
+# Included Redis preset / compatibility database assignment (default: 7)
 export TRUVAG3_LLM_DEBUG_REDIS_DB=7
 ```
 
 **Programmatic Configuration:**
 ```go
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleLLMDebug),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer ownedBackends.Close()
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.LLMDebug.Enabled = true
+if err := orchestration.WireOrchestratorBackends(config, ownedBackends.Backends()); err != nil {
+    log.Fatal(err)
+}
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
     AIClient:  aiClient,
+    Logger:    logger,
 }
-
-orchestrator, _ := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebug(true),  // Enable debug capture
-)
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
 ```
+
+To use another backend, assign `config.LLMDebugStore` directly before canonical
+construction. `CreateOrchestratorWithOptions(..., WithLLMDebug(true))` remains a
+compatibility path with the historical Redis bootstrap.
 
 **Agent-Side LLM Recording:**
 

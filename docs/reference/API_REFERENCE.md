@@ -1404,7 +1404,8 @@ effective scheduler feature requirements, and register the bundle's runnables.
 
 #### core/conformance Sub-Package
 
-Contract test suite for `TaskConsumer` implementations.
+Reusable contract test suites for interfaces owned by Core. This package is
+test support: provider tests import it, while runtime packages do not.
 
 ```go
 // core/conformance/task_consumer_conformance.go
@@ -1414,6 +1415,9 @@ func RunTaskDeliveryProfileConformance(
     profile TaskDeliveryProfile,
     factory TaskDeliveryFactory,
 )
+func RunTaskStoreConformance(t *testing.T, factory TaskStoreFactory)
+func RunScheduleStoreConformance(t *testing.T, factory ScheduleStoreFactory)
+func RunTaskQueueConformance(t *testing.T, factory TaskQueueFactory)
 
 const (
     TaskDeliveryAtMostOnce  TaskDeliveryProfile = "at_most_once"
@@ -1421,11 +1425,14 @@ const (
 )
 ```
 
-The base suite runs 10 transport-neutral subtests covering roundtrip,
+The task-consumer base suite runs 10 transport-neutral subtests covering roundtrip,
 settlement, idempotency, cancellation, concurrency, field preservation, and
 double settlement. The profile suite also checks terminal dead-letter behavior
 and the recovery semantics advertised by an at-most-once or at-least-once
-adapter.
+adapter. The storage suites verify lifecycle, namespace isolation,
+cross-instance visibility, cancellation, ordering, state transitions, and
+settlement behavior appropriate to `TaskStore`, `ScheduleStore`, and the legacy
+`TaskQueue`.
 
 The test-only `orchestration/backendconformance` package supplies corresponding
 provider-neutral suites for execution-debug and LLM-debug stores, checkpoint
@@ -4512,6 +4519,8 @@ func (b *OrchestrationBackends) With(...OrchestrationBackendOption) (*Orchestrat
 func (b *OrchestrationBackends) ValidateFor(BackendRequirements) error
 
 func RequirementsForFeatures(*OrchestratorConfig, ...BackendFeature) (BackendRequirements, error)
+func WireOrchestratorBackends(*OrchestratorConfig, *OrchestrationBackends) error
+func (b *OrchestrationBackends) SkillAdministrationDependencies() (SkillAdminHandlerDependencies, error)
 ```
 
 Typed options populate or override individual capabilities:
@@ -4521,6 +4530,7 @@ WithExecutionBackend(ExecutionStore)
 WithLLMDebugBackend(LLMDebugStore)
 WithCheckpointPersistence(CheckpointPersistence)
 WithCheckpointExpiry(ExpiredCheckpointSource)
+WithCheckpointExpiryProcessor(core.Runnable)
 WithCommandBackend(CommandStore)
 WithWorkflowBackend(StateStore)
 WithScheduleBackend(core.ScheduleStore)
@@ -4538,18 +4548,33 @@ WithRunnables(...core.Runnable)
 ```
 
 Matching getters are `Execution`, `LLMDebug`, `Checkpoints`,
-`CheckpointExpiry`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
+`CheckpointExpiry`, `CheckpointExpiryProcessor`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
 `TaskDispatcher`, `TaskConsumer`, `Lock`, `SkillRegistry`, `SkillRevisionReader`,
 `SkillAdministrationStore`, `SkillRevisionDeletionStore`, `SkillAuditSink`, and
-`Runnables`. Getters are nil-safe;
-`Runnables` returns a defensive copy.
+`Runnables`. Getters are nil-safe; `Runnables` returns a defensive copy.
+`WithRunnables` appends rather than replacing previously composed lifecycle
+components. Replacing checkpoint persistence or the expired-checkpoint source
+invalidates the old processor so it cannot remain bound to stale dependencies.
+Within one option list, dependency options must precede an explicit checkpoint
+processor; the reverse order fails instead of silently substituting a default.
 
 `RequirementsForFeatures` combines execution/LLM-debug requirements from the
 effective orchestrator configuration with explicit feature flags such as
 `BackendFeatureWorkflow`, `BackendFeatureCrossInstanceHITL`,
 `BackendFeatureCheckpointExpiry`, `BackendFeatureSchedulerProducer`,
-`BackendFeatureScheduledWorker`, and `BackendFeatureDistributedLock`.
+`BackendFeatureScheduledWorker`, `BackendFeatureDistributedLock`,
+`BackendFeatureSkillsRuntime`, and `BackendFeatureSkillsAdministration`.
 `ValidateFor` fails startup with the complete sorted missing-capability list.
+The scheduler-producer feature requires schedules, tasks, dispatcher, and lock.
+Checkpoint expiry requires persistence, source, and processor capabilities.
+`BackendSkills` remains a source-compatible alias for the runtime skill-registry
+capability; revision reading, publication, deletion, and audit are distinct
+control-plane capabilities.
+
+`WireOrchestratorBackends` fills only enabled dependencies that are still nil;
+explicitly injected config dependencies win. `SkillAdministrationDependencies`
+validates and unpacks the complete management dependency set for
+`NewSkillAdminHandler`.
 
 #### Included Redis preset
 
@@ -4558,40 +4583,43 @@ The included implementation lives in
 orchestration imports:
 
 ```go
-redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
-    &redis.Options{Addr: "redis:6379"},
-))
-defer redisClient.Close()
-
-clients, err := redisprovider.NewClientSet(redisClient)
-if err != nil {
-    log.Fatal(err)
-}
-options, err := redisprovider.NewOptions(
-    redisprovider.WithNamespace("travel-chat-agent"),
-    redisprovider.WithLogger(logger),
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendProviderOptions(
+        redisprovider.WithNamespace("travel-chat-agent"),
+    ),
 )
 if err != nil {
     log.Fatal(err)
 }
-backends, err := redisprovider.NewOrchestrationBackends(clients, options)
-if err != nil {
-    log.Fatal(err)
-}
+defer ownedBackends.Close()
+backends := ownedBackends.Backends()
 ```
 
+`NewDefaultBackends` is the Layer-1 path. It loads documented environment
+configuration, applies explicit client/provider/backend options last, creates
+and validates either all roles or the roles selected by
+`WithDefaultBackendRoles`, and returns `OwnedBackends` for deterministic client
+cleanup. `WithDefaultBackendClientConfig`,
+`WithDefaultBackendProviderOptions`, and `WithDefaultBackendOverrides` expose
+the lower-layer customization seams without duplicating their implementation.
+
 `ClientSet` accepts one application-owned default Redis client plus optional
-role-specific clients through `WithRoleClient`. For configuration-owned
-connections, use `DefaultClientConfig`,
-`LoadClientConfigFromEnvironment`, and `NewOwnedClients`; close the returned
-`OwnedClients` after the framework stops. Redis URLs are parsed without being
-repeated in errors.
+role-specific clients through `WithRoleClient`. A default client is an explicit
+fallback for every role; pass nil plus role clients to construct only selected
+capability groups. For configuration-owned connections, use
+`DefaultClientConfig`, `LoadClientConfigFromEnvironment`, and `NewOwnedClients`;
+`WithOwnedClientRoles` restricts creation to the roles the process needs. Close
+the returned `OwnedClients` after the framework stops. Redis URLs are parsed
+without being repeated in errors. Default role/database assignments preserve
+legacy behavior and are compatibility values, not deployment recommendations.
 
 Preset options are created with `NewOptions`. Deployment-owned operational
 values can then be applied using `LoadOptionsFromEnvironment`, followed by
 `ConfigureOptions` when code must win. Supported options include namespace,
-logger, execution-store configuration, workflow TTL, task-queue retry policy,
-and checkpoint expiry. Caller-supplied root backend overrides are applied last:
+logger, execution-store configuration, LLM-debug retention, checkpoint
+retention, workflow TTL, task-queue retry policy, and checkpoint expiry.
+Caller-supplied root backend overrides are applied last:
 
 ```go
 backends, err := redisprovider.NewOrchestrationBackends(
@@ -4610,6 +4638,14 @@ change runtime feature wiring.
 The Redis preset's explicit configuration surface is:
 
 ```go
+func NewDefaultBackends(core.Logger, ...DefaultBackendsOption) (*OwnedBackends, error)
+func WithDefaultBackendRoles(...ClientRole) DefaultBackendsOption
+func WithDefaultBackendClientConfig(...ClientConfigOption) DefaultBackendsOption
+func WithDefaultBackendProviderOptions(...Option) DefaultBackendsOption
+func WithDefaultBackendOverrides(...orchestration.OrchestrationBackendOption) DefaultBackendsOption
+func (*OwnedBackends) Backends() *orchestration.OrchestrationBackends
+func (*OwnedBackends) Close() error
+
 func DefaultClientConfig() ClientConfig
 func ConfigureClientConfig(ClientConfig, ...ClientConfigOption) (ClientConfig, error)
 func LoadClientConfigFromEnvironment(ClientConfig, func(string) (string, bool)) (ClientConfig, error)
@@ -4617,7 +4653,8 @@ func WithClientURL(string) ClientConfigOption
 func WithRoleDatabase(ClientRole, int) ClientConfigOption
 func NewClientSet(redis.UniversalClient, ...ClientSetOption) (*ClientSet, error)
 func WithRoleClient(ClientRole, redis.UniversalClient) ClientSetOption
-func NewOwnedClients(ClientConfig) (*OwnedClients, error)
+func NewOwnedClients(ClientConfig, ...OwnedClientsOption) (*OwnedClients, error)
+func WithOwnedClientRoles(...ClientRole) OwnedClientsOption
 func (*OwnedClients) ClientSet() *ClientSet
 func (*OwnedClients) Close() error
 
@@ -4635,6 +4672,8 @@ func ConfigureOptions(Options, ...Option) (Options, error)
 func LoadOptionsFromEnvironment(Options, func(string) (string, bool)) (Options, error)
 func WithNamespace(string) Option
 func WithExecutionStoreConfig(orchestration.ExecutionStoreConfig) Option
+func WithLLMDebugRetention(time.Duration, time.Duration) Option
+func WithCheckpointTTL(time.Duration) Option
 func WithLogger(core.Logger) Option
 func WithWorkflowStateTTL(time.Duration) Option
 func WithTaskQueueRetryPolicy(int, time.Duration) Option
@@ -4692,6 +4731,9 @@ The included Redis source uses atomic owner/lease claims so multiple replicas
 do not process the same expiry concurrently. The default claim lease is 30
 seconds and can be overridden with
 `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` or code configuration.
+When the preset assembles expiry, it binds the processor after applying final
+checkpoint overrides. `BackendFeatureCheckpointExpiry` validation therefore
+fails if only persistence/source are present without a runnable processor.
 
 **Example - Production Orchestrator:**
 ```go
@@ -5686,16 +5728,16 @@ type LLMInteraction struct {
 }
 ```
 
-#### Factory Options
+#### Factory Options and Compatibility Constructors
 
 ```go
-// Orchestrator options (for CreateOrchestratorWithOptions)
+// Environment-compatible orchestrator options
 orchestration.WithLLMDebug(true)                    // Enable debug capture
 orchestration.WithLLMDebugStore(customStore)        // Inject custom store
 orchestration.WithLLMDebugTTL(48 * time.Hour)       // Custom TTL for success
 orchestration.WithLLMDebugErrorTTL(14 * 24 * time.Hour) // Custom TTL for errors
 
-// RedisLLMDebugStore options (for NewRedisLLMDebugStore)
+// Direct Redis compatibility-constructor options
 orchestration.WithDebugRedisURL("redis://localhost:6379")
 orchestration.WithDebugRedisDB(7)
 orchestration.WithDebugLogger(logger)
@@ -5721,17 +5763,32 @@ configure routing on the supplied client and use `WithDebugKeyPrefix` for key
 isolation. `WithDebugRedisURL` and `WithDebugRedisDB` do not reconfigure an
 already-supplied client.
 
+New applications should normally construct the included adapter through the
+Redis preset and inject the provider-neutral store. The direct constructors and
+`CreateOrchestratorWithOptions` remain supported compatibility paths.
+
 **Example - Enable Debug Capture:**
 ```go
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleLLMDebug),
+)
+if err != nil {
+    return err
+}
+defer ownedBackends.Close()
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.LLMDebug.Enabled = true
+if err := orchestration.WireOrchestratorBackends(config, ownedBackends.Backends()); err != nil {
+    return err
+}
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
     AIClient:  aiClient,
+    Logger:    logger,
 }
-
-// Enable debug capture
-orchestrator, err := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebug(true),
-)
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
 
 // Query debug records (from your application's API)
 record, _ := orchestrator.GetLLMDebugStore().GetRecord(ctx, requestID)
@@ -5783,7 +5840,7 @@ type LLMDebugRecordSummary struct {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of `LLMDebugStore` |
 
 ### Execution Debug Store
 

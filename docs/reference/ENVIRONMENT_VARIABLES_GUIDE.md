@@ -1397,7 +1397,7 @@ Configure LLM debug payload storage for debugging orchestration issues. This fea
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | **Implemented** | Enable LLM debug payload storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful debug records; a longer execution-lineage floor is preserved | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for error debug records; lineage, HITL, or investigation retention may extend it | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | **Implemented** | Redis database number for debug storage (uses `core.RedisDBLLMDebug`) | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | **Implemented** | Included Redis preset and compatibility database assignment (uses `core.RedisDBLLMDebug`); not part of the provider-neutral store contract | [orchestration/redisprovider/client_config.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/client_config.go) |
 
 ### How It Works
 
@@ -1802,6 +1802,9 @@ These variables are read only when the application explicitly calls
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Successful LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Failed LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_HITL_CHECKPOINT_TTL` | `24h` | **Implemented** | Checkpoint retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_WORKFLOW_STATE_TTL` | `24h` | **Implemented** | Retention for workflow execution state composed by the default Redis backend preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `3` | **Implemented** | Positive number of Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_TASK_QUEUE_RETRY_DELAY` | `100ms` | **Implemented** | Positive delay between Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
@@ -2115,7 +2118,7 @@ export TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT=10         # Max signals in prompt
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h           # Success record retention
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h    # Error record retention (7 days)
-export TRUVAG3_LLM_DEBUG_REDIS_DB=7        # Redis database number
+export TRUVAG3_LLM_DEBUG_REDIS_DB=7        # Included Redis preset / compatibility assignment
 ```
 
 ### Kubernetes ConfigMap Example
