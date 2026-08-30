@@ -1,0 +1,3 @@
+.build/
+.state/
+coverage.out

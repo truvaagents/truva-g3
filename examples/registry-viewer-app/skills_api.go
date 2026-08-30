@@ -18,42 +18,38 @@ func newSkillAdminAPI(
 	logger core.Logger,
 	telemetry core.Telemetry,
 ) (httpHandler orchestrationHTTPHandler, closer io.Closer, err error) {
-	clientConfig, err := redisprovider.LoadClientConfigFromEnvironment(
-		redisprovider.DefaultClientConfig(), os.LookupEnv,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve skills client configuration: %w", err)
+	defaultOptions := []redisprovider.DefaultBackendsOption{
+		redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleSkills),
 	}
-	clients, err := redisprovider.NewOwnedClients(clientConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create skills clients: %w", err)
-	}
-	storeOptions := []redisprovider.SkillStoreOption{redisprovider.WithSkillStoreLogger(logger)}
 	if strings.TrimSpace(keyNamespace) != "" {
-		storeOptions = append(storeOptions, redisprovider.WithSkillStoreKeyPrefix(strings.TrimSpace(keyNamespace)+":skills"))
+		defaultOptions = append(defaultOptions, redisprovider.WithDefaultBackendProviderOptions(
+			redisprovider.WithNamespace(strings.TrimSpace(keyNamespace)),
+		))
 	}
-	store, err := redisprovider.NewSkillStore(
-		clients.ClientSet().Resolve(redisprovider.ClientRoleSkills), storeOptions...,
-	)
+	owned, err := redisprovider.NewDefaultBackends(logger, defaultOptions...)
 	if err != nil {
-		_ = clients.Close()
-		return nil, nil, fmt.Errorf("create skills store: %w", err)
+		return nil, nil, fmt.Errorf("create default skills backends: %w", err)
+	}
+	dependencies, err := owned.Backends().SkillAdministrationDependencies()
+	if err != nil {
+		_ = owned.Close()
+		return nil, nil, fmt.Errorf("wire skills administration backends: %w", err)
 	}
 	authoringLimits, adminLimits, err := skillAdminLimitsFromEnvironment()
 	if err != nil {
-		_ = clients.Close()
+		_ = owned.Close()
 		return nil, nil, err
 	}
-	handler, err := orchestration.NewSkillAdminHandler(orchestration.SkillAdminHandlerDependencies{
-		Registry: store, RevisionReader: store, Administration: store,
-		Deletions: store, Audit: store, AuthoringLimits: authoringLimits,
-		AdministrationLimits: adminLimits, Logger: logger, Telemetry: telemetry,
-	})
+	dependencies.AuthoringLimits = authoringLimits
+	dependencies.AdministrationLimits = adminLimits
+	dependencies.Logger = logger
+	dependencies.Telemetry = telemetry
+	handler, err := orchestration.NewSkillAdminHandler(dependencies)
 	if err != nil {
-		_ = clients.Close()
+		_ = owned.Close()
 		return nil, nil, fmt.Errorf("create skills HTTP handler: %w", err)
 	}
-	return handler, clients, nil
+	return handler, owned, nil
 }
 
 // orchestrationHTTPHandler is the small host-facing surface needed from the
