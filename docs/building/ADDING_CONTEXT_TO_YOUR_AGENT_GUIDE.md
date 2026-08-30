@@ -46,7 +46,7 @@ Every hook implements the base `core.PipelineHook` interface (just a `Name()` me
 | `BeforePlanningHook` | Before the planning phase begins | Enrichments | Yes — skip entire pipeline |
 | `AfterPlanningHook` | After each phase reaches a final validated planner-produced plan | Plan (copy-on-write and revalidated) | No |
 | `AfterExecutionHook` | After all tools finish executing | No (observe-only) | No |
-| `AfterSynthesisHook` | After the LLM synthesizes the final response | Response text | No |
+| `AfterSynthesisHook` | After the LLM produces its synthesis draft | Response text | No |
 
 Hook callbacks are **resilient by design**: if a hook returns an error, the
 orchestrator logs a warning and continues. Invalid provenance-aware
@@ -500,7 +500,15 @@ func (h *GuardrailsHook) AfterSynthesis(ctx context.Context, pctx *core.Pipeline
 }
 ```
 
-The `AfterSynthesisHook` runs **after** the LLM has generated the final response. Multiple hooks run in registration order — each receives the output of the previous hook. This makes it easy to chain: first redact PII, then check content policy, then apply formatting.
+The `AfterSynthesisHook` runs **after** the LLM has generated its synthesis
+draft. Multiple hooks run in registration order—each receives the output of the
+previous hook. The normal `ProcessRequest` paths store the chained result as
+`StoredExecution.FinalResponse`, separately from the raw synthesis interaction
+in the LLM debug store. This makes it easy to chain application-owned policies:
+for example, transform PII, then check content policy, then apply formatting.
+
+Workflow-mode `ExecutePlanWithSynthesis` currently does not run this pipeline or
+store a post-hook final response.
 
 > **Streaming note**: In `ProcessRequestStreaming`, tokens have already been streamed to the client by the time `AfterSynthesisHook` runs. The hook operates on the full accumulated response. Use it for post-processing tasks like memory storage, audit logging, or updating the `Response` field in the final `StreamingOrchestratorResponse`.
 

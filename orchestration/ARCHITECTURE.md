@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.9
+**Version**: 1.10
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -1646,8 +1646,10 @@ The store name is historical: it now carries both true LLM calls and selected no
 
 Conversation identity is stored in the existing `StoredExecution.Metadata` and
 `ExecutionSummary.Metadata` maps. `ExecutionConversationID` and
-`ExecutionSummaryConversationID` are the canonical accessors; the exported
-record field sets remain unchanged.
+`ExecutionSummaryConversationID` are the canonical accessors; the conversation
+contract does not require a dedicated conversation field on either record. The
+separate terminal-response fields described below are not conversation
+identity.
 
 `ExecutionStore` keeps its minimal required method set.
 `ConversationExecutionLister` is a separate optional capability discovered by
@@ -1683,6 +1685,32 @@ returned records. `ConversationIndexScanLimit` defaults to 5000 and bounds
 work when stale entries are encountered. Explicit positive config values win;
 otherwise environment values are normalized by the factory and invalid or
 non-positive values fall back to defaults.
+
+#### Terminal application-response evidence
+
+`StoredExecution.FinalResponse` is a pointer so an absent terminal response is
+different from an application that intentionally returned an empty string.
+`StoredExecution.FinalResponseSource` identifies the capture boundary. The
+normal buffered and native-streaming `ProcessRequest` paths run
+`AfterSynthesis` hooks and then persist the resulting application response with
+source `FinalResponseSourceAfterSynthesisHooks` (`after_synthesis_hooks`).
+
+This record is deliberately separate from the synthesis interaction in the LLM
+debug store. The synthesis interaction is the model output before application
+governance; it remains useful evidence but is not proof of the final business
+response. Registry Viewer therefore shows synthesis under LLM Calls and the
+governed terminal value under Post-Execution.
+
+On native streaming, synthesis tokens have already been delivered when
+`AfterSynthesis` runs. `FinalResponse` is therefore the post-hook response
+object, not a claim that the hook-mutated text was the byte stream observed by
+the client.
+
+Workflow-mode `ExecutePlanWithSynthesis` executes a caller-supplied plan and
+synthesizes its results, but it does not run pipeline hooks and does not
+currently persist `FinalResponse`. Older records also predate these fields.
+Consumers must treat a missing value as "no post-hook terminal evidence was
+stored," not as proof that the application returned the raw synthesis.
 
 #### Lineage-aware debug retention
 
@@ -2623,6 +2651,7 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.10 | 2026-08-29 | Documented governed terminal-response evidence separately from raw LLM synthesis, including workflow-mode and historical-record absence cases |
 | 1.9 | 2026-08-28 | Clarified available-lineage retention extension and direct Redis option normalization, documented coupled record/projection updates, and explicitly inventoried the returned skills-authoring AI error among the legacy payload-fidelity exceptions pending audit |
 | 1.8 | 2026-08-28 | Reconciled exact-payload ownership with explicitly labeled legacy error transformations pending a separate audit; prohibited treating those paths as an adopter-facing sanitization guarantee |
 | 1.7 | 2026-08-28 | Made missing lineage evidence breaker-neutral and retention-link-only Store failures best-effort while preserving full-record fallback and sanitized diagnostics |

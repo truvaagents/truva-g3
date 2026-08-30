@@ -1384,15 +1384,20 @@ tool.RegisterCapability(core.Capability{
 - Works seamlessly with OpenTelemetry distributed tracing
 - Essential for debugging in production environments
 
-Keep original errors for control flow, but sanitize external/provider/backend
-errors before placing them in logs, traces, debug records, or tool responses.
-`core.RedactSensitiveText` removes common credential assignments,
-authorization values, and secret-bearing URL components while preserving useful
-diagnostic structure. It is defense in depth, so avoid putting raw prompts,
-payloads, endpoints, or credentials into errors in the first place.
-When returning an error across a framework boundary, use
-`core.RedactSensitiveError(err)` to sanitize its observable message without
-breaking `errors.Is` or `errors.As` inspection of the original cause.
+Keep original errors for control flow. If your application deliberately chooses
+to transform a diagnostic field, `core.RedactSensitiveText` removes a bounded
+set of common credential assignments, authorization values, and secret-bearing
+URL components while preserving some diagnostic structure. When your
+application deliberately returns a transformed error,
+`core.RedactSensitiveError(err)` preserves `errors.Is` and `errors.As`
+inspection of the original cause.
+
+These helpers are explicit and lossy; they are not a framework-wide automatic
+redaction guarantee. Built-in debug persistence preserves the values supplied
+to it. A small set of legacy orchestration, skills, provider, and backend paths
+still invokes the helpers automatically pending a dedicated audit. Do not treat
+those exceptions as coverage for application data. Adopters own payload
+classification, access controls, and any required sanitization policy.
 
 ### Provider-Neutral AI Requests
 

@@ -538,9 +538,10 @@ This means:
 
 Serialization tags do not sanitize arbitrary error text or application logs.
 Never log complete headers, token responses, credential-bearing URLs, or raw
-OAuth provider bodies. Preserve original errors for control flow, but pass
-external diagnostic strings through `core.RedactSensitiveText` before writing
-them to logs, traces, debug records, or client-visible responses.
+OAuth provider bodies. Preserve original errors for control flow. The refresh
+example below explicitly chooses `core.RedactSensitiveText` for its application
+log policy; that lossy helper is not automatically applied by the framework and
+is not a general detector for domain secrets.
 
 ### Thread-Safe Token Storage
 

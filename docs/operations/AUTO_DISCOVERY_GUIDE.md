@@ -623,7 +623,15 @@ redis-cli TTL "truvag3:services:weather-tool-abc123"
 # 0 or -2 means the record has expired or doesn't exist.
 ```
 
-For a friendlier view of the whole registry, the [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/) example is a standalone web dashboard that shows all registered services, their capabilities, and their health in real time. It's read-only, runs anywhere with access to your Redis, and is useful for both developers and ops.
+For a friendlier view of the whole registry, the
+[`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app/)
+example is an independently deployable dashboard that shows registered
+services, capabilities, health, execution evidence, HITL, skills, memory, and
+optional trace enrichment. Its backend currently imports TruvaG3 modules, so
+moving the source to another repository requires dependency and container-build
+changes. Most views are observational, but it is not globally read-only: HITL
+commands and Skills administration are intentional mutation surfaces, and
+grouped execution reads prune only confirmed-missing DB 8 index members.
 
 The framework also emits Prometheus metrics for discovery operations (`discovery.registrations`, `discovery.lookups`, `discovery.lookup.duration_ms`). See [`examples/k8-deployment/OBSERVABILITY.md`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/OBSERVABILITY.md) for the full metric catalog.
 

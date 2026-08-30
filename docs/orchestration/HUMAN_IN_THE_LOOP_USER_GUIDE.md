@@ -111,7 +111,7 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m              # 5 minute approval window
 
 **What do these settings mean?**
 
-- `TRUVAG3_AGENT_NAME`: Scopes this agent's HITL state in Redis to `truvag3:hitl:<agent_name>:*`. Without it, all agents pointed at the same Redis share `truvag3:hitl:pending`, and anything that fans out across agents (such as the registry viewer's HITL list) will see duplicates. K8s manifests typically set this; for local dev with more than one HITL agent on the same Redis, set it explicitly. The framework logs a startup Warn if it detects the shared-prefix configuration. See [Agent Isolation](#agent-isolation) for the full mechanism.
+- `TRUVAG3_AGENT_NAME`: Scopes this agent's HITL state in Redis to `truvag3:hitl:<agent_name>:*`. Without it, all agents pointed at the same Redis share `truvag3:hitl:pending`, so a fan-out can receive the same checkpoint from several agents. The current Registry Viewer deduplicates that response by `checkpoint_id`, but identity is still required for correct ownership, routing, and isolation. K8s manifests typically set it; for local dev with more than one HITL agent on the same Redis, set it explicitly. The framework logs a startup Warn if it detects the shared-prefix configuration. See [Agent Isolation](#agent-isolation) for the full mechanism.
 - `TRUVAG3_HITL_ENABLED`: The master switch. Without this, nothing HITL-related happens.
 - `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL`: When true, the AI pauses after generating a plan but before executing anything. This lets you review the entire plan at once.
 - `TRUVAG3_HITL_DEFAULT_TIMEOUT`: How long to wait for human response. After this, the system takes a default action (usually reject for safety).
@@ -1482,19 +1482,27 @@ processor, err := orchestration.NewCheckpointExpiryProcessor(
 )
 ```
 
-### Duplicate Checkpoints in the Registry Viewer (Visual Only)
+### Shared-prefix duplicates at the aggregation boundary
 
-**What you see:** The viewer's "HITL interrupted" screen shows several rows that all have the same `checkpoint_id`, `request_id`, and timestamps. Approving one row doesn't make the others disappear until the next refresh.
+**What happens:** Multiple agents that share `truvag3:hitl:pending` can each
+return the same checkpoint to a fan-out caller. The current Registry Viewer
+deduplicates its merged list by `checkpoint_id`, so this condition should not
+create duplicate rows in the UI.
 
-**Why it happens:** Multiple agents are sharing the same Redis pending index (`truvag3:hitl:pending`) because none of them have an agent identity configured. Each agent's `GET /hitl/checkpoints` endpoint legitimately returns the full shared list, and the viewer's fan-out concatenates the responses. This is distinct from the multi-pod processing issue above — the underlying checkpoint is processed once correctly; only the *display* duplicates.
+This remains a configuration defect even when the UI hides its visual symptom:
+checkpoint ownership and command routing are ambiguous, and another management
+client may not deduplicate.
 
-**Diagnostic:** Inspect the viewer API response directly and count distinct vs. total `checkpoint_id` values:
+**Diagnostic:** Inspect the Viewer API response and agent configuration:
 
 ```bash
 curl -s http://<viewer>/api/hitl/checkpoints | jq '.checkpoints | length, (map(.checkpoint_id) | unique | length)'
 ```
 
-If total > distinct, you're hitting this case. If total == distinct and growing, you're seeing genuine checkpoint accumulation (tune `TRUVAG3_HITL_DEFAULT_TIMEOUT`).
+For the current Viewer, total and distinct should match. If they do not, the
+deployed Viewer is older than this implementation or its deduplication has
+regressed. Matching counts do not prove correct isolation; confirm every
+logical agent has its own resolved prefix.
 
 **How to fix:** Give each agent a distinct identity so their Redis prefixes don't collide. Any of these works:
 
@@ -1509,7 +1517,10 @@ TRUVAG3_K8S_SERVICE_NAME=my-agent
 TRUVAG3_HITL_KEY_PREFIX=truvag3:hitl:my-agent
 ```
 
-Or pass `orchestration.WithCheckpointKeyPrefix("…")` to `NewRedisCheckpointStore`. The framework logs a startup Warn pointing at this — check agent logs for "using shared key prefix" before the duplication appears in the UI.
+Or pass `orchestration.WithCheckpointKeyPrefix("…")` to
+`NewRedisCheckpointStore`. The framework logs a startup Warn pointing at this;
+check agent logs for "using shared key prefix" even when the Viewer shows only
+one deduplicated row.
 
 See [Agent Isolation](#agent-isolation) for the full mechanism and why each path works.
 
@@ -1866,7 +1877,14 @@ Whichever path you choose, this agent's checkpoints are stored at `{prefix}:chec
 
 #### What the framework does on its own
 
-K8s replicas of one Deployment naturally share `TRUVAG3_K8S_SERVICE_NAME`, but `applyConfigToComponent` collapses them to a single service-discovery entry (`base.ID = config.Name`), so the registry viewer hits only one replica per logical agent. Replica sharing is intentional and doesn't produce duplicates. The duplication surfaces only when (a) multiple **logical** agents share a prefix, or (b) operators force instance-scoped registration via per-pod `TRUVAG3_AGENT_ID`.
+K8s replicas of one Deployment naturally share `TRUVAG3_K8S_SERVICE_NAME`, but
+`applyConfigToComponent` collapses them to a single service-discovery entry
+(`base.ID = config.Name`), so the Registry Viewer hits only one replica per
+logical agent. Replica sharing is intentional. Duplicate upstream checkpoint
+responses can arise when multiple **logical** agents share a prefix or when
+operators force instance-scoped registration via per-pod
+`TRUVAG3_AGENT_ID`; the current Viewer deduplicates those responses for display
+but cannot repair the underlying ownership configuration.
 
 If isolation isn't configured, you'll see this in the agent's startup logs:
 

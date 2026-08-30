@@ -1323,8 +1323,8 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | Enable tiered capability resolution for LLM token optimization. Automatically selects relevant tools before plan generation. |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful debug records |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error debug records (7 days) |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
 | `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index for debug storage |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
@@ -1845,6 +1845,8 @@ These features are not yet implemented but could be added:
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
+- `StoredExecution` - DAG evidence, including optional post-hook terminal response
+- `FinalResponseSourceAfterSynthesisHooks` - Source label for governed terminal responses
 - `ErrExecutionRecordNotFound` - Typed absence for optional execution evidence
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
 - `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
@@ -1867,7 +1869,7 @@ These features are not yet implemented but could be added:
 - `ProcessRequest(ctx, request, metadata)` - Process natural language request
 - `ProcessRequestStreaming(ctx, query, tools, callback)` - Stream orchestration response with real-time tokens
 - `ExecutePlan(ctx, plan)` - Execute pre-defined routing plan (raw results, no synthesis)
-- `ExecutePlanWithSynthesis(ctx, plan, originalRequest)` - Execute plan with synthesis + DAG storage
+- `ExecutePlanWithSynthesis(ctx, plan, originalRequest)` - Workflow-mode plan execution and synthesis with DAG storage; it does not run pipeline hooks or store a governed final response
 - `WithStepCallback(ctx, callback)` - Add per-request step completion callback
 - `ExecuteWorkflow(ctx, workflow, inputs)` - Execute defined workflow
 - `ParseWorkflowYAML(data)` - Parse workflow from YAML
@@ -1912,6 +1914,25 @@ retained ancestor with cycle protection. A missing requested execution returns
 returns success after extending the available chain and does not recreate the
 missing record. Non-positive direct Redis TTL options are normalized to the
 framework defaults after all options are applied.
+
+### Terminal response evidence
+
+The normal buffered and native-streaming `ProcessRequest` paths persist the
+response produced after `AfterSynthesis` hooks in
+`StoredExecution.FinalResponse`. The corresponding
+`FinalResponseSource` is `FinalResponseSourceAfterSynthesisHooks`. This is the
+application-level outcome evidence; the synthesis interaction in the LLM debug
+store remains the model's pre-hook draft.
+
+For native streaming, emitted tokens precede `AfterSynthesis`; the stored value
+is the post-hook response object and may differ from the text already streamed
+to the client.
+
+`ExecutePlanWithSynthesis` intentionally has a narrower workflow-mode contract:
+it executes a supplied plan and synthesizes the result, but it does not invoke
+the pipeline-hook chain and does not currently populate `FinalResponse`.
+Historical records also omit the field. Consumers must not substitute the raw
+synthesis response when post-hook evidence is absent.
 
 ### Configuration Options
 - `WithCapabilityProvider(type, url)` - Configure capability provider type and URL

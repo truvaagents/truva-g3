@@ -455,7 +455,13 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 
 ### For Tool Developers
 
-1. **Always use your tool's `sendUpstreamError` method + `core.ClassifyUpstreamError` for upstream API errors.** Classify the original error, then pass only `core.RedactSensitiveText(err.Error())` into the response and observation surfaces. This preserves routing without propagating common credential forms.
+1. **Define and use your tool's upstream-error policy consistently.** The
+   reference examples use `sendUpstreamError` plus
+   `core.ClassifyUpstreamError`, then explicitly choose
+   `core.RedactSensitiveText(err.Error())` for their application response and
+   observation surfaces. That transformation belongs to the tool; the
+   framework does not install it automatically or guarantee that it recognizes
+   domain secrets.
 
 2. **Use your tool's `sendError` method only for tool-local validation** — decode failures, missing required fields, invalid formats detected before calling the upstream API.
 
