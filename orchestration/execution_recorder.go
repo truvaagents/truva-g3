@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -22,21 +23,27 @@ type executionRecordSnapshot struct {
 	ConversationID     string
 	CheckpointID       string
 	Interrupted        bool
+	RetentionTTL       time.Duration
 }
 
 type executionRecorder struct {
-	mu       sync.Mutex
-	tail     <-chan struct{}
-	lifetime context.Context
-	store    ExecutionStore
-	logger   core.Logger
-	wg       *sync.WaitGroup
-	timeout  time.Duration
+	mu         sync.Mutex
+	tail       <-chan struct{}
+	lifetime   context.Context
+	store      ExecutionStore
+	debugStore LLMDebugStore
+	logger     core.Logger
+	wg         *sync.WaitGroup
+	timeout    time.Duration
+
+	retentionMu     sync.Mutex
+	retentionFloors map[string]time.Duration
 }
 
 func newExecutionRecorder(
 	lifetime context.Context,
 	store ExecutionStore,
+	debugStore LLMDebugStore,
 	logger core.Logger,
 	wg *sync.WaitGroup,
 	timeout time.Duration,
@@ -47,7 +54,15 @@ func newExecutionRecorder(
 	if timeout <= 0 {
 		timeout = defaultExecutionStoreWriteTimeout
 	}
-	return &executionRecorder{lifetime: lifetime, store: store, logger: logger, wg: wg, timeout: timeout}
+	return &executionRecorder{
+		lifetime:        lifetime,
+		store:           store,
+		debugStore:      debugStore,
+		logger:          logger,
+		wg:              wg,
+		timeout:         timeout,
+		retentionFloors: make(map[string]time.Duration),
+	}
 }
 
 func cloneStoredExecution(source *StoredExecution) (*StoredExecution, error) {
@@ -103,11 +118,105 @@ func (r *executionRecorder) Record(snapshot executionRecordSnapshot) {
 
 		base := telemetry.CopyBaggage(r.lifetime, snapshot.CorrelationContext)
 		storeCtx, cancel := context.WithTimeout(base, r.timeout)
-		defer cancel()
-		if err := r.store.Store(storeCtx, snapshot.Record); err != nil {
-			r.logFailure(snapshot, err, "store_write")
+		storeErr := r.store.Store(storeCtx, snapshot.Record)
+		cancel()
+		if storeErr != nil {
+			r.logFailure(snapshot, storeErr, "store_write")
 		}
+		r.preserveLLMDebugRetention(base, snapshot)
 	}()
+}
+
+func (r *executionRecorder) preserveLLMDebugRetention(
+	ctx context.Context,
+	snapshot executionRecordSnapshot,
+) {
+	if r == nil || r.debugStore == nil || snapshot.RetentionTTL <= 0 {
+		return
+	}
+	requestIDs := []string{snapshot.RequestID}
+	if rootID := relatedRootID(snapshot.Record); rootID != "" {
+		requestIDs = append(requestIDs, rootID)
+	}
+	if preserver, ok := r.debugStore.(LLMDebugRetentionPreserver); ok {
+		for _, requestID := range requestIDs {
+			if !r.retentionIncreaseNeeded(requestID, snapshot.RetentionTTL) {
+				continue
+			}
+			retentionCtx, cancel := context.WithTimeout(ctx, r.timeout)
+			err := preserver.PreserveRetention(
+				retentionCtx,
+				requestID,
+				snapshot.RetentionTTL,
+			)
+			cancel()
+			if err != nil {
+				r.logLLMRetentionFailure(snapshot, requestID, err)
+				continue
+			}
+			r.rememberRetentionFloor(requestID, snapshot.RetentionTTL)
+		}
+		return
+	}
+
+	// Compatibility path for custom stores that have not implemented the
+	// retention-floor capability. Built-in stateful stores use PreserveRetention.
+	for _, requestID := range requestIDs {
+		if !r.retentionIncreaseNeeded(requestID, snapshot.RetentionTTL) {
+			continue
+		}
+		retentionCtx, cancel := context.WithTimeout(ctx, r.timeout)
+		err := r.debugStore.ExtendTTL(retentionCtx, requestID, snapshot.RetentionTTL)
+		cancel()
+		if err != nil {
+			if errors.Is(err, ErrLLMDebugRecordNotFound) {
+				continue
+			}
+			r.logLLMRetentionFailure(snapshot, requestID, err)
+			continue
+		}
+		r.rememberRetentionFloor(requestID, snapshot.RetentionTTL)
+	}
+}
+
+func (r *executionRecorder) retentionIncreaseNeeded(
+	requestID string,
+	duration time.Duration,
+) bool {
+	r.retentionMu.Lock()
+	defer r.retentionMu.Unlock()
+	return r.retentionFloors[requestID] < duration
+}
+
+func (r *executionRecorder) rememberRetentionFloor(
+	requestID string,
+	duration time.Duration,
+) {
+	r.retentionMu.Lock()
+	defer r.retentionMu.Unlock()
+	if r.retentionFloors == nil {
+		r.retentionFloors = make(map[string]time.Duration)
+	}
+	if r.retentionFloors[requestID] < duration {
+		r.retentionFloors[requestID] = duration
+	}
+}
+
+func (r *executionRecorder) logLLMRetentionFailure(
+	snapshot executionRecordSnapshot,
+	requestID string,
+	err error,
+) {
+	if r == nil || r.logger == nil {
+		return
+	}
+	r.logger.Warn("Failed to preserve LLM debug evidence retention", map[string]interface{}{
+		"operation":            "llm_debug_lineage_retention",
+		"request_id":           requestID,
+		"execution_request_id": snapshot.RequestID,
+		"error_type":           "retention_extension",
+		"error":                safeExecutionStoreError(err),
+	})
 }
 
 func (r *executionRecorder) logFailure(snapshot executionRecordSnapshot, err error, errorType string) {

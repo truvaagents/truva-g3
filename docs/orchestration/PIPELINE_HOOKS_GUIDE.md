@@ -67,7 +67,7 @@ There are four stage interfaces. A single hook type can implement as many as it 
 | `BeforePlanningHook` | Before the planning phase begins | Enrichments | **Yes** — skips the entire pipeline | Yes |
 | `AfterPlanningHook` | After each phase reaches one final validated planner-produced plan | The plan | No | Yes |
 | `AfterExecutionHook` | After all tools finish executing | No (observe-only) | No | Yes |
-| `AfterSynthesisHook` | After the LLM synthesizes the final response | Response text | No | Yes |
+| `AfterSynthesisHook` | After the LLM produces its synthesis draft | Response text | No | Yes |
 
 Two properties define the whole system and are worth committing to memory:
 
@@ -129,7 +129,15 @@ runners and validation logic live in `orchestration/pipeline_hooks.go`.
 
 > **Streaming caveat**
 >
-> On the streaming path, tokens are sent to the client *during* synthesis. By the time `AfterSynthesis` hooks run, the user has already seen the text. The returned (possibly mutated) string updates the final `OrchestratorResponse.Response` for recording purposes, but **it cannot un-stream what was already delivered**. If you need to *block* content before the user sees it, do it in a `BeforePlanning` hook, in a guarded prompt builder, or use the non-streaming path. See `orchestrator.go:3510-3513`.
+> On the streaming path, tokens are sent to the client *during* synthesis. By
+> the time `AfterSynthesis` hooks run, the user has already seen the text. The
+> returned (possibly mutated) string updates the final
+> `OrchestratorResponse.Response` and is stored separately as
+> `StoredExecution.FinalResponse`, but **it cannot un-stream what was already
+> delivered**. The LLM debug synthesis interaction remains the streamed/raw
+> model draft. If you need to *block* content before the user sees it, do it in
+> a `BeforePlanning` hook, in a guarded prompt builder, or use the non-streaming
+> path.
 
 ---
 
@@ -608,6 +616,11 @@ There is no exported NoOp hook in non-test code; if you want one for tests, the 
 | Can't find the hook in a trace | Telemetry provider not configured, or hook never matched its stage | Verify telemetry is initialized; look for span `pipeline.hook.<stage>.<name>` |
 
 To verify a hook fired, look in Jaeger for its span (`pipeline.hook.before_planning.<name>`) or grep agent logs for the hook name. The DAG/registry-viewer debug UI surfaces `BeforePlanning` activity under its **Pre-Execution** tab and `AfterSynthesis` activity under **Post-Execution** — see the [Dev Tools Guide](../operations/DEV_TOOLS_GUIDE.md).
+
+This hook pipeline applies to the normal `ProcessRequest` paths.
+`ExecutePlanWithSynthesis` is workflow mode and currently does not invoke these
+hooks or store a post-hook `FinalResponse`; its synthesis record is model output
+only.
 
 That's the whole surface: four stages, one shared context, fail-open semantics. Wire a hook, confirm its span shows up in a trace, and build out from there. Happy hooking!
 

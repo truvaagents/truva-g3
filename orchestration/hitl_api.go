@@ -49,7 +49,7 @@ import (
 // HITLHandler provides HTTP API for HITL operations.
 type HITLHandler struct {
 	controller InterruptController
-	store      CheckpointStore
+	store      CheckpointPersistence
 
 	// Optional dependencies (injected per framework patterns)
 	logger    core.Logger    // Defaults to NoOp
@@ -58,7 +58,7 @@ type HITLHandler struct {
 
 // NewHITLHandler creates a new HITL HTTP handler.
 // Returns concrete type per Go idiom "return structs, accept interfaces".
-func NewHITLHandler(controller InterruptController, store CheckpointStore, opts ...HITLHandlerOption) *HITLHandler {
+func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) *HITLHandler {
 	h := &HITLHandler{
 		controller: controller,
 		store:      store,
@@ -220,7 +220,6 @@ func (h *HITLHandler) HandleCommand(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to process command: %s", err.Error()))
 		return
 	}
-
 	// Add span event for successful processing
 	telemetry.AddSpanEvent(ctx, "hitl.api.command.processed",
 		attribute.String("checkpoint_id", command.CheckpointID),

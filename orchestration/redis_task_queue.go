@@ -16,9 +16,11 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// RedisTaskQueue implements core.TaskQueue using Redis lists.
-// It uses LPUSH for enqueue and BRPOP for dequeue, providing
-// reliable FIFO processing with blocking wait support.
+const defaultTaskQueueRecoveryTimeout = 5 * time.Second
+
+// RedisTaskQueue implements core.TaskQueue using a Redis queue list plus a list of
+// dequeued tasks awaiting settlement. Enqueue/Dequeue retain FIFO behavior;
+// Acknowledge removes the in-flight record and Reject requeues it.
 type RedisTaskQueue struct {
 	client redis.Cmdable
 	config RedisTaskQueueConfig
@@ -31,9 +33,8 @@ type RedisTaskQueueConfig struct {
 	// Default: "truvag3:tasks:queue"
 	QueueKey string `json:"queue_key"`
 
-	// ProcessingKey is the Redis key for tasks being processed
-	// Used for reliable queue patterns (tasks moved here during processing)
-	// Default: "truvag3:tasks:processing"
+	// ProcessingKey is the Redis list key for tasks awaiting acknowledgement.
+	// Default: "truvag3:tasks:processing", service-scoped when EnvServiceName is set.
 	ProcessingKey string `json:"processing_key"`
 
 	// CircuitBreaker is an optional circuit breaker for Redis operations
@@ -53,18 +54,21 @@ type RedisTaskQueueConfig struct {
 }
 
 // DefaultRedisTaskQueueConfig returns default configuration.
-// The queue key is auto-namespaced by TRUVAG3_K8S_SERVICE_NAME to prevent
-// BRPOP cross-agent task stealing when multiple agents share a Redis instance.
+// The queue and processing keys are auto-namespaced by
+// TRUVAG3_K8S_SERVICE_NAME to prevent cross-agent task stealing or settlement
+// collisions when multiple agents share a Redis instance.
 // Precedence: explicit QueueKey > TRUVAG3_K8S_SERVICE_NAME > hardcoded default.
 // Uses core.EnvServiceName constant — single source of truth per design principles §3.3.
 func DefaultRedisTaskQueueConfig() RedisTaskQueueConfig {
 	queueKey := "truvag3:tasks:queue"
+	processingKey := "truvag3:tasks:processing"
 	if svc := os.Getenv(core.EnvServiceName); svc != "" {
 		queueKey = fmt.Sprintf("truvag3:tasks:queue:%s", svc)
+		processingKey = fmt.Sprintf("truvag3:tasks:processing:%s", svc)
 	}
 	return RedisTaskQueueConfig{
 		QueueKey:      queueKey,
-		ProcessingKey: "truvag3:tasks:processing",
+		ProcessingKey: processingKey,
 		RetryAttempts: 3,
 		RetryDelay:    100 * time.Millisecond,
 	}
@@ -85,6 +89,7 @@ func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueCon
 	}
 
 	// Apply defaults for unset values — mirror DefaultRedisTaskQueueConfig env logic.
+	explicitQueueKey := config.QueueKey != ""
 	if config.QueueKey == "" {
 		queueSource := "default"
 		if svc := os.Getenv(core.EnvServiceName); svc != "" {
@@ -102,7 +107,13 @@ func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueCon
 		}
 	}
 	if config.ProcessingKey == "" {
-		config.ProcessingKey = "truvag3:tasks:processing"
+		if explicitQueueKey {
+			config.ProcessingKey = config.QueueKey + ":processing"
+		} else if svc := os.Getenv(core.EnvServiceName); svc != "" {
+			config.ProcessingKey = fmt.Sprintf("truvag3:tasks:processing:%s", svc)
+		} else {
+			config.ProcessingKey = "truvag3:tasks:processing"
+		}
 	}
 	if config.RetryAttempts <= 0 {
 		config.RetryAttempts = 3
@@ -250,6 +261,20 @@ func (q *RedisTaskQueue) Dequeue(ctx context.Context, timeout time.Duration) (*c
 		}
 		return nil, fmt.Errorf("failed to deserialize task: %w", err)
 	}
+	if task.ID == "" {
+		return nil, fmt.Errorf("dequeued task ID cannot be empty")
+	}
+	// Retain the payload so Acknowledge and Reject work across processes. Keep
+	// the established list representation of ProcessingKey, and intentionally
+	// avoid a multi-key command so Redis Cluster keys need not share a slot.
+	if err := q.client.LPush(ctx, q.config.ProcessingKey, result[1]).Err(); err != nil {
+		// Best-effort recovery: the queue pop already succeeded, so put the task
+		// back before reporting the tracking failure.
+		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultTaskQueueRecoveryTimeout)
+		defer cancel()
+		_ = q.client.RPush(recoveryCtx, q.config.QueueKey, result[1]).Err()
+		return nil, fmt.Errorf("failed to track dequeued task: %w", err)
+	}
 
 	if q.logger != nil {
 		q.logger.InfoWithContext(ctx, "Task dequeued", map[string]interface{}{
@@ -261,9 +286,8 @@ func (q *RedisTaskQueue) Dequeue(ctx context.Context, timeout time.Duration) (*c
 	return &task, nil
 }
 
-// Acknowledge marks a task as successfully processed.
-// In the simple implementation, this is a no-op since BRPOP removes the item.
-// For reliable queue patterns with processing list, this would remove from processing list.
+// Acknowledge marks a task as successfully processed by removing its in-flight
+// payload. It is idempotent so cleanup paths may safely retry it.
 func (q *RedisTaskQueue) Acknowledge(ctx context.Context, taskID string) error {
 	if taskID == "" {
 		return fmt.Errorf("task ID cannot be empty")
@@ -275,14 +299,20 @@ func (q *RedisTaskQueue) Acknowledge(ctx context.Context, taskID string) error {
 		})
 	}
 
-	// In simple implementation, BRPOP already removed the task
-	// For reliable queue with processing list, we would:
-	// q.client.LRem(ctx, q.config.ProcessingKey, 1, taskID)
+	payload, found, err := q.inFlightPayload(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to load acknowledged task: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	if err := q.client.LRem(ctx, q.config.ProcessingKey, 1, payload).Err(); err != nil {
+		return fmt.Errorf("failed to acknowledge task: %w", err)
+	}
 	return nil
 }
 
-// Reject returns a task to the queue for retry.
-// Re-enqueues the task at the front of the queue.
+// Reject returns a task to the front of the queue for retry.
 func (q *RedisTaskQueue) Reject(ctx context.Context, taskID string, reason string) error {
 	if taskID == "" {
 		return fmt.Errorf("task ID cannot be empty")
@@ -295,10 +325,38 @@ func (q *RedisTaskQueue) Reject(ctx context.Context, taskID string, reason strin
 		})
 	}
 
-	// Note: In a full implementation, we would retrieve the task from the processing list
-	// and re-add it to the queue. For now, this logs the rejection.
-	// The caller should handle re-enqueuing if needed.
+	payload, found, err := q.inFlightPayload(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to load rejected task: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("task %s is not awaiting acknowledgement", taskID)
+	}
+	// Enqueue first so a transient cleanup failure cannot lose the task. RPush
+	// places the retry at the side consumed by BRPOP, ahead of newer LPUSHes.
+	if err := q.client.RPush(ctx, q.config.QueueKey, payload).Err(); err != nil {
+		return fmt.Errorf("failed to requeue rejected task: %w", err)
+	}
+	if err := q.client.LRem(ctx, q.config.ProcessingKey, 1, payload).Err(); err != nil {
+		return fmt.Errorf("requeued rejected task but failed to clear in-flight record: %w", err)
+	}
 	return nil
+}
+
+func (q *RedisTaskQueue) inFlightPayload(ctx context.Context, taskID string) (string, bool, error) {
+	payloads, err := q.client.LRange(ctx, q.config.ProcessingKey, 0, -1).Result()
+	if err != nil {
+		return "", false, err
+	}
+	for _, payload := range payloads {
+		var task struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(payload), &task); err == nil && task.ID == taskID {
+			return payload, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // QueueLength returns the current number of tasks in the queue.

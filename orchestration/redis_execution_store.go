@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +24,11 @@ const (
 	executionCompressionThreshold = 100 * 1024  // 100KB
 	executionMaxPayloadSize       = 1024 * 1024 // 1MB
 
-	// go-redis preserves the Redis TTL sentinel integers as raw duration
-	// values rather than multiplying them by the command's one-second
-	// precision.
-	redisTTLKeyMissing time.Duration = -2
-	redisTTLPersistent time.Duration = -1
+	// go-redis preserves the Redis persistent-key sentinel as a raw duration
+	// value rather than multiplying it by the command's precision. Lua PTTL
+	// scripts return their missing-key sentinel as a plain integer instead.
+	redisTTLPersistent  time.Duration = -1
+	redisPTTLKeyMissing int64         = -2
 )
 
 var conversationIndexUpsertScript = redis.NewScript(`
@@ -174,7 +176,7 @@ func NewRedisExecutionDebugStoreWithConfig(
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
+	normalizeRedisExecutionDebugStoreConfig(cfg)
 
 	// Parse Redis URL and create client
 	redisOpt, err := redis.ParseURL(cfg.redisURL)
@@ -232,8 +234,19 @@ func NewRedisExecutionDebugStoreWithClient(
 			opt(cfg)
 		}
 	}
-	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
+	normalizeRedisExecutionDebugStoreConfig(cfg)
 	return newRedisExecutionDebugStore(client, false, cfg), nil
+}
+
+func normalizeRedisExecutionDebugStoreConfig(cfg *redisExecutionDebugStoreConfig) {
+	defaults := DefaultExecutionStoreConfig()
+	if cfg.ttl <= 0 {
+		cfg.ttl = defaults.TTL
+	}
+	if cfg.errorTTL <= 0 {
+		cfg.errorTTL = defaults.ErrorTTL
+	}
+	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
 }
 
 func redisExecutionDebugStoreConfigForClient(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
@@ -283,6 +296,11 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 		return fmt.Errorf("request_id is required")
 	}
 	storedExecution, conversationID := sanitizeExecutionConversationMetadata(execution)
+	ttl := executionRetentionTTL(storedExecution, s.ttl, s.errorTTL)
+	retentionLink, err := marshalExecutionRetentionLink(storedExecution)
+	if err != nil {
+		return err
+	}
 
 	operation := func() error {
 		// Serialize with optional compression
@@ -291,21 +309,21 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 			return fmt.Errorf("serialization failed: %w", err)
 		}
 
-		// Determine TTL based on success/failure.
-		// ORCH-022: interrupted records have Result.Success == false (Result was nil
-		// pre-fix, bypassing this branch). Carve them out so pending HITL approvals
-		// keep the default TTL rather than the shorter errorTTL.
-		ttl := s.ttl
-		if storedExecution.Result != nil &&
-			!storedExecution.Result.Success &&
-			!storedExecution.Interrupted {
-			ttl = s.errorTTL
-		}
-
 		// Store the main record
 		key := s.recordKey(storedExecution.RequestID)
-		if err := s.client.Set(ctx, key, data, ttl).Err(); err != nil {
+		if err := setRedisValueWithMinimumTTL(ctx, s.client, key, data, ttl); err != nil {
 			return fmt.Errorf("redis set failed: %w", err)
+		}
+		if err := setRedisValueWithMinimumTTL(
+			ctx,
+			s.client,
+			s.retentionLinkKey(storedExecution.RequestID),
+			retentionLink,
+			ttl,
+		); err != nil {
+			// The primary execution is authoritative. Retention extension can
+			// recover from a missing projection by reading that record.
+			logExecutionRetentionLinkFailure(ctx, s.logger, storedExecution.RequestID, err)
 		}
 
 		// Update index for listing (sorted set by timestamp) - best effort
@@ -348,12 +366,18 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 		// Store trace ID mapping if available - best effort
 		if storedExecution.TraceID != "" {
 			traceKey := s.traceKey(storedExecution.TraceID)
-			if err := s.client.Set(ctx, traceKey, storedExecution.RequestID, ttl).Err(); err != nil {
+			if err := setRedisValueWithMinimumTTL(
+				ctx,
+				s.client,
+				traceKey,
+				storedExecution.RequestID,
+				ttl,
+			); err != nil {
 				if s.logger != nil {
 					s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
 						"request_id": storedExecution.RequestID,
 						"trace_id":   storedExecution.TraceID,
-						"error":      err.Error(),
+						"error":      safeExecutionStoreError(err),
 					})
 				}
 				// Don't fail - trace mapping is for convenience
@@ -363,13 +387,23 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 		return nil
 	}
 
+	var storeErr error
 	// Layer 2: Use injected circuit breaker if available
 	if s.circuitBreaker != nil {
-		return s.circuitBreaker.Execute(ctx, operation)
+		storeErr = s.circuitBreaker.Execute(ctx, operation)
+	} else {
+		// Layer 1: Built-in simple retry with exponential backoff
+		storeErr = s.executeWithRetry(ctx, operation)
 	}
-
-	// Layer 1: Built-in simple retry with exponential backoff
-	return s.executeWithRetry(ctx, operation)
+	if storeErr != nil {
+		return storeErr
+	}
+	if rootID := relatedRootID(storedExecution); rootID != "" {
+		if err := s.ExtendTTL(ctx, rootID, ttl); err != nil {
+			logLineageRetentionFailure(ctx, s.logger, storedExecution, err)
+		}
+	}
+	return nil
 }
 
 // Get retrieves the complete execution record by request ID.
@@ -381,7 +415,7 @@ func (s *RedisExecutionDebugStore) Get(ctx context.Context, requestID string) (*
 	key := s.recordKey(requestID)
 	data, err := s.client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
-		return nil, fmt.Errorf("execution not found: %s", requestID)
+		return nil, fmt.Errorf("%w: %s", ErrExecutionRecordNotFound, requestID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("redis get failed: %w", err)
@@ -400,7 +434,7 @@ func (s *RedisExecutionDebugStore) GetByTraceID(ctx context.Context, traceID str
 	traceKey := s.traceKey(traceID)
 	requestID, err := s.client.Get(ctx, traceKey).Result()
 	if err == redis.Nil {
-		return nil, fmt.Errorf("execution not found for trace: %s", traceID)
+		return nil, fmt.Errorf("%w for trace: %s", ErrExecutionRecordNotFound, traceID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup trace: %w", err)
@@ -440,19 +474,22 @@ func (s *RedisExecutionDebugStore) Update(ctx context.Context, requestID string,
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
-
-		// Use original TTL (we can't know the remaining TTL without Redis-specific commands).
-		// ORCH-022: interrupted records have Result.Success == false after the
-		// orchestrator fix — carve them out so pending HITL approvals keep the
-		// default TTL rather than the shorter errorTTL.
-		ttl := s.ttl
-		if storedExecution.Result != nil &&
-			!storedExecution.Result.Success &&
-			!storedExecution.Interrupted {
-			ttl = s.errorTTL
+		retentionLink, err := marshalExecutionRetentionLink(storedExecution)
+		if err != nil {
+			return err
 		}
 
-		return s.client.Set(ctx, s.recordKey(requestID), data, ttl).Err()
+		ttl := executionRetentionTTL(storedExecution, s.ttl, s.errorTTL)
+		return setRedisValuesWithMinimumTTL(
+			ctx,
+			s.client,
+			[]string{
+				s.recordKey(requestID),
+				s.retentionLinkKey(requestID),
+			},
+			[]interface{}{data, retentionLink},
+			ttl,
+		)
 	}
 
 	// Layer 2: Use injected circuit breaker if available
@@ -473,48 +510,93 @@ func (s *RedisExecutionDebugStore) ExtendTTL(ctx context.Context, requestID stri
 		return fmt.Errorf("duration must be positive")
 	}
 
-	execution, err := s.Get(ctx, requestID)
+	operation := func() error {
+		return s.extendTTL(ctx, requestID, duration, make(map[string]struct{}), true)
+	}
+	if s.circuitBreaker != nil {
+		// A missing execution is an expected investigation outcome, not a
+		// storage-health failure. Keep it outside the breaker result so an
+		// expired or never-recorded lineage ID cannot open the same breaker that
+		// protects authoritative Store writes.
+		var expectedAbsence error
+		breakerOperation := func() error {
+			err := operation()
+			if errors.Is(err, ErrExecutionRecordNotFound) {
+				expectedAbsence = err
+				return nil
+			}
+			return err
+		}
+		if err := s.circuitBreaker.Execute(ctx, breakerOperation); err != nil {
+			return err
+		}
+		return expectedAbsence
+	}
+	return s.executeWithRetry(ctx, operation)
+}
+
+func (s *RedisExecutionDebugStore) extendTTL(
+	ctx context.Context,
+	requestID string,
+	duration time.Duration,
+	visited map[string]struct{},
+	required bool,
+) error {
+	if _, seen := visited[requestID]; seen {
+		return nil
+	}
+	visited[requestID] = struct{}{}
+
+	linkKey := s.retentionLinkKey(requestID)
+	link, err := s.loadExecutionRetentionLink(ctx, requestID, linkKey)
+	if err != nil {
+		if !required && errors.Is(err, ErrExecutionRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	keys := []string{s.recordKey(requestID), linkKey}
+	if link.TraceID != "" {
+		keys = append(keys, s.traceKey(link.TraceID))
+	}
+	if link.ConversationID != "" {
+		keys = append(keys, s.conversationIndexKey(link.ConversationID))
+	}
+	exists, err := extendRedisKeysMinimumTTL(ctx, s.client, keys, duration)
 	if err != nil {
 		return err
 	}
-	key := s.recordKey(requestID)
-
-	if err := s.extendIndexTTLWithoutDowngrade(ctx, key, duration, false); err != nil {
-		return err
-	}
-
-	if execution.TraceID != "" {
-		traceKey := s.traceKey(execution.TraceID)
-		if err := s.extendIndexTTLWithoutDowngrade(ctx, traceKey, duration, false); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("Failed to extend trace ID mapping TTL", map[string]interface{}{
-					"request_id": requestID,
-					"trace_id":   execution.TraceID,
-					"error":      err.Error(),
-				})
-			}
-			// Don't fail - trace mapping TTL extension is best effort
+	if !exists {
+		if !required {
+			return nil
 		}
+		return fmt.Errorf("%w: %s", ErrExecutionRecordNotFound, requestID)
 	}
-
-	if conversationID := ExecutionConversationID(execution); conversationID != "" {
-		conversationKey := s.conversationIndexKey(conversationID)
-		if err := s.extendIndexTTLWithoutDowngrade(
-			ctx,
-			conversationKey,
-			duration,
-			false,
-		); err != nil && s.logger != nil {
-			s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
-				"operation":  "execution_store_conversation_index_ttl",
-				"request_id": requestID,
-				"error_type": "ttl_update",
-				"error":      safeExecutionStoreError(err),
-			})
-		}
+	if rootID := strings.TrimSpace(link.OriginalRequestID); rootID != "" && rootID != requestID {
+		return s.extendTTL(ctx, rootID, duration, visited, false)
 	}
-
 	return nil
+}
+
+func (s *RedisExecutionDebugStore) loadExecutionRetentionLink(
+	ctx context.Context,
+	requestID string,
+	linkKey string,
+) (executionRetentionLink, error) {
+	encoded, err := s.client.Get(ctx, linkKey).Result()
+	if err == nil {
+		return unmarshalExecutionRetentionLink(encoded)
+	}
+	if err != redis.Nil {
+		return executionRetentionLink{}, fmt.Errorf("redis retention link get failed: %w", err)
+	}
+
+	// Compatibility fallback for records stored before retention links existed.
+	execution, err := s.Get(ctx, requestID)
+	if err != nil {
+		return executionRetentionLink{}, err
+	}
+	return executionRetentionLinkFromStored(execution), nil
 }
 
 // SetMetadata adds metadata to an existing record.
@@ -546,14 +628,9 @@ func (s *RedisExecutionDebugStore) SetMetadata(ctx context.Context, requestID st
 			return fmt.Errorf("serialization failed: %w", err)
 		}
 
-		// Get current TTL to preserve it
 		redisKey := s.recordKey(requestID)
-		ttl, err := s.client.TTL(ctx, redisKey).Result()
-		if err != nil || ttl < 0 {
-			ttl = s.ttl
-		}
-
-		return s.client.Set(ctx, redisKey, data, ttl).Err()
+		ttl := executionRetentionTTL(execution, s.ttl, s.errorTTL)
+		return setRedisValueWithMinimumTTL(ctx, s.client, redisKey, data, ttl)
 	}
 
 	// Layer 2: Use injected circuit breaker if available
@@ -722,6 +799,10 @@ func (s *RedisExecutionDebugStore) traceKey(traceID string) string {
 	return normalizeExecutionKeyPrefix(s.keyPrefix) + "trace:" + traceID
 }
 
+func (s *RedisExecutionDebugStore) retentionLinkKey(requestID string) string {
+	return executionRetentionLinkKey(s.keyPrefix, requestID)
+}
+
 func (s *RedisExecutionDebugStore) conversationIndexKey(conversationID string) string {
 	return executionConversationIndexKey(s.keyPrefix, conversationID)
 }
@@ -747,31 +828,6 @@ func (s *RedisExecutionDebugStore) upsertConversationIndex(
 	).Err()
 }
 
-func (s *RedisExecutionDebugStore) extendIndexTTLWithoutDowngrade(
-	ctx context.Context,
-	key string,
-	minTTL time.Duration,
-	expirePersistent bool,
-) error {
-	currentTTL, err := s.client.TTL(ctx, key).Result()
-	if err != nil {
-		return err
-	}
-	switch {
-	case currentTTL == redisTTLKeyMissing:
-		return nil
-	case currentTTL == redisTTLPersistent:
-		if !expirePersistent {
-			return nil
-		}
-		return s.client.Expire(ctx, key, minTTL).Err()
-	case currentTTL >= minTTL:
-		return nil
-	default:
-		return s.client.Expire(ctx, key, minTTL).Err()
-	}
-}
-
 // Layer 1 Resilience Constants (same as LLM Debug Store)
 const (
 	execLayer1MaxRetries     = 3
@@ -789,10 +845,12 @@ func (s *RedisExecutionDebugStore) executeWithRetry(ctx context.Context, operati
 	s.failureMu.Lock()
 	if s.failureCount >= execLayer1MaxFailures && time.Since(s.lastFailure) < execLayer1FailureWindow {
 		s.failureMu.Unlock()
-		s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
-			"failures":     s.failureCount,
-			"cooldown_sec": execLayer1FailureWindow.Seconds(),
-		})
+		if s.logger != nil {
+			s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
+				"failures":     s.failureCount,
+				"cooldown_sec": execLayer1FailureWindow.Seconds(),
+			})
+		}
 		return fmt.Errorf("execution debug store in cooldown after %d failures", s.failureCount)
 	}
 	s.failureMu.Unlock()
@@ -816,14 +874,19 @@ func (s *RedisExecutionDebugStore) executeWithRetry(ctx context.Context, operati
 			s.failureMu.Unlock()
 			return nil
 		}
+		if errors.Is(err, ErrExecutionRecordNotFound) {
+			return err
+		}
 
 		lastErr = err
-		s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
-			"attempt": attempt,
-			"max":     execLayer1MaxRetries,
-			"backoff": backoff.String(),
-			"error":   err.Error(),
-		})
+		if s.logger != nil {
+			s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
+				"attempt": attempt,
+				"max":     execLayer1MaxRetries,
+				"backoff": backoff.String(),
+				"error":   err.Error(),
+			})
+		}
 
 		// Don't sleep on last attempt
 		if attempt < execLayer1MaxRetries {

@@ -14,12 +14,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 )
+
+// ErrExecutionRecordNotFound identifies the expected absence of an execution
+// debug record. Callers may use errors.Is to distinguish missing optional
+// evidence from storage failures.
+var ErrExecutionRecordNotFound = errors.New("execution record not found")
 
 // ExecutionStore stores execution records (plan + result) for debugging and visualization.
 // Implementations must be safe for concurrent use.
@@ -135,11 +141,23 @@ type StoredExecution struct {
 	// prompt content remains governed by the separate opt-in LLM debug store.
 	Skills *SkillExecutionDebug `json:"skills,omitempty"`
 
+	// FinalResponse is the terminal application response after AfterSynthesis
+	// hooks have run. It is intentionally separate from the raw synthesis
+	// interaction retained in the opt-in LLM debug store.
+	FinalResponse       *string `json:"final_response,omitempty"`
+	FinalResponseSource string  `json:"final_response_source,omitempty"`
+
 	// Metadata contains framework-owned correlation metadata plus optional
 	// application investigation metadata. MetadataConversationID is reserved
 	// for the immutable conversation identity captured at execution time.
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
+
+// FinalResponseSourceAfterSynthesisHooks identifies a terminal response after
+// every registered AfterSynthesis hook has run. Keeping this as a named API
+// value prevents producers and observability consumers from inventing subtly
+// different spellings for the same response boundary.
+const FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
 
 // ExecutionSummary is a lightweight version for listing.
 // Used by ListRecent to avoid loading full payloads.
@@ -232,6 +250,32 @@ type IndexTTLManager interface {
 	) error
 }
 
+// KeyTTLManager defines atomic retention maintenance for ordinary values.
+type KeyTTLManager interface {
+	// ExtendKeyTTL keeps an existing key for at least minTTL from now. It must
+	// not create a missing key, shorten a longer TTL, or expire a persistent key.
+	ExtendKeyTTL(ctx context.Context, key string, minTTL time.Duration) error
+
+	// SetKeyWithMinimumTTL atomically writes value and keeps the key for at
+	// least max(previous remaining TTL, minTTL). It creates a missing key with
+	// minTTL and preserves persistent keys as persistent.
+	SetKeyWithMinimumTTL(
+		ctx context.Context,
+		key string,
+		value string,
+		minTTL time.Duration,
+	) error
+}
+
+// ExecutionStorageProvider is the complete provider contract required by the
+// provider-backed execution store. Keeping the capabilities as small embedded
+// interfaces preserves composition while making retention correctness a
+// compile-time requirement.
+type ExecutionStorageProvider interface {
+	StorageProvider
+	KeyTTLManager
+}
+
 // ExecutionStoreConfig holds configuration for execution storage.
 // This is embedded in OrchestratorConfig.
 //
@@ -257,6 +301,8 @@ type ExecutionStoreConfig struct {
 	// Override via TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX.
 	// This allows multi-tenant deployments or custom namespacing.
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
+	// Deprecated: configure provider namespacing with redisprovider.WithNamespace.
+	// This field remains for the legacy compatibility factory.
 	KeyPrefix string `json:"key_prefix"`
 
 	// ConversationQueryLimit bounds the most recent execution window returned
@@ -297,15 +343,15 @@ const (
 // executionStoreImpl is the default implementation of ExecutionStore
 // backed by a StorageProvider.
 type executionStoreImpl struct {
-	provider StorageProvider
+	provider ExecutionStorageProvider
 	config   ExecutionStoreConfig
 	logger   core.Logger
 }
 
-// NewExecutionStoreWithProvider creates an ExecutionStore backed by the given StorageProvider.
-// This is the recommended way to create an ExecutionStore - the application provides
-// the storage backend implementation (Redis, PostgreSQL, etc.).
-func NewExecutionStoreWithProvider(provider StorageProvider, config ExecutionStoreConfig, logger core.Logger) ExecutionStore {
+// NewExecutionStoreWithProvider creates an ExecutionStore backed by the given
+// ExecutionStorageProvider. The application provides a backend implementation
+// (Redis, PostgreSQL, etc.) with atomic minimum-retention operations.
+func NewExecutionStoreWithProvider(provider ExecutionStorageProvider, config ExecutionStoreConfig, logger core.Logger) ExecutionStore {
 	config = normalizeExecutionStoreConfig(config)
 	return &executionStoreImpl{
 		provider: provider,
@@ -315,6 +361,13 @@ func NewExecutionStoreWithProvider(provider StorageProvider, config ExecutionSto
 }
 
 func normalizeExecutionStoreConfig(config ExecutionStoreConfig) ExecutionStoreConfig {
+	defaults := DefaultExecutionStoreConfig()
+	if config.TTL <= 0 {
+		config.TTL = defaults.TTL
+	}
+	if config.ErrorTTL <= 0 {
+		config.ErrorTTL = defaults.ErrorTTL
+	}
 	config.KeyPrefix = normalizeExecutionKeyPrefix(config.KeyPrefix)
 	if config.ConversationQueryLimit <= 0 {
 		config.ConversationQueryLimit = defaultConversationQueryLimit
@@ -366,6 +419,10 @@ func (s *executionStoreImpl) traceKey(traceID string) string {
 	return s.config.KeyPrefix + "trace:" + traceID
 }
 
+func (s *executionStoreImpl) retentionLinkKey(requestID string) string {
+	return executionRetentionLinkKey(s.config.KeyPrefix, requestID)
+}
+
 func (s *executionStoreImpl) conversationIndexKey(conversationID string) string {
 	return executionConversationIndexKey(s.config.KeyPrefix, conversationID)
 }
@@ -373,6 +430,129 @@ func (s *executionStoreImpl) conversationIndexKey(conversationID string) string 
 func executionConversationIndexKey(prefix, conversationID string) string {
 	digest := sha256.Sum256([]byte(conversationID))
 	return normalizeExecutionKeyPrefix(prefix) + fmt.Sprintf("conversation:%x", digest)
+}
+
+func executionRetentionLinkKey(prefix, requestID string) string {
+	digest := sha256.Sum256([]byte(requestID))
+	return normalizeExecutionKeyPrefix(prefix) + fmt.Sprintf("retention:%x", digest)
+}
+
+// executionRetentionLink is the small, backend-neutral projection needed to
+// preserve an execution's related evidence. Keeping it beside the full record
+// avoids loading and decoding a potentially large debug payload merely to
+// extend retention.
+type executionRetentionLink struct {
+	TraceID           string `json:"trace_id,omitempty"`
+	ConversationID    string `json:"conversation_id,omitempty"`
+	OriginalRequestID string `json:"original_request_id,omitempty"`
+}
+
+func executionRetentionLinkFromStored(execution *StoredExecution) executionRetentionLink {
+	return executionRetentionLink{
+		TraceID:           execution.TraceID,
+		ConversationID:    ExecutionConversationID(execution),
+		OriginalRequestID: relatedRootID(execution),
+	}
+}
+
+func marshalExecutionRetentionLink(execution *StoredExecution) (string, error) {
+	encoded, err := json.Marshal(executionRetentionLinkFromStored(execution))
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal execution retention link: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func unmarshalExecutionRetentionLink(encoded string) (executionRetentionLink, error) {
+	var link executionRetentionLink
+	if err := json.Unmarshal([]byte(encoded), &link); err != nil {
+		return executionRetentionLink{}, fmt.Errorf("failed to unmarshal execution retention link: %w", err)
+	}
+	return link, nil
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left >= right {
+		return left
+	}
+	return right
+}
+
+func executionRetentionTTL(
+	execution *StoredExecution,
+	normalTTL time.Duration,
+	errorTTL time.Duration,
+) time.Duration {
+	return executionRetentionTTLAt(execution, normalTTL, errorTTL, time.Now())
+}
+
+func executionRetentionTTLAt(
+	execution *StoredExecution,
+	normalTTL time.Duration,
+	errorTTL time.Duration,
+	now time.Time,
+) time.Duration {
+	if execution == nil {
+		return normalTTL
+	}
+	if execution.Interrupted {
+		retention := maxDuration(normalTTL, errorTTL)
+		if execution.Checkpoint != nil && execution.Checkpoint.ExpiresAt.After(now) {
+			retention = maxDuration(retention, execution.Checkpoint.ExpiresAt.Sub(now))
+		}
+		return retention
+	}
+	if execution.Result != nil && !execution.Result.Success {
+		return errorTTL
+	}
+	return normalTTL
+}
+
+func relatedRootID(execution *StoredExecution) string {
+	if execution == nil {
+		return ""
+	}
+	rootID := strings.TrimSpace(execution.OriginalRequestID)
+	if rootID == "" || rootID == execution.RequestID {
+		return ""
+	}
+	return rootID
+}
+
+func logLineageRetentionFailure(
+	ctx context.Context,
+	logger core.Logger,
+	execution *StoredExecution,
+	err error,
+) {
+	if logger == nil || execution == nil || err == nil ||
+		errors.Is(err, ErrExecutionRecordNotFound) {
+		return
+	}
+	logger.WarnWithContext(ctx, "Failed to preserve related execution root", map[string]interface{}{
+		"operation":           "execution_store_lineage_retention",
+		"request_id":          execution.RequestID,
+		"original_request_id": relatedRootID(execution),
+		"error_type":          "retention_extension",
+		"error":               safeExecutionStoreError(err),
+	})
+}
+
+func logExecutionRetentionLinkFailure(
+	ctx context.Context,
+	logger core.Logger,
+	requestID string,
+	err error,
+) {
+	if logger == nil || err == nil {
+		return
+	}
+	logger.WarnWithContext(ctx, "Failed to store execution retention link", map[string]interface{}{
+		"operation":  "execution_store_retention_link",
+		"request_id": requestID,
+		"error_type": "retention_link_write",
+		"error":      safeExecutionStoreError(err),
+	})
 }
 
 func sanitizeExecutionConversationMetadata(
@@ -459,6 +639,10 @@ func (s *executionStoreImpl) Store(ctx context.Context, execution *StoredExecuti
 		return fmt.Errorf("request_id is required")
 	}
 	storedExecution, conversationID := sanitizeExecutionConversationMetadata(execution)
+	retentionLink, err := marshalExecutionRetentionLink(storedExecution)
+	if err != nil {
+		return err
+	}
 
 	// Serialize to JSON
 	data, err := json.Marshal(storedExecution)
@@ -466,20 +650,24 @@ func (s *executionStoreImpl) Store(ctx context.Context, execution *StoredExecuti
 		return fmt.Errorf("failed to marshal execution: %w", err)
 	}
 
-	// Determine TTL based on success/failure.
-	// ORCH-022: interrupted records have Result.Success == false after the
-	// orchestrator fix (Result was nil pre-fix, bypassing this branch). Carve
-	// them out so pending HITL approvals keep the default TTL rather than the
-	// shorter ErrorTTL.
-	ttl := s.config.TTL
-	if storedExecution.Result != nil && !storedExecution.Result.Success && !storedExecution.Interrupted {
-		ttl = s.config.ErrorTTL
-	}
+	ttl := executionRetentionTTL(storedExecution, s.config.TTL, s.config.ErrorTTL)
 
 	// Store the main record
 	key := s.recordKey(storedExecution.RequestID)
-	if err := s.provider.Set(ctx, key, string(data), ttl); err != nil {
-		return fmt.Errorf("failed to store execution: %w", err)
+	storeErr := s.provider.SetKeyWithMinimumTTL(ctx, key, string(data), ttl)
+	if storeErr != nil {
+		return fmt.Errorf("failed to store execution: %w", storeErr)
+	}
+	if err := s.provider.SetKeyWithMinimumTTL(
+		ctx,
+		s.retentionLinkKey(storedExecution.RequestID),
+		retentionLink,
+		ttl,
+	); err != nil {
+		// The primary execution is authoritative. Retention extension can recover
+		// from a missing projection by reading that record, so do not report a
+		// failed Store after the primary write has already succeeded.
+		logExecutionRetentionLinkFailure(ctx, s.logger, storedExecution.RequestID, err)
 	}
 
 	// Add to index (sorted set by timestamp)
@@ -527,16 +715,28 @@ func (s *executionStoreImpl) Store(ctx context.Context, execution *StoredExecuti
 	// Store trace ID mapping if available
 	if storedExecution.TraceID != "" {
 		traceKey := s.traceKey(storedExecution.TraceID)
-		if err := s.provider.Set(ctx, traceKey, storedExecution.RequestID, ttl); err != nil {
+		traceErr := s.provider.SetKeyWithMinimumTTL(
+			ctx,
+			traceKey,
+			storedExecution.RequestID,
+			ttl,
+		)
+		if traceErr != nil {
 			if s.logger != nil {
 				s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
 					"operation":  "execution_store_trace",
 					"request_id": storedExecution.RequestID,
 					"trace_id":   storedExecution.TraceID,
-					"error":      err.Error(),
+					"error":      safeExecutionStoreError(traceErr),
 				})
 			}
 			// Continue - main record is stored
+		}
+	}
+
+	if rootID := relatedRootID(storedExecution); rootID != "" {
+		if err := s.ExtendTTL(ctx, rootID, ttl); err != nil {
+			logLineageRetentionFailure(ctx, s.logger, storedExecution, err)
 		}
 	}
 
@@ -555,7 +755,7 @@ func (s *executionStoreImpl) Get(ctx context.Context, requestID string) (*Stored
 		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
 	if data == "" {
-		return nil, fmt.Errorf("execution not found: %s", requestID)
+		return nil, fmt.Errorf("%w: %s", ErrExecutionRecordNotFound, requestID)
 	}
 
 	var execution StoredExecution
@@ -579,7 +779,7 @@ func (s *executionStoreImpl) GetByTraceID(ctx context.Context, traceID string) (
 		return nil, fmt.Errorf("failed to lookup trace: %w", err)
 	}
 	if requestID == "" {
-		return nil, fmt.Errorf("execution not found for trace: %s", traceID)
+		return nil, fmt.Errorf("%w for trace: %s", ErrExecutionRecordNotFound, traceID)
 	}
 
 	// Get the execution by request ID
@@ -613,57 +813,74 @@ func (s *executionStoreImpl) SetMetadata(ctx context.Context, requestID string, 
 		return fmt.Errorf("failed to marshal execution: %w", err)
 	}
 
-	// Use original TTL (we can't know the remaining TTL without Redis-specific commands).
-	// ORCH-022: interrupted records have Result.Success == false after the
-	// orchestrator fix — carve them out so pending HITL approvals keep the
-	// default TTL rather than the shorter ErrorTTL.
-	ttl := s.config.TTL
-	if execution.Result != nil && !execution.Result.Success && !execution.Interrupted {
-		ttl = s.config.ErrorTTL
-	}
+	ttl := executionRetentionTTL(execution, s.config.TTL, s.config.ErrorTTL)
 
 	storeKey := s.recordKey(requestID)
-	return s.provider.Set(ctx, storeKey, string(data), ttl)
+	return s.provider.SetKeyWithMinimumTTL(ctx, storeKey, string(data), ttl)
 }
 
 // ExtendTTL extends retention for investigation.
 func (s *executionStoreImpl) ExtendTTL(ctx context.Context, requestID string, duration time.Duration) error {
-	// Get existing record
-	execution, err := s.Get(ctx, requestID)
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	if duration <= 0 {
+		return fmt.Errorf("duration must be positive")
+	}
+
+	return s.extendTTL(ctx, requestID, duration, make(map[string]struct{}), true)
+}
+
+func (s *executionStoreImpl) extendTTL(
+	ctx context.Context,
+	requestID string,
+	duration time.Duration,
+	visited map[string]struct{},
+	required bool,
+) error {
+	if _, seen := visited[requestID]; seen {
+		return nil
+	}
+	visited[requestID] = struct{}{}
+
+	exists, err := s.provider.Exists(ctx, s.recordKey(requestID))
 	if err != nil {
+		return fmt.Errorf("failed to check execution retention target: %w", err)
+	}
+	if !exists {
+		if !required {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", ErrExecutionRecordNotFound, requestID)
+	}
+
+	linkKey := s.retentionLinkKey(requestID)
+	link, err := s.loadExecutionRetentionLink(ctx, requestID, linkKey)
+	if err != nil {
+		if !required && errors.Is(err, ErrExecutionRecordNotFound) {
+			return nil
+		}
 		return err
 	}
-
-	// Re-serialize and store with new TTL
-	data, err := json.Marshal(execution)
-	if err != nil {
-		return fmt.Errorf("failed to marshal execution: %w", err)
-	}
-
-	storeKey := s.recordKey(requestID)
-	if err := s.provider.Set(ctx, storeKey, string(data), duration); err != nil {
+	if err := s.provider.ExtendKeyTTL(ctx, s.recordKey(requestID), duration); err != nil {
 		return err
 	}
-
-	// Also extend trace ID mapping TTL if present
-	if execution.TraceID != "" {
-		traceKey := s.traceKey(execution.TraceID)
-		if err := s.provider.Set(ctx, traceKey, requestID, duration); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("Failed to extend trace ID mapping TTL", map[string]interface{}{
-					"operation":  "execution_store_extend_ttl",
-					"request_id": requestID,
-					"trace_id":   execution.TraceID,
-					"error":      err.Error(),
-				})
-			}
-			// Continue - main record TTL is extended
+	if err := s.provider.ExtendKeyTTL(ctx, linkKey, duration); err != nil {
+		return err
+	}
+	if link.TraceID != "" {
+		if err := s.provider.ExtendKeyTTL(ctx, s.traceKey(link.TraceID), duration); err != nil && s.logger != nil {
+			s.logger.Warn("Failed to extend trace ID mapping TTL", map[string]interface{}{
+				"operation":  "execution_store_extend_ttl",
+				"request_id": requestID,
+				"trace_id":   link.TraceID,
+				"error":      safeExecutionStoreError(err),
+			})
 		}
 	}
-
-	if conversationID := ExecutionConversationID(execution); conversationID != "" {
+	if link.ConversationID != "" {
 		if ttlManager, ok := s.provider.(IndexTTLManager); ok {
-			conversationKey := s.conversationIndexKey(conversationID)
+			conversationKey := s.conversationIndexKey(link.ConversationID)
 			if err := ttlManager.ExtendIndexTTL(ctx, conversationKey, duration); err != nil && s.logger != nil {
 				s.logger.WarnWithContext(ctx, "Failed to extend conversation index TTL", map[string]interface{}{
 					"operation":  "execution_store_conversation_index_ttl",
@@ -674,8 +891,31 @@ func (s *executionStoreImpl) ExtendTTL(ctx context.Context, requestID string, du
 			}
 		}
 	}
-
+	if rootID := strings.TrimSpace(link.OriginalRequestID); rootID != "" && rootID != requestID {
+		return s.extendTTL(ctx, rootID, duration, visited, false)
+	}
 	return nil
+}
+
+func (s *executionStoreImpl) loadExecutionRetentionLink(
+	ctx context.Context,
+	requestID string,
+	linkKey string,
+) (executionRetentionLink, error) {
+	encoded, err := s.provider.Get(ctx, linkKey)
+	if err != nil {
+		return executionRetentionLink{}, fmt.Errorf("failed to get execution retention link: %w", err)
+	}
+	if encoded != "" {
+		return unmarshalExecutionRetentionLink(encoded)
+	}
+
+	// Compatibility fallback for records stored before retention links existed.
+	execution, err := s.Get(ctx, requestID)
+	if err != nil {
+		return executionRetentionLink{}, err
+	}
+	return executionRetentionLinkFromStored(execution), nil
 }
 
 // ListRecent returns recent records for UI listing.

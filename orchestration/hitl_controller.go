@@ -17,7 +17,7 @@ import (
 //
 // DefaultInterruptController coordinates all HITL functionality:
 // - Evaluates policy decisions via InterruptPolicy
-// - Persists state via CheckpointStore
+// - Persists state via CheckpointPersistence
 // - Sends notifications via InterruptHandler
 //
 // Per FRAMEWORK_DESIGN_PRINCIPLES.md, telemetry is nil-safe with NoOp default.
@@ -51,7 +51,7 @@ type DefaultInterruptController struct {
 // Returns concrete type per Go idiom "return structs, accept interfaces".
 func NewInterruptController(
 	policy InterruptPolicy,
-	store CheckpointStore,
+	store CheckpointPersistence,
 	handler InterruptHandler,
 	opts ...InterruptControllerOption,
 ) *DefaultInterruptController {
@@ -81,9 +81,15 @@ func (c *DefaultInterruptController) SetHandler(handler InterruptHandler) {
 	c.handler = handler
 }
 
-// SetCheckpointStore configures state persistence
-func (c *DefaultInterruptController) SetCheckpointStore(store CheckpointStore) {
+// SetCheckpointPersistence configures the provider-neutral request-path store.
+func (c *DefaultInterruptController) SetCheckpointPersistence(store CheckpointPersistence) {
 	c.store = store
+}
+
+// SetCheckpointStore configures state persistence.
+// Deprecated: use SetCheckpointPersistence.
+func (c *DefaultInterruptController) SetCheckpointStore(store CheckpointStore) {
+	c.SetCheckpointPersistence(store)
 }
 
 // CheckPlanApproval evaluates policy and triggers interrupt if needed.

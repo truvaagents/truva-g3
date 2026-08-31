@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.4
+**Version**: 1.5
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -673,6 +673,29 @@ func TestToolCannotDiscover(t *testing.T) {
 }
 ```
 
+### Reusable Contract Conformance
+
+Provider-neutral interfaces owned by Core may ship reusable executable suites
+under the separately importable `core/conformance` package. This placement
+keeps the contract beside its owner without making `core` depend on an optional
+framework module or forcing provider tests to duplicate behavioral rules.
+
+The conformance package is test support, not runtime framework behavior:
+
+- it may import only the standard library and the root `core` package;
+- it must not import orchestration or another optional framework module;
+- runtime packages must not import it;
+- exported `Run*Conformance` functions accept factories for implementations
+  and test observable contract behavior rather than implementation details;
+- provider and in-memory implementations run every suite corresponding to the
+  capabilities they advertise.
+
+Current suites cover AI-options cloning, `TaskConsumer` delivery profiles,
+`TaskStore`, `ScheduleStore`, and the legacy `TaskQueue`. Orchestration-owned
+persistence and coordination contracts remain in
+`orchestration/backendconformance`; moving those suites into Core would move
+ownership in the wrong direction.
+
 ### Integration Testing Patterns
 
 #### 1. **Discovery System Testing**
@@ -809,18 +832,26 @@ logger.Error("Provider request failed", map[string]interface{}{
 return err
 ```
 
-`RedactSensitiveText` is a dependency-free defense-in-depth helper for strings
-that cross log, trace, debug-record, or tool-result boundaries. It recognizes
-common authorization headers, credential assignments, secret-bearing URL user
-information, and credential query parameters while retaining useful diagnostic
-structure. It is not a substitute for avoiding secrets in URLs, payloads,
-prompts, and errors in the first place.
+`RedactSensitiveText` is a dependency-free, explicit, lossy transformation. An
+application or subsystem may choose it for a diagnostic field after deciding
+that reduced fidelity is appropriate. It recognizes common authorization
+headers, credential assignments, secret-bearing URL user information, and
+credential query parameters while retaining useful diagnostic structure. It is
+not a general secret detector, and the framework does not automatically apply
+it as a persistence or observability policy.
 
-When a sanitized error must cross an API boundary, `RedactSensitiveError`
-provides the same observable-message protection while implementing `Unwrap` so
-`errors.Is` and `errors.As` still reach the original cause. Use
-`RedactSensitiveText` for observation-only fields and `RedactSensitiveError`
-when error-chain control flow must survive sanitization.
+When an adopter explicitly chooses to return a transformed error,
+`RedactSensitiveError` provides the same observable-message transformation
+while implementing `Unwrap` so `errors.Is` and `errors.As` still reach the
+original cause. Use `RedactSensitiveText` for observation-only fields and
+`RedactSensitiveError` when error-chain control flow must survive that chosen
+transformation.
+
+Some legacy orchestration, skills, provider, and backend diagnostic paths still
+call these helpers automatically. They are documented exceptions pending a
+dedicated audit, not a security guarantee or a precedent for new framework
+paths. Built-in debug stores preserve the values they receive; applications own
+any required payload classification and sanitization.
 
 #### 2. **Input Validation**
 ```go
@@ -999,6 +1030,8 @@ their packages or vocabulary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6 | 2026-08-30 | Documented the module-owned `core/conformance` test-support package and its dependency, ownership, and runtime-import constraints |
+| 1.5 | 2026-08-29 | Clarified that redaction helpers are explicit adopter/subsystem transformations and documented the remaining automatic framework uses as legacy exceptions |
 | 1.4 | 2026-08-20 | Defined `AIOptions.ResponseFormat="json"` as the sole non-empty portable structured-output value and reserved native formats for `Extra` |
 | 1.3 | 2026-08-17 | Migrated the included Redis implementation to go-redis/v9 with explicit RESP2 compatibility defaults and application-owned RESP3 opt-in |
 | 1.2 | 2026-08-09 | Added generic provenance-aware pipeline short-circuit and named cache-variation contracts without changing legacy hook payloads |

@@ -23,9 +23,16 @@ const (
 	contextKeyTokenUsageAccumulator             contextKey = "truvag3_token_usage_accumulator" // #nosec G101 -- context key for LLM token-usage accounting, not a credential
 )
 
-// MaxConversationIDLength is the maximum byte length of a conversation ID.
-// It is a protocol invariant aligned with the telemetry baggage value limit.
-const MaxConversationIDLength = 512
+const (
+	// MetadataConversationID is the framework-owned correlation key used for
+	// conversation identity in metadata, telemetry baggage, and persisted debug
+	// records.
+	MetadataConversationID = "conversation_id"
+
+	// MaxConversationIDLength is the maximum byte length of a conversation ID.
+	// It is a protocol invariant aligned with the telemetry baggage value limit.
+	MaxConversationIDLength = 512
+)
 
 // ConversationIDValidationReason is a bounded classification for a rejected
 // conversation ID. It never contains the rejected value.

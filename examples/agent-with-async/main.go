@@ -84,6 +84,15 @@ import (
 	_ "github.com/truvaagents/truva-g3/ai/providers/openai"
 )
 
+const asyncTravelTaskQueueKey = "truvag3:tasks:queue:async-travel-agent"
+
+func asyncTravelTaskQueueConfig() *orchestration.RedisTaskQueueConfig {
+	return &orchestration.RedisTaskQueueConfig{
+		QueueKey:      asyncTravelTaskQueueKey,
+		ProcessingKey: asyncTravelTaskQueueKey + ":processing",
+	}
+}
+
 func main() {
 	startupStart := time.Now()
 
@@ -129,7 +138,9 @@ func main() {
 	log.Println("Connected to Redis")
 
 	// 6. Create async task infrastructure
-	taskQueue := orchestration.NewRedisTaskQueue(redisClient, nil)
+	// API and worker pods advertise different Kubernetes services, so they must
+	// not derive their shared work queue from TRUVAG3_K8S_SERVICE_NAME.
+	taskQueue := orchestration.NewRedisTaskQueue(redisClient, asyncTravelTaskQueueConfig())
 	taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
 
 	// 7. Get port configuration

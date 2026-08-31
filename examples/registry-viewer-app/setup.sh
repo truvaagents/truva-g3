@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # setup.sh - Setup and deployment script for registry-viewer-app
-# This is a standalone app that visualizes the TruvaG3 Redis service registry
-# No infrastructure setup required - just build, deploy, and run
+# This independently deployable app visualizes TruvaG3 runtime data. Its source
+# imports framework modules from the repository; setup.sh builds them together.
+# No infrastructure setup is performed here: build, deploy, and run the app
+# after shared infrastructure is available.
 
 set -e
 
@@ -130,7 +132,7 @@ build_app() {
 
     cd "$SCRIPT_DIR"
 
-    # Disable Go workspace to build standalone
+    # Build this module through the local framework replacements in go.mod.
     export GOWORK=off
 
     # Download dependencies
@@ -234,6 +236,8 @@ deploy_k8s() {
         --from-literal=PORT="${APP_PORT}" \
         --from-literal=APP_ENV="${APP_ENV:-development}" \
         --from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}" \
+        --from-literal=JAEGER_QUERY_URL="${JAEGER_QUERY_URL:-http://jaeger-query}" \
+        --from-literal=JAEGER_UI_URL="${JAEGER_UI_URL:-http://jaeger.localhost}" \
         --from-literal=TRUVAG3_VIEWER_MEMORY_DOMAINS="${TRUVAG3_VIEWER_MEMORY_DOMAINS:-infrastructure}" \
         --from-literal=TRUVAG3_SKILLS_REDIS_DB="${TRUVAG3_SKILLS_REDIS_DB:-9}" \
         --dry-run=client -o yaml | kubectl apply -f -
@@ -323,9 +327,9 @@ run_local() {
     echo ""
 
     if [ "$1" = "redis" ]; then
-        ./registry-viewer -mock=false -redis-url="${REDIS_URL:-redis://localhost:6379}"
+        ./registry-viewer -port="$APP_PORT" -mock=false -redis-url="${REDIS_URL:-redis://localhost:6379}"
     else
-        ./registry-viewer -mock=true
+        ./registry-viewer -port="$APP_PORT" -mock=true
     fi
 }
 
@@ -504,6 +508,8 @@ Environment Variables:
                     Default: Extracted from ../k8-deployment/redis.yaml
                     (service name + port from Redis Service definition)
   REDIS_NAMESPACE   Redis key namespace (default: truvag3)
+  JAEGER_QUERY_URL  Jaeger Query base URL (default: http://jaeger-query)
+  JAEGER_UI_URL     Browser-facing Jaeger UI base URL (default: http://jaeger.localhost)
   DOCKER_NO_CACHE   Set to 'true' to build Docker with --no-cache
 
 Redis Configuration:

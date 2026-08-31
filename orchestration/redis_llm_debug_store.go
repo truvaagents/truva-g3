@@ -23,6 +23,7 @@ const (
 	llmDebugKeyPrefix   = "truvag3:llm:debug:"
 	llmDebugMetaSuffix  = ":meta"
 	llmDebugInterSuffix = ":interactions"
+	llmDebugFloorSuffix = ":retention-floor"
 
 	// Size thresholds for compression
 	compressionThreshold = 100 * 1024  // 100KB
@@ -32,6 +33,67 @@ const (
 	defaultDebugTTL = 24 * time.Hour
 	errorDebugTTL   = 7 * 24 * time.Hour
 )
+
+var recordLLMInteractionScript = redis.NewScript(`
+local meta_ttl = redis.call("PTTL", KEYS[1])
+local interaction_ttl = redis.call("PTTL", KEYS[2])
+local floor_ttl = redis.call("PTTL", KEYS[4])
+redis.call("RPUSH", KEYS[2], ARGV[1])
+redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
+redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
+redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+redis.call("HSET", KEYS[1], "request_id", ARGV[4])
+redis.call("HSET", KEYS[1], "original_request_id", ARGV[5])
+if ARGV[6] ~= "" then
+	redis.call("HSETNX", KEYS[1], ARGV[6], ARGV[7])
+end
+if ARGV[8] ~= "" then
+	redis.call("HSETNX", KEYS[1], "source_component", ARGV[8])
+end
+if ARGV[9] ~= "" then
+	redis.call("HSETNX", KEYS[1], "originating_agent", ARGV[9])
+end
+redis.call("ZADD", KEYS[3], ARGV[10], ARGV[4])
+local requested = tonumber(ARGV[11])
+if floor_ttl == -1 then
+	requested = -1
+elseif floor_ttl > requested then
+	requested = floor_ttl
+end
+if requested == -1 then
+	redis.call("PERSIST", KEYS[1])
+	redis.call("PERSIST", KEYS[2])
+else
+	if meta_ttl == -2 or (meta_ttl >= 0 and meta_ttl < requested) then
+		redis.call("PEXPIRE", KEYS[1], requested)
+	end
+	if interaction_ttl == -2 or (interaction_ttl >= 0 and interaction_ttl < requested) then
+		redis.call("PEXPIRE", KEYS[2], requested)
+	end
+end
+return 1
+`)
+
+var preserveLLMDebugRetentionScript = redis.NewScript(`
+local requested = tonumber(ARGV[1])
+local floor_ttl = redis.call("PTTL", KEYS[1])
+if floor_ttl == -2 then
+	redis.call("SET", KEYS[1], "1", "PX", requested)
+elseif floor_ttl >= 0 and floor_ttl < requested then
+	redis.call("PEXPIRE", KEYS[1], requested)
+elseif floor_ttl > requested then
+	requested = floor_ttl
+end
+for index = 2, #KEYS do
+	local current = redis.call("PTTL", KEYS[index])
+	if floor_ttl == -1 and current >= 0 then
+		redis.call("PERSIST", KEYS[index])
+	elseif current >= 0 and current < requested then
+		redis.call("PEXPIRE", KEYS[index], requested)
+	end
+end
+return floor_ttl
+`)
 
 // RedisLLMDebugStoreOption configures the Redis debug store
 type RedisLLMDebugStoreOption func(*redisDebugStoreConfig)
@@ -129,8 +191,11 @@ func NewRedisLLMDebugStore(opts ...RedisLLMDebugStoreOption) (*RedisLLMDebugStor
 
 	// Apply explicit options (override defaults)
 	for _, opt := range opts {
-		opt(cfg)
+		if opt != nil {
+			opt(cfg)
+		}
 	}
+	normalizeRedisLLMDebugStoreConfig(cfg)
 
 	// Parse Redis URL and create client
 	redisOpt, err := redis.ParseURL(cfg.redisURL)
@@ -184,7 +249,17 @@ func NewRedisLLMDebugStoreWithClient(client redis.UniversalClient, opts ...Redis
 			opt(cfg)
 		}
 	}
+	normalizeRedisLLMDebugStoreConfig(cfg)
 	return newRedisLLMDebugStore(client, false, cfg), nil
+}
+
+func normalizeRedisLLMDebugStoreConfig(cfg *redisDebugStoreConfig) {
+	if cfg.ttl <= 0 {
+		cfg.ttl = defaultDebugTTL
+	}
+	if cfg.errorTTL <= 0 {
+		cfg.errorTTL = errorDebugTTL
+	}
 }
 
 func defaultRedisLLMDebugStoreConfig() *redisDebugStoreConfig {
@@ -211,8 +286,9 @@ func newRedisLLMDebugStore(client redis.UniversalClient, ownsClient bool, cfg *r
 }
 
 // RecordInteraction appends an LLM interaction to the debug record.
-// Uses list-based atomic storage (RPUSH) — safe for concurrent writes from
-// multiple processes (orchestrator + agents).
+// A Redis script atomically appends the interaction, updates metadata/index
+// fields, and preserves any longer or persistent retention already applied.
+// It is safe for concurrent writes from multiple processes (orchestrator + agents).
 // Uses Layer 2 circuit breaker if injected, otherwise falls back to Layer 1 simple retry.
 func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID string, interaction LLMInteraction) error {
 	operation := func() error {
@@ -249,38 +325,36 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 			ttl = s.errorTTL
 		}
 
-		// Prevent TTL downgrade: if the key already has a longer TTL (e.g., from
-		// a prior error interaction with errorTTL=7d), keep the longer one.
-		if existingTTL, err := s.client.TTL(ctx, metaKey).Result(); err == nil && existingTTL > ttl {
-			ttl = existingTTL
-		}
-
-		// Atomic pipeline — no read-modify-write, no race condition
-		pipe := s.client.Pipeline()
-		pipe.RPush(ctx, interKey, data)                                            // Append interaction
-		pipe.HSetNX(ctx, metaKey, "created_at", strconv.FormatInt(now.Unix(), 10)) // Set only if new
-		pipe.HSet(ctx, metaKey, "updated_at", strconv.FormatInt(now.Unix(), 10))   // Always update
-		pipe.HSet(ctx, metaKey, "trace_id", traceID)
-		pipe.HSet(ctx, metaKey, "request_id", requestID)
-		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
+		conversationMetadataKey := ""
 		if conversationID != "" {
-			pipe.HSetNX(ctx, metaKey, "meta:"+MetadataConversationID, conversationID)
+			conversationMetadataKey = "meta:" + MetadataConversationID
 		}
-		if interaction.SourceComponent != "" {
-			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
-		}
-		if originatingAgent != "" {
-			pipe.HSetNX(ctx, metaKey, "originating_agent", originatingAgent)
-		}
-		pipe.Expire(ctx, metaKey, ttl)
-		pipe.Expire(ctx, interKey, ttl)
-		pipe.ZAdd(ctx, s.indexKey(), redis.Z{
-			Score:  float64(now.Unix()),
-			Member: requestID,
-		})
-		_, err = pipe.Exec(ctx)
+		ttlMilliseconds, err := positiveTTLMilliseconds(ttl)
 		if err != nil {
-			return fmt.Errorf("redis pipeline failed: %w", err)
+			return err
+		}
+		if err := recordLLMInteractionScript.Run(
+			ctx,
+			s.client,
+			[]string{
+				metaKey,
+				interKey,
+				s.indexKey(),
+				s.retentionFloorKey(requestID),
+			},
+			data,
+			strconv.FormatInt(now.Unix(), 10),
+			traceID,
+			requestID,
+			originalRequestID,
+			conversationMetadataKey,
+			conversationID,
+			interaction.SourceComponent,
+			originatingAgent,
+			strconv.FormatInt(now.Unix(), 10),
+			strconv.FormatInt(ttlMilliseconds, 10),
+		).Err(); err != nil {
+			return fmt.Errorf("redis interaction write failed: %w", err)
 		}
 
 		return nil
@@ -325,7 +399,7 @@ func (s *RedisLLMDebugStore) getRecordFromList(ctx context.Context, requestID, m
 		return nil, fmt.Errorf("redis hgetall failed: %w", err)
 	}
 	if len(meta) == 0 {
-		return nil, fmt.Errorf("record not found: %s", requestID)
+		return nil, fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 	}
 
 	// Get all interactions
@@ -380,7 +454,7 @@ func (s *RedisLLMDebugStore) getRecordFromList(ctx context.Context, requestID, m
 func (s *RedisLLMDebugStore) getRecordFromString(ctx context.Context, requestID, key string) (*LLMDebugRecord, error) {
 	data, err := s.client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
-		return nil, fmt.Errorf("record not found: %s", requestID)
+		return nil, fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("redis get failed: %w", err)
@@ -394,7 +468,6 @@ func (s *RedisLLMDebugStore) SetMetadata(ctx context.Context, requestID string, 
 	if key == MetadataConversationID {
 		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
 	}
-
 	operation := func() error {
 		metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
 
@@ -424,11 +497,7 @@ func (s *RedisLLMDebugStore) SetMetadata(ctx context.Context, requestID string, 
 		if err != nil {
 			return err
 		}
-		ttl, err := s.client.TTL(ctx, oldKey).Result()
-		if err != nil || ttl < 0 {
-			ttl = s.ttl
-		}
-		return s.client.Set(ctx, oldKey, data, ttl).Err()
+		return setRedisValueWithMinimumTTL(ctx, s.client, oldKey, data, s.ttl)
 	}
 
 	if s.circuitBreaker != nil {
@@ -439,17 +508,66 @@ func (s *RedisLLMDebugStore) SetMetadata(ctx context.Context, requestID string, 
 
 // ExtendTTL extends retention for investigation.
 func (s *RedisLLMDebugStore) ExtendTTL(ctx context.Context, requestID string, duration time.Duration) error {
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	if duration <= 0 {
+		return fmt.Errorf("duration must be positive")
+	}
 	metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
 	interKey := s.recordPrefix() + requestID + llmDebugInterSuffix
 
-	// Try new format first
-	pipe := s.client.Pipeline()
-	pipe.Expire(ctx, metaKey, duration)
-	pipe.Expire(ctx, interKey, duration)
-	// Also try old format key (backward compat)
-	pipe.Expire(ctx, s.recordPrefix()+requestID, duration)
-	_, err := pipe.Exec(ctx)
-	return err
+	found := false
+	for _, key := range []string{
+		metaKey,
+		interKey,
+		s.recordPrefix() + requestID,
+	} {
+		exists, err := extendRedisKeyMinimumTTL(ctx, s.client, key, duration)
+		if err != nil {
+			return err
+		}
+		found = found || exists
+	}
+	if !found {
+		return fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
+	}
+	return nil
+}
+
+// PreserveRetention establishes a request-level retention floor and applies it
+// to any existing debug keys in one Redis operation. The floor is intentionally
+// separate from the debug record, so late in-process or cross-process writers
+// inherit the final execution retention without creating an empty UI record.
+func (s *RedisLLMDebugStore) PreserveRetention(
+	ctx context.Context,
+	requestID string,
+	duration time.Duration,
+) error {
+	if requestID == "" {
+		return fmt.Errorf("request_id is required")
+	}
+	milliseconds, err := positiveTTLMilliseconds(duration)
+	if err != nil {
+		return err
+	}
+	operation := func() error {
+		return preserveLLMDebugRetentionScript.Run(
+			ctx,
+			s.client,
+			[]string{
+				s.retentionFloorKey(requestID),
+				s.recordPrefix() + requestID + llmDebugMetaSuffix,
+				s.recordPrefix() + requestID + llmDebugInterSuffix,
+				s.recordPrefix() + requestID,
+			},
+			strconv.FormatInt(milliseconds, 10),
+		).Err()
+	}
+	if s.circuitBreaker != nil {
+		return s.circuitBreaker.Execute(ctx, operation)
+	}
+	return s.executeWithRetry(ctx, operation)
 }
 
 // ListRecent returns recent records ordered by creation time.
@@ -576,6 +694,12 @@ func (s *RedisLLMDebugStore) recordPrefix() string {
 	return s.keyPrefix
 }
 
+func (s *RedisLLMDebugStore) retentionFloorKey(requestID string) string {
+	return s.recordPrefix() + requestID + llmDebugFloorSuffix
+}
+
+var _ LLMDebugRetentionPreserver = (*RedisLLMDebugStore)(nil)
+
 // Layer 1 Resilience Constants
 const (
 	layer1MaxRetries     = 3
@@ -593,10 +717,12 @@ func (s *RedisLLMDebugStore) executeWithRetry(ctx context.Context, operation fun
 	s.failureMu.Lock()
 	if s.failureCount >= layer1MaxFailures && time.Since(s.lastFailure) < layer1FailureWindow {
 		s.failureMu.Unlock()
-		s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
-			"failures":     s.failureCount,
-			"cooldown_sec": layer1FailureWindow.Seconds(),
-		})
+		if s.logger != nil {
+			s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
+				"failures":     s.failureCount,
+				"cooldown_sec": layer1FailureWindow.Seconds(),
+			})
+		}
 		return fmt.Errorf("debug store in cooldown after %d failures", s.failureCount)
 	}
 	s.failureMu.Unlock()
@@ -622,12 +748,14 @@ func (s *RedisLLMDebugStore) executeWithRetry(ctx context.Context, operation fun
 		}
 
 		lastErr = err
-		s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
-			"attempt": attempt,
-			"max":     layer1MaxRetries,
-			"backoff": backoff.String(),
-			"error":   err.Error(),
-		})
+		if s.logger != nil {
+			s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
+				"attempt": attempt,
+				"max":     layer1MaxRetries,
+				"backoff": backoff.String(),
+				"error":   err.Error(),
+			})
+		}
 
 		// Don't sleep on last attempt
 		if attempt < layer1MaxRetries {

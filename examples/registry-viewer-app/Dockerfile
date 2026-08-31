@@ -1,6 +1,8 @@
-# Dockerfile for registry-viewer-app
-# This is a standalone app - no truvag3 framework dependencies required
-# Usage: docker build -t registry-viewer:latest .
+# Dockerfile for a source-level registry-viewer-app checkout.
+# In the TruvaG3 repository, use setup.sh and Dockerfile.workspace; this file
+# requires the go.mod replace directives to resolve to released or copied
+# framework modules before it can be built outside the workspace.
+# Usage after that preparation: docker build -t registry-viewer:latest .
 
 FROM golang:1.27.0-alpine AS builder
 
@@ -51,7 +53,7 @@ RUN chown appuser:appgroup /app/registry-viewer && \
 USER appuser
 
 # Set default PORT
-ENV PORT=8100
+ENV PORT=8361
 
 # Expose port
 EXPOSE ${PORT}

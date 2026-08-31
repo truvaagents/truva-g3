@@ -167,6 +167,9 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 
 | What | Default | Env Var | Code Override |
 |------|---------|---------|---------------|
+| LLM debug TTL | 24h | `TRUVAG3_LLM_DEBUG_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
+| LLM debug error TTL | 7d | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
+| HITL checkpoint TTL | 24h | `TRUVAG3_HITL_CHECKPOINT_TTL` | `redisprovider.WithCheckpointTTL(d)` |
 | Workflow state TTL | 24h | `TRUVAG3_WORKFLOW_STATE_TTL` | `redisprovider.WithWorkflowStateTTL(d)` |
 | Task queue retry attempts | 3 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `redisprovider.WithTaskQueueRetryPolicy(n, d)` |
 | Task queue retry delay | 100ms | `TRUVAG3_TASK_QUEUE_RETRY_DELAY` | `redisprovider.WithTaskQueueRetryPolicy(n, d)` |

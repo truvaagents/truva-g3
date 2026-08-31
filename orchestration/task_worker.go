@@ -304,6 +304,17 @@ func (p *TaskWorkerPool) processTask(parentCtx context.Context, workerID string,
 		},
 	)
 	defer endSpan()
+	// Every dequeued task reaches a terminal outcome in this method. Settle the
+	// legacy TaskQueue handle on success, handler failure, timeout, and missing
+	// handler paths so Redis in-flight records cannot accumulate indefinitely.
+	defer func() {
+		if err := p.queue.Acknowledge(ctx, task.ID); err != nil && p.logger != nil {
+			p.logger.WarnWithContext(ctx, "Failed to acknowledge task", map[string]interface{}{
+				"task_id": task.ID,
+				"error":   err.Error(),
+			})
+		}
+	}()
 
 	startTime := time.Now()
 
@@ -380,16 +391,6 @@ func (p *TaskWorkerPool) processTask(parentCtx context.Context, workerID string,
 	if err := p.store.Update(ctx, task); err != nil {
 		if p.logger != nil {
 			p.logger.ErrorWithContext(ctx, "Failed to update completed task", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
-			})
-		}
-	}
-
-	// Acknowledge task in queue
-	if err := p.queue.Acknowledge(ctx, task.ID); err != nil {
-		if p.logger != nil {
-			p.logger.WarnWithContext(ctx, "Failed to acknowledge task", map[string]interface{}{
 				"task_id": task.ID,
 				"error":   err.Error(),
 			})

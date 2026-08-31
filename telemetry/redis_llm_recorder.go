@@ -7,7 +7,7 @@
 // Design: Phase 8 of AGENT_LLM_DEBUG_CAPTURE_DESIGN.md
 // - Write-only: agents append interactions, registry-viewer reads them
 // - Format-compatible: writes match orchestration.LLMInteraction JSON structure
-// - Atomic: uses RPUSH (no read-modify-write, safe for concurrent writes)
+// - Atomic: one Redis script appends data and preserves minimum retention
 // - Resilient: Layer 1 retry with exponential backoff
 package telemetry
 
@@ -26,10 +26,12 @@ import (
 
 const (
 	// Redis key patterns — must match orchestration/redis_llm_debug_store.go
-	recorderKeyPrefix   = "truvag3:llm:debug:"
-	recorderIndexKey    = "truvag3:llm:debug:index"
-	recorderMetaSuffix  = ":meta"
-	recorderInterSuffix = ":interactions"
+	recorderKeyPrefix                 = "truvag3:llm:debug:"
+	recorderIndexKey                  = "truvag3:llm:debug:index"
+	recorderMetaSuffix                = ":meta"
+	recorderInterSuffix               = ":interactions"
+	recorderFloorSuffix               = ":retention-floor"
+	recorderConversationMetadataField = "meta:" + core.MetadataConversationID
 
 	// Default TTLs — match orchestration defaults
 	recorderDefaultTTL = 24 * time.Hour
@@ -42,6 +44,51 @@ const (
 	recorderFailureWindow  = 30 * time.Second
 	recorderMaxFailures    = 5
 )
+
+// recordLLMCallScript is the format-twin of orchestration's LLM interaction
+// writer. Reading the prior TTL and applying the write in one script prevents
+// an agent-side success record from shortening retention already promoted by
+// the orchestrator. Missing keys receive the requested TTL; persistent and
+// longer-lived keys retain their existing lifetime.
+var recordLLMCallScript = redis.NewScript(`
+local meta_ttl = redis.call("PTTL", KEYS[1])
+local interaction_ttl = redis.call("PTTL", KEYS[2])
+local floor_ttl = redis.call("PTTL", KEYS[4])
+redis.call("RPUSH", KEYS[2], ARGV[1])
+redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
+redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
+redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+redis.call("HSET", KEYS[1], "request_id", ARGV[4])
+redis.call("HSET", KEYS[1], "original_request_id", ARGV[5])
+if ARGV[6] ~= "" then
+	redis.call("HSETNX", KEYS[1], ARGV[11], ARGV[6])
+end
+if ARGV[7] ~= "" then
+	redis.call("HSETNX", KEYS[1], "source_component", ARGV[7])
+end
+if ARGV[8] ~= "" then
+	redis.call("HSETNX", KEYS[1], "originating_agent", ARGV[8])
+end
+redis.call("ZADD", KEYS[3], ARGV[9], ARGV[4])
+local requested = tonumber(ARGV[10])
+if floor_ttl == -1 then
+	requested = -1
+elseif floor_ttl > requested then
+	requested = floor_ttl
+end
+if requested == -1 then
+	redis.call("PERSIST", KEYS[1])
+	redis.call("PERSIST", KEYS[2])
+else
+	if meta_ttl == -2 or (meta_ttl >= 0 and meta_ttl < requested) then
+		redis.call("PEXPIRE", KEYS[1], requested)
+	end
+	if interaction_ttl == -2 or (interaction_ttl >= 0 and interaction_ttl < requested) then
+		redis.call("PEXPIRE", KEYS[2], requested)
+	end
+end
+return 1
+`)
 
 // RedisLLMCallRecorder is a write-only Redis-backed implementation of LLMCallRecorder.
 // It writes LLM call records to Redis DB 7 in the same format as the orchestration
@@ -108,8 +155,11 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 		errTTL:   recorderGetEnvDuration("TRUVAG3_LLM_DEBUG_ERROR_TTL", recorderErrorTTL),
 	}
 	for _, opt := range opts {
-		opt(cfg)
+		if opt != nil {
+			opt(cfg)
+		}
 	}
+	normalizeRecorderConfig(cfg)
 
 	redisOpt, err := redis.ParseURL(cfg.redisURL)
 	if err != nil {
@@ -143,6 +193,15 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 	}, nil
 }
 
+func normalizeRecorderConfig(cfg *recorderConfig) {
+	if cfg.ttl <= 0 {
+		cfg.ttl = recorderDefaultTTL
+	}
+	if cfg.errTTL <= 0 {
+		cfg.errTTL = recorderErrorTTL
+	}
+}
+
 // llmInteractionJSON matches the JSON structure of orchestration.LLMInteraction.
 // This is an internal serialization type — agents write this format, the registry-viewer
 // (which uses orchestration.RedisLLMDebugStore.GetRecord) reads it.
@@ -170,7 +229,8 @@ type llmInteractionJSON struct {
 }
 
 // RecordLLMCall appends an LLM call record to Redis DB 7.
-// Uses the same atomic pipeline format as orchestration.RedisLLMDebugStore.RecordInteraction.
+// Uses the same atomic minimum-retention format as
+// orchestration.RedisLLMDebugStore.RecordInteraction.
 func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID string, record LLMCallRecord) error {
 	if requestID == "" {
 		return nil // Not called from orchestration — skip silently
@@ -203,7 +263,6 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 			Attempt:          1, // Agent-side calls don't have retry visibility
 			PhaseNumber:      record.PhaseNumber,
 		}
-
 		data, err := json.Marshal(interaction)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
@@ -232,43 +291,49 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		if !record.Success {
 			ttl = r.errTTL
 		}
-
-		// Prevent TTL downgrade
-		if existingTTL, err := r.client.TTL(ctx, metaKey).Result(); err == nil && existingTTL > ttl {
-			ttl = existingTTL
-		}
-
-		// Atomic pipeline — matches orchestration.RedisLLMDebugStore.RecordInteraction exactly
-		pipe := r.client.Pipeline()
-		pipe.RPush(ctx, interKey, data)
-		pipe.HSetNX(ctx, metaKey, "created_at", strconv.FormatInt(now.Unix(), 10))
-		pipe.HSet(ctx, metaKey, "updated_at", strconv.FormatInt(now.Unix(), 10))
-		pipe.HSet(ctx, metaKey, "trace_id", traceID)
-		pipe.HSet(ctx, metaKey, "request_id", requestID)
-		pipe.HSet(ctx, metaKey, "original_request_id", originalRequestID)
-		if conversationID != "" {
-			pipe.HSetNX(ctx, metaKey, "meta:conversation_id", conversationID)
-		}
-		if interaction.SourceComponent != "" {
-			pipe.HSetNX(ctx, metaKey, "source_component", interaction.SourceComponent)
-		}
-		if originatingAgent != "" {
-			pipe.HSetNX(ctx, metaKey, "originating_agent", originatingAgent)
-		}
-		pipe.Expire(ctx, metaKey, ttl)
-		pipe.Expire(ctx, interKey, ttl)
-		pipe.ZAdd(ctx, recorderIndexKey, redis.Z{
-			Score:  float64(now.Unix()),
-			Member: requestID,
-		})
-		_, err = pipe.Exec(ctx)
+		ttlMilliseconds, err := recorderTTLMilliseconds(ttl)
 		if err != nil {
-			return fmt.Errorf("redis pipeline failed: %w", err)
+			return err
+		}
+
+		if err := recordLLMCallScript.Run(
+			ctx,
+			r.client,
+			[]string{
+				metaKey,
+				interKey,
+				recorderIndexKey,
+				recorderKeyPrefix + requestID + recorderFloorSuffix,
+			},
+			data,
+			strconv.FormatInt(now.Unix(), 10),
+			traceID,
+			requestID,
+			originalRequestID,
+			conversationID,
+			interaction.SourceComponent,
+			originatingAgent,
+			strconv.FormatInt(now.Unix(), 10),
+			strconv.FormatInt(ttlMilliseconds, 10),
+			recorderConversationMetadataField,
+		).Err(); err != nil {
+			return fmt.Errorf("redis interaction write failed: %w", err)
 		}
 		return nil
 	}
 
 	return r.executeWithRetry(ctx, operation)
+}
+
+func recorderTTLMilliseconds(ttl time.Duration) (int64, error) {
+	if ttl <= 0 {
+		return 0, fmt.Errorf("duration must be positive")
+	}
+	milliseconds := ttl.Milliseconds()
+	if milliseconds <= 0 {
+		milliseconds = 1
+	}
+	return milliseconds, nil
 }
 
 func recorderConversationIDFromContext(ctx context.Context) string {
@@ -281,7 +346,7 @@ func recorderConversationIDFromContext(ctx context.Context) string {
 		return coreCandidate.Value
 	}
 
-	conversationID := GetBaggage(ctx)["conversation_id"]
+	conversationID := GetBaggage(ctx)[core.MetadataConversationID]
 	if core.ValidateConversationID(conversationID) != core.ConversationIDValidationNone {
 		return ""
 	}

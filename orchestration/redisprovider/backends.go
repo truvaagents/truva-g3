@@ -33,7 +33,10 @@ func NewOrchestrationBackends(
 	}
 
 	if client := clients.Resolve(ClientRoleLLMDebug); client != nil {
-		llmOptions := []orchestration.RedisLLMDebugStoreOption{}
+		llmOptions := []orchestration.RedisLLMDebugStoreOption{
+			orchestration.WithDebugTTL(options.llmDebugTTL),
+			orchestration.WithDebugErrorTTL(options.llmDebugErrorTTL),
+		}
 		if options.logger != nil {
 			llmOptions = append(llmOptions, orchestration.WithDebugLogger(componentLogger(options.logger)))
 		}
@@ -48,7 +51,9 @@ func NewOrchestrationBackends(
 	}
 
 	if client := clients.Resolve(ClientRoleHITL); client != nil {
-		checkpointOptions := []orchestration.RedisCheckpointStoreOption{}
+		checkpointOptions := []orchestration.RedisCheckpointStoreOption{
+			orchestration.WithCheckpointTTL(options.checkpointTTL),
+		}
 		commandOptions := []orchestration.RedisCommandStoreOption{}
 		if options.logger != nil {
 			checkpointOptions = append(checkpointOptions, orchestration.WithCheckpointStoreLogger(options.logger))
@@ -71,20 +76,6 @@ func NewOrchestrationBackends(
 			orchestration.WithCheckpointExpiry(checkpoints),
 			orchestration.WithCommandBackend(commands),
 		)
-		if options.expiryEnabled {
-			expiryOptions := make([]orchestration.CheckpointExpiryProcessorOption, 0, len(options.expiryOptions)+1)
-			if options.logger != nil {
-				expiryOptions = append(expiryOptions, orchestration.WithCheckpointExpiryLogger(options.logger))
-			}
-			expiryOptions = append(expiryOptions, options.expiryOptions...)
-			processor, err := orchestration.NewCheckpointExpiryProcessor(
-				checkpoints, checkpoints, options.expiryCallback, options.expiryConfig, expiryOptions...,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("redisprovider: checkpoint expiry processor: %w", err)
-			}
-			backendOptions = append(backendOptions, orchestration.WithRunnables(processor))
-		}
 	}
 
 	if client := clients.Resolve(ClientRoleWorkflow); client != nil {
@@ -177,7 +168,21 @@ func NewOrchestrationBackends(
 	if err != nil {
 		return nil, err
 	}
-	return backends.With(overrides...)
+	backends, err = backends.With(overrides...)
+	if err != nil {
+		return nil, err
+	}
+	// Compose the provider default only after caller overrides have established
+	// the final checkpoint dependencies. A caller-supplied processor wins, and
+	// the neutral composition rejects a processor placed before dependency
+	// overrides instead of silently substituting this default.
+	if options.expiryEnabled && backends.CheckpointExpiryProcessor() == nil {
+		backends, err = withCheckpointExpiryProcessor(backends, options)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return backends, nil
 }
 
 var _ core.Runnable = (*orchestration.CheckpointExpiryProcessor)(nil)
@@ -187,4 +192,26 @@ func componentLogger(logger core.Logger) core.Logger {
 		return componentAware.WithComponent("framework/orchestration")
 	}
 	return logger
+}
+
+func withCheckpointExpiryProcessor(
+	backends *orchestration.OrchestrationBackends,
+	options Options,
+) (*orchestration.OrchestrationBackends, error) {
+	expiryOptions := make([]orchestration.CheckpointExpiryProcessorOption, 0, len(options.expiryOptions)+1)
+	if options.logger != nil {
+		expiryOptions = append(expiryOptions, orchestration.WithCheckpointExpiryLogger(options.logger))
+	}
+	expiryOptions = append(expiryOptions, options.expiryOptions...)
+	processor, err := orchestration.NewCheckpointExpiryProcessor(
+		backends.Checkpoints(), backends.CheckpointExpiry(), options.expiryCallback, options.expiryConfig, expiryOptions...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("redisprovider: checkpoint expiry processor: %w", err)
+	}
+	configured, err := backends.With(orchestration.WithCheckpointExpiryProcessor(processor))
+	if err != nil {
+		return nil, fmt.Errorf("redisprovider: checkpoint expiry processor composition: %w", err)
+	}
+	return configured, nil
 }

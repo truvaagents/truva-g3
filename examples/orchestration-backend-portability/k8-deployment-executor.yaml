@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portable-scheduled-executor
+  namespace: truvag3-examples
+  labels:
+    app: portable-scheduled-executor
+    component: agent-worker
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: portable-scheduled-executor
+  template:
+    metadata:
+      labels:
+        app: portable-scheduled-executor
+        component: agent-worker
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      containers:
+      - name: executor
+        image: truvag3-portable-agent:local
+        imagePullPolicy: Never
+        envFrom:
+        - configMapRef:
+            name: portability-backend-config
+        - secretRef:
+            name: portability-postgres
+        env:
+        - name: TRUVAG3_MODE
+          value: scheduled-executor
+        - name: PORT
+          value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 3
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
