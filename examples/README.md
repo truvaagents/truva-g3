@@ -277,6 +277,12 @@ new file automatically. The complete coding-assistant rules are in
 | [mock-services](mock-services/) | Support | Placeholder/support area for mock APIs used by examples | Yes |
 | [k8-deployment](k8-deployment/) | Infrastructure | Shared Kind, Redis, observability, and setup helpers | Yes |
 
+### Framework Validation Examples
+
+| Example | Type | What It Demonstrates | README |
+|---|---|---|---|
+| [orchestration-backend-portability](orchestration-backend-portability/) | Integration | Role-specific PostgreSQL, NATS, and Redis composition with self-contained Kind verification | Yes |
+
 ## Infrastructure and UIs
 
 The `k8-deployment/` folder contains shared local Kubernetes infrastructure used

@@ -127,7 +127,15 @@ func TestDefaultRedisTaskQueueConfig_EnvIsolation(t *testing.T) {
 	if cfg2.RetryAttempts != 3 {
 		t.Errorf("RetryAttempts = %d, want 3", cfg2.RetryAttempts)
 	}
-	if cfg2.ProcessingKey != "truvag3:tasks:processing" {
-		t.Errorf("ProcessingKey = %q, want %q", cfg2.ProcessingKey, "truvag3:tasks:processing")
+	if cfg2.ProcessingKey != "truvag3:tasks:processing:my-agent" {
+		t.Errorf("ProcessingKey = %q, want %q", cfg2.ProcessingKey, "truvag3:tasks:processing:my-agent")
+	}
+}
+
+func TestRedisTaskQueueDerivesProcessingKeyFromExplicitQueue(t *testing.T) {
+	config := &RedisTaskQueueConfig{QueueKey: "custom:queue"}
+	queue := NewRedisTaskQueueWithClient(nil, config)
+	if queue.config.ProcessingKey != "custom:queue:processing" {
+		t.Fatalf("ProcessingKey = %q, want %q", queue.config.ProcessingKey, "custom:queue:processing")
 	}
 }

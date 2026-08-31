@@ -487,8 +487,8 @@ client, _ := ai.NewClient(ai.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 ```go
 response, err := client.GenerateResponse(ctx, prompt, options)
 if err != nil {
-    // Framework observation surfaces sanitize provider errors. Application
-    // logs should classify the error rather than copying a provider body.
+    // Classify the typed provider error instead of copying an arbitrary
+    // provider body into an application log.
     var providerErr core.ProviderError
     if errors.As(err, &providerErr) {
         log.Printf("AI request failed: provider=%s status=%d",
@@ -497,6 +497,12 @@ if err != nil {
     return fallbackResponse, nil
 }
 ```
+
+Some current provider adapters transform selected diagnostic messages before
+recording them. This is a legacy framework exception pending audit, not a
+general promise that returned errors, application logs, or debug records have
+been sanitized. Applications remain responsible for their own logging and data
+protection policy.
 
 3. **⏱️ Set appropriate timeouts**
 ```go

@@ -191,18 +191,19 @@ The solution is elegantly simple: **return immediately with a task ID, process i
 │                         REDIS QUEUE                                  │
 │                                                                      │
 │  Queue: [task-abc123, task-def456, ...]                             │
+│  In-flight list: dequeued payloads awaiting Ack/Reject               │
 └───────────────────────────┬─────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      BACKGROUND WORKER                               │
 │                                                                      │
-│  1. BRPOP from queue (blocks waiting for tasks)                     │
+│  1. BRPOP from queue and record the in-flight payload                │
 │  2. Load task from Redis                                             │
 │  3. Execute handler (AI orchestration)                               │
 │  4. Report progress via ProgressReporter                             │
 │  5. Save result to Redis                                             │
-│  6. Mark task complete                                               │
+│  6. Mark task complete and acknowledge the in-flight payload         │
 └─────────────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -925,7 +926,7 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 | Worker pool | `orchestration/task_worker.go` | `processTask()`, `executeHandler()`, `failTask()` |
 | Telemetry helpers | `orchestration/task_telemetry.go` | `EmitTaskStarted()`, `EmitTaskCompleted()`, etc. |
 | API handler | `orchestration/task_api.go` | `HandleSubmit()`, `HandleGetTask()`, `HandleCancel()` |
-| Redis queue | `orchestration/redis_task_queue.go` | `Enqueue()`, `Dequeue()`, `Acknowledge()` |
+| Redis queue | `orchestration/redis_task_queue.go` | `Enqueue()`, `Dequeue()`, `Acknowledge()`, `Reject()` |
 | Redis store | `orchestration/redis_task_store.go` | `Create()`, `Get()`, `Update()`, `Cancel()` |
 | Linked spans | `telemetry/async_span.go` | `StartLinkedSpan()` |
 
@@ -1584,10 +1585,14 @@ Set these environment variables to enable advanced observability:
 |----------|-------------|---------|
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Enable execution storage for DAG visualization | `false` |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` |
-| `TRUVAG3_LLM_DEBUG_TTL` | Retention for successful LLM records | `24h` |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Retention for error records | `168h` (7 days) |
+| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `24h` |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `168h` (7 days) |
 
 **What Gets Recorded:**
+
+These TTLs are initial minimums. Execution-lineage, HITL, and explicit
+investigation retention can extend current/root LLM and execution evidence and
+never shorten a longer or persistent lifetime.
 
 **Execution DAG Store** (`TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`):
 - The routing plan (steps, dependencies, tool selections)
@@ -1745,8 +1750,8 @@ See [examples/k8-deployment/grafana.yaml](https://github.com/truvaagents/truva-g
 | `GROQ_API_KEY` | Groq API key (alternative provider) | - | `gsk-...` |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Enable execution storage for DAG visualization | `false` | `true` |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` | `true` |
-| `TRUVAG3_LLM_DEBUG_TTL` | Retention for successful LLM records | `24h` | `48h` |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Retention for error records | `168h` | `336h` |
+| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `24h` | `48h` |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `168h` | `336h` |
 
 > 📖 **AI Provider Configuration**: For comprehensive information on configuring AI providers, model aliases, provider chains with failover, and environment variable overrides for models, see the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md). It covers:
 > - All supported providers (OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Gemini, Ollama, etc.)
@@ -1770,7 +1775,7 @@ type TaskWorkerConfig struct {
 ```go
 type RedisTaskQueueConfig struct {
     QueueKey       string         // Redis key for queue list (default: "truvag3:tasks:queue")
-    ProcessingKey  string         // Redis key for processing list (default: "truvag3:tasks:processing")
+    ProcessingKey  string         // Redis list for in-flight payloads (service-scoped by default)
     RetryAttempts  int            // Retry count for Redis operations (default: 3)
     RetryDelay     time.Duration  // Delay between retries (default: 100ms)
     CircuitBreaker CircuitBreaker // Optional circuit breaker for Redis operations

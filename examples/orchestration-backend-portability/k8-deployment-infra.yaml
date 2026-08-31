@@ -1,0 +1,165 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portability-postgres
+  namespace: truvag3-examples
+  labels:
+    app: portability-postgres
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: infrastructure
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portability-postgres
+  template:
+    metadata:
+      labels:
+        app: portability-postgres
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: infrastructure
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17.6-alpine
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: portability-postgres
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: portability-postgres
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: portability-postgres
+              key: POSTGRES_PASSWORD
+        ports:
+        - name: postgres
+          containerPort: 5432
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+          initialDelaySeconds: 2
+          periodSeconds: 2
+        livenessProbe:
+          exec:
+            command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portability-postgres
+  namespace: truvag3-examples
+  labels:
+    app: portability-postgres
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  selector:
+    app: portability-postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portability-nats
+  namespace: truvag3-examples
+  labels:
+    app: portability-nats
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/component: infrastructure
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portability-nats
+  template:
+    metadata:
+      labels:
+        app: portability-nats
+        app.kubernetes.io/name: nats
+        app.kubernetes.io/component: infrastructure
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      containers:
+      - name: nats
+        image: nats:2.11.8-alpine
+        imagePullPolicy: IfNotPresent
+        args:
+        - --jetstream
+        - --store_dir=/data
+        - --http_port=8222
+        ports:
+        - name: client
+          containerPort: 4222
+        - name: monitor
+          containerPort: 8222
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: monitor
+          initialDelaySeconds: 2
+          periodSeconds: 2
+        livenessProbe:
+          tcpSocket:
+            port: client
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portability-nats
+  namespace: truvag3-examples
+  labels:
+    app: portability-nats
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  selector:
+    app: portability-nats
+  ports:
+  - name: client
+    port: 4222
+    targetPort: client
+  - name: monitor
+    port: 8222
+    targetPort: monitor

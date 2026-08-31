@@ -90,8 +90,11 @@ type ExpiredCheckpointSource interface {
 	ReleaseExpiredCheckpointClaim(ctx context.Context, checkpointID, owner string) error
 }
 
-// CheckpointStore persists workflow state for interrupt/resume.
-// Implementations: Redis (default), PostgreSQL, S3, Memory (testing)
+// CheckpointStore is the legacy combined persistence and lifecycle contract.
+//
+// Deprecated: request-path consumers should accept CheckpointPersistence.
+// Background expiry should compose ExpiredCheckpointSource with
+// CheckpointExpiryProcessor. This interface remains for source compatibility.
 type CheckpointStore interface {
 	CheckpointPersistence
 
@@ -99,13 +102,16 @@ type CheckpointStore interface {
 
 	// StartExpiryProcessor starts the background goroutine that processes expired checkpoints.
 	// The agent calls this method during setup - the framework provides the implementation.
+	// Deprecated: run CheckpointExpiryProcessor through application lifecycle ownership.
 	StartExpiryProcessor(ctx context.Context, config ExpiryProcessorConfig) error
 
 	// StopExpiryProcessor stops the expiry processor gracefully.
+	// Deprecated: cancel the application-owned CheckpointExpiryProcessor context.
 	StopExpiryProcessor(ctx context.Context) error
 
 	// SetExpiryCallback sets the callback for expired checkpoints.
 	// Must be called before StartExpiryProcessor.
+	// Deprecated: pass the callback to NewCheckpointExpiryProcessor.
 	SetExpiryCallback(callback ExpiryCallback) error
 }
 
@@ -229,7 +235,9 @@ type InterruptController interface {
 	// SetHandler configures the notification handler (optional - can be set via constructor)
 	SetHandler(handler InterruptHandler)
 
-	// SetCheckpointStore configures state persistence (optional - can be set via constructor)
+	// SetCheckpointStore configures state persistence (optional - can be set via constructor).
+	// Deprecated: concrete DefaultInterruptController users should call
+	// SetCheckpointPersistence. This method remains for interface compatibility.
 	SetCheckpointStore(store CheckpointStore)
 
 	// Check methods evaluate policy and handle interrupt if needed.
@@ -573,7 +581,9 @@ type HITLConfig struct {
 
 	// Storage configuration
 	CheckpointTTL time.Duration `json:"checkpoint_ttl"`
-	KeyPrefix     string        `json:"key_prefix"` // Storage-agnostic key prefix
+	// KeyPrefix remains for the legacy compatibility factory.
+	// Deprecated: configure provider namespacing with redisprovider.WithNamespace.
+	KeyPrefix string `json:"key_prefix"`
 
 	// Expiry processor configuration
 	// Controls how expired checkpoints are processed in the background.

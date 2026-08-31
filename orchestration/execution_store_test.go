@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -13,6 +14,7 @@ import (
 type mockStorageProvider struct {
 	mu                 sync.RWMutex
 	data               map[string]string
+	ttls               map[string]time.Duration
 	indexes            map[string]map[string]float64 // Sorted indexes (was zsets)
 	setErr             error
 	getErr             error
@@ -23,6 +25,7 @@ type mockStorageProvider struct {
 func newMockStorageProvider() *mockStorageProvider {
 	return &mockStorageProvider{
 		data:    make(map[string]string),
+		ttls:    make(map[string]time.Duration),
 		indexes: make(map[string]map[string]float64),
 	}
 }
@@ -42,7 +45,58 @@ func (m *mockStorageProvider) Set(ctx context.Context, key string, value string,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ttls == nil {
+		m.ttls = make(map[string]time.Duration)
+	}
 	m.data[key] = value
+	m.ttls[key] = ttl
+	return nil
+}
+
+func (m *mockStorageProvider) ExtendKeyTTL(
+	_ context.Context,
+	key string,
+	minTTL time.Duration,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ttls == nil {
+		m.ttls = make(map[string]time.Duration)
+	}
+	if _, exists := m.data[key]; !exists {
+		return nil
+	}
+	current := m.ttls[key]
+	if current == 0 || current >= minTTL {
+		return nil
+	}
+	m.ttls[key] = minTTL
+	return nil
+}
+
+func (m *mockStorageProvider) SetKeyWithMinimumTTL(
+	_ context.Context,
+	key string,
+	value string,
+	minTTL time.Duration,
+) error {
+	if m.setErr != nil {
+		return m.setErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ttls == nil {
+		m.ttls = make(map[string]time.Duration)
+	}
+	current, exists := m.ttls[key]
+	m.data[key] = value
+	if exists && current == 0 {
+		m.ttls[key] = 0
+	} else if exists && current > minTTL {
+		m.ttls[key] = current
+	} else {
+		m.ttls[key] = minTTL
+	}
 	return nil
 }
 
@@ -51,6 +105,7 @@ func (m *mockStorageProvider) Del(ctx context.Context, keys ...string) error {
 	defer m.mu.Unlock()
 	for _, key := range keys {
 		delete(m.data, key)
+		delete(m.ttls, key)
 	}
 	return nil
 }
@@ -202,6 +257,34 @@ func TestExecutionStore_Store(t *testing.T) {
 	traceKey := DefaultExecutionKeyPrefix + "trace:" + execution.TraceID
 	if provider.data[traceKey] != execution.RequestID {
 		t.Errorf("Trace mapping not stored: got %q, want %q", provider.data[traceKey], execution.RequestID)
+	}
+}
+
+func TestExecutionStore_StorePreservesFinalResponse(t *testing.T) {
+	provider := newMockStorageProvider()
+	store := NewExecutionStoreWithProvider(provider, DefaultExecutionStoreConfig(), nil)
+	execution := sampleExecution("req-final-response-fidelity", true)
+	finalResponse := `The application returned password=local-debug-value`
+	execution.FinalResponse = &finalResponse
+	execution.FinalResponseSource = FinalResponseSourceAfterSynthesisHooks
+
+	if err := store.Store(context.Background(), execution); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	var persisted StoredExecution
+	key := DefaultExecutionKeyPrefix + execution.RequestID
+	if err := json.Unmarshal([]byte(provider.data[key]), &persisted); err != nil {
+		t.Fatalf("decode persisted execution: %v", err)
+	}
+	if persisted.FinalResponse == nil {
+		t.Fatal("persisted final response is nil")
+	}
+	if *persisted.FinalResponse != finalResponse {
+		t.Errorf("persisted final response = %q, want %q", *persisted.FinalResponse, finalResponse)
+	}
+	if *execution.FinalResponse != finalResponse {
+		t.Errorf("runtime final response was mutated: %q", *execution.FinalResponse)
 	}
 }
 

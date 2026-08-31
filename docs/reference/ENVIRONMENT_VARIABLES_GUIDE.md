@@ -1395,9 +1395,9 @@ Configure LLM debug payload storage for debugging orchestration issues. This fea
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | **Implemented** | Enable LLM debug payload storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Retention period for successful debug records | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Retention period for error debug records (longer for troubleshooting) | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | **Implemented** | Redis database number for debug storage (uses `core.RedisDBLLMDebug`) | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful debug records; a longer execution-lineage floor is preserved | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for error debug records; lineage, HITL, or investigation retention may extend it | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | **Implemented** | Included Redis preset and compatibility database assignment (uses `core.RedisDBLLMDebug`); not part of the provider-neutral store contract | [orchestration/redisprovider/client_config.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/client_config.go) |
 
 ### How It Works
 
@@ -1405,7 +1405,14 @@ When enabled, the orchestrator automatically captures:
 - **Request payloads**: Full prompts sent to the LLM
 - **Response payloads**: Complete LLM responses (parsed and raw)
 - **Timing metadata**: Duration, timestamps, retry attempts
-- **Error context**: Parse failures, validation errors with original content
+- **Error context**: The error value supplied to the recorder. A small set of
+  legacy executor, skills, and provider paths still transforms errors before
+  recording; this is not a general sanitization guarantee.
+
+The built-in recorder preserves the prompt and response values it receives.
+This feature is therefore an informed opt-in: applications own access control,
+encryption, retention policy, and any explicit sanitization required for their
+data.
 
 ### Example: Enable Debug Storage
 
@@ -1450,8 +1457,8 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | `false` | **Implemented** | Enable/disable execution debug storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_EXECUTION_DEBUG_TTL` | `24h` | **Implemented** | Retention period for successful execution records | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
-| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Retention period for failed execution records (longer for troubleshooting) | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful execution records; related-lineage promotion may extend it | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for failed execution records; HITL approval windows and investigation extensions may retain them longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | `truvag3:execution:debug` | **Implemented** | Key prefix for all storage keys. Allows multi-tenant deployments or custom namespacing. | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_REDIS_DB` | `8` | **Implemented** | Redis database number (uses `core.RedisDBExecutionDebug`) | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1465,6 +1472,13 @@ default construction, or passed directly in `ExecutionStoreConfig`, is
 authoritative. The per-call `limit` passed to `ListByConversationID` is clamped
 to `ConversationQueryLimit`; stale-index work is independently bounded by
 `ConversationIndexScanLimit`.
+
+The TTL variables select the initial minimum, not an absolute deletion time.
+An interrupted record receives at least the larger of the normal TTL, error
+TTL, and remaining approval window. Storing or explicitly extending a related
+execution promotes the available lineage without shortening an existing longer
+or persistent lifetime. Final execution recording applies the corresponding
+minimum to current and root LLM-debug evidence, including late writes.
 
 ### Correlation and baggage protocol limits
 
@@ -1788,6 +1802,9 @@ These variables are read only when the application explicitly calls
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Successful LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Failed LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_HITL_CHECKPOINT_TTL` | `24h` | **Implemented** | Checkpoint retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_WORKFLOW_STATE_TTL` | `24h` | **Implemented** | Retention for workflow execution state composed by the default Redis backend preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `3` | **Implemented** | Positive number of Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_TASK_QUEUE_RETRY_DELAY` | `100ms` | **Implemented** | Positive delay between Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
@@ -1983,13 +2000,16 @@ answers.
 | `TRUVAG3_SKILL_AUTHORING_MAX_PACKAGE_BYTES` | `1048576` | **Example Only** | HTTP package body host override. |
 | `TRUVAG3_SKILL_ADMIN_MAX_DELETE_VERSIONS` | `100` | **Example Only** | Maximum inclusive deletion range accepted by the host. |
 | `TRUVAG3_SKILL_AUTHORING_ADVICE_MAX_OUTPUT_TOKENS` | `1024` | **Example Only** | Optional authoring-advisor output ceiling; the bundled host does not configure an advisor in V1. |
+| `JAEGER_QUERY_URL` | disabled for a direct binary; `http://jaeger-query` through `setup.sh deploy` | **Example Only** | Server-side Jaeger Query base URL used for optional execution and pipeline-hook enrichment. |
+| `JAEGER_UI_URL` | `http://jaeger.localhost` | **Example Only** | Browser-facing Jaeger base URL used by the Registry Viewer trace redirect. |
 
-The authoring-limit variables belong to the example host, not framework-global
-configuration. Other hosts pass `SkillAuthoringLimits` and
+These Registry Viewer variables belong to the example host, not framework-global
+configuration. Other skills hosts pass `SkillAuthoringLimits` and
 `SkillAdministrationLimits` directly to `NewSkillAdminHandler`. The Registry
 Viewer binary reads these values from its process environment; its bundled
 `setup.sh` does not automatically forward authoring/admin overrides from the
-invoking shell into Kubernetes.
+invoking shell into Kubernetes. It does forward the two Jaeger values into the
+deployment ConfigMap.
 
 ---
 
@@ -2098,7 +2118,7 @@ export TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT=10         # Max signals in prompt
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h           # Success record retention
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h    # Error record retention (7 days)
-export TRUVAG3_LLM_DEBUG_REDIS_DB=7        # Redis database number
+export TRUVAG3_LLM_DEBUG_REDIS_DB=7        # Included Redis preset / compatibility assignment
 ```
 
 ### Kubernetes ConfigMap Example

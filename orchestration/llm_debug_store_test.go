@@ -84,6 +84,40 @@ func TestMemoryLLMDebugStore_RecordInteraction(t *testing.T) {
 	}
 }
 
+func TestMemoryLLMDebugStore_PreservesApplicationPayloads(t *testing.T) {
+	store := NewMemoryLLMDebugStore()
+	payload := "password=local-debug-value"
+	requestID := "test-payload-fidelity"
+	interaction := LLMInteraction{
+		Type:         "error_analysis",
+		Prompt:       "prompt " + payload,
+		SystemPrompt: "system " + payload,
+		Response:     "response " + payload,
+		Error:        "error " + payload,
+		Success:      false,
+	}
+	if err := store.RecordInteraction(context.Background(), requestID, interaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadata(context.Background(), requestID, "application_value", payload); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.GetRecord(context.Background(), requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), payload) || strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("memory debug record changed application payloads: %s", encoded)
+	}
+	if record.Metadata["application_value"] != payload {
+		t.Fatalf("memory debug metadata = %q, want %q", record.Metadata["application_value"], payload)
+	}
+}
+
 func TestLLMInteraction_HookPhase_RoundTrip(t *testing.T) {
 	store := NewMemoryLLMDebugStore()
 	ctx := context.Background()

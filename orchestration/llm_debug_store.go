@@ -10,11 +10,18 @@ package orchestration
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
 )
+
+// ErrLLMDebugRecordNotFound identifies the expected absence of an LLM debug
+// record. Valid executions do not necessarily call an LLM, so retention
+// coordination uses errors.Is to suppress this condition without hiding real
+// backend failures.
+var ErrLLMDebugRecordNotFound = errors.New("LLM debug record not found")
 
 // LLMDebugStore stores LLM interaction payloads for debugging.
 // Implementations must be safe for concurrent use.
@@ -42,6 +49,14 @@ type LLMDebugStore interface {
 	// ListRecent returns recent records for UI listing.
 	// Results are ordered by creation time, newest first.
 	ListRecent(ctx context.Context, limit int) ([]LLMDebugRecordSummary, error)
+}
+
+// LLMDebugRetentionPreserver is the optional capability used when final
+// execution retention must survive LLM writes that have not started yet or
+// originate in another process. Implementations establish a retention floor
+// without creating an empty debug record and apply it to any existing record.
+type LLMDebugRetentionPreserver interface {
+	PreserveRetention(ctx context.Context, requestID string, duration time.Duration) error
 }
 
 // LLMDebugRecord stores all LLM interactions for a single orchestration request.
@@ -262,6 +277,8 @@ type LLMDebugConfig struct {
 
 	// RedisDB is the Redis database number for storage.
 	// Default: 7 (core.RedisDBLLMDebug). Override via TRUVAG3_LLM_DEBUG_REDIS_DB
+	// Deprecated: configure Redis client roles through redisprovider.ClientConfig.
+	// This field remains for the legacy compatibility factory.
 	RedisDB int `json:"redis_db"`
 }
 

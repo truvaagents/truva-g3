@@ -952,32 +952,24 @@ package defines provider-neutral capabilities; the included Redis preset is
 selected explicitly at the application boundary:
 
 ```go
-redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
-    &redis.Options{Addr: "redis:6379"},
-))
-defer redisClient.Close()
-
-clients, err := redisprovider.NewClientSet(redisClient)
-if err != nil {
-    log.Fatal(err)
-}
-providerOptions, err := redisprovider.NewOptions(
-    redisprovider.WithNamespace("travel-chat-agent"),
-    redisprovider.WithLogger(logger),
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendProviderOptions(
+        redisprovider.WithNamespace("travel-chat-agent"),
+    ),
 )
 if err != nil {
     log.Fatal(err)
 }
-backends, err := redisprovider.NewOrchestrationBackends(clients, providerOptions)
-if err != nil {
-    log.Fatal(err)
-}
+defer ownedBackends.Close()
+backends := ownedBackends.Backends()
 
 config := orchestration.NewDefaultOrchestratorConfig()
 config.ExecutionStore.Enabled = true
-config.ExecutionStoreBackend = backends.Execution()
 config.LLMDebug.Enabled = true
-config.LLMDebugStore = backends.LLMDebug()
+if err := orchestration.WireOrchestratorBackends(config, backends); err != nil {
+    log.Fatal(err)
+}
 
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
@@ -1005,9 +997,27 @@ engine := orchestration.NewWorkflowEngine(discovery, backends.Workflow(), logger
 
 Applications register every value returned by `backends.Runnables()` with
 `core.Framework` before calling `Run`, and close their clients only after the
-framework stops. The preset constructs adapters but does not start goroutines
-or close application-owned clients. A non-Redis provider supplies the same
-root options and getters, so runtime consumers do not change.
+framework stops. `NewDefaultBackends` returns the explicit ownership handle
+shown above and delegates to the separately callable client configuration,
+owned-client, provider-option, and preset constructors. The preset constructs
+adapters but does not start goroutines or close application-owned clients. A
+non-Redis provider supplies the same root options and getters, so runtime
+consumers do not change.
+
+Runnable composition is additive. Checkpoint expiry is a typed capability:
+validation requires persistence, an expired-checkpoint source, and its runnable
+processor. Checkpoint dependency options must precede an explicit processor;
+the reverse order fails construction instead of silently replacing the
+processor. The Redis preset constructs any missing default processor only after
+the final dependencies are known. Provider-owned
+retention can be configured with `redisprovider.WithLLMDebugRetention` and
+`redisprovider.WithCheckpointTTL`.
+
+In-tree skill-enabled agents and Registry Viewer use the Redis preset directly.
+They call `NewDefaultBackends` with
+`WithDefaultBackendRoles(ClientRoleSkills)`, so a skills-only process neither
+creates nor advertises unrelated backend groups while client ownership remains
+explicit.
 
 #### Benefits of This Design
 
@@ -1323,9 +1333,9 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | Enable tiered capability resolution for LLM token optimization. Automatically selects relevant tools before plan generation. |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful debug records |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error debug records (7 days) |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index for debug storage |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of the provider-neutral `LLMDebugStore` contract |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
@@ -1840,12 +1850,18 @@ These features are not yet implemented but could be added:
 - `StreamingOrchestratorResponse` - Streaming response with accumulated content and metadata
 - `StepCallback` - Callback type for per-step progress notifications
 - `LLMDebugStore` - Interface for LLM debug payload storage
+- `LLMDebugRetentionPreserver` - Optional late/cross-process retention-floor capability
 - `LLMInteraction` - Single LLM call record with `SourceComponent` and `CallDescription` attribution
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
+- `StoredExecution` - DAG evidence, including optional post-hook terminal response
+- `FinalResponseSourceAfterSynthesisHooks` - Source label for governed terminal responses
+- `ErrExecutionRecordNotFound` - Typed absence for optional execution evidence
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
 - `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
+- `KeyTTLManager` - Atomic minimum-retention extension and TTL-preserving value rewrites
+- `ExecutionStorageProvider` - Required composite provider contract: `StorageProvider` + `KeyTTLManager`
 - `ExecutionStoreConfig` - Includes conversation query and stale-index scan limits
 - `OrchestrationBackends` - Provider-neutral bundle of optional storage and coordination capabilities
 - `BackendRequirements` / `BackendFeature` - Effective capability requirements and validation inputs
@@ -1863,7 +1879,7 @@ These features are not yet implemented but could be added:
 - `ProcessRequest(ctx, request, metadata)` - Process natural language request
 - `ProcessRequestStreaming(ctx, query, tools, callback)` - Stream orchestration response with real-time tokens
 - `ExecutePlan(ctx, plan)` - Execute pre-defined routing plan (raw results, no synthesis)
-- `ExecutePlanWithSynthesis(ctx, plan, originalRequest)` - Execute plan with synthesis + DAG storage
+- `ExecutePlanWithSynthesis(ctx, plan, originalRequest)` - Workflow-mode plan execution and synthesis with DAG storage; it does not run pipeline hooks or store a governed final response
 - `WithStepCallback(ctx, callback)` - Add per-request step completion callback
 - `ExecuteWorkflow(ctx, workflow, inputs)` - Execute defined workflow
 - `ParseWorkflowYAML(data)` - Parse workflow from YAML
@@ -1885,20 +1901,48 @@ if lister, ok := store.(orchestration.ConversationExecutionLister); ok {
 }
 ```
 
-Do capability discovery with a type assertion. `ExecutionStore` and
-`StorageProvider` deliberately keep their existing required method sets, and
-the NoOp store does not claim conversation lookup support.
+Do conversation-listing capability discovery with a type assertion. The NoOp
+store does not claim conversation lookup support.
 
-Provider-backed stores may additionally implement `IndexTTLManager`. If they
-do not, writes and queries still work; bounded lazy cleanup removes stale
-membership as records expire. Execution record metadata is the source of truth
-and the hashed conversation index is only an accelerator. Optional
-conversation-index or TTL failures never fail the orchestration request.
+Provider-backed execution stores require `ExecutionStorageProvider`, which
+composes the base `StorageProvider` operations with `KeyTTLManager`'s atomic
+minimum-retention operations. This makes lineage promotion and
+rewrite-with-retention preservation compile-time requirements. Providers may
+additionally implement `IndexTTLManager` to extend conversation-index
+retention. Without it, bounded lazy cleanup removes stale membership as
+records expire. Execution record metadata is the source of truth and the
+hashed conversation index is only an accelerator.
 
 `MetadataConversationID` should be supplied whenever a conversation exists,
 including the first turn when `MetadataConversationTurns` is empty. It is
 separate from application `session_id`; an application may intentionally map
 the same opaque UUID to both concepts.
+
+`ExecutionStore.ExtendTTL` extends the requested execution and every available
+retained ancestor with cycle protection. A missing requested execution returns
+`ErrExecutionRecordNotFound`. If only a later ancestor has expired, the method
+returns success after extending the available chain and does not recreate the
+missing record. Non-positive direct Redis TTL options are normalized to the
+framework defaults after all options are applied.
+
+### Terminal response evidence
+
+The normal buffered and native-streaming `ProcessRequest` paths persist the
+response produced after `AfterSynthesis` hooks in
+`StoredExecution.FinalResponse`. The corresponding
+`FinalResponseSource` is `FinalResponseSourceAfterSynthesisHooks`. This is the
+application-level outcome evidence; the synthesis interaction in the LLM debug
+store remains the model's pre-hook draft.
+
+For native streaming, emitted tokens precede `AfterSynthesis`; the stored value
+is the post-hook response object and may differ from the text already streamed
+to the client.
+
+`ExecutePlanWithSynthesis` intentionally has a narrower workflow-mode contract:
+it executes a supplied plan and synthesizes the result, but it does not invoke
+the pipeline-hook chain and does not currently populate `FinalResponse`.
+Historical records also omit the field. Consumers must not substitute the raw
+synthesis response when post-hook evidence is absent.
 
 ### Configuration Options
 - `WithCapabilityProvider(type, url)` - Configure capability provider type and URL
@@ -2124,7 +2168,8 @@ This is the **same reasoning a human developer would apply** when debugging a fa
 The orchestration module captures complete LLM request/response payloads for production debugging. Unlike Jaeger spans which truncate large payloads, the debug store preserves full prompts and responses.
 
 **Key Features:**
-- **Complete Payload Visibility**: No truncation of prompts or responses
+- **Complete Payload Visibility**: No truncation or framework-inferred
+  redaction of prompts or responses
 - **Request Correlation**: Query by the stable prefix-aware `request_id` carried
   across logs, traces, and execution records
 - **Typed Recording Families**: core orchestration calls include `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, and `hallucination_detection`; optional memory/compaction features add their own types, and `ai.InstrumentedAIClient` contributes `agent_llm_call`
@@ -2132,7 +2177,16 @@ The orchestration module captures complete LLM request/response payloads for pro
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
 - **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
-- **Atomic Storage**: List-based storage (RPUSH) safe for concurrent writes from orchestrator and agents
+- **Atomic Storage and Retention**: One Redis operation appends the interaction,
+  updates metadata/index data, and preserves any longer or persistent TTL from
+  final execution, HITL, lineage, or investigation retention
+- **Adopter-Owned Protection**: Built-in writers preserve exact application
+  and model payloads. Applications that require sanitization must supply it
+  through their logger, telemetry pipeline, store, recorder, middleware, or
+  processing hooks
+- **Lineage Retention**: Final execution recording promotes current and root
+  LLM evidence through a non-displayable retention floor. Late agent-pod and
+  orchestrator writes inherit it atomically without creating an empty record
 
 **Configuration:**
 ```bash
@@ -2143,21 +2197,37 @@ export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h
 
-# Redis database (default: 7)
+# Included Redis preset / compatibility database assignment (default: 7)
 export TRUVAG3_LLM_DEBUG_REDIS_DB=7
 ```
 
 **Programmatic Configuration:**
 ```go
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleLLMDebug),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer ownedBackends.Close()
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.LLMDebug.Enabled = true
+if err := orchestration.WireOrchestratorBackends(config, ownedBackends.Backends()); err != nil {
+    log.Fatal(err)
+}
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
     AIClient:  aiClient,
+    Logger:    logger,
 }
-
-orchestrator, _ := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebug(true),  // Enable debug capture
-)
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
 ```
+
+To use another backend, assign `config.LLMDebugStore` directly before canonical
+construction. `CreateOrchestratorWithOptions(..., WithLLMDebug(true))` remains a
+compatibility path with the historical Redis bootstrap.
 
 **Agent-Side LLM Recording:**
 
@@ -2172,6 +2242,15 @@ aiClient := ai.NewInstrumentedClient(baseClient, recorder,
 ```
 
 The orchestrator propagates `X-TruvaG3-Request-ID` and `X-TruvaG3-Step-ID` headers to agents during plan execution. Agents extract these via `core.ExtractRequestContext()` in their HTTP handlers, which enables `InstrumentedAIClient` to correlate recordings back to the orchestration request.
+
+`telemetry.RedisLLMCallRecorder` is a persistence-format twin of
+`orchestration.RedisLLMDebugStore`. Both preserve exact payloads and apply the
+same atomic minimum-retention rules, so either writer can append to a shared
+request record without reducing retention already promoted by the other. Both
+also consult the same request-scoped retention-floor key, so the guarantee does
+not depend on which process writes first. Enabling either built-in writer is an
+informed opt-in: the adopter owns access control, encryption, retention, and
+any required sanitization.
 
 **LLMCallRecorderAdapter:**
 

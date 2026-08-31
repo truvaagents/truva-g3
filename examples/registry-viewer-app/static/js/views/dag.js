@@ -32,6 +32,16 @@ import {
     isPhaseClosingType,
     getPhaseNumber,
 } from '../llm-types.js';
+import {
+    assignAfterPlanningHooksToPhases,
+    executionDisplayStepNumber,
+    filterInteractionsWithRenderedParent,
+    filterRenderableEdges,
+    hasVisibleRelationOwner,
+    isPostExecutionHook,
+    isPreExecutionHook,
+    pipelineHookHasDetailedInteractions,
+} from '../utils/dag-graph.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -89,6 +99,17 @@ function escapeHtmlAttribute(value) {
     return escapeHtml(String(value ?? '')).replace(/"/g, '&quot;');
 }
 
+// The framework's phase-loop time and aggregate LLM call time overlap. The
+// viewer must never add them. Prefer the backend's elapsed-time envelope and
+// retain total_duration_ms only as a compatibility fallback for older rows.
+function primaryDurationMs(execution) {
+    return execution?.wall_clock_duration_ms || execution?.total_duration_ms || 0;
+}
+
+function jaegerTraceURL(traceID) {
+    return `/api/traces/${encodeURIComponent(traceID || '')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Hook-phase classification
 // ---------------------------------------------------------------------------
@@ -118,6 +139,76 @@ function classifyInteractions(interactions) {
         ? (i) => !i.hook_phase
         : (i) => !isPreHook(i) && !isPostHook(i);
     return { isPreHook, isPostHook, isOrchestrationCall };
+}
+
+function pipelineHookPhaseLabel(phase) {
+    const labels = {
+        before_planning: 'BeforePlanning',
+        after_planning: 'AfterPlanning',
+        after_execution: 'AfterExecution',
+        after_synthesis: 'AfterSynthesis',
+    };
+    return labels[phase] || String(phase || 'Unknown').replaceAll('_', ' ');
+}
+
+function formatPipelineHookDuration(durationUS) {
+    const microseconds = Number(durationUS) || 0;
+    if (microseconds < 1000) return `${microseconds}µs`;
+    const milliseconds = microseconds / 1000;
+    return milliseconds < 10 ? `${milliseconds.toFixed(2)}ms` : formatDuration(Math.round(milliseconds));
+}
+
+function pipelineHookNodeData(hook, id) {
+    const phase = pipelineHookPhaseLabel(hook.phase);
+    return {
+        id,
+        label: `🪝 ${phase}\n${hook.hook_name}`,
+        nodeType: 'pipeline_hook',
+        hookName: hook.hook_name || 'unknown',
+        hookPhase: hook.phase || '',
+        operationName: hook.operation_name || '',
+        hookStatus: hook.status || 'completed',
+        durationUS: hook.duration_us || 0,
+        traceID: hook.trace_id || selected?.trace_id || '',
+        spanID: hook.span_id || '',
+        startedAt: hook.started_at || '',
+    };
+}
+
+function renderPipelineHookObservations(hooks) {
+    if (!hooks?.length) return '';
+    return `
+        <section style="margin-bottom: 20px;">
+            <div style="font-size: 14px; font-weight: 600; color: #64d2ff; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                🪝 Pipeline hook executions
+                <span style="font-size: 11px; font-weight: 400; color: var(--text-muted);">${hooks.length} trace-backed invocation${hooks.length === 1 ? '' : 's'}</span>
+            </div>
+            ${hooks.map(hook => {
+                const failed = hook.status === 'failed';
+                const statusColor = failed ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `
+                    <div class="dag-step-card" style="margin-bottom: 8px; border-left: 3px solid ${statusColor};">
+                        <div class="dag-step-header">
+                            <div class="dag-step-title">
+                                <span style="font-weight: 700; color: var(--text-primary);">${escapeHtml(hook.hook_name || 'unknown hook')}</span>
+                                <span class="dag-step-id">${escapeHtml(pipelineHookPhaseLabel(hook.phase))}</span>
+                            </div>
+                            <span style="color: ${statusColor}; font-size: 11px; font-weight: 700;">${failed ? '✗ Failed' : '✓ Completed'}</span>
+                        </div>
+                        <div class="dag-step-body">
+                            <div class="dag-step-info">
+                                <span class="dag-step-label">Duration</span>
+                                <span class="dag-step-value">${formatPipelineHookDuration(hook.duration_us)}</span>
+                                <span class="dag-step-label">Evidence</span>
+                                <span class="dag-step-value" style="color: var(--accent-teal);">Jaeger pipeline span</span>
+                                <span class="dag-step-label">Operation</span>
+                                <span class="dag-step-value dag-mono">${escapeHtml(hook.operation_name || '')}</span>
+                                ${hook.span_id ? `<span class="dag-step-label">Span ID</span><span class="dag-step-value dag-mono">${escapeHtml(hook.span_id)}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('')}
+        </section>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,13 +515,11 @@ function handleDagDetailContentClick(e) {
         toggleHITLSection(hitlHeader.dataset.toggleHitl, hitlHeader.dataset.hitlSection);
         return;
     }
-    // ORCH-022 Layer 4: navigate to the completed resume sibling when the
-    // banner link is clicked. Reuses the same selection path the list click
-    // uses so load/cache behavior is identical.
-    const resumeSibling = e.target.closest('[data-resume-sibling]');
-    if (resumeSibling) {
+    // Navigate between immutable interruption and resume execution records.
+    const hitlExecution = e.target.closest('[data-hitl-execution], [data-resume-sibling]');
+    if (hitlExecution) {
         e.preventDefault();
-        const targetID = resumeSibling.dataset.resumeSibling;
+        const targetID = hitlExecution.dataset.hitlExecution || hitlExecution.dataset.resumeSibling;
         if (targetID) {
             selectExecution(targetID);
         }
@@ -839,7 +928,8 @@ function renderServerExecutionGroups(groups) {
                 (group.orphans || []).forEach(orphan => {
                     rows.push(renderGroupedExecutionRow(orphan, {
                         related: true,
-                        relationLabel: 'Related record',
+                        relationLabel: orphanRelationLabel(orphan),
+                        orphan: true,
                     }));
                 });
                 return;
@@ -865,7 +955,7 @@ function renderServerExecutionGroups(groups) {
             (group.orphans || []).forEach(orphan => {
                 rows.push(renderGroupedExecutionRow(orphan, {
                     related: true,
-                    relationLabel: 'Unattached related record',
+                    relationLabel: orphanRelationLabel(orphan),
                     orphan: true,
                 }));
             });
@@ -883,6 +973,16 @@ function renderServerExecutionGroups(groups) {
     }
 }
 
+function orphanRelationLabel(execution) {
+    if (execution?.relation_status === 'owner_unavailable') {
+        return 'Parent execution unavailable';
+    }
+    if (execution?.relation_status === 'owner_unknown') {
+        return 'Parent relationship incomplete';
+    }
+    return 'Unattached related record';
+}
+
 function renderConversationGroupHeader(group, expanded) {
     const turns = group.turns || [];
     const anchor = turns[0]?.execution || group.orphans?.[0] || {};
@@ -891,9 +991,7 @@ function renderConversationGroupHeader(group, expanded) {
         (group.orphans || []).length,
     );
     const visibleExecutions = flattenGroupedExecutions([group]);
-    const totalDuration =
-        (anchor.total_duration_ms || 0) +
-        (anchor.llm_total_duration_ms || 0);
+    const totalDuration = primaryDurationMs(anchor);
     const successful = visibleExecutions.every(item => item.success);
     const interrupted = visibleExecutions.some(item => item.interrupted);
     const statusClass = interrupted ? 'interrupted' : (successful ? 'success' : 'error');
@@ -954,18 +1052,19 @@ function renderGroupedExecutionRow(exec, options = {}) {
         llmCallCount = 0,
         historyStatus = '',
     } = options;
+    const renderRelationBranch = related && hasVisibleRelationOwner(exec, orphan);
     const isSelected = selected?.request_id === exec.request_id;
     const rowClasses = [
         isSelected ? 'selected' : '',
         conversationTurn ? 'dag-conversation-turn-row' : '',
-        related ? 'child-row dag-related-execution-row' : '',
+        renderRelationBranch ? 'child-row dag-related-execution-row' : '',
         orphan ? 'dag-orphan-execution-row' : '',
     ].filter(Boolean).join(' ');
     const requestID = exec.request_id || '';
     const originalRequestID = exec.original_request_id || requestID;
     const statusClass = exec.interrupted ? 'interrupted' : (exec.success ? 'success' : 'error');
     const statusLabel = exec.interrupted ? '⏸ Interrupted' : (exec.success ? '✓ Success' : '✗ Failed');
-    const duration = (exec.total_duration_ms || 0) + (exec.llm_total_duration_ms || 0);
+    const duration = primaryDurationMs(exec);
 
     return `
         <tr class="${rowClasses}"
@@ -976,7 +1075,7 @@ function renderGroupedExecutionRow(exec, options = {}) {
             </td>
             <td>
                 <div class="dag-execution-title-row">
-                    ${related ? '<span class="child-indicator">↳</span>' : (conversationTurn ? '<span class="dag-turn-dot" aria-hidden="true"></span>' : '')}
+                    ${renderRelationBranch ? '<span class="child-indicator">↳</span>' : (conversationTurn ? '<span class="dag-turn-dot" aria-hidden="true"></span>' : '')}
                     <div class="dag-execution-title">
                         ${relationLabel ? `<span class="dag-relation-label">${escapeHtml(relationLabel)}</span>` : ''}
                         <div class="service-name">${escapeHtml(truncateText(exec.original_request || 'Unknown request', related ? 48 : 58))}</div>
@@ -985,6 +1084,7 @@ function renderGroupedExecutionRow(exec, options = {}) {
                         ${exec.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge dag-hitl-resume">HITL Resume</span>' : ''}
                         ${llmCallCount ? `<span class="dag-row-meta">${llmCallCount} LLM call${llmCallCount === 1 ? '' : 's'}</span>` : ''}
                         ${historyStatus ? `<span class="dag-row-meta">${escapeHtml(historyStatus)}</span>` : ''}
+                        ${exec.missing_owner_id ? `<span class="dag-row-meta">Parent: ${escapeHtml(exec.missing_owner_id)}</span>` : ''}
                     </div>
                 </div>
             </td>
@@ -1022,8 +1122,8 @@ function renderLegacyExecutionList() {
                 valB = (b.original_request || '').toLowerCase();
                 break;
             case 'total_duration_ms':
-                valA = (a.total_duration_ms || 0) + (a.llm_total_duration_ms || 0);
-                valB = (b.total_duration_ms || 0) + (b.llm_total_duration_ms || 0);
+                valA = primaryDurationMs(a);
+                valB = primaryDurationMs(b);
                 break;
             case 'created_at':
             default:
@@ -1094,8 +1194,8 @@ function renderLegacyExecutionList() {
                     valB = (b.parent.original_request || '').toLowerCase();
                     break;
                 case 'total_duration_ms':
-                    valA = (a.parent.total_duration_ms || 0) + (a.parent.llm_total_duration_ms || 0);
-                    valB = (b.parent.total_duration_ms || 0) + (b.parent.llm_total_duration_ms || 0);
+                    valA = primaryDurationMs(a.parent);
+                    valB = primaryDurationMs(b.parent);
                     break;
                 case 'created_at':
                 default:
@@ -1126,8 +1226,8 @@ function renderLegacyExecutionList() {
                 valB = (b.parent.original_request || '').toLowerCase();
                 break;
             case 'total_duration_ms':
-                valA = (a.parent.total_duration_ms || 0) + (a.parent.llm_total_duration_ms || 0);
-                valB = (b.parent.total_duration_ms || 0) + (b.parent.llm_total_duration_ms || 0);
+                valA = primaryDurationMs(a.parent);
+                valB = primaryDurationMs(b.parent);
                 break;
             case 'created_at':
             default:
@@ -1179,7 +1279,7 @@ function renderLegacyExecutionList() {
             </td>
             <td>
                 <span style="font-family: 'SF Mono', monospace; font-size: 12px;">
-                    ${formatDuration((exec.total_duration_ms || 0) + (exec.llm_total_duration_ms || 0))}
+                    ${formatDuration(primaryDurationMs(exec))}
                 </span>
             </td>
             <td>
@@ -1353,7 +1453,7 @@ function renderConversationTimeline(timeline, selectedRequestID = selected?.requ
         cards.push(`
             <section class="dag-timeline-orphans">
                 <h3>Unattached related records</h3>
-                <p>These executions carry the conversation ID, but their top-level owner was not available.</p>
+                <p>These executions reference a parent that could not be attached. Each card shows whether the parent was confirmed unavailable or the lookup was incomplete.</p>
                 ${(timeline.orphans || []).map(orphan =>
                     renderTimelineRelatedExecution(orphan, selectedRequestID, true)
                 ).join('')}
@@ -1375,8 +1475,7 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
     const statusLabel = execution.interrupted
         ? '⏸ Interrupted'
         : (execution.success ? '✓ Success' : '✗ Failed');
-    const duration = (execution.total_duration_ms || 0) +
-        (execution.llm_total_duration_ms || 0);
+    const duration = primaryDurationMs(execution);
 
     return `
         <article class="dag-timeline-card ${containsSelected ? 'contains-current' : ''} ${execution.request_id === selectedRequestID ? 'current' : ''}" ${containsSelected ? 'aria-current="true"' : ''}>
@@ -1428,11 +1527,11 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
 
 function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = false) {
     const current = execution.request_id === selectedRequestID;
-    const duration = (execution.total_duration_ms || 0) +
-        (execution.llm_total_duration_ms || 0);
+    const duration = primaryDurationMs(execution);
     const relation = orphan
-        ? 'Unattached'
+        ? orphanRelationLabel(execution)
         : (execution.metadata?.resume_checkpoint_id ? 'HITL resume' : 'Delegated / related');
+    const renderRelationBranch = hasVisibleRelationOwner(execution, orphan);
     return `
         <div
             class="dag-timeline-related ${current ? 'current' : ''}"
@@ -1442,7 +1541,7 @@ function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = f
             aria-label="View DAG for ${escapeHtmlAttribute(relation.toLowerCase())} execution: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
             ${current ? 'aria-current="true"' : ''}
         >
-            <span class="dag-related-branch" aria-hidden="true">↳</span>
+            ${renderRelationBranch ? '<span class="dag-related-branch" aria-hidden="true">↳</span>' : ''}
             <div>
                 <span class="dag-relation-label">${relation}</span>
                 <div>${escapeHtml(truncateText(execution.original_request || 'Unknown request', 72))}</div>
@@ -1454,6 +1553,7 @@ function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = f
                     <span class="${execution.success ? 'dag-success-text' : 'dag-error-text'}">${execution.interrupted ? 'Interrupted' : (execution.success ? 'Success' : 'Failed')}</span>
                 </div>
                 <div class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</div>
+                ${execution.missing_owner_id ? `<div class="dag-timeline-request-id">Parent: ${escapeHtml(execution.missing_owner_id)}</div>` : ''}
             </div>
             <span class="dag-view-dag-btn" aria-hidden="true">
                 ${current ? 'Viewing DAG' : 'View DAG'}
@@ -1586,11 +1686,16 @@ function updateDetailTabs() {
         hitlTab.style.display = selected?.has_hitl_data ? 'block' : 'none';
     }
 
-    // Pre/Post tabs visible when hook interactions exist for the respective phase.
+    // LLM-debug interactions describe hook-internal operations. Jaeger-backed
+    // pipeline_hooks prove deterministic hook invocations that make no LLM
+    // call. Either source must make the respective tab visible.
     const interactions = selected?.llm_interactions || [];
+    const pipelineHooks = selected?.pipeline_hooks || [];
     const { isPreHook, isPostHook } = classifyInteractions(interactions);
-    const hasPreHooks = interactions.some(isPreHook);
-    const hasPostHooks = interactions.some(isPostHook);
+    const hasPreHooks = interactions.some(isPreHook) || pipelineHooks.some(isPreExecutionHook);
+    const hasPostHooks = interactions.some(isPostHook) ||
+        pipelineHooks.some(isPostExecutionHook) ||
+        typeof selected?.final_response === 'string';
 
     if (preTab) {
         preTab.style.display = hasPreHooks ? 'block' : 'none';
@@ -1998,17 +2103,24 @@ function renderDAGVisualization(container) {
     const stepCount = selected.plan?.steps?.length || 0;
     const hasLLM = selected.has_llm_data;
     const hasHITL = selected.has_hitl_data;
+    const hasPipelineHooks = (selected.pipeline_hooks || []).length > 0;
     const llmCallCount = selected.llm_interactions?.length || 0;
+    const hasImplicitDeps = (selected.plan?.steps || []).some(step =>
+        (step.implicit_deps || []).length > 0
+    );
 
-    // Compute total duration: executor time (tool calls) + LLM time (AI calls)
-    // These are additive because executor handles tool invocations, LLM handles AI planning/synthesis
-    const executorDurationMs = selected.total_duration_ms || 0;
+    // Elapsed time and aggregate LLM call time are separate diagnostics. LLM
+    // calls occur inside the elapsed interval, so they are not additive.
+    const totalDurationMs = primaryDurationMs(selected);
     const llmDurationMs = selected.llm_debug_summary?.total_duration_ms || 0;
-    const totalDurationMs = executorDurationMs + llmDurationMs;
 
     // Check if we can show Full Flow (has LLM or HITL data)
-    const canShowFullFlow = hasLLM || hasHITL;
+    const canShowFullFlow = hasLLM || hasHITL || hasPipelineHooks;
     const agentName = selected.agent_name || 'orchestrator';
+    // Keep one direct observability affordance without filling the header with
+    // separate processing/submission trace pills. Prefer the execution's own
+    // processing trace and use a linked trace only as a legacy fallback.
+    const traceID = selected.trace_id || selected.linked_traces?.[0]?.trace_id;
 
     container.innerHTML = `
         <div class="dag-viz-container">
@@ -2017,11 +2129,11 @@ function renderDAGVisualization(container) {
                 <div class="dag-viz-meta">
                     ${agentName !== 'orchestrator' ? `<span class="dag-viz-meta-item" style="color: var(--accent-purple);">🤖 ${escapeHtml(agentName)}</span>` : ''}
                     <span class="dag-viz-meta-item">ID: ${(selected.request_id || '').substring(0, 20)}...</span>
-                    ${selected.trace_id ? `<span class="dag-viz-meta-item">Trace: ${selected.trace_id.substring(0, 16)}...</span>` : ''}
+                    ${traceID ? `<a class="dag-viz-meta-item dag-viz-trace-link" href="${jaegerTraceURL(traceID)}" target="_blank" rel="noopener noreferrer" title="Open execution trace ${escapeHtmlAttribute(traceID)} in Jaeger">Trace</a>` : ''}
                     <span class="dag-viz-meta-item">${stepCount} step${stepCount !== 1 ? 's' : ''}</span>
-                    <span class="dag-viz-meta-item">⏱️ Total: ${formatDuration(totalDurationMs)}</span>
+                    <span class="dag-viz-meta-item" title="${escapeHtmlAttribute(selected.duration_source || 'legacy execution duration')}">⏱️ Elapsed: ${formatDuration(totalDurationMs)}</span>
                     <span class="dag-viz-meta-item ${selected.interrupted ? 'interrupted' : (selected.success ? 'success' : 'error')}">${selected.interrupted ? '⏸ Interrupted' : (selected.success ? '✓ Success' : '✗ Failed')}</span>
-                    ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls</span>` : ''}
+                    ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · aggregate ${formatDuration(llmDurationMs)}</span>` : ''}
                     ${hasHITL && !selected.interrupted ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⏸️ HITL</span>` : ''}
                     ${selected.phase_count > 1 ? `<span class="dag-viz-meta-item" style="color: var(--accent-teal);">🔄 ${selected.phase_count} Phases</span>` : ''}
                     ${selected.forced_terminal ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⚠ Forced Terminal</span>` : ''}
@@ -2047,12 +2159,6 @@ function renderDAGVisualization(container) {
                     } catch(e) { return ''; }
                 })()}
             </div>
-            ${selected.interrupted && selected.resume_sibling_request_id ? `
-            <div class="dag-resume-sibling-banner" style="margin: 8px 0 12px 0; padding: 10px 14px; background: rgba(46, 204, 113, 0.10); border: 1px solid rgba(46, 204, 113, 0.35); border-radius: 8px; font-size: 12px; color: #2ecc71; display: flex; align-items: center; gap: 8px;">
-                <span>⏩</span>
-                <span>This execution was interrupted for approval. A completed resume exists:</span>
-                <a href="#" data-resume-sibling="${escapeHtml(selected.resume_sibling_request_id)}" style="color: #2ecc71; text-decoration: underline;">${escapeHtml((selected.resume_sibling_request_id || '').substring(0, 28))}…</a>
-            </div>` : ''}
             <div id="dagContainer" class="dag-viz-canvas"></div>
             <div id="dagLegend" class="dag-viz-legend">
                 ${viewMode === 'full' ? `
@@ -2065,6 +2171,10 @@ function renderDAGVisualization(container) {
                     <span class="dag-legend-dot llm-call"></span>
                     <span>LLM Call</span>
                 </div>
+                ${hasPipelineHooks ? `<div class="dag-legend-item" title="Trace-backed deterministic pipeline hook">
+                    <span class="dag-legend-dot" style="background: #64d2ff;"></span>
+                    <span>Hook</span>
+                </div>` : ''}
                 <div class="dag-legend-item">
                     <span class="dag-legend-dot" style="background: #a064f0;"></span>
                     <span>Agent LLM</span>
@@ -2122,6 +2232,11 @@ function renderDAGVisualization(container) {
                     <span class="dag-legend-dot phase-boundary"></span>
                     <span>Phase →</span>
                 </div>` : ''}
+                ${hasImplicitDeps ? `
+                <div class="dag-legend-item" title="Shows that a step uses results from an earlier phase; this does not control execution order">
+                    <span class="dag-legend-dot implicit-dependency"></span>
+                    <span>Earlier-step results</span>
+                </div>` : ''}
                 ` : `
                 <!-- Steps Only Legend -->
                 <div class="dag-legend-item">
@@ -2168,6 +2283,11 @@ function renderDAGVisualization(container) {
                 <div class="dag-legend-item" title="Phase boundary between iterative planning phases">
                     <span class="dag-legend-dot phase-boundary"></span>
                     <span>Phase →</span>
+                </div>` : ''}
+                ${hasImplicitDeps ? `
+                <div class="dag-legend-item" title="Shows that a step uses results from an earlier phase; this does not control execution order">
+                    <span class="dag-legend-dot implicit-dependency"></span>
+                    <span>Earlier-step results</span>
                 </div>` : ''}
                 `}
             </div>
@@ -2295,6 +2415,28 @@ function computeStepLevels(steps) {
     return levels;
 }
 
+function computeExecutionStepLevels(execution) {
+    const phasePlans = execution?.phase_plans || [];
+    if (phasePlans.length <= 1) {
+        return computeStepLevels(execution?.plan?.steps || []);
+    }
+
+    const levels = [];
+    phasePlans.forEach((phase, phaseIndex) => {
+        const phaseSteps = phase.steps || [];
+        const phaseStepIDs = new Set(phaseSteps.map(step => step.step_id));
+        const scopedSteps = phaseSteps.map(step => ({
+            ...step,
+            depends_on: (step.depends_on || []).filter(dep => phaseStepIDs.has(dep)),
+        }));
+        levels.push(...computeStepLevels(scopedSteps));
+        if (phaseIndex < phasePlans.length - 1) {
+            levels.push([`phase_boundary_${phaseIndex + 1}`]);
+        }
+    });
+    return levels;
+}
+
 // Update the DAG legend with parallelism statistics
 function updateDAGLegend(depth, maxParallelism) {
     const legendContainer = document.querySelector('.dag-viz-legend');
@@ -2383,8 +2525,9 @@ function initCytoscape() {
     // Track the current step (blocked by HITL) for proper status display
     const currentStepId = selected.checkpoint?.current_step?.step_id;
 
-    // Compute levels using topological sort for parallelism info
-    const levels = computeStepLevels(selected.plan.steps);
+    // Phase boundaries serialize iterative plans. Including those boundaries
+    // prevents steps from different phases appearing at the same level.
+    const levels = computeExecutionStepLevels(selected);
     const maxParallelism = Math.max(...levels.map(l => l.length), 0);
 
     // Update legend with parallelism info (only for steps view)
@@ -2401,6 +2544,9 @@ function initCytoscape() {
         const agentName = selected.agent_name || 'orchestrator';
         const llmInteractions = selected.llm_interactions || [];
         const checkpoints = selected.hitl_checkpoints || [];
+        const traceOnlyPipelineHooks = (selected.pipeline_hooks || []).filter(hook =>
+            !pipelineHookHasDetailedInteractions(hook, llmInteractions)
+        );
 
         // 1. Orchestrator node (root)
         nodes.push({
@@ -2418,6 +2564,13 @@ function initCytoscape() {
         const phasePlans = selected.phase_plans || [];
         const llmByPhase = groupLLMCallsByPhase(llmInteractions);
         const fullFlowLevels = computeStepLevels(allPlanSteps);
+        const hookPlacementPlans = phasePlans.length > 0
+            ? phasePlans
+            : (selected.plan ? [selected.plan] : []);
+        const afterPlanningByPhase = assignAfterPlanningHooksToPhases(
+            traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_planning'),
+            hookPlacementPlans
+        );
 
         // HITL plan-approval checkpoints (before_plan_execution) are attached
         // after Phase 1 planning LLM calls.
@@ -2428,6 +2581,30 @@ function initCytoscape() {
         let previousPhaseExitNode = 'orchestrator';
         let globalLLMIndex = 0;
         let memoryLLMIndex = 0;
+        let pipelineHookIndex = 0;
+
+        const appendPipelineHookChain = (hooks, sourceNodeIDs) => {
+            const sources = Array.isArray(sourceNodeIDs) ? sourceNodeIDs : [sourceNodeIDs];
+            let previousNodeID = '';
+            hooks.forEach((hook, index) => {
+                const nodeId = `pipeline_hook_${pipelineHookIndex++}`;
+                nodes.push({ data: pipelineHookNodeData(hook, nodeId) });
+                if (index === 0) {
+                    sources.filter(Boolean).forEach(source => {
+                        edges.push({ data: { source, target: nodeId, edgeType: 'pipeline_hook' } });
+                    });
+                } else {
+                    edges.push({ data: { source: previousNodeID, target: nodeId, edgeType: 'pipeline_hook' } });
+                }
+                previousNodeID = nodeId;
+            });
+            return previousNodeID || sources[0] || '';
+        };
+
+        const beforePlanningHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'before_planning');
+        if (beforePlanningHooks.length > 0) {
+            previousPhaseExitNode = appendPipelineHookChain(beforePlanningHooks, previousPhaseExitNode);
+        }
 
         // Pre-planning conversation-history and memory-hook calls
         const compactionCalls = llmInteractions.filter(i =>
@@ -2516,6 +2693,19 @@ function initCytoscape() {
                     lastLLMNodeInPhase = nodeId;
                 });
 
+                // Trace-backed AfterPlanning hooks run after the phase plan is
+                // generated and before any approval checkpoint or step from
+                // that phase. Timestamp association avoids inventing a phase
+                // number that the current trace span schema does not carry.
+                const phaseHookIndex = phasePlans.length > 0 ? phaseIdx : 0;
+                const phaseAfterPlanningHooks = afterPlanningByPhase[phaseHookIndex] || [];
+                if (phaseAfterPlanningHooks.length > 0) {
+                    lastLLMNodeInPhase = appendPipelineHookChain(
+                        phaseAfterPlanningHooks,
+                        lastLLMNodeInPhase
+                    );
+                }
+
                 // 2b. HITL plan-approval checkpoint (Phase 1 only)
                 if (phaseIdx === 0 && planCheckpoints.length > 0) {
                     planCheckpoints.forEach((cp, idx) => {
@@ -2578,6 +2768,7 @@ function initCytoscape() {
                             parallelCount: parallelCount,
                             isParallel: parallelCount > 1,
                             dependsOn: step.depends_on || [],
+                            implicitDeps: step.implicit_deps || [],
                             hasAutoIncludes: (result?.metadata?.template_auto_includes?.length > 0),
                             trimmed: !!wasTrimmedFull
                         }
@@ -2601,6 +2792,15 @@ function initCytoscape() {
                                 }
                             });
                         }
+                    });
+                    (step.implicit_deps || []).forEach(dep => {
+                        edges.push({
+                            data: {
+                                source: dep,
+                                target: step.step_id,
+                                edgeType: 'implicit_dependency'
+                            }
+                        });
                     });
                 });
 
@@ -2653,7 +2853,11 @@ function initCytoscape() {
                 const source = idx === 0 ? previousPhaseExitNode : `llm_plan_${idx - 1}`;
                 edges.push({ data: { source, target: nodeId } });
             });
-            const lastPlanNode = planningCalls.length > 0 ? `llm_plan_${planningCalls.length - 1}` : previousPhaseExitNode;
+            let lastPlanNode = planningCalls.length > 0 ? `llm_plan_${planningCalls.length - 1}` : previousPhaseExitNode;
+            const fallbackAfterPlanningHooks = afterPlanningByPhase[0] || [];
+            if (fallbackAfterPlanningHooks.length > 0) {
+                lastPlanNode = appendPipelineHookChain(fallbackAfterPlanningHooks, lastPlanNode);
+            }
             planCheckpoints.forEach((cp, idx) => {
                 const nodeId = `checkpoint_plan_${idx}`;
                 const statusLabel = cp.status === 'approved' ? '✓' : cp.status === 'pending' ? '⏳' : '✗';
@@ -2707,6 +2911,7 @@ function initCytoscape() {
                         parallelCount: parallelCount,
                         isParallel: parallelCount > 1,
                         dependsOn: step.depends_on || [],
+                        implicitDeps: step.implicit_deps || [],
                         hasAutoIncludes: (result?.metadata?.template_auto_includes?.length > 0),
                         trimmed: !!wasTrimmedFull
                     }
@@ -2724,6 +2929,15 @@ function initCytoscape() {
                             source: dep,
                             target: step.step_id,
                             edgeType: depFailed ? 'failed' : undefined
+                        }
+                    });
+                });
+                (step.implicit_deps || []).forEach(dep => {
+                    edges.push({
+                        data: {
+                            source: dep,
+                            target: step.step_id,
+                            edgeType: 'implicit_dependency'
                         }
                     });
                 });
@@ -2795,8 +3009,11 @@ function initCytoscape() {
 
         // 4c. Step-specific LLM calls (micro_resolution and semantic_retry WITH step_id)
         // These are parameter resolution calls associated with specific execution steps
-        const stepSpecificLLMCalls = llmInteractions.filter(i =>
-            ['micro_resolution', 'semantic_retry', 'error_analysis', 'result_distillation', 'hallucination_detection'].includes(i.type) && i.step_id
+        const stepSpecificLLMCalls = filterInteractionsWithRenderedParent(
+            llmInteractions.filter(i =>
+                ['micro_resolution', 'semantic_retry', 'error_analysis', 'result_distillation', 'hallucination_detection'].includes(i.type) && i.step_id
+            ),
+            stepIds
         );
         stepSpecificLLMCalls.forEach((call, idx) => {
             const nodeId = `llm_step_${idx}`;
@@ -2895,6 +3112,19 @@ function initCytoscape() {
             return previousPhaseExitNode;
         })();
 
+        // Deterministic AfterExecution hooks do not necessarily emit an LLM
+        // interaction. Place their trace-backed nodes after the terminal step
+        // leaves and before synthesis. Hooks whose internal activity already
+        // has richer graph nodes were filtered above.
+        const afterExecutionHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_execution');
+        let afterExecutionHookExit = '';
+        if (afterExecutionHooks.length > 0) {
+            const sources = leafSteps.length > 0
+                ? leafSteps.map(step => step.step_id)
+                : [lastPlanningNodeId];
+            afterExecutionHookExit = appendPipelineHookChain(afterExecutionHooks, sources);
+        }
+
         // 5c. Post-execution memory hook LLM calls (event summarization)
         let eventSumIndex = 0;
         const eventSumCalls = llmInteractions.filter(i =>
@@ -2912,7 +3142,9 @@ function initCytoscape() {
                     })
                 });
                 if (idx === 0) {
-                    if (leafSteps.length > 0) {
+                    if (afterExecutionHookExit) {
+                        edges.push({ data: { source: afterExecutionHookExit, target: nodeId, edgeType: 'memory_llm' } });
+                    } else if (leafSteps.length > 0) {
                         leafSteps.forEach(step => {
                             const result = stepResults[step.step_id];
                             const isFailed = result && !result.success;
@@ -2960,6 +3192,8 @@ function initCytoscape() {
                     if (eventSumNodes.length > 0) {
                         // Chain from last event summarization node
                         edges.push({ data: { source: eventSumNodes[eventSumNodes.length - 1], target: nodeId } });
+                    } else if (afterExecutionHookExit) {
+                        edges.push({ data: { source: afterExecutionHookExit, target: nodeId, edgeType: 'pipeline_hook' } });
                     } else if (leafSteps.length > 0) {
                         // Connect leaf steps directly to synthesis
                         leafSteps.forEach(step => {
@@ -2995,10 +3229,22 @@ function initCytoscape() {
         //   4. Last planning node (ORCH-018 clarification short-circuit edge case
         //      where synthesis was somehow skipped — defensive)
         //   5. Orchestrator root (fully degenerate trace)
-        const responseSource = synthesisCalls.length > 0 ? `llm_synth_${synthesisCalls.length - 1}` :
+        let responseSource = synthesisCalls.length > 0 ? `llm_synth_${synthesisCalls.length - 1}` :
             (eventSumNodes.length > 0 ? eventSumNodes[eventSumNodes.length - 1] :
+            (afterExecutionHookExit ? afterExecutionHookExit :
             (leafSteps.length > 0 ? leafSteps[0].step_id :
-            (lastPlanningNodeId !== 'orchestrator' ? lastPlanningNodeId : 'orchestrator')));
+            (lastPlanningNodeId !== 'orchestrator' ? lastPlanningNodeId : 'orchestrator'))));
+
+        // AfterSynthesis hooks run after the model draft and before the
+        // terminal application response. This is the key trace-only path for
+        // deterministic response-governance hooks used by domain applications.
+        const afterSynthesisHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_synthesis');
+        if (afterSynthesisHooks.length > 0) {
+            const hookSources = synthesisCalls.length > 0 || eventSumNodes.length > 0 || afterExecutionHookExit
+                ? [responseSource]
+                : (leafSteps.length > 0 ? leafSteps.map(step => step.step_id) : [responseSource]);
+            responseSource = appendPipelineHookChain(afterSynthesisHooks, hookSources);
+        }
         const successLabel = selected.success ? '✓ Complete' : (selected.interrupted ? '⏸ Paused (HITL)' : '✗ Failed');
         nodes.push({
             data: {
@@ -3009,7 +3255,7 @@ function initCytoscape() {
                 interrupted: selected.interrupted ? 'true' : 'false'
             }
         });
-        if (synthesisCalls.length > 0 || eventSumNodes.length > 0) {
+        if (synthesisCalls.length > 0 || eventSumNodes.length > 0 || afterExecutionHookExit || afterSynthesisHooks.length > 0) {
             edges.push({ data: { source: responseSource, target: 'response' } });
         } else if (leafSteps.length > 0) {
             // No synthesis or event summarization - connect leaf steps directly to response
@@ -3098,6 +3344,7 @@ function initCytoscape() {
                     parallelCount: parallelCount,
                     isParallel: isParallel,
                     dependsOn: step.depends_on || [],
+                    implicitDeps: step.implicit_deps || [],
                     hasAutoIncludes: (result?.metadata?.template_auto_includes?.length > 0)
                 }
             };
@@ -3114,6 +3361,15 @@ function initCytoscape() {
                         source: dep,
                         target: step.step_id,
                         edgeType: depFailed ? 'failed' : undefined
+                    }
+                });
+            });
+            (step.implicit_deps || []).forEach(dep => {
+                edges.push({
+                    data: {
+                        source: dep,
+                        target: step.step_id,
+                        edgeType: 'implicit_dependency'
                     }
                 });
             });
@@ -3169,6 +3425,20 @@ function initCytoscape() {
                 });
             }
         }
+    }
+
+    // Cytoscape rejects the entire graph when even one edge references a node
+    // outside the current execution. This can happen legitimately on a HITL
+    // resume when an implicit provenance dependency points to a step stored on
+    // the interrupted parent record. Keep the current record renderable while
+    // retaining a diagnostic for malformed or cross-record edges.
+    const filteredEdges = filterRenderableEdges(nodes, edges);
+    edges = filteredEdges.renderable;
+    if (filteredEdges.omitted.length > 0) {
+        console.warn(
+            `Omitted ${filteredEdges.omitted.length} DAG edge(s) whose endpoints are not present in this execution`,
+            filteredEdges.omitted.map(edge => edge.data)
+        );
     }
 
     // Create Cytoscape instance with premium dark styling
@@ -3506,6 +3776,32 @@ function initCytoscape() {
                 }
             },
             {
+                // Trace-backed framework pipeline hook. This remains visible
+                // even when the hook is deterministic and emits no LLM record.
+                selector: 'node[nodeType="pipeline_hook"]',
+                style: {
+                    'shape': 'round-rectangle',
+                    'width': '220px',
+                    'height': '58px',
+                    'background-color': '#112c35',
+                    'border-color': '#64d2ff',
+                    'border-width': '2px',
+                    'border-style': 'dashed',
+                    'color': '#b9eaff',
+                    'font-size': '10px',
+                    'text-wrap': 'wrap',
+                    'text-max-width': '200px'
+                }
+            },
+            {
+                selector: 'node[nodeType="pipeline_hook"][hookStatus="failed"]',
+                style: {
+                    'background-color': '#3d1717',
+                    'border-color': '#ff6b6b',
+                    'color': '#ffd0d0'
+                }
+            },
+            {
                 // HITL Checkpoint - default orange diamond style (plan approval)
                 selector: 'node[nodeType="checkpoint"]',
                 style: {
@@ -3695,6 +3991,32 @@ function initCytoscape() {
                 }
             },
             {
+                // Cross-phase data provenance. This is advisory and does not
+                // express scheduler ordering inside a phase.
+                selector: 'edge[edgeType="implicit_dependency"]',
+                style: {
+                    'line-color': '#b685f4',
+                    'target-arrow-color': '#b685f4',
+                    'target-arrow-shape': 'triangle',
+                    'line-style': 'dotted',
+                    'width': 2,
+                    'opacity': 0.85,
+                    'curve-style': 'bezier'
+                }
+            },
+            {
+                selector: 'edge[edgeType="pipeline_hook"]',
+                style: {
+                    'line-color': '#64d2ff',
+                    'target-arrow-color': '#64d2ff',
+                    'target-arrow-shape': 'triangle',
+                    'line-style': 'dashed',
+                    'width': 2,
+                    'opacity': 0.8,
+                    'curve-style': 'bezier'
+                }
+            },
+            {
                 // Phase transition edge (dashed teal)
                 selector: 'edge[edgeType="phase_transition"]',
                 style: {
@@ -3743,7 +4065,7 @@ function initCytoscape() {
             return;
         }
         // Handle different node types in full flow mode
-        if (nodeType === 'orchestrator' || nodeType === 'llm_call' || nodeType === 'llm_step' || nodeType === 'agent_llm' || nodeType === 'memory_llm' || nodeType === 'checkpoint' || nodeType === 'response' || nodeType === 'phase_boundary') {
+        if (nodeType === 'orchestrator' || nodeType === 'llm_call' || nodeType === 'llm_step' || nodeType === 'agent_llm' || nodeType === 'memory_llm' || nodeType === 'pipeline_hook' || nodeType === 'checkpoint' || nodeType === 'response' || nodeType === 'phase_boundary') {
             showFullFlowNodePopup(node, nodeData);
         } else {
             // Step node - use existing logic
@@ -4008,6 +4330,32 @@ function showFullFlowNodePopup(node, nodeData) {
             `;
             break;
         }
+        case 'pipeline_hook': {
+            const hookFailed = nodeData.hookStatus === 'failed';
+            const hookTraceID = nodeData.traceID || selected?.trace_id || '';
+            title = `🪝 ${pipelineHookPhaseLabel(nodeData.hookPhase)}`;
+            color = hookFailed ? 'var(--accent-red)' : '#64d2ff';
+            content = `
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Hook</div>
+                    <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(nodeData.hookName || 'unknown')}</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Status</div>
+                    <div style="font-weight: 600; color: ${hookFailed ? 'var(--accent-red)' : 'var(--accent-green)'};">${hookFailed ? 'FAILED' : 'COMPLETED'}</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Duration</div>
+                    <div>${formatPipelineHookDuration(nodeData.durationUS)}</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Trace evidence</div>
+                    <div style="font-family: 'SF Mono', monospace; font-size: 11px; overflow-wrap: anywhere;">${escapeHtml(nodeData.operationName || '')}</div>
+                    ${nodeData.spanID ? `<div style="font-family: 'SF Mono', monospace; font-size: 10px; color: var(--text-muted); margin-top: 4px;">Span ${escapeHtml(nodeData.spanID)}</div>` : ''}
+                    ${hookTraceID ? `<a href="${jaegerTraceURL(hookTraceID)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; margin-top: 7px; color: #9bdcff;">Open trace ↗</a>` : ''}
+                </div>`;
+            break;
+        }
         case 'llm_step':
             // Step-specific LLM call attached to a parent step
             const stepLlmType = nodeData.llmType || 'unknown';
@@ -4237,15 +4585,14 @@ function showFullFlowNodePopup(node, nodeData) {
             color = 'var(--accent-teal)';
             const success = nodeData.success;
             const resultColor = success ? 'var(--accent-green)' : 'var(--accent-red)';
-            // Compute total duration: executor time + LLM time
-            const responseTotalDuration = (selected.total_duration_ms || 0) + (selected.llm_debug_summary?.total_duration_ms || 0);
+            const responseTotalDuration = primaryDurationMs(selected);
             content = `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Status</div>
                     <div style="color: ${resultColor}; font-weight: 600;">${success ? 'SUCCESS' : 'FAILED'}</div>
                 </div>
                 <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Total Duration</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">Elapsed Duration</div>
                     <div>${formatDuration(responseTotalDuration)}</div>
                 </div>
             `;
@@ -4262,6 +4609,7 @@ function showFullFlowNodePopup(node, nodeData) {
             const stepLevel = nodeData.level || 1;
             const stepParallel = nodeData.parallelCount || 1;
             const stepDeps = nodeData.dependsOn || [];
+            const stepImplicitDeps = nodeData.implicitDeps || [];
             content = `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Status</div>
@@ -4284,7 +4632,13 @@ function showFullFlowNodePopup(node, nodeData) {
                 ${stepDeps.length > 0 ? `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Depends On</div>
-                    <div style="font-family: 'SF Mono', monospace; font-size: 10px;">${stepDeps.join(', ')}</div>
+                    <div style="font-family: 'SF Mono', monospace; font-size: 10px;">${stepDeps.map(escapeHtml).join(', ')}</div>
+                </div>` : ''}
+                ${stepImplicitDeps.length > 0 ? `
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Prior-phase Data</div>
+                    <div style="font-family: 'SF Mono', monospace; font-size: 10px; color: #b685f4;">${stepImplicitDeps.map(escapeHtml).join(', ')}</div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Provenance only; this does not schedule the step.</div>
                 </div>` : ''}
                 ${nodeData.instruction ? `
                 <div style="margin-top: 10px;">
@@ -4390,6 +4744,11 @@ function showNodePopup(node, step, result) {
     const parallelCount = nodeData.parallelCount || 1;
     const isParallel = nodeData.isParallel || false;
     const dependsOn = nodeData.dependsOn || step.depends_on || [];
+    const implicitDeps = nodeData.implicitDeps || step.implicit_deps || [];
+    const stepIndex = (selected.plan?.steps || []).findIndex(candidate =>
+        candidate.step_id === step.step_id
+    );
+    const displayStepNumber = executionDisplayStepNumber(stepIndex, selected);
     // Get capability from metadata (where orchestration stores it)
     const capability = step.metadata?.capability || result?.metadata?.capability || step.capability || step.agent_name || '';
 
@@ -4429,9 +4788,10 @@ function showNodePopup(node, step, result) {
 
         <!-- Execution Flow Info -->
         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;">
-            <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: rgba(10, 132, 255, 0.15); color: var(--accent-blue); font-family: 'SF Mono', 'Monaco', monospace;">
-                ${step.step_id}
-            </span>
+            ${displayStepNumber !== null ? `
+            <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; font-weight: 700; background: rgba(50, 215, 75, 0.15); color: var(--accent-green);">
+                Step ${displayStepNumber}
+            </span>` : ''}
             <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: rgba(100, 210, 255, 0.15); color: var(--accent-teal);">
                 Level ${level}
             </span>
@@ -4453,12 +4813,25 @@ function showNodePopup(node, step, result) {
                     ○ Root step
                 </span>
             `}
+            ${implicitDeps.length > 0 ? `
+                <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: rgba(182, 133, 244, 0.12); color: #b685f4;">
+                    ⇠ ${implicitDeps.length} prior-phase data
+                </span>
+            ` : ''}
         </div>
 
         ${dependsOn.length > 0 ? `
             <div style="margin-bottom: 12px; padding: 8px 10px; background: rgba(0,0,0,0.2); border-radius: 8px; font-size: 11px;">
                 <span style="color: var(--text-muted);">Depends on:</span>
                 <span style="color: var(--text-secondary); margin-left: 6px;">${dependsOn.join(', ')}</span>
+            </div>
+        ` : ''}
+
+        ${implicitDeps.length > 0 ? `
+            <div style="margin-bottom: 12px; padding: 8px 10px; background: rgba(182, 133, 244, 0.08); border-left: 2px dotted #b685f4; border-radius: 8px; font-size: 11px;">
+                <span style="color: #b685f4; font-weight: 600;">Uses results from earlier steps:</span>
+                <span style="color: var(--text-secondary); margin-left: 6px;">${implicitDeps.join(', ')}</span>
+                <div style="color: var(--text-muted); margin-top: 4px;">Data lineage only; this does not control execution order.</div>
             </div>
         ` : ''}
 
@@ -4471,9 +4844,9 @@ function showNodePopup(node, step, result) {
                 <span>${formatDuration(result.duration_ms || (result.duration ? Math.round(result.duration / 1000000) : 0))}</span>
                 <span>${result.attempts || 1} attempt${(result.attempts || 1) > 1 ? 's' : ''}</span>
             </div>
-            ${result.error ? `
+            ${result.error && !result.success ? `
                 <div style="margin-top: 10px; padding: 10px 12px; background: rgba(255, 107, 107, 0.1); border-radius: 8px; border: 1px solid rgba(255, 107, 107, 0.2); color: var(--accent-red); font-size: 11px;">
-                    ${result.error}
+                    ${escapeHtml(result.error)}
                 </div>
             ` : ''}
         ` : '<div style="color: var(--text-muted); font-style: italic;">Not executed yet</div>'}
@@ -4889,8 +5262,9 @@ function renderStepDetails(container) {
                 const capability = step.metadata?.capability || result?.metadata?.capability || result?.capability || step.capability || step.capability_name || step.agent_name || 'N/A';
                 const agentName = step.agent_name || result?.agent_name || 'N/A';
                 const dependsOn = step.depends_on || [];
+                const implicitDeps = step.implicit_deps || [];
                 const usedBy = usedByMap[step.step_id] || [];
-                const hasDependencies = dependsOn.length > 0 || usedBy.length > 0;
+                const hasDependencies = dependsOn.length > 0 || implicitDeps.length > 0 || usedBy.length > 0;
 
                 // Timing data from orchestration/interfaces.go StepResult
                 const durationMs = getDurationMs(result);
@@ -4909,7 +5283,7 @@ function renderStepDetails(container) {
                     <div class="dag-step-card ${status}">
                         <div class="dag-step-header">
                             <div class="dag-step-title">
-                                <span class="dag-step-number" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">Step ${parseInt(step.step_id.replace(/\D/g, '')) || (idx + 1)}</span>
+                                <span class="dag-step-number" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">Step ${executionDisplayStepNumber(idx, selected)}</span>
                                 <span class="dag-step-id">${step.step_id}</span>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
@@ -4947,6 +5321,14 @@ function renderStepDetails(container) {
                                             <span class="dag-step-depends-label">⬅ Waits for:</span>
                                             <div class="dag-step-depends-list">
                                                 ${dependsOn.map(dep => `<span class="dag-step-depends-item">${dep}</span>`).join('')}
+                                            </div>
+                                        </div>
+                                    ` : ''}
+                                    ${implicitDeps.length > 0 ? `
+                                        <div class="dag-step-depends-row">
+                                            <span class="dag-step-depends-label" style="color: #b685f4;">⇠ Uses earlier results:</span>
+                                            <div class="dag-step-depends-list">
+                                                ${implicitDeps.map(dep => `<span class="dag-step-depends-item" title="Data lineage only; this does not control execution order">${dep}</span>`).join('')}
                                             </div>
                                         </div>
                                     ` : ''}
@@ -5010,9 +5392,9 @@ function renderStepDetails(container) {
                                     `).join('')}
                                 </div>
                             ` : ''}
-                            ${result?.error ? `
+                            ${result?.error && !result?.success ? `
                                 <div class="dag-step-error">
-                                    <strong>Error:</strong> ${result.error}
+                                    <strong>Error:</strong> ${escapeHtml(result.error)}
                                 </div>
                             ` : ''}
                             ${result?.response ? `
@@ -5086,15 +5468,16 @@ function toggleLLMInteraction(idx, type) {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-Execution tab — BeforePlanning hook steps
+// Pre-Execution tab — BeforePlanning / AfterPlanning hooks and their activity
 // ---------------------------------------------------------------------------
 
 function renderPreExecution(container) {
     const interactions = selected?.llm_interactions || [];
     const { isPreHook } = classifyInteractions(interactions);
     const preSteps = interactions.filter(isPreHook);
+    const pipelineHooks = (selected?.pipeline_hooks || []).filter(isPreExecutionHook);
 
-    if (preSteps.length === 0) {
+    if (preSteps.length === 0 && pipelineHooks.length === 0) {
         container.innerHTML = `
             <div class="empty-detail">
                 <div class="empty-detail-icon">🔄</div>
@@ -5121,8 +5504,9 @@ function renderPreExecution(container) {
 
     let html = `<div style="overflow-y: auto; height: 100%; padding: 16px;">`;
     html += `<div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
-        ${preSteps.length} steps | ${formatDuration(totalDuration)} total | Runs before planning
+        ${pipelineHooks.length} hook invocation${pipelineHooks.length === 1 ? '' : 's'} | ${preSteps.length} recorded operation${preSteps.length === 1 ? '' : 's'} | ${formatDuration(totalDuration)} aggregate operation time | Runs before step execution
     </div>`;
+    html += renderPipelineHookObservations(pipelineHooks);
 
     // User memory enrichment section
     if (userMemorySteps.length > 0) {
@@ -5198,15 +5582,17 @@ function renderPreExecution(container) {
 }
 
 // ---------------------------------------------------------------------------
-// Post-Execution tab — AfterSynthesis hook steps
+// Post-Execution tab — AfterExecution / AfterSynthesis hooks and their activity
 // ---------------------------------------------------------------------------
 
 function renderPostExecution(container) {
     const interactions = selected?.llm_interactions || [];
     const { isPostHook } = classifyInteractions(interactions);
     const postSteps = interactions.filter(isPostHook);
+    const pipelineHooks = (selected?.pipeline_hooks || []).filter(isPostExecutionHook);
+    const governedResponsePanel = renderGovernedResponsePanel(interactions);
 
-    if (postSteps.length === 0) {
+    if (postSteps.length === 0 && pipelineHooks.length === 0 && !governedResponsePanel) {
         container.innerHTML = `
             <div class="empty-detail">
                 <div class="empty-detail-icon">🔄</div>
@@ -5228,8 +5614,10 @@ function renderPostExecution(container) {
 
     let html = `<div style="overflow-y: auto; height: 100%; padding: 16px;">`;
     html += `<div style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);">
-        ${postSteps.length} steps | ${formatDuration(totalDuration)} total | ${llmCount} LLM calls | Runs after synthesis
+        ${pipelineHooks.length} hook invocation${pipelineHooks.length === 1 ? '' : 's'} | ${postSteps.length} recorded operation${postSteps.length === 1 ? '' : 's'} | ${llmCount} LLM call${llmCount === 1 ? '' : 's'} | ${formatDuration(totalDuration)} aggregate operation time
     </div>`;
+    html += renderPipelineHookObservations(pipelineHooks);
+    html += governedResponsePanel;
 
     // User memory extraction section
     if (userMemorySteps.length > 0) {
@@ -5343,7 +5731,13 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
     const config = getLLMCardConfig(interaction.type);
     const _r = config.rgb;
     const category = interaction.category || 'llm';
-    const typeLabel = config.label || interaction.type || 'Unknown';
+    const isStreamingSynthesis = interaction.type === 'synthesis_streaming';
+    const isSynthesis = interaction.type === 'synthesis' || isStreamingSynthesis;
+    const typeLabel = isStreamingSynthesis
+        ? 'LLM synthesis output streamed to client'
+        : interaction.type === 'synthesis'
+            ? 'Pre-hook LLM synthesis output'
+        : (config.label || interaction.type || 'Unknown');
     const shownNum = displayNum != null ? displayNum : (idx + 1);
     // Prefer the globally-annotated label (stamped by annotateCallLabels)
     // so popup and card suffixes always match. Falls back to the base
@@ -5455,7 +5849,7 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
                 ${promptSections}
                 <div class="dag-step-response" style="background: rgba(0, 0, 0, 0.15); border-radius: 12px; margin-top: 8px; overflow: hidden;">
                     <div class="dag-step-response-header" data-toggle-llm="${idx}" data-llm-type="response" style="background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
-                        <span><span class="expand-arrow" id="llm-response-arrow-${idx}">▶</span> View Response</span>
+                        <span><span class="expand-arrow" id="llm-response-arrow-${idx}">▶</span> ${isStreamingSynthesis ? 'View Streamed Output' : isSynthesis ? 'View Pre-hook Output' : 'View Response'}</span>
                         <span style="display: flex; align-items: center; gap: 8px;">
                             <button class="copy-inline-btn" data-copy-llm="${idx}" data-copy-type="response">Copy</button>
                             <span style="color: var(--text-muted); font-size: 10px;">${(interaction.completion_tokens || 0).toLocaleString()} tokens</span>
@@ -5469,12 +5863,45 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
     `;
 }
 
+function renderGovernedResponsePanel(interactions) {
+    const synthesisOutputs = (interactions || []).filter(interaction =>
+        interaction.type === 'synthesis' || interaction.type === 'synthesis_streaming'
+    );
+    const latestSynthesis = synthesisOutputs.at(-1);
+    const latestOutput = latestSynthesis?.response || '';
+    const isStreamingSynthesis = latestSynthesis?.type === 'synthesis_streaming';
+    const governedResponse = selected?.final_response;
+    if (typeof governedResponse !== 'string') {
+        return '';
+    }
+    const governedDiffers = governedResponse !== latestOutput;
+    return `
+        <div class="dag-step-card" style="margin-bottom: 20px; background: linear-gradient(135deg, rgba(50, 215, 75, 0.16), rgba(182, 133, 244, 0.08)); border: 2px solid rgba(50, 215, 75, 0.45);">
+            <div class="dag-step-header">
+                <div class="dag-step-title">
+                    <span style="font-size: 15px; font-weight: 700; color: var(--accent-green);">✓ Post-hook application response</span>
+                    <span class="dag-step-id">${escapeHtml((selected.final_response_source || 'post-hook application output').replaceAll('_', ' '))}</span>
+                </div>
+            </div>
+            <div class="dag-step-body">
+                <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px;">
+                    This terminal response was captured after application AfterSynthesis hooks.${isStreamingSynthesis ? ' The streaming synthesis card below also preserves the output already emitted to the client.' : ' The synthesis card below preserves the model output from before those hooks.'}
+                </div>
+                ${governedDiffers ? `<div style="margin-bottom: 10px; color: var(--accent-orange); font-size: 11px; font-weight: 600;">${isStreamingSynthesis ? 'The stored post-hook response differs from the output streamed to the client.' : 'The application changed the pre-hook synthesis output.'}</div>` : ''}
+                <pre style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; padding: 12px; background: rgba(0,0,0,0.24); border-radius: 8px; color: var(--text-primary);">${escapeHtml(governedResponse)}</pre>
+            </div>
+        </div>`;
+}
+
 function renderLLMCalls(container) {
-    if (!selected?.llm_interactions?.length) {
+    const allInteractions = selected?.llm_interactions || [];
+    if (allInteractions.length === 0) {
         container.innerHTML = `
-            <div class="empty-detail">
-                <div class="empty-detail-icon">🤖</div>
-                <div>No LLM calls recorded for this execution</div>
+            <div style="overflow-y: auto; height: 100%; padding: 16px;">
+                <div class="empty-detail">
+                    <div class="empty-detail-icon">🤖</div>
+                    <div>No LLM calls recorded for this execution</div>
+                </div>
             </div>`;
         return;
     }
@@ -5483,14 +5910,16 @@ function renderLLMCalls(container) {
     // tiered selection, etc.). Hook interactions route to the Pre-Execution /
     // Post-Execution tabs. classifyInteractions handles both new agents
     // (hook_phase-aware) and legacy agents (type-string fallback) uniformly.
-    const { isOrchestrationCall } = classifyInteractions(selected.llm_interactions);
-    const interactions = selected.llm_interactions.filter(isOrchestrationCall);
+    const { isOrchestrationCall } = classifyInteractions(allInteractions);
+    const interactions = allInteractions.filter(isOrchestrationCall);
 
     if (interactions.length === 0) {
         container.innerHTML = `
-            <div class="empty-detail">
-                <div class="empty-detail-icon">🤖</div>
-                <div>No orchestration LLM calls for this execution<br><span style="font-size: 12px; color: var(--text-muted);">Hook calls are shown in the Pre-Execution and Post-Execution tabs</span></div>
+            <div style="overflow-y: auto; height: 100%; padding: 16px;">
+                <div class="empty-detail">
+                    <div class="empty-detail-icon">🤖</div>
+                    <div>No orchestration LLM calls for this execution<br><span style="font-size: 12px; color: var(--text-muted);">Hook calls are shown in the Pre-Execution and Post-Execution tabs</span></div>
+                </div>
             </div>`;
         return;
     }
@@ -5531,14 +5960,14 @@ function renderLLMCalls(container) {
                         <span class="dag-step-value" style="color: var(--accent-teal);">${orchTotalTokensIn.toLocaleString()}</span>
                         <span class="dag-step-label">Output Tokens</span>
                         <span class="dag-step-value" style="color: var(--accent-purple);">${orchTotalTokensOut.toLocaleString()}</span>
-                        <span class="dag-step-label">Total Duration</span>
+                        <span class="dag-step-label">Aggregate Call Time</span>
                         <span class="dag-step-value">${formatDuration(orchTotalDurationMs)}</span>
                     </div>
                     ${providerEntries.length > 0 ? `
                         <div style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap;">
                             ${providerEntries.map(([provider, count]) => `
                                 <span style="padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600; background: linear-gradient(135deg, rgba(10, 132, 255, 0.25), rgba(10, 132, 255, 0.1)); border: 1px solid rgba(10, 132, 255, 0.3); color: var(--accent-blue);">
-                                    ${provider}: ${count} call${count > 1 ? 's' : ''}
+                                    ${escapeHtml(provider)}: ${count} call${count > 1 ? 's' : ''}
                                 </span>
                             `).join('')}
                         </div>
@@ -5686,7 +6115,8 @@ function toggleHITLSection(checkpointId, section) {
 }
 
 function renderHITLCheckpoints(container) {
-    if (!selected?.hitl_checkpoints?.length) {
+    const lifecycle = selected?.hitl_lifecycle;
+    if (!lifecycle && !selected?.hitl_checkpoints?.length) {
         container.innerHTML = `
             <div class="empty-detail">
                 <div class="empty-detail-icon">🛑</div>
@@ -5695,41 +6125,83 @@ function renderHITLCheckpoints(container) {
         return;
     }
 
-    const checkpoints = selected.hitl_checkpoints;
+    const checkpoints = selected.hitl_checkpoints || [];
+    const lifecyclePanel = lifecycle ? `
+        <div class="dag-step-card" style="border-color: rgba(182, 133, 244, 0.45); margin-bottom: 16px;">
+            <div class="dag-step-header">
+                <div class="dag-step-title">
+                    <span class="dag-step-number" style="color: #b685f4;">Lifecycle</span>
+                    <span class="dag-step-id">${lifecycle.is_resume ? 'Resume execution' : 'Interruption execution'}</span>
+                </div>
+            </div>
+            <div class="dag-step-body">
+                <div class="dag-step-info">
+                    <span class="dag-step-label">Checkpoint ID</span>
+                    <span class="dag-step-value dag-mono">${escapeHtml(lifecycle.checkpoint_id || 'Unavailable')}</span>
+                    <span class="dag-step-label">Initial request</span>
+                    <span class="dag-step-value dag-mono">${escapeHtml(lifecycle.initial_request_id || 'Unavailable')}</span>
+                    ${lifecycle.snapshot_status ? `<span class="dag-step-label">Stored snapshot</span><span class="dag-step-value">${escapeHtml(lifecycle.snapshot_status)}</span>` : ''}
+                    <span class="dag-step-label">Current status</span>
+                    <span class="dag-step-value" style="color: #b685f4;">${escapeHtml(lifecycle.current_status || 'Unavailable')}</span>
+                    ${lifecycle.current_status_source ? `<span class="dag-step-label">Status source</span><span class="dag-step-value">${escapeHtml(lifecycle.current_status_source.replaceAll('_', ' '))}</span>` : ''}
+                </div>
+                ${lifecycle.snapshot_status && lifecycle.current_status && lifecycle.snapshot_status !== lifecycle.current_status ? `
+                    <div style="margin-top: 12px; padding: 10px 12px; background: rgba(182, 133, 244, 0.08); border-left: 3px solid #b685f4; border-radius: 6px;">
+                        The stored interruption remains <strong>${escapeHtml(lifecycle.snapshot_status)}</strong> as historical evidence. The live checkpoint is now <strong>${escapeHtml(lifecycle.current_status)}</strong>.
+                    </div>
+                ` : ''}
+                ${(lifecycle.related_executions || []).length ? `
+                    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                        ${(lifecycle.related_executions || []).map(link => `<a href="#" data-hitl-execution="${escapeHtmlAttribute(link.request_id)}" class="dag-viz-meta-item" style="color: #b685f4;">Open ${escapeHtml(link.role)} execution ↗</a>`).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        </div>` : '';
 
     container.innerHTML = `
         <div style="overflow-y: auto; height: 100%; padding: 16px;">
-            ${checkpoints.map((checkpoint, idx) => {
+            ${lifecyclePanel}
+            ${checkpoints.length === 0 ? '<div class="empty-detail">The lifecycle is known, but the current checkpoint payload is unavailable.</div>' : checkpoints.map((checkpoint, idx) => {
+                const normalizedStatus = String(checkpoint.status || 'unknown').toLowerCase();
                 const statusColors = {
                     'pending': 'rgba(255, 179, 64, 0.2)',
                     'approved': 'rgba(50, 215, 75, 0.2)',
+                    'completed': 'rgba(50, 215, 75, 0.2)',
                     'rejected': 'rgba(255, 107, 107, 0.2)',
+                    'aborted': 'rgba(255, 107, 107, 0.2)',
                     'expired': 'rgba(128, 128, 128, 0.2)'
                 };
-                const bgColor = statusColors[checkpoint.status] || 'rgba(255, 255, 255, 0.08)';
+                const bgColor = statusColors[normalizedStatus] || 'rgba(255, 255, 255, 0.08)';
+                const successfulStatus = normalizedStatus === 'approved' || normalizedStatus === 'completed';
+                const failedStatus = normalizedStatus === 'rejected' || normalizedStatus === 'aborted';
+                const statusClass = successfulStatus ? 'completed' : failedStatus ? 'failed' : 'pending';
+                const statusIcon = successfulStatus ? '✓' : failedStatus ? '✗' : normalizedStatus === 'expired' ? '⊘' : '◐';
+                const statusLabel = normalizedStatus === 'unknown'
+                    ? 'Unknown'
+                    : normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
+                const checkpointID = String(checkpoint.checkpoint_id || `checkpoint-${idx + 1}`);
+                const checkpointIDAttr = escapeHtmlAttribute(checkpointID);
 
                 return `
                     <div class="dag-step-card" style="background: linear-gradient(135deg, ${bgColor} 0%, rgba(255, 255, 255, 0.02) 100%);">
                         <div class="dag-step-header">
                             <div class="dag-step-title">
                                 <span class="dag-step-number">#${idx + 1}</span>
-                                <span class="dag-step-id">${checkpoint.interrupt_point || 'Checkpoint'}</span>
+                                <span class="dag-step-id">${escapeHtml(checkpoint.interrupt_point || 'Checkpoint')}</span>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
-                                <span class="dag-step-status ${checkpoint.status === 'approved' ? 'completed' : checkpoint.status === 'rejected' ? 'failed' : 'pending'}">
-                                    ${checkpoint.status === 'approved' ? '✓ Approved' :
-                                      checkpoint.status === 'rejected' ? '✗ Rejected' :
-                                      checkpoint.status === 'expired' ? '⊘ Expired' : '◐ Pending'}
+                                <span class="dag-step-status ${statusClass}">
+                                    ${statusIcon} ${escapeHtml(statusLabel)}
                                 </span>
                             </div>
                         </div>
                         <div class="dag-step-body">
                             <div class="dag-step-info">
                                 <span class="dag-step-label">Checkpoint ID</span>
-                                <span class="dag-step-value" style="font-family: 'SF Mono', monospace; font-size: 11px;">${checkpoint.checkpoint_id}</span>
+                                <span class="dag-step-value" style="font-family: 'SF Mono', monospace; font-size: 11px;">${escapeHtml(checkpointID)}</span>
                                 ${checkpoint.agent_name ? `
                                     <span class="dag-step-label">Agent</span>
-                                    <span class="dag-step-value highlight">${checkpoint.agent_name}</span>
+                                    <span class="dag-step-value highlight">${escapeHtml(checkpoint.agent_name)}</span>
                                 ` : ''}
                                 <span class="dag-step-label">Created</span>
                                 <span class="dag-step-value">${new Date(checkpoint.created_at).toLocaleString()}</span>
@@ -5737,47 +6209,47 @@ function renderHITLCheckpoints(container) {
                                 <span class="dag-step-value">${new Date(checkpoint.expires_at).toLocaleString()}</span>
                             </div>
                             ${checkpoint.decision ? `
-                                <div style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
-                                    <div style="font-weight: 500; margin-bottom: 8px; color: var(--text-primary);">Decision Context</div>
-                                    <div class="dag-step-info">
+                                <div class="hitl-context-panel hitl-context-panel-decision">
+                                    <div class="hitl-context-title">Decision Context</div>
+                                    <div class="dag-step-info hitl-context-grid">
                                         <span class="dag-step-label">Reason</span>
-                                        <span class="dag-step-value">${checkpoint.decision.reason || 'N/A'}</span>
+                                        <span class="dag-step-value">${escapeHtml(checkpoint.decision.reason || 'N/A')}</span>
                                         <span class="dag-step-label">Priority</span>
-                                        <span class="dag-step-value">${checkpoint.decision.priority || 'N/A'}</span>
+                                        <span class="dag-step-value">${escapeHtml(checkpoint.decision.priority || 'N/A')}</span>
                                         ${checkpoint.decision.message ? `
                                             <span class="dag-step-label">Message</span>
-                                            <span class="dag-step-value" style="grid-column: span 3;">${checkpoint.decision.message}</span>
+                                            <span class="dag-step-value">${escapeHtml(checkpoint.decision.message)}</span>
                                         ` : ''}
                                     </div>
                                 </div>
                             ` : ''}
                             ${checkpoint.current_step ? `
-                                <div style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
-                                    <div style="font-weight: 500; margin-bottom: 8px; color: var(--text-primary);">Current Step</div>
-                                    <div class="dag-step-info">
+                                <div class="hitl-context-panel hitl-context-panel-step">
+                                    <div class="hitl-context-title">Current Step</div>
+                                    <div class="dag-step-info hitl-context-grid">
                                         <span class="dag-step-label">Step ID</span>
-                                        <span class="dag-step-value">${checkpoint.current_step.step_id || 'N/A'}</span>
+                                        <span class="dag-step-value">${escapeHtml(checkpoint.current_step.step_id || 'N/A')}</span>
                                         <span class="dag-step-label">Capability</span>
-                                        <span class="dag-step-value highlight">${checkpoint.current_step.capability || 'N/A'}</span>
+                                        <span class="dag-step-value highlight">${escapeHtml(checkpoint.current_step.capability || 'N/A')}</span>
                                     </div>
                                 </div>
                             ` : ''}
                             ${checkpoint.resolved_parameters ? `
                                 <div class="dag-step-response">
-                                    <div class="dag-step-response-header" data-toggle-hitl="${checkpoint.checkpoint_id}" data-hitl-section="params">
-                                        <span><span class="expand-arrow" id="hitl-params-arrow-${checkpoint.checkpoint_id}">▶</span> Resolved Parameters</span>
+                                    <div class="dag-step-response-header" data-toggle-hitl="${checkpointIDAttr}" data-hitl-section="params">
+                                        <span><span class="expand-arrow" id="hitl-params-arrow-${checkpointIDAttr}">▶</span> Resolved Parameters</span>
                                     </div>
-                                    <div id="hitl-params-${checkpoint.checkpoint_id}" class="dag-step-response-content" style="display: none;">
+                                    <div id="hitl-params-${checkpointIDAttr}" class="dag-step-response-content" style="display: none;">
                                         ${formatResponseJson(checkpoint.resolved_parameters)}
                                     </div>
                                 </div>
                             ` : ''}
                             ${checkpoint.plan ? `
                                 <div class="dag-step-response">
-                                    <div class="dag-step-response-header" data-toggle-hitl="${checkpoint.checkpoint_id}" data-hitl-section="plan">
-                                        <span><span class="expand-arrow" id="hitl-plan-arrow-${checkpoint.checkpoint_id}">▶</span> Execution Plan (${checkpoint.plan.steps?.length || 0} steps)</span>
+                                    <div class="dag-step-response-header" data-toggle-hitl="${checkpointIDAttr}" data-hitl-section="plan">
+                                        <span><span class="expand-arrow" id="hitl-plan-arrow-${checkpointIDAttr}">▶</span> Execution Plan (${checkpoint.plan.steps?.length || 0} steps)</span>
                                     </div>
-                                    <div id="hitl-plan-${checkpoint.checkpoint_id}" class="dag-step-response-content" style="display: none;">
+                                    <div id="hitl-plan-${checkpointIDAttr}" class="dag-step-response-content" style="display: none;">
                                         ${formatResponseJson(checkpoint.plan)}
                                     </div>
                                 </div>

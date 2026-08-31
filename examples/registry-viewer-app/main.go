@@ -194,6 +194,7 @@ type RoutingStep struct {
 	Instruction    string                 `json:"instruction,omitempty"`
 	Parameters     map[string]interface{} `json:"parameters,omitempty"`
 	DependsOn      []string               `json:"depends_on,omitempty"`
+	ImplicitDeps   []string               `json:"implicit_deps,omitempty"`
 	Description    string                 `json:"description,omitempty"`
 	ExpectedOutput string                 `json:"expected_output,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
@@ -265,7 +266,10 @@ const (
 	viewerGlobalExecutionScanLimit      = 5000
 	viewerDistinctConversationLimit     = 500
 	viewerExecutionHydrationLimit       = 10000
+	viewerExactOwnerHydrationLimit      = 1000
 	viewerConversationMemberReadLimit   = 1000
+	viewerStaleIndexMaintenanceBatch    = 200
+	viewerStaleIndexMaintenanceInterval = 30 * time.Second
 	viewerLLMEnrichmentExecutionLimit   = 200
 	viewerLLMInteractionLimit           = 100
 	viewerLLMInteractionBytesLimit      = 4 * 1024 * 1024
@@ -274,18 +278,20 @@ const (
 
 // StoredExecution contains everything needed for DAG visualization
 type StoredExecution struct {
-	RequestID         string                             `json:"request_id"`
-	OriginalRequestID string                             `json:"original_request_id,omitempty"`
-	TraceID           string                             `json:"trace_id"`
-	AgentName         string                             `json:"agent_name,omitempty"`
-	OriginalRequest   string                             `json:"original_request"`
-	Plan              *RoutingPlan                       `json:"plan"`
-	Result            *ExecutionResult                   `json:"result"`
-	Interrupted       bool                               `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint        *HITLCheckpoint                    `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
-	CreatedAt         time.Time                          `json:"created_at"`
-	Metadata          map[string]string                  `json:"metadata,omitempty"`
-	Skills            *orchestration.SkillExecutionDebug `json:"skills,omitempty"`
+	RequestID           string                             `json:"request_id"`
+	OriginalRequestID   string                             `json:"original_request_id,omitempty"`
+	TraceID             string                             `json:"trace_id"`
+	AgentName           string                             `json:"agent_name,omitempty"`
+	OriginalRequest     string                             `json:"original_request"`
+	Plan                *RoutingPlan                       `json:"plan"`
+	Result              *ExecutionResult                   `json:"result"`
+	Interrupted         bool                               `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint          *HITLCheckpoint                    `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
+	CreatedAt           time.Time                          `json:"created_at"`
+	Metadata            map[string]string                  `json:"metadata,omitempty"`
+	Skills              *orchestration.SkillExecutionDebug `json:"skills,omitempty"`
+	FinalResponse       *string                            `json:"final_response,omitempty"`
+	FinalResponseSource string                             `json:"final_response_source,omitempty"`
 
 	// Multi-phase execution data
 	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
@@ -304,20 +310,30 @@ type ExecutionResult struct {
 
 // ExecutionSummary is a lightweight version for listing
 type ExecutionSummary struct {
-	RequestID          string            `json:"request_id"`
-	OriginalRequestID  string            `json:"original_request_id,omitempty"`
-	ConversationID     string            `json:"conversation_id,omitempty"`
-	TraceID            string            `json:"trace_id"`
-	AgentName          string            `json:"agent_name,omitempty"`
-	OriginalRequest    string            `json:"original_request"`
-	Success            bool              `json:"success"`
-	Interrupted        bool              `json:"interrupted,omitempty"`
-	StepCount          int               `json:"step_count"`
-	FailedSteps        int               `json:"failed_steps"`
-	TotalDurationMs    int64             `json:"total_duration_ms"`
-	LLMTotalDurationMs int64             `json:"llm_total_duration_ms,omitempty"` // LLM call duration for total time calculation
-	CreatedAt          time.Time         `json:"created_at"`
-	Metadata           map[string]string `json:"metadata,omitempty"`
+	RequestID           string            `json:"request_id"`
+	OriginalRequestID   string            `json:"original_request_id,omitempty"`
+	ConversationID      string            `json:"conversation_id,omitempty"`
+	TraceID             string            `json:"trace_id"`
+	AgentName           string            `json:"agent_name,omitempty"`
+	OriginalRequest     string            `json:"original_request"`
+	Success             bool              `json:"success"`
+	Interrupted         bool              `json:"interrupted,omitempty"`
+	StepCount           int               `json:"step_count"`
+	FailedSteps         int               `json:"failed_steps"`
+	TotalDurationMs     int64             `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
+	WallClockDurationMs int64             `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
+	DurationSource      string            `json:"duration_source,omitempty"`
+	LLMTotalDurationMs  int64             `json:"llm_total_duration_ms,omitempty"` // Aggregate LLM call time; may overlap wall clock.
+	HITLCheckpointID    string            `json:"hitl_checkpoint_id,omitempty"`    // Exact checkpoint identity for lineage-safe HITL joins.
+	RelationStatus      string            `json:"relation_status,omitempty"`
+	MissingOwnerID      string            `json:"missing_owner_id,omitempty"`
+	CreatedAt           time.Time         `json:"created_at"`
+	Metadata            map[string]string `json:"metadata,omitempty"`
+
+	// observedStart/observedEnd are internal inputs for deriving a wall-clock
+	// envelope. They are never serialized.
+	observedStart time.Time
+	observedEnd   time.Time
 }
 
 // ExecutionListResponse is the API response for listing executions
@@ -345,7 +361,7 @@ type DAGNode struct {
 type DAGEdge struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
-	EdgeType string `json:"edge_type,omitempty"` // "dependency" (default) or "phase_transition"
+	EdgeType string `json:"edge_type,omitempty"` // dependency, implicit_dependency, or phase_transition
 }
 
 // DAGStatistics contains computed statistics for the DAG
@@ -403,24 +419,32 @@ type ResolutionAnalyticsResponse struct {
 // This provides a "one-stop shop" for debugging and understanding request execution
 type UnifiedExecutionView struct {
 	// Core execution data
-	RequestID         string           `json:"request_id"`
-	OriginalRequestID string           `json:"original_request_id,omitempty"`
-	ConversationID    string           `json:"conversation_id,omitempty"`
-	TraceID           string           `json:"trace_id,omitempty"`
-	AgentName         string           `json:"agent_name,omitempty"`
-	OriginalRequest   string           `json:"original_request"`
-	CreatedAt         time.Time        `json:"created_at"`
-	Success           bool             `json:"success"`
-	TotalDurationMs   int64            `json:"total_duration_ms"`
-	Plan              *RoutingPlan     `json:"plan,omitempty"`
-	Result            *ExecutionResult `json:"result,omitempty"`
-	Interrupted       bool             `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint        *HITLCheckpoint  `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted (includes completed_steps, step_results)
+	RequestID             string                  `json:"request_id"`
+	OriginalRequestID     string                  `json:"original_request_id,omitempty"`
+	ConversationID        string                  `json:"conversation_id,omitempty"`
+	TraceID               string                  `json:"trace_id,omitempty"`
+	AsyncTaskID           string                  `json:"async_task_id,omitempty"`
+	LinkedTraces          []LinkedTrace           `json:"linked_traces,omitempty"`
+	PipelineHooks         []PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+	TraceEnrichmentStatus string                  `json:"trace_enrichment_status,omitempty"`
+	AgentName             string                  `json:"agent_name,omitempty"`
+	OriginalRequest       string                  `json:"original_request"`
+	CreatedAt             time.Time               `json:"created_at"`
+	Success               bool                    `json:"success"`
+	TotalDurationMs       int64                   `json:"total_duration_ms"` // Phase-loop duration; retained for compatibility.
+	WallClockDurationMs   int64                   `json:"wall_clock_duration_ms,omitempty"`
+	DurationSource        string                  `json:"duration_source,omitempty"`
+	Plan                  *RoutingPlan            `json:"plan,omitempty"`
+	Result                *ExecutionResult        `json:"result,omitempty"`
+	Interrupted           bool                    `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint            *HITLCheckpoint         `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted (includes completed_steps, step_results)
 
 	// Multi-phase execution data
-	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
-	PhaseCount     int            `json:"phase_count,omitempty"`
-	ForcedTerminal bool           `json:"forced_terminal,omitempty"`
+	PhasePlans          []*RoutingPlan `json:"phase_plans,omitempty"`
+	PhaseCount          int            `json:"phase_count,omitempty"`
+	ForcedTerminal      bool           `json:"forced_terminal,omitempty"`
+	FinalResponse       *string        `json:"final_response,omitempty"`
+	FinalResponseSource string         `json:"final_response_source,omitempty"`
 
 	// Computed DAG structure
 	DAG *DAGResponse `json:"dag,omitempty"`
@@ -432,6 +456,7 @@ type UnifiedExecutionView struct {
 
 	// HITL checkpoints (if any)
 	HITLCheckpoints []HITLCheckpoint `json:"hitl_checkpoints,omitempty"`
+	HITLLifecycle   *HITLLifecycle   `json:"hitl_lifecycle,omitempty"`
 
 	// Metadata for UI
 	HasLLMData  bool `json:"has_llm_data"`
@@ -443,6 +468,30 @@ type UnifiedExecutionView struct {
 	// linking to the completed resume. Empty when no sibling exists or when
 	// this record is not interrupted. (ORCH-022 Layer 4)
 	ResumeSiblingRequestID string `json:"resume_sibling_request_id,omitempty"`
+}
+
+type HITLExecutionLink struct {
+	RequestID   string `json:"request_id"`
+	TraceID     string `json:"trace_id,omitempty"`
+	Role        string `json:"role"` // interrupted or resume
+	Interrupted bool   `json:"interrupted,omitempty"`
+	Success     bool   `json:"success"`
+}
+
+// HITLLifecycle reconciles the immutable interruption snapshot with the
+// checkpoint's current state and the separate execution records created by a
+// resume. The original snapshot is retained rather than overwritten.
+type HITLLifecycle struct {
+	CheckpointID        string              `json:"checkpoint_id,omitempty"`
+	InitialRequestID    string              `json:"initial_request_id"`
+	CurrentRequestID    string              `json:"current_request_id"`
+	IsResume            bool                `json:"is_resume"`
+	SnapshotStatus      string              `json:"snapshot_status,omitempty"`
+	CurrentStatus       string              `json:"current_status,omitempty"`
+	CurrentStatusSource string              `json:"current_status_source,omitempty"`
+	SnapshotCheckpoint  *HITLCheckpoint     `json:"snapshot_checkpoint,omitempty"`
+	CurrentCheckpoint   *HITLCheckpoint     `json:"current_checkpoint,omitempty"`
+	RelatedExecutions   []HITLExecutionLink `json:"related_executions,omitempty"`
 }
 
 // LLMDebugSummary provides a summary of LLM interactions
@@ -469,7 +518,7 @@ func init() {
 	flag.BoolVar(&useMock, "mock", true, "Use mock data instead of Redis")
 	flag.StringVar(&redisURL, "redis-url", "", "Redis/Valkey URL (required when -mock=false, or set REDIS_URL env var)")
 	flag.StringVar(&namespace, "namespace", "truvag3", "Redis key namespace")
-	flag.IntVar(&port, "port", 8100, "HTTP server port")
+	flag.IntVar(&port, "port", 8361, "HTTP server port")
 }
 
 // getEnvOrDefault returns environment variable value or default
@@ -612,6 +661,7 @@ func main() {
 	mux.HandleFunc("/api/executions", apiMiddleware(handleExecutionList))
 	mux.HandleFunc("/api/executions/search", apiMiddleware(handleExecutionSearch))
 	mux.HandleFunc("/api/executions/", apiMiddleware(handleExecution)) // Handles both /{id} and /{id}/dag
+	mux.HandleFunc("/api/traces/", withCORS(handleJaegerTraceRedirect))
 	mux.HandleFunc("/api/conversations", apiMiddleware(handleConversationTimeline))
 	mux.HandleFunc("/api/analytics/resolution", apiMiddleware(handleResolutionAnalytics))
 	if !useMock {
@@ -678,7 +728,12 @@ func main() {
 		log.Printf("Redis Namespace: %s", namespace)
 	}
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
@@ -735,7 +790,7 @@ func withETag(next http.HandlerFunc) http.HandlerFunc {
 
 		// Compute ETag from FNV-1a hash of the response body (fast, stdlib)
 		h := fnv.New64a()
-		h.Write(body)
+		_, _ = h.Write(body) // hash.Hash.Write never returns an error
 		etag := fmt.Sprintf(`"%x"`, h.Sum64())
 
 		// If client has this version, return 304
@@ -748,7 +803,9 @@ func withETag(next http.HandlerFunc) http.HandlerFunc {
 		// (responseRecorder delegates Header() to the embedded ResponseWriter).
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(rec.statusCode)
-		w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			log.Printf("Failed to write HTTP response: %v", err)
+		}
 	}
 }
 
@@ -783,11 +840,11 @@ func withGzip(next http.HandlerFunc) http.HandlerFunc {
 		gz := gzip.NewWriter(w)
 		gzw := &gzipResponseWriter{ResponseWriter: w, Writer: gz}
 		next(gzw, r)
-		if gzw.wroteBody {
-			gz.Close()
-		} else {
+		if !gzw.wroteBody {
 			gz.Reset(io.Discard)
-			gz.Close()
+		}
+		if err := gz.Close(); err != nil {
+			log.Printf("Failed to finish gzip response: %v", err)
 		}
 	}
 }
@@ -800,11 +857,33 @@ func apiMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 	return withCORS(withGzip(withETag(handler)))
 }
 
+// writeJSON writes a JSON response and records transport failures that occur
+// after a handler has begun writing its response.
+func writeJSON(w http.ResponseWriter, value interface{}) {
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("Failed to encode HTTP response: %v", err)
+	}
+}
+
+// closeHTTPBody closes an outbound HTTP response body without hiding cleanup
+// failures from local diagnostics.
+func closeHTTPBody(body io.Closer) {
+	if err := body.Close(); err != nil {
+		log.Printf("Failed to close outbound HTTP response: %v", err)
+	}
+}
+
+// safeLogText keeps values from external records or request paths on one log
+// line, preventing forged prefixes or entries through CR/LF characters.
+func safeLogText(value string) string {
+	return strings.NewReplacer("\r", `\r`, "\n", `\n`).Replace(value)
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func handleServices(w http.ResponseWriter, r *http.Request) {
@@ -849,7 +928,7 @@ func handleServices(w http.ResponseWriter, r *http.Request) {
 		Timestamp:  time.Now(),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // handleSwaggerURLs returns a Swagger UI compatible `urls` array for auto-discovery.
@@ -912,7 +991,7 @@ func handleSwaggerURLs(w http.ResponseWriter, r *http.Request) {
 	// Stable order — Swagger UI preserves the array order in its dropdown.
 	sort.Slice(urls, func(i, j int) bool { return urls[i].Name < urls[j].Name })
 
-	json.NewEncoder(w).Encode(urls)
+	writeJSON(w, urls)
 }
 
 // getMockServices returns mock service data for development
@@ -1054,6 +1133,46 @@ func getMockServices() []ServiceInfo {
 // hitlHTTPClient is the HTTP client used for fan-out calls to agent /hitl/checkpoints endpoints.
 // Uses a 10s timeout to avoid hanging on unresponsive agents.
 var hitlHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+func doHITLGet(ctx context.Context, targetURL string) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	parsed, err := url.Parse(targetURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("invalid HITL service URL")
+	}
+	// The host originates from the framework's service-discovery registry, not
+	// directly from an HTTP request. Scheme and host are validated above. The
+	// viewer intentionally calls registered agents to aggregate HITL state.
+	// #nosec G704 -- registry-owned service URL, validated before use.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G704 -- the request uses the same validated registry-owned URL.
+	return hitlHTTPClient.Do(req)
+}
+
+func doHITLPost(ctx context.Context, targetURL string, body io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	parsed, err := url.Parse(targetURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("invalid HITL service URL")
+	}
+	// #nosec G704 -- parsed is a validated framework-owned service URL.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// The destination comes from the framework service registry or a stored
+	// checkpoint created by that registered service, and is validated above.
+	// #nosec G704 -- validated framework-owned service URL.
+	return hitlHTTPClient.Do(req)
+}
 
 // Discovery client singleton. The viewer talks to core.Discovery so the
 // enumeration of registered services is not coupled to a specific backing
@@ -1345,7 +1464,7 @@ func handleLLMDebugList(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // handleLLMDebugRecord returns a specific LLM debug record by ID
@@ -1397,7 +1516,7 @@ func handleLLMDebugRecord(w http.ResponseWriter, r *http.Request) {
 		record.Interactions = orchestration.DedupeLLMInteractions(record.Interactions)
 	}
 
-	json.NewEncoder(w).Encode(record)
+	writeJSON(w, record)
 }
 
 // ============================================================================
@@ -1470,7 +1589,7 @@ func handleHITLCheckpointList(w http.ResponseWriter, r *http.Request) {
 		Timestamp:   time.Now(),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // handleHITLCheckpoint returns a specific HITL checkpoint by ID
@@ -1507,7 +1626,7 @@ func handleHITLCheckpoint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(checkpoint)
+	writeJSON(w, checkpoint)
 }
 
 // handleHITLCommand proxies an approve/reject command to the owning agent.
@@ -1572,17 +1691,23 @@ func handleHITLCommand(w http.ResponseWriter, r *http.Request) {
 		"type":          req.CommandType,
 		"feedback":      req.Feedback,
 	}
-	body, _ := json.Marshal(agentCmd)
+	body, err := json.Marshal(agentCmd)
+	if err != nil {
+		http.Error(w, `{"error":"failed to encode command"}`, http.StatusInternalServerError)
+		return
+	}
 
-	resp, err := http.Post(agentAddr+"/hitl/command", "application/json", bytes.NewReader(body))
+	resp, err := doHITLPost(r.Context(), agentAddr+"/hitl/command", bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"failed to reach agent %q: %s"}`, checkpoint.AgentName, err.Error()), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer closeHTTPBody(resp.Body)
 
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Failed to proxy HITL command response: %v", err)
+	}
 }
 
 // handleHITLResume proxies a resume request to the owning agent after approval.
@@ -1628,15 +1753,17 @@ func handleHITLResume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, err := http.Post(agentAddr+"/hitl/resume/"+url.PathEscape(checkpointID), "application/json", http.NoBody)
+	resp, err := doHITLPost(r.Context(), agentAddr+"/hitl/resume/"+url.PathEscape(checkpointID), http.NoBody)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"failed to reach agent: %s"}`, err.Error()), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer closeHTTPBody(resp.Body)
 
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Failed to proxy HITL resume response: %v", err)
+	}
 }
 
 // getAgentAddress looks up an agent's HTTP address from the service discovery registry.
@@ -1710,7 +1837,7 @@ func handleExecutionList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // ExecutionSearchResponse is the API response for search results
@@ -1760,7 +1887,7 @@ func handleExecutionSearch(w http.ResponseWriter, r *http.Request) {
 		Timestamp:  time.Now(),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // searchMockExecutions searches mock executions by original request content
@@ -1841,15 +1968,16 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 
 	if isUnifiedRequest {
 		// Return unified view combining execution, LLM debug, and HITL data
-		unified := buildUnifiedView(execution)
-		json.NewEncoder(w).Encode(unified)
+		unified := buildUnifiedViewWithContext(r.Context(), execution)
+		enrichUnifiedViewWithTrace(r.Context(), unified)
+		writeJSON(w, unified)
 	} else if isDAGRequest {
 		// Return computed DAG structure
 		dag := computeDAG(execution)
-		json.NewEncoder(w).Encode(dag)
+		writeJSON(w, dag)
 	} else {
 		// Return full execution record
-		json.NewEncoder(w).Encode(execution)
+		writeJSON(w, execution)
 	}
 }
 
@@ -1936,83 +2064,162 @@ func normalizeSteps(execution *StoredExecution) (steps []RoutingStep, results ma
 	return steps, results, phaseBreakpoints
 }
 
-// computeDAG builds the DAG structure from a stored execution
-func computeDAG(execution *StoredExecution) *DAGResponse {
-	if execution == nil {
-		return &DAGResponse{
-			Nodes:  []DAGNode{},
-			Edges:  []DAGEdge{},
-			Levels: [][]string{},
-		}
+func topologicalStepLevels(steps []RoutingStep) [][]string {
+	if len(steps) == 0 {
+		return nil
 	}
-
-	// ORCH-022: unified step source + result map via normalizeSteps. Handles
-	// multi-phase records (via PhasePlans), single-phase records (via Plan),
-	// and legacy interrupted records (via Checkpoint.StepResults fallback).
-	allPlanSteps, stepResults, phaseBreakpoints := normalizeSteps(execution)
-
-	if len(allPlanSteps) == 0 {
-		return &DAGResponse{
-			Nodes:  []DAGNode{},
-			Edges:  []DAGEdge{},
-			Levels: [][]string{},
-		}
+	stepIDs := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		stepIDs[step.StepID] = struct{}{}
 	}
-
-	// Build adjacency list and in-degree map for topological sort
-	inDegree := make(map[string]int)
-	dependents := make(map[string][]string)
-
-	for _, step := range allPlanSteps {
-		if _, exists := inDegree[step.StepID]; !exists {
-			inDegree[step.StepID] = 0
-		}
+	inDegree := make(map[string]int, len(steps))
+	dependents := make(map[string][]string, len(steps))
+	for _, step := range steps {
+		inDegree[step.StepID] = 0
+	}
+	for _, step := range steps {
+		seenDeps := make(map[string]struct{}, len(step.DependsOn))
 		for _, dep := range step.DependsOn {
+			if _, inPhase := stepIDs[dep]; !inPhase {
+				continue
+			}
+			if _, duplicate := seenDeps[dep]; duplicate {
+				continue
+			}
+			seenDeps[dep] = struct{}{}
 			inDegree[step.StepID]++
 			dependents[dep] = append(dependents[dep], step.StepID)
 		}
 	}
 
-	// Compute levels using BFS (Kahn's algorithm)
-	levels := [][]string{}
-	currentLevel := []string{}
-
-	// Find initial nodes (no dependencies)
-	for _, step := range allPlanSteps {
+	current := make([]string, 0)
+	for _, step := range steps {
 		if inDegree[step.StepID] == 0 {
-			currentLevel = append(currentLevel, step.StepID)
+			current = append(current, step.StepID)
 		}
 	}
-
-	levelMap := make(map[string]int)
-	for len(currentLevel) > 0 {
-		levels = append(levels, currentLevel)
-		levelIdx := len(levels) - 1
-		for _, stepID := range currentLevel {
-			levelMap[stepID] = levelIdx
-		}
-
-		nextLevel := []string{}
-		for _, stepID := range currentLevel {
-			for _, dep := range dependents[stepID] {
-				inDegree[dep]--
-				if inDegree[dep] == 0 {
-					nextLevel = append(nextLevel, dep)
+	levels := make([][]string, 0)
+	visited := make(map[string]struct{}, len(steps))
+	for len(current) > 0 {
+		levels = append(levels, current)
+		next := make([]string, 0)
+		for _, stepID := range current {
+			visited[stepID] = struct{}{}
+			for _, dependent := range dependents[stepID] {
+				inDegree[dependent]--
+				if inDegree[dependent] == 0 {
+					next = append(next, dependent)
 				}
 			}
 		}
-		currentLevel = nextLevel
+		current = next
 	}
 
-	// Build nodes
-	nodes := make([]DAGNode, 0, len(allPlanSteps))
+	// Keep malformed historical plans visible instead of silently dropping
+	// cyclic nodes from the API. Their dependency edges remain available for
+	// diagnosis in a final level.
+	remaining := make([]string, 0)
+	for _, step := range steps {
+		if _, ok := visited[step.StepID]; !ok {
+			remaining = append(remaining, step.StepID)
+		}
+	}
+	if len(remaining) > 0 {
+		levels = append(levels, remaining)
+	}
+	return levels
+}
+
+func phaseStepGroups(allPlanSteps []RoutingStep, phaseBreakpoints []int) [][]RoutingStep {
+	if len(phaseBreakpoints) <= 1 {
+		return [][]RoutingStep{allPlanSteps}
+	}
+	phases := make([][]RoutingStep, 0, len(phaseBreakpoints))
+	for i, start := range phaseBreakpoints {
+		end := len(allPlanSteps)
+		if i+1 < len(phaseBreakpoints) {
+			end = phaseBreakpoints[i+1]
+		}
+		if start < 0 || start > end || end > len(allPlanSteps) {
+			continue
+		}
+		phases = append(phases, allPlanSteps[start:end])
+	}
+	return phases
+}
+
+func phaseRootAndLeafSteps(steps []RoutingStep) (roots, leaves []string) {
+	stepIDs := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		stepIDs[step.StepID] = struct{}{}
+	}
+	hasInPhaseDependency := make(map[string]bool, len(steps))
+	dependedOnInPhase := make(map[string]bool, len(steps))
+	for _, step := range steps {
+		for _, dep := range step.DependsOn {
+			if _, ok := stepIDs[dep]; !ok {
+				continue
+			}
+			hasInPhaseDependency[step.StepID] = true
+			dependedOnInPhase[dep] = true
+		}
+	}
+	for _, step := range steps {
+		if !hasInPhaseDependency[step.StepID] {
+			roots = append(roots, step.StepID)
+		}
+		if !dependedOnInPhase[step.StepID] {
+			leaves = append(leaves, step.StepID)
+		}
+	}
+	return roots, leaves
+}
+
+// computeDAG builds a phase-aware DAG from a stored execution. Explicit
+// depends_on edges control scheduling inside each phase. Phase-boundary edges
+// serialize phases, while implicit_deps remain advisory cross-phase data edges.
+func computeDAG(execution *StoredExecution) *DAGResponse {
+	empty := &DAGResponse{Nodes: []DAGNode{}, Edges: []DAGEdge{}, Levels: [][]string{}}
+	if execution == nil {
+		return empty
+	}
+
+	allPlanSteps, stepResults, phaseBreakpoints := normalizeSteps(execution)
+	if len(allPlanSteps) == 0 {
+		return empty
+	}
+	phases := phaseStepGroups(allPlanSteps, phaseBreakpoints)
+
+	levels := make([][]string, 0)
+	levelMap := make(map[string]int, len(allPlanSteps)+len(phases)-1)
+	phaseMap := make(map[string]int, len(allPlanSteps))
+	maxParallelism := 0
+	for phaseIndex, phaseSteps := range phases {
+		for _, phaseLevel := range topologicalStepLevels(phaseSteps) {
+			levelIndex := len(levels)
+			levels = append(levels, phaseLevel)
+			if len(phaseLevel) > maxParallelism {
+				maxParallelism = len(phaseLevel)
+			}
+			for _, stepID := range phaseLevel {
+				levelMap[stepID] = levelIndex
+				phaseMap[stepID] = phaseIndex + 1
+			}
+		}
+		if phaseIndex < len(phases)-1 {
+			boundaryID := fmt.Sprintf("phase_boundary_%d", phaseIndex+1)
+			levelMap[boundaryID] = len(levels)
+			levels = append(levels, []string{boundaryID})
+		}
+	}
+
 	statistics := DAGStatistics{
-		TotalNodes: len(allPlanSteps),
-		Depth:      len(levels),
+		TotalNodes:     len(allPlanSteps) + len(phases) - 1,
+		MaxParallelism: maxParallelism,
+		Depth:          len(levels),
 	}
-
-	// Determine the current step blocked by HITL (if interrupted)
-	var blockedStepID string
+	nodes := make([]DAGNode, 0, statistics.TotalNodes)
+	blockedStepID := ""
 	if execution.Interrupted && execution.Checkpoint != nil && execution.Checkpoint.CurrentStep != nil {
 		blockedStepID = execution.Checkpoint.CurrentStep.StepID
 	}
@@ -2020,27 +2227,24 @@ func computeDAG(execution *StoredExecution) *DAGResponse {
 	for _, step := range allPlanSteps {
 		status := "pending"
 		var durationMs int64
-
 		if result, ok := stepResults[step.StepID]; ok {
-			if result.Success {
+			switch {
+			case result.Success:
 				status = "completed"
 				statistics.CompletedNodes++
-			} else if step.StepID == blockedStepID {
-				// Step is blocked by HITL approval, not failed
+			case step.StepID == blockedStepID:
 				status = "blocked"
-			} else if result.Error != "" {
+			case result.Error != "":
 				status = "failed"
 				statistics.FailedNodes++
-			} else if result.Skipped {
+			case result.Skipped:
 				status = "skipped"
 				statistics.SkippedNodes++
 			}
-			durationMs = result.DurationMs
+			durationMs = stepDurationMilliseconds(result)
 		} else if step.StepID == blockedStepID {
-			// Step has no result yet but is the blocked HITL step
 			status = "blocked"
 		}
-
 		nodes = append(nodes, DAGNode{
 			ID:          step.StepID,
 			Label:       step.AgentName,
@@ -2048,111 +2252,57 @@ func computeDAG(execution *StoredExecution) *DAGResponse {
 			Status:      status,
 			DurationMs:  durationMs,
 			Level:       levelMap[step.StepID],
+			NodeType:    "step",
+			Metadata: map[string]interface{}{
+				"phase_number": phaseMap[step.StepID],
+			},
 		})
 	}
 
-	// Build edges
+	knownSteps := make(map[string]struct{}, len(allPlanSteps))
+	for _, step := range allPlanSteps {
+		knownSteps[step.StepID] = struct{}{}
+	}
 	edges := make([]DAGEdge, 0)
 	for _, step := range allPlanSteps {
 		for _, dep := range step.DependsOn {
-			edges = append(edges, DAGEdge{
-				Source: dep,
-				Target: step.StepID,
-			})
+			edges = append(edges, DAGEdge{Source: dep, Target: step.StepID, EdgeType: "dependency"})
+		}
+		for _, dep := range step.ImplicitDeps {
+			if _, exists := knownSteps[dep]; !exists {
+				continue
+			}
+			edges = append(edges, DAGEdge{Source: dep, Target: step.StepID, EdgeType: "implicit_dependency"})
 		}
 	}
 
-	// For multi-phase: add phase boundary nodes and edges
-	if len(phaseBreakpoints) > 1 {
-		for p := 0; p < len(phaseBreakpoints)-1; p++ {
-			currentPhaseStart := phaseBreakpoints[p]
-			nextPhaseStart := phaseBreakpoints[p+1]
-			var currentPhaseEnd int
-			if p+1 < len(phaseBreakpoints) {
-				currentPhaseEnd = phaseBreakpoints[p+1]
-			} else {
-				currentPhaseEnd = len(allPlanSteps)
-			}
-
-			currentPhaseSteps := allPlanSteps[currentPhaseStart:currentPhaseEnd]
-			var nextPhaseEnd int
-			if p+2 < len(phaseBreakpoints) {
-				nextPhaseEnd = phaseBreakpoints[p+2]
-			} else {
-				nextPhaseEnd = len(allPlanSteps)
-			}
-			nextPhaseSteps := allPlanSteps[nextPhaseStart:nextPhaseEnd]
-
-			// Find leaf steps of current phase (no other step in this phase depends on them)
-			dependedOnInPhase := make(map[string]bool)
-			for _, s := range currentPhaseSteps {
-				for _, dep := range s.DependsOn {
-					dependedOnInPhase[dep] = true
-				}
-			}
-			var leafSteps []string
-			for _, s := range currentPhaseSteps {
-				if !dependedOnInPhase[s.StepID] {
-					leafSteps = append(leafSteps, s.StepID)
-				}
-			}
-
-			// Find root steps of next phase (no depends_on)
-			var rootNextSteps []string
-			for _, s := range nextPhaseSteps {
-				if len(s.DependsOn) == 0 {
-					rootNextSteps = append(rootNextSteps, s.StepID)
-				}
-			}
-
-			// Create phase boundary node
-			boundaryID := fmt.Sprintf("phase_boundary_%d", p+1)
-			note := ""
-			if p < len(execution.PhasePlans) {
-				note = execution.PhasePlans[p].ContinuationNote
-			}
-
-			nodes = append(nodes, DAGNode{
-				ID:       boundaryID,
-				Label:    fmt.Sprintf("Phase %d → %d", p+1, p+2),
-				NodeType: "phase_boundary",
-				Metadata: map[string]interface{}{
-					"continuation_note": note,
-					"phase_number":      p + 1,
-				},
-			})
-
-			// Connect: leaf steps of Phase N → boundary → root steps of Phase N+1
-			for _, stepID := range leafSteps {
-				edges = append(edges, DAGEdge{
-					Source:   stepID,
-					Target:   boundaryID,
-					EdgeType: "phase_transition",
-				})
-			}
-			for _, stepID := range rootNextSteps {
-				edges = append(edges, DAGEdge{
-					Source:   boundaryID,
-					Target:   stepID,
-					EdgeType: "phase_transition",
-				})
-			}
+	for phaseIndex := 0; phaseIndex < len(phases)-1; phaseIndex++ {
+		boundaryID := fmt.Sprintf("phase_boundary_%d", phaseIndex+1)
+		note := ""
+		if phaseIndex < len(execution.PhasePlans) && execution.PhasePlans[phaseIndex] != nil {
+			note = execution.PhasePlans[phaseIndex].ContinuationNote
+		}
+		nodes = append(nodes, DAGNode{
+			ID:       boundaryID,
+			Label:    fmt.Sprintf("Phase %d → %d", phaseIndex+1, phaseIndex+2),
+			Level:    levelMap[boundaryID],
+			NodeType: "phase_boundary",
+			Metadata: map[string]interface{}{
+				"continuation_note": note,
+				"phase_number":      phaseIndex + 1,
+			},
+		})
+		_, currentLeaves := phaseRootAndLeafSteps(phases[phaseIndex])
+		nextRoots, _ := phaseRootAndLeafSteps(phases[phaseIndex+1])
+		for _, stepID := range currentLeaves {
+			edges = append(edges, DAGEdge{Source: stepID, Target: boundaryID, EdgeType: "phase_transition"})
+		}
+		for _, stepID := range nextRoots {
+			edges = append(edges, DAGEdge{Source: boundaryID, Target: stepID, EdgeType: "phase_transition"})
 		}
 	}
 
-	// Calculate max parallelism
-	for _, level := range levels {
-		if len(level) > statistics.MaxParallelism {
-			statistics.MaxParallelism = len(level)
-		}
-	}
-
-	return &DAGResponse{
-		Nodes:      nodes,
-		Edges:      edges,
-		Levels:     levels,
-		Statistics: statistics,
-	}
+	return &DAGResponse{Nodes: nodes, Edges: edges, Levels: levels, Statistics: statistics}
 }
 
 // handleResolutionAnalytics handles GET /api/analytics/resolution
@@ -2251,7 +2401,7 @@ func handleResolutionAnalytics(w http.ResponseWriter, r *http.Request) {
 
 	// Default: JSON response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ResolutionAnalyticsResponse{
+	writeJSON(w, ResolutionAnalyticsResponse{
 		Records:    nonNilSlice(records),
 		Summary:    analyticsSummary,
 		ExportedAt: time.Now(),
@@ -2349,15 +2499,18 @@ func writeResolutionCSV(w http.ResponseWriter, records []ResolutionAnalyticsReco
 	defer writer.Flush()
 
 	// Header row
-	writer.Write([]string{
+	if err := writer.Write([]string{
 		"request_id", "step_id", "capability", "agent_name", "success",
 		"auto_wired_count", "micro_resolved_count", "semantic_retry_count", "user_provided_count",
 		"auto_wiring_duration_us", "micro_resolution_duration_ms",
 		"source_data_key_count", "total_params",
-	})
+	}); err != nil {
+		log.Printf("Failed to write resolution CSV header: %v", err)
+		return
+	}
 
 	for _, r := range records {
-		writer.Write([]string{
+		if err := writer.Write([]string{
 			r.RequestID,
 			r.StepID,
 			r.Capability,
@@ -2371,7 +2524,10 @@ func writeResolutionCSV(w http.ResponseWriter, records []ResolutionAnalyticsReco
 			strconv.FormatInt(r.MicroResolvMs, 10),
 			strconv.Itoa(r.SourceKeyCount),
 			strconv.Itoa(r.TotalParams),
-		})
+		}); err != nil {
+			log.Printf("Failed to write resolution CSV row: %v", err)
+			return
+		}
 	}
 }
 
@@ -2405,34 +2561,266 @@ func int64FromMap(m map[string]interface{}, key string) int64 {
 	return 0
 }
 
-// buildUnifiedView combines execution data with LLM debug and HITL checkpoint data
-func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
+func stepDurationMilliseconds(result *StepResult) int64 {
+	if result == nil {
+		return 0
+	}
+	// Live framework records expose Duration as nanoseconds. DurationMs exists
+	// only for older viewer fixtures and remains a backward-compatible fallback.
+	if result.Duration != 0 {
+		return result.Duration / int64(time.Millisecond)
+	}
+	return result.DurationMs
+}
+
+func extendObservationWindow(start, end *time.Time, candidateStart, candidateEnd time.Time) {
+	if candidateStart.IsZero() {
+		return
+	}
+	if candidateEnd.IsZero() || candidateEnd.Before(candidateStart) {
+		candidateEnd = candidateStart
+	}
+	if start.IsZero() || candidateStart.Before(*start) {
+		*start = candidateStart
+	}
+	if end.IsZero() || candidateEnd.After(*end) {
+		*end = candidateEnd
+	}
+}
+
+func stepPlanSource(result *StepResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	planSource, _ := result.Metadata["plan_source"].(string)
+	return planSource
+}
+
+// resumeObservationBoundary returns the first step that actually ran in this
+// resumed invocation. Resume records also contain restored pre-checkpoint
+// results, whose original timestamps must not expand this invocation's elapsed
+// time to include the operator approval wait.
+func resumeObservationBoundary(execution *StoredExecution) time.Time {
+	if execution == nil || execution.Result == nil || execution.Metadata["resume_checkpoint_id"] == "" {
+		return time.Time{}
+	}
+	var boundary time.Time
+	for i := range execution.Result.Steps {
+		result := &execution.Result.Steps[i]
+		if result.StartTime == nil || stepPlanSource(result) != "hitl_resume" {
+			continue
+		}
+		if boundary.IsZero() || result.StartTime.Before(boundary) {
+			boundary = *result.StartTime
+		}
+	}
+	return boundary
+}
+
+func executionObservationWindow(execution *StoredExecution) (time.Time, time.Time) {
+	var start, end time.Time
+	if execution == nil || execution.Result == nil {
+		return start, end
+	}
+	resumeExecution := execution.Metadata["resume_checkpoint_id"] != ""
+	resumeBoundary := resumeObservationBoundary(execution)
+	for i := range execution.Result.Steps {
+		result := &execution.Result.Steps[i]
+		if result.StartTime == nil {
+			continue
+		}
+		if resumeExecution && (resumeBoundary.IsZero() || result.StartTime.Before(resumeBoundary)) {
+			continue
+		}
+		candidateEnd := *result.StartTime
+		if result.EndTime != nil {
+			candidateEnd = *result.EndTime
+		} else if duration := stepDurationMilliseconds(result); duration > 0 {
+			candidateEnd = candidateEnd.Add(time.Duration(duration) * time.Millisecond)
+		}
+		extendObservationWindow(&start, &end, *result.StartTime, candidateEnd)
+	}
+	return start, end
+}
+
+func extendWindowWithLLMInteractions(start, end time.Time, interactions []orchestration.LLMInteraction) (time.Time, time.Time) {
+	for _, interaction := range interactions {
+		candidateEnd := interaction.Timestamp
+		if interaction.DurationMs > 0 {
+			candidateEnd = candidateEnd.Add(time.Duration(interaction.DurationMs) * time.Millisecond)
+		}
+		extendObservationWindow(&start, &end, interaction.Timestamp, candidateEnd)
+	}
+	return start, end
+}
+
+func observedDurationMilliseconds(start, end time.Time) int64 {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start).Milliseconds()
+}
+
+// preferDurationCandidate keeps duration enrichment lower-bound safe. The
+// phase-loop duration includes planning and hooks that a step/LLM timestamp
+// envelope may not observe, so a smaller envelope must never replace it.
+func preferDurationCandidate(current int64, currentSource string, candidate int64, candidateSource string) (int64, string) {
+	if candidate <= current || candidate <= 0 {
+		return current, currentSource
+	}
+	return candidate, candidateSource
+}
+
+func dedupeHITLCheckpoints(checkpoints []HITLCheckpoint) []HITLCheckpoint {
+	if len(checkpoints) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(checkpoints))
+	deduped := make([]HITLCheckpoint, 0, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		if checkpoint.CheckpointID == "" {
+			continue
+		}
+		if _, duplicate := seen[checkpoint.CheckpointID]; duplicate {
+			continue
+		}
+		seen[checkpoint.CheckpointID] = struct{}{}
+		deduped = append(deduped, checkpoint)
+	}
+	return deduped
+}
+
+func checkpointByID(checkpoints []HITLCheckpoint, checkpointID string) *HITLCheckpoint {
+	for i := range checkpoints {
+		if checkpoints[i].CheckpointID == checkpointID {
+			return &checkpoints[i]
+		}
+	}
+	return nil
+}
+
+func buildHITLLifecycle(execution *StoredExecution, checkpoints []HITLCheckpoint, family []ExecutionSummary) *HITLLifecycle {
 	if execution == nil {
 		return nil
 	}
+	checkpointID := ""
+	if execution.Checkpoint != nil {
+		checkpointID = execution.Checkpoint.CheckpointID
+	}
+	resumeCheckpointID := execution.Metadata["resume_checkpoint_id"]
+	if checkpointID == "" {
+		checkpointID = resumeCheckpointID
+	}
+	if checkpointID == "" && !execution.Interrupted {
+		return nil
+	}
+
+	initialRequestID := execution.OriginalRequestID
+	if initialRequestID == "" {
+		initialRequestID = execution.RequestID
+	}
+	lifecycle := &HITLLifecycle{
+		CheckpointID:       checkpointID,
+		InitialRequestID:   initialRequestID,
+		CurrentRequestID:   execution.RequestID,
+		IsResume:           resumeCheckpointID != "",
+		SnapshotCheckpoint: execution.Checkpoint,
+	}
+	if execution.Checkpoint != nil {
+		lifecycle.SnapshotStatus = execution.Checkpoint.Status
+	}
+	if current := checkpointByID(checkpoints, checkpointID); current != nil {
+		lifecycle.CurrentCheckpoint = current
+		lifecycle.CurrentStatus = current.Status
+		lifecycle.CurrentStatusSource = "agent_checkpoint_api"
+	} else if execution.Checkpoint != nil {
+		lifecycle.CurrentStatus = execution.Checkpoint.Status
+		lifecycle.CurrentStatusSource = "stored_interruption_snapshot"
+	}
+
+	for _, summary := range family {
+		rootID := summary.OriginalRequestID
+		if rootID == "" {
+			rootID = summary.RequestID
+		}
+		if rootID != initialRequestID || summary.RequestID == execution.RequestID {
+			continue
+		}
+		role := ""
+		summaryCheckpointID := summary.HITLCheckpointID
+		if summaryCheckpointID == "" {
+			summaryCheckpointID = summary.Metadata["resume_checkpoint_id"]
+		}
+		switch {
+		case summary.Interrupted && (checkpointID == "" || summaryCheckpointID == checkpointID):
+			role = "interrupted"
+		case summaryCheckpointID != "" && (checkpointID == "" || summaryCheckpointID == checkpointID):
+			role = "resume"
+		}
+		if role == "" {
+			continue
+		}
+		lifecycle.RelatedExecutions = append(lifecycle.RelatedExecutions, HITLExecutionLink{
+			RequestID:   summary.RequestID,
+			TraceID:     summary.TraceID,
+			Role:        role,
+			Interrupted: summary.Interrupted,
+			Success:     summary.Success,
+		})
+	}
+	return lifecycle
+}
+
+// buildUnifiedView combines execution data with LLM debug and HITL checkpoint data
+func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
+	return buildUnifiedViewWithContext(context.Background(), execution)
+}
+
+func buildUnifiedViewWithContext(ctx context.Context, execution *StoredExecution) *UnifiedExecutionView {
+	if execution == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	unified := &UnifiedExecutionView{
-		RequestID:         execution.RequestID,
-		OriginalRequestID: execution.OriginalRequestID,
-		ConversationID:    execution.Metadata[orchestration.MetadataConversationID],
-		TraceID:           execution.TraceID,
-		AgentName:         execution.AgentName,
-		OriginalRequest:   execution.OriginalRequest,
-		CreatedAt:         execution.CreatedAt,
-		Plan:              execution.Plan,
-		Result:            execution.Result,
-		Interrupted:       execution.Interrupted,
-		Checkpoint:        execution.Checkpoint,
-		PhasePlans:        execution.PhasePlans,
-		PhaseCount:        execution.PhaseCount,
-		ForcedTerminal:    execution.ForcedTerminal,
-		Skills:            execution.Skills,
+		RequestID:           execution.RequestID,
+		OriginalRequestID:   execution.OriginalRequestID,
+		ConversationID:      execution.Metadata[orchestration.MetadataConversationID],
+		TraceID:             execution.TraceID,
+		AgentName:           execution.AgentName,
+		OriginalRequest:     execution.OriginalRequest,
+		CreatedAt:           execution.CreatedAt,
+		Plan:                execution.Plan,
+		Result:              execution.Result,
+		Interrupted:         execution.Interrupted,
+		Checkpoint:          execution.Checkpoint,
+		PhasePlans:          execution.PhasePlans,
+		PhaseCount:          execution.PhaseCount,
+		ForcedTerminal:      execution.ForcedTerminal,
+		Skills:              execution.Skills,
+		FinalResponse:       execution.FinalResponse,
+		FinalResponseSource: execution.FinalResponseSource,
 	}
 
 	// Compute success and duration from result
 	if execution.Result != nil {
 		unified.Success = execution.Result.Success
 		unified.TotalDurationMs = execution.Result.TotalDuration / 1_000_000 // ns to ms
+		unified.WallClockDurationMs = unified.TotalDurationMs
+		if unified.WallClockDurationMs > 0 {
+			unified.DurationSource = "phase_loop_fallback"
+		}
+	}
+	observedStart, observedEnd := executionObservationWindow(execution)
+	if observed := observedDurationMilliseconds(observedStart, observedEnd); observed > 0 {
+		unified.WallClockDurationMs, unified.DurationSource = preferDurationCandidate(
+			unified.WallClockDurationMs,
+			unified.DurationSource,
+			observed,
+			"step_time_envelope",
+		)
 	}
 
 	// Compute DAG structure
@@ -2444,9 +2832,9 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 		var llmRecord *orchestration.LLMDebugRecord
 		var err error
 		if storeErr == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			llmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			llmRecord, err = store.GetRecord(ctx, execution.RequestID)
+			llmRecord, err = store.GetRecord(llmCtx, execution.RequestID)
 		}
 		if err == nil && llmRecord != nil {
 			if unified.TraceID == "" {
@@ -2466,6 +2854,19 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 			deduped := orchestration.DedupeLLMInteractions(llmRecord.Interactions)
 			unified.LLMInteractions = deduped
 			unified.HasLLMData = len(deduped) > 0
+			observedStart, observedEnd = extendWindowWithLLMInteractions(
+				observedStart,
+				observedEnd,
+				deduped,
+			)
+			if observed := observedDurationMilliseconds(observedStart, observedEnd); observed > 0 {
+				unified.WallClockDurationMs, unified.DurationSource = preferDurationCandidate(
+					unified.WallClockDurationMs,
+					unified.DurationSource,
+					observed,
+					"llm_and_step_time_envelope",
+				)
+			}
 
 			// Build summary from the deduped view
 			if len(deduped) > 0 {
@@ -2486,21 +2887,23 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 				unified.LLMDebugSummary = summary
 			}
 		} else if err != nil && !strings.Contains(err.Error(), "not found") {
-			log.Printf("Warning: failed to fetch LLM debug data for %s: %v", execution.RequestID, err)
+			// #nosec G706 -- every external value is normalized by safeLogText.
+			log.Printf("Warning: failed to fetch LLM debug data for %s: %s", safeLogText(execution.RequestID), safeLogText(err.Error()))
 		}
 
 		// Fetch HITL checkpoints by request ID
-		checkpoints, err := getHITLCheckpointsByRequestID(execution.RequestID)
+		checkpoints, err := getAgentHITLCheckpointsByRequestID(ctx, execution.RequestID)
 		if err == nil && len(checkpoints) > 0 {
 			unified.HITLCheckpoints = checkpoints
 			unified.HasHITLData = true
 		} else if err != nil {
-			log.Printf("Warning: failed to fetch HITL checkpoints for %s: %v", execution.RequestID, err)
+			// #nosec G706 -- every external value is normalized by safeLogText.
+			log.Printf("Warning: failed to fetch HITL checkpoints for %s: %s", safeLogText(execution.RequestID), safeLogText(err.Error()))
 		}
 
 		// Also check by original_request_id if different (for resumed HITL conversations)
 		if execution.OriginalRequestID != "" && execution.OriginalRequestID != execution.RequestID {
-			moreCheckpoints, err := getHITLCheckpointsByRequestID(execution.OriginalRequestID)
+			moreCheckpoints, err := getAgentHITLCheckpointsByRequestID(ctx, execution.OriginalRequestID)
 			if err == nil && len(moreCheckpoints) > 0 {
 				unified.HITLCheckpoints = append(unified.HITLCheckpoints, moreCheckpoints...)
 				unified.HasHITLData = true
@@ -2508,68 +2911,41 @@ func buildUnifiedView(execution *StoredExecution) *UnifiedExecutionView {
 		}
 	}
 
-	// ORCH-022 Layer 4: surface a pointer to a completed resume sibling when this
-	// record is interrupted. The UI renders a banner linking to the resume.
-	// Canonical "is interrupted" signal is execution.Interrupted; also flag
-	// has-HITL-data when the stored record carries an embedded checkpoint.
+	unified.HITLCheckpoints = dedupeHITLCheckpoints(unified.HITLCheckpoints)
+	checkpointID := execution.Metadata["resume_checkpoint_id"]
 	if execution.Checkpoint != nil {
-		unified.HasHITLData = true
+		checkpointID = execution.Checkpoint.CheckpointID
 	}
-	if execution.Interrupted && execution.OriginalRequestID != "" {
-		if sibling := findCompletedResumeSibling(execution); sibling != "" {
-			unified.ResumeSiblingRequestID = sibling
+	if !useMock && checkpointID != "" && checkpointByID(unified.HITLCheckpoints, checkpointID) == nil {
+		if current, err := getAgentHITLCheckpoint(ctx, checkpointID); err == nil && current != nil {
+			unified.HITLCheckpoints = append(unified.HITLCheckpoints, *current)
+		}
+	}
+
+	var family []ExecutionSummary
+	if !useMock && (execution.Interrupted || checkpointID != "") {
+		if page, err := getRedisExecutionSummaries(resumeSiblingSearchDepth, ""); err == nil && page != nil {
+			family = page.Summaries
+		}
+	}
+	unified.HITLLifecycle = buildHITLLifecycle(execution, unified.HITLCheckpoints, family)
+	if unified.HITLLifecycle != nil {
+		unified.HasHITLData = true
+		for _, related := range unified.HITLLifecycle.RelatedExecutions {
+			if related.Role == "resume" {
+				unified.ResumeSiblingRequestID = related.RequestID
+				break
+			}
 		}
 	}
 
 	return unified
 }
 
-// resumeSiblingSearchDepth bounds the findCompletedResumeSibling scan. Named
-// constant so the limitation is discoverable by grep rather than buried as a
-// magic number at the call site.
+// resumeSiblingSearchDepth bounds the best-effort family scan used to link
+// interruption and resume records. A future indexed lineage lookup can replace
+// this bounded scan without changing the unified API shape.
 const resumeSiblingSearchDepth = 200
-
-// findCompletedResumeSibling searches recent executions for a non-interrupted
-// record sharing the same original_request_id. Returns the sibling's request_id
-// or empty string when none exists.
-//
-// Scope and limits (Layer 4 UX banner, not load-bearing):
-//   - Only fires when the current execution is interrupted AND has a non-empty
-//     original_request_id (cheap early-out on the common case).
-//   - Scans the most recent resumeSiblingSearchDepth executions. Older siblings
-//     (e.g. an approval that pended for weeks) may not be found; the banner
-//     is best-effort.
-//   - No memoization or indexed lookup. Each unified-view load of an interrupted
-//     record issues one Redis pipeline fetch. Acceptable at current scale; if
-//     viewer load becomes a concern, add a short-TTL cache keyed by
-//     original_request_id or push an explicit index.
-func findCompletedResumeSibling(execution *StoredExecution) string {
-	if useMock || execution == nil || execution.OriginalRequestID == "" {
-		return ""
-	}
-	page, err := getRedisExecutionSummaries(resumeSiblingSearchDepth, "")
-	if err != nil || page == nil {
-		return ""
-	}
-	for _, s := range page.Summaries {
-		if s.RequestID == execution.RequestID {
-			continue
-		}
-		if s.OriginalRequestID != execution.OriginalRequestID {
-			continue
-		}
-		if !s.Interrupted {
-			return s.RequestID
-		}
-	}
-	return ""
-}
-
-// getHITLCheckpointsByRequestID finds all HITL checkpoints for a given request ID.
-// Delegates to the HTTP fan-out helper (RC3-Backend).
-func getHITLCheckpointsByRequestID(requestID string) ([]HITLCheckpoint, error) {
-	return getAgentHITLCheckpointsByRequestID(context.Background(), requestID)
-}
 
 // getRedisExecutionSummaries fetches recent execution summaries from Redis
 // executionPage holds a page of summaries with cursor for pagination.
@@ -2701,23 +3077,28 @@ func deserializeExecution(data []byte) (*StoredExecution, error) {
 	var jsonData []byte
 
 	// Check compression flag (first byte)
-	if data[0] == 1 {
+	switch data[0] {
+	case 1:
 		// Gzip compressed
 		reader, err := gzip.NewReader(bytes.NewReader(data[1:]))
 		if err != nil {
 			return nil, fmt.Errorf("gzip reader failed: %w", err)
 		}
-		defer reader.Close()
+		defer func() {
+			if closeErr := reader.Close(); closeErr != nil {
+				log.Printf("Failed to close gzip reader: %v", closeErr)
+			}
+		}()
 
 		var buf bytes.Buffer
 		if _, err := buf.ReadFrom(reader); err != nil {
 			return nil, fmt.Errorf("gzip decompress failed: %w", err)
 		}
 		jsonData = buf.Bytes()
-	} else if data[0] == 0 {
+	case 0:
 		// Raw JSON (skip flag byte)
 		jsonData = data[1:]
-	} else {
+	default:
 		// Legacy format (no flag byte, raw JSON)
 		jsonData = data
 	}
@@ -2972,7 +3353,7 @@ func getAgentHITLCheckpointSummaries(ctx context.Context) ([]HITLCheckpointSumma
 			continue
 		}
 		agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
-		resp, err := hitlHTTPClient.Get(agentURL + "/hitl/checkpoints")
+		resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints")
 		if err != nil {
 			log.Printf("Warning: could not reach agent %s for HITL checkpoints: %v", svc.Name, err)
 			continue
@@ -2981,7 +3362,7 @@ func getAgentHITLCheckpointSummaries(ctx context.Context) ([]HITLCheckpointSumma
 			Checkpoints []HITLCheckpoint `json:"checkpoints"`
 		}
 		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
+		closeHTTPBody(resp.Body)
 		if decodeErr != nil {
 			log.Printf("Warning: failed to decode HITL checkpoints from agent %s: %v", svc.Name, decodeErr)
 			continue
@@ -3014,21 +3395,21 @@ func getAgentHITLCheckpoint(ctx context.Context, checkpointID string) (*HITLChec
 			continue
 		}
 		agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
-		resp, err := hitlHTTPClient.Get(agentURL + "/hitl/checkpoints/" + url.PathEscape(checkpointID))
+		resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints/"+url.PathEscape(checkpointID))
 		if err != nil {
 			continue
 		}
 		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
+			closeHTTPBody(resp.Body)
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+			closeHTTPBody(resp.Body)
 			continue
 		}
 		var cp HITLCheckpoint
 		decodeErr := json.NewDecoder(resp.Body).Decode(&cp)
-		resp.Body.Close()
+		closeHTTPBody(resp.Body)
 		if decodeErr != nil {
 			continue
 		}
@@ -3065,11 +3446,11 @@ func getAgentHITLCheckpointsByRequestID(ctx context.Context, requestID string) (
 		}
 		g.Go(func() error {
 			agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
-			resp, err := hitlHTTPClient.Get(agentURL + "/hitl/checkpoints?request_id=" + url.QueryEscape(requestID))
+			resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints?request_id="+url.QueryEscape(requestID))
 			if err != nil {
 				return nil // swallow per-agent failures, same as the sequential implementation
 			}
-			defer resp.Body.Close()
+			defer closeHTTPBody(resp.Body)
 			if resp.StatusCode != http.StatusOK {
 				return nil
 			}
@@ -3739,7 +4120,8 @@ func initMemoryClients(factory MemoryBackendFactory, domains []string) {
 	for _, domain := range domains {
 		backends, err := factory(domain)
 		if err != nil {
-			log.Printf("[WARN] Memory: failed to init backends for domain %q: %v", domain, err)
+			// #nosec G706 -- every external value is normalized by safeLogText.
+			log.Printf("[WARN] Memory: failed to init backends for domain %q: %s", safeLogText(domain), safeLogText(err.Error()))
 			continue
 		}
 		built[domain] = &domainMemory{
@@ -3748,7 +4130,8 @@ func initMemoryClients(factory MemoryBackendFactory, domains []string) {
 			digest:      backends.Digest,
 			activity:    backends.Activity,
 		}
-		log.Printf("[INFO] Memory: initialized domain %q", domain)
+		// #nosec G706 -- the external value is normalized by safeLogText.
+		log.Printf("[INFO] Memory: initialized domain %q", safeLogText(domain))
 	}
 	// Only promote to the package-level map if we successfully built at
 	// least one domain — otherwise keep memoryDomains nil so getMemoryDomain
@@ -3851,7 +4234,7 @@ func handleMemoryDomains(w http.ResponseWriter, r *http.Request) {
 		"knowledge":      false, // Phase 2
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"domains":  domains,
 		"backends": backends,
 	})
@@ -3881,7 +4264,7 @@ func handleMemoryEvents(w http.ResponseWriter, r *http.Request) {
 		for i, e := range events {
 			jsonEvents[i] = agentEventToJSON(e)
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"events":      jsonEvents,
 			"total_count": len(jsonEvents),
 			"domain":      domain,
@@ -3912,7 +4295,8 @@ func handleMemoryEvents(w http.ResponseWriter, r *http.Request) {
 
 	events, err := dm.episodic.QueryEvents(ctx, domain, filter)
 	if err != nil {
-		log.Printf("[ERROR] Memory: QueryEvents failed for domain %q: %v", domain, err)
+		// #nosec G706 -- every external value is normalized by safeLogText.
+		log.Printf("[ERROR] Memory: QueryEvents failed for domain %q: %s", safeLogText(domain), safeLogText(err.Error()))
 		http.Error(w, `{"error":"query_failed","message":"Failed to query episodic events"}`, http.StatusInternalServerError)
 		return
 	}
@@ -3922,7 +4306,7 @@ func handleMemoryEvents(w http.ResponseWriter, r *http.Request) {
 		jsonEvents[i] = agentEventToJSON(e)
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"events":      jsonEvents,
 		"total_count": len(jsonEvents),
 		"domain":      domain,
@@ -3957,7 +4341,7 @@ func handleMemoryEventsRecent(w http.ResponseWriter, r *http.Request) {
 		for i, e := range events {
 			jsonEvents[i] = agentEventToJSON(e)
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"events":      jsonEvents,
 			"total_count": len(jsonEvents),
 			"domain":      domain,
@@ -3977,7 +4361,8 @@ func handleMemoryEventsRecent(w http.ResponseWriter, r *http.Request) {
 
 	events, err := dm.episodic.QueryRecentEvents(ctx, domain, time.Now().Add(-since), limit)
 	if err != nil {
-		log.Printf("[ERROR] Memory: QueryRecentEvents failed for domain %q: %v", domain, err)
+		// #nosec G706 -- every external value is normalized by safeLogText.
+		log.Printf("[ERROR] Memory: QueryRecentEvents failed for domain %q: %s", safeLogText(domain), safeLogText(err.Error()))
 		http.Error(w, `{"error":"query_failed","message":"Failed to query recent events"}`, http.StatusInternalServerError)
 		return
 	}
@@ -3987,7 +4372,7 @@ func handleMemoryEventsRecent(w http.ResponseWriter, r *http.Request) {
 		jsonEvents[i] = agentEventToJSON(e)
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"events":      jsonEvents,
 		"total_count": len(jsonEvents),
 		"domain":      domain,
@@ -4002,7 +4387,7 @@ func handleMemoryInvestigations(w http.ResponseWriter, r *http.Request) {
 
 	if useMock {
 		investigations := getMockMemoryInvestigations(domain)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"investigations": investigations,
 			"total_count":    len(investigations),
 		})
@@ -4031,7 +4416,8 @@ func handleMemoryInvestigations(w http.ResponseWriter, r *http.Request) {
 		}
 		claims, err := dm.coordinator.GetActiveInvestigations(ctx)
 		if err != nil {
-			log.Printf("[WARN] Memory: GetActiveInvestigations failed for domain %q: %v", d, err)
+			// #nosec G706 -- every external value is normalized by safeLogText.
+			log.Printf("[WARN] Memory: GetActiveInvestigations failed for domain %q: %s", safeLogText(d), safeLogText(err.Error()))
 			continue
 		}
 		for entityID, holder := range claims {
@@ -4047,7 +4433,7 @@ func handleMemoryInvestigations(w http.ResponseWriter, r *http.Request) {
 		results = []investigation{}
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"investigations": results,
 		"total_count":    len(results),
 	})
@@ -4063,7 +4449,7 @@ func handleMemoryDigest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if useMock {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"domain":    domain,
 			"digest":    getMockMemoryDigest(domain),
 			"available": true,
@@ -4082,8 +4468,9 @@ func handleMemoryDigest(w http.ResponseWriter, r *http.Request) {
 
 	data, err := dm.digest.GetDigest(ctx, domain)
 	if err != nil {
-		log.Printf("[WARN] Memory: GetDigest failed for domain %q: %v", domain, err)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// #nosec G706 -- every external value is normalized by safeLogText.
+		log.Printf("[WARN] Memory: GetDigest failed for domain %q: %s", safeLogText(domain), safeLogText(err.Error()))
+		writeJSON(w, map[string]interface{}{
 			"domain":    domain,
 			"digest":    "",
 			"available": false,
@@ -4093,7 +4480,7 @@ func handleMemoryDigest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(data) == 0 {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"domain":    domain,
 			"digest":    "",
 			"available": false,
@@ -4112,8 +4499,10 @@ func handleMemoryDigest(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(data, &digestData); err == nil && digestData.Content != "" {
 		// Re-marshal the raw data with indentation for the raw view
 		var rawPretty interface{}
-		json.Unmarshal(data, &rawPretty)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.Unmarshal(data, &rawPretty); err != nil {
+			rawPretty = string(data)
+		}
+		writeJSON(w, map[string]interface{}{
 			"domain":       domain,
 			"digest":       digestData.Content,
 			"generated_at": digestData.GeneratedAt,
@@ -4122,7 +4511,7 @@ func handleMemoryDigest(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		// Fallback: treat raw bytes as plain text digest
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"domain":    domain,
 			"digest":    string(data),
 			"available": true,
@@ -4141,7 +4530,7 @@ func handleMemoryActivities(w http.ResponseWriter, r *http.Request) {
 
 	if useMock {
 		activities := getMockMemoryActivities(domain)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"activities":  activities,
 			"domain":      domain,
 			"total_count": len(activities),
@@ -4160,7 +4549,8 @@ func handleMemoryActivities(w http.ResponseWriter, r *http.Request) {
 
 	signals, err := dm.activity.GetDomainActivities(ctx, domain)
 	if err != nil {
-		log.Printf("[WARN] Memory: GetDomainActivities failed for domain %q: %v", domain, err)
+		// #nosec G706 -- every external value is normalized by safeLogText.
+		log.Printf("[WARN] Memory: GetDomainActivities failed for domain %q: %s", safeLogText(domain), safeLogText(err.Error()))
 		signals = nil
 	}
 
@@ -4186,7 +4576,7 @@ func handleMemoryActivities(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"activities":  results,
 		"domain":      domain,
 		"total_count": len(results),

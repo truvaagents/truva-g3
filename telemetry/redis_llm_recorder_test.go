@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,6 +323,56 @@ func TestRecorderConstants_MatchOrchestrationDefaults(t *testing.T) {
 	if recorderMaxBackoff != 2*time.Second {
 		t.Errorf("recorderMaxBackoff = %v, want 2s", recorderMaxBackoff)
 	}
+	if recorderConversationMetadataField != "meta:"+core.MetadataConversationID {
+		t.Errorf(
+			"recorderConversationMetadataField = %q, want shared core key",
+			recorderConversationMetadataField,
+		)
+	}
+}
+
+func TestRedisLLMCallRecorderOptionsNormalizeNonPositiveTTLs(t *testing.T) {
+	mr := miniredis.RunT(t)
+	recorder, err := NewRedisLLMCallRecorder(
+		WithRecorderRedisURL(mr.Addr()),
+		WithRecorderRedisDB(0),
+		WithRecorderTTL(0),
+		WithRecorderErrorTTL(-time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewRedisLLMCallRecorder: %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	if recorder.ttl != recorderDefaultTTL || recorder.errTTL != recorderErrorTTL {
+		t.Fatalf(
+			"recorder TTLs = (%v, %v), want (%v, %v)",
+			recorder.ttl,
+			recorder.errTTL,
+			recorderDefaultTTL,
+			recorderErrorTTL,
+		)
+	}
+
+	for _, test := range []struct {
+		requestID string
+		success   bool
+		wantTTL   time.Duration
+	}{
+		{requestID: "normalized-success", success: true, wantTTL: recorderDefaultTTL},
+		{requestID: "normalized-error", success: false, wantTTL: recorderErrorTTL},
+	} {
+		if err := recorder.RecordLLMCall(
+			context.Background(),
+			test.requestID,
+			LLMCallRecord{CallType: "test", Success: test.success},
+		); err != nil {
+			t.Fatalf("RecordLLMCall(%s): %v", test.requestID, err)
+		}
+		metaKey := recorderKeyPrefix + test.requestID + recorderMetaSuffix
+		if got := mr.TTL(metaKey); got != test.wantTTL {
+			t.Fatalf("TTL(%s) = %v, want %v", metaKey, got, test.wantTTL)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +414,105 @@ func setupRedisLLMRecorderTest(t *testing.T) (*miniredis.Miniredis, *RedisLLMCal
 		errTTL: recorderErrorTTL,
 	}
 	return mr, r
+}
+
+func TestRecordLLMCall_PreservesPromotedAndPersistentRetention(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	ctx := context.Background()
+	requestID := "request-retention"
+	record := LLMCallRecord{CallType: "agent_llm_call", Success: true}
+	if err := recorder.RecordLLMCall(ctx, requestID, record); err != nil {
+		t.Fatalf("initial write: %v", err)
+	}
+
+	keys := []string{
+		recorderKeyPrefix + requestID + recorderMetaSuffix,
+		recorderKeyPrefix + requestID + recorderInterSuffix,
+	}
+	for _, key := range keys {
+		if err := recorder.client.PExpire(ctx, key, 14*24*time.Hour).Err(); err != nil {
+			t.Fatalf("promote %s: %v", key, err)
+		}
+	}
+	if err := recorder.RecordLLMCall(ctx, requestID, record); err != nil {
+		t.Fatalf("write after promotion: %v", err)
+	}
+	for _, key := range keys {
+		if got := mr.TTL(key); got != 14*24*time.Hour {
+			t.Fatalf("%s TTL = %v, want 14d", key, got)
+		}
+		if err := recorder.client.Persist(ctx, key).Err(); err != nil {
+			t.Fatalf("persist %s: %v", key, err)
+		}
+	}
+	if err := recorder.RecordLLMCall(ctx, requestID, record); err != nil {
+		t.Fatalf("write after persist: %v", err)
+	}
+	for _, key := range keys {
+		if got := mr.TTL(key); got != 0 {
+			t.Fatalf("persistent %s gained TTL %v", key, got)
+		}
+	}
+}
+
+func TestRecordLLMCall_ConcurrentWritersKeepLongestRetention(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	ctx := context.Background()
+	requestID := "request-concurrent-retention"
+
+	var wg sync.WaitGroup
+	for index := 0; index < 40; index++ {
+		success := index%2 != 0
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := recorder.RecordLLMCall(ctx, requestID, LLMCallRecord{
+				CallType: "agent_llm_call",
+				Success:  success,
+			}); err != nil {
+				t.Errorf("concurrent write: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, key := range []string{
+		recorderKeyPrefix + requestID + recorderMetaSuffix,
+		recorderKeyPrefix + requestID + recorderInterSuffix,
+	} {
+		if got := mr.TTL(key); got != recorderErrorTTL {
+			t.Fatalf("%s TTL = %v, want %v", key, got, recorderErrorTTL)
+		}
+	}
+}
+
+func TestRecordLLMCall_PreservesApplicationPayloadsAtPersistence(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	payload := "password=local-debug-value"
+	requestID := "request-payload-fidelity"
+	if err := recorder.RecordLLMCall(context.Background(), requestID, LLMCallRecord{
+		CallType:     "agent_llm_call",
+		Description:  "description " + payload,
+		Prompt:       "prompt " + payload,
+		SystemPrompt: "system " + payload,
+		Response:     "response " + payload,
+		Error:        "error " + payload,
+		Success:      false,
+	}); err != nil {
+		t.Fatalf("RecordLLMCall: %v", err)
+	}
+
+	key := recorderKeyPrefix + requestID + recorderInterSuffix
+	values, err := recorder.client.LRange(context.Background(), key, 0, -1).Result()
+	if err != nil || len(values) != 1 {
+		t.Fatalf("stored interactions = (%v, %v)", values, err)
+	}
+	if !strings.Contains(values[0], payload) || strings.Contains(values[0], "[REDACTED]") {
+		t.Fatalf("persisted interaction changed application payloads: %s", values[0])
+	}
+	if got := mr.TTL(key); got != recorderErrorTTL {
+		t.Fatalf("error interaction TTL = %v, want %v", got, recorderErrorTTL)
+	}
 }
 
 // TestRecordLLMCall_StampsOriginatingAgentFromBaggage is the format-twin

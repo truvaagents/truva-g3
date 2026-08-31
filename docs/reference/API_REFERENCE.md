@@ -1404,7 +1404,8 @@ effective scheduler feature requirements, and register the bundle's runnables.
 
 #### core/conformance Sub-Package
 
-Contract test suite for `TaskConsumer` implementations.
+Reusable contract test suites for interfaces owned by Core. This package is
+test support: provider tests import it, while runtime packages do not.
 
 ```go
 // core/conformance/task_consumer_conformance.go
@@ -1414,6 +1415,9 @@ func RunTaskDeliveryProfileConformance(
     profile TaskDeliveryProfile,
     factory TaskDeliveryFactory,
 )
+func RunTaskStoreConformance(t *testing.T, factory TaskStoreFactory)
+func RunScheduleStoreConformance(t *testing.T, factory ScheduleStoreFactory)
+func RunTaskQueueConformance(t *testing.T, factory TaskQueueFactory)
 
 const (
     TaskDeliveryAtMostOnce  TaskDeliveryProfile = "at_most_once"
@@ -1421,11 +1425,14 @@ const (
 )
 ```
 
-The base suite runs 10 transport-neutral subtests covering roundtrip,
+The task-consumer base suite runs 10 transport-neutral subtests covering roundtrip,
 settlement, idempotency, cancellation, concurrency, field preservation, and
 double settlement. The profile suite also checks terminal dead-letter behavior
 and the recovery semantics advertised by an at-most-once or at-least-once
-adapter.
+adapter. The storage suites verify lifecycle, namespace isolation,
+cross-instance visibility, cancellation, ordering, state transitions, and
+settlement behavior appropriate to `TaskStore`, `ScheduleStore`, and the legacy
+`TaskQueue`.
 
 The test-only `orchestration/backendconformance` package supplies corresponding
 provider-neutral suites for execution-debug and LLM-debug stores, checkpoint
@@ -1494,8 +1501,8 @@ func (h *HotelHandler) handleSearch(rw http.ResponseWriter, r *http.Request) {
 
 #### RedactSensitiveText
 
-Sanitizes untrusted diagnostic text before it is written to logs, traces,
-execution/debug state, or another model prompt:
+Explicit helpers that an application, adapter, or framework subsystem may call
+when it has deliberately chosen to transform diagnostic text:
 
 ```go
 func RedactSensitiveText(value string) string
@@ -1513,13 +1520,21 @@ basic authorization values, credential-bearing URL user information, and common
 credential query parameters. It retains surrounding diagnostic structure and
 replaces values with `[REDACTED]`.
 
-This is defense in depth, not a general secret detector. Applications should
-still avoid placing credentials in URLs, response bodies, errors, prompts, or
-logs. The orchestration executor applies the helper to downstream failure text
-before retry/error-analysis prompts, state, logs, traces, checkpoints, and
-execution debug records. Successful tool payloads are not rewritten because
-they are application data. Tools that return logs or other observability data
-should sanitize those lines before returning them.
+This is a lossy, pattern-based transformation, not a general secret detector
+and not a framework-wide persistence guarantee. Built-in debug stores and
+recorders preserve the values supplied to them. Applications that require
+redaction must choose and install that policy explicitly through their logger,
+telemetry pipeline, recorder, storage implementation, middleware, or processing
+hooks.
+
+Some older framework paths still invoke these helpers before storage or
+observation. In particular, the orchestration executor currently transforms
+downstream failure text used by retry/error-analysis and error surfaces, and
+selected skills and provider diagnostics have similar behavior. These are
+legacy implementation exceptions pending the audit required by
+`FRAMEWORK_DESIGN_PRINCIPLES.md`; adopters must not rely on them as complete or
+stable sanitization. Successful application payloads are not automatically
+rewritten.
 
 Use `RedactSensitiveText` when only an observation field needs sanitization.
 Use `RedactSensitiveError` when the sanitized error is returned: its `Error`
@@ -1568,6 +1583,8 @@ func WithStepID(ctx context.Context, id string) context.Context
 func GetStepID(ctx context.Context) string
 
 // Validate and carry opaque multi-turn correlation.
+const MetadataConversationID = "conversation_id"
+
 func ValidateConversationID(id string) ConversationIDValidationReason
 func WithConversationID(ctx context.Context, id string) context.Context
 func GetConversationID(ctx context.Context) string
@@ -1577,6 +1594,10 @@ func WithoutConversationID(ctx context.Context) context.Context
 
 `ValidateConversationID` accepts 1–512 bytes from the documented
 W3C-baggage-safe visible-ASCII subset and returns a bounded reason enum.
+`MetadataConversationID` is the shared framework-owned metadata and baggage
+key. `orchestration.MetadataConversationID` remains an alias so applications
+can continue to set orchestration request metadata without importing a second
+package.
 `WithConversationID` records a programmatic candidate. An explicit
 `X-TruvaG3-Conversation-ID` candidate has precedence regardless of call order;
 invalid raw values are not retained. `WithoutConversationID` shadows inherited
@@ -3860,10 +3881,21 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 | `WithRecorderRedisURL(url)` | Redis connection URL |
 | `WithRecorderRedisDB(db)` | Redis database number (default: 7) |
 | `WithRecorderLogger(logger)` | Logger for recorder operations |
-| `WithRecorderTTL(ttl)` | TTL for successful records (default: 24h) |
-| `WithRecorderErrorTTL(ttl)` | TTL for error records (default: 7 days) |
+| `WithRecorderTTL(ttl)` | Base TTL for successful records (default: 24h); an existing longer/persistent lifetime or retention floor wins |
+| `WithRecorderErrorTTL(ttl)` | Base TTL for error records (default: 7 days); an existing longer/persistent lifetime or retention floor wins |
 
 **Built-in resilience:** Layer 1 retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures within 30s triggers cooldown).
+
+The Redis write is an atomic append/metadata/index/minimum-TTL operation. It
+does not shorten a longer lifetime or make a persistent record expiring, so it
+can safely share a request record with `orchestration.RedisLLMDebugStore` after
+execution or lineage retention has been promoted. The built-in recorder
+preserves the prompt, system prompt, response, description, and error text it
+receives; it does not infer sensitive application fields or silently redact
+their values. Applications that require sanitization must supply it explicitly
+through their logger, telemetry pipeline, recorder, storage implementation, or
+middleware and must govern access, encryption, and retention for this opt-in
+debug data.
 
 **Example:**
 ```go
@@ -3874,8 +3906,13 @@ recorder, err := telemetry.NewRedisLLMCallRecorder(
 if err != nil {
     log.Printf("LLM recording disabled: %v", err)
     recorder = nil // InstrumentedClient falls back to NoOp
+} else {
+    defer func() {
+        if closeErr := recorder.Close(); closeErr != nil {
+            log.Printf("LLM recorder close failed: %v", closeErr)
+        }
+    }()
 }
-defer recorder.Close()
 ```
 
 ### Distributed Tracing
@@ -4482,6 +4519,8 @@ func (b *OrchestrationBackends) With(...OrchestrationBackendOption) (*Orchestrat
 func (b *OrchestrationBackends) ValidateFor(BackendRequirements) error
 
 func RequirementsForFeatures(*OrchestratorConfig, ...BackendFeature) (BackendRequirements, error)
+func WireOrchestratorBackends(*OrchestratorConfig, *OrchestrationBackends) error
+func (b *OrchestrationBackends) SkillAdministrationDependencies() (SkillAdminHandlerDependencies, error)
 ```
 
 Typed options populate or override individual capabilities:
@@ -4491,6 +4530,7 @@ WithExecutionBackend(ExecutionStore)
 WithLLMDebugBackend(LLMDebugStore)
 WithCheckpointPersistence(CheckpointPersistence)
 WithCheckpointExpiry(ExpiredCheckpointSource)
+WithCheckpointExpiryProcessor(core.Runnable)
 WithCommandBackend(CommandStore)
 WithWorkflowBackend(StateStore)
 WithScheduleBackend(core.ScheduleStore)
@@ -4508,18 +4548,33 @@ WithRunnables(...core.Runnable)
 ```
 
 Matching getters are `Execution`, `LLMDebug`, `Checkpoints`,
-`CheckpointExpiry`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
+`CheckpointExpiry`, `CheckpointExpiryProcessor`, `Commands`, `Workflow`, `Schedules`, `Tasks`, `TaskQueue`,
 `TaskDispatcher`, `TaskConsumer`, `Lock`, `SkillRegistry`, `SkillRevisionReader`,
 `SkillAdministrationStore`, `SkillRevisionDeletionStore`, `SkillAuditSink`, and
-`Runnables`. Getters are nil-safe;
-`Runnables` returns a defensive copy.
+`Runnables`. Getters are nil-safe; `Runnables` returns a defensive copy.
+`WithRunnables` appends rather than replacing previously composed lifecycle
+components. Replacing checkpoint persistence or the expired-checkpoint source
+invalidates the old processor so it cannot remain bound to stale dependencies.
+Within one option list, dependency options must precede an explicit checkpoint
+processor; the reverse order fails instead of silently substituting a default.
 
 `RequirementsForFeatures` combines execution/LLM-debug requirements from the
 effective orchestrator configuration with explicit feature flags such as
 `BackendFeatureWorkflow`, `BackendFeatureCrossInstanceHITL`,
 `BackendFeatureCheckpointExpiry`, `BackendFeatureSchedulerProducer`,
-`BackendFeatureScheduledWorker`, and `BackendFeatureDistributedLock`.
+`BackendFeatureScheduledWorker`, `BackendFeatureDistributedLock`,
+`BackendFeatureSkillsRuntime`, and `BackendFeatureSkillsAdministration`.
 `ValidateFor` fails startup with the complete sorted missing-capability list.
+The scheduler-producer feature requires schedules, tasks, dispatcher, and lock.
+Checkpoint expiry requires persistence, source, and processor capabilities.
+`BackendSkills` remains a source-compatible alias for the runtime skill-registry
+capability; revision reading, publication, deletion, and audit are distinct
+control-plane capabilities.
+
+`WireOrchestratorBackends` fills only enabled dependencies that are still nil;
+explicitly injected config dependencies win. `SkillAdministrationDependencies`
+validates and unpacks the complete management dependency set for
+`NewSkillAdminHandler`.
 
 #### Included Redis preset
 
@@ -4528,40 +4583,43 @@ The included implementation lives in
 orchestration imports:
 
 ```go
-redisClient := redis.NewClient(core.ApplyRedisClientDefaults(
-    &redis.Options{Addr: "redis:6379"},
-))
-defer redisClient.Close()
-
-clients, err := redisprovider.NewClientSet(redisClient)
-if err != nil {
-    log.Fatal(err)
-}
-options, err := redisprovider.NewOptions(
-    redisprovider.WithNamespace("travel-chat-agent"),
-    redisprovider.WithLogger(logger),
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendProviderOptions(
+        redisprovider.WithNamespace("travel-chat-agent"),
+    ),
 )
 if err != nil {
     log.Fatal(err)
 }
-backends, err := redisprovider.NewOrchestrationBackends(clients, options)
-if err != nil {
-    log.Fatal(err)
-}
+defer ownedBackends.Close()
+backends := ownedBackends.Backends()
 ```
 
+`NewDefaultBackends` is the Layer-1 path. It loads documented environment
+configuration, applies explicit client/provider/backend options last, creates
+and validates either all roles or the roles selected by
+`WithDefaultBackendRoles`, and returns `OwnedBackends` for deterministic client
+cleanup. `WithDefaultBackendClientConfig`,
+`WithDefaultBackendProviderOptions`, and `WithDefaultBackendOverrides` expose
+the lower-layer customization seams without duplicating their implementation.
+
 `ClientSet` accepts one application-owned default Redis client plus optional
-role-specific clients through `WithRoleClient`. For configuration-owned
-connections, use `DefaultClientConfig`,
-`LoadClientConfigFromEnvironment`, and `NewOwnedClients`; close the returned
-`OwnedClients` after the framework stops. Redis URLs are parsed without being
-repeated in errors.
+role-specific clients through `WithRoleClient`. A default client is an explicit
+fallback for every role; pass nil plus role clients to construct only selected
+capability groups. For configuration-owned connections, use
+`DefaultClientConfig`, `LoadClientConfigFromEnvironment`, and `NewOwnedClients`;
+`WithOwnedClientRoles` restricts creation to the roles the process needs. Close
+the returned `OwnedClients` after the framework stops. Redis URLs are parsed
+without being repeated in errors. Default role/database assignments preserve
+legacy behavior and are compatibility values, not deployment recommendations.
 
 Preset options are created with `NewOptions`. Deployment-owned operational
 values can then be applied using `LoadOptionsFromEnvironment`, followed by
 `ConfigureOptions` when code must win. Supported options include namespace,
-logger, execution-store configuration, workflow TTL, task-queue retry policy,
-and checkpoint expiry. Caller-supplied root backend overrides are applied last:
+logger, execution-store configuration, LLM-debug retention, checkpoint
+retention, workflow TTL, task-queue retry policy, and checkpoint expiry.
+Caller-supplied root backend overrides are applied last:
 
 ```go
 backends, err := redisprovider.NewOrchestrationBackends(
@@ -4580,6 +4638,14 @@ change runtime feature wiring.
 The Redis preset's explicit configuration surface is:
 
 ```go
+func NewDefaultBackends(core.Logger, ...DefaultBackendsOption) (*OwnedBackends, error)
+func WithDefaultBackendRoles(...ClientRole) DefaultBackendsOption
+func WithDefaultBackendClientConfig(...ClientConfigOption) DefaultBackendsOption
+func WithDefaultBackendProviderOptions(...Option) DefaultBackendsOption
+func WithDefaultBackendOverrides(...orchestration.OrchestrationBackendOption) DefaultBackendsOption
+func (*OwnedBackends) Backends() *orchestration.OrchestrationBackends
+func (*OwnedBackends) Close() error
+
 func DefaultClientConfig() ClientConfig
 func ConfigureClientConfig(ClientConfig, ...ClientConfigOption) (ClientConfig, error)
 func LoadClientConfigFromEnvironment(ClientConfig, func(string) (string, bool)) (ClientConfig, error)
@@ -4587,7 +4653,8 @@ func WithClientURL(string) ClientConfigOption
 func WithRoleDatabase(ClientRole, int) ClientConfigOption
 func NewClientSet(redis.UniversalClient, ...ClientSetOption) (*ClientSet, error)
 func WithRoleClient(ClientRole, redis.UniversalClient) ClientSetOption
-func NewOwnedClients(ClientConfig) (*OwnedClients, error)
+func NewOwnedClients(ClientConfig, ...OwnedClientsOption) (*OwnedClients, error)
+func WithOwnedClientRoles(...ClientRole) OwnedClientsOption
 func (*OwnedClients) ClientSet() *ClientSet
 func (*OwnedClients) Close() error
 
@@ -4605,6 +4672,8 @@ func ConfigureOptions(Options, ...Option) (Options, error)
 func LoadOptionsFromEnvironment(Options, func(string) (string, bool)) (Options, error)
 func WithNamespace(string) Option
 func WithExecutionStoreConfig(orchestration.ExecutionStoreConfig) Option
+func WithLLMDebugRetention(time.Duration, time.Duration) Option
+func WithCheckpointTTL(time.Duration) Option
 func WithLogger(core.Logger) Option
 func WithWorkflowStateTTL(time.Duration) Option
 func WithTaskQueueRetryPolicy(int, time.Duration) Option
@@ -4662,6 +4731,9 @@ The included Redis source uses atomic owner/lease claims so multiple replicas
 do not process the same expiry concurrently. The default claim lease is 30
 seconds and can be overridden with
 `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` or code configuration.
+When the preset assembles expiry, it binds the processor after applying final
+checkpoint overrides. `BackendFeatureCheckpointExpiry` validation therefore
+fails if only persistence/source are present without a runnable processor.
 
 **Example - Production Orchestrator:**
 ```go
@@ -4740,6 +4812,7 @@ type Orchestrator interface {
     // 2. Returns a complete OrchestratorResponse (not raw ExecutionResult)
     // 3. Stores execution to ExecutionStore for DAG visualization
     // 4. Sets up context baggage for request_id propagation
+    // It does not run pipeline hooks or store a post-hook FinalResponse.
     ExecutePlanWithSynthesis(ctx context.Context, plan *RoutingPlan, originalRequest string) (*OrchestratorResponse, error)
 
     // GetExecutionHistory returns recent execution history
@@ -4756,7 +4829,7 @@ type Orchestrator interface {
 |--------|----------|
 | `ProcessRequest` | Natural language requests with AI-driven planning |
 | `ExecutePlan` | Pre-defined workflows when you need raw results for custom synthesis |
-| `ExecutePlanWithSynthesis` | Pre-defined workflows with full observability (DAG visualization, LLM debug store) |
+| `ExecutePlanWithSynthesis` | Pre-defined workflow execution with synthesis, DAG visualization, and LLM debug evidence; no application pipeline hooks or post-hook `FinalResponse` |
 
 **Example - ExecutePlanWithSynthesis:**
 ```go
@@ -5602,7 +5675,20 @@ type LLMDebugStore interface {
     // ListRecent returns recent records for UI listing (newest first)
     ListRecent(ctx context.Context, limit int) ([]LLMDebugRecordSummary, error)
 }
+
+// Optional capability used by final execution recording. It establishes a
+// minimum lifetime for existing and future writes without creating an empty
+// debug record.
+type LLMDebugRetentionPreserver interface {
+    PreserveRetention(ctx context.Context, requestID string, duration time.Duration) error
+}
 ```
+
+`RedisLLMDebugStore` implements `LLMDebugRetentionPreserver` with a small
+request-scoped retention-floor key. Both the orchestration writer and
+`telemetry.RedisLLMCallRecorder` consult it atomically, so late or
+cross-process writes inherit the final execution lifetime. Custom stores that
+do not implement the optional capability continue through `ExtendTTL`.
 
 #### LLMInteraction Type
 
@@ -5642,16 +5728,16 @@ type LLMInteraction struct {
 }
 ```
 
-#### Factory Options
+#### Factory Options and Compatibility Constructors
 
 ```go
-// Orchestrator options (for CreateOrchestratorWithOptions)
+// Environment-compatible orchestrator options
 orchestration.WithLLMDebug(true)                    // Enable debug capture
 orchestration.WithLLMDebugStore(customStore)        // Inject custom store
 orchestration.WithLLMDebugTTL(48 * time.Hour)       // Custom TTL for success
 orchestration.WithLLMDebugErrorTTL(14 * 24 * time.Hour) // Custom TTL for errors
 
-// RedisLLMDebugStore options (for NewRedisLLMDebugStore)
+// Direct Redis compatibility-constructor options
 orchestration.WithDebugRedisURL("redis://localhost:6379")
 orchestration.WithDebugRedisDB(7)
 orchestration.WithDebugLogger(logger)
@@ -5677,17 +5763,32 @@ configure routing on the supplied client and use `WithDebugKeyPrefix` for key
 isolation. `WithDebugRedisURL` and `WithDebugRedisDB` do not reconfigure an
 already-supplied client.
 
+New applications should normally construct the included adapter through the
+Redis preset and inject the provider-neutral store. The direct constructors and
+`CreateOrchestratorWithOptions` remain supported compatibility paths.
+
 **Example - Enable Debug Capture:**
 ```go
+ownedBackends, err := redisprovider.NewDefaultBackends(
+    logger,
+    redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleLLMDebug),
+)
+if err != nil {
+    return err
+}
+defer ownedBackends.Close()
+
+config := orchestration.NewDefaultOrchestratorConfig()
+config.LLMDebug.Enabled = true
+if err := orchestration.WireOrchestratorBackends(config, ownedBackends.Backends()); err != nil {
+    return err
+}
 deps := orchestration.OrchestratorDependencies{
     Discovery: discovery,
     AIClient:  aiClient,
+    Logger:    logger,
 }
-
-// Enable debug capture
-orchestrator, err := orchestration.CreateOrchestratorWithOptions(deps,
-    orchestration.WithLLMDebug(true),
-)
+orchestrator, err := orchestration.CreateResolvedOrchestrator(config, deps)
 
 // Query debug records (from your application's API)
 record, _ := orchestrator.GetLLMDebugStore().GetRecord(ctx, requestID)
@@ -5737,14 +5838,45 @@ type LLMDebugRecordSummary struct {
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | TTL for successful records |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | TTL for error records (7 days) |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database index |
+| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of `LLMDebugStore` |
 
 ### Execution Debug Store
 
 `ExecutionStore` remains the required request-oriented persistence contract.
 Conversation lookup is additive capability discovery:
+
+```go
+type StoredExecution struct {
+    // Existing correlation, request, plan, result, HITL, phase, skill, and
+    // metadata fields are omitted here for brevity.
+
+    // FinalResponse is the terminal application response captured after
+    // AfterSynthesis hooks on the normal ProcessRequest paths.
+    FinalResponse       *string `json:"final_response,omitempty"`
+    FinalResponseSource string  `json:"final_response_source,omitempty"`
+}
+
+const FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+```
+
+The LLM debug store retains the model's synthesis output. That output is a raw
+LLM draft, not proof of what the application ultimately returned. When the
+normal buffered or native-streaming `ProcessRequest` path reaches its terminal
+response, the execution recorder stores the post-`AfterSynthesis` value in
+`FinalResponse` and labels its source with
+`FinalResponseSourceAfterSynthesisHooks`. Registry Viewer displays that value
+under Post-Execution and keeps the synthesis interaction under LLM Calls.
+On native streaming, tokens were already emitted before `AfterSynthesis` ran;
+the stored value is the post-hook response object and may differ from text the
+client already received.
+
+`ExecutePlanWithSynthesis` is workflow mode: it executes a supplied plan and
+performs synthesis, but it does not run application pipeline hooks and does not
+currently store `FinalResponse`. Consumers must therefore treat its synthesis
+record as model output, not as post-hook application evidence. Historical
+records written before these fields existed also legitimately omit them.
 
 ```go
 type ConversationExecutionLister interface {
@@ -5762,12 +5894,50 @@ type IndexTTLManager interface {
         minTTL time.Duration,
     ) error
 }
+
+type KeyTTLManager interface {
+    // ExtendKeyTTL preserves an existing key for at least minTTL. It does not
+    // create a missing key, shorten a longer TTL, or expire a persistent key.
+    ExtendKeyTTL(ctx context.Context, key string, minTTL time.Duration) error
+
+    // SetKeyWithMinimumTTL writes value atomically while preserving the larger
+    // of the previous remaining TTL and minTTL. Persistent keys stay persistent.
+    SetKeyWithMinimumTTL(
+        ctx context.Context,
+        key string,
+        value string,
+        minTTL time.Duration,
+    ) error
+}
+
+type ExecutionStorageProvider interface {
+    StorageProvider
+    KeyTTLManager
+}
 ```
 
 Use `lister, ok := store.(ConversationExecutionLister)`; the NoOp store does
 not advertise the capability. Provider-backed stores may implement
 `IndexTTLManager`, but its absence is supported through bounded lazy index
-cleanup.
+cleanup. `NewExecutionStoreWithProvider` and `WithExecutionStoreProvider`
+require `ExecutionStorageProvider`, making atomic lineage promotion and
+TTL-preserving content rewrites compile-time provider requirements.
+
+Interrupted executions receive at least the maximum of normal retention, error
+retention, and the checkpoint's remaining approval lifetime. Within the
+execution store, storing a related execution promotes its existing root
+execution, trace mapping, and conversation index to the selected minimum
+lifetime. Final execution recording separately promotes current/root LLM-debug
+evidence through `LLMDebugRetentionPreserver`, with
+`LLMDebugStore.ExtendTTL` used as a compatibility fallback.
+`ExecutionStore.ExtendTTL` follows retained root links recursively with cycle
+protection. Normal extension reads a small
+retention-link projection instead of decoding the full execution payload, and
+direct Redis performs the related key updates inside its retry/circuit-breaker
+boundary. A missing requested execution returns
+`ErrExecutionRecordNotFound`. If the requested execution exists but a later
+ancestor has expired, the available retained chain is extended successfully
+and traversal stops without recreating the ancestor.
 
 `StoredExecution.Metadata` and `ExecutionSummary.Metadata` carry the
 framework-owned `MetadataConversationID`. Read it with
@@ -5784,6 +5954,10 @@ type ExecutionStoreConfig struct {
     ConversationIndexScanLimit int // default 5000
 }
 ```
+
+Non-positive `TTL` and `ErrorTTL` values in programmatic configuration are
+normalized to the standard 24-hour and 7-day defaults. They do not disable
+persistence or produce an invalid Redis expiry.
 
 The included direct Redis adapter exposes both store-owned and
 application-owned construction paths:
@@ -5822,7 +5996,8 @@ options apply afterward. `WithExecutionDebugRedisURL` and
 
 Positive programmatic values are authoritative. Per-call result limits are
 clamped to `ConversationQueryLimit`, and stale-index work is bounded by
-`ConversationIndexScanLimit`.
+`ConversationIndexScanLimit`. After explicit adapter options are applied,
+non-positive normal or error TTLs are normalized to the framework defaults.
 
 | Variable | Default |
 |---|---:|

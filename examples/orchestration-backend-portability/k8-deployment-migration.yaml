@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: portability-postgres-migration
+  namespace: truvag3-examples
+  labels:
+    app: portability-postgres-migration
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app: portability-postgres-migration
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+      containers:
+      - name: migrate
+        image: postgres:17.6-alpine
+        imagePullPolicy: IfNotPresent
+        command: ["psql"]
+        args: ["$(POSTGRES_URL)", "--set", "ON_ERROR_STOP=1", "--file", "/migrations/001_create_orchestration_tables.sql"]
+        env:
+        - name: POSTGRES_URL
+          valueFrom:
+            secretKeyRef:
+              name: portability-postgres
+              key: POSTGRES_URL
+        volumeMounts:
+        - name: migrations
+          mountPath: /migrations
+          readOnly: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 250m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: migrations
+        configMap:
+          name: portability-postgres-migrations

@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portable-agent-api
+  namespace: truvag3-examples
+  labels:
+    app: portable-agent-api
+    component: agent
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: portable-agent-api
+  template:
+    metadata:
+      labels:
+        app: portable-agent-api
+        component: agent
+        app.kubernetes.io/part-of: orchestration-backend-portability
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      containers:
+      - name: api
+        image: truvag3-portable-agent:local
+        imagePullPolicy: Never
+        envFrom:
+        - configMapRef:
+            name: portability-backend-config
+        - secretRef:
+            name: portability-postgres
+        env:
+        - name: TRUVAG3_MODE
+          value: api
+        - name: PORT
+          value: "8080"
+        ports:
+        - name: http
+          containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 2
+          periodSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portable-agent-api
+  namespace: truvag3-examples
+  labels:
+    app: portable-agent-api
+    app.kubernetes.io/part-of: orchestration-backend-portability
+spec:
+  selector:
+    app: portable-agent-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: http

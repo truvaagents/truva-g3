@@ -843,7 +843,11 @@ See [Logging Implementation Guide](../observability/LOGGING_IMPLEMENTATION_GUIDE
 
 #### LLM And Execution Debug Stores
 
-Debug stores can persist full LLM payloads and execution records with TTLs for troubleshooting orchestration behavior. The telemetry package also includes LLM call recording interfaces for storing request/response metadata outside the request path.
+Debug stores can persist full LLM payloads and execution records with base TTLs
+for troubleshooting orchestration behavior. HITL, related-lineage, and explicit
+investigation retention may extend those minimums. The telemetry package also
+includes LLM call recording interfaces for storing request/response metadata
+outside the request path.
 
 See [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#llm-debug-configuration), [API Reference: LLM Debug Store](../reference/API_REFERENCE.md#llm-debug-store), and [API Reference: LLM Call Recording](../reference/API_REFERENCE.md#llm-call-recording).
 
@@ -854,7 +858,9 @@ The Registry Viewer is a developer-facing runtime dashboard. It can inspect:
 - service registry
 - LLM debug records
 - HITL checkpoints
-- execution DAGs
+- conversation-grouped execution lineage and interactive DAGs
+- raw synthesis evidence versus stored post-`AfterSynthesis` application responses
+- optional Jaeger-linked traces and deterministic pipeline-hook spans
 - skill package management and version history
 - per-execution skill pinning, activation, resource loading, and prompt projection evidence
 - shared memory

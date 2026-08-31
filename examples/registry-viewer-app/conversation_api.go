@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -108,9 +109,11 @@ type indexedExecution struct {
 }
 
 type executionReadCache struct {
-	records  map[string]*StoredExecution
-	missing  map[string]struct{}
-	hydrated int
+	records       map[string]*StoredExecution
+	missing       map[string]struct{}
+	unreadable    map[string]struct{}
+	hydrated      int
+	exactHydrated int
 }
 
 type llmDebugEnrichment struct {
@@ -120,8 +123,11 @@ type llmDebugEnrichment struct {
 }
 
 var (
-	llmDebugReadClient   *redis.Client
-	llmDebugReadClientMu sync.Mutex
+	llmDebugReadClient     *redis.Client
+	llmDebugReadClientMu   sync.Mutex
+	staleIndexSweepMu      sync.Mutex
+	staleIndexSweepCursor  uint64
+	staleIndexSweepLastRun time.Time
 )
 
 func getLLMDebugReadClient() (*redis.Client, error) {
@@ -154,15 +160,33 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		CreatedAt:         execution.CreatedAt,
 		Metadata:          execution.Metadata,
 	}
+	if execution.Checkpoint != nil {
+		summary.HITLCheckpointID = execution.Checkpoint.CheckpointID
+	} else {
+		summary.HITLCheckpointID = execution.Metadata["resume_checkpoint_id"]
+	}
 	if execution.Result != nil {
 		summary.Success = execution.Result.Success
 		summary.TotalDurationMs = execution.Result.TotalDuration / 1_000_000
+		summary.WallClockDurationMs = summary.TotalDurationMs
+		if summary.WallClockDurationMs > 0 {
+			summary.DurationSource = "phase_loop_fallback"
+		}
 		summary.StepCount = len(execution.Result.Steps)
 		for _, step := range execution.Result.Steps {
 			if !step.Success {
 				summary.FailedSteps++
 			}
 		}
+	}
+	summary.observedStart, summary.observedEnd = executionObservationWindow(execution)
+	if observed := observedDurationMilliseconds(summary.observedStart, summary.observedEnd); observed > 0 {
+		summary.WallClockDurationMs, summary.DurationSource = preferDurationCandidate(
+			summary.WallClockDurationMs,
+			summary.DurationSource,
+			observed,
+			"step_time_envelope",
+		)
 	}
 	return summary
 }
@@ -174,8 +198,9 @@ func viewerConversationIndexKey(conversationID string) string {
 
 func newExecutionReadCache() *executionReadCache {
 	return &executionReadCache{
-		records: make(map[string]*StoredExecution),
-		missing: make(map[string]struct{}),
+		records:    make(map[string]*StoredExecution),
+		missing:    make(map[string]struct{}),
+		unreadable: make(map[string]struct{}),
 	}
 }
 
@@ -184,6 +209,29 @@ func (c *executionReadCache) load(
 	client *redis.Client,
 	requestIDs []string,
 ) (bool, error) {
+	remaining := viewerExecutionHydrationLimit - c.hydrated
+	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining)
+	c.hydrated += loaded
+	return partial, err
+}
+
+func (c *executionReadCache) loadExactOwners(
+	ctx context.Context,
+	client *redis.Client,
+	requestIDs []string,
+) (bool, error) {
+	remaining := viewerExactOwnerHydrationLimit - c.exactHydrated
+	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining)
+	c.exactHydrated += loaded
+	return partial, err
+}
+
+func (c *executionReadCache) loadWithBudget(
+	ctx context.Context,
+	client *redis.Client,
+	requestIDs []string,
+	remaining int,
+) (int, bool, error) {
 	unknown := make([]string, 0, len(requestIDs))
 	seen := make(map[string]struct{}, len(requestIDs))
 	for _, requestID := range requestIDs {
@@ -200,19 +248,21 @@ func (c *executionReadCache) load(
 		if _, ok := c.missing[requestID]; ok {
 			continue
 		}
+		if _, ok := c.unreadable[requestID]; ok {
+			continue
+		}
 		unknown = append(unknown, requestID)
 	}
 
-	remaining := viewerExecutionHydrationLimit - c.hydrated
 	truncated := len(unknown) > remaining
 	if remaining <= 0 {
-		return len(unknown) > 0, nil
+		return 0, len(unknown) > 0, nil
 	}
 	if len(unknown) > remaining {
 		unknown = unknown[:remaining]
 	}
 	if len(unknown) == 0 {
-		return truncated, nil
+		return 0, truncated, nil
 	}
 
 	keys := make([]string, len(unknown))
@@ -221,9 +271,9 @@ func (c *executionReadCache) load(
 	}
 	values, err := client.MGet(ctx, keys...).Result()
 	if err != nil {
-		return truncated, fmt.Errorf("failed to hydrate executions: %w", err)
+		return 0, truncated, fmt.Errorf("failed to hydrate executions: %w", err)
 	}
-	c.hydrated += len(unknown)
+	partial := truncated
 	for i, value := range values {
 		requestID := unknown[i]
 		if value == nil {
@@ -237,17 +287,164 @@ func (c *executionReadCache) load(
 		case []byte:
 			data = typed
 		default:
-			c.missing[requestID] = struct{}{}
+			c.unreadable[requestID] = struct{}{}
+			partial = true
 			continue
 		}
 		execution, decodeErr := deserializeExecution(data)
 		if decodeErr != nil {
-			c.missing[requestID] = struct{}{}
+			c.unreadable[requestID] = struct{}{}
+			partial = true
 			continue
 		}
 		c.records[requestID] = execution
 	}
-	return truncated, nil
+	return len(unknown), partial, nil
+}
+
+func pruneConfirmedMissingIndexMembers(
+	ctx context.Context,
+	client *redis.Client,
+	indexKey string,
+	requestIDs []string,
+	missing map[string]struct{},
+) {
+	stale := make([]interface{}, 0)
+	seen := make(map[string]struct{}, len(requestIDs))
+	for _, requestID := range requestIDs {
+		if _, duplicate := seen[requestID]; duplicate {
+			continue
+		}
+		seen[requestID] = struct{}{}
+		if _, confirmedMissing := missing[requestID]; confirmedMissing {
+			stale = append(stale, requestID)
+		}
+	}
+	if len(stale) == 0 {
+		return
+	}
+	if err := client.ZRem(ctx, indexKey, stale...).Err(); err != nil {
+		log.Printf("[WARN] execution index cleanup failed")
+	}
+}
+
+// maintainStaleGlobalExecutionIndex periodically advances a bounded Redis
+// ZSCAN cursor. Unlike newest-first page cleanup, repeated eligible calls
+// eventually inspect old members outside the normal hydration window without
+// adding a scan and hydration round trip to every grouped-list request.
+func maintainStaleGlobalExecutionIndex(ctx context.Context, client *redis.Client) {
+	if !staleIndexSweepMu.TryLock() {
+		return
+	}
+	defer staleIndexSweepMu.Unlock()
+	now := time.Now()
+	if !staleIndexSweepLastRun.IsZero() &&
+		now.Sub(staleIndexSweepLastRun) < viewerStaleIndexMaintenanceInterval {
+		return
+	}
+	// Advance the eligibility clock before Redis work so a temporary backend
+	// failure cannot make every incoming list request repeat the same sweep.
+	staleIndexSweepLastRun = now
+
+	rows, nextCursor, err := client.ZScan(
+		ctx,
+		executionIndexKey,
+		staleIndexSweepCursor,
+		"",
+		viewerStaleIndexMaintenanceBatch,
+	).Result()
+	if err != nil {
+		log.Printf("[WARN] execution index maintenance scan failed")
+		return
+	}
+	requestIDs := make([]string, 0, len(rows)/2)
+	for index := 0; index+1 < len(rows); index += 2 {
+		requestIDs = append(requestIDs, rows[index])
+	}
+	if len(requestIDs) == 0 {
+		staleIndexSweepCursor = nextCursor
+		return
+	}
+	keys := make([]string, len(requestIDs))
+	for index, requestID := range requestIDs {
+		keys[index] = executionKeyPrefix + requestID
+	}
+	values, err := client.MGet(ctx, keys...).Result()
+	if err != nil {
+		log.Printf("[WARN] execution index maintenance hydration failed")
+		return
+	}
+	missing := make(map[string]struct{})
+	for index, value := range values {
+		if value == nil {
+			missing[requestIDs[index]] = struct{}{}
+		}
+	}
+	pruneConfirmedMissingIndexMembers(
+		ctx,
+		client,
+		executionIndexKey,
+		requestIDs,
+		missing,
+	)
+	staleIndexSweepCursor = nextCursor
+}
+
+func unresolvedExecutionOwnerIDs(
+	summaries map[string]ExecutionSummary,
+) []string {
+	ownerIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, summary := range summaries {
+		if isTopLevelExecution(summary) {
+			continue
+		}
+		ownerID := summary.OriginalRequestID
+		if _, exists := summaries[ownerID]; exists {
+			continue
+		}
+		if _, duplicate := seen[ownerID]; duplicate {
+			continue
+		}
+		seen[ownerID] = struct{}{}
+		ownerIDs = append(ownerIDs, ownerID)
+	}
+	return ownerIDs
+}
+
+func hydrateAndClassifyGroupedExecutionOwners(
+	ctx context.Context,
+	client *redis.Client,
+	cache *executionReadCache,
+	summaries map[string]ExecutionSummary,
+) (bool, error) {
+	ownerIDs := unresolvedExecutionOwnerIDs(summaries)
+	partial, err := cache.loadExactOwners(ctx, client, ownerIDs)
+	if err != nil {
+		return partial, err
+	}
+	for _, ownerID := range ownerIDs {
+		if execution := cache.records[ownerID]; execution != nil {
+			summaries[ownerID] = summarizeExecution(execution)
+		}
+	}
+	for requestID, summary := range summaries {
+		if isTopLevelExecution(summary) {
+			continue
+		}
+		if _, ownerPresent := summaries[summary.OriginalRequestID]; ownerPresent {
+			continue
+		}
+		if _, confirmedMissing := cache.missing[summary.OriginalRequestID]; confirmedMissing {
+			summary.RelationStatus = "owner_unavailable"
+			summary.MissingOwnerID = summary.OriginalRequestID
+		} else {
+			summary.RelationStatus = "owner_unknown"
+			partial = true
+		}
+		summaries[requestID] = summary
+	}
+	return partial, nil
 }
 
 func handleConversationTimeline(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +545,20 @@ func loadConversationTimeline(
 	if err != nil {
 		return nil, err
 	}
+	pruneConfirmedMissingIndexMembers(
+		ctx,
+		client,
+		executionIndexKey,
+		globalIDs,
+		cache.missing,
+	)
+	pruneConfirmedMissingIndexMembers(
+		ctx,
+		client,
+		conversationKey,
+		reverseIDs,
+		cache.missing,
+	)
 
 	reverseSet := make(map[string]struct{}, len(reverseIDs))
 	for _, requestID := range reverseIDs {
@@ -371,6 +582,36 @@ func loadConversationTimeline(
 			continue
 		}
 		verified[requestID] = summarizeExecution(execution)
+	}
+	ownerIDs := unresolvedExecutionOwnerIDs(verified)
+	ownerHydrationPartial, err := cache.loadExactOwners(ctx, client, ownerIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, ownerID := range ownerIDs {
+		execution := cache.records[ownerID]
+		if execution == nil ||
+			execution.Metadata[orchestration.MetadataConversationID] != conversationID {
+			continue
+		}
+		verified[ownerID] = summarizeExecution(execution)
+	}
+	ownerClassificationPartial := ownerHydrationPartial
+	for requestID, summary := range verified {
+		if isTopLevelExecution(summary) {
+			continue
+		}
+		if _, ownerPresent := verified[summary.OriginalRequestID]; ownerPresent {
+			continue
+		}
+		if _, confirmedMissing := cache.missing[summary.OriginalRequestID]; confirmedMissing {
+			summary.RelationStatus = "owner_unavailable"
+			summary.MissingOwnerID = summary.OriginalRequestID
+		} else {
+			summary.RelationStatus = "owner_unknown"
+			ownerClassificationPartial = true
+		}
+		verified[requestID] = summary
 	}
 	membershipChecks := make(map[string][]string)
 	for requestID := range verified {
@@ -403,7 +644,7 @@ func loadConversationTimeline(
 		conversationID,
 		summaries,
 		enrichment,
-		reverseMore || globalMore || hydrationPartial,
+		reverseMore || globalMore || hydrationPartial || ownerClassificationPartial,
 		indexIncomplete,
 		enrichmentIncomplete || enrichmentErr != nil,
 	), nil
@@ -660,6 +901,14 @@ func loadGroupedExecutions(
 	if err != nil {
 		return nil, err
 	}
+	pruneConfirmedMissingIndexMembers(
+		ctx,
+		client,
+		executionIndexKey,
+		globalIDs,
+		cache.missing,
+	)
+	maintainStaleGlobalExecutionIndex(ctx, client)
 	partial := globalPartial || hydrationPartial
 
 	conversationOrder := make([]string, 0)
@@ -706,6 +955,15 @@ func loadGroupedExecutions(
 		return nil, err
 	}
 	partial = partial || reverseHydrationPartial
+	for _, conversationID := range conversationOrder {
+		pruneConfirmedMissingIndexMembers(
+			ctx,
+			client,
+			viewerConversationIndexKey(conversationID),
+			reverseMembers[conversationID],
+			cache.missing,
+		)
+	}
 
 	snapshotScoreNumber, _ := strconv.ParseFloat(snapshotScore, 64)
 	summariesByID := make(map[string]ExecutionSummary)
@@ -781,6 +1039,17 @@ func loadGroupedExecutions(
 			indexIncomplete[groupedConversationKey(conversationID)] = true
 		}
 	}
+
+	ownerPartial, err := hydrateAndClassifyGroupedExecutionOwners(
+		ctx,
+		client,
+		cache,
+		summariesByID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	partial = partial || ownerPartial
 
 	summaries := make([]ExecutionSummary, 0, len(summariesByID))
 	for _, summary := range summariesByID {
@@ -1100,20 +1369,31 @@ func buildGroupedExecutionUnits(
 
 		matching := make([]ExecutionSummary, 0, len(topLevel))
 		for _, member := range topLevel {
-			if executionMatchesGroupedQuery(member, conversationID, query) {
+			if executionMatchesGroupedQuery(member, conversationID, query) ||
+				anyExecutionMatchesGroupedQuery(
+					relatedByOwner[member.RequestID],
+					conversationID,
+					query,
+				) {
 				matching = append(matching, member)
 			}
 		}
 		if len(matching) == 0 {
-			if len(topLevel) > 0 ||
-				query.Status != "all" ||
-				(query.Search != "" &&
-					!strings.Contains(strings.ToLower(conversationID), query.Search)) {
+			if len(topLevel) > 0 {
+				continue
+			}
+			matchingOrphans := make([]ExecutionSummary, 0, len(orphans))
+			for _, orphan := range orphans {
+				if executionMatchesGroupedQuery(orphan, conversationID, query) {
+					matchingOrphans = append(matchingOrphans, orphan)
+				}
+			}
+			if len(matchingOrphans) == 0 {
 				continue
 			}
 			// Preserve a globally-discovered related execution even when its
 			// owning top-level record is outside the bounded snapshot.
-			matching = append(matching, orphans[0])
+			matching = append(matching, matchingOrphans[0])
 		}
 
 		anchor := matching[0]
@@ -1185,6 +1465,19 @@ func executionMatchesGroupedQuery(
 		strings.Contains(strings.ToLower(conversationID), query.Search)
 }
 
+func anyExecutionMatchesGroupedQuery(
+	summaries []ExecutionSummary,
+	conversationID string,
+	query *groupedExecutionQuery,
+) bool {
+	for _, summary := range summaries {
+		if executionMatchesGroupedQuery(summary, conversationID, query) {
+			return true
+		}
+	}
+	return false
+}
+
 func groupedExecutionSortValue(
 	summary ExecutionSummary,
 	field string,
@@ -1198,7 +1491,7 @@ func groupedExecutionSortValue(
 	case "total_duration_ms":
 		return groupedSortValue{
 			Kind:   "number",
-			Number: summary.TotalDurationMs + summary.LLMTotalDurationMs,
+			Number: primaryExecutionDurationMs(summary),
 		}
 	default:
 		return groupedSortValue{
@@ -1206,6 +1499,13 @@ func groupedExecutionSortValue(
 			Number: summary.CreatedAt.UnixNano(),
 		}
 	}
+}
+
+func primaryExecutionDurationMs(summary ExecutionSummary) int64 {
+	if summary.WallClockDurationMs > 0 {
+		return summary.WallClockDurationMs
+	}
+	return summary.TotalDurationMs
 }
 
 func compareGroupedExecutionPosition(
@@ -1520,6 +1820,19 @@ func enrichExecutionSummariesFromLLMDebug(
 		}
 		enrichment[requestID] = item
 		summaries[summaryIndex].LLMTotalDurationMs = item.TotalDurationMs
+		start, end := extendWindowWithLLMInteractions(
+			summaries[summaryIndex].observedStart,
+			summaries[summaryIndex].observedEnd,
+			deduped,
+		)
+		if observed := observedDurationMilliseconds(start, end); observed > 0 {
+			summaries[summaryIndex].WallClockDurationMs, summaries[summaryIndex].DurationSource = preferDurationCandidate(
+				summaries[summaryIndex].WallClockDurationMs,
+				summaries[summaryIndex].DurationSource,
+				observed,
+				"llm_and_step_time_envelope",
+			)
+		}
 	}
 	return enrichment, incomplete, nil
 }

@@ -20,16 +20,19 @@ const (
 )
 
 type Options struct {
-	namespace       string
-	executionConfig orchestration.ExecutionStoreConfig
-	expiryEnabled   bool
-	expiryCallback  orchestration.ExpiryCallback
-	expiryConfig    orchestration.ExpiryProcessorConfig
-	expiryOptions   []orchestration.CheckpointExpiryProcessorOption
-	workflowTTL     time.Duration
-	taskRetryCount  int
-	taskRetryDelay  time.Duration
-	logger          core.Logger
+	namespace        string
+	executionConfig  orchestration.ExecutionStoreConfig
+	llmDebugTTL      time.Duration
+	llmDebugErrorTTL time.Duration
+	checkpointTTL    time.Duration
+	expiryEnabled    bool
+	expiryCallback   orchestration.ExpiryCallback
+	expiryConfig     orchestration.ExpiryProcessorConfig
+	expiryOptions    []orchestration.CheckpointExpiryProcessorOption
+	workflowTTL      time.Duration
+	taskRetryCount   int
+	taskRetryDelay   time.Duration
+	logger           core.Logger
 }
 
 type Option interface{ applyOptions(*Options) error }
@@ -40,10 +43,13 @@ func (option optionFunc) applyOptions(options *Options) error { return option(op
 func NewOptions(options ...Option) (Options, error) {
 	defaults := orchestration.NewDefaultOrchestratorConfig()
 	configured := Options{
-		executionConfig: defaults.ExecutionStore,
-		workflowTTL:     defaultWorkflowStateTTL,
-		taskRetryCount:  defaultTaskQueueRetryCount,
-		taskRetryDelay:  defaultTaskQueueRetryDelay,
+		executionConfig:  defaults.ExecutionStore,
+		llmDebugTTL:      defaults.LLMDebug.TTL,
+		llmDebugErrorTTL: defaults.LLMDebug.ErrorTTL,
+		checkpointTTL:    defaults.HITL.CheckpointTTL,
+		workflowTTL:      defaultWorkflowStateTTL,
+		taskRetryCount:   defaultTaskQueueRetryCount,
+		taskRetryDelay:   defaultTaskQueueRetryDelay,
 	}
 	return ConfigureOptions(configured, options...)
 }
@@ -73,6 +79,16 @@ func LoadOptionsFromEnvironment(base Options, lookup func(string) (string, bool)
 	if base.workflowTTL <= 0 {
 		base.workflowTTL = defaultWorkflowStateTTL
 	}
+	defaults := orchestration.NewDefaultOrchestratorConfig()
+	if base.llmDebugTTL <= 0 {
+		base.llmDebugTTL = defaults.LLMDebug.TTL
+	}
+	if base.llmDebugErrorTTL <= 0 {
+		base.llmDebugErrorTTL = defaults.LLMDebug.ErrorTTL
+	}
+	if base.checkpointTTL <= 0 {
+		base.checkpointTTL = defaults.HITL.CheckpointTTL
+	}
 	if base.taskRetryCount <= 0 {
 		base.taskRetryCount = defaultTaskQueueRetryCount
 	}
@@ -86,6 +102,22 @@ func LoadOptionsFromEnvironment(base Options, lookup func(string) (string, bool)
 			return Options{}, fmt.Errorf("redisprovider: TRUVAG3_WORKFLOW_STATE_TTL must be a positive duration")
 		}
 		base.workflowTTL = value
+	}
+	for _, setting := range []struct {
+		name   string
+		target *time.Duration
+	}{
+		{name: "TRUVAG3_LLM_DEBUG_TTL", target: &base.llmDebugTTL},
+		{name: "TRUVAG3_LLM_DEBUG_ERROR_TTL", target: &base.llmDebugErrorTTL},
+		{name: "TRUVAG3_HITL_CHECKPOINT_TTL", target: &base.checkpointTTL},
+	} {
+		if raw, present := lookup(setting.name); present {
+			value, err := time.ParseDuration(strings.TrimSpace(raw))
+			if err != nil || value <= 0 {
+				return Options{}, fmt.Errorf("redisprovider: %s must be a positive duration", setting.name)
+			}
+			*setting.target = value
+		}
 	}
 	if raw, present := lookup("TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS"); present {
 		value, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -117,6 +149,30 @@ func WithNamespace(namespace string) Option {
 func WithExecutionStoreConfig(config orchestration.ExecutionStoreConfig) Option {
 	return optionFunc(func(options *Options) error {
 		options.executionConfig = config
+		return nil
+	})
+}
+
+// WithLLMDebugRetention configures successful and failed LLM debug record
+// retention without exposing Redis-specific settings through OrchestratorConfig.
+func WithLLMDebugRetention(ttl, errorTTL time.Duration) Option {
+	return optionFunc(func(options *Options) error {
+		if ttl <= 0 || errorTTL <= 0 {
+			return fmt.Errorf("redisprovider: LLM debug TTLs must be positive")
+		}
+		options.llmDebugTTL = ttl
+		options.llmDebugErrorTTL = errorTTL
+		return nil
+	})
+}
+
+// WithCheckpointTTL configures Redis checkpoint retention.
+func WithCheckpointTTL(ttl time.Duration) Option {
+	return optionFunc(func(options *Options) error {
+		if ttl <= 0 {
+			return fmt.Errorf("redisprovider: checkpoint TTL must be positive")
+		}
+		options.checkpointTTL = ttl
 		return nil
 	})
 }

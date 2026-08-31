@@ -36,7 +36,10 @@ func NewInMemoryScheduleStore() *InMemoryScheduleStore {
 
 // Create persists a new schedule. Returns core.ErrScheduleAlreadyExists if
 // a schedule with the same ID is already present.
-func (s *InMemoryScheduleStore) Create(_ context.Context, schedule *core.Schedule) error {
+func (s *InMemoryScheduleStore) Create(ctx context.Context, schedule *core.Schedule) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if schedule == nil {
 		return errNilSchedule
 	}
@@ -56,7 +59,10 @@ func (s *InMemoryScheduleStore) Create(_ context.Context, schedule *core.Schedul
 
 // Get retrieves a schedule by ID. Returns a deep copy to prevent callers
 // from mutating stored state.
-func (s *InMemoryScheduleStore) Get(_ context.Context, id string) (*core.Schedule, error) {
+func (s *InMemoryScheduleStore) Get(ctx context.Context, id string) (*core.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	schedule, ok := s.schedules[id]
@@ -68,7 +74,10 @@ func (s *InMemoryScheduleStore) Get(_ context.Context, id string) (*core.Schedul
 
 // List returns all schedules. Returns deep copies.
 // Results are sorted by RunAt ascending for deterministic iteration.
-func (s *InMemoryScheduleStore) List(_ context.Context) ([]*core.Schedule, error) {
+func (s *InMemoryScheduleStore) List(ctx context.Context) ([]*core.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -84,7 +93,10 @@ func (s *InMemoryScheduleStore) List(_ context.Context) ([]*core.Schedule, error
 
 // Update persists changes to an existing schedule. Returns
 // core.ErrScheduleNotFound if the schedule doesn't exist.
-func (s *InMemoryScheduleStore) Update(_ context.Context, schedule *core.Schedule) error {
+func (s *InMemoryScheduleStore) Update(ctx context.Context, schedule *core.Schedule) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if schedule == nil {
 		return errNilSchedule
 	}
@@ -104,7 +116,10 @@ func (s *InMemoryScheduleStore) Update(_ context.Context, schedule *core.Schedul
 
 // Delete removes a schedule. Returns core.ErrScheduleNotFound if the
 // schedule doesn't exist.
-func (s *InMemoryScheduleStore) Delete(_ context.Context, id string) error {
+func (s *InMemoryScheduleStore) Delete(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,7 +136,10 @@ func (s *InMemoryScheduleStore) Delete(_ context.Context, id string) error {
 // Returns an empty slice (never nil) when no schedules are due, matching
 // the convention used by List() for consistency with callers that may
 // compare against a fresh empty slice.
-func (s *InMemoryScheduleStore) GetDue(_ context.Context, now time.Time) ([]*core.Schedule, error) {
+func (s *InMemoryScheduleStore) GetDue(ctx context.Context, now time.Time) ([]*core.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
