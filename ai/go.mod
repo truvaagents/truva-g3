@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.37
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.57.4
-	github.com/aws/smithy-go v1.27.8
+	github.com/aws/smithy-go v1.27.9
 	github.com/stretchr/testify v1.12.1
 	github.com/truvaagents/truva-g3/core v0.4.0
 	github.com/truvaagents/truva-g3/telemetry v0.4.0
