@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -222,7 +223,8 @@ func TestRunBeforePlanningHooks_ErrorSkipsHook(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result, err := o.runBeforePlanningHooks(context.Background(), pctx, newPipelineGate(nil, false))
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "request-before-hook")
+	result, err := o.runBeforePlanningHooks(ctx, pctx, newPipelineGate(nil, false))
 	if err != nil {
 		t.Fatalf("runBeforePlanningHooks() error = %v", err)
 	}
@@ -239,6 +241,116 @@ func TestRunBeforePlanningHooks_ErrorSkipsHook(t *testing.T) {
 	// Logger should have been called with warning
 	if logger.warnCount != 1 {
 		t.Errorf("expected 1 warning logged, got %d", logger.warnCount)
+	}
+	assertHookWarningFields(t, logger.lastFields, "before_planning_hook", "request-before-hook")
+}
+
+func TestPipelineHookExecutionDiagnosticsRecordOrderStatusAndExactErrors(t *testing.T) {
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	failure := errors.New("hook-owned failure detail")
+	failing := &allStagesHook{
+		name:          "failing",
+		beforePlanErr: failure,
+		afterExecErr:  failure,
+		afterSynthErr: failure,
+	}
+	succeeding := &allStagesHook{name: "succeeding"}
+	orchestrator := &AIOrchestrator{
+		pipelineHooks: []core.PipelineHook{failing, succeeding},
+	}
+	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
+
+	if _, err := orchestrator.runBeforePlanningHooks(ctx, pctx, newPipelineGate(nil, false)); err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
+	orchestrator.runAfterExecutionHooks(ctx, pctx, "results")
+	if got := orchestrator.runAfterSynthesisHooks(ctx, pctx, "response"); got != "response" {
+		t.Fatalf("runAfterSynthesisHooks() = %q, want response", got)
+	}
+
+	records := holder.Snapshot()
+	if len(records) != 6 {
+		t.Fatalf("pipeline hook records = %#v, want six", records)
+	}
+	for index, record := range records {
+		wantSequence := index%2 + 1
+		if record.Sequence != wantSequence {
+			t.Errorf("record %d sequence = %d, want %d", index, record.Sequence, wantSequence)
+		}
+		if record.StartedAt.IsZero() || record.Duration < 0 {
+			t.Errorf("record %d timing = %s/%s", index, record.StartedAt, record.Duration)
+		}
+		wantStatus := PipelineHookSucceeded
+		wantError := ""
+		if index%2 == 0 {
+			wantStatus = PipelineHookFailed
+			wantError = failure.Error()
+		}
+		if record.Status != wantStatus || record.Error != wantError {
+			t.Errorf("record %d outcome = %q/%q, want %q/%q", index, record.Status, record.Error, wantStatus, wantError)
+		}
+	}
+	wantPhases := []string{
+		PipelineHookPhaseBeforePlanning,
+		PipelineHookPhaseBeforePlanning,
+		PipelineHookPhaseAfterExecution,
+		PipelineHookPhaseAfterExecution,
+		PipelineHookPhaseAfterSynthesis,
+		PipelineHookPhaseAfterSynthesis,
+	}
+	for index, want := range wantPhases {
+		if records[index].Phase != want {
+			t.Errorf("record %d phase = %q, want %q", index, records[index].Phase, want)
+		}
+	}
+
+	copy := holder.Snapshot()
+	copy[0].HookName = "mutated-copy"
+	if holder.Snapshot()[0].HookName != "failing" {
+		t.Fatal("Snapshot returned holder-owned storage")
+	}
+}
+
+func TestAfterPlanningHookDiagnosticsIncludePlanPhaseAndInvalidOutput(t *testing.T) {
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	hook := &allStagesHook{name: "bad-plan", planMutation: "not-a-routing-plan"}
+	spanTelemetry := &pipelineHookSpanTelemetry{}
+	orchestrator := &AIOrchestrator{
+		pipelineHooks: []core.PipelineHook{hook},
+		telemetry:     spanTelemetry,
+	}
+	plan := &RoutingPlan{PlanID: "original"}
+
+	result := orchestrator.runValidatedAfterPlanningHooks(
+		ctx,
+		&core.PipelineContext{},
+		plan,
+		nil,
+		nil,
+		3,
+		"request-id",
+	)
+	if result != plan {
+		t.Fatalf("invalid hook output replaced original plan: %#v", result)
+	}
+	records := holder.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("pipeline hook records = %#v, want one", records)
+	}
+	record := records[0]
+	if record.HookName != "bad-plan" || record.Phase != PipelineHookPhaseAfterPlanning ||
+		record.PlanPhase != 3 || record.Sequence != 1 || record.Status != PipelineHookFailed {
+		t.Fatalf("pipeline hook record = %#v", record)
+	}
+	if record.Error != "hook returned string, want *RoutingPlan" {
+		t.Fatalf("pipeline hook error = %q", record.Error)
+	}
+	if len(spanTelemetry.spans) != 1 || !spanTelemetry.spans[0].ended ||
+		len(spanTelemetry.spans[0].errors) != 1 ||
+		spanTelemetry.spans[0].errors[0].Error() != record.Error {
+		t.Fatalf("after-planning span outcome = %#v", spanTelemetry.spans)
 	}
 }
 
@@ -464,6 +576,49 @@ func TestRunBeforePlanningHooks_Enrichments(t *testing.T) {
 
 	if pctx.Enrichments[core.EnrichmentRAGContext] != "retrieved docs" {
 		t.Errorf("expected enrichment 'retrieved docs', got %v", pctx.Enrichments[core.EnrichmentRAGContext])
+	}
+}
+
+func TestRunBeforePlanningHooks_CapturesExactEnrichmentChange(t *testing.T) {
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	hook := &enrichmentHook{
+		key: "retrieved_context",
+		value: map[string]interface{}{
+			"announcement": "agent-a is investigating checkout latency",
+			"count":        2,
+		},
+	}
+	orchestrator := &AIOrchestrator{pipelineHooks: []core.PipelineHook{hook}}
+	pctx := &core.PipelineContext{Enrichments: map[string]interface{}{
+		"unchanged": "preserved",
+	}}
+
+	if _, err := orchestrator.runBeforePlanningHooks(ctx, pctx, newPipelineGate(nil, false)); err != nil {
+		t.Fatalf("runBeforePlanningHooks() error = %v", err)
+	}
+	records := holder.Snapshot()
+	if len(records) != 1 || len(records[0].Effects) != 1 {
+		t.Fatalf("captured hook effects = %#v", records)
+	}
+	effect := records[0].Effects[0]
+	if effect.EffectID != "planning_enrichment:retrieved_context" ||
+		effect.Status != core.PipelineHookEffectSucceeded {
+		t.Fatalf("captured enrichment effect = %#v", effect)
+	}
+	var data pipelineEnrichmentEffectData
+	if err := json.Unmarshal(effect.Data, &data); err != nil {
+		t.Fatalf("decode enrichment effect: %v", err)
+	}
+	if data.Key != "retrieved_context" || data.Operation != "added" || data.Before != nil {
+		t.Fatalf("enrichment effect data = %#v", data)
+	}
+	var captured map[string]interface{}
+	if err := json.Unmarshal(data.After, &captured); err != nil {
+		t.Fatalf("decode captured value: %v", err)
+	}
+	if captured["announcement"] != "agent-a is investigating checkout latency" || captured["count"] != float64(2) {
+		t.Fatalf("captured exact value = %#v", captured)
 	}
 }
 
@@ -773,11 +928,13 @@ func TestRunAfterExecutionHooks_ErrorLogged(t *testing.T) {
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
 	// Should not panic — errors are logged and skipped
-	o.runAfterExecutionHooks(context.Background(), pctx, "results")
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "request-after-execution")
+	o.runAfterExecutionHooks(ctx, pctx, "results")
 
 	if logger.warnCount != 1 {
 		t.Errorf("expected 1 warning, got %d", logger.warnCount)
 	}
+	assertHookWarningFields(t, logger.lastFields, "after_execution_hook", "request-after-execution")
 }
 
 // --- Tests: runAfterSynthesisHooks ---
@@ -808,7 +965,8 @@ func TestRunAfterSynthesisHooks_ErrorPreservesResponse(t *testing.T) {
 	}
 	pctx := &core.PipelineContext{Request: "test", Enrichments: map[string]interface{}{}}
 
-	result := o.runAfterSynthesisHooks(context.Background(), pctx, "original-response")
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "request-after-synthesis")
+	result := o.runAfterSynthesisHooks(ctx, pctx, "original-response")
 
 	if result != "original-response" {
 		t.Errorf("expected 'original-response' preserved on error, got %q", result)
@@ -816,6 +974,7 @@ func TestRunAfterSynthesisHooks_ErrorPreservesResponse(t *testing.T) {
 	if logger.warnCount != 1 {
 		t.Errorf("expected 1 warning, got %d", logger.warnCount)
 	}
+	assertHookWarningFields(t, logger.lastFields, "after_synthesis_hook", "request-after-synthesis")
 }
 
 func TestRunAfterSynthesisHooks_NoHooksReturnsOriginal(t *testing.T) {
@@ -918,13 +1077,85 @@ func TestAcceptedShortCircuitIsVisibleOnRequestTrace(t *testing.T) {
 	}
 }
 
+func TestPipelineHookEffectSpanErrorUsesBoundedProviderClassification(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("pipeline-hook-test").Start(t.Context(), "hook")
+
+	recordPipelineHookEffectSpanError(ctx, "knowledge_store")
+	span.End()
+
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(ended))
+	}
+	attributes := make(map[string]string)
+	for _, attr := range ended[0].Attributes() {
+		attributes[string(attr.Key)] = attr.Value.AsString()
+	}
+	if attributes["error_type"] != "knowledge_store" ||
+		attributes["pipeline.hook.effect.error_type"] != "knowledge_store" {
+		t.Fatalf("span attributes = %#v", attributes)
+	}
+	wantMessage := "pipeline hook effect failed: knowledge_store"
+	for _, event := range ended[0].Events() {
+		if event.Name != "exception" {
+			continue
+		}
+		for _, attr := range event.Attributes {
+			if attr.Key == "exception.message" && attr.Value.AsString() == wantMessage {
+				return
+			}
+		}
+	}
+	t.Fatalf("bounded exception %q not found in %#v", wantMessage, ended[0].Events())
+}
+
 // --- Helper: test logger ---
 
 type hookTestLogger struct {
 	core.NoOpLogger
-	warnCount int
+	warnCount  int
+	lastFields map[string]interface{}
 }
 
 func (l *hookTestLogger) WarnWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 	l.warnCount++
+	l.lastFields = fields
 }
+
+func assertHookWarningFields(
+	t *testing.T,
+	fields map[string]interface{},
+	operation string,
+	requestID string,
+) {
+	t.Helper()
+	if fields["operation"] != operation || fields["request_id"] != requestID ||
+		fields["error_type"] != "hook_error" {
+		t.Fatalf("hook warning fields = %#v", fields)
+	}
+}
+
+type pipelineHookSpanTelemetry struct {
+	spans []*pipelineHookSpan
+}
+
+func (t *pipelineHookSpanTelemetry) StartSpan(ctx context.Context, name string) (context.Context, core.Span) {
+	span := &pipelineHookSpan{name: name}
+	t.spans = append(t.spans, span)
+	return ctx, span
+}
+
+func (*pipelineHookSpanTelemetry) RecordMetric(string, float64, map[string]string) {}
+
+type pipelineHookSpan struct {
+	name   string
+	ended  bool
+	errors []error
+}
+
+func (s *pipelineHookSpan) End()                           { s.ended = true }
+func (*pipelineHookSpan) SetAttribute(string, interface{}) {}
+func (s *pipelineHookSpan) RecordError(err error)          { s.errors = append(s.errors, err) }

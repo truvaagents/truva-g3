@@ -3,6 +3,8 @@ package memory
 import (
 	"fmt"
 	"os"
+	"reflect"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
@@ -29,8 +31,38 @@ type SharedBackends struct {
 type sharedBackendsConfig struct {
 	domain            string
 	agentName         string
+	keyspace          core.RedisKeyspace
+	keyspaceExplicit  bool
 	knowledgeDisabled bool
 	embedder          core.EmbeddingClient // from WithEmbeddingClient option
+}
+
+// sharedBackendsStartupError keeps the public diagnostic fixed and
+// credential-free while preserving the client error for errors.Is/errors.As.
+// The injected client belongs to the application, so this package cannot make
+// assumptions about what its error text may contain.
+type sharedBackendsStartupError struct {
+	cause error
+}
+
+func (err *sharedBackendsStartupError) Error() string {
+	return "shared memory Redis startup check failed"
+}
+
+func (err *sharedBackendsStartupError) Unwrap() error { return err.cause }
+
+// WithRedisDeployment selects the validated deployment namespace used by all
+// Redis-backed memory adapters.
+func WithRedisDeployment(deployment string) SharedBackendsOption {
+	return func(c *sharedBackendsConfig) error {
+		keyspace, err := core.NewRedisKeyspace(deployment)
+		if err != nil {
+			return fmt.Errorf("redis deployment namespace: %w", err)
+		}
+		c.keyspace = keyspace
+		c.keyspaceExplicit = true
+		return nil
+	}
 }
 
 // SharedBackendsOption configures NewSharedBackends.
@@ -88,8 +120,8 @@ func WithEmbeddingClient(embedder core.EmbeddingClient) SharedBackendsOption {
 //  1. Explicit WithXXX() options (highest)
 //  2. TRUVAG3_AGENT_DOMAIN, TRUVAG3_AGENT_NAME env vars
 //  3. Sensible defaults ("default" domain)
-func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...SharedBackendsOption) (*SharedBackends, error) {
-	if redisClient == nil {
+func NewSharedBackends(redisClient redis.UniversalClient, logger core.Logger, opts ...SharedBackendsOption) (*SharedBackends, error) {
+	if redisClient == nil || (reflect.ValueOf(redisClient).Kind() == reflect.Pointer && reflect.ValueOf(redisClient).IsNil()) {
 		return nil, fmt.Errorf("redis client is required for shared memory backends")
 	}
 	if logger == nil {
@@ -99,10 +131,20 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 		logger = cal.WithComponent("framework/memory")
 	}
 
-	// 1. Defaults
+	// 1. Defaults. Defer an invalid environment namespace until explicit
+	// options have had the opportunity to replace it.
+	defaultKeyspace, err := core.NewRedisKeyspace("")
+	if err != nil {
+		return nil, fmt.Errorf("initialize default Redis deployment namespace: %w", err)
+	}
+	environmentKeyspace, environmentKeyspaceErr := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
 	cfg := &sharedBackendsConfig{
 		domain:    "default",
 		agentName: os.Getenv("TRUVAG3_AGENT_NAME"), // Reuse existing env var (§3 No Duplicates)
+		keyspace:  defaultKeyspace,
+	}
+	if environmentKeyspaceErr == nil {
+		cfg.keyspace = environmentKeyspace
 	}
 
 	// 2. Env vars
@@ -116,6 +158,15 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 			return nil, fmt.Errorf("invalid shared backends option: %w", err)
 		}
 	}
+	if environmentKeyspaceErr != nil && !cfg.keyspaceExplicit {
+		return nil, fmt.Errorf("invalid Redis deployment namespace: %w", environmentKeyspaceErr)
+	}
+
+	// All deterministic configuration has been resolved. Only now perform the
+	// single bounded connectivity check against the application-owned client.
+	if err := core.CheckRedisStartup(redisClient, 5*time.Second); err != nil {
+		return nil, &sharedBackendsStartupError{cause: err}
+	}
 
 	sb := &SharedBackends{logger: logger}
 
@@ -125,6 +176,7 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	episodic, err := NewStreamEpisodicMemory(
 		WithEpisodicRedisClient(redisClient),
 		WithEpisodicDomain(cfg.domain),
+		WithEpisodicKeyspace(cfg.keyspace),
 		WithEpisodicLogger(logger),
 	)
 	if err != nil {
@@ -136,14 +188,17 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	coordinator, err := NewAtomicLockCoordinator(
 		WithCoordinatorRedisClient(redisClient),
 		WithCoordinatorDomain(cfg.domain),
+		WithCoordinatorKeyspace(cfg.keyspace),
 		WithCoordinatorLogger(logger),
 	)
 	if err != nil {
-		logger.Warn("Investigation coordinator unavailable, dedup disabled", map[string]interface{}{
-			"operation":  "shared_backends_setup",
-			"error":      err.Error(),
-			"error_type": "coordinator_init",
-		})
+		if logger != nil {
+			logger.Warn("Investigation coordinator unavailable, dedup disabled", map[string]interface{}{
+				"operation":  "shared_backends_setup",
+				"error":      "investigation coordinator initialization failed",
+				"error_type": "coordinator_init",
+			})
+		}
 	} else {
 		sb.deps.Coordinator = coordinator
 	}
@@ -151,26 +206,31 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	// Activity coordinator — optional, degrade gracefully
 	activityCoord, err := NewRedisActivityCoordinator(
 		redisClient, cfg.domain,
+		WithActivityCoordinatorKeyspace(cfg.keyspace),
 		WithActivityCoordinatorLogger(logger),
 	)
 	if err != nil {
-		logger.Warn("Activity coordinator unavailable, coordination disabled", map[string]interface{}{
-			"operation":  "shared_backends_setup",
-			"error":      err.Error(),
-			"error_type": "activity_coordinator_init",
-		})
+		if logger != nil {
+			logger.Warn("Activity coordinator unavailable, coordination disabled", map[string]interface{}{
+				"operation":  "shared_backends_setup",
+				"error":      "activity coordinator initialization failed",
+				"error_type": "activity_coordinator_init",
+			})
+		}
 	} else {
 		sb.deps.ActivityCoordinator = activityCoord
 	}
 
 	// Digest cache — optional, degrade gracefully (full compaction every request)
-	digestCache, err := NewRedisDigestCache(redisClient, logger)
+	digestCache, err := NewRedisDigestCache(redisClient, logger, WithDigestCacheKeyspace(cfg.keyspace))
 	if err != nil {
-		logger.Warn("Digest cache unavailable, full compaction every request", map[string]interface{}{
-			"operation":  "shared_backends_setup",
-			"error":      err.Error(),
-			"error_type": "digest_cache_init",
-		})
+		if logger != nil {
+			logger.Warn("Digest cache unavailable, full compaction every request", map[string]interface{}{
+				"operation":  "shared_backends_setup",
+				"error":      "digest cache initialization failed",
+				"error_type": "digest_cache_init",
+			})
+		}
 	} else {
 		sb.deps.DigestCache = digestCache
 	}
@@ -178,13 +238,15 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	// Distributed lock — optional, used by background jobs (reflection, future
 	// scheduled compaction) for multi-replica safety. Without this, every replica
 	// runs background jobs independently — wasteful but not incorrect.
-	lock, err := NewRedisDistributedLock(redisClient, logger)
+	lock, err := NewRedisDistributedLock(redisClient, logger, WithDistributedLockKeyspace(cfg.keyspace))
 	if err != nil {
-		logger.Warn("Distributed lock unavailable, background jobs will run on all replicas", map[string]interface{}{
-			"operation":  "shared_backends_setup",
-			"error":      err.Error(),
-			"error_type": "distributed_lock_init",
-		})
+		if logger != nil {
+			logger.Warn("Distributed lock unavailable, background jobs will run on all replicas", map[string]interface{}{
+				"operation":  "shared_backends_setup",
+				"error":      "distributed lock initialization failed",
+				"error_type": "distributed_lock_init",
+			})
+		}
 	} else {
 		sb.deps.Lock = lock
 	}
@@ -194,22 +256,26 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	if !cfg.knowledgeDisabled && cfg.embedder != nil {
 		knowledgeStore, err := NewVectorSharedKnowledge(WithLogger(logger))
 		if err != nil {
-			logger.Warn("Vector DB unavailable, semantic knowledge search disabled", map[string]interface{}{
-				"operation":  "shared_backends_setup",
-				"error":      err.Error(),
-				"error_type": "knowledge_store_init",
-				"hint":       "set TRUVAG3_VECTOR_DB_URL (default: localhost:6334)",
-			})
+			if logger != nil {
+				logger.Warn("Vector DB unavailable, semantic knowledge search disabled", map[string]interface{}{
+					"operation":  "shared_backends_setup",
+					"error":      "knowledge store initialization failed",
+					"error_type": "knowledge_store_init",
+					"hint":       "set TRUVAG3_VECTOR_DB_URL (default: localhost:6334)",
+				})
+			}
 		} else {
 			sb.deps.Knowledge = knowledgeStore
 			sb.deps.Embedder = cfg.embedder
 			sb.closers = append(sb.closers, func() {
 				if err := knowledgeStore.Close(); err != nil {
-					sb.logger.Warn("Failed to close knowledge store", map[string]interface{}{
-						"operation":  "shared_backends_shutdown",
-						"error":      err.Error(),
-						"error_type": "knowledge_store_close",
-					})
+					if sb.logger != nil {
+						sb.logger.Warn("Failed to close knowledge store", map[string]interface{}{
+							"operation":  "shared_backends_shutdown",
+							"error":      "knowledge store close failed",
+							"error_type": "knowledge_store_close",
+						})
+					}
 				}
 			})
 		}
@@ -219,18 +285,20 @@ func NewSharedBackends(redisClient *redis.Client, logger core.Logger, opts ...Sh
 	sb.deps.AgentName = cfg.agentName
 	sb.deps.AgentDomain = cfg.domain
 
-	logger.Info("Shared memory backends initialized", map[string]interface{}{
-		"operation":         "shared_backends_setup",
-		"agent_name":        cfg.agentName,
-		"domain":            cfg.domain,
-		"episodic":          true,
-		"coordinator":       sb.deps.Coordinator != nil,
-		"activity_coord":    sb.deps.ActivityCoordinator != nil,
-		"digest_cache":      sb.deps.DigestCache != nil,
-		"distributed_lock":  sb.deps.Lock != nil,
-		"knowledge_enabled": sb.deps.Knowledge != nil,
-		"embedding_enabled": sb.deps.Embedder != nil,
-	})
+	if logger != nil {
+		logger.Info("Shared memory backends initialized", map[string]interface{}{
+			"operation":         "shared_backends_setup",
+			"agent_name":        cfg.agentName,
+			"domain":            cfg.domain,
+			"episodic":          true,
+			"coordinator":       sb.deps.Coordinator != nil,
+			"activity_coord":    sb.deps.ActivityCoordinator != nil,
+			"digest_cache":      sb.deps.DigestCache != nil,
+			"distributed_lock":  sb.deps.Lock != nil,
+			"knowledge_enabled": sb.deps.Knowledge != nil,
+			"embedding_enabled": sb.deps.Embedder != nil,
+		})
+	}
 
 	return sb, nil
 }

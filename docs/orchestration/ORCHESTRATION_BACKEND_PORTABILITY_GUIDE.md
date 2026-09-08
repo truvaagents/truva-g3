@@ -224,7 +224,7 @@ Your process needs:
 
 - a `core.Logger`;
 - a reachable Redis or Valkey endpoint; and
-- `REDIS_URL` or `TRUVAG3_REDIS_URL` when the endpoint is not the local
+- `REDIS_URL` (standalone shorthand) or structured `TRUVAG3_REDIS_*` topology fields when the endpoint is not the local
   compatibility default.
 
 For local Redis, the compatibility default is `redis://localhost:6379` when no
@@ -1637,5 +1637,4 @@ state independently.
 - [Agent Skills Guide](AGENT_SKILLS_GUIDE.md) — runtime and administrative skill storage requirements.
 - [Framework Design Principles](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md) — layered composition, ownership, interface-first design, and invariant boundaries.
 - [Orchestration Architecture](https://github.com/truvaagents/truva-g3/blob/main/orchestration/ARCHITECTURE.md) — authoritative module architecture and provider dependency direction.
-- [Backend Portability Design](https://github.com/truvaagents/truva-g3/blob/main/orchestration/notes/ORCHESTRATION_BACKEND_PORTABILITY_DESIGN.md) — rationale, accepted design constraints, implementation status, and later migration work.
 - [Portability Reference README](https://github.com/truvaagents/truva-g3/blob/main/examples/orchestration-backend-portability/README.md) — dedicated-cluster setup, live workflows, commands, and proof boundaries.

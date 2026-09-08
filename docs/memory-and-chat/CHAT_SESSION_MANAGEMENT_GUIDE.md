@@ -150,7 +150,7 @@ The framework-side history preparation path lives in:
 
 If you are skimming, this is the behavior today:
 
-1. Both example agents store chat sessions in Redis DB 2 under the `truvag3:sessions` namespace.
+1. Both example agents store chat sessions in Redis/Valkey DB 0 under `truvag3:v1:<deployment>:sessions:*`.
 2. A session holds metadata plus a bounded list of messages.
 3. Sessions live for 48 hours and keep at most 50 messages.
 4. `POST /chat/session` creates a session explicitly.
@@ -176,17 +176,20 @@ That happens in:
 
 Both examples use the same constructor settings:
 
-- Redis DB: `core.RedisDBSessions` which is DB 2
-- Namespace: `truvag3:sessions`
+- Topology: the application's resolved standalone, Sentinel, or cluster connection
+- Redis/Valkey DB: 0
+- Namespace: `truvag3:v1:<deployment>:sessions`
 - TTL: `48*time.Hour`
 - Max messages: `50`
 
 That choice matters for two reasons:
 
-- sessions are isolated from service discovery, which uses Redis DB 0
+- sessions are isolated from service discovery by versioned subsystem keys rather than numbered databases
 - the examples intentionally keep chat history bounded in both time and size
 
-If `REDIS_URL` is missing, startup fails. In these examples, session storage is a required part of the chat-agent design.
+If neither `REDIS_URL` nor a valid structured `TRUVAG3_REDIS_*` topology is
+configured, startup fails. In these examples, session storage is a required
+part of the chat-agent design.
 
 ## Step 2: What A Session Looks Like
 
@@ -221,7 +224,7 @@ The main session object is saved under the session ID using the namespaced Redis
 So conceptually it lives under a key like:
 
 ```text
-truvag3:sessions:{session_id}
+truvag3:v1:<deployment>:sessions:<session_id>
 ```
 
 ### The per-user session index
@@ -229,7 +232,7 @@ truvag3:sessions:{session_id}
 If a session has a `user_id`, the session ID is also added to a sorted set:
 
 ```text
-truvag3:sessions:index:{user_id}
+truvag3:v1:<deployment>:sessions:index:<user_id>
 ```
 
 The score is the session's `UpdatedAt.UnixMilli()`.
@@ -241,7 +244,7 @@ That gives the app a clean way to list a user's sessions in most-recent-first or
 The store also increments a simple Redis counter:
 
 ```text
-truvag3:sessions:active_session_count
+truvag3:v1:<deployment>:sessions:active_session_count
 ```
 
 This is used by the health endpoint.

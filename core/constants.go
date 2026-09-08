@@ -28,8 +28,8 @@ const (
 const (
 	// DefaultRedisPrefix is the default key prefix for schema cache entries in Redis
 	// Format: <prefix><tool-name>:<capability-name>
-	// Example: truvag3:schema:weather-service:current_weather
-	DefaultRedisPrefix = "truvag3:schema:"
+	// Example: truvag3:v1:default:schema:weather-service:current_weather
+	DefaultRedisPrefix = "truvag3:v1:default:schema:"
 
 	// DefaultSchemaCacheTTL is the default TTL for cached schemas in Redis
 	// Schemas rarely change, so 24 hours is a reasonable default

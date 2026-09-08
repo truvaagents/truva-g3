@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
-	"github.com/truvaagents/truva-g3/telemetry"
 )
 
 // Compile-time interface compliance checks.
@@ -33,7 +32,7 @@ type EpisodicMemoryConfig struct {
 type EpisodicMemoryOption func(*StreamEpisodicMemory) error
 
 // WithEpisodicRedisClient sets the Redis client for episodic memory.
-func WithEpisodicRedisClient(client *redis.Client) EpisodicMemoryOption {
+func WithEpisodicRedisClient(client redis.UniversalClient) EpisodicMemoryOption {
 	return func(v *StreamEpisodicMemory) error {
 		if client == nil {
 			return fmt.Errorf("redis client cannot be nil")
@@ -43,6 +42,12 @@ func WithEpisodicRedisClient(client *redis.Client) EpisodicMemoryOption {
 	}
 }
 
+// WithEpisodicRedisUniversalClient is the topology-explicit spelling for
+// injecting an application-owned standalone, Sentinel, or cluster client.
+func WithEpisodicRedisUniversalClient(client redis.UniversalClient) EpisodicMemoryOption {
+	return WithEpisodicRedisClient(client)
+}
+
 // WithEpisodicDomain sets the agent domain for key prefixing.
 func WithEpisodicDomain(domain string) EpisodicMemoryOption {
 	return func(v *StreamEpisodicMemory) error {
@@ -50,6 +55,14 @@ func WithEpisodicDomain(domain string) EpisodicMemoryOption {
 			return fmt.Errorf("domain cannot be empty")
 		}
 		v.domain = domain
+		return nil
+	}
+}
+
+// WithEpisodicKeyspace sets the deployment-scoped Redis keyspace.
+func WithEpisodicKeyspace(keyspace core.RedisKeyspace) EpisodicMemoryOption {
+	return func(v *StreamEpisodicMemory) error {
+		v.keyspace = keyspace
 		return nil
 	}
 }
@@ -82,7 +95,11 @@ func WithEpisodicLogger(logger core.Logger) EpisodicMemoryOption {
 		if logger == nil {
 			return fmt.Errorf("logger cannot be nil: use &core.NoOpLogger{} to disable logging")
 		}
-		v.logger = logger
+		if cal, ok := logger.(core.ComponentAwareLogger); ok {
+			v.logger = cal.WithComponent("framework/memory")
+		} else {
+			v.logger = logger
+		}
 		return nil
 	}
 }
@@ -100,8 +117,9 @@ func WithEpisodicLogger(logger core.Logger) EpisodicMemoryOption {
 //	truvag3:memory:{domain}:event:{event_id}            — hash (event details)
 //	truvag3:memory:global:events:stream                 — cross-domain global events
 type StreamEpisodicMemory struct {
-	client       *redis.Client
+	client       redis.UniversalClient
 	domain       string
+	keyspace     core.RedisKeyspace
 	streamMaxLen int64
 	eventTTL     time.Duration // TTL for individual event hash keys
 	logger       core.Logger
@@ -112,6 +130,7 @@ type StreamEpisodicMemory struct {
 func NewStreamEpisodicMemory(opts ...EpisodicMemoryOption) (*StreamEpisodicMemory, error) {
 	v := &StreamEpisodicMemory{
 		domain:       "default",
+		keyspace:     defaultRedisKeyspace(),
 		streamMaxLen: 100000,
 		eventTTL:     60 * 24 * time.Hour,
 		logger:       &core.NoOpLogger{},
@@ -141,13 +160,15 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 	// Serialize event to JSON for the hash
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to marshal event", map[string]interface{}{
-			"request_id": core.GetRequestID(ctx),
-			"operation":  "record_event",
-			"event_id":   event.EventID,
-			"error":      err.Error(),
-			"error_type": "marshal",
-		})
+		if v.logger != nil {
+			v.logger.WarnWithContext(ctx, "Failed to marshal event", map[string]interface{}{
+				"request_id": core.GetRequestID(ctx),
+				"operation":  "record_event",
+				"event_id":   event.EventID,
+				"error":      "memory event serialization failed",
+				"error_type": "marshal",
+			})
+		}
 		return nil // Fail-open: don't block the pipeline
 	}
 
@@ -192,7 +213,7 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 
 	// 5. Dual-write: ScopeGlobal events also go to the global stream
 	if event.Scope == core.ScopeGlobal {
-		globalStreamKey := "truvag3:memory:global:events:stream"
+		globalStreamKey := v.globalStreamKey()
 		pipe.XAdd(ctx, &redis.XAddArgs{
 			Stream: globalStreamKey,
 			MaxLen: v.streamMaxLen,
@@ -203,14 +224,15 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to record event", map[string]interface{}{
-			"request_id": core.GetRequestID(ctx),
-			"operation":  "record_event",
-			"event_id":   event.EventID,
-			"error":      err.Error(),
-			"error_type": "stream_write",
-		})
-		telemetry.RecordSpanError(ctx, err)
+		if v.logger != nil {
+			v.logger.WarnWithContext(ctx, "Failed to record event", map[string]interface{}{
+				"request_id": core.GetRequestID(ctx),
+				"operation":  "record_event",
+				"event_id":   event.EventID,
+				"error":      "memory event write failed",
+				"error_type": "stream_write",
+			})
+		}
 		return nil // Fail-open
 	}
 
@@ -240,14 +262,15 @@ func (v *StreamEpisodicMemory) QueryEvents(ctx context.Context, callerDomain str
 	}
 
 	if err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to query event index", map[string]interface{}{
-			"request_id":    core.GetRequestID(ctx),
-			"operation":     "query_events",
-			"caller_domain": callerDomain,
-			"error":         err.Error(),
-			"error_type":    "index_read",
-		})
-		telemetry.RecordSpanError(ctx, err)
+		if v.logger != nil {
+			v.logger.WarnWithContext(ctx, "Failed to query event index", map[string]interface{}{
+				"request_id":    core.GetRequestID(ctx),
+				"operation":     "query_events",
+				"caller_domain": callerDomain,
+				"error":         "memory event index read failed",
+				"error_type":    "index_read",
+			})
+		}
 		return nil, nil // Fail-open
 	}
 
@@ -368,13 +391,15 @@ func (v *StreamEpisodicMemory) DeleteEvents(ctx context.Context, eventIDs []stri
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to delete events", map[string]interface{}{
-			"request_id":  core.GetRequestID(ctx),
-			"operation":   "delete_events",
-			"event_count": len(eventIDs),
-			"error":       err.Error(),
-			"error_type":  "stream_delete",
-		})
+		if v.logger != nil {
+			v.logger.WarnWithContext(ctx, "Failed to delete events", map[string]interface{}{
+				"request_id":  core.GetRequestID(ctx),
+				"operation":   "delete_events",
+				"event_count": len(eventIDs),
+				"error":       "memory event deletion failed",
+				"error_type":  "stream_delete",
+			})
+		}
 		return nil // Fail-open
 	}
 
@@ -384,19 +409,23 @@ func (v *StreamEpisodicMemory) DeleteEvents(ctx context.Context, eventIDs []stri
 // --- Key schema helpers ---
 
 func (v *StreamEpisodicMemory) domainStreamKey() string {
-	return fmt.Sprintf("truvag3:memory:%s:events:stream", v.domain)
+	return v.keyspace.Plain("memory", v.domain, "events", "stream")
+}
+
+func (v *StreamEpisodicMemory) globalStreamKey() string {
+	return v.keyspace.Plain("memory", "global", "events", "stream")
 }
 
 func (v *StreamEpisodicMemory) entityIndexKey(entityType, entityID string) string {
-	return fmt.Sprintf("truvag3:memory:%s:entity:%s:%s", v.domain, entityType, entityID)
+	return v.keyspace.Plain("memory", v.domain, "entity", entityType, entityID)
 }
 
 func (v *StreamEpisodicMemory) agentIndexKey(agentName string) string {
-	return fmt.Sprintf("truvag3:memory:%s:agent:%s", v.domain, agentName)
+	return v.keyspace.Plain("memory", v.domain, "agent", agentName)
 }
 
 func (v *StreamEpisodicMemory) eventKey(eventID string) string {
-	return fmt.Sprintf("truvag3:memory:%s:event:%s", v.domain, eventID)
+	return v.keyspace.Plain("memory", v.domain, "event", eventID)
 }
 
 // --- Query helpers ---
@@ -461,7 +490,7 @@ func (v *StreamEpisodicMemory) queryGlobalStream(ctx context.Context, since time
 		start = fmt.Sprintf("%d-0", since.UnixMilli())
 	}
 
-	msgs, err := v.client.XRevRangeN(ctx, "truvag3:memory:global:events:stream", "+", start, int64(limit)).Result()
+	msgs, err := v.client.XRevRangeN(ctx, v.globalStreamKey(), "+", start, int64(limit)).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +521,7 @@ func (v *StreamEpisodicMemory) fetchEvent(ctx context.Context, eventID string) (
 	if strings.HasPrefix(eventID, "xdomain:") {
 		parts := strings.SplitN(eventID[8:], ":", 2) // "xdomain:{domain}:{id}"
 		if len(parts) == 2 {
-			key = fmt.Sprintf("truvag3:memory:%s:event:%s", parts[0], parts[1])
+			key = v.keyspace.Plain("memory", parts[0], "event", parts[1])
 			_ = parts[1] // Normalize for dedup (eventID used via key lookup)
 		}
 	}
@@ -549,7 +578,7 @@ func containsString(slice []string, s string) bool {
 type InvestigationCoordinatorOption func(*AtomicLockCoordinator) error
 
 // WithCoordinatorRedisClient sets the Redis client for investigation coordination.
-func WithCoordinatorRedisClient(client *redis.Client) InvestigationCoordinatorOption {
+func WithCoordinatorRedisClient(client redis.UniversalClient) InvestigationCoordinatorOption {
 	return func(v *AtomicLockCoordinator) error {
 		if client == nil {
 			return fmt.Errorf("redis client cannot be nil")
@@ -559,6 +588,12 @@ func WithCoordinatorRedisClient(client *redis.Client) InvestigationCoordinatorOp
 	}
 }
 
+// WithCoordinatorRedisUniversalClient is the topology-explicit spelling for
+// injecting an application-owned standalone, Sentinel, or cluster client.
+func WithCoordinatorRedisUniversalClient(client redis.UniversalClient) InvestigationCoordinatorOption {
+	return WithCoordinatorRedisClient(client)
+}
+
 // WithCoordinatorDomain sets the agent domain for key prefixing.
 func WithCoordinatorDomain(domain string) InvestigationCoordinatorOption {
 	return func(v *AtomicLockCoordinator) error {
@@ -566,6 +601,14 @@ func WithCoordinatorDomain(domain string) InvestigationCoordinatorOption {
 			return fmt.Errorf("domain cannot be empty")
 		}
 		v.domain = domain
+		return nil
+	}
+}
+
+// WithCoordinatorKeyspace sets the deployment-scoped Redis keyspace.
+func WithCoordinatorKeyspace(keyspace core.RedisKeyspace) InvestigationCoordinatorOption {
+	return func(v *AtomicLockCoordinator) error {
+		v.keyspace = keyspace
 		return nil
 	}
 }
@@ -587,7 +630,11 @@ func WithCoordinatorLogger(logger core.Logger) InvestigationCoordinatorOption {
 		if logger == nil {
 			return fmt.Errorf("logger cannot be nil: use &core.NoOpLogger{} to disable logging")
 		}
-		v.logger = logger
+		if cal, ok := logger.(core.ComponentAwareLogger); ok {
+			v.logger = cal.WithComponent("framework/memory")
+		} else {
+			v.logger = logger
+		}
 		return nil
 	}
 }
@@ -600,16 +647,35 @@ func WithCoordinatorLogger(logger core.Logger) InvestigationCoordinatorOption {
 //
 //	truvag3:memory:{domain}:investigating:{entity_id} — String (value=agentName, with TTL)
 type AtomicLockCoordinator struct {
-	client     *redis.Client
+	client     redis.UniversalClient
 	domain     string
+	keyspace   core.RedisKeyspace
 	defaultTTL time.Duration
 	logger     core.Logger
 }
+
+var claimInvestigationScript = redis.NewScript(`
+if redis.call("SET", KEYS[1], ARGV[1], "NX", "PX", ARGV[2]) then
+	redis.call("SADD", KEYS[2], ARGV[3])
+	return 1
+end
+return 0
+`)
+
+var releaseInvestigationScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+	redis.call("DEL", KEYS[1])
+	redis.call("SREM", KEYS[2], ARGV[2])
+	return 1
+end
+return 0
+`)
 
 // NewAtomicLockCoordinator creates a new Stream-backed investigation coordinator.
 func NewAtomicLockCoordinator(opts ...InvestigationCoordinatorOption) (*AtomicLockCoordinator, error) {
 	v := &AtomicLockCoordinator{
 		domain:     "default",
+		keyspace:   defaultRedisKeyspace(),
 		defaultTTL: 30 * time.Minute,
 		logger:     &core.NoOpLogger{},
 	}
@@ -631,27 +697,31 @@ func (v *AtomicLockCoordinator) ClaimInvestigation(ctx context.Context, agentNam
 		ttl = v.defaultTTL
 	}
 	key := v.investigationKey(entityID)
-
-	// SET key agentName NX PX ttl — atomic claim
-	ok, err := v.client.SetNX(ctx, key, agentName, ttl).Result()
+	milliseconds := ttl.Milliseconds()
+	if milliseconds <= 0 {
+		milliseconds = 1
+	}
+	ok, err := claimInvestigationScript.Run(
+		ctx,
+		v.client,
+		[]string{key, v.investigationIndexKey()},
+		agentName,
+		strconv.FormatInt(milliseconds, 10),
+		entityID,
+	).Int64()
 	if err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to claim investigation", map[string]interface{}{
-			"request_id": core.GetRequestID(ctx),
-			"operation":  "claim_investigation",
-			"entity_id":  entityID,
-			"error":      err.Error(),
-			"error_type": "claim",
-		})
+		v.observeRuntimeFailure(ctx, "claim_investigation", entityID, err)
 		return false, "", nil // Fail-open: can't claim, but don't error
 	}
 
-	if ok {
+	if ok == 1 {
 		return true, "", nil // Successfully claimed
 	}
 
 	// Already claimed — find out by whom
 	holder, err := v.client.Get(ctx, key).Result()
 	if err != nil {
+		v.observeRuntimeFailure(ctx, "claim_holder_read", entityID, err)
 		return false, "", nil // Can't determine holder
 	}
 	return false, holder, nil
@@ -662,67 +732,98 @@ func (v *AtomicLockCoordinator) ClaimInvestigation(ctx context.Context, agentNam
 func (v *AtomicLockCoordinator) ReleaseInvestigation(ctx context.Context, agentName, entityID string) error {
 	key := v.investigationKey(entityID)
 
-	// Lua script: only delete if current value matches agentName (ownership check)
-	script := redis.NewScript(`
-		if redis.call("GET", KEYS[1]) == ARGV[1] then
-			return redis.call("DEL", KEYS[1])
-		end
-		return 0
-	`)
-
-	_, err := script.Run(ctx, v.client, []string{key}, agentName).Result()
+	_, err := releaseInvestigationScript.Run(
+		ctx,
+		v.client,
+		[]string{key, v.investigationIndexKey()},
+		agentName,
+		entityID,
+	).Result()
 	if err != nil && err != redis.Nil {
-		v.logger.WarnWithContext(ctx, "Failed to release investigation", map[string]interface{}{
-			"request_id": core.GetRequestID(ctx),
-			"operation":  "release_investigation",
-			"entity_id":  entityID,
-			"error":      err.Error(),
-			"error_type": "release",
-		})
+		v.observeRuntimeFailure(ctx, "release_investigation", entityID, err)
 	}
 	return nil // Fail-open
 }
 
 // GetActiveInvestigations returns all currently claimed entities and their holders.
 func (v *AtomicLockCoordinator) GetActiveInvestigations(ctx context.Context) (map[string]string, error) {
-	pattern := v.investigationKey("*")
-	result := make(map[string]string)
-
-	iter := v.client.Scan(ctx, 0, pattern, 100).Iterator()
-	for iter.Next(ctx) {
-		key := iter.Val()
-		holder, err := v.client.Get(ctx, key).Result()
-		if err != nil {
-			continue // Key may have expired between scan and get
-		}
-		// Extract entity ID from key: truvag3:memory:{domain}:investigating:{entityID}
-		entityID := extractEntityIDFromKey(key, v.domain)
-		if entityID != "" {
-			result[entityID] = holder
-		}
-	}
-	if err := iter.Err(); err != nil {
-		v.logger.WarnWithContext(ctx, "Failed to scan active investigations", map[string]interface{}{
-			"request_id": core.GetRequestID(ctx),
-			"operation":  "get_active_investigations",
-			"error":      err.Error(),
-			"error_type": "scan",
-		})
+	ids, err := v.scanInvestigationIDs(ctx)
+	if err != nil {
+		v.observeRuntimeFailure(ctx, "active_investigation_index_scan", "", err)
 		return nil, nil // Fail-open
 	}
-
+	pipe := v.client.Pipeline()
+	commands := make([]*redis.StringCmd, len(ids))
+	for i, id := range ids {
+		commands[i] = pipe.Get(ctx, v.investigationKey(id))
+	}
+	_, execErr := pipe.Exec(ctx)
+	if execErr != nil && execErr != redis.Nil {
+		v.observeRuntimeFailure(ctx, "active_investigation_load", "", execErr)
+		return nil, nil
+	}
+	result := make(map[string]string, len(ids))
+	stale := make([]interface{}, 0)
+	for i, command := range commands {
+		holder, err := command.Result()
+		if err == redis.Nil {
+			stale = append(stale, ids[i])
+			continue
+		}
+		if err != nil {
+			v.observeRuntimeFailure(ctx, "active_investigation_load", ids[i], err)
+			return nil, nil
+		}
+		result[ids[i]] = holder
+	}
+	if len(stale) > 0 {
+		if err := v.client.SRem(ctx, v.investigationIndexKey(), stale...).Err(); err != nil {
+			v.observeRuntimeFailure(ctx, "active_investigation_index_cleanup", "", err)
+		}
+	}
 	return result, nil
 }
 
-func (v *AtomicLockCoordinator) investigationKey(entityID string) string {
-	return fmt.Sprintf("truvag3:memory:%s:investigating:%s", v.domain, entityID)
+func (v *AtomicLockCoordinator) observeRuntimeFailure(ctx context.Context, operation, entityID string, _ error) {
+	if v.logger == nil {
+		return
+	}
+	v.logger.WarnWithContext(ctx, "Redis investigation coordination failed open", map[string]interface{}{
+		"request_id": core.GetRequestID(ctx),
+		"operation":  operation,
+		"entity_id":  entityID,
+		"error":      "redis investigation coordination unavailable",
+		"error_type": "backend",
+	})
 }
 
-// extractEntityIDFromKey parses "truvag3:memory:{domain}:investigating:{entityID}" → entityID
-func extractEntityIDFromKey(key, domain string) string {
-	prefix := fmt.Sprintf("truvag3:memory:%s:investigating:", domain)
-	if strings.HasPrefix(key, prefix) {
-		return key[len(prefix):]
+func (v *AtomicLockCoordinator) investigationKey(entityID string) string {
+	return v.keyspace.Tagged("memory", v.domain, "investigation", entityID)
+}
+
+func (v *AtomicLockCoordinator) investigationIndexKey() string {
+	return v.keyspace.Tagged("memory", v.domain, "investigations")
+}
+
+func (v *AtomicLockCoordinator) scanInvestigationIDs(ctx context.Context) ([]string, error) {
+	seen := make(map[string]struct{})
+	var cursor uint64
+	for {
+		ids, next, err := v.client.SScan(ctx, v.investigationIndexKey(), cursor, "", 256).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
-	return ""
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids, nil
 }

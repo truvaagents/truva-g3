@@ -141,8 +141,14 @@ type StoredExecution struct {
 	// prompt content remains governed by the separate opt-in LLM debug store.
 	Skills *SkillExecutionDebug `json:"skills,omitempty"`
 
+	// PipelineHooks is the ordered, request-local record of framework pipeline
+	// hook invocation outcomes. It is persisted with the execution so debugging
+	// consumers do not need a tracing backend to reconstruct the hook lifecycle.
+	PipelineHooks []PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+
 	// FinalResponse is the terminal application response after AfterSynthesis
-	// hooks have run. It is intentionally separate from the raw synthesis
+	// hooks have run, or the accepted response from a BeforePlanning
+	// short-circuit. It is intentionally separate from the raw synthesis
 	// interaction retained in the opt-in LLM debug store.
 	FinalResponse       *string `json:"final_response,omitempty"`
 	FinalResponseSource string  `json:"final_response_source,omitempty"`
@@ -153,11 +159,54 @@ type StoredExecution struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// FinalResponseSourceAfterSynthesisHooks identifies a terminal response after
-// every registered AfterSynthesis hook has run. Keeping this as a named API
-// value prevents producers and observability consumers from inventing subtly
-// different spellings for the same response boundary.
-const FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+// PipelineHookExecution is the provider-neutral troubleshooting record for one
+// registered pipeline hook at one lifecycle boundary. Status describes the
+// callback invocation; Effects describe separately reported concrete outcomes.
+// Error preserves the exact hook or validation error because execution-debug
+// persistence is an explicit, fidelity-preserving opt-in.
+type PipelineHookExecution struct {
+	HookName  string                      `json:"hook_name"`
+	Phase     string                      `json:"phase"`
+	Status    PipelineHookExecutionStatus `json:"status"`
+	Sequence  int                         `json:"sequence"`
+	PlanPhase int                         `json:"plan_phase,omitempty"`
+	StartedAt time.Time                   `json:"started_at"`
+	Duration  time.Duration               `json:"duration"`
+	Error     string                      `json:"error,omitempty"`
+	Effects   []core.PipelineHookEffect   `json:"effects,omitempty"`
+}
+
+// PipelineHookExecutionStatus is the terminal framework-observed outcome of a
+// pipeline hook invocation. It does not claim that every side effect initiated
+// by the hook completed successfully; hooks may deliberately fail open or
+// schedule asynchronous work.
+type PipelineHookExecutionStatus string
+
+const (
+	PipelineHookSucceeded PipelineHookExecutionStatus = "succeeded"
+	PipelineHookFailed    PipelineHookExecutionStatus = "failed"
+	PipelineHookSkipped   PipelineHookExecutionStatus = "skipped"
+)
+
+const (
+	PipelineHookPhaseBeforePlanning = "before_planning"
+	PipelineHookPhaseAfterPlanning  = "after_planning"
+	PipelineHookPhaseAfterExecution = "after_execution"
+	PipelineHookPhaseAfterSynthesis = "after_synthesis"
+)
+
+const (
+	// FinalResponseSourceAfterSynthesisHooks identifies a terminal response after
+	// every registered AfterSynthesis hook has run. Keeping this as a named API
+	// value prevents producers and observability consumers from inventing subtly
+	// different spellings for the same response boundary.
+	FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+
+	// FinalResponseSourceBeforePlanningShortCircuit identifies a terminal
+	// response accepted from a BeforePlanning hook before model planning or step
+	// execution began.
+	FinalResponseSourceBeforePlanningShortCircuit = "before_planning_short_circuit"
+)
 
 // ExecutionSummary is a lightweight version for listing.
 // Used by ListRecent to avoid loading full payloads.
@@ -297,7 +346,7 @@ type ExecutionStoreConfig struct {
 	ErrorTTL time.Duration `json:"error_ttl"`
 
 	// KeyPrefix is the prefix for all storage keys.
-	// Default: "truvag3:execution:debug:".
+	// Default: "truvag3:v1:default:execution-debug:".
 	// Override via TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX.
 	// This allows multi-tenant deployments or custom namespacing.
 	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
@@ -320,10 +369,10 @@ type ExecutionStoreConfig struct {
 // Feature is disabled by default per FRAMEWORK_DESIGN_PRINCIPLES.md.
 func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 	return ExecutionStoreConfig{
-		Enabled:                    false,                      // Disabled by default
-		TTL:                        24 * time.Hour,             // 24 hours for success
-		ErrorTTL:                   7 * 24 * time.Hour,         // 7 days for errors
-		KeyPrefix:                  "truvag3:execution:debug:", // Default prefix with trailing colon
+		Enabled:                    false,              // Disabled by default
+		TTL:                        24 * time.Hour,     // 24 hours for success
+		ErrorTTL:                   7 * 24 * time.Hour, // 7 days for errors
+		KeyPrefix:                  defaultRedisKeyspace().Plain("execution-debug") + ":",
 		ConversationQueryLimit:     defaultConversationQueryLimit,
 		ConversationIndexScanLimit: defaultConversationIndexScanLimit,
 	}
@@ -332,7 +381,7 @@ func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 // Default key prefix constant (for documentation and backwards compatibility)
 const (
 	// DefaultExecutionKeyPrefix is the default prefix for execution debug storage keys
-	DefaultExecutionKeyPrefix = "truvag3:execution:debug:"
+	DefaultExecutionKeyPrefix = "truvag3:v1:default:execution-debug:"
 
 	defaultConversationQueryLimit     = 1000
 	defaultConversationIndexScanLimit = 5000

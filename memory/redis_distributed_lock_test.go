@@ -135,13 +135,13 @@ func TestLockKey_FormatPrefix(t *testing.T) {
 	lock, _ := NewRedisDistributedLock(client, &core.NoOpLogger{})
 	ctx := context.Background()
 
-	// Acquire and verify the underlying Redis key uses the truvag3:lock: prefix
+	// Acquire and verify the underlying Redis key uses the versioned lock keyspace.
 	_, err := lock.Acquire(ctx, "myjob:domain1", 5*time.Second)
 	require.NoError(t, err)
 
 	// Read the key directly via the client
-	val, err := client.Get(ctx, "truvag3:lock:myjob:domain1").Result()
-	require.NoError(t, err, "key should exist with truvag3:lock: prefix")
+	val, err := client.Get(ctx, "truvag3:v1:default:locks:{default:locks:~bXlqb2I6ZG9tYWluMQ}:lease").Result()
+	require.NoError(t, err, "key should exist in the versioned lock keyspace")
 	assert.NotEmpty(t, val)
 }
 

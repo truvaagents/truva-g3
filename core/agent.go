@@ -184,9 +184,10 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 		// Initialize discovery if configured
 		if b.Config.Discovery.Enabled && b.Discovery == nil {
 			b.Logger.Info("Initializing service discovery", map[string]interface{}{
-				"provider":  b.Config.Discovery.Provider,
-				"mock_mode": b.Config.Development.MockDiscovery,
-				"redis_url": b.Config.Discovery.RedisURL != "",
+				"operation":             "redis_discovery_initialize",
+				"provider":              b.Config.Discovery.Provider,
+				"mock_mode":             b.Config.Development.MockDiscovery,
+				"connection_configured": b.Config.Discovery.RedisConnection != nil || b.Config.Discovery.RedisURL != "",
 			})
 
 			if b.Config.Development.MockDiscovery {
@@ -196,32 +197,40 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 					"provider": "mock",
 					"reason":   "development_mode",
 				})
-			} else if b.Config.Discovery.Provider == "redis" && b.Config.Discovery.RedisURL != "" {
+			} else if b.Config.Discovery.Provider == "redis" && (b.Config.Discovery.RedisConnection != nil || b.Config.Discovery.RedisURL != "") {
+				logRedisConnectionDiagnostics(b.Logger, b.Config.Discovery.RedisDiagnostics)
+				connection, connectionErr := redisConnectionForDiscovery(b.Config.Discovery)
+				var discovery *RedisDiscovery
+				if connectionErr == nil {
+					discovery, connectionErr = NewRedisDiscoveryWithConnection(connection, b.Config.Discovery.RedisKeyspace, b.Config.Discovery.TTL)
+				}
 				// Initialize Redis discovery with configured TTL
-				if discovery, err := NewRedisDiscoveryWithOptions(b.Config.Discovery.RedisURL, "truvag3", b.Config.Discovery.TTL); err == nil {
+				if connectionErr == nil {
 					// Set logger for better observability
 					discovery.SetLogger(b.Logger)
 					b.mu.Lock()
 					b.Discovery = discovery
 					b.mu.Unlock()
 					b.Logger.Info("Redis discovery initialized successfully", map[string]interface{}{
+						"operation":     "redis_discovery_initialize",
 						"provider":      "redis",
-						"redis_url":     b.Config.Discovery.RedisURL,
+						"redis_mode":    connection.Mode,
 						"effective_ttl": discovery.TTL().String(),
 						"requested_ttl": b.Config.Discovery.TTL.String(),
 					})
 				} else {
 					// Enhance existing error logging with dependency context
 					b.Logger.Error("Failed to initialize Redis discovery", map[string]interface{}{
-						"error":         err,
-						"error_type":    fmt.Sprintf("%T", err),
-						"redis_url":     b.Config.Discovery.RedisURL,
+						"operation":     "redis_discovery_initialize",
+						"error":         "redis discovery initialization failed",
+						"error_type":    "backend_startup",
+						"redis_mode":    connection.Mode,
 						"impact":        "agent_will_run_without_discovery",
 						"retry_enabled": b.Config.Discovery.RetryOnFailure,
 					})
 
 					// Start background retry if enabled
-					if b.Config.Discovery.RetryOnFailure {
+					if b.Config.Discovery.RetryOnFailure && connectionErr != nil {
 						address, port := ResolveServiceAddress(b.Config, b.Logger)
 
 						serviceInfo := &ServiceInfo{
@@ -253,9 +262,10 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 						}
 
 						// Start background retry manager
-						StartRegistryRetry(
+						StartRegistryRetryWithConnection(
 							ctx,
-							b.Config.Discovery.RedisURL,
+							connection,
+							b.Config.Discovery.RedisKeyspace,
 							serviceInfo,
 							b.Config.Discovery.RetryInterval,
 							b.Logger,

@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.10
+**Version**: 1.19
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -23,9 +23,11 @@
 12. [Common Patterns & Examples](#common-patterns--examples)
 13. [Troubleshooting Guide](#troubleshooting-guide)
 14. [Future Considerations](#future-considerations)
-15. [Agent Skills V1](#agent-skills-v1)
-16. [Summary](#summary)
-17. [Version History](#version-history)
+15. [Foundation Lifecycle and Configuration Contracts](#foundation-lifecycle-and-configuration-contracts)
+16. [Redis/Valkey Backend Contract](#redisvalkey-backend-contract)
+17. [Agent Skills V1](#agent-skills-v1)
+18. [Summary](#summary)
+19. [Version History](#version-history)
 
 ---
 
@@ -1601,15 +1603,14 @@ The orchestration module includes a debug store that captures complete LLM reque
 │      when non-empty, falls back to SourceComponents otherwise.   │
 │                                                                  │
 │  Storage Layer:                                                  │
-│  ├── Redis preset role (included production default; legacy      │
-│  │   parity default is Redis DB 7)                               │
+│  ├── Redis preset role (DB 0, versioned deployment keyspace)   │
 │  ├── MemoryLLMDebugStore (testing)                               │
 │  └── NoOpLLMDebugStore (disabled/fallback)                       │
 │                                                                  │
 │  Alternative Writer (no orchestration import needed):            │
 │  └── telemetry.RedisLLMCallRecorder — write-only Redis recorder  │
-│      for standalone agents. Same Redis DB 7 format and atomic    │
-│      minimum-retention rules.                                     │
+│      for agents. Same DB-0 request-local format and retention     │
+│      rules; recent-index projection is best-effort.               │
 │                                                                  │
 │  Three-Layer Resilience:                                         │
 │  ├── Layer 1: Built-in retry (3 attempts, 50ms backoff)         │
@@ -1622,8 +1623,8 @@ The orchestration module includes a debug store that captures complete LLM reque
 **Key Design Decisions:**
 - **Disabled by default**: Must explicitly enable via `TRUVAG3_LLM_DEBUG_ENABLED=true`
 - **Provider-neutral runtime contract**: Runtime behavior consumes
-  `LLMDebugStore`; the included Redis preset uses DB 7 only as a legacy-parity
-  role default, not as a neutral storage requirement
+  `LLMDebugStore`; the included Redis preset is one DB-0 adapter and is not a
+  neutral storage requirement
 - **TTL-based cleanup**: 24h for success and 168h (7 days) for errors;
   final execution outcome and lineage promotion may retain the current and
   root records longer
@@ -1636,8 +1637,11 @@ The orchestration module includes a debug store that captures complete LLM reque
   executor and skills error transformations documented below occur before
   storage and remain pending a separate audit; they are not part of the store
   contract or precedent for new paths
-- **Atomic minimum retention**: Both Redis writers preserve a longer or
-  persistent lifetime in the same atomic operation that appends an interaction
+- **Request-local atomic minimum retention**: Both Redis writers preserve a
+  longer or persistent lifetime in the same atomic operation that appends an
+  interaction. Metadata, interactions, and the retention floor share one hash
+  slot. The deployment-wide recent index is an advisory post-commit projection;
+  its bounded retry never repeats the authoritative append
 - **Late-writer retention floor**: Final execution recording stores a small,
   non-displayable retention-floor key. Orchestrator and standalone-agent
   writers consult that key atomically, so a write that starts later or in a
@@ -1689,6 +1693,87 @@ work when stale entries are encountered. Explicit positive config values win;
 otherwise environment values are normalized by the factory and invalid or
 non-positive values fall back to defaults.
 
+#### Pipeline-hook execution evidence
+
+`StoredExecution.PipelineHooks` is the authoritative, provider-neutral record
+of the pipeline hooks observed for that request. Each entry preserves the hook
+name, lifecycle phase, terminal invocation outcome, phase-local sequence, optional
+iterative-plan phase, start time, duration, and exact failure text. The
+request-local holder is concurrency-safe because execution snapshots are
+written asynchronously, while hook invocation remains sequential.
+
+The invocation outcome reports whether the framework call returned normally,
+returned an error, or was skipped. It does not claim that every side effect
+initiated by the hook completed successfully: a hook may deliberately fail
+open, and `KnowledgeExtractionHook` schedules work that completes later.
+
+Each invocation may therefore carry versioned `Effects`. Effects have their own
+`pending`, `succeeded`, `partial`, `failed`, or `skipped` status, exact failure
+text, timing, and producer-owned JSON data. The hook runner automatically
+captures exact per-key `PipelineContext.Enrichments` changes at
+`BeforePlanning`. Built-in shared-memory hooks additionally report submitted
+activity signals, discovery/selection metadata, episodic event and claim-release
+calls, extracted knowledge fragments and provider-call observations, and
+activity cleanup calls. Hook-specific context metadata does not duplicate the
+exact value already carried by its enrichment effect.
+Custom hooks use the typed `core.PipelineHookEffectReporter` context seam; no
+orchestration type or storage provider is exposed to the hook.
+
+This evidence is captured by orchestration and stored through the existing
+`ExecutionStore.Store` method. It does not add a backend method, Redis command,
+key, index, or topology rule. A custom `ExecutionStore`—including a future
+DynamoDB implementation—receives the same optional field. Observability UIs
+must read this record rather than query a tracing backend and infer ownership
+from distributed spans. Trace IDs remain optional correlation pointers only.
+
+The existing `pipeline.hook.<phase>.<hook-name>` spans remain the timing and
+causality surface. Their lifetime covers the complete framework-observed
+boundary, including after-planning clone, return-type, and validation checks,
+so a rejected result is recorded as a failed span. Effect payloads are not
+copied into span attributes, events, or logs. Detached knowledge extraction
+uses a fresh shutdown-owned context with copied request baggage and a linked
+`pipeline.hook.async.knowledge-extraction` root span; it does not retain the
+request's cancellation or make an ended request span its parent. The exact
+model response, fragments, and provider observations remain in execution-debug
+effects. Built-in fail-open provider failures mark the active span with a
+bounded error classification and use bounded ordinary log fields; raw provider
+text is not duplicated outside the opt-in effect record. Application-owned
+custom hook callback errors remain exact.
+
+An asynchronous hook must record a new effect as `pending` before its
+invocation returns. Detached work may then transition that same effect ID to a
+terminal state; a new post-invocation ID and a terminal-to-pending regression
+are rejected. Every request-ending execution snapshot--success, failure,
+partial native-stream delivery, or HITL suspension--installs a request-local
+publisher on the same orchestrator-owned execution recorder. The request
+lifecycle also closes uncommon errors that occur before the planner or executor
+can produce a richer terminal result, provided at least one hook ran. A terminal
+effect update rewrites the complete record through `ExecutionStore.Store`.
+Holder revisions are admitted monotonically before per-request recorder
+serialization, so concurrently finishing detached effects cannot submit an
+older snapshot after a newer one. Pending work is counted in the orchestrator's
+recording lifecycle, so shutdown waits for the effect update and the resulting
+store write. This relies only on the existing last-write-wins `Store` contract
+and remains backend-neutral.
+
+The execution debug store is an explicit fidelity-preserving opt-in, so hook
+errors, effect errors, and effect data are stored exactly as supplied. The
+framework does not silently redact, truncate, or summarize them. Applications
+that need transformation must provide it at their hook, logger, store, or other
+documented customization boundary. Effect status is producer-reported rather
+than an independent durability attestation. This distinction is material for
+the memory module's documented fail-open providers, which may log an internal
+runtime failure and return a neutral result to keep the request alive; built-in
+effect schemas label submissions and provider-call observations accordingly.
+Workflow-mode `ExecutePlanWithSynthesis` does not run pipeline hooks and
+therefore does not populate this field.
+
+Enrichment snapshots are serialized only when an execution-debug invocation
+exists. Structured hook effects check for an active reporter before marshaling
+application values. Disabling capture therefore avoids invoking application
+`MarshalJSON` methods for troubleshooting evidence; enabled capture retains
+the exact-fidelity contract above.
+
 #### Terminal application-response evidence
 
 `StoredExecution.FinalResponse` is a pointer so an absent terminal response is
@@ -1697,6 +1782,11 @@ different from an application that intentionally returned an empty string.
 normal buffered and native-streaming `ProcessRequest` paths run
 `AfterSynthesis` hooks and then persist the resulting application response with
 source `FinalResponseSourceAfterSynthesisHooks` (`after_synthesis_hooks`).
+An accepted `BeforePlanning` short-circuit stores its exact terminal response
+with source `FinalResponseSourceBeforePlanningShortCircuit`
+(`before_planning_short_circuit`) and a successful zero-step result. That makes
+the hook invocation visible and prevents list consumers from misclassifying a
+successful short-circuit as a failed record merely because no model plan ran.
 
 This record is deliberately separate from the synthesis interaction in the LLM
 debug store. The synthesis interaction is the model output before application
@@ -1732,9 +1822,11 @@ extension reads this projection instead of decompressing and unmarshalling the
 full execution payload. A projection-write failure after the authoritative
 record succeeds is a sanitized warning, not a false `Store` failure; indexing
 continues, and later extension falls back to the full record when the projection
-is absent. Direct Redis extends the execution, link, trace mapping, and optional
-conversation index in one Lua operation inside the store's retry/circuit-
-breaker boundary. `ExtendTTL` follows related-root links recursively with a
+is absent. Direct Redis atomically extends the request-local execution record
+and retention link, which share one hash slot. Trace, conversation, and recent
+indexes are repairable deployment-wide projections updated outside that
+request-local operation; projection failure is observable but does not turn a
+successful authoritative write into failure. `ExtendTTL` follows related-root links recursively with a
 cycle guard, so an investigation extension on a retained descendant promotes
 the complete available lineage. Promotion never creates a missing execution
 and never fails the business request. A missing requested execution returns the
@@ -1753,7 +1845,8 @@ Final execution recording coordinates LLM evidence through the optional
 `LLMDebugRetentionPreserver` capability. The Redis implementation creates or
 extends a small retention-floor marker without creating an empty debug record,
 and applies the same floor to any existing metadata, interaction, or legacy
-record keys. Both DB 7 writers read that marker in their append script, which
+record keys. Both Redis writers read that marker in their request-local append
+script, which
 covers writes that begin after execution recording and writes from another
 process. Execution storage and each current/root LLM-retention target use
 separate bounded timeouts.
@@ -1782,10 +1875,13 @@ export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h       # Success records
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h # Error records (7 days)
 
-# Included Redis preset / compatibility database assignment.
-# This is provider configuration, not an LLMDebugStore contract.
-export TRUVAG3_LLM_DEBUG_REDIS_DB=7
+# Optional deployment namespace shared by every Redis-backed role.
+export TRUVAG3_REDIS_NAMESPACE=production
 ```
+
+`TRUVAG3_LLM_DEBUG_REDIS_DB` remains a deprecated standalone-only compatibility
+input during the precursor release. Canonical composition does not set it and
+uses DB 0. Cluster mode rejects every non-zero database.
 
 **Canonical Programmatic Usage:**
 ```go
@@ -2260,7 +2356,7 @@ ownership handle that the application closes after framework shutdown. Layer 2
 keeps client configuration, owned clients, provider options, and
 `redisprovider.NewOrchestrationBackends` separately callable. An application
 may also assemble Layer-3 domain adapters directly. Runtime workflow
-code consumes only the narrow `StateStore` returned by `Workflow()` and never
+code consumes only the narrow `WorkflowStateStore` returned by `Workflow()` and never
 imports or infers a storage provider. `NewRedisStateStore` remains a supported
 compatibility constructor, but it is not the preferred pattern for new code.
 The proof-only `examples/orchestration-backend-portability` module implements
@@ -2497,9 +2593,12 @@ client cleanup. `WithDefaultBackendClientConfig`,
 `WithDefaultBackendProviderOptions`, and `WithDefaultBackendOverrides` retain
 code-over-environment precedence and per-capability replacement without forcing
 the caller to abandon the convenience layer.
-`NewOptions` is deterministic; `LoadOptionsFromEnvironment` applies the preset's
-LLM-debug retention, checkpoint retention, workflow TTL, and task-queue retry
-limits; `ConfigureOptions` applies later code overrides. `WithLogger` propagates one application-owned logger to every
+`NewOptions` and `NewOrchestrationBackends` are deterministic and environment-
+free. `LoadOptionsFromEnvironment` applies the preset's LLM-debug retention,
+checkpoint retention, workflow TTL, task-queue service scope and retry,
+task-index reconciliation, and schedule-capacity limits; `ConfigureOptions`
+applies later code overrides, including `WithTaskQueueScope`. `WithLogger`
+propagates one application-owned logger to every
 logging-capable adapter assembled by the preset; each adapter retains its
 standard `framework/orchestration` component attribution and NoOp behavior when
 no logger is supplied. Root orchestration contracts and lifecycle code do not
@@ -2519,15 +2618,12 @@ the URL-owning compatibility constructors create and close their own clients;
 their corresponding `WithClient` constructors leave connection and database
 routing to application bootstrap.
 
-Prefix behavior is explicit per adapter. `NewRedisCommandStoreWithClient` does
-not read command-store identity from the process environment and uses the
-deterministic `truvag3:hitl` default; applications select another prefix with
-`WithCommandStoreKeyPrefix` or provider composition. Checkpoint identity is
-different by design: both checkpoint constructors resolve
-`TRUVAG3_HITL_KEY_PREFIX` plus `TRUVAG3_AGENT_NAME` or
-`TRUVAG3_K8S_SERVICE_NAME`, with `WithCheckpointKeyPrefix` as the final code
-override. Task and workflow adapter constructors take their namespace through
-their explicit prefix or configuration arguments.
+Prefix behavior is explicit per adapter. Canonical provider composition passes
+one `core.RedisKeyspace` and a validated agent scope to command and checkpoint
+stores, so both use the same deployment-scoped HITL tag. Direct compatibility
+constructors retain their documented prefix inputs during the precursor
+release. Task and workflow adapter constructors take their keyspace through
+explicit configuration and never infer another logical database.
 
 **Legacy exception — pending dedicated audit:** Some error paths that predate
 the framework payload-fidelity policy still sanitize downstream failure bodies
@@ -2537,9 +2633,13 @@ executor currently uses `core.RedactSensitiveText` for a failed component body
 and `core.RedactSensitiveError` for its Go error; the latter retains the original
 cause for `errors.Is` and `errors.As` while exposing a transformed message.
 Skills authoring transforms an AI error returned to its caller, and skills AI
-observability transforms error text recorded for debugging. Selected
-Redis/provider construction and operational diagnostics contain similar legacy
-calls.
+observability transforms error text recorded for debugging. The Redis topology
+work retired the automatic transformations previously used by the two
+URL-owning execution- and LLM-debug constructors; their bounded startup errors
+now preserve the original cause. Existing transformations remain unchanged in
+skills-backend construction, skill-store returned/logged failures, and
+distributed-lock operational logging. Those retained paths are still legacy
+exceptions pending the broader audit.
 
 This paragraph records current implementation behavior; it is not a normative
 sanitization guarantee and must not be copied into new or modified paths.
@@ -2547,6 +2647,114 @@ Adopters remain responsible for payload classification and protection. Removal
 or redesign is deferred to a dedicated audit that must check retry behavior, Go
 error identity, stored evidence, returned observations, and log/trace output
 across every framework call site.
+
+---
+
+## Redis/Valkey Backend Contract
+
+The root orchestration package remains provider-neutral. Redis implementation
+and composition live in the optional `orchestration/redisprovider` package,
+which may depend on orchestration; the inverse dependency is prohibited and
+enforced by the repository architecture test.
+
+Canonical application composition resolves one `core.RedisConnectionConfig`
+and one `core.RedisKeyspace`, creates a `redis.UniversalClient`, and injects it
+into the selected backend roles. The default bundle shares one DB-0 client;
+`WithRoleClient` remains the explicit seam for separate physical endpoints.
+Standalone, Sentinel, and cluster modes therefore use the same adapter code.
+Pool size is per connected node. An injected client is application-owned and
+is never closed by an adapter. `OwnedBackends` closes only clients created by
+the provider and does so idempotently.
+
+Canonical keys begin `truvag3:v1:<deployment>:<subsystem>`. Braces delimit only
+the Redis cluster hash tag; the deployment remains outside the tag as part of
+the stable ACL/diagnostic prefix. Atomic scopes are deliberate:
+
+```text
+workflow:        {...:workflow:<workflow-id>}:execution:<execution-id>
+HITL:            {...:hitl:<agent-scope>}:checkpoint|request|claim|command:...
+schedules:       {...:schedules}:data:<id>, index:all, index:due
+skills:          {...:skills}:...
+execution debug: {...:execution-debug:<request-id>}:record|retention
+LLM debug:       {...:llm-debug:<request-id>}:meta|interactions|retention-floor
+```
+
+Workflow state is scoped by both workflow and execution identity. Schedule and
+skills operations deliberately concentrate their bounded control-plane data in
+one deployment slot. HITL concentrates one agent scope per slot so checkpoint,
+pending, request, claim, and command transactions remain atomic. Task queue to
+processing-list handoff is intentionally multi-command because the lists may
+occupy different slots; its documented retry windows allow duplicates but not
+silent loss.
+
+Request-correctness paths never rely on cluster-node-local keyspace `SCAN`,
+`KEYS`, or arbitrary cross-slot `MGET`. Task status and all-services indexes use
+`SSCAN`; record hydration uses ordinary pipelines so go-redis routes individual
+commands. Schedules maintain bounded explicit all/due indexes and reject writes
+over `TRUVAG3_SCHEDULER_MAX_SCHEDULES`. Task indexes are explicit projections
+repaired by a `core.Runnable` reconciler configured with
+`TRUVAG3_TASK_INDEX_RECONCILE_INTERVAL`. That application-owned maintenance
+path is the one deliberate keyspace-scan exception: it rotates fairly across
+the explicit task indexes and every Redis Cluster primary, keeps persistent
+cursors, and buffers oversized `SCAN`/`SSCAN` pages so each pass observes its
+strict configured task-ID bound. Request paths never call it.
+
+Execution and LLM-debug records are authoritative request-local writes. Recent,
+trace, and conversation indexes are advisory deployment-wide projections and
+are updated separately to avoid `CROSSSLOT`. Projection failure is classified
+with fixed, bounded diagnostics; it does not repeat or falsify a successful
+authoritative write. Registry Viewer uses exported key builders and pipelined
+single-key reads, and may prune only confirmed-missing projection members.
+
+Redis store constructors scope component-aware loggers to
+`framework/orchestration`, including direct injected-client construction.
+Request-path retry, decode, schedule, task, and projection records use the
+caller context and explicit request correlation; raw Redis and stored-payload
+errors are not copied into ordinary logs. Detached bounded maintenance uses a
+non-context logger and does not manufacture or retain request trace context.
+
+During the precursor release, numbered-DB options, concrete `*redis.Client`
+wrappers, `TRUVAG3_REDIS_URL`, and URL-owning direct constructors remain labeled
+compatibility APIs. They delegate to the shared resolver/factory and are not
+used by canonical examples. Cluster mode and canonical provider composition
+require DB 0; removal of the deprecated paths belongs to the later major
+cutover. Raw HITL, schedule, execution-debug, and LLM-debug key-prefix options
+are likewise standalone compatibility inputs: cluster composition must use
+their typed `RedisKeyspace` options so every transactional or Lua aggregate has
+a verified hash tag.
+
+### Real-topology verification contract
+
+The existing CI workflow and its full default unit-test selection remain the
+primary gate, without `-short` or real Redis/Valkey service jobs. Isolated
+contracts use narrow mocks, fakes, miniredis, and in-memory telemetry exporters;
+cover successful behavior, error paths, ownership, and concurrency without
+introducing complex test infrastructure.
+
+Real-topology verification is optional, manually invoked supplemental evidence,
+not a CI or merge prerequisite. The existing integration-tagged matrix runs
+the same provider-neutral workflow, HITL, command, execution, LLM-debug, scheduling,
+lock, and skill conformance surfaces against three-primary/three-replica
+clusters for Redis OSS 8.8.0, Valkey 8.1.9, and Valkey 9.1.1 in DB 0. It also
+asks the server for key slots, proves a cross-slot command is rejected, moves a
+slot under load, performs a coordinated primary failover, and requires the
+client to refresh topology without exposing a domain error.
+
+A separate manually invoked Sentinel test writes through the complete provider
+composition, confirms replication, terminates the primary, and requires reads
+to recover through the promoted replica. The cluster fixture uses Linux host networking
+because Redis and Valkey Cluster advertise node endpoints and do not support
+ordinary remapped/NAT ports for this topology. These tests require both
+`-tags integration` and their explicit environment opt-ins; they are absent
+from default `go test ./...` selection and skip explicitly on unsupported
+hosts. Unit tests do not claim to prove real server redirects or failover.
+
+An additional manual opt-in runs the accepted single-slot registry capacity
+profile: 2,000 services with five unique capabilities, 133.3 heartbeats/s, 100
+filtered discoveries/s, and one unfiltered discovery/s for two minutes. The
+gate requires zero domain errors and the documented p99 bounds. Capacity
+threshold changes are architecture decisions and must record a new workload
+and measurement basis.
 
 ---
 
@@ -2701,6 +2909,16 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.22 | 2026-09-08 | Preserved the unchanged CI workflow and full unit-test selection as the primary gate; real-topology and capacity fixtures are integration-tagged, optional manual verification, superseding the mandatory integration-gate policy in 1.14 |
+| 1.21 | 2026-09-08 | Gated enrichment/effect serialization on active debug capture and made HITL checkpoint/command adapters preserve caller-owned span errors while emitting bounded, correlated diagnostics |
+| 1.20 | 2026-09-04 | Aligned direct Redis stores with component-scoped, request-correlated, bounded logging and clarified that detached projection maintenance neither inherits nor manufactures request trace context |
+| 1.19 | 2026-09-04 | Aligned hook evidence with observability contracts: complete-boundary hook spans, linked and correlated asynchronous knowledge extraction, component-scoped logging, and strict separation between bounded trace/log signals and exact execution-debug effects |
+| 1.18 | 2026-09-04 | Added versioned provider-neutral hook effects, exact enrichment capture, asynchronous terminal-record rewrites, and explicit producer-observation semantics for fail-open backends |
+| 1.17 | 2026-09-03 | Made request-local pipeline-hook outcomes part of provider-neutral execution evidence so debugging consumers no longer query tracing infrastructure to reconstruct hook lifecycles |
+| 1.16 | 2026-09-02 | Made Layer-2 Redis composition environment-free by resolving task-queue service scope in Layer 1 and documented explicit code-over-environment queue scoping |
+| 1.15 | 2026-09-01 | Restricted projection cleanup to confirmed-missing records, rejected cluster schedule raw prefixes, and documented the fair, strictly bounded, all-primary task-index maintenance scan needed to recover record-only writes |
+| 1.14 | 2026-09-01 | Made the Linux real-topology Redis OSS/Valkey cluster matrix, Sentinel failover, live reshard/failover, and 2,000-service registry capacity profile mandatory implementation gates |
+| 1.13 | 2026-08-31 | Added the DB-0 standalone/Sentinel/cluster backend contract, versioned slot-safe schemas, explicit indexes and reconciliation, advisory debug projections required to avoid `CROSSSLOT`, shared-client ownership, and the scoped retirement/inventory of Redis diagnostic transformations |
 | 1.12 | 2026-08-30 | Recorded the external PostgreSQL/NATS mixed-composition proof and its non-provider status |
 | 1.11 | 2026-08-30 | Added the layered Redis backend composition contract, explicit ownership handle, role-selective Layer-1 construction, and canonical LLM-debug preset wiring |
 | 1.10 | 2026-08-29 | Documented governed terminal-response evidence separately from raw LLM synthesis, including workflow-mode and historical-record absence cases |

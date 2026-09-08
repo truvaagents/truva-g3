@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +15,71 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+var recorderTestKeys = NewRedisLLMDebugKeys(telemetryDefaultRedisKeyspace())
+
+type recorderIndexFailureHook struct {
+	mu       sync.Mutex
+	fail     bool
+	attempts int
+}
+
+type recorderAuthoritativeFailureHook struct{}
+
+func (*recorderAuthoritativeFailureHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (*recorderAuthoritativeFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		if command.Name() == "eval" || command.Name() == "evalsha" {
+			return errors.New("redis://user:secret@index.invalid/0")
+		}
+		return next(ctx, command)
+	}
+}
+
+func (*recorderAuthoritativeFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+type recorderCaptureLogger struct {
+	core.NoOpLogger
+	warnings  []map[string]interface{}
+	component string
+}
+
+func (logger *recorderCaptureLogger) WithComponent(component string) core.Logger {
+	logger.component = component
+	return logger
+}
+
+func (logger *recorderCaptureLogger) Warn(_ string, fields map[string]interface{}) {
+	logger.warnings = append(logger.warnings, fields)
+}
+
+func (logger *recorderCaptureLogger) WarnWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+	logger.warnings = append(logger.warnings, fields)
+}
+
+func (hook *recorderIndexFailureHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (hook *recorderIndexFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		if command.Name() == "zadd" {
+			hook.mu.Lock()
+			hook.attempts++
+			fail := hook.fail
+			hook.mu.Unlock()
+			if fail {
+				return errors.New("redis://user:secret@index.invalid/0")
+			}
+		}
+		return next(ctx, command)
+	}
+}
+
+func (*recorderIndexFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
 // ---------------------------------------------------------------------------
 // Interface compliance
 // ---------------------------------------------------------------------------
@@ -22,6 +88,28 @@ func TestRedisLLMCallRecorder_ImplementsLLMCallRecorder(t *testing.T) {
 	// Compile-time check already exists in redis_llm_recorder.go (line 318).
 	// This test makes the assertion explicit and visible in test output.
 	var _ LLMCallRecorder = (*RedisLLMCallRecorder)(nil)
+}
+
+func TestRedisLLMCallRecorderScopesComponentAwareLogger(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	keyspace, err := core.NewRedisKeyspace("telemetry-logger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := &recorderCaptureLogger{}
+	recorder, err := NewRedisLLMCallRecorderWithClient(
+		client,
+		keyspace,
+		WithRecorderLogger(logger),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.logger != logger || logger.component != "framework/telemetry" {
+		t.Fatalf("recorder logger = %#v, component = %q", recorder.logger, logger.component)
+	}
 }
 
 func TestNoOpLLMCallRecorder_RemainsSafe(t *testing.T) {
@@ -33,6 +121,45 @@ func TestNoOpLLMCallRecorder_RemainsSafe(t *testing.T) {
 	); err != nil {
 		t.Fatalf("RecordLLMCall: %v", err)
 	}
+}
+
+func TestOwningRedisLLMRecorderUsesEnvironmentKeyspace(t *testing.T) {
+	server := miniredis.RunT(t)
+	t.Setenv("TRUVAG3_REDIS_NAMESPACE", "telemetry-deployment")
+	keyspace, err := core.NewRedisKeyspace("telemetry-deployment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRedisLLMCallRecorder(WithRecorderRedisURL("redis://" + server.Addr()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	if got, want := recorder.keys.Meta("request-1"), keyspace.Tagged("llm-debug", "request-1", "meta"); got != want {
+		t.Fatalf("recorder key = %q, want %q", got, want)
+	}
+}
+
+func TestOwningRedisLLMRecorderValidatesEnvironmentKeyspace(t *testing.T) {
+	t.Setenv("TRUVAG3_REDIS_NAMESPACE", "invalid{namespace")
+	_, err := NewRedisLLMCallRecorder()
+	if !errors.Is(err, core.ErrInvalidConfiguration) {
+		t.Fatalf("constructor error = %v, want ErrInvalidConfiguration", err)
+	}
+
+	server := miniredis.RunT(t)
+	keyspace, err := core.NewRedisKeyspace("explicit-deployment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRedisLLMCallRecorder(
+		WithRecorderRedisURL("redis://"+server.Addr()),
+		WithRecorderKeyspace(keyspace),
+	)
+	if err != nil {
+		t.Fatalf("explicit keyspace did not override environment: %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
 }
 
 // ---------------------------------------------------------------------------
@@ -228,28 +355,29 @@ func TestLLMCallRecord_ToInteractionJSON_Mapping(t *testing.T) {
 // Environment variable helpers
 // ---------------------------------------------------------------------------
 
-func TestRecorderGetRedisURL_Precedence(t *testing.T) {
+func TestRecorderRedisConnectionResolution(t *testing.T) {
 	// Clean state
 	os.Unsetenv("REDIS_URL")
 	os.Unsetenv("TRUVAG3_REDIS_URL")
 	defer os.Unsetenv("REDIS_URL")
 	defer os.Unsetenv("TRUVAG3_REDIS_URL")
 
-	// Default: localhost:6379
-	if got := recorderGetRedisURL(); got != "localhost:6379" {
-		t.Errorf("default = %q, want localhost:6379", got)
+	connection, diagnostics, err := resolveRecorderRedisConnection("", 0)
+	if err != nil || connection.Addrs[0] != "localhost:6379" || len(diagnostics) != 0 {
+		t.Fatalf("default resolution = (%#v, %#v, %v)", connection, diagnostics, err)
 	}
 
 	// TRUVAG3_REDIS_URL set
 	os.Setenv("TRUVAG3_REDIS_URL", "redis://truvag3:6379")
-	if got := recorderGetRedisURL(); got != "redis://truvag3:6379" {
-		t.Errorf("with TRUVAG3_REDIS_URL = %q, want redis://truvag3:6379", got)
+	connection, diagnostics, err = resolveRecorderRedisConnection("", 0)
+	if err != nil || connection.Addrs[0] != "truvag3:6379" || len(diagnostics) != 1 {
+		t.Fatalf("deprecated resolution = (%#v, %#v, %v)", connection, diagnostics, err)
 	}
 
-	// REDIS_URL takes precedence over TRUVAG3_REDIS_URL
+	// Contradictory connection forms are rejected instead of ranked.
 	os.Setenv("REDIS_URL", "redis://standard:6379")
-	if got := recorderGetRedisURL(); got != "redis://standard:6379" {
-		t.Errorf("with both set = %q, want redis://standard:6379 (REDIS_URL wins)", got)
+	if _, _, err := resolveRecorderRedisConnection("", 0); err == nil {
+		t.Fatal("mixed standard and deprecated URL forms were accepted")
 	}
 }
 
@@ -368,10 +496,61 @@ func TestRedisLLMCallRecorderOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 		); err != nil {
 			t.Fatalf("RecordLLMCall(%s): %v", test.requestID, err)
 		}
-		metaKey := recorderKeyPrefix + test.requestID + recorderMetaSuffix
+		metaKey := recorderTestKeys.Meta(test.requestID)
 		if got := mr.TTL(metaKey); got != test.wantTTL {
 			t.Fatalf("TTL(%s) = %v, want %v", metaKey, got, test.wantTTL)
 		}
+	}
+}
+
+func TestRedisLLMCallRecorderInjectedClientOwnership(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	keyspace, err := core.NewRedisKeyspace("injected-recorder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRedisLLMCallRecorderWithClient(client, keyspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.keys.Meta("request"); !strings.Contains(got, ":injected-recorder:") {
+		t.Fatalf("injected recorder key = %q, want explicit deployment", got)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(t.Context()).Err(); err != nil {
+		t.Fatalf("recorder closed injected client: %v", err)
+	}
+}
+
+func TestRedisLLMCallRecorderInjectedClientRejectsTypedNil(t *testing.T) {
+	var client *redis.Client
+	keyspace, err := core.NewRedisKeyspace("typed-nil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRedisLLMCallRecorderWithClient(client, keyspace); err == nil {
+		t.Fatal("typed-nil injected client was accepted")
+	}
+}
+
+func TestRedisLLMCallRecorderInjectedClientStartupFailureIsBounded(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	server.Close()
+	keyspace, err := core.NewRedisKeyspace("startup-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewRedisLLMCallRecorderWithClient(client, keyspace)
+	if err == nil {
+		t.Fatal("unavailable injected client was accepted")
+	}
+	if got := err.Error(); got != "telemetry Redis startup check failed" {
+		t.Fatalf("startup error = %q, want bounded diagnostic", got)
 	}
 }
 
@@ -380,17 +559,154 @@ func TestRedisLLMCallRecorderOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRecorderKeyPatterns_MatchOrchestration(t *testing.T) {
-	if recorderKeyPrefix != "truvag3:llm:debug:" {
-		t.Errorf("recorderKeyPrefix = %q, want truvag3:llm:debug:", recorderKeyPrefix)
+	if got := recorderTestKeys.Meta("request"); got != "truvag3:v1:default:llm-debug:{default:llm-debug:request}:meta" {
+		t.Errorf("Meta = %q", got)
 	}
-	if recorderIndexKey != "truvag3:llm:debug:index" {
-		t.Errorf("recorderIndexKey = %q, want truvag3:llm:debug:index", recorderIndexKey)
+	if got := recorderTestKeys.Interactions("request"); got != "truvag3:v1:default:llm-debug:{default:llm-debug:request}:interactions" {
+		t.Errorf("Interactions = %q", got)
 	}
-	if recorderMetaSuffix != ":meta" {
-		t.Errorf("recorderMetaSuffix = %q, want :meta", recorderMetaSuffix)
+	if got := recorderTestKeys.RetentionFloor("request"); got != "truvag3:v1:default:llm-debug:{default:llm-debug:request}:retention-floor" {
+		t.Errorf("RetentionFloor = %q", got)
 	}
-	if recorderInterSuffix != ":interactions" {
-		t.Errorf("recorderInterSuffix = %q, want :interactions", recorderInterSuffix)
+	if got := recorderTestKeys.RecentIndex(); got != "truvag3:v1:default:llm-debug:index:recent" {
+		t.Errorf("RecentIndex = %q", got)
+	}
+}
+
+func TestRecordLLMCall_IndexFailureDoesNotDuplicateAndLaterWriteRepairs(t *testing.T) {
+	_, recorder := setupRedisLLMRecorderTest(t)
+	logger := &recorderCaptureLogger{}
+	recorder.logger = logger
+	hook := &recorderIndexFailureHook{fail: true}
+	recorder.client.AddHook(hook)
+	requestID := "request-index-repair"
+	record := LLMCallRecord{CallType: "agent_llm_call", Success: true}
+
+	if err := recorder.RecordLLMCall(context.Background(), requestID, record); err != nil {
+		t.Fatalf("advisory index failure became fatal: %v", err)
+	}
+	if got := recorder.client.LLen(context.Background(), recorder.keys.Interactions(requestID)).Val(); got != 1 {
+		t.Fatalf("interaction count after exhausted index retry = %d, want 1", got)
+	}
+	hook.mu.Lock()
+	if hook.attempts != recorderMaxRetries {
+		t.Fatalf("index attempts = %d, want %d", hook.attempts, recorderMaxRetries)
+	}
+	if len(logger.warnings) != 1 {
+		t.Fatalf("index warnings = %d, want 1", len(logger.warnings))
+	}
+	fields := logger.warnings[0]
+	if fields["operation"] != "llm_debug_recent_index" ||
+		fields["request_id"] != requestID ||
+		fields["error"] != "redis LLM debug index update failed" ||
+		fields["error_type"] != "index_write" ||
+		fields["failure_class"] != "redis_backend_failure" {
+		t.Fatalf("index warning fields = %#v", fields)
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "secret") || strings.Contains(string(encoded), "redis://") {
+		t.Fatalf("index warning exposed Redis error text: %s", encoded)
+	}
+	hook.fail = false
+	hook.mu.Unlock()
+
+	if err := recorder.RecordLLMCall(context.Background(), requestID, record); err != nil {
+		t.Fatalf("repairing write: %v", err)
+	}
+	if got := recorder.client.LLen(context.Background(), recorder.keys.Interactions(requestID)).Val(); got != 2 {
+		t.Fatalf("interaction count after later write = %d, want 2", got)
+	}
+	if score, err := recorder.client.ZScore(context.Background(), recorder.keys.RecentIndex(), requestID).Result(); err != nil || score == 0 {
+		t.Fatalf("recent index was not repaired: score=%v err=%v", score, err)
+	}
+}
+
+func TestRecordLLMCall_IndexFailureRemainsFailOpenWithNilLogger(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	keyspace, err := core.NewRedisKeyspace("nil-logger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRedisLLMCallRecorderWithClient(client, keyspace, WithRecorderLogger(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := &recorderIndexFailureHook{fail: true}
+	client.AddHook(hook)
+
+	if err := recorder.RecordLLMCall(
+		t.Context(),
+		"request-nil-logger",
+		LLMCallRecord{CallType: "agent_llm_call", Success: true},
+	); err != nil {
+		t.Fatalf("advisory index failure became fatal with nil logger: %v", err)
+	}
+	if got := client.LLen(t.Context(), recorder.keys.Interactions("request-nil-logger")).Val(); got != 1 {
+		t.Fatalf("authoritative interaction count = %d, want 1", got)
+	}
+}
+
+func TestRedisLLMCallRecorderRetryLogsUseBoundedFailureClass(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	keyspace, err := core.NewRedisKeyspace("bounded-diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := &recorderCaptureLogger{}
+	recorder, err := NewRedisLLMCallRecorderWithClient(client, keyspace, WithRecorderLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.AddHook(&recorderAuthoritativeFailureHook{})
+	if err := recorder.RecordLLMCall(t.Context(), "request-bounded-error", LLMCallRecord{
+		CallType: "test",
+		Success:  true,
+	}); err == nil {
+		t.Fatal("authoritative Redis failure was ignored")
+	}
+	encoded, err := json.Marshal(logger.warnings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "secret") || strings.Contains(string(encoded), "redis://") {
+		t.Fatalf("retry diagnostics exposed Redis error text: %s", encoded)
+	}
+	if len(logger.warnings) != recorderMaxRetries {
+		t.Fatalf("warning count = %d, want %d", len(logger.warnings), recorderMaxRetries)
+	}
+	for _, fields := range logger.warnings {
+		if fields["failure_class"] != "redis_backend_failure" {
+			t.Fatalf("failure_class = %#v", fields["failure_class"])
+		}
+		if fields["operation"] != "llm_debug_recorder_retry" ||
+			fields["request_id"] != "request-bounded-error" ||
+			fields["error"] != "redis LLM recorder operation failed" ||
+			fields["error_type"] != "backend" {
+			t.Fatalf("retry diagnostic fields = %#v", fields)
+		}
+	}
+}
+
+func TestClassifyRecorderRedisDiagnosticUsesFixedVocabulary(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		want string
+	}{
+		{nil, "none"},
+		{context.Canceled, "canceled"},
+		{context.DeadlineExceeded, "timeout"},
+		{errors.New("redis://user:secret@index.invalid/0"), "redis_backend_failure"},
+	} {
+		if got := classifyRecorderRedisDiagnostic(test.err); got != test.want {
+			t.Fatalf("classification = %q, want %q", got, test.want)
+		}
 	}
 }
 
@@ -426,8 +742,8 @@ func TestRecordLLMCall_PreservesPromotedAndPersistentRetention(t *testing.T) {
 	}
 
 	keys := []string{
-		recorderKeyPrefix + requestID + recorderMetaSuffix,
-		recorderKeyPrefix + requestID + recorderInterSuffix,
+		recorder.keys.Meta(requestID),
+		recorder.keys.Interactions(requestID),
 	}
 	for _, key := range keys {
 		if err := recorder.client.PExpire(ctx, key, 14*24*time.Hour).Err(); err != nil {
@@ -477,8 +793,8 @@ func TestRecordLLMCall_ConcurrentWritersKeepLongestRetention(t *testing.T) {
 	wg.Wait()
 
 	for _, key := range []string{
-		recorderKeyPrefix + requestID + recorderMetaSuffix,
-		recorderKeyPrefix + requestID + recorderInterSuffix,
+		recorder.keys.Meta(requestID),
+		recorder.keys.Interactions(requestID),
 	} {
 		if got := mr.TTL(key); got != recorderErrorTTL {
 			t.Fatalf("%s TTL = %v, want %v", key, got, recorderErrorTTL)
@@ -502,7 +818,7 @@ func TestRecordLLMCall_PreservesApplicationPayloadsAtPersistence(t *testing.T) {
 		t.Fatalf("RecordLLMCall: %v", err)
 	}
 
-	key := recorderKeyPrefix + requestID + recorderInterSuffix
+	key := recorder.keys.Interactions(requestID)
 	values, err := recorder.client.LRange(context.Background(), key, 0, -1).Result()
 	if err != nil || len(values) != 1 {
 		t.Fatalf("stored interactions = (%v, %v)", values, err)
@@ -537,7 +853,7 @@ func TestRecordLLMCall_StampsOriginatingAgentFromBaggage(t *testing.T) {
 		t.Fatalf("RecordLLMCall failed: %v", err)
 	}
 
-	metaKey := recorderKeyPrefix + "reflect-test-abc" + recorderMetaSuffix
+	metaKey := r.keys.Meta("reflect-test-abc")
 	got := mr.HGet(metaKey, "originating_agent")
 	if got != "devops-chat-agent" {
 		t.Errorf("meta hash originating_agent = %q, want devops-chat-agent", got)
@@ -573,7 +889,7 @@ func TestRecordLLMCall_OriginatingAgent_FirstWriterWins(t *testing.T) {
 		t.Fatalf("second write failed: %v", err)
 	}
 
-	metaKey := recorderKeyPrefix + "req-shared" + recorderMetaSuffix
+	metaKey := r.keys.Meta("req-shared")
 	got := mr.HGet(metaKey, "originating_agent")
 	if got != "travel-chat-agent" {
 		t.Errorf("originating_agent must be first writer's value (HSetNX); got %q", got)
@@ -596,7 +912,7 @@ func TestRecordLLMCall_EmptyBaggage_NoOriginatingAgent(t *testing.T) {
 		t.Fatalf("RecordLLMCall failed: %v", err)
 	}
 
-	metaKey := recorderKeyPrefix + "req-no-bag" + recorderMetaSuffix
+	metaKey := r.keys.Meta("req-no-bag")
 	if got := mr.HGet(metaKey, "originating_agent"); got != "" {
 		t.Errorf("originating_agent must be empty when baggage carries no agent_name; got %q", got)
 	}
@@ -665,7 +981,7 @@ func TestRecordLLMCall_ConversationIDResolution(t *testing.T) {
 			); err != nil {
 				t.Fatalf("RecordLLMCall: %v", err)
 			}
-			metaKey := recorderKeyPrefix + requestID + recorderMetaSuffix
+			metaKey := recorder.keys.Meta(requestID)
 			if got := mr.HGet(metaKey, "meta:conversation_id"); got != test.want {
 				t.Fatalf("conversation field = %q, want %q", got, test.want)
 			}
@@ -696,7 +1012,7 @@ func TestRecordLLMCall_ConversationFirstValidWriterWins(t *testing.T) {
 		t.Fatalf("later write: %v", err)
 	}
 
-	metaKey := recorderKeyPrefix + requestID + recorderMetaSuffix
+	metaKey := recorder.keys.Meta(requestID)
 	if got := mr.HGet(metaKey, "meta:conversation_id"); got != "conversation-first" {
 		t.Fatalf("conversation field = %q", got)
 	}

@@ -1981,44 +1981,37 @@ import (
     "github.com/truvaagents/truva-g3/telemetry"
 )
 
-func monitorRedisRegistry(redisClient *redis.Client) {
+func monitorRegistry(discovery core.Discovery) {
     ticker := time.NewTicker(30 * time.Second)
     defer ticker.Stop()
 
     for range ticker.C {
         ctx := context.Background()
 
-        // Get all registered services
-        keys, _ := redisClient.Keys(ctx, "truvag3:services:*").Result()
+        // Use the provider-neutral discovery contract. The Redis adapter reads
+        // its explicit DB-0 registry index with SSCAN; it never scans the
+        // cluster keyspace.
+        services, err := discovery.Discover(ctx, core.DiscoveryFilter{})
+        if err != nil {
+            telemetry.Counter("registry.discovery.errors_total")
+            continue
+        }
 
         // Emit gauge for total registered services
-        telemetry.Gauge("redis.services.registered_total", float64(len(keys)))
+        telemetry.Gauge("registry.services.registered_total", float64(len(services)))
 
-        // Check each service's TTL and last_seen
-        for _, key := range keys {
-            serviceName := strings.TrimPrefix(key, "truvag3:services:")
-
-            // Get TTL
-            ttl, _ := redisClient.TTL(ctx, key).Result()
-            telemetry.Gauge("redis.service.ttl_seconds",
-                ttl.Seconds(),
-                "service", serviceName)
-
-            // Get service data and check last_seen
-            data, _ := redisClient.Get(ctx, key).Result()
-            var info ServiceInfo
-            json.Unmarshal([]byte(data), &info)
-
+        // Check each service's provider-neutral heartbeat timestamp.
+        for _, info := range services {
             staleness := time.Since(info.LastSeen).Seconds()
-            telemetry.Gauge("redis.service.staleness_seconds",
+            telemetry.Gauge("registry.service.staleness_seconds",
                 staleness,
-                "service", serviceName,
+                "service", info.Name,
                 "type", string(info.Type))
 
             // Alert on stale entries (> 60 seconds without update)
             if staleness > 60 {
-                telemetry.Counter("redis.service.stale_detected",
-                    "service", serviceName)
+                telemetry.Counter("registry.service.stale_detected",
+                    "service", info.Name)
             }
         }
 
@@ -2031,17 +2024,17 @@ func monitorRedisRegistry(redisClient *redis.Client) {
         }
 
         for _, expected := range expectedServices {
-            key := "truvag3:services:" + expected
-            exists, _ := redisClient.Exists(ctx, key).Result()
+            matches, err := discovery.Discover(ctx, core.DiscoveryFilter{Name: expected})
+            missing := err != nil || len(matches) == 0
 
-            if exists == 0 {
-                telemetry.Counter("redis.service.missing",
+            if missing {
+                telemetry.Counter("registry.service.missing",
                     "service", expected)
-                telemetry.Gauge("redis.service.registered",
+                telemetry.Gauge("registry.service.registered",
                     0, // Not registered
                     "service", expected)
             } else {
-                telemetry.Gauge("redis.service.registered",
+                telemetry.Gauge("registry.service.registered",
                     1, // Registered
                     "service", expected)
             }

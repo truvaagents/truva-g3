@@ -97,11 +97,23 @@ func (terminalMetadataProcessor) ProcessForPrompt(
 }
 
 type terminalHook struct {
-	mu       sync.Mutex
-	finished bool
+	mu                 sync.Mutex
+	afterExecutionDone bool
+	finished           bool
 }
 
 func (*terminalHook) Name() string { return "terminal-record-order" }
+
+func (hook *terminalHook) AfterExecution(
+	_ context.Context,
+	_ *core.PipelineContext,
+	_ interface{},
+) error {
+	hook.mu.Lock()
+	hook.afterExecutionDone = true
+	hook.mu.Unlock()
+	return nil
+}
 
 func (hook *terminalHook) AfterSynthesis(
 	_ context.Context,
@@ -118,6 +130,12 @@ func (hook *terminalHook) Finished() bool {
 	hook.mu.Lock()
 	defer hook.mu.Unlock()
 	return hook.finished
+}
+
+func (hook *terminalHook) AfterExecutionDone() bool {
+	hook.mu.Lock()
+	defer hook.mu.Unlock()
+	return hook.afterExecutionDone
 }
 
 type terminalStreamingClient struct {
@@ -158,20 +176,27 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 		client        core.AIClient
 		wantError     bool
 		wantHookCalls bool
+		wantSuccess   bool
 	}{
 		{
 			name: "buffered success", client: &promptCapturingAIClient{
 				responses: []string{foundationTerminalSingleStepPlan, "buffered response"},
-			}, wantHookCalls: true,
+			}, wantHookCalls: true, wantSuccess: true,
+		},
+		{
+			name: "buffered synthesis failure", client: &promptCapturingAIClient{
+				responses: []string{foundationTerminalSingleStepPlan, ""},
+				errors:    []error{nil, errors.New("buffered synthesis failed")},
+			}, wantError: true,
 		},
 		{
 			name: "simulated streaming success", streaming: true, client: &promptCapturingAIClient{
 				responses: []string{foundationTerminalSingleStepPlan, "simulated response"},
-			}, wantHookCalls: true,
+			}, wantHookCalls: true, wantSuccess: true,
 		},
 		{
 			name: "native streaming success", streaming: true,
-			client: &terminalStreamingClient{}, wantHookCalls: true,
+			client: &terminalStreamingClient{}, wantHookCalls: true, wantSuccess: true,
 		},
 		{
 			name: "native streaming partial", streaming: true,
@@ -248,7 +273,23 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			if hook.Finished() != test.wantHookCalls {
 				t.Fatalf("AfterSynthesis finished = %v, want %v", hook.Finished(), test.wantHookCalls)
 			}
+			if !hook.AfterExecutionDone() {
+				t.Fatal("AfterExecution did not run")
+			}
+			if terminalRecord == nil || len(terminalRecord.PipelineHooks) == 0 ||
+				terminalRecord.PipelineHooks[0].Phase != PipelineHookPhaseAfterExecution ||
+				terminalRecord.PipelineHooks[0].Status != PipelineHookSucceeded {
+				t.Fatalf("terminal AfterExecution diagnostics = %#v", terminalRecord)
+			}
+			if terminalRecord.Result == nil || terminalRecord.Result.Success != test.wantSuccess {
+				t.Fatalf("terminal result success = %#v, want %v", terminalRecord.Result, test.wantSuccess)
+			}
 			if test.wantHookCalls {
+				if len(terminalRecord.PipelineHooks) != 2 ||
+					terminalRecord.PipelineHooks[1].Phase != PipelineHookPhaseAfterSynthesis ||
+					terminalRecord.PipelineHooks[1].Status != PipelineHookSucceeded {
+					t.Fatalf("terminal AfterSynthesis diagnostics = %#v", terminalRecord.PipelineHooks)
+				}
 				if terminalRecord == nil || terminalRecord.FinalResponse == nil ||
 					!strings.HasPrefix(*terminalRecord.FinalResponse, "governed: ") {
 					t.Fatalf("terminal final response = %#v, want governed post-hook output", terminalRecord)

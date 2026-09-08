@@ -203,6 +203,10 @@ PRs that violate these will be flagged in review.
 
 ### Coverage and Style
 
+- The existing CI workflow is the primary gate. Keep its full default unit-test
+  selection: do not add `-short` or require real Redis/Valkey services. Prefer
+  small, table-driven tests with narrow mocks, fakes, or existing in-memory
+  fixtures for backend behavior, including failures and ownership contracts.
 - Add unit tests in the same change for every new production behavior that can
   be isolated. Include small public adapters and defaulting wrappers—their
   contract is still production behavior. Do not manufacture tests for
@@ -242,6 +246,9 @@ func TestFunctionName(t *testing.T) {
 ```
 
 ### Integration Tests
+
+Integration tests are optional, manually invoked supplemental verification;
+they are not required CI jobs or a substitute for focused unit coverage.
 
 Integration tests live **alongside** unit tests inside each module — there is no top-level `test/` directory. Gate them with the `integration` build tag:
 

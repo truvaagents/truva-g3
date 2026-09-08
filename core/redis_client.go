@@ -1,69 +1,29 @@
-// Package core provides Redis client abstractions for the TruvaG3 framework.
-// This file implements a simplified Redis client wrapper with database isolation,
-// namespacing, and connection management for various framework components.
-//
-// Purpose:
-// - Provides unified Redis access across framework modules
-// - Implements database isolation for different use cases
-// - Supports key namespacing to prevent collisions
-// - Offers simplified API for common Redis operations
-// - Manages connection lifecycle and error handling
-//
-// Scope:
-// - RedisClient: Wrapper around go-redis with added features
-// - Database isolation using Redis DB selection (0-15)
-// - Key namespacing for logical separation
-// - Connection pooling and health checking
-// - Common operations: Get, Set, Delete, Increment, Lists, Sets
-//
-// Database Allocation:
-// The framework uses different Redis databases for isolation:
-// - DB 0: Discovery and service registry
-// - DB 1: Rate limiting
-// - DB 2: Session management
-// - DB 3: Circuit breaker state
-// - DB 4-15: Available for extensions
-//
-// Namespacing:
-// All keys are automatically prefixed with the namespace:
-// - Discovery: "truvag3:discovery:*"
-// - Rate Limiting: "truvag3:ratelimit:*"
-// - Sessions: "truvag3:sessions:*"
-//
-// Connection Management:
-// - Automatic connection pooling
-// - Connection health checks with Ping
-// - Configurable timeouts
-// - Graceful shutdown support
-//
-// Usage:
-//
-//	client, err := NewRedisClient(RedisClientOptions{
-//	    RedisURL: "redis://localhost:6379",
-//	    DB: RedisDBRateLimiting,
-//	    Namespace: "truvag3:ratelimit",
-//	})
-//
-// Used throughout the framework for distributed state management.
+// Package core provides topology-aware Redis/Valkey client abstractions for
+// framework components that need a small namespaced command surface.
 package core
 
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisClient provides a simplified Redis interface for modules with DB isolation
+// RedisClient provides a simplified, namespaced Redis command surface.
 type RedisClient struct {
-	client    *redis.Client
-	dbID      int
-	namespace string
-	logger    Logger // Optional logger
+	client     redis.UniversalClient
+	ownsClient bool
+	dbID       int
+	namespace  string
+	logger     Logger // Optional logger
+	closeMu    sync.Mutex
 }
 
-// RedisClientOptions configures the Redis client
+// RedisClientOptions configures the deprecated standalone numbered-DB wrapper.
+// Deprecated: use RedisClientConnectionOptions and NewRedisClientWithConnection.
 type RedisClientOptions struct {
 	RedisURL  string
 	DB        int    // Redis DB number for isolation (0-15)
@@ -71,112 +31,118 @@ type RedisClientOptions struct {
 	Logger    Logger // Optional logger
 }
 
-// NewRedisClient creates a new Redis client with specified options
+// RedisClientConnectionOptions configures an owning topology-aware client.
+// Built-in callers pass a prefix returned by RedisKeyspace.Plain or Tagged.
+type RedisClientConnectionOptions struct {
+	Connection RedisConnectionConfig
+	Namespace  string
+	Logger     Logger
+}
+
+// NewRedisClient retains standalone numbered-DB behavior for the precursor
+// compatibility window.
+// Deprecated: use NewRedisClientWithConnection.
 func NewRedisClient(opts RedisClientOptions) (*RedisClient, error) {
-	if opts.Logger != nil {
-		opts.Logger.Debug("Initializing Redis client", map[string]interface{}{
-			"redis_url": opts.RedisURL,
-			"db":        opts.DB,
-			"namespace": opts.Namespace,
-		})
-	}
-
-	// Warn if application is using a framework-reserved DB
-	// This respects the explicit override principle - they can still use reserved DBs if needed
-	if IsReservedDB(opts.DB) && opts.DB != RedisDBLLMDebug {
-		if opts.Logger != nil {
-			opts.Logger.Warn("Using framework-reserved Redis DB", map[string]interface{}{
-				"db":       opts.DB,
-				"db_name":  GetRedisDBName(opts.DB),
-				"reserved": fmt.Sprintf("%d-%d", RedisDBReservedStart, RedisDBReservedEnd),
-				"hint":     "DBs 7-15 are reserved for framework extensions. Use DBs 0-6 for application data.",
-			})
-		}
-	}
-
 	if opts.RedisURL == "" {
-		if opts.Logger != nil {
-			opts.Logger.Error("Failed to initialize Redis client", map[string]interface{}{
-				"error":      "Redis URL is required",
-				"error_type": "ErrInvalidConfiguration",
-			})
-		}
 		return nil, fmt.Errorf("redis URL is required: %w", ErrInvalidConfiguration)
 	}
-
-	// Parse Redis URL
-	redisOpt, err := redis.ParseURL(opts.RedisURL)
+	connection, err := parseStandaloneRedisURL(opts.RedisURL, true)
 	if err != nil {
-		if opts.Logger != nil {
-			opts.Logger.Error("Failed to parse Redis URL", map[string]interface{}{
-				"error":      err,
-				"error_type": fmt.Sprintf("%T", err),
-				"redis_url":  opts.RedisURL,
-			})
-		}
-		return nil, fmt.Errorf("invalid Redis URL: %w", ErrInvalidConfiguration)
+		return nil, err
 	}
-
-	// Override DB for isolation
-	if opts.DB >= 0 && opts.DB <= 15 {
-		redisOpt.DB = opts.DB
-		if opts.Logger != nil {
-			opts.Logger.Debug("Using Redis DB isolation", map[string]interface{}{
-				"db":      opts.DB,
-				"db_name": GetRedisDBName(opts.DB),
-			})
-		}
+	if opts.DB < 0 || opts.DB > 15 {
+		return nil, fmt.Errorf("redis database must be between 0 and 15: %w", ErrInvalidConfiguration)
 	}
-
-	client := redis.NewClient(ApplyRedisClientDefaults(redisOpt))
-
-	if opts.Logger != nil {
-		opts.Logger.Debug("Testing Redis connection", map[string]interface{}{
-			"db":        opts.DB,
-			"namespace": opts.Namespace,
-			"timeout":   "5s",
+	connection.DB = opts.DB
+	logger := coreComponentLogger(opts.Logger)
+	if logger != nil {
+		logger.Warn("Numbered Redis database compatibility path is deprecated", map[string]interface{}{
+			"operation":   "redis_client_compatibility",
+			"db":          opts.DB,
+			"replacement": "DB 0 with core.RedisKeyspace",
 		})
 	}
+	return newRedisClientWithConnection(RedisClientConnectionOptions{
+		Connection: connection,
+		Namespace:  opts.Namespace,
+		Logger:     logger,
+	}, true)
+}
 
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// NewRedisClientWithConnection constructs and owns a topology-aware client.
+func NewRedisClientWithConnection(opts RedisClientConnectionOptions) (*RedisClient, error) {
+	return newRedisClientWithConnection(opts, false)
+}
 
-	if err := client.Ping(ctx).Err(); err != nil {
-		if opts.Logger != nil {
-			opts.Logger.Error("Failed to connect to Redis", map[string]interface{}{
-				"error":      err,
-				"error_type": fmt.Sprintf("%T", err),
-				"db":         opts.DB,
-				"db_name":    GetRedisDBName(opts.DB),
-				"namespace":  opts.Namespace,
-			})
-		}
-		return nil, fmt.Errorf("failed to connect to Redis DB %d: %w", opts.DB, ErrConnectionFailed)
+func newRedisClientWithConnection(
+	opts RedisClientConnectionOptions,
+	allowNumberedDatabase bool,
+) (*RedisClient, error) {
+	namespace := strings.TrimSuffix(strings.TrimSpace(opts.Namespace), ":")
+	if namespace == "" {
+		return nil, fmt.Errorf("redis key namespace is required: %w", ErrInvalidConfiguration)
 	}
-
+	profile, err := normalizeRedisConnectionConfig(opts.Connection)
+	if err != nil {
+		return nil, err
+	}
+	var client redis.UniversalClient
+	if allowNumberedDatabase {
+		client, err = NewRedisUniversalClientForCompatibility(profile)
+	} else {
+		client, err = NewRedisUniversalClient(profile)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("initialize namespaced Redis client: %w", err)
+	}
 	rc := &RedisClient{
-		client:    client,
-		dbID:      opts.DB,
-		namespace: opts.Namespace,
-		logger:    opts.Logger,
+		client: client, ownsClient: true, dbID: profile.DB,
+		namespace: namespace, logger: coreComponentLogger(opts.Logger),
 	}
-
 	if rc.logger != nil {
 		rc.logger.Info("Redis client connected", map[string]interface{}{
-			"db":        opts.DB,
-			"db_name":   GetRedisDBName(opts.DB),
-			"namespace": opts.Namespace,
+			"operation":  "redis_client_connect",
+			"redis_mode": profile.Mode,
+			"db":         profile.DB,
+			"namespace":  namespace,
 		})
 	}
-
 	return rc, nil
+}
+
+// NewRedisClientWithClient wraps an application-owned universal client.
+func NewRedisClientWithClient(client redis.UniversalClient, namespace string, logger Logger) (*RedisClient, error) {
+	if nilRedisUniversalClient(client) {
+		return nil, fmt.Errorf("redis client is required: %w", ErrInvalidConfiguration)
+	}
+	namespace = strings.TrimSuffix(strings.TrimSpace(namespace), ":")
+	if namespace == "" {
+		return nil, fmt.Errorf("redis key namespace is required: %w", ErrInvalidConfiguration)
+	}
+	return &RedisClient{client: client, namespace: namespace, logger: coreComponentLogger(logger)}, nil
+}
+
+func coreComponentLogger(logger Logger) Logger {
+	if componentAware, ok := logger.(ComponentAwareLogger); ok {
+		return componentAware.WithComponent("framework/core")
+	}
+	return logger
 }
 
 // Close closes the Redis connection
 func (r *RedisClient) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	if !r.ownsClient {
+		return nil
+	}
+	r.ownsClient = false
 	if r.logger != nil {
 		r.logger.Info("Closing Redis client connection", map[string]interface{}{
+			"operation": "redis_client_close",
 			"db":        r.dbID,
 			"db_name":   GetRedisDBName(r.dbID),
 			"namespace": r.namespace,
@@ -186,8 +152,9 @@ func (r *RedisClient) Close() error {
 	err := r.client.Close()
 	if err != nil && r.logger != nil {
 		r.logger.Error("Failed to close Redis client", map[string]interface{}{
-			"error":      err,
-			"error_type": fmt.Sprintf("%T", err),
+			"operation":  "redis_client_close",
+			"error":      "redis client close failed",
+			"error_type": "backend",
 			"db":         r.dbID,
 			"namespace":  r.namespace,
 		})
@@ -243,11 +210,12 @@ func (r *RedisClient) Set(ctx context.Context, key string, value interface{}, tt
 
 // Del deletes keys
 func (r *RedisClient) Del(ctx context.Context, keys ...string) error {
-	formattedKeys := make([]string, len(keys))
-	for i, key := range keys {
-		formattedKeys[i] = r.formatKey(key)
+	for _, key := range keys {
+		if err := r.client.Del(ctx, r.formatKey(key)).Err(); err != nil {
+			return err
+		}
 	}
-	return r.client.Del(ctx, formattedKeys...).Err()
+	return nil
 }
 
 // TTL gets the TTL of a key
@@ -307,10 +275,13 @@ func (r *RedisClient) FormatKey(key string) string {
 
 // HealthCheck verifies Redis connectivity
 func (r *RedisClient) HealthCheck(ctx context.Context) error {
+	startedAt := time.Now()
 	if r.logger != nil {
 		r.logger.DebugWithContext(ctx, "Performing Redis health check", map[string]interface{}{
-			"db":        r.dbID,
-			"namespace": r.namespace,
+			"operation":  "redis_health_check",
+			"request_id": GetRequestID(ctx),
+			"db":         r.dbID,
+			"namespace":  r.namespace,
 		})
 	}
 
@@ -318,104 +289,27 @@ func (r *RedisClient) HealthCheck(ctx context.Context) error {
 	if err != nil {
 		if r.logger != nil {
 			r.logger.ErrorWithContext(ctx, "Redis health check failed", map[string]interface{}{
-				"error":      err,
-				"error_type": fmt.Sprintf("%T", err),
-				"db":         r.dbID,
-				"db_name":    GetRedisDBName(r.dbID),
-				"namespace":  r.namespace,
+				"operation":   "redis_health_check",
+				"request_id":  GetRequestID(ctx),
+				"error":       "redis health check failed",
+				"error_type":  "backend",
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"db":          r.dbID,
+				"db_name":     GetRedisDBName(r.dbID),
+				"namespace":   r.namespace,
 			})
 		}
 	} else {
 		if r.logger != nil {
 			r.logger.DebugWithContext(ctx, "Redis health check passed", map[string]interface{}{
-				"db":        r.dbID,
-				"namespace": r.namespace,
+				"operation":   "redis_health_check",
+				"request_id":  GetRequestID(ctx),
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"db":          r.dbID,
+				"namespace":   r.namespace,
 			})
 		}
 	}
 
 	return err
-}
-
-// --- Standard Redis DB Allocation ---
-
-const (
-	// RedisDBServiceDiscovery is for service registry (default)
-	RedisDBServiceDiscovery = 0
-
-	// RedisDBRateLimiting is for rate limiting (isolated)
-	RedisDBRateLimiting = 1
-
-	// RedisDBSessions is for session storage
-	RedisDBSessions = 2
-
-	// RedisDBCache is for general caching
-	RedisDBCache = 3
-
-	// RedisDBCircuitBreaker is for circuit breaker state
-	RedisDBCircuitBreaker = 4
-
-	// RedisDBMetrics is for metrics buffering
-	RedisDBMetrics = 5
-
-	// RedisDBTelemetry is for telemetry data
-	RedisDBTelemetry = 6
-
-	// RedisDBLLMDebug is for framework LLM debug payload storage.
-	// Orchestration and telemetry recorders share this persistence format.
-	RedisDBLLMDebug = 7
-
-	// RedisDBExecutionDebug is for execution debug store (DAG visualization)
-	RedisDBExecutionDebug = 8
-
-	// RedisDBReserved9 through RedisDBReserved15 are reserved for future framework extensions
-	RedisDBReserved9  = 9
-	RedisDBReserved10 = 10
-	RedisDBReserved11 = 11
-	RedisDBReserved12 = 12
-	RedisDBReserved13 = 13
-	RedisDBReserved14 = 14
-	RedisDBReserved15 = 15
-
-	// RedisDBReservedStart marks the beginning of framework-reserved databases
-	RedisDBReservedStart = 7
-
-	// RedisDBReservedEnd marks the end of framework-reserved databases
-	// Note: Redis default is 0-15 (16 DBs). Configure `databases` in redis.conf for more.
-	RedisDBReservedEnd = 15
-)
-
-// IsReservedDB returns true if the DB number is reserved for framework extensions.
-// DBs 7-15 are reserved for framework use. Applications should use DBs 0-6.
-func IsReservedDB(db int) bool {
-	return db >= RedisDBReservedStart && db <= RedisDBReservedEnd
-}
-
-// GetRedisDBName returns a human-readable name for the Redis DB
-func GetRedisDBName(db int) string {
-	switch db {
-	case RedisDBServiceDiscovery:
-		return "Service Discovery"
-	case RedisDBRateLimiting:
-		return "Rate Limiting"
-	case RedisDBSessions:
-		return "Sessions"
-	case RedisDBCache:
-		return "Cache"
-	case RedisDBCircuitBreaker:
-		return "Circuit Breaker"
-	case RedisDBMetrics:
-		return "Metrics"
-	case RedisDBTelemetry:
-		return "Telemetry"
-	case RedisDBLLMDebug:
-		return "LLM Debug"
-	case RedisDBExecutionDebug:
-		return "Execution Debug"
-	default:
-		if IsReservedDB(db) {
-			return fmt.Sprintf("Reserved DB %d", db)
-		}
-		return fmt.Sprintf("DB %d", db)
-	}
 }

@@ -28,7 +28,7 @@ func setupRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 // mustRedisStore constructs a RedisScheduleStore and fails the test if the
 // constructor returns an error. Thin wrapper around NewRedisScheduleStore
 // used by tests that don't care about the error-return path.
-func mustRedisStore(t *testing.T, client redis.Cmdable, config *RedisScheduleStoreConfig) *RedisScheduleStore {
+func mustRedisStore(t *testing.T, client redis.UniversalClient, config *RedisScheduleStoreConfig) *RedisScheduleStore {
 	t.Helper()
 	s, err := NewRedisScheduleStore(client, config)
 	require.NoError(t, err)
@@ -64,6 +64,18 @@ func TestRedisScheduleStore_DefaultConfig(t *testing.T) {
 	cfg := DefaultRedisScheduleStoreConfig()
 	require.NotNil(t, cfg)
 	assert.Equal(t, defaultScheduleKeyPrefix, cfg.KeyPrefix)
+	assert.Equal(t, defaultMaxSchedules, cfg.MaxSchedules)
+}
+
+func TestRedisScheduleStore_MaxSchedulesEnvironmentAndExplicitPrecedence(t *testing.T) {
+	_, client := setupRedis(t)
+	t.Setenv("TRUVAG3_SCHEDULER_MAX_SCHEDULES", "23")
+
+	fromEnvironment := mustRedisStore(t, client, nil)
+	assert.Equal(t, 23, fromEnvironment.maxSchedules)
+
+	explicit := mustRedisStore(t, client, &RedisScheduleStoreConfig{MaxSchedules: 41})
+	assert.Equal(t, 41, explicit.maxSchedules)
 }
 
 func TestRedisScheduleStore_CustomPrefix(t *testing.T) {
@@ -76,7 +88,7 @@ func TestRedisScheduleStore_CustomPrefix(t *testing.T) {
 func TestRedisScheduleStore_EmptyPrefixFallsBack(t *testing.T) {
 	_, client := setupRedis(t)
 	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{KeyPrefix: ""})
-	assert.Equal(t, defaultScheduleKeyPrefix+":data:x", s.dataKey("x"))
+	assert.Equal(t, "truvag3:v1:default:schedules:{default:schedules}:data:x", s.dataKey("x"))
 }
 
 func TestRedisScheduleStore_CustomLogger_Preserved(t *testing.T) {
@@ -103,6 +115,7 @@ func TestRedisScheduleStore_Create_Success(t *testing.T) {
 	// Due index has exactly one entry when enabled.
 	count, _ := client.ZCard(context.Background(), s.dueKey()).Result()
 	assert.EqualValues(t, 1, count)
+	assert.True(t, client.SIsMember(context.Background(), s.allKey(), sch.ID).Val())
 }
 
 func TestRedisScheduleStore_Create_DisabledNotInDueIndex(t *testing.T) {
@@ -123,6 +136,14 @@ func TestRedisScheduleStore_Create_Duplicate(t *testing.T) {
 	require.NoError(t, s.Create(context.Background(), sch))
 	err := s.Create(context.Background(), sch)
 	assert.ErrorIs(t, err, core.ErrScheduleAlreadyExists)
+}
+
+func TestRedisScheduleStore_Create_EnforcesCapacity(t *testing.T) {
+	_, client := setupRedis(t)
+	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{MaxSchedules: 1})
+	require.NoError(t, s.Create(context.Background(), makeSchedule("first", "a", time.Now())))
+	err := s.Create(context.Background(), makeSchedule("second", "a", time.Now()))
+	assert.ErrorIs(t, err, core.ErrCapacityExceeded)
 }
 
 func TestRedisScheduleStore_Create_Nil(t *testing.T) {
@@ -245,6 +266,7 @@ func TestRedisScheduleStore_List_SkipsMalformedEntries(t *testing.T) {
 	require.NoError(t, s.Create(context.Background(), makeSchedule("good", "a", time.Now())))
 	// Malformed entry under the same prefix.
 	require.NoError(t, client.Set(context.Background(), s.dataKey("bad"), "{not-json", 0).Err())
+	require.NoError(t, client.SAdd(context.Background(), s.allKey(), "bad").Err())
 
 	list, err := s.List(context.Background())
 	require.NoError(t, err)
@@ -426,22 +448,29 @@ func TestRedisScheduleStore_GetDue_SkipsRaceDeleted(t *testing.T) {
 
 func TestRedisScheduleStore_GetDue_SkipsMalformedJSON(t *testing.T) {
 	_, client := setupRedis(t)
-	s := mustRedisStore(t, client, nil)
+	logger := &TestLogger{}
+	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{Logger: logger})
+	ctx := core.WithRequestID(context.Background(), "schedule-request")
 
 	// Valid enabled schedule.
-	_ = s.Create(context.Background(), makeSchedule("good", "a", time.Now().Add(-1*time.Hour)))
+	_ = s.Create(ctx, makeSchedule("good", "a", time.Now().Add(-1*time.Hour)))
 
 	// Add a stale due-index entry pointing at a data key containing garbage.
-	require.NoError(t, client.Set(context.Background(), s.dataKey("bad"), "{not-json", 0).Err())
-	_ = client.ZAdd(context.Background(), s.dueKey(), redis.Z{
+	require.NoError(t, client.Set(ctx, s.dataKey("bad"), "{not-json", 0).Err())
+	_ = client.ZAdd(ctx, s.dueKey(), redis.Z{
 		Score:  float64(time.Now().Add(-1 * time.Hour).Unix()),
 		Member: "bad",
 	}).Err()
 
-	due, err := s.GetDue(context.Background(), time.Now())
+	due, err := s.GetDue(ctx, time.Now())
 	require.NoError(t, err)
 	require.Len(t, due, 1)
 	assert.Equal(t, "good", due[0].ID)
+	warnings := logger.GetLogsByOperation("schedule_load")
+	require.Len(t, warnings, 1)
+	assert.Equal(t, "schedule-request", warnings[0].Fields["request_id"])
+	assert.Equal(t, "stored schedule is malformed", warnings[0].Fields["error"])
+	assert.Equal(t, "unmarshal", warnings[0].Fields["error_type"])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

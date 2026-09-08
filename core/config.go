@@ -75,6 +75,12 @@ type Config struct {
 
 	// Logger instance for configuration operations (excluded from JSON)
 	logger Logger `json:"-"`
+
+	// NewConfig defers Redis environment errors until functional options have
+	// had one chance to supply the documented complete explicit connection.
+	// Direct LoadFromEnv calls still return those errors immediately.
+	redisEnvironmentError          error
+	redisNamespaceEnvironmentError error
 }
 
 // HTTPConfig contains HTTP server configuration including timeouts, limits, and CORS settings.
@@ -136,13 +142,16 @@ type CORSConfig struct {
 // Currently supports Redis as the discovery backend with optional caching.
 // When MockDiscovery is enabled in Development mode, an in-memory discovery is used instead.
 type DiscoveryConfig struct {
-	Enabled           bool          `json:"enabled" env:"TRUVAG3_DISCOVERY_ENABLED" default:"false"`
-	Provider          string        `json:"provider" env:"TRUVAG3_DISCOVERY_PROVIDER" default:"redis"`
-	RedisURL          string        `json:"redis_url" env:"TRUVAG3_REDIS_URL,REDIS_URL"`
-	CacheEnabled      bool          `json:"cache_enabled" env:"TRUVAG3_DISCOVERY_CACHE" default:"true"`
-	CacheTTL          time.Duration `json:"cache_ttl" env:"TRUVAG3_DISCOVERY_CACHE_TTL" default:"5m"`
-	HeartbeatInterval time.Duration `json:"heartbeat_interval" env:"TRUVAG3_DISCOVERY_HEARTBEAT" default:"0"`
-	TTL               time.Duration `json:"ttl" env:"TRUVAG3_DISCOVERY_TTL" default:"30s"`
+	Enabled           bool                   `json:"enabled" env:"TRUVAG3_DISCOVERY_ENABLED" default:"false"`
+	Provider          string                 `json:"provider" env:"TRUVAG3_DISCOVERY_PROVIDER" default:"redis"`
+	RedisURL          string                 `json:"redis_url" env:"REDIS_URL"`
+	RedisConnection   *RedisConnectionConfig `json:"-"`
+	RedisKeyspace     RedisKeyspace          `json:"-"`
+	RedisDiagnostics  []string               `json:"-"`
+	CacheEnabled      bool                   `json:"cache_enabled" env:"TRUVAG3_DISCOVERY_CACHE" default:"true"`
+	CacheTTL          time.Duration          `json:"cache_ttl" env:"TRUVAG3_DISCOVERY_CACHE_TTL" default:"5m"`
+	HeartbeatInterval time.Duration          `json:"heartbeat_interval" env:"TRUVAG3_DISCOVERY_HEARTBEAT" default:"0"`
+	TTL               time.Duration          `json:"ttl" env:"TRUVAG3_DISCOVERY_TTL" default:"30s"`
 
 	// Retry configuration for handling initial connection failures
 	RetryOnFailure bool          `json:"retry_on_failure" env:"TRUVAG3_DISCOVERY_RETRY" default:"false"`
@@ -200,7 +209,8 @@ type SharedMemoryConfig struct {
 	// "redis" uses existing Valkey/Redis, "noop" explicitly disables
 	Provider string `json:"provider" env:"TRUVAG3_SHARED_MEMORY_PROVIDER" default:"noop"`
 
-	// Redis/Valkey connection — reuses existing REDIS_URL / TRUVAG3_REDIS_URL
+	// Redis/Valkey connection — REDIS_URL is the standalone shorthand;
+	// structured TRUVAG3_REDIS_* fields select an explicit topology.
 	// to avoid duplicate env vars per FRAMEWORK_DESIGN_PRINCIPLES §env var naming.
 	// Only used when Provider is "redis".
 	RedisURL string `json:"redis_url"`
@@ -519,6 +529,8 @@ func DefaultConfig() *Config {
 //   - Kubernetes: KUBERNETES_SERVICE_HOST environment variable is set
 //   - Local: No Kubernetes environment variables detected
 func (c *Config) DetectEnvironment() {
+	keyspace, _ := NewRedisKeyspace("default")
+	c.Discovery.RedisKeyspace = keyspace
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
 		// Kubernetes environment detected
 		c.Kubernetes.Enabled = true
@@ -538,6 +550,10 @@ func (c *Config) DetectEnvironment() {
 			c.Logging.Format = "text" // Human-readable logs
 		}
 	}
+	connection, err := ParseStandaloneRedisURL(c.Discovery.RedisURL)
+	if err == nil {
+		c.Discovery.RedisConnection = &connection
+	}
 }
 
 // LoadFromEnv loads configuration from environment variables and validates the result.
@@ -549,6 +565,12 @@ func (c *Config) DetectEnvironment() {
 //
 // Returns an error if environment variables contain invalid values or if validation fails.
 func (c *Config) LoadFromEnv() error {
+	return c.loadFromEnv(false)
+}
+
+func (c *Config) loadFromEnv(deferRedisErrors bool) error {
+	c.redisEnvironmentError = nil
+	c.redisNamespaceEnvironmentError = nil
 	if c.logger != nil {
 		c.logger.Info("Loading configuration from environment", map[string]interface{}{
 			"config_source": "environment_variables",
@@ -677,25 +699,54 @@ func (c *Config) LoadFromEnv() error {
 	if v := os.Getenv("TRUVAG3_DISCOVERY_PROVIDER"); v != "" {
 		c.Discovery.Provider = v
 	}
-	if v := os.Getenv("TRUVAG3_REDIS_URL"); v != "" {
-		c.Discovery.RedisURL = v
-		envVarsLoaded++
-		if c.logger != nil {
-			c.logger.Debug("Configuration loaded", map[string]interface{}{
-				"setting": "redis_url",
-				"source":  "TRUVAG3_REDIS_URL",
-				"set":     true,
-			})
+	if value, present := os.LookupEnv("TRUVAG3_REDIS_NAMESPACE"); present {
+		keyspace, err := NewRedisKeyspace(value)
+		if err != nil {
+			if !deferRedisErrors {
+				return err
+			}
+			c.redisNamespaceEnvironmentError = err
+		} else {
+			c.Discovery.RedisKeyspace = keyspace
 		}
-	} else if v := os.Getenv("REDIS_URL"); v != "" {
-		c.Discovery.RedisURL = v
-		envVarsLoaded++
-		if c.logger != nil {
-			c.logger.Debug("Configuration loaded", map[string]interface{}{
-				"setting": "redis_url",
-				"source":  "REDIS_URL",
-				"set":     true,
-			})
+	}
+	connectionEnvironmentPresent := redisConnectionSourcePresent(os.LookupEnv)
+	if connectionEnvironmentPresent {
+		resolution, err := ResolveRedisConnectionConfig(nil, os.LookupEnv)
+		if err != nil {
+			if !deferRedisErrors {
+				return err
+			}
+			c.redisEnvironmentError = err
+		} else {
+			c.Discovery.RedisConnection = &resolution.Config
+			c.Discovery.RedisDiagnostics = append([]string(nil), resolution.Diagnostics...)
+			if v := os.Getenv("REDIS_URL"); v != "" {
+				c.Discovery.RedisURL = v
+			} else if v := os.Getenv("TRUVAG3_REDIS_URL"); v != "" {
+				c.Discovery.RedisURL = v
+			} else {
+				c.Discovery.RedisURL = ""
+			}
+			envVarsLoaded++
+			if c.logger != nil {
+				c.logger.Debug("Configuration loaded", map[string]interface{}{
+					"operation": "config_load",
+					"setting":   "redis_connection",
+					"source":    "environment",
+					"mode":      resolution.Config.Mode,
+				})
+			}
+		}
+	} else if c.Discovery.RedisConnection != nil {
+		configured, err := loadRedisOperationalConfig(*c.Discovery.RedisConnection, os.LookupEnv)
+		if err != nil {
+			if !deferRedisErrors {
+				return err
+			}
+			c.redisEnvironmentError = err
+		} else {
+			c.Discovery.RedisConnection = &configured
 		}
 	}
 	if v := os.Getenv("TRUVAG3_DISCOVERY_CACHE"); v != "" {
@@ -1210,12 +1261,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Discovery.Enabled && c.Discovery.Provider == "redis" && c.Discovery.RedisURL == "" && !c.Development.MockDiscovery {
+	if c.Discovery.Enabled && c.Discovery.Provider == "redis" && c.Discovery.RedisURL == "" && c.Discovery.RedisConnection == nil && !c.Development.MockDiscovery {
 		// Preserve exact message for test compatibility
 		return &FrameworkError{
 			Op:      "Config.Validate",
 			Kind:    "config",
-			Message: "redis URL is required for Redis discovery provider (or use mock discovery in development)",
+			Message: "redis connection is required for Redis discovery provider (or use mock discovery in development)",
 			Err:     ErrMissingConfiguration,
 		}
 	}
@@ -1405,7 +1456,14 @@ func WithMiddleware(middleware ...func(http.Handler) http.Handler) Option {
 // only; this URL does not affect it.
 func WithRedisURL(url string) Option {
 	return func(c *Config) error {
+		connection, err := ParseStandaloneRedisURL(url)
+		if err != nil {
+			return err
+		}
 		c.Discovery.RedisURL = url
+		c.Discovery.RedisConnection = &connection
+		c.Discovery.RedisDiagnostics = nil
+		c.redisEnvironmentError = nil
 		c.Discovery.Enabled = true // Auto-enable discovery when Redis is configured
 		return nil
 	}
@@ -1422,30 +1480,18 @@ func WithDiscovery(enabled bool, provider string) Option {
 		c.Discovery.Enabled = enabled
 		c.Discovery.Provider = provider
 
-		// Auto-configure Redis URL for Redis provider
+		// Auto-configure Redis only when no higher-precedence source already did.
 		if enabled && provider == "redis" {
-			// Check if RedisURL was explicitly set by user configuration
-			// We can distinguish this from LoadFromEnv by checking if it's not one of the common env values
-			currentURL := c.Discovery.RedisURL
-			wasExplicitlySet := currentURL != "" &&
-				currentURL != os.Getenv("REDIS_URL") &&
-				currentURL != os.Getenv("TRUVAG3_REDIS_URL")
-
-			if !wasExplicitlySet {
-				// Apply proper precedence: REDIS_URL takes precedence over TRUVAG3_REDIS_URL
-				redisURL := os.Getenv("REDIS_URL")
-				if redisURL != "" {
-					c.Discovery.RedisURL = redisURL
-				} else if truvag3RedisURL := os.Getenv("TRUVAG3_REDIS_URL"); truvag3RedisURL != "" {
-					c.Discovery.RedisURL = truvag3RedisURL
-				} else if currentURL == "" {
-					// Use sensible default for development only if no URL was set
-					c.Discovery.RedisURL = "redis://localhost:6379"
-				}
+			if c.Discovery.RedisConnection == nil {
+				connection := DefaultRedisConnectionConfig()
+				c.Discovery.RedisConnection = &connection
+				c.Discovery.RedisURL = "redis://localhost:6379"
 			}
 		} else if !enabled || provider != "redis" {
-			// Clear RedisURL if discovery is disabled or non-Redis provider
+			// Clear Redis configuration if discovery is disabled or non-Redis.
 			c.Discovery.RedisURL = ""
+			c.Discovery.RedisConnection = nil
+			c.Discovery.RedisDiagnostics = nil
 		}
 		return nil
 	}
@@ -1459,9 +1505,49 @@ func WithDiscovery(enabled bool, provider string) Option {
 // but more explicit and convenient for Redis-specific setups.
 func WithRedisDiscovery(redisURL string) Option {
 	return func(c *Config) error {
+		connection, err := ParseStandaloneRedisURL(redisURL)
+		if err != nil {
+			return err
+		}
 		c.Discovery.Enabled = true
 		c.Discovery.Provider = "redis"
 		c.Discovery.RedisURL = redisURL
+		c.Discovery.RedisConnection = &connection
+		c.Discovery.RedisDiagnostics = nil
+		c.redisEnvironmentError = nil
+		return nil
+	}
+}
+
+// WithRedisConnection configures Redis discovery with an explicit standalone,
+// Sentinel, or cluster profile. Environment connection fields are not merged
+// into this value.
+func WithRedisConnection(connection RedisConnectionConfig) Option {
+	return func(c *Config) error {
+		resolution, err := ResolveRedisConnectionConfig(&connection, nil)
+		if err != nil {
+			return err
+		}
+		c.Discovery.Enabled = true
+		c.Discovery.Provider = "redis"
+		c.Discovery.RedisURL = ""
+		c.Discovery.RedisConnection = &resolution.Config
+		c.Discovery.RedisDiagnostics = nil
+		c.redisEnvironmentError = nil
+		return nil
+	}
+}
+
+// WithRedisDeployment selects the validated deployment namespace used by
+// versioned Redis/Valkey keys without changing the application namespace.
+func WithRedisDeployment(deployment string) Option {
+	return func(c *Config) error {
+		keyspace, err := NewRedisKeyspace(deployment)
+		if err != nil {
+			return err
+		}
+		c.Discovery.RedisKeyspace = keyspace
+		c.redisNamespaceEnvironmentError = nil
 		return nil
 	}
 }
@@ -1788,7 +1874,7 @@ func NewConfig(opts ...Option) (*Config, error) {
 	cfg := DefaultConfig()
 
 	// Load from environment first (includes validation per spec)
-	if err := cfg.LoadFromEnv(); err != nil {
+	if err := cfg.loadFromEnv(true); err != nil {
 		return nil, fmt.Errorf("failed to load env config: %w", err)
 	}
 
@@ -1797,6 +1883,12 @@ func NewConfig(opts ...Option) (*Config, error) {
 		if err := opt(cfg); err != nil {
 			return nil, fmt.Errorf("failed to apply option: %w", err)
 		}
+	}
+	if cfg.redisEnvironmentError != nil {
+		return nil, fmt.Errorf("failed to load env config: %w", cfg.redisEnvironmentError)
+	}
+	if cfg.redisNamespaceEnvironmentError != nil {
+		return nil, fmt.Errorf("failed to load env config: %w", cfg.redisNamespaceEnvironmentError)
 	}
 
 	if cfg.logger == nil {

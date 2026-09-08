@@ -112,9 +112,10 @@ func (t *BaseTool) Initialize(ctx context.Context) error {
 		// Initialize registry if configured
 		if t.Config.Discovery.Enabled && t.Registry == nil {
 			t.Logger.Info("Initializing service registry", map[string]interface{}{
-				"provider":  t.Config.Discovery.Provider,
-				"mock_mode": t.Config.Development.MockDiscovery,
-				"redis_url": t.Config.Discovery.RedisURL != "",
+				"operation":             "redis_registry_initialize",
+				"provider":              t.Config.Discovery.Provider,
+				"mock_mode":             t.Config.Development.MockDiscovery,
+				"connection_configured": t.Config.Discovery.RedisConnection != nil || t.Config.Discovery.RedisURL != "",
 			})
 
 			if t.Config.Development.MockDiscovery {
@@ -124,32 +125,40 @@ func (t *BaseTool) Initialize(ctx context.Context) error {
 					"provider": "mock",
 					"reason":   "development_mode",
 				})
-			} else if t.Config.Discovery.Provider == "redis" && t.Config.Discovery.RedisURL != "" {
+			} else if t.Config.Discovery.Provider == "redis" && (t.Config.Discovery.RedisConnection != nil || t.Config.Discovery.RedisURL != "") {
+				logRedisConnectionDiagnostics(t.Logger, t.Config.Discovery.RedisDiagnostics)
+				connection, connectionErr := redisConnectionForDiscovery(t.Config.Discovery)
+				var registry *RedisRegistry
+				if connectionErr == nil {
+					registry, connectionErr = NewRedisRegistryWithConnection(connection, t.Config.Discovery.RedisKeyspace, t.Config.Discovery.TTL)
+				}
 				// Initialize Redis registry with configured TTL
-				if registry, err := NewRedisRegistryWithOptions(t.Config.Discovery.RedisURL, "truvag3", t.Config.Discovery.TTL); err == nil {
+				if connectionErr == nil {
 					// Set logger for better observability
 					registry.SetLogger(t.Logger)
 					t.mu.Lock()
 					t.Registry = registry
 					t.mu.Unlock()
 					t.Logger.Info("Redis registry initialized successfully", map[string]interface{}{
+						"operation":     "redis_registry_initialize",
 						"provider":      "redis",
-						"redis_url":     t.Config.Discovery.RedisURL,
+						"redis_mode":    connection.Mode,
 						"effective_ttl": registry.TTL().String(),
 						"requested_ttl": t.Config.Discovery.TTL.String(),
 					})
 				} else {
 					// Enhance existing error logging with dependency context
 					t.Logger.Error("Failed to initialize Redis registry", map[string]interface{}{
-						"error":         err,
-						"error_type":    fmt.Sprintf("%T", err),
-						"redis_url":     t.Config.Discovery.RedisURL,
+						"operation":     "redis_registry_initialize",
+						"error":         "redis registry initialization failed",
+						"error_type":    "backend_startup",
+						"redis_mode":    connection.Mode,
 						"impact":        "tool_will_run_without_registry",
 						"retry_enabled": t.Config.Discovery.RetryOnFailure,
 					})
 
 					// Start background retry if enabled
-					if t.Config.Discovery.RetryOnFailure {
+					if t.Config.Discovery.RetryOnFailure && connectionErr != nil {
 						address, port := ResolveServiceAddress(t.Config, t.Logger)
 
 						serviceInfo := &ServiceInfo{
@@ -181,9 +190,10 @@ func (t *BaseTool) Initialize(ctx context.Context) error {
 						}
 
 						// Start background retry manager
-						StartRegistryRetry(
+						StartRegistryRetryWithConnection(
 							ctx,
-							t.Config.Discovery.RedisURL,
+							connection,
+							t.Config.Discovery.RedisKeyspace,
 							serviceInfo,
 							t.Config.Discovery.RetryInterval,
 							t.Logger,

@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.5
+**Version**: 1.10
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -111,14 +111,68 @@ require (
 ```
 
 Framework-owned Redis clients pass their options through
-`ApplyRedisClientDefaults`. This keeps the migration to go-redis/v9 on RESP2
-and preserves the established timeout, retry, and idle-connection defaults.
+`ApplyRedisUniversalDefaults`; `ApplyRedisClientDefaults` remains a standalone
+compatibility wrapper. This keeps go-redis/v9 on RESP2 and preserves the
+established timeout, retry, and idle-connection defaults across standalone,
+Sentinel, and cluster clients.
 The dialer implementation, TCP keepalive, and buffer sizing use go-redis/v9
 defaults unless the application overrides them. An application-owned client may
 choose RESP3 explicitly, but the application must validate its complete command
 and backend surface before injecting that client. The helper returns a shallow
-copy, fills only zero-value option fields, and leaves explicit non-zero settings
-and negative timeout sentinels application-owned.
+copy, clones mutable address/TLS inputs, fills only zero-value option fields,
+and leaves explicit non-zero settings and negative timeout sentinels
+application-owned.
+
+#### Redis and Valkey topology contract
+
+`RedisConnectionConfig` is Core's topology-neutral connection profile. Its mode
+is explicit—address count never guesses topology—and
+`NewRedisUniversalClient` constructs exactly one of a standalone, Sentinel, or
+cluster client. Standalone requires one address, Sentinel requires one or more
+Sentinel addresses plus a master name, and cluster requires one or more seed
+addresses with DB 0. Cluster rejects a non-zero DB at configuration time.
+
+`REDIS_URL` is the standard DB-0 standalone shorthand. Structured
+`TRUVAG3_REDIS_MODE` and `TRUVAG3_REDIS_*` connection fields express all three
+topologies. Those sources are mutually exclusive; combining them is an invalid
+configuration rather than a precedence case. `TRUVAG3_REDIS_URL` is a
+deprecated precursor-minor standalone compatibility source, emits one bounded
+diagnostic, and is the only path that temporarily retains numbered-database
+behavior. Pool size is per node in cluster mode, so the deployment-wide upper
+bound is approximately `PoolSize * shard nodes` (plus Sentinel/control-plane
+connections where applicable).
+
+Constructors that create a client own and close it. Injected construction accepts
+an application-owned `redis.UniversalClient` (or the narrower `redis.Cmdable`
+where only commands are needed) and never closes it. APIs such as
+`NewSchemaCache(redis.Cmdable, ...)` use that interface directly instead of
+retaining a duplicate concrete-client wrapper. `CheckRedisStartup` bounds the
+constructor's wait independently of go-redis `ContextTimeoutEnabled`, without
+changing options or closing a borrowed pool. If its PING ignores cancellation,
+the outstanding command finishes under the client's socket deadline or the
+owner's close; applications remain responsible for closing failed-startup
+clients they own, especially when I/O deadlines are disabled. This preserves dependency
+injection, lets applications supply managed Redis or Valkey clients, and avoids
+moving orchestration concepts into Core. The
+`RedisKeyspace` validates deployment names and defines the canonical
+`truvag3:v1:<deployment>:<subsystem>` DB-0 layout. Both plain and tagged keys
+keep the deployment before the subsystem; tagged keys add the deployment,
+subsystem, and atomic scope inside braces later in the key. This gives ACLs,
+metrics, and operator tooling one stable deployment prefix.
+
+The Redis registry keeps service records and its all/name/type/capability
+indexes in the deployment-wide `{<deployment>:registry}` slot. Registration,
+heartbeat, and unregister transactions are therefore single-slot. Discovery
+uses explicit sets and `SSCAN`, never keyspace `SCAN`; expired index members are
+pruned best-effort through a same-slot Lua existence recheck plus index removal.
+A re-registration between hydration and cleanup must retain its fresh index
+membership. This deliberately places all registry traffic for one
+deployment on one primary. At 1,000 agents and a 30-second heartbeat, the
+steady-state refresh load is roughly 33 heartbeats/second before multiplying by
+the bounded number of index refreshes per service—a few hundred commands per
+second for typical capability counts. That control-plane concentration is an
+accepted tradeoff at the documented scale and must be revisited before much
+larger deployments.
 
 **Forbidden**:
 ```go
@@ -184,16 +238,13 @@ func WithDiscovery(enabled bool, provider string) Option {
     return func(c *Config) error {
         c.Discovery.Enabled = enabled
         c.Discovery.Provider = provider
-        
-        // Auto-configure related settings when intent is clear
+
+        // Preserve a connection already resolved from explicit configuration
+        // or the environment; otherwise install the local standalone default.
         if enabled && provider == "redis" {
-            // Try standard environment variables first
-            redisURL := os.Getenv("REDIS_URL")
-            if redisURL != "" {
-                c.Discovery.RedisURL = redisURL
-            } else if truvag3RedisURL := os.Getenv("TRUVAG3_REDIS_URL"); truvag3RedisURL != "" {
-                c.Discovery.RedisURL = truvag3RedisURL
-            } else if c.Discovery.RedisURL == "" {
+            if c.Discovery.RedisConnection == nil {
+                connection := DefaultRedisConnectionConfig()
+                c.Discovery.RedisConnection = &connection
                 c.Discovery.RedisURL = "redis://localhost:6379"
             }
         }
@@ -205,8 +256,12 @@ func WithDiscovery(enabled bool, provider string) Option {
 **Configuration Priority (implemented)**:
 1. Explicit function options (highest)
 2. Standard environment variables (`REDIS_URL`, `OPENAI_API_KEY`)
-3. TruvaG3-specific variables (`TRUVAG3_REDIS_URL`, etc.)
+3. TruvaG3-specific variables (`TRUVAG3_REDIS_MODE`, etc.)
 4. Sensible defaults (lowest)
+
+Precedence applies only to compatible representations. Contradictory Redis
+topology forms—for example `REDIS_URL` plus structured mode/address fields—fail
+validation instead of silently overriding one another.
 
 ---
 
@@ -473,13 +528,15 @@ func WithPort(port int) Option {
 
 #### 2. **Environment Variable Loading**
 ```go
-// ✅ LoadFromEnv implementation: TRUVAG3_* variables take precedence
+// ✅ LoadFromEnv delegates Redis source selection to one shared resolver.
 func (c *Config) LoadFromEnv() error {
-    // TRUVAG3_* prefixed variables have priority in LoadFromEnv
-    if v := os.Getenv("TRUVAG3_REDIS_URL"); v != "" {
-        c.Discovery.RedisURL = v
-    } else if v := os.Getenv("REDIS_URL"); v != "" {
-        c.Discovery.RedisURL = v
+    if redisConnectionSourcePresent(os.LookupEnv) {
+        resolution, err := ResolveRedisConnectionConfig(nil, os.LookupEnv)
+        if err != nil {
+            return err
+        }
+        c.Discovery.RedisConnection = &resolution.Config
+        c.Discovery.RedisDiagnostics = resolution.Diagnostics
     }
     // Memory is in-process only; no env-var URL.
     if v := os.Getenv("TRUVAG3_MEMORY_CLEANUP_INTERVAL"); v != "" {
@@ -491,15 +548,11 @@ func (c *Config) LoadFromEnv() error {
     return nil
 }
 
-// ✅ WithDiscovery() has different precedence: REDIS_URL takes precedence
+// ✅ WithDiscovery preserves the profile already resolved by LoadFromEnv.
 func WithDiscovery(enabled bool, provider string) Option {
-    // When auto-configuring Redis URL, standard REDIS_URL beats TRUVAG3_REDIS_URL
-    if enabled && provider == "redis" {
-        if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-            c.Discovery.RedisURL = redisURL
-        } else if truvag3RedisURL := os.Getenv("TRUVAG3_REDIS_URL"); truvag3RedisURL != "" {
-            c.Discovery.RedisURL = truvag3RedisURL
-        }
+    if enabled && provider == "redis" && c.Discovery.RedisConnection == nil {
+        connection := DefaultRedisConnectionConfig()
+        c.Discovery.RedisConnection = &connection
     }
 }
 ```
@@ -561,15 +614,15 @@ type DiscoveryFilter struct {
 
 #### 3. **TTL and Heartbeat Management**
 ```go
-// ✅ Actual implementation: configurable TTL in RedisRegistry
-// From redis_registry.go:138
+// ✅ Key shape: configurable TTL in RedisRegistry
 ttl: 30 * time.Second  // default; configurable via DiscoveryConfig.TTL or WithDiscoveryTTL()
 
-// Registration expires after TTL unless refreshed by heartbeat
+// Registration expires after TTL unless refreshed by heartbeat. The actual
+// writer atomically maintains the service record and registry indexes.
 func (r *RedisRegistry) Register(ctx context.Context, info *ServiceInfo) error {
-    key := fmt.Sprintf("truvag3:services:%s", info.ID)
+    key := r.keys.service(info.ID)
     data, _ := json.Marshal(info)
-    return r.client.SetEX(ctx, key, data, r.ttl).Err()
+    return r.client.Set(ctx, key, data, r.ttl).Err()
 }
 
 // StartHeartbeat accepts an explicit heartbeat interval (0 = ttl/2).
@@ -628,15 +681,6 @@ func TestConfigurationPrecedence(t *testing.T) {
             options: []Option{WithRedisURL("redis://explicit:6379")},
             expectedResult: "redis://explicit:6379",
         },
-        {
-            name: "REDIS_URL beats TRUVAG3_REDIS_URL",
-            envVars: map[string]string{
-                "REDIS_URL": "redis://standard:6379",
-                "TRUVAG3_REDIS_URL": "redis://truvag3:6379",
-            },
-            options: []Option{WithDiscovery(true, "redis")},
-            expectedResult: "redis://standard:6379",
-        },
     }
     
     for _, tt := range tests {
@@ -652,6 +696,15 @@ func TestConfigurationPrecedence(t *testing.T) {
             assert.Equal(t, tt.expectedResult, config.Discovery.RedisURL)
         })
     }
+}
+
+func TestConfigurationRejectsContradictoryRedisSources(t *testing.T) {
+    t.Setenv("REDIS_URL", "redis://standalone:6379")
+    t.Setenv("TRUVAG3_REDIS_MODE", "cluster")
+    t.Setenv("TRUVAG3_REDIS_ADDRS", "cluster-a:6379,cluster-b:6379")
+
+    _, err := NewConfig(WithDiscovery(true, "redis"))
+    assert.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 ```
 
@@ -921,22 +974,28 @@ func (r *RedisRegistry) StartHeartbeat(ctx context.Context, id string, heartbeat
 > `core.MemoryStoreSweeper`. The existing `StartHeartbeat` will be migrated
 > in a separate cleanup PR if/when prioritized.
 
-#### 3. **Connection Pooling**
+#### 3. **Connection Pooling and Ownership**
 ```go
-// ✅ Good: Reuse Redis connections
-func NewRedisRegistry(redisURL string) (*RedisRegistry, error) {
-    opts, err := redis.ParseURL(redisURL)
+// ✅ Owning path: construct, verify, and close with the registry.
+func NewRedisRegistryWithConnection(
+    connection RedisConnectionConfig,
+    namespace string,
+    ttl time.Duration,
+) (*RedisRegistry, error) {
+    client, err := NewRedisUniversalClient(connection)
     if err != nil {
-        // Do not return parser text: it may echo URL user information.
-        return nil, errors.New("invalid Redis URL")
+        return nil, err
     }
-    
-    // Configure connection pool
-    opts.PoolSize = 10
-    opts.MinIdleConns = 5
-    
-    client := redis.NewClient(ApplyRedisClientDefaults(opts))
-    return &RedisRegistry{client: client, ttl: ttl}, nil  // ttl from NewRedisRegistryWithOptions, clamped (min 5s, default 30s)
+    return newRedisRegistry(client, true, namespace, ttl)
+}
+
+// ✅ Injected path: the application retains client lifecycle ownership.
+func NewRedisRegistryWithClient(
+    client redis.UniversalClient,
+    namespace string,
+    ttl time.Duration,
+) (*RedisRegistry, error) {
+    return newRedisRegistry(client, false, namespace, ttl)
 }
 ```
 
@@ -963,6 +1022,25 @@ dimension owns its projection and semantics; core provides only provenance and
 transport. This keeps the contract reusable for memory, conversation
 compaction, model-routing, policy, and later features without importing any of
 their packages or vocabulary.
+
+### Pipeline-hook effect reporting
+
+Core also owns the optional, typed `PipelineHookEffectReporter` extension seam.
+Orchestration injects an invocation-bound reporter into the hook context only
+when execution-debug persistence is configured. A hook calls
+`ReportPipelineHookEffect` with a stable effect ID, schema version, effect
+status, timing, and optional `json.RawMessage` data. A hook announces a new
+`pending` effect before its invocation returns; detached work may then report
+the same ID to transition it to a terminal status. This makes asynchronous
+lifecycle accounting race-free without adding storage concepts to core.
+
+The contract deliberately separates a hook invocation outcome from its effects:
+a callback can return successfully while a fail-open write fails or background
+work remains pending. Effect data is exact-fidelity debug evidence. Core does
+not redact, truncate, summarize, interpret, or persist it; orchestration and the
+configured execution store own capture and retention. Applications that emit
+custom effect data own its schema and sensitivity. Effect status is explicitly
+producer-reported; it is not an independent verification of backend durability.
 
 ---
 
@@ -1030,6 +1108,12 @@ their packages or vocabulary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.12 | 2026-09-08 | Made discovery cleanup atomic with its missing-record recheck, preserved explicit namespace precedence over invalid environment values, and shared independently bounded startup checks without taking ownership of borrowed clients |
+| 1.11 | 2026-09-04 | Scoped topology-aware Redis client and configuration diagnostics to `framework/core` and required bounded, request-correlated health/error observations without endpoint or credential text |
+| 1.10 | 2026-09-04 | Added the typed request-scoped pipeline-hook effect reporting seam, producer-reported status semantics, exact debug-data ownership, and race-free pending-effect lifecycle contract |
+| 1.9 | 2026-09-02 | Made command-interface injection canonical for schema caching and kept Redis pool/retry/timeout defaults solely in `NewRedisUniversalClient` |
+| 1.8 | 2026-08-31 | Made the versioned deployment-first DB-0 keyspace normative and documented the registry's single-slot `SSCAN` indexes plus the accepted 1,000-agent heartbeat hot-slot estimate |
+| 1.7 | 2026-08-31 | Added explicit standalone, Sentinel, and cluster connection profiles; centralized universal-client defaults and source resolution; documented DB-0 cluster validation, per-node pooling, deprecated numbered-DB compatibility, keyspace preparation, and injected-client ownership |
 | 1.6 | 2026-08-30 | Documented the module-owned `core/conformance` test-support package and its dependency, ownership, and runtime-import constraints |
 | 1.5 | 2026-08-29 | Clarified that redaction helpers are explicit adopter/subsystem transformations and documented the remaining automatic framework uses as legacy exceptions |
 | 1.4 | 2026-08-20 | Defined `AIOptions.ResponseFormat="json"` as the sole non-empty portable structured-output value and reserved native formats for `Extra` |

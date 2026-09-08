@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // mockStorageProvider is a mock implementation of StorageProvider for testing.
@@ -285,6 +288,43 @@ func TestExecutionStore_StorePreservesFinalResponse(t *testing.T) {
 	}
 	if *execution.FinalResponse != finalResponse {
 		t.Errorf("runtime final response was mutated: %q", *execution.FinalResponse)
+	}
+}
+
+func TestExecutionStore_StorePreservesPipelineHookDiagnostics(t *testing.T) {
+	provider := newMockStorageProvider()
+	store := NewExecutionStoreWithProvider(provider, DefaultExecutionStoreConfig(), nil)
+	execution := sampleExecution("req-pipeline-hooks", true)
+	execution.PipelineHooks = []PipelineHookExecution{{
+		HookName:  "knowledge-extraction",
+		Phase:     PipelineHookPhaseAfterSynthesis,
+		Status:    PipelineHookFailed,
+		Sequence:  1,
+		PlanPhase: 2,
+		StartedAt: time.Date(2026, time.September, 3, 10, 31, 42, 184_000_000, time.UTC),
+		Duration:  284 * time.Millisecond,
+		Error:     "application-owned hook error",
+		Effects: []core.PipelineHookEffect{{
+			EffectID: "knowledge_extraction", SchemaVersion: 1,
+			Name: "Knowledge extraction", Status: core.PipelineHookEffectFailed,
+			Data: json.RawMessage(`{"fragments":[]}`), Error: "provider unavailable",
+		}},
+	}}
+
+	if err := store.Store(context.Background(), execution); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	var persisted StoredExecution
+	key := DefaultExecutionKeyPrefix + execution.RequestID
+	if err := json.Unmarshal([]byte(provider.data[key]), &persisted); err != nil {
+		t.Fatalf("decode persisted execution: %v", err)
+	}
+	if len(persisted.PipelineHooks) != 1 {
+		t.Fatalf("persisted hooks = %#v, want one", persisted.PipelineHooks)
+	}
+	if got := persisted.PipelineHooks[0]; !reflect.DeepEqual(got, execution.PipelineHooks[0]) {
+		t.Fatalf("persisted hook = %#v, want %#v", got, execution.PipelineHooks[0])
 	}
 }
 

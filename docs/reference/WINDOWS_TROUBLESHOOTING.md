@@ -82,7 +82,7 @@ kubectl rollout restart \
   -n truvag3-examples
 ```
 
-Redis service TTLs should now land between 0 and 30 (`redis-cli ttl truvag3:services:<name>`) and discovery should be stable.
+Redis service TTLs should now land between 0 and 30 (`redis-cli TTL 'truvag3:v1:default:registry:{default:registry}:service:<name>'`) and discovery should be stable.
 
 ## Registry Viewer ingress points at a missing service
 

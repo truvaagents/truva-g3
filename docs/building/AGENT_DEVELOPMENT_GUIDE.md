@@ -71,7 +71,7 @@ In TruvaG3, an **Agent** is an active component that:
 │                                │                                      │
 │  ┌──────────────┐   ┌──────────▼──────────┐   ┌──────────────────┐  │
 │  │ Session Store│   │  Service Discovery  │   │  SSE Handler     │  │
-│  │ (Redis DB 2) │   │  (Redis DB 0)       │   │  (Streaming)     │  │
+│  │ (DB 0 keys)  │   │  (DB 0 keys)        │   │  (Streaming)     │  │
 │  └──────────────┘   └─────────────────────┘   └──────────────────┘  │
 │                                │                                      │
 └────────────────────────────────┼──────────────────────────────────────┘
@@ -349,9 +349,16 @@ func NewYourChatAgent() (*YourChatAgent, error) {
     })
     tracedClient.Timeout = 300 * time.Second
 
-    // Create Redis-backed session store (uses Redis DB 2)
-    redisURL := os.Getenv("REDIS_URL")
-    sessionStore, err := NewSessionStore(redisURL, 48*time.Hour, 50, agent.Logger)
+    // Resolve one standalone, Sentinel, or cluster topology and DB-0 keyspace.
+    redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+    if err != nil {
+        return nil, fmt.Errorf("resolve Redis topology: %w", err)
+    }
+    redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+    if err != nil {
+        return nil, fmt.Errorf("resolve Redis namespace: %w", err)
+    }
+    sessionStore, err := NewSessionStore(redisResolution.Config, redisKeyspace, 48*time.Hour, 50, agent.Logger)
     if err != nil {
         return nil, fmt.Errorf("failed to create session store: %w", err)
     }
@@ -1536,8 +1543,8 @@ type Message struct {
 ### SessionStore
 
 ```go
-// SessionStore provides Redis-backed session management.
-// Uses Redis DB 2 (core.RedisDBSessions) to isolate from service registry (DB 0).
+// SessionStore provides Redis/Valkey-backed session management in the
+// versioned DB-0 sessions subspace.
 type SessionStore struct {
     client      *core.RedisClient
     ttl         time.Duration
@@ -1545,12 +1552,11 @@ type SessionStore struct {
     logger      core.Logger
 }
 
-func NewSessionStore(redisURL string, ttl time.Duration, maxMessages int, logger core.Logger) (*SessionStore, error) {
-    client, err := core.NewRedisClient(core.RedisClientOptions{
-        RedisURL:  redisURL,
-        DB:        core.RedisDBSessions, // DB 2 - separate from registry (DB 0)
-        Namespace: "truvag3:sessions",
-        Logger:    logger,
+func NewSessionStore(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace, ttl time.Duration, maxMessages int, logger core.Logger) (*SessionStore, error) {
+    client, err := core.NewRedisClientWithConnection(core.RedisClientConnectionOptions{
+        Connection: connection,
+        Namespace:  keyspace.Plain("sessions"),
+        Logger:     logger,
     })
     if err != nil {
         return nil, fmt.Errorf("failed to create Redis client for sessions: %w", err)
@@ -1571,7 +1577,7 @@ func NewSessionStore(redisURL string, ttl time.Duration, maxMessages int, logger
 | `UpdateTitle(sessionID, title)` | Update session title |
 | `Delete(sessionID)` | Remove session and index entry |
 
-**Key design points:** Redis DB 2 (separate from registry DB 0), sliding window of 50 messages, auto-titling from first user message (57 chars + "..."). See `examples/travel-chat-agent/session.go` for complete implementation.
+**Key design points:** shared DB 0 with a versioned deployment/session namespace, sliding window of 50 messages, and auto-titling from the first user message (57 chars + "..."). See `examples/travel-chat-agent/session.go` for complete implementation.
 
 ---
 
@@ -1900,7 +1906,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 | AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, etc. |
 | `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type,Authorization` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `5000` | Max output tokens for LLM synthesis. Chat agents typically need `10000` for detailed responses |
-| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in Redis DB 8 for [Registry Viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) inspection |
+| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in the versioned DB 0 execution-debug subspace for [Registry Viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) inspection |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Recommended | `false` | Stores LLM request/response payloads for debugging |
 | `DEV_MODE` | No | `false` | Enables verbose logging |
 | `TRUVAG3_LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
@@ -1978,7 +1984,7 @@ configure the orchestrator's runtime skill selection.
 
 The management API writer and the agent's `SkillRegistry` reader must address
 the same logical data store. With the included adapter, keep the Redis/Valkey
-deployment and `TRUVAG3_SKILLS_REDIS_DB` aligned between the management host and
+topology and `TRUVAG3_REDIS_NAMESPACE` aligned between the management host and
 every skill-enabled agent. Setup synchronization uses the HTTP management API;
 it must not write provider keys directly.
 
@@ -2302,7 +2308,7 @@ This is a **context drift** problem: as the framework grows the resume contract 
 5. **Surface AI provider errors correctly** — Use `errors.As(err, &pe)` with `core.ProviderError` to extract the real HTTP status from AI provider errors. Return the original status code (e.g., 400, 429) instead of wrapping everything as 500. See the handler example in [Step 4](#7-step-4-implement-handlers)
 6. **Extended AI timeouts** — 240s+ for reasoning models; cap session history at ~50 messages
 7. **Never log API keys** — use env vars for all credentials, restrict CORS in production
-8. **Backend role isolation** — discovery uses Redis DB 0, sessions use DB 2, and the included skills adapter defaults to DB 9; keep skill management and runtime readers aligned
+8. **Backend role isolation** — use one Redis/Valkey DB 0 and the versioned deployment/subsystem keyspaces; keep the topology and `TRUVAG3_REDIS_NAMESPACE` aligned across management and runtime readers
 9. **Keep skill eligibility explicit** — publishing a package does not grant access; bind every skill the agent may use through code or deployment configuration
 
 ---
@@ -2411,7 +2417,7 @@ func main() {
 | `ANTHROPIC_API_KEY` | One AI key required | Anthropic API key |
 | `TRUVAG3_CORS_HEADERS` | Streaming agents | Allowed CORS headers (include `X-User-ID` for chat-ui) |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | No | Max tokens for synthesis (default: 5000, chat agents: 10000) |
-| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | No | Store orchestration DAGs in Redis DB 8 for Registry Viewer |
+| `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | No | Store orchestration DAGs in the versioned DB 0 execution-debug subspace for Registry Viewer |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | No | Store LLM request/response payloads for debugging |
 | `DEV_MODE` | No | Enable verbose logging |
 | `TRUVAG3_LOG_LEVEL` | No | `debug`, `info`, `warn`, `error` |
@@ -2422,7 +2428,7 @@ func main() {
 | `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Override model alias (e.g., `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`) |
 | `TRUVAG3_SKILLS_ENABLED` | No | Enable skill processing; the effective binding list must also be nonempty |
 | `TRUVAG3_SKILL_BINDINGS_JSON` | No | Replace the complete code-owned skill binding list with deployment configuration |
-| `TRUVAG3_SKILLS_REDIS_DB` | No | Select the skills database for the included Redis/Valkey adapter (default: 9); management and runtime must use the same value |
+| `TRUVAG3_REDIS_NAMESPACE` | No | Select the deployment namespace for all versioned DB 0 keys; management and runtime must use the same value |
 | `TRUVAG3_SKILLS_API_URL` | No | Setup-only override for the Skills management API base URL |
 | `TRUVAG3_SKIP_SKILLS_SYNC` | No | Setup-only `true` switch that skips automatic best-effort synchronization; strict commands ignore it |
 

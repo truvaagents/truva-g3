@@ -10,6 +10,19 @@ import (
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
+type diagnosticCaptureLogger struct {
+	core.NoOpLogger
+	diagnostics []string
+}
+
+func (logger *diagnosticCaptureLogger) Warn(message string, fields map[string]interface{}) {
+	if message == "Redis configuration notice" && fields["operation"] == "redis_configuration_notice" {
+		if diagnostic, ok := fields["diagnostic"].(string); ok {
+			logger.diagnostics = append(logger.diagnostics, diagnostic)
+		}
+	}
+}
+
 func TestDefaultBackendsConstructsOnlySelectedRolesAndOwnsClients(t *testing.T) {
 	server := miniredis.RunT(t)
 	lookup := lookupValues(map[string]string{
@@ -79,6 +92,34 @@ func TestDefaultBackendsPreservesCodePrecedenceAndCapabilityOverrides(t *testing
 	}
 }
 
+func TestDefaultBackendsCompleteClientConfigBypassesConflictingConnectionEnvironment(t *testing.T) {
+	server := miniredis.RunT(t)
+	connection := core.DefaultRedisConnectionConfig()
+	connection.Addrs = []string{server.Addr()}
+	owned, err := newDefaultBackends(
+		&core.NoOpLogger{},
+		lookupValues(map[string]string{
+			"REDIS_URL":                  "redis://standalone.example:6379",
+			"TRUVAG3_REDIS_MODE":         "cluster",
+			"TRUVAG3_REDIS_ADDRS":        "cluster.example:6379",
+			"TRUVAG3_REDIS_POOL_SIZE":    "not-an-integer",
+			"TRUVAG3_SKILLS_REDIS_DB":    "0",
+			"TRUVAG3_WORKFLOW_REDIS_DB":  "invalid-unselected-value",
+			"TRUVAG3_LLM_DEBUG_REDIS_DB": "invalid-unselected-value",
+		}),
+		WithDefaultBackendRoles(ClientRoleSkills),
+		WithDefaultBackendClientConfig(WithConnectionConfig(connection)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owned.Close() })
+	client, ok := owned.clients.ClientSet().Resolve(ClientRoleSkills).(*redis.Client)
+	if !ok || client.Options().Addr != server.Addr() {
+		t.Fatalf("skills client = %#v, want explicit connection %q", client, server.Addr())
+	}
+}
+
 func TestDefaultBackendsRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -119,6 +160,23 @@ func TestOwnedBackendsNilSafety(t *testing.T) {
 	owned = &OwnedBackends{clients: &OwnedClients{clients: []redis.UniversalClient{closeErrorClient{}}}}
 	if err := owned.Close(); err == nil || !errors.Is(err, errCloseClient) {
 		t.Fatalf("Close error = %v, want %v", err, errCloseClient)
+	}
+}
+
+func TestDefaultBackendsEmitsDeprecatedURLDiagnosticOnce(t *testing.T) {
+	server := miniredis.RunT(t)
+	logger := &diagnosticCaptureLogger{}
+	owned, err := newDefaultBackends(
+		logger,
+		lookupValues(map[string]string{"TRUVAG3_REDIS_URL": "redis://" + server.Addr()}),
+		WithDefaultBackendRoles(ClientRoleSkills),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owned.Close() })
+	if len(logger.diagnostics) != 1 || logger.diagnostics[0] != "TRUVAG3_REDIS_URL is deprecated; use REDIS_URL" {
+		t.Fatalf("diagnostics = %#v", logger.diagnostics)
 	}
 }
 

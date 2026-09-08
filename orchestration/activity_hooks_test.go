@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,6 +175,45 @@ func TestActivityAnnouncementHook_AnnouncesAndDiscovers(t *testing.T) {
 	assert.True(t, ok)
 	assert.Contains(t, coordSection, "other-agent")
 	assert.Contains(t, coordSection, "doing stuff")
+}
+
+func TestActivityAnnouncementHook_ReportsSignalAndInjectedContext(t *testing.T) {
+	coord := &core.MockActivityCoordinator{
+		GetDomainActivitiesFn: func(context.Context, string) ([]core.ActivitySignal, error) {
+			return []core.ActivitySignal{{
+				RequestID: "other-request", AgentName: "peer-agent", AgentDomain: "infra",
+				Query: "investigate checkout latency", Status: "executing", StartedAt: time.Now(),
+			}}, nil
+		},
+	}
+	hook, err := NewActivityAnnouncementHook(coord, "current-agent", "infra", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseBeforePlanning, 1, 0, time.Now(),
+	)
+	pctx := &core.PipelineContext{Request: "diagnose latency", Enrichments: map[string]interface{}{}}
+	if _, err := hook.BeforePlanning(invocation.Context(ctx), pctx); err != nil {
+		t.Fatal(err)
+	}
+	invocation.Complete(PipelineHookSucceeded, nil)
+
+	records := holder.Snapshot()
+	if len(records) != 1 || len(records[0].Effects) != 2 {
+		t.Fatalf("activity effects = %#v", records)
+	}
+	if records[0].Effects[0].EffectID != "activity_signal" ||
+		records[0].Effects[0].Status != core.PipelineHookEffectSucceeded {
+		t.Fatalf("activity signal effect = %#v", records[0].Effects[0])
+	}
+	if records[0].Effects[1].EffectID != "activity_context" ||
+		records[0].Effects[1].Status != core.PipelineHookEffectSucceeded ||
+		!strings.Contains(string(records[0].Effects[1].Data), "peer-agent") {
+		t.Fatalf("activity context effect = %#v", records[0].Effects[1])
+	}
 }
 
 func TestActivityAnnouncementHook_NoOtherAgents_NoEnrichment(t *testing.T) {

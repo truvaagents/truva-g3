@@ -370,7 +370,7 @@ func TestStore_InterruptedUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug:req-interrupt")
+	got := provider.lastTTL("truvag3:v1:default:execution-debug:req-interrupt")
 	if got != 24*time.Hour {
 		t.Errorf("interrupted TTL = %v, want 24h (default); got errorTTL-routing regression", got)
 	}
@@ -391,7 +391,7 @@ func TestStore_ErrorUsesErrorTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug:req-error")
+	got := provider.lastTTL("truvag3:v1:default:execution-debug:req-error")
 	if got != 1*time.Hour {
 		t.Errorf("errored TTL = %v, want 1h (errorTTL)", got)
 	}
@@ -411,7 +411,7 @@ func TestStore_SuccessUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	got := provider.lastTTL("truvag3:execution:debug:req-success")
+	got := provider.lastTTL("truvag3:v1:default:execution-debug:req-success")
 	if got != 24*time.Hour {
 		t.Errorf("success TTL = %v, want 24h", got)
 	}
@@ -439,7 +439,7 @@ func TestSetMetadata_InterruptedUsesDefaultTTL(t *testing.T) {
 	if err := store.SetMetadata(ctx, "req-sm-interrupt", "note", "approved"); err != nil {
 		t.Fatalf("SetMetadata failed: %v", err)
 	}
-	got := provider.lastTTL("truvag3:execution:debug:req-sm-interrupt")
+	got := provider.lastTTL("truvag3:v1:default:execution-debug:req-sm-interrupt")
 	if got != 24*time.Hour {
 		t.Errorf("interrupted SetMetadata TTL = %v, want 24h", got)
 	}
@@ -462,7 +462,7 @@ func TestSetMetadata_ErrorUsesErrorTTL(t *testing.T) {
 	if err := store.SetMetadata(ctx, "req-sm-error", "note", "probed"); err != nil {
 		t.Fatalf("SetMetadata failed: %v", err)
 	}
-	got := provider.lastTTL("truvag3:execution:debug:req-sm-error")
+	got := provider.lastTTL("truvag3:v1:default:execution-debug:req-sm-error")
 	if got != 1*time.Hour {
 		t.Errorf("errored SetMetadata TTL = %v, want 1h (errorTTL)", got)
 	}
@@ -508,7 +508,7 @@ func TestRedisStore_InterruptedUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	key := "truvag3:execution:debug:req-redis-interrupt"
+	key := store.recordKey(exec.RequestID)
 	got := mr.TTL(key)
 	if got != 24*time.Hour {
 		t.Errorf("interrupted Redis Store TTL = %v, want 24h; carve-out regression", got)
@@ -530,7 +530,7 @@ func TestRedisStore_ErrorUsesErrorTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	key := "truvag3:execution:debug:req-redis-error"
+	key := store.recordKey(exec.RequestID)
 	got := mr.TTL(key)
 	if got != 1*time.Hour {
 		t.Errorf("errored Redis Store TTL = %v, want 1h (errorTTL)", got)
@@ -551,7 +551,7 @@ func TestRedisStore_SuccessUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	key := "truvag3:execution:debug:req-redis-success"
+	key := store.recordKey(exec.RequestID)
 	got := mr.TTL(key)
 	if got != 24*time.Hour {
 		t.Errorf("success Redis Store TTL = %v, want 24h", got)
@@ -581,7 +581,7 @@ func TestRedisUpdate_InterruptedUsesDefaultTTL(t *testing.T) {
 		t.Fatalf("Update failed: %v", err)
 	}
 
-	key := "truvag3:execution:debug:req-redis-u-interrupt"
+	key := store.recordKey(exec.RequestID)
 	got := mr.TTL(key)
 	if got != 24*time.Hour {
 		t.Errorf("interrupted Redis Update TTL = %v, want 24h; carve-out regression", got)
@@ -608,7 +608,7 @@ func TestRedisUpdate_ErrorUsesErrorTTL(t *testing.T) {
 		t.Fatalf("Update failed: %v", err)
 	}
 
-	key := "truvag3:execution:debug:req-redis-u-error"
+	key := store.recordKey(exec.RequestID)
 	got := mr.TTL(key)
 	if got != 1*time.Hour {
 		t.Errorf("errored Redis Update TTL = %v, want 1h (errorTTL)", got)

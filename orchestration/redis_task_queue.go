@@ -60,11 +60,12 @@ type RedisTaskQueueConfig struct {
 // Precedence: explicit QueueKey > TRUVAG3_K8S_SERVICE_NAME > hardcoded default.
 // Uses core.EnvServiceName constant — single source of truth per design principles §3.3.
 func DefaultRedisTaskQueueConfig() RedisTaskQueueConfig {
-	queueKey := "truvag3:tasks:queue"
-	processingKey := "truvag3:tasks:processing"
+	keyspace := defaultRedisKeyspace()
+	queueKey := keyspace.Plain("tasks", "queue")
+	processingKey := keyspace.Plain("tasks", "processing")
 	if svc := os.Getenv(core.EnvServiceName); svc != "" {
-		queueKey = fmt.Sprintf("truvag3:tasks:queue:%s", svc)
-		processingKey = fmt.Sprintf("truvag3:tasks:processing:%s", svc)
+		queueKey = keyspace.Plain("tasks", "queue", svc)
+		processingKey = keyspace.Plain("tasks", "processing", svc)
 	}
 	return RedisTaskQueueConfig{
 		QueueKey:      queueKey,
@@ -74,15 +75,9 @@ func DefaultRedisTaskQueueConfig() RedisTaskQueueConfig {
 	}
 }
 
-// NewRedisTaskQueue creates a new Redis-backed task queue.
-// The client should already be connected to Redis.
-func NewRedisTaskQueue(client *redis.Client, config *RedisTaskQueueConfig) *RedisTaskQueue {
-	return NewRedisTaskQueueWithClient(client, config)
-}
-
-// NewRedisTaskQueueWithClient creates a task queue using an
-// application-owned Redis-compatible client.
-func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueConfig) *RedisTaskQueue {
+// NewRedisTaskQueue creates a task queue using an application-owned
+// standalone, Sentinel, or cluster command client.
+func NewRedisTaskQueue(client redis.Cmdable, config *RedisTaskQueueConfig) *RedisTaskQueue {
 	if config == nil {
 		defaultConfig := DefaultRedisTaskQueueConfig()
 		config = &defaultConfig
@@ -93,10 +88,10 @@ func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueCon
 	if config.QueueKey == "" {
 		queueSource := "default"
 		if svc := os.Getenv(core.EnvServiceName); svc != "" {
-			config.QueueKey = fmt.Sprintf("truvag3:tasks:queue:%s", svc)
+			config.QueueKey = defaultRedisKeyspace().Plain("tasks", "queue", svc)
 			queueSource = core.EnvServiceName
 		} else {
-			config.QueueKey = "truvag3:tasks:queue"
+			config.QueueKey = defaultRedisKeyspace().Plain("tasks", "queue")
 		}
 		if config.Logger != nil {
 			config.Logger.Debug("Task queue key resolved", map[string]interface{}{
@@ -110,9 +105,9 @@ func NewRedisTaskQueueWithClient(client redis.Cmdable, config *RedisTaskQueueCon
 		if explicitQueueKey {
 			config.ProcessingKey = config.QueueKey + ":processing"
 		} else if svc := os.Getenv(core.EnvServiceName); svc != "" {
-			config.ProcessingKey = fmt.Sprintf("truvag3:tasks:processing:%s", svc)
+			config.ProcessingKey = defaultRedisKeyspace().Plain("tasks", "processing", svc)
 		} else {
-			config.ProcessingKey = "truvag3:tasks:processing"
+			config.ProcessingKey = defaultRedisKeyspace().Plain("tasks", "processing")
 		}
 	}
 	if config.RetryAttempts <= 0 {

@@ -18,18 +18,18 @@ const (
 	defaultRedisConnMaxIdleTime = 5 * time.Minute
 )
 
-// ApplyRedisClientDefaults applies TruvaG3's stable Redis client defaults to
-// zero-value fields. Explicit non-zero developer configuration is preserved,
-// including Protocol 3, disabled timeouts and custom dialers.
-//
-// A shallow copy is returned so applying framework defaults does not mutate the
-// caller's options. The dialer implementation, TCP keepalive and buffer sizing
-// remain owned by go-redis/v9 unless the caller configures them explicitly.
-func ApplyRedisClientDefaults(options *redis.Options) *redis.Options {
+// ApplyRedisUniversalDefaults applies TruvaG3's stable Redis defaults to
+// standalone, Sentinel, and cluster client options. The caller's value, address
+// slice, and TLS configuration are not mutated.
+func ApplyRedisUniversalDefaults(options *redis.UniversalOptions) *redis.UniversalOptions {
 	if options == nil {
-		options = &redis.Options{}
+		options = &redis.UniversalOptions{}
 	}
 	resolved := *options
+	resolved.Addrs = append([]string(nil), options.Addrs...)
+	if options.TLSConfig != nil {
+		resolved.TLSConfig = options.TLSConfig.Clone()
+	}
 	options = &resolved
 	if options.Protocol == 0 {
 		options.Protocol = DefaultRedisProtocol
@@ -57,4 +57,76 @@ func ApplyRedisClientDefaults(options *redis.Options) *redis.Options {
 		options.DialerRetries = 1
 	}
 	return options
+}
+
+// ApplyRedisClientDefaults applies the universal defaults to standalone
+// options while preserving standalone-only fields. It remains the compatibility
+// wrapper for existing direct go-redis client construction.
+func ApplyRedisClientDefaults(options *redis.Options) *redis.Options {
+	if options == nil {
+		options = &redis.Options{}
+	}
+	resolved := ApplyRedisUniversalDefaults(universalOptionsFromSimple(options)).Simple()
+
+	// These fields do not have a UniversalOptions equivalent, or are not copied
+	// back by UniversalOptions.Simple in the pinned go-redis version.
+	resolved.Network = options.Network
+	resolved.NodeAddress = options.NodeAddress
+	resolved.DialerRetryBackoff = options.DialerRetryBackoff
+	resolved.PipelineReadBufferSize = options.PipelineReadBufferSize
+	resolved.PipelineWriteBufferSize = options.PipelineWriteBufferSize
+	resolved.PipelinePoolSize = options.PipelinePoolSize
+	resolved.Limiter = options.Limiter
+	resolved.FailingTimeoutSeconds = options.FailingTimeoutSeconds
+	return resolved
+}
+
+func universalOptionsFromSimple(options *redis.Options) *redis.UniversalOptions {
+	return &redis.UniversalOptions{
+		Addrs:                        []string{options.Addr},
+		ClientName:                   options.ClientName,
+		DB:                           options.DB,
+		Dialer:                       options.Dialer,
+		OnConnect:                    options.OnConnect,
+		Protocol:                     options.Protocol,
+		Username:                     options.Username,
+		Password:                     options.Password,
+		CredentialsProvider:          options.CredentialsProvider,
+		CredentialsProviderContext:   options.CredentialsProviderContext,
+		StreamingCredentialsProvider: options.StreamingCredentialsProvider,
+		MaxRetries:                   options.MaxRetries,
+		MinRetryBackoff:              options.MinRetryBackoff,
+		MaxRetryBackoff:              options.MaxRetryBackoff,
+		DialTimeout:                  options.DialTimeout,
+		DialerRetries:                options.DialerRetries,
+		DialerRetryTimeout:           options.DialerRetryTimeout,
+		ReadTimeout:                  options.ReadTimeout,
+		WriteTimeout:                 options.WriteTimeout,
+		ContextTimeoutEnabled:        options.ContextTimeoutEnabled,
+		ReadBufferSize:               options.ReadBufferSize,
+		WriteBufferSize:              options.WriteBufferSize,
+		PoolFIFO:                     options.PoolFIFO,
+		PoolSize:                     options.PoolSize,
+		MaxConcurrentDials:           options.MaxConcurrentDials,
+		PoolTimeout:                  options.PoolTimeout,
+		MinIdleConns:                 options.MinIdleConns,
+		MaxIdleConns:                 options.MaxIdleConns,
+		MaxActiveConns:               options.MaxActiveConns,
+		ConnMaxIdleTime:              options.ConnMaxIdleTime,
+		ConnMaxLifetime:              options.ConnMaxLifetime,
+		ConnMaxLifetimeJitter:        options.ConnMaxLifetimeJitter,
+		TLSConfig:                    options.TLSConfig,
+		DisableIdentity:              options.DisableIdentity,
+		// Deprecated fields are copied deliberately so this compatibility helper
+		// remains lossless for callers using the pinned go-redis API.
+		DisableIndentity:          options.DisableIndentity, //nolint:staticcheck
+		IdentitySuffix:            options.IdentitySuffix,
+		UnstableResp3:             options.UnstableResp3, //nolint:staticcheck
+		PushNotificationProcessor: options.PushNotificationProcessor,
+		AutoPipelineOptions:       options.AutoPipelineOptions,
+		MaintNotificationsConfig:  options.MaintNotificationsConfig,
+		ClientSideCacheConfig:     options.ClientSideCacheConfig,
+		ClientSideCache:           options.ClientSideCache,
+		ClientSideCacheStrategy:   options.ClientSideCacheStrategy,
+	}
 }

@@ -11,7 +11,7 @@ import (
 //
 // RC8: Skip plan validation and step ID conflict check for HITL resume plans.
 // RC9: Persist enriched checkpoint (with accumulated multi-phase step results)
-//      back to the checkpoint store (DB 6) via the CheckpointEnricher interface.
+//      back to the DB-0 HITL checkpoint store via the CheckpointEnricher interface.
 // =============================================================================
 
 // =============================================================================
@@ -232,7 +232,7 @@ func TestValidateNoStepIDConflicts_ResumePhase1_NoConflict(t *testing.T) {
 func TestResumeContextHelpers_PlanOverrideAndCompletedSteps(t *testing.T) {
 	// Verify that WithPlanOverride and WithCompletedSteps round-trip correctly.
 	// These are used by BuildResumeContext (RC9 depends on completedSteps being
-	// loaded from the enriched checkpoint in DB 6).
+	// loaded from the enriched checkpoint in the DB-0 HITL keyspace).
 	ctx := context.Background()
 
 	plan := &RoutingPlan{
@@ -286,9 +286,9 @@ func TestResumeContextHelpers_PlanOverrideAndCompletedSteps(t *testing.T) {
 
 func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
 	// Simulates the plan-level enrichment flow (Site 1):
-	// 1. createCheckpoint saves StepResults={} to DB 6
+	// 1. createCheckpoint saves StepResults={} to the DB-0 HITL keyspace
 	// 2. Orchestrator enriches with allStepResults
-	// 3. SaveEnrichedCheckpoint overwrites DB 6 with enriched version
+	// 3. SaveEnrichedCheckpoint overwrites the DB-0 record with the enriched version
 	store := newMockCheckpointStore()
 	controller := NewInterruptController(nil, store, nil)
 
@@ -308,7 +308,7 @@ func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
 		t.Fatalf("precondition: save initial checkpoint: %v", err)
 	}
 
-	// Verify DB 6 has empty step results
+	// Verify the DB-0 checkpoint has empty step results
 	loaded, _ := store.LoadCheckpoint(context.Background(), "cp-plan-001")
 	if len(loaded.StepResults) != 0 {
 		t.Fatalf("precondition: expected empty step results, got %d", len(loaded.StepResults))
@@ -325,12 +325,12 @@ func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
 		initial.StepResults[stepID] = result
 	}
 
-	// Step 3: RC9 saves enriched checkpoint back to DB 6
+	// Step 3: RC9 saves the enriched checkpoint back to the DB-0 HITL keyspace
 	if err := controller.SaveEnrichedCheckpoint(context.Background(), initial); err != nil {
 		t.Fatalf("SaveEnrichedCheckpoint failed: %v", err)
 	}
 
-	// Verify DB 6 now has all 4 prior-phase step results
+	// Verify the DB-0 checkpoint now has all 4 prior-phase step results
 	reloaded, _ := store.LoadCheckpoint(context.Background(), "cp-plan-001")
 	if len(reloaded.StepResults) != 4 {
 		t.Errorf("expected 4 step results after enrichment, got %d", len(reloaded.StepResults))
@@ -344,9 +344,9 @@ func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
 
 func TestCheckpointEnrichment_StepLevel(t *testing.T) {
 	// Simulates the step-level enrichment flow (Site 2):
-	// 1. UpdateCheckpointProgress saves current-batch steps {step-5} to DB 6
+	// 1. UpdateCheckpointProgress saves current-batch steps {step-5} to the DB-0 HITL keyspace
 	// 2. Orchestrator enriches with allStepResults from prior phases
-	// 3. SaveEnrichedCheckpoint overwrites DB 6 with enriched version
+	// 3. SaveEnrichedCheckpoint overwrites the DB-0 record with the enriched version
 	store := newMockCheckpointStore()
 	controller := NewInterruptController(nil, store, nil)
 
@@ -368,7 +368,7 @@ func TestCheckpointEnrichment_StepLevel(t *testing.T) {
 		t.Fatalf("precondition: save progress checkpoint: %v", err)
 	}
 
-	// Verify DB 6 only has step-5
+	// Verify the DB-0 checkpoint only has step-5
 	loaded, _ := store.LoadCheckpoint(context.Background(), "cp-step-001")
 	if len(loaded.StepResults) != 1 {
 		t.Fatalf("precondition: expected 1 step result, got %d", len(loaded.StepResults))
@@ -395,12 +395,12 @@ func TestCheckpointEnrichment_StepLevel(t *testing.T) {
 	}
 	afterProgress.ExecutedStepIDs = []string{"step-1", "step-2", "step-3", "step-4", "step-5"}
 
-	// Step 3: RC9 saves enriched checkpoint back to DB 6
+	// Step 3: RC9 saves the enriched checkpoint back to the DB-0 HITL keyspace
 	if err := controller.SaveEnrichedCheckpoint(context.Background(), afterProgress); err != nil {
 		t.Fatalf("SaveEnrichedCheckpoint failed: %v", err)
 	}
 
-	// Verify DB 6 now has all 5 step results (prior-phase + current-batch)
+	// Verify the DB-0 checkpoint now has all 5 step results (prior-phase + current-batch)
 	reloaded, _ := store.LoadCheckpoint(context.Background(), "cp-step-001")
 	if len(reloaded.StepResults) != 5 {
 		t.Errorf("expected 5 step results after enrichment, got %d", len(reloaded.StepResults))

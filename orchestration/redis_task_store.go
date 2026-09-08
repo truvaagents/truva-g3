@@ -7,7 +7,11 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,7 +24,22 @@ type RedisTaskStore struct {
 	client redis.Cmdable
 	config RedisTaskStoreConfig
 	logger core.Logger
+
+	reconcileMu      sync.Mutex
+	reconcileCursors map[string]uint64
+	reconcilePending map[string][]string
+	reconcileNext    int
 }
+
+// TaskIndexUpdateError reports that an authoritative task mutation succeeded
+// but one or more repairable status projections did not.
+type TaskIndexUpdateError struct {
+	TaskID string
+	Cause  error
+}
+
+func (err *TaskIndexUpdateError) Error() string { return "task saved but status index update failed" }
+func (err *TaskIndexUpdateError) Unwrap() error { return err.Cause }
 
 // RedisTaskStoreConfig configures the Redis task store.
 type RedisTaskStoreConfig struct {
@@ -47,22 +66,16 @@ type RedisTaskStoreConfig struct {
 // DefaultRedisTaskStoreConfig returns default configuration.
 func DefaultRedisTaskStoreConfig() RedisTaskStoreConfig {
 	return RedisTaskStoreConfig{
-		KeyPrefix:     "truvag3:tasks",
+		KeyPrefix:     defaultRedisKeyspace().Plain("tasks"),
 		TTL:           24 * time.Hour,
 		RetryAttempts: 3,
 		RetryDelay:    100 * time.Millisecond,
 	}
 }
 
-// NewRedisTaskStore creates a new Redis-backed task store.
-// The client should already be connected to Redis.
-func NewRedisTaskStore(client *redis.Client, config *RedisTaskStoreConfig) *RedisTaskStore {
-	return NewRedisTaskStoreWithClient(client, config)
-}
-
-// NewRedisTaskStoreWithClient creates a task store using an
-// application-owned Redis-compatible client.
-func NewRedisTaskStoreWithClient(client redis.Cmdable, config *RedisTaskStoreConfig) *RedisTaskStore {
+// NewRedisTaskStore creates a task store using an application-owned
+// standalone, Sentinel, or cluster command client.
+func NewRedisTaskStore(client redis.Cmdable, config *RedisTaskStoreConfig) *RedisTaskStore {
 	if config == nil {
 		defaultConfig := DefaultRedisTaskStoreConfig()
 		config = &defaultConfig
@@ -70,7 +83,7 @@ func NewRedisTaskStoreWithClient(client redis.Cmdable, config *RedisTaskStoreCon
 
 	// Apply defaults for unset values
 	if config.KeyPrefix == "" {
-		config.KeyPrefix = "truvag3:tasks"
+		config.KeyPrefix = defaultRedisKeyspace().Plain("tasks")
 	}
 	if config.TTL <= 0 {
 		config.TTL = 24 * time.Hour
@@ -82,10 +95,16 @@ func NewRedisTaskStoreWithClient(client redis.Cmdable, config *RedisTaskStoreCon
 		config.RetryDelay = 100 * time.Millisecond
 	}
 
+	logger := config.Logger
+	if logger == nil {
+		logger = &core.NoOpLogger{}
+	}
 	s := &RedisTaskStore{
-		client: client,
-		config: *config,
-		logger: config.Logger,
+		client:           client,
+		config:           *config,
+		logger:           logger,
+		reconcileCursors: make(map[string]uint64),
+		reconcilePending: make(map[string][]string),
 	}
 
 	// Apply component-aware logging if available
@@ -114,6 +133,12 @@ func (s *RedisTaskStore) taskKey(taskID string) string {
 	return fmt.Sprintf("%s:task:%s", s.config.KeyPrefix, taskID)
 }
 
+func (s *RedisTaskStore) statusKey(status core.TaskStatus) string {
+	return fmt.Sprintf("%s:index:status:%s", s.config.KeyPrefix, status)
+}
+
+func (s *RedisTaskStore) allKey() string { return s.config.KeyPrefix + ":index:all" }
+
 // Create persists a new task.
 // Returns error if task with same ID already exists.
 func (s *RedisTaskStore) Create(ctx context.Context, task *core.Task) error {
@@ -131,8 +156,11 @@ func (s *RedisTaskStore) Create(ctx context.Context, task *core.Task) error {
 	if err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to serialize task", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
+				"operation":  "task_create",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    task.ID,
+				"error":      "task serialization failed",
+				"error_type": "marshal",
 			})
 		}
 		return fmt.Errorf("failed to serialize task: %w", err)
@@ -143,8 +171,11 @@ func (s *RedisTaskStore) Create(ctx context.Context, task *core.Task) error {
 	if err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to create task", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
+				"operation":  "task_create",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    task.ID,
+				"error":      "redis task write failed",
+				"error_type": "backend_write",
 			})
 		}
 		return fmt.Errorf("failed to create task: %w", err)
@@ -153,12 +184,17 @@ func (s *RedisTaskStore) Create(ctx context.Context, task *core.Task) error {
 	if !set {
 		return fmt.Errorf("%w: %s", core.ErrTaskAlreadyExists, task.ID)
 	}
+	if err := s.updateStatusIndex(ctx, task.ID, "", task.Status, true); err != nil {
+		return err
+	}
 
 	if s.logger != nil {
 		s.logger.InfoWithContext(ctx, "Task created", map[string]interface{}{
-			"task_id":   task.ID,
-			"task_type": task.Type,
-			"status":    task.Status,
+			"operation":  "task_create",
+			"request_id": core.GetRequestID(ctx),
+			"task_id":    task.ID,
+			"task_type":  task.Type,
+			"status":     task.Status,
 		})
 	}
 
@@ -181,8 +217,11 @@ func (s *RedisTaskStore) Get(ctx context.Context, taskID string) (*core.Task, er
 		}
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to get task", map[string]interface{}{
-				"task_id": taskID,
-				"error":   err.Error(),
+				"operation":  "task_get",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
+				"error":      "redis task read failed",
+				"error_type": "backend_read",
 			})
 		}
 		return nil, fmt.Errorf("failed to get task: %w", err)
@@ -192,8 +231,11 @@ func (s *RedisTaskStore) Get(ctx context.Context, taskID string) (*core.Task, er
 	if err := json.Unmarshal([]byte(data), &task); err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to deserialize task", map[string]interface{}{
-				"task_id": taskID,
-				"error":   err.Error(),
+				"operation":  "task_get",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
+				"error":      "stored task is malformed",
+				"error_type": "unmarshal",
 			})
 		}
 		return nil, fmt.Errorf("failed to deserialize task: %w", err)
@@ -213,20 +255,9 @@ func (s *RedisTaskStore) Update(ctx context.Context, task *core.Task) error {
 	}
 
 	key := s.taskKey(task.ID)
-
-	// Check if task exists
-	exists, err := s.client.Exists(ctx, key).Result()
+	previous, err := s.Get(ctx, task.ID)
 	if err != nil {
-		if s.logger != nil {
-			s.logger.ErrorWithContext(ctx, "Failed to check task existence", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
-			})
-		}
-		return fmt.Errorf("failed to check task existence: %w", err)
-	}
-	if exists == 0 {
-		return core.ErrTaskNotFound
+		return err
 	}
 
 	// Serialize task to JSON
@@ -234,8 +265,11 @@ func (s *RedisTaskStore) Update(ctx context.Context, task *core.Task) error {
 	if err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to serialize task", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
+				"operation":  "task_update",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    task.ID,
+				"error":      "task serialization failed",
+				"error_type": "marshal",
 			})
 		}
 		return fmt.Errorf("failed to serialize task: %w", err)
@@ -245,17 +279,25 @@ func (s *RedisTaskStore) Update(ctx context.Context, task *core.Task) error {
 	if err := s.client.Set(ctx, key, data, s.config.TTL).Err(); err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to update task", map[string]interface{}{
-				"task_id": task.ID,
-				"error":   err.Error(),
+				"operation":  "task_update",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    task.ID,
+				"error":      "redis task write failed",
+				"error_type": "backend_write",
 			})
 		}
 		return fmt.Errorf("failed to update task: %w", err)
 	}
+	if err := s.updateStatusIndex(ctx, task.ID, previous.Status, task.Status, true); err != nil {
+		return err
+	}
 
 	if s.logger != nil {
 		s.logger.DebugWithContext(ctx, "Task updated", map[string]interface{}{
-			"task_id": task.ID,
-			"status":  task.Status,
+			"operation":  "task_update",
+			"request_id": core.GetRequestID(ctx),
+			"task_id":    task.ID,
+			"status":     task.Status,
 		})
 	}
 
@@ -270,13 +312,20 @@ func (s *RedisTaskStore) Delete(ctx context.Context, taskID string) error {
 	}
 
 	key := s.taskKey(taskID)
+	previous, getErr := s.Get(ctx, taskID)
+	if getErr != nil && !errors.Is(getErr, core.ErrTaskNotFound) {
+		return getErr
+	}
 
 	deleted, err := s.client.Del(ctx, key).Result()
 	if err != nil {
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to delete task", map[string]interface{}{
-				"task_id": taskID,
-				"error":   err.Error(),
+				"operation":  "task_delete",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
+				"error":      "redis task deletion failed",
+				"error_type": "backend_write",
 			})
 		}
 		return fmt.Errorf("failed to delete task: %w", err)
@@ -285,13 +334,25 @@ func (s *RedisTaskStore) Delete(ctx context.Context, taskID string) error {
 	if deleted == 0 {
 		if s.logger != nil {
 			s.logger.WarnWithContext(ctx, "Task not found for deletion", map[string]interface{}{
-				"task_id": taskID,
+				"operation":  "task_delete",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
+				"status":     "not_found",
 			})
 		}
 	} else {
+		var previousStatus core.TaskStatus
+		if previous != nil {
+			previousStatus = previous.Status
+		}
+		if err := s.updateStatusIndex(ctx, taskID, previousStatus, "", false); err != nil {
+			return err
+		}
 		if s.logger != nil {
 			s.logger.InfoWithContext(ctx, "Task deleted", map[string]interface{}{
-				"task_id": taskID,
+				"operation":  "task_delete",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
 			})
 		}
 	}
@@ -317,8 +378,12 @@ func (s *RedisTaskStore) Cancel(ctx context.Context, taskID string) error {
 	if task.Status.IsTerminal() {
 		if s.logger != nil {
 			s.logger.WarnWithContext(ctx, "Cannot cancel task in terminal state", map[string]interface{}{
-				"task_id": taskID,
-				"status":  task.Status,
+				"operation":  "task_cancel",
+				"request_id": core.GetRequestID(ctx),
+				"task_id":    taskID,
+				"status":     task.Status,
+				"error":      "task is not cancellable",
+				"error_type": "terminal_state",
 			})
 		}
 		return core.ErrTaskNotCancellable
@@ -339,7 +404,9 @@ func (s *RedisTaskStore) Cancel(ctx context.Context, taskID string) error {
 
 	if s.logger != nil {
 		s.logger.InfoWithContext(ctx, "Task cancelled", map[string]interface{}{
-			"task_id": taskID,
+			"operation":  "task_cancel",
+			"request_id": core.GetRequestID(ctx),
+			"task_id":    taskID,
 		})
 	}
 
@@ -348,43 +415,283 @@ func (s *RedisTaskStore) Cancel(ctx context.Context, taskID string) error {
 
 // ListByStatus returns all tasks with the given status.
 // Useful for monitoring and admin operations.
-// Note: This scans all keys with the prefix, so use sparingly in production.
+// The result is still O(N) in result memory. Add pagination before using this
+// method as an unbounded high-cardinality request path.
 func (s *RedisTaskStore) ListByStatus(ctx context.Context, status core.TaskStatus) ([]*core.Task, error) {
-	pattern := fmt.Sprintf("%s:task:*", s.config.KeyPrefix)
-
-	var tasks []*core.Task
-	var cursor uint64
-
-	for {
-		keys, nextCursor, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+	ids, err := s.scanSetMembers(ctx, s.statusKey(status), 256)
+	if err != nil {
+		return nil, fmt.Errorf("scan task status index: %w", err)
+	}
+	tasks := make([]*core.Task, 0, len(ids))
+	staleIDs := make([]interface{}, 0)
+	for _, id := range ids {
+		task, err := s.Get(ctx, id)
+		if errors.Is(err, core.ErrTaskNotFound) || err == nil && task.Status != status {
+			staleIDs = append(staleIDs, id)
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan tasks: %w", err)
+			return nil, err
 		}
+		tasks = append(tasks, task)
+	}
+	if len(staleIDs) > 0 {
+		_ = s.client.SRem(ctx, s.statusKey(status), staleIDs...).Err()
+	}
+	return tasks, nil
+}
 
-		for _, key := range keys {
-			data, err := s.client.Get(ctx, key).Result()
-			if err != nil {
-				continue // Skip tasks that disappeared
-			}
+func (s *RedisTaskStore) updateStatusIndex(
+	ctx context.Context,
+	id string,
+	previous, next core.TaskStatus,
+	includeAll bool,
+) error {
+	pipe := s.client.Pipeline()
+	if includeAll {
+		pipe.SAdd(ctx, s.allKey(), id)
+	} else {
+		pipe.SRem(ctx, s.allKey(), id)
+	}
+	if previous != "" && previous != next {
+		pipe.SRem(ctx, s.statusKey(previous), id)
+	}
+	if next != "" {
+		pipe.SAdd(ctx, s.statusKey(next), id)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return &TaskIndexUpdateError{TaskID: id, Cause: err}
+	}
+	return nil
+}
 
-			var task core.Task
-			if err := json.Unmarshal([]byte(data), &task); err != nil {
-				continue // Skip invalid tasks
-			}
-
-			if task.Status == status {
-				tasks = append(tasks, &task)
-			}
+func (s *RedisTaskStore) scanSetMembers(ctx context.Context, key string, countHint int64) ([]string, error) {
+	seen := make(map[string]struct{})
+	var cursor uint64
+	for {
+		batch, next, err := s.client.SScan(ctx, key, cursor, "", countHint).Result()
+		if err != nil {
+			return nil, err
 		}
-
-		cursor = nextCursor
+		for _, id := range batch {
+			seen[id] = struct{}{}
+		}
+		cursor = next
 		if cursor == 0 {
 			break
 		}
 	}
-
-	return tasks, nil
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
+
+var taskIndexStatuses = []core.TaskStatus{
+	core.TaskStatusQueued,
+	core.TaskStatusRunning,
+	core.TaskStatusCompleted,
+	core.TaskStatusFailed,
+	core.TaskStatusCancelled,
+}
+
+type taskReconcileSource struct {
+	name string
+	scan func(context.Context, uint64, int64) ([]string, uint64, error)
+}
+
+func (s *RedisTaskStore) taskReconcileSources(ctx context.Context) ([]taskReconcileSource, error) {
+	sources := make([]taskReconcileSource, 0, len(taskIndexStatuses)+2)
+	indexKeys := make([]string, 0, len(taskIndexStatuses)+1)
+	indexKeys = append(indexKeys, s.allKey())
+	for _, status := range taskIndexStatuses {
+		indexKeys = append(indexKeys, s.statusKey(status))
+	}
+	for _, key := range indexKeys {
+		indexKey := key
+		sources = append(sources, taskReconcileSource{
+			name: "index:" + indexKey,
+			scan: func(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
+				return s.client.SScan(ctx, indexKey, cursor, "", count).Result()
+			},
+		})
+	}
+
+	recordPattern := s.config.KeyPrefix + ":task:*"
+	recordPrefix := s.config.KeyPrefix + ":task:"
+	addRecordSource := func(name string, client redis.Cmdable) {
+		sources = append(sources, taskReconcileSource{
+			name: "records:" + name,
+			scan: func(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
+				keys, next, err := client.Scan(ctx, cursor, recordPattern, count).Result()
+				if err != nil {
+					return nil, 0, err
+				}
+				ids := make([]string, 0, len(keys))
+				for _, key := range keys {
+					if id := strings.TrimPrefix(key, recordPrefix); id != key && id != "" {
+						ids = append(ids, id)
+					}
+				}
+				return ids, next, nil
+			},
+		})
+	}
+	if cluster, ok := s.client.(*redis.ClusterClient); ok {
+		var mastersMu sync.Mutex
+		masters := make([]*redis.Client, 0)
+		if err := cluster.ForEachMaster(ctx, func(_ context.Context, client *redis.Client) error {
+			mastersMu.Lock()
+			masters = append(masters, client)
+			mastersMu.Unlock()
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("list Redis cluster primaries for task repair: %w", err)
+		}
+		sort.Slice(masters, func(i, j int) bool {
+			return masters[i].Options().Addr < masters[j].Options().Addr
+		})
+		for _, master := range masters {
+			addRecordSource(master.Options().Addr, master)
+		}
+	} else {
+		addRecordSource("default", s.client)
+	}
+	return sources, nil
+}
+
+func (s *RedisTaskStore) nextTaskReconcileBatch(
+	ctx context.Context,
+	source taskReconcileSource,
+	limit int,
+) ([]string, error) {
+	if pending := s.reconcilePending[source.name]; len(pending) > 0 {
+		count := min(limit, len(pending))
+		batch := append([]string(nil), pending[:count]...)
+		if count == len(pending) {
+			delete(s.reconcilePending, source.name)
+		} else {
+			s.reconcilePending[source.name] = pending[count:]
+		}
+		return batch, nil
+	}
+	batch, next, err := source.scan(ctx, s.reconcileCursors[source.name], int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	s.reconcileCursors[source.name] = next
+	if len(batch) > limit {
+		s.reconcilePending[source.name] = append([]string(nil), batch[limit:]...)
+		batch = batch[:limit]
+	}
+	return batch, nil
+}
+
+func (s *RedisTaskStore) repairTaskIndexEntry(ctx context.Context, id string) error {
+	task, err := s.Get(ctx, id)
+	if errors.Is(err, core.ErrTaskNotFound) {
+		pipe := s.client.Pipeline()
+		pipe.SRem(ctx, s.allKey(), id)
+		for _, status := range taskIndexStatuses {
+			pipe.SRem(ctx, s.statusKey(status), id)
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return fmt.Errorf("prune missing task indexes: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.updateStatusIndex(ctx, id, "", task.Status, true); err != nil {
+		return err
+	}
+	for _, status := range taskIndexStatuses {
+		if status != task.Status {
+			if err := s.client.SRem(ctx, s.statusKey(status), id).Err(); err != nil {
+				return fmt.Errorf("repair task status index: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// ReconcileTaskIndexes performs one bounded, application-owned repair pass.
+func (s *RedisTaskStore) ReconcileTaskIndexes(ctx context.Context, maxIDs int) error {
+	if maxIDs <= 0 {
+		return fmt.Errorf("task index reconcile maximum must be positive")
+	}
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
+	sources, err := s.taskReconcileSources(ctx)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	s.reconcileNext %= len(sources)
+	processed := 0
+	visited := 0
+	for processed < maxIDs && visited < len(sources) {
+		sourceIndex := s.reconcileNext
+		source := sources[sourceIndex]
+		s.reconcileNext = (sourceIndex + 1) % len(sources)
+		visited++
+		batch, err := s.nextTaskReconcileBatch(ctx, source, maxIDs-processed)
+		if err != nil {
+			return fmt.Errorf("scan task repair source %q: %w", source.name, err)
+		}
+		for _, id := range batch {
+			processed++
+			if err := s.repairTaskIndexEntry(ctx, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TaskIndexReconciler runs bounded status-index repair under application lifecycle control.
+type TaskIndexReconciler struct {
+	store    *RedisTaskStore
+	interval time.Duration
+	maxIDs   int
+}
+
+func NewTaskIndexReconciler(store *RedisTaskStore, interval time.Duration, maxIDs int) (*TaskIndexReconciler, error) {
+	if store == nil || interval <= 0 || maxIDs <= 0 {
+		return nil, fmt.Errorf("task index reconciler requires a store and positive limits")
+	}
+	return &TaskIndexReconciler{store: store, interval: interval, maxIDs: maxIDs}, nil
+}
+
+func (reconciler *TaskIndexReconciler) Start(ctx context.Context) error {
+	ticker := time.NewTicker(reconciler.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			startedAt := time.Now()
+			if err := reconciler.store.ReconcileTaskIndexes(ctx, reconciler.maxIDs); err != nil {
+				if reconciler.store.logger != nil {
+					reconciler.store.logger.Warn("Task index reconciliation failed", map[string]interface{}{
+						"operation":   "task_index_reconcile",
+						"error":       "redis task index reconciliation failed",
+						"error_type":  "index_reconcile",
+						"duration_ms": time.Since(startedAt).Milliseconds(),
+					})
+				}
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+var _ core.Runnable = (*TaskIndexReconciler)(nil)
 
 // Close performs any cleanup needed.
 // Note: Does not close the Redis client as it may be shared.

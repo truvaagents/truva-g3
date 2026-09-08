@@ -415,6 +415,7 @@ func (h *MemoryEnrichmentHook) SetLLMDebugStore(store LLMDebugStore) {
 // BeforePlanning queries shared memory and injects context into the planning prompt.
 func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.PipelineContext) (*core.PipelineShortCircuit, error) {
 	var sections []string
+	var memoryContext string
 
 	startTime := time.Now()
 
@@ -694,7 +695,7 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 
 	// 5. Assemble and inject into enrichments
 	if len(sections) > 0 {
-		memoryContext := strings.Join(sections, "\n\n")
+		memoryContext = strings.Join(sections, "\n\n")
 
 		// Truncate to max tokens (approximate: 1 token ≈ 4 chars)
 		maxChars := h.maxTokens * 4
@@ -732,11 +733,49 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 			"module", telemetry.ModuleOrchestration,
 		)
 	}
+	effectStatus := core.PipelineHookEffectSucceeded
+	effectSummary := "Prepared shared-memory context for planning"
+	if memoryContext == "" {
+		effectStatus = core.PipelineHookEffectSkipped
+		effectSummary = "No shared-memory context was available to inject"
+	}
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"memory_planning_context",
+		"Memory planning context",
+		effectStatus,
+		effectSummary,
+		struct {
+			AgentDomain string           `json:"agent_domain"`
+			Entities    []core.EntityRef `json:"entities"`
+			Sections    int              `json:"sections"`
+		}{
+			AgentDomain: h.agentDomain,
+			Entities:    toEntityRefs(entities),
+			Sections:    len(sections),
+		},
+		nil,
+		startTime,
+	)
 
 	return nil, nil // Never short-circuits
 }
 
 // --- Memory Record Hook (AfterExecutionHook) ---
+
+type memoryEventEffect struct {
+	StepID                       string                        `json:"step_id"`
+	SubmittedEvent               core.AgentEvent               `json:"submitted_event"`
+	ProviderCallStatus           core.PipelineHookEffectStatus `json:"provider_call_status"`
+	BackendAssignsIDAndTimestamp bool                          `json:"backend_assigns_event_id_and_timestamp"`
+	ProviderError                string                        `json:"provider_error,omitempty"`
+}
+
+type memoryClaimReleaseEffect struct {
+	EntityID           string                        `json:"entity_id"`
+	ProviderCallStatus core.PipelineHookEffectStatus `json:"provider_call_status"`
+	ProviderError      string                        `json:"provider_error,omitempty"`
+}
 
 // MemoryRecordHook implements core.AfterExecutionHook.
 // It records structured AgentEvents from execution results into episodic memory,
@@ -858,8 +897,19 @@ func (h *MemoryRecordHook) Name() string { return "memory-record" }
 
 // AfterExecution records execution outcomes as episodic events and releases investigation claims.
 func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.PipelineContext, results interface{}) error {
+	effectStart := time.Now()
 	execResult, ok := results.(*ExecutionResult)
 	if !ok || execResult == nil {
+		reportStructuredPipelineHookEffect(
+			ctx,
+			"episodic_memory_records",
+			"Episodic memory records",
+			core.PipelineHookEffectSkipped,
+			"No execution result was available to record",
+			nil,
+			nil,
+			effectStart,
+		)
 		return nil
 	}
 
@@ -905,6 +955,9 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 
 	// Track entities for investigation release
 	var investigatedEntities []string
+	var eventEffects []memoryEventEffect
+	var releaseEffects []memoryClaimReleaseEffect
+	var firstEffectErr error
 
 	for _, step := range execResult.Steps {
 		if step.Skipped {
@@ -995,13 +1048,28 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				Importance:  h.importanceFunc(actionType, outcome),
 			}
 
-			if err := h.episodic.RecordEvent(ctx, event); err != nil {
+			recordErr := h.episodic.RecordEvent(ctx, event)
+			eventEffect := memoryEventEffect{
+				StepID:                       step.StepID,
+				SubmittedEvent:               event,
+				ProviderCallStatus:           core.PipelineHookEffectSucceeded,
+				BackendAssignsIDAndTimestamp: event.EventID == "" || event.Timestamp.IsZero(),
+			}
+			if recordErr != nil {
+				if firstEffectErr == nil {
+					firstEffectErr = recordErr
+				}
+				eventEffect.ProviderCallStatus = core.PipelineHookEffectFailed
+				eventEffect.ProviderError = recordErr.Error()
+				recordPipelineHookEffectSpanError(ctx, "episodic_write")
+			}
+			eventEffects = append(eventEffects, eventEffect)
+			if err := recordErr; err != nil {
 				h.logger.WarnWithContext(ctx, "Failed to record episodic event, continuing", map[string]interface{}{
 					"operation":   "memory_record",
 					"request_id":  requestID,
 					"entity_type": primary.Type,
 					"entity_id":   primary.ID,
-					"error":       err.Error(),
 					"error_type":  "episodic_write",
 				})
 			}
@@ -1023,11 +1091,26 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				Scope:       determineEventScope(actionType, step),
 				Importance:  h.importanceFunc(actionType, outcome),
 			}
-			if err := h.episodic.RecordEvent(ctx, event); err != nil {
+			recordErr := h.episodic.RecordEvent(ctx, event)
+			eventEffect := memoryEventEffect{
+				StepID:                       step.StepID,
+				SubmittedEvent:               event,
+				ProviderCallStatus:           core.PipelineHookEffectSucceeded,
+				BackendAssignsIDAndTimestamp: event.EventID == "" || event.Timestamp.IsZero(),
+			}
+			if recordErr != nil {
+				if firstEffectErr == nil {
+					firstEffectErr = recordErr
+				}
+				eventEffect.ProviderCallStatus = core.PipelineHookEffectFailed
+				eventEffect.ProviderError = recordErr.Error()
+				recordPipelineHookEffectSpanError(ctx, "episodic_write")
+			}
+			eventEffects = append(eventEffects, eventEffect)
+			if err := recordErr; err != nil {
 				h.logger.WarnWithContext(ctx, "Failed to record entity-less episodic event, continuing", map[string]interface{}{
 					"operation":  "memory_record",
 					"request_id": requestID,
-					"error":      err.Error(),
 					"error_type": "episodic_write",
 				})
 			}
@@ -1050,17 +1133,73 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 	// Release investigation claims for all entities we acted on
 	if h.coordinator != nil {
 		for _, entityID := range investigatedEntities {
-			if err := h.coordinator.ReleaseInvestigation(ctx, h.agentName, entityID); err != nil {
+			releaseErr := h.coordinator.ReleaseInvestigation(ctx, h.agentName, entityID)
+			releaseEffect := memoryClaimReleaseEffect{
+				EntityID:           entityID,
+				ProviderCallStatus: core.PipelineHookEffectSucceeded,
+			}
+			if releaseErr != nil {
+				if firstEffectErr == nil {
+					firstEffectErr = releaseErr
+				}
+				releaseEffect.ProviderCallStatus = core.PipelineHookEffectFailed
+				releaseEffect.ProviderError = releaseErr.Error()
+				recordPipelineHookEffectSpanError(ctx, "claim_release")
+			}
+			releaseEffects = append(releaseEffects, releaseEffect)
+			if err := releaseErr; err != nil {
 				h.logger.WarnWithContext(ctx, "Failed to release investigation claim", map[string]interface{}{
 					"operation":  "memory_record",
 					"request_id": requestID,
 					"entity_id":  entityID,
-					"error":      err.Error(),
 					"error_type": "claim_release",
 				})
 			}
 		}
 	}
+
+	failedEffects := 0
+	for _, effect := range eventEffects {
+		if effect.ProviderCallStatus == core.PipelineHookEffectFailed {
+			failedEffects++
+		}
+	}
+	for _, effect := range releaseEffects {
+		if effect.ProviderCallStatus == core.PipelineHookEffectFailed {
+			failedEffects++
+		}
+	}
+	totalEffects := len(eventEffects) + len(releaseEffects)
+	effectStatus := core.PipelineHookEffectSucceeded
+	effectSummary := fmt.Sprintf("Submitted %d episodic event(s) to the fail-open memory backend", len(eventEffects))
+	switch {
+	case totalEffects == 0:
+		effectStatus = core.PipelineHookEffectSkipped
+		effectSummary = "No executable steps produced episodic memory records"
+	case failedEffects == totalEffects:
+		effectStatus = core.PipelineHookEffectFailed
+		effectSummary = "Every episodic-memory and claim-release provider call returned an error"
+	case failedEffects > 0:
+		effectStatus = core.PipelineHookEffectPartial
+		effectSummary = fmt.Sprintf(
+			"Provider calls returned without error for %d of %d episodic-memory and claim-release submissions",
+			totalEffects-failedEffects,
+			totalEffects,
+		)
+	}
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"episodic_memory_records",
+		"Episodic memory records",
+		effectStatus,
+		effectSummary,
+		struct {
+			Events        []memoryEventEffect        `json:"events"`
+			ClaimReleases []memoryClaimReleaseEffect `json:"claim_releases"`
+		}{Events: eventEffects, ClaimReleases: releaseEffects},
+		firstEffectErr,
+		effectStart,
+	)
 
 	return nil
 }

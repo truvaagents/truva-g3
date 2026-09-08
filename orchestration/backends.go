@@ -155,7 +155,7 @@ type OrchestrationBackends struct {
 	checkpointExpiry          ExpiredCheckpointSource
 	checkpointExpiryProcessor core.Runnable
 	commands                  CommandStore
-	workflow                  StateStore
+	workflow                  WorkflowStateStore
 	schedules                 core.ScheduleStore
 	tasks                     core.TaskStore
 	taskQueue                 core.TaskQueue
@@ -300,8 +300,8 @@ func WithCheckpointExpiryProcessor(value core.Runnable) OrchestrationBackendOpti
 func WithCommandBackend(value CommandStore) OrchestrationBackendOption {
 	return backendOption("command", value, func(b *OrchestrationBackends, v CommandStore) { b.commands = v })
 }
-func WithWorkflowBackend(value StateStore) OrchestrationBackendOption {
-	return backendOption("workflow", value, func(b *OrchestrationBackends, v StateStore) { b.workflow = v })
+func WithWorkflowBackend(value WorkflowStateStore) OrchestrationBackendOption {
+	return backendOption("workflow", value, func(b *OrchestrationBackends, v WorkflowStateStore) { b.workflow = v })
 }
 func WithScheduleBackend(value core.ScheduleStore) OrchestrationBackendOption {
 	return backendOption("schedule", value, func(b *OrchestrationBackends, v core.ScheduleStore) { b.schedules = v })
@@ -392,7 +392,7 @@ func (b *OrchestrationBackends) Commands() CommandStore {
 	}
 	return b.commands
 }
-func (b *OrchestrationBackends) Workflow() StateStore {
+func (b *OrchestrationBackends) Workflow() WorkflowStateStore {
 	if b == nil {
 		return nil
 	}

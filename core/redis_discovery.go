@@ -16,9 +16,20 @@ type RedisDiscovery struct {
 	logger         Logger // Optional logger for discovery operations
 }
 
+// Registry records and indexes share a slot. Recheck existence in the same
+// operation as pruning so re-registration cannot lose fresh index membership.
+var pruneMissingRegistryService = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) == 0 then
+    for index = 2, #KEYS do
+        redis.call("SREM", KEYS[index], ARGV[1])
+    end
+end
+return 1
+`)
+
 // NewRedisDiscovery creates a new Redis discovery client
 func NewRedisDiscovery(redisURL string) (*RedisDiscovery, error) {
-	return NewRedisDiscoveryWithOptions(redisURL, "truvag3", 0)
+	return NewRedisDiscoveryWithOptions(redisURL, "default", 0)
 }
 
 // NewRedisDiscoveryWithNamespace creates a new Redis discovery client with custom namespace
@@ -34,10 +45,27 @@ func NewRedisDiscoveryWithOptions(redisURL, namespace string, ttl time.Duration)
 	if err != nil {
 		return nil, err
 	}
+	return &RedisDiscovery{RedisRegistry: registry}, nil
+}
 
-	return &RedisDiscovery{
-		RedisRegistry: registry,
-	}, nil
+// NewRedisDiscoveryWithConnection creates owning discovery for an explicit
+// standalone, Sentinel, or cluster connection profile.
+func NewRedisDiscoveryWithConnection(profile RedisConnectionConfig, keyspace RedisKeyspace, ttl time.Duration) (*RedisDiscovery, error) {
+	registry, err := NewRedisRegistryWithConnection(profile, keyspace, ttl)
+	if err != nil {
+		return nil, err
+	}
+	return &RedisDiscovery{RedisRegistry: registry}, nil
+}
+
+// NewRedisDiscoveryWithClient creates discovery around an application-owned
+// standalone, Sentinel, or cluster client.
+func NewRedisDiscoveryWithClient(client redis.UniversalClient, keyspace RedisKeyspace, ttl time.Duration) (*RedisDiscovery, error) {
+	registry, err := NewRedisRegistryWithClient(client, keyspace, ttl)
+	if err != nil {
+		return nil, err
+	}
+	return &RedisDiscovery{RedisRegistry: registry}, nil
 }
 
 // SetLogger sets the logger for the discovery client
@@ -64,6 +92,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 	if d.logger != nil {
 		d.logger.InfoWithContext(ctx, "Starting service discovery", map[string]interface{}{
+			"request_id":          GetRequestID(ctx),
+			"operation":           "discovery_lookup",
 			"filter_type":         filter.Type,
 			"filter_name":         filter.Name,
 			"filter_capabilities": filter.Capabilities,
@@ -73,18 +103,20 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 	var services []*ServiceInfo
 	var serviceIDs []string
+	var candidateIndexKeys []string
 
 	// Filter by type if specified
 	if filter.Type != "" {
-		typeKey := fmt.Sprintf("%s:types:%s", d.namespace, filter.Type)
+		typeKey := d.keys.serviceType(filter.Type)
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "Filtering services by type", map[string]interface{}{
-				"type":     filter.Type,
-				"type_key": typeKey,
+				"request_id": GetRequestID(ctx),
+				"operation":  "discovery_lookup",
+				"type":       filter.Type,
 			})
 		}
 
-		ids, err := d.client.SMembers(ctx, typeKey).Result()
+		ids, err := d.scanIndexMembers(ctx, typeKey)
 		if err != nil && err != redis.Nil {
 			// Emit framework metrics for discovery error
 			if registry := GetGlobalMetricsRegistry(); registry != nil {
@@ -103,18 +135,22 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 			if d.logger != nil {
 				d.logger.ErrorWithContext(ctx, "Failed to find services by type", map[string]interface{}{
-					"error":      err,
-					"error_type": fmt.Sprintf("%T", err),
+					"request_id": GetRequestID(ctx),
+					"operation":  "discovery_lookup",
+					"error":      "redis discovery backend_operation failed",
+					"error_type": "backend_operation",
 					"type":       filter.Type,
-					"type_key":   typeKey,
 				})
 			}
 			return nil, fmt.Errorf("failed to find services by type %s: %w", filter.Type, err)
 		}
 		serviceIDs = append(serviceIDs, ids...)
+		candidateIndexKeys = append(candidateIndexKeys, typeKey)
 
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "Found services by type", map[string]interface{}{
+				"request_id":     GetRequestID(ctx),
+				"operation":      "discovery_lookup",
 				"type":           filter.Type,
 				"services_count": len(ids),
 			})
@@ -123,15 +159,16 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 	// Filter by name if specified
 	if filter.Name != "" {
-		nameKey := fmt.Sprintf("%s:names:%s", d.namespace, filter.Name)
+		nameKey := d.keys.name(filter.Name)
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "Filtering services by name", map[string]interface{}{
-				"name":     filter.Name,
-				"name_key": nameKey,
+				"request_id": GetRequestID(ctx),
+				"operation":  "discovery_lookup",
+				"name":       filter.Name,
 			})
 		}
 
-		ids, err := d.client.SMembers(ctx, nameKey).Result()
+		ids, err := d.scanIndexMembers(ctx, nameKey)
 		if err != nil && err != redis.Nil {
 			// Emit framework metrics for name lookup error
 			if registry := GetGlobalMetricsRegistry(); registry != nil {
@@ -150,14 +187,16 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 			if d.logger != nil {
 				d.logger.ErrorWithContext(ctx, "Failed to find services by name", map[string]interface{}{
-					"error":      err,
-					"error_type": fmt.Sprintf("%T", err),
+					"request_id": GetRequestID(ctx),
+					"operation":  "discovery_lookup",
+					"error":      "redis discovery backend_operation failed",
+					"error_type": "backend_operation",
 					"name":       filter.Name,
-					"name_key":   nameKey,
 				})
 			}
 			return nil, fmt.Errorf("failed to find services by name %s: %w", filter.Name, err)
 		}
+		candidateIndexKeys = append(candidateIndexKeys, nameKey)
 
 		if filter.Type != "" {
 			// Intersect with type filter
@@ -165,6 +204,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 			serviceIDs = intersect(serviceIDs, ids)
 			if d.logger != nil {
 				d.logger.DebugWithContext(ctx, "Applied name filter intersection", map[string]interface{}{
+					"request_id":          GetRequestID(ctx),
+					"operation":           "discovery_lookup",
 					"name":                filter.Name,
 					"before_intersection": beforeCount,
 					"after_intersection":  len(serviceIDs),
@@ -175,6 +216,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 			serviceIDs = append(serviceIDs, ids...)
 			if d.logger != nil {
 				d.logger.DebugWithContext(ctx, "Found services by name", map[string]interface{}{
+					"request_id":     GetRequestID(ctx),
+					"operation":      "discovery_lookup",
 					"name":           filter.Name,
 					"services_count": len(ids),
 				})
@@ -186,6 +229,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	if len(filter.Capabilities) > 0 {
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "Filtering services by capabilities", map[string]interface{}{
+				"request_id":         GetRequestID(ctx),
+				"operation":          "discovery_lookup",
 				"capabilities":       filter.Capabilities,
 				"capabilities_count": len(filter.Capabilities),
 			})
@@ -193,23 +238,27 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 		var capIDs []string
 		for _, capability := range filter.Capabilities {
-			capKey := fmt.Sprintf("%s:capabilities:%s", d.namespace, capability)
-			ids, err := d.client.SMembers(ctx, capKey).Result()
+			capKey := d.keys.capability(capability)
+			ids, err := d.scanIndexMembers(ctx, capKey)
 			if err != nil && err != redis.Nil {
 				if d.logger != nil {
 					d.logger.WarnWithContext(ctx, "Failed to find services by capability", map[string]interface{}{
-						"error":          err,
-						"error_type":     fmt.Sprintf("%T", err),
-						"capability":     capability,
-						"capability_key": capKey,
+						"request_id": GetRequestID(ctx),
+						"operation":  "discovery_lookup",
+						"error":      "redis discovery backend_operation failed",
+						"error_type": "backend_operation",
+						"capability": capability,
 					})
 				}
 				continue
 			}
 			capIDs = append(capIDs, ids...)
+			candidateIndexKeys = append(candidateIndexKeys, capKey)
 
 			if d.logger != nil {
 				d.logger.DebugWithContext(ctx, "Found services by capability", map[string]interface{}{
+					"request_id":     GetRequestID(ctx),
+					"operation":      "discovery_lookup",
 					"capability":     capability,
 					"services_count": len(ids),
 				})
@@ -222,6 +271,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 			serviceIDs = intersect(serviceIDs, capIDs)
 			if d.logger != nil {
 				d.logger.DebugWithContext(ctx, "Applied capability filter intersection", map[string]interface{}{
+					"request_id":           GetRequestID(ctx),
+					"operation":            "discovery_lookup",
 					"before_intersection":  beforeCount,
 					"after_intersection":   len(serviceIDs),
 					"capability_matches":   len(capIDs),
@@ -232,6 +283,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 			serviceIDs = capIDs
 			if d.logger != nil {
 				d.logger.DebugWithContext(ctx, "Using capability filter as primary", map[string]interface{}{
+					"request_id":           GetRequestID(ctx),
+					"operation":            "discovery_lookup",
 					"services_count":       len(capIDs),
 					"capabilities_checked": len(filter.Capabilities),
 				})
@@ -243,35 +296,33 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	if filter.Type == "" && filter.Name == "" && len(filter.Capabilities) == 0 {
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "No filters specified, getting all services", map[string]interface{}{
-				"namespace": d.namespace,
+				"request_id": GetRequestID(ctx),
+				"operation":  "discovery_lookup",
+				"namespace":  d.namespace,
 			})
 		}
 
-		// Get all service keys
-		pattern := fmt.Sprintf("%s:services:*", d.namespace)
-		keys, err := d.client.Keys(ctx, pattern).Result()
+		ids, err := d.scanIndexMembers(ctx, d.keys.all())
 		if err != nil {
 			if d.logger != nil {
 				d.logger.ErrorWithContext(ctx, "Failed to list all services", map[string]interface{}{
-					"error":      err,
-					"error_type": fmt.Sprintf("%T", err),
-					"pattern":    pattern,
+					"request_id": GetRequestID(ctx),
+					"operation":  "discovery_lookup",
+					"error":      "redis discovery backend_operation failed",
+					"error_type": "backend_operation",
 					"namespace":  d.namespace,
 				})
 			}
 			return nil, fmt.Errorf("failed to list all services: %w", err)
 		}
-
-		for _, key := range keys {
-			// Extract service ID from key
-			serviceID := key[len(fmt.Sprintf("%s:services:", d.namespace)):]
-			serviceIDs = append(serviceIDs, serviceID)
-		}
+		serviceIDs = ids
+		candidateIndexKeys = append(candidateIndexKeys, d.keys.all())
 
 		if d.logger != nil {
 			d.logger.DebugWithContext(ctx, "Found all services", map[string]interface{}{
+				"request_id":     GetRequestID(ctx),
+				"operation":      "discovery_lookup",
 				"total_services": len(serviceIDs),
-				"pattern":        pattern,
 			})
 		}
 	}
@@ -289,6 +340,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	// Fetch service info for each ID
 	if d.logger != nil {
 		d.logger.DebugWithContext(ctx, "Fetching service details", map[string]interface{}{
+			"request_id":          GetRequestID(ctx),
+			"operation":           "discovery_lookup",
 			"unique_services":     len(uniqueIDs),
 			"has_metadata_filter": len(filter.Metadata) > 0,
 		})
@@ -297,18 +350,21 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	skippedExpired := 0
 	skippedMalformed := 0
 	skippedMetadata := 0
+	staleIDs := make([]string, 0)
 
 	for _, id := range uniqueIDs {
-		key := fmt.Sprintf("%s:services:%s", d.namespace, id)
+		key := d.keys.service(id)
 		data, err := d.client.Get(ctx, key).Result()
 		if err != nil {
 			if err == redis.Nil {
 				// Service expired or deleted, skip
 				skippedExpired++
+				staleIDs = append(staleIDs, id)
 				if d.logger != nil {
 					d.logger.DebugWithContext(ctx, "Service expired or deleted", map[string]interface{}{
+						"request_id": GetRequestID(ctx),
+						"operation":  "discovery_lookup",
 						"service_id": id,
-						"key":        key,
 					})
 				}
 				continue
@@ -334,10 +390,11 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 
 			if d.logger != nil {
 				d.logger.ErrorWithContext(ctx, "Failed to get service data", map[string]interface{}{
-					"error":      err,
-					"error_type": fmt.Sprintf("%T", err),
+					"request_id": GetRequestID(ctx),
+					"operation":  "discovery_lookup",
+					"error":      "redis discovery backend_operation failed",
+					"error_type": "backend_operation",
 					"service_id": id,
-					"key":        key,
 				})
 			}
 			return nil, fmt.Errorf("failed to get service %s: %w", id, err)
@@ -349,10 +406,11 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 			skippedMalformed++
 			if d.logger != nil {
 				d.logger.WarnWithContext(ctx, "Skipping malformed service entry", map[string]interface{}{
-					"error":      err,
-					"error_type": fmt.Sprintf("%T", err),
+					"request_id": GetRequestID(ctx),
+					"operation":  "discovery_lookup",
+					"error":      "redis discovery decode failed",
+					"error_type": "decode",
 					"service_id": id,
-					"key":        key,
 					"data_size":  len(data),
 				})
 			}
@@ -372,10 +430,10 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 				skippedMetadata++
 				if d.logger != nil {
 					d.logger.DebugWithContext(ctx, "Service filtered out by metadata", map[string]interface{}{
+						"request_id":   GetRequestID(ctx),
+						"operation":    "discovery_lookup",
 						"service_id":   id,
 						"service_name": info.Name,
-						"metadata":     info.Metadata,
-						"filter":       filter.Metadata,
 					})
 				}
 				continue
@@ -383,6 +441,20 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 		}
 
 		services = append(services, &info)
+	}
+	if len(staleIDs) > 0 {
+		for _, id := range staleIDs {
+			keys := append([]string{d.keys.service(id)}, candidateIndexKeys...)
+			if err := pruneMissingRegistryService.Run(ctx, d.client, keys, id).Err(); err != nil && d.logger != nil {
+				d.logger.WarnWithContext(ctx, "Failed to prune stale discovery index entries", map[string]interface{}{
+					"operation":   "discovery_index_cleanup",
+					"request_id":  GetRequestID(ctx),
+					"error":       "redis discovery index cleanup failed",
+					"error_type":  "index_write",
+					"stale_count": len(staleIDs),
+				})
+			}
+		}
 	}
 
 	// Emit framework metrics for successful discovery
@@ -410,6 +482,8 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	// Log discovery summary
 	if d.logger != nil {
 		d.logger.InfoWithContext(ctx, "Service discovery completed", map[string]interface{}{
+			"request_id":          GetRequestID(ctx),
+			"operation":           "discovery_lookup",
 			"services_found":      len(services),
 			"services_checked":    len(uniqueIDs),
 			"skipped_expired":     skippedExpired,
@@ -422,6 +496,30 @@ func (d *RedisDiscovery) Discover(ctx context.Context, filter DiscoveryFilter) (
 	}
 
 	return services, nil
+}
+
+func (d *RedisDiscovery) scanIndexMembers(ctx context.Context, key string) ([]string, error) {
+	const countHint int64 = 256
+	seen := make(map[string]struct{})
+	var cursor uint64
+	for {
+		batch, next, err := d.client.SScan(ctx, key, cursor, "", countHint).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range batch {
+			seen[id] = struct{}{}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // FindService finds services by name (backward compatibility)

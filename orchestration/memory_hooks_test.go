@@ -199,6 +199,93 @@ func TestMemoryRecordHook_RecordsEvents(t *testing.T) {
 	assert.Equal(t, "test-agent", recorded[0].AgentName)
 }
 
+func TestMemoryRecordHook_ReportsExactRecordedEvent(t *testing.T) {
+	episodic := &core.MockEpisodicMemory{}
+	hook, err := NewMemoryRecordHook(episodic, nil, "test-agent", "infrastructure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterExecution, 1, 0, time.Now(),
+	)
+	result := &ExecutionResult{Steps: []StepResult{{
+		StepID: "step-1", AgentName: "weather-tool", Capability: "forecast",
+		Instruction: "Forecast weather for ORD", Success: true,
+		Parameters: map[string]interface{}{"entity_type": "airport", "entity_id": "ORD"},
+	}}}
+	if err := hook.AfterExecution(invocation.Context(ctx), &core.PipelineContext{}, result); err != nil {
+		t.Fatal(err)
+	}
+	invocation.Complete(PipelineHookSucceeded, nil)
+
+	records := holder.Snapshot()
+	if len(records) != 1 || len(records[0].Effects) != 1 {
+		t.Fatalf("memory record effects = %#v", records)
+	}
+	effect := records[0].Effects[0]
+	if effect.EffectID != "episodic_memory_records" || effect.Status != core.PipelineHookEffectSucceeded {
+		t.Fatalf("memory record effect = %#v", effect)
+	}
+	var data struct {
+		Events []memoryEventEffect `json:"events"`
+	}
+	if err := json.Unmarshal(effect.Data, &data); err != nil {
+		t.Fatalf("decode memory record effect: %v", err)
+	}
+	if len(data.Events) != 1 || data.Events[0].SubmittedEvent.EntityID != "ORD" ||
+		data.Events[0].SubmittedEvent.ActionType != "forecast" ||
+		data.Events[0].SubmittedEvent.Summary == "" ||
+		data.Events[0].ProviderCallStatus != core.PipelineHookEffectSucceeded ||
+		!data.Events[0].BackendAssignsIDAndTimestamp {
+		t.Fatalf("recorded event effect = %#v", data.Events)
+	}
+}
+
+func TestMemoryRecordHook_LabelsPartialProviderObservationsWithoutClaimingDurability(t *testing.T) {
+	episodic := &core.MockEpisodicMemory{
+		RecordEventFn: func(_ context.Context, event core.AgentEvent) error {
+			if event.EntityID == "ORD" {
+				return fmt.Errorf("provider rejected ORD event")
+			}
+			return nil
+		},
+	}
+	hook, err := NewMemoryRecordHook(episodic, nil, "test-agent", "travel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterExecution, 1, 0, time.Now(),
+	)
+	result := &ExecutionResult{Steps: []StepResult{
+		{
+			StepID: "step-1", Capability: "forecast", Instruction: "Forecast ORD", Success: true,
+			Parameters: map[string]interface{}{"entity_type": "airport", "entity_id": "ORD"},
+		},
+		{
+			StepID: "step-2", Capability: "forecast", Instruction: "Forecast DFW", Success: true,
+			Parameters: map[string]interface{}{"entity_type": "airport", "entity_id": "DFW"},
+		},
+	}}
+	if err := hook.AfterExecution(invocation.Context(ctx), &core.PipelineContext{}, result); err != nil {
+		t.Fatal(err)
+	}
+	invocation.Complete(PipelineHookSucceeded, nil)
+
+	effect := holder.Snapshot()[0].Effects[0]
+	if effect.Status != core.PipelineHookEffectPartial {
+		t.Fatalf("effect status = %q, want partial", effect.Status)
+	}
+	const want = "Provider calls returned without error for 1 of 2 episodic-memory and claim-release submissions"
+	if effect.Summary != want {
+		t.Fatalf("effect summary = %q, want %q", effect.Summary, want)
+	}
+}
+
 func TestMemoryRecordHook_ReleasesInvestigationClaims(t *testing.T) {
 	episodic := &core.MockEpisodicMemory{}
 	var released []string

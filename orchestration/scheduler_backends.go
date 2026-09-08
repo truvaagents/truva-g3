@@ -16,6 +16,8 @@
 package orchestration
 
 import (
+	"fmt"
+
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -34,6 +36,35 @@ type SchedulerBackends struct {
 	TaskConsumer core.TaskConsumer
 }
 
+// RedisSchedulerBackendsOption configures the Redis scheduler bundle.
+type RedisSchedulerBackendsOption func(*redisSchedulerBackendsConfig) error
+
+type redisSchedulerBackendsConfig struct {
+	keyspace core.RedisKeyspace
+}
+
+// WithRedisSchedulerKeyspace selects the deployment-scoped DB-0 schema used
+// by the scheduler producer and consumer.
+func WithRedisSchedulerKeyspace(keyspace core.RedisKeyspace) RedisSchedulerBackendsOption {
+	return func(config *redisSchedulerBackendsConfig) error {
+		config.keyspace = keyspace
+		return nil
+	}
+}
+
+func resolveRedisSchedulerBackendsConfig(options []RedisSchedulerBackendsOption) (redisSchedulerBackendsConfig, error) {
+	config := redisSchedulerBackendsConfig{keyspace: defaultRedisKeyspace()}
+	for index, option := range options {
+		if option == nil {
+			return redisSchedulerBackendsConfig{}, fmt.Errorf("orchestration: Redis scheduler backend option %d is nil", index)
+		}
+		if err := option(&config); err != nil {
+			return redisSchedulerBackendsConfig{}, err
+		}
+	}
+	return config, nil
+}
+
 const (
 	// ScheduledExecutorQueue is the canonical logical queue name shared by
 	// both sides. The producer (Scheduler) dispatches to it; the consumer
@@ -48,17 +79,22 @@ const (
 // semantics, use NewRedisStreamsSchedulerBackends instead and register
 // the returned reaper Runnable alongside the worker.
 //
-// Accepts redis.Cmdable so both *redis.Client and *redis.ClusterClient work.
-func NewRedisSchedulerBackends(client redis.Cmdable) (*SchedulerBackends, error) {
-	store, err := NewRedisScheduleStore(client, nil)
+// Accepts redis.UniversalClient so standalone, Sentinel, and cluster clients work.
+func NewRedisSchedulerBackends(client redis.UniversalClient, options ...RedisSchedulerBackendsOption) (*SchedulerBackends, error) {
+	config, err := resolveRedisSchedulerBackendsConfig(options)
 	if err != nil {
 		return nil, err
 	}
-	dispatcher, err := NewRedisTaskDispatcher(client)
+	taskPrefix := config.keyspace.Plain("tasks")
+	store, err := NewRedisScheduleStore(client, &RedisScheduleStoreConfig{Keyspace: &config.keyspace})
 	if err != nil {
 		return nil, err
 	}
-	consumer, err := NewRedisTaskConsumer(client, ScheduledExecutorQueue)
+	dispatcher, err := NewRedisTaskDispatcherWithPrefix(client, taskPrefix)
+	if err != nil {
+		return nil, err
+	}
+	consumer, err := NewRedisTaskConsumerWithPrefix(client, ScheduledExecutorQueue, taskPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -79,21 +115,26 @@ func NewRedisSchedulerBackends(client redis.Cmdable) (*SchedulerBackends, error)
 //	backends, reaper, err := orchestration.NewRedisStreamsSchedulerBackends(client)
 //	framework.RegisterRunnable(worker)
 //	framework.RegisterRunnable(reaper)
-func NewRedisStreamsSchedulerBackends(client redis.Cmdable) (*SchedulerBackends, core.Runnable, error) {
-	store, err := NewRedisScheduleStore(client, nil)
+func NewRedisStreamsSchedulerBackends(client redis.UniversalClient, options ...RedisSchedulerBackendsOption) (*SchedulerBackends, core.Runnable, error) {
+	config, err := resolveRedisSchedulerBackendsConfig(options)
 	if err != nil {
 		return nil, nil, err
 	}
-	dispatcher, err := NewRedisStreamsTaskDispatcher(client, ScheduledExecutorQueue)
+	taskPrefix := config.keyspace.Plain("tasks")
+	store, err := NewRedisScheduleStore(client, &RedisScheduleStoreConfig{Keyspace: &config.keyspace})
+	if err != nil {
+		return nil, nil, err
+	}
+	dispatcher, err := NewRedisStreamsTaskDispatcherWithPrefix(client, ScheduledExecutorQueue, taskPrefix)
 	if err != nil {
 		return nil, nil, err
 	}
 	groupName := "scheduled-executor-group"
-	consumer, err := NewRedisStreamsTaskConsumer(client, ScheduledExecutorQueue, groupName)
+	consumer, err := NewRedisStreamsTaskConsumerWithPrefix(client, ScheduledExecutorQueue, groupName, taskPrefix)
 	if err != nil {
 		return nil, nil, err
 	}
-	reaper := NewRedisStreamsReaper(client, ScheduledExecutorQueue, groupName)
+	reaper := NewRedisStreamsReaperWithPrefix(client, ScheduledExecutorQueue, groupName, taskPrefix)
 	return &SchedulerBackends{
 		ScheduleStore:  store,
 		TaskDispatcher: dispatcher,

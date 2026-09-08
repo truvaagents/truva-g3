@@ -121,7 +121,7 @@ func TestRedisLLMDebugStoreOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 		); err != nil {
 			t.Fatalf("RecordInteraction(%s): %v", test.requestID, err)
 		}
-		metaKey := llmDebugKeyPrefix + test.requestID + llmDebugMetaSuffix
+		metaKey := injectedStore.metaKey(test.requestID)
 		if got := mr.TTL(metaKey); got != test.wantTTL {
 			t.Fatalf("TTL(%s) = %v, want %v", metaKey, got, test.wantTTL)
 		}

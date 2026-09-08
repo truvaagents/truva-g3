@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,12 +22,13 @@ import (
 )
 
 const (
-	defaultSkillStoreKeyPrefix = "truvag3:skills"
-	maxSkillStoreBatchSize     = 256
-	defaultSkillListLimit      = 100
-	maxSkillListLimit          = 100
-	maxSkillStoreTxRetries     = 32
+	maxSkillStoreBatchSize = 256
+	defaultSkillListLimit  = 100
+	maxSkillListLimit      = 100
+	maxSkillStoreTxRetries = 32
 )
+
+var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 
 type skillStoreFailureType string
 
@@ -42,9 +44,19 @@ const (
 // mechanics are deliberately private to this package.
 type SkillStore struct {
 	client    redis.UniversalClient
+	keyspace  core.RedisKeyspace
 	keyPrefix string
 	logger    core.Logger
 	now       func() time.Time
+}
+
+// WithSkillStoreKeyspace sets the canonical deployment-scoped keyspace.
+func WithSkillStoreKeyspace(keyspace core.RedisKeyspace) SkillStoreOption {
+	return skillStoreOption(func(store *SkillStore) error {
+		store.keyspace = keyspace
+		store.keyPrefix = ""
+		return nil
+	})
 }
 
 type SkillStoreOption interface{ applySkillStore(*SkillStore) error }
@@ -55,8 +67,8 @@ func (option skillStoreOption) applySkillStore(store *SkillStore) error { return
 func WithSkillStoreKeyPrefix(prefix string) SkillStoreOption {
 	return skillStoreOption(func(store *SkillStore) error {
 		prefix = strings.TrimSpace(prefix)
-		if !namespacePattern.MatchString(prefix) {
-			return fmt.Errorf("redisprovider: skill key prefix must match %s", namespacePattern.String())
+		if !redisKeyPrefixPattern.MatchString(prefix) {
+			return fmt.Errorf("redisprovider: skill key prefix must match %s", redisKeyPrefixPattern.String())
 		}
 		store.keyPrefix = prefix
 		return nil
@@ -77,8 +89,12 @@ func NewSkillStore(client redis.UniversalClient, options ...SkillStoreOption) (*
 	if nilRedisClient(client) {
 		return nil, fmt.Errorf("redisprovider: skill store client is required")
 	}
+	keyspace, err := core.NewRedisKeyspace("default")
+	if err != nil {
+		return nil, err
+	}
 	store := &SkillStore{
-		client: client, keyPrefix: defaultSkillStoreKeyPrefix,
+		client: client, keyspace: keyspace,
 		logger: &core.NoOpLogger{}, now: time.Now,
 	}
 	for index, option := range options {
@@ -1046,8 +1062,13 @@ func nilSkillStoreLogger(logger core.Logger) bool {
 	}
 }
 
-func (store *SkillStore) storagePrefix() string { return store.keyPrefix + ":{store}" }
-func (store *SkillStore) catalogKey() string    { return store.storagePrefix() + ":catalog" }
+func (store *SkillStore) storagePrefix() string {
+	if store.keyPrefix != "" {
+		return store.keyPrefix + ":{store}"
+	}
+	return store.keyspace.Tagged("skills", "")
+}
+func (store *SkillStore) catalogKey() string { return store.storagePrefix() + ":catalog" }
 func (store *SkillStore) currentKey(ref orchestration.SkillRef) string {
 	return store.currentKeyFromIdentity(ref.String())
 }

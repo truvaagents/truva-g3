@@ -11,6 +11,7 @@ func TestWithRedisDiscovery(t *testing.T) {
 	tests := []struct {
 		name     string
 		redisURL string
+		wantErr  bool
 		expected struct {
 			enabled  bool
 			provider string
@@ -46,6 +47,7 @@ func TestWithRedisDiscovery(t *testing.T) {
 		{
 			name:     "empty redis URL",
 			redisURL: "",
+			wantErr:  true,
 			expected: struct {
 				enabled  bool
 				provider string
@@ -65,6 +67,12 @@ func TestWithRedisDiscovery(t *testing.T) {
 			// Apply the WithRedisDiscovery option
 			option := WithRedisDiscovery(tt.redisURL)
 			err := option(config)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("WithRedisDiscovery() accepted an empty URL")
+				}
+				return
+			}
 			if err != nil {
 				t.Errorf("WithRedisDiscovery() error = %v", err)
 			}

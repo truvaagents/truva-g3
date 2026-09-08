@@ -24,6 +24,28 @@ func setupMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	return mr, client
 }
 
+func TestRedisMemoryAdaptersScopeComponentAwareLoggers(t *testing.T) {
+	_, client := setupMiniRedis(t)
+
+	episodic, err := NewStreamEpisodicMemory(
+		WithEpisodicRedisClient(client),
+		WithEpisodicLogger(&fakeComponentAwareLogger{}),
+	)
+	require.NoError(t, err)
+	episodicLogger, ok := episodic.logger.(*fakeComponentAwareLogger)
+	require.True(t, ok)
+	assert.Equal(t, "framework/memory", episodicLogger.wrappedComponent)
+
+	coordinator, err := NewAtomicLockCoordinator(
+		WithCoordinatorRedisClient(client),
+		WithCoordinatorLogger(&fakeComponentAwareLogger{}),
+	)
+	require.NoError(t, err)
+	coordinatorLogger, ok := coordinator.logger.(*fakeComponentAwareLogger)
+	require.True(t, ok)
+	assert.Equal(t, "framework/memory", coordinatorLogger.wrappedComponent)
+}
+
 // --- StreamEpisodicMemory Tests ---
 
 func TestStreamEpisodicMemory_RecordAndQueryByEntity(t *testing.T) {
@@ -131,12 +153,12 @@ func TestStreamEpisodicMemory_GlobalDualWrite(t *testing.T) {
 	}))
 
 	// Verify domain stream has the event
-	domainLen, err := client.XLen(ctx, "truvag3:memory:infrastructure:events:stream").Result()
+	domainLen, err := client.XLen(ctx, "truvag3:v1:default:memory:infrastructure:events:stream").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), domainLen)
 
 	// Verify global stream also has the event (dual-write)
-	globalLen, err := client.XLen(ctx, "truvag3:memory:global:events:stream").Result()
+	globalLen, err := client.XLen(ctx, "truvag3:v1:default:memory:global:events:stream").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), globalLen)
 
@@ -147,7 +169,7 @@ func TestStreamEpisodicMemory_GlobalDualWrite(t *testing.T) {
 		Scope: core.ScopeSharedDomain,
 	}))
 
-	globalLen, err = client.XLen(ctx, "truvag3:memory:global:events:stream").Result()
+	globalLen, err = client.XLen(ctx, "truvag3:v1:default:memory:global:events:stream").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), globalLen) // Still 1 — shared_domain not dual-written
 

@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRedisRegistry_InitialRetryDuration verifies that initial connection attempts
-// complete within the expected 10-13 second window
-func TestRedisRegistry_InitialRetryDuration(t *testing.T) {
+// TestRedisRegistryStartupFailureIsBounded verifies that startup validation uses
+// the shared client retry policy without constructor-local sleep loops.
+func TestRedisRegistryStartupFailureIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode (waits for connection timeout)")
 	}
@@ -26,13 +26,10 @@ func TestRedisRegistry_InitialRetryDuration(t *testing.T) {
 	// Verify error occurred
 	assert.Error(t, err, "Should fail to connect to non-existent Redis")
 
-	// Verify duration is within expected range
-	// Expected: 3 attempts × up to 3s timeout + (2s + 2s) backoff
-	// Actual: Connection refused happens quickly, so total is ~7-10 seconds
-	assert.GreaterOrEqual(t, duration, 5*time.Second, "Should retry for at least 5 seconds")
-	assert.LessOrEqual(t, duration, 12*time.Second, "Should not exceed 12 seconds")
+	assert.ErrorIs(t, err, ErrConnectionFailed)
+	assert.LessOrEqual(t, duration, 6*time.Second, "startup validation exceeded its dial-timeout bound")
 
-	t.Logf("Initial retry completed in %v (expected ~7-10s)", duration)
+	t.Logf("Startup validation completed in %v", duration)
 }
 
 // TestRedisRegistry_ExponentialBackoff verifies that the retry interval

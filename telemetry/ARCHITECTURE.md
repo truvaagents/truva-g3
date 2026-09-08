@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.6
+**Version**: 1.8
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -371,15 +371,16 @@ By placing the recorder interface and Redis implementation in telemetry, agents 
 │  3. Builds telemetry.LLMCallRecord                           │
 │  4. Fires async goroutine → recorder.RecordLLMCall()         │
 └──────────────────────┬───────────────────────────────────────┘
-                       │ Atomic Lua: append + metadata + index + minimum TTL
+                       │ Request-local Lua: append + metadata + minimum TTL
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Redis DB 7                                                   │
+│ Redis/Valkey DB 0                                            │
 │                                                              │
-│  truvag3:llm:debug:{requestID}:interactions  [JSON, JSON, …] │
-│  truvag3:llm:debug:{requestID}:meta          {hash fields}    │
-│  truvag3:llm:debug:{requestID}:retention-floor  {marker}      │
-│  truvag3:llm:debug:index                     {sorted set}     │
+│  truvag3:v1:<deployment>:llm-debug:{request-tag}:            │
+│    interactions                              [JSON, JSON, …] │
+│  ...:{same-request-tag}:meta                  {hash fields}   │
+│  ...:{same-request-tag}:retention-floor       {marker}        │
+│  truvag3:v1:<deployment>:llm-debug:index:recent {sorted set}  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -399,22 +400,41 @@ created by those factories are wrapped normally.
 
 2. **Format-compatible**: The JSON structure written by `RedisLLMCallRecorder` matches `orchestration.LLMInteraction` exactly. Both writers produce records that the registry-viewer can read seamlessly.
 
-3. **Atomic write and minimum retention**: One Redis Lua operation appends the
-   interaction, performs first-valid metadata backfill with `HSETNX`, updates
-   the listing index, and applies TTLs. It also reads orchestration's
-   request-scoped retention-floor marker in the same operation. It therefore
-   preserves a longer or persistent lifetime even when the agent-side write
-   starts after final execution recording or runs in another pod.
+3. **Request-local atomicity and advisory projection**: One Redis Lua operation
+   appends the interaction, performs first-valid metadata backfill with
+   `HSETNX`, reads the request-scoped retention-floor marker, and applies TTLs.
+   Those keys share the request hash tag and therefore one cluster slot. The
+   deployment-wide recent index cannot share every request slot, so it is
+   updated afterward with bounded index-only retry. A failed index update does
+   not retry or duplicate the authoritative append; a later write can repair
+   the advisory projection. This intentionally replaces v1.6's single-script
+   index contract because that shape would fail with `CROSSSLOT` on the
+   portable Redis/Valkey cluster baseline.
 
-4. **Layer 1 resilience**: Built-in retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures in 30s triggers 30s pause). Recording failures never impact the LLM call path.
+4. **Topology and ownership**: `NewRedisLLMCallRecorderWithClient` requires both
+   an application-owned `redis.UniversalClient` and an explicit
+   `core.RedisKeyspace`, rejects typed-nil clients, performs one bounded startup
+   `PING` through `core.CheckRedisStartup`, and never closes or changes the
+   injected client. The five-second constructor wait is bounded even when the
+   client ignores context deadlines; an outstanding PING still requires its
+   socket deadline or owner-driven close to finish. Owning construction delegates
+   topology resolution and client creation to Core and closes only the client
+   it created, exactly once.
 
-5. **Payload fidelity and adopter ownership**: The Redis recorder and its
+5. **Layer 1 resilience**: Built-in retry uses exponential backoff (3 attempts,
+   100ms→2s) and a failure cooldown (5 failures in 30s triggers a 30s pause).
+   Retry logs contain only fixed failure classifications, never raw Redis error
+   text. They use request-aware logging and a component-aware adopter logger is
+   scoped to `framework/telemetry`. Recording failures never impact the LLM
+   call path.
+
+6. **Payload fidelity and adopter ownership**: The Redis recorder and its
    orchestration format twin preserve the application and model payloads they
    receive. They do not infer sensitive domain fields or alter content before
    persistence. Applications own sanitization, access control, encryption, and
    retention decisions for sensitive workloads.
 
-6. **Request context propagation**: The orchestrator's executor sends
+7. **Request context propagation**: The orchestrator's executor sends
    framework-managed request, step, plan, phase, original-request,
    conversation, agent, and investigation headers. Agents extract the request,
    step, plan, phase, original-request, conversation, and agent headers via
@@ -423,9 +443,9 @@ created by those factories are wrapped normally.
    W3C Trace Context and W3C Baggage; the explicit conversation header is a
    framework fallback, not a replacement for standard propagation.
 
-7. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
+8. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
 
-8. **Sanitized error ownership**: `LLMCallRecord.Error` is observation-only.
+9. **Sanitized error ownership**: `LLMCallRecord.Error` is observation-only.
    The producing caller—`ai.InstrumentedAIClient` for provider calls—must
    sanitize the string before invoking `RecordLLMCall`. Telemetry recorders
    store the supplied value verbatim; they do not parse provider-specific
@@ -433,7 +453,7 @@ created by those factories are wrapped normally.
    adapters must therefore keep raw response bodies out of returned errors,
    while the producer applies credential redaction as defense in depth.
 
-9. **Correlation is not a metric dimension**: The centralized
+10. **Correlation is not a metric dimension**: The centralized
    metric-enrichment boundary excludes reserved request-, user-, session-,
    trace-, plan-, step-, checkpoint-, investigation-, pass-, conversation-, and
    provider-request names even when an incoming baggage member carries
@@ -1674,6 +1694,10 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.10 | 2026-09-08 | Enforced injected-recorder startup deadlines independently of client context-timeout settings without changing borrowed-client options or ownership |
+| 1.9 | 2026-09-04 | Scoped Redis-recorder logs to `framework/telemetry` and made retry diagnostics request-aware, fixed-text, and explicitly classified |
+| 1.8 | 2026-09-02 | Required explicit keyspace and bounded startup verification for injected Redis recorders and replaced raw retry errors with fixed diagnostic classifications |
+| 1.7 | 2026-08-31 | Moved LLM-debug storage to the versioned deployment-scoped DB-0 schema, documented universal-client ownership, and split the recent index from request-local Lua because the former DB-7 single-script contract would produce `CROSSSLOT` in cluster mode |
 | 1.6 | 2026-08-28 | Documented the shared DB 7 retention-floor marker used by late and cross-process agent writers |
 | 1.5 | 2026-08-28 | Synchronized the standalone Redis LLM writer with orchestration's exact-payload and atomic minimum-retention contract |
 | 1.4 | 2026-08-20 | Excluded reserved correlation and provider-observation names from automatic metric-label enrichment without stripping existing baggage or changing documented log/span emission |

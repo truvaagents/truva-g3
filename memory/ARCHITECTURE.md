@@ -1,6 +1,6 @@
 # TruvaG3 Memory Module Architecture
 
-**Version**: 1.0
+**Version**: 1.3
 **Module**: `github.com/truvaagents/truva-g3/memory`
 **Purpose**: Pluggable storage backend implementations for cross-agent shared memory
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
@@ -37,11 +37,13 @@
    - [Nested Agent Delegation](#nested-agent-delegation)
 9. [Integration Pattern](#integration-pattern)
 10. [Configuration System](#configuration-system)
-11. [Error Handling](#error-handling)
-12. [Testing Strategy](#testing-strategy)
-13. [Performance Considerations](#performance-considerations)
-14. [Security & Compliance](#security--compliance)
-15. [What This Module Does NOT Do](#what-this-module-does-not-do)
+11. [Redis/Valkey DB-0 Backend Contract](#redisvalkey-db-0-backend-contract)
+12. [Error Handling](#error-handling)
+13. [Testing Strategy](#testing-strategy)
+14. [Performance Considerations](#performance-considerations)
+15. [Security & Compliance](#security--compliance)
+16. [What This Module Does NOT Do](#what-this-module-does-not-do)
+17. [Version History](#version-history)
 
 ---
 
@@ -992,6 +994,60 @@ func NewVectorSharedKnowledge(opts ...Option) (*VectorSharedKnowledge, error) {
 
 ---
 
+## Redis/Valkey DB-0 Backend Contract
+
+Redis-backed memory adapters accept an application-owned
+`redis.UniversalClient` or the narrower `redis.Cmdable` interface. The canonical
+`NewSharedBackends` bundle resolves and validates defaults, environment values,
+and explicit options before any network operation; a valid explicit deployment
+option can therefore replace an invalid environment namespace. It then performs
+one startup `PING` through `core.CheckRedisStartup`, with an independent
+five-second constructor deadline even when the borrowed client ignores command
+context deadlines. It shares that client across all Redis memory adapters and
+never closes or mutates it. An outstanding timed-out command remains subject to
+the borrowed client's socket deadline or owner-driven close. Topology resolution and owned-client creation remain
+application/Core responsibilities, preserving the module dependency boundary.
+
+All canonical keys use database 0 and `core.RedisKeyspace`:
+
+```text
+truvag3:v1:<deployment>:memory:<domain>:events:stream
+truvag3:v1:<deployment>:memory:<domain>:entity:<type>:<id>
+truvag3:v1:<deployment>:activity:{<deployment>:activity:<domain>}:signal:<request>
+truvag3:v1:<deployment>:activity:{<deployment>:activity:<domain>}:signals
+truvag3:v1:<deployment>:memory:{<deployment>:memory:<domain>}:investigation:<entity>
+truvag3:v1:<deployment>:memory:{<deployment>:memory:<domain>}:investigations
+truvag3:v1:<deployment>:locks:{<deployment>:locks:<scope>}:lease
+```
+
+The deployment name precedes the subsystem in both plain and tagged layouts,
+so ACLs and operational filtering have one stable prefix. Activity and
+investigation record/index pairs share a hash slot for transactional updates.
+Potentially unbounded domain indexes use `SSCAN`; candidate records are loaded
+through ordinary pipelines so a cluster client can route each command to its
+owner node. Expired members are advisory stale state and are pruned
+best-effort.
+
+After successful construction, optional activity, investigation, episodic,
+and digest enrichment retains its documented fail-open behavior: Redis command,
+Lua, pipeline, or index failures are logged and produce the existing empty or
+no-op result. Invalid configuration and the required shared-backend startup
+check still fail fast. Runtime fail-open behavior must not close or replace the
+application-owned client. Activity and investigation diagnostics use fixed
+operation names plus bounded error types; they do not copy Redis error text,
+connection details, or credentials into new log fields. Tests inject distinct
+Lua, transaction-pipeline, hydration-result, TTL, and index-scan failures so no
+fail-open branch can become silent.
+
+Every Redis memory adapter scopes a component-aware logger to
+`framework/memory`. Fail-open adapter operations do not call
+`telemetry.RecordSpanError`; the enclosing memory hook owns the meaningful
+degradation observation. Distributed-lock methods return authoritative errors
+without also recording them in the low-level adapter, preventing duplicate
+exception events when the owning background workflow records the failure.
+
+---
+
 ## Error Handling
 
 ### Fail-Open Principle
@@ -1161,3 +1217,16 @@ Backend implementations must:
 | Enforce K8s-level isolation | K8s manifests (NetworkPolicy) | Infrastructure concern, not code |
 
 **In short:** Core defines *what* memory is (interfaces). Orchestration decides *when* to use it (hooks). This module provides *how* to store and retrieve it (backend implementations).
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.5 | 2026-09-08 | Enforced the shared-backend constructor deadline independently of borrowed-client context-timeout settings while retaining owner-controlled socket and pool lifetime |
+| 1.4 | 2026-09-04 | Aligned Redis memory observability with the logging/tracing guides: component-scoped and bounded diagnostics, request correlation, and enclosing-workflow ownership of span failures |
+| 1.3 | 2026-09-02 | Made `NewSharedBackends(redis.UniversalClient, ...)` the sole bundle constructor and required local configuration resolution before the bounded Redis startup check |
+| 1.2 | 2026-09-01 | Pinned bounded diagnostics for every activity/investigation Redis, Lua, pipeline, hydration, TTL, and index fail-open branch and the cursor-edge/stale-cleanup verification contract |
+| 1.1 | 2026-08-31 | Documented universal-client injection, DB-0 versioned memory keyspaces, cluster-slot/index behavior, startup ownership, and the unchanged runtime fail-open contract |
+| 1.0 | 2025-09-28 | Initial architecture documentation |

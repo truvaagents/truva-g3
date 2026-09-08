@@ -1,6 +1,6 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.6
+**Version**: 1.9
 
 **Purpose**: Ensure consistency and maintainability across all framework development
 
@@ -156,8 +156,12 @@ call sites that predate this policy still transform error text automatically.
 The known categories are downstream tool/agent failure bodies and errors in the
 orchestration executor; skills AI errors returned by the authoring path or
 recorded for debugging; and selected Redis/provider construction or operational
-diagnostics. These are documented implementation facts, not approved extensions
-of the policy:
+diagnostics. The Redis topology work retired the automatic transformations in
+the two URL-owning execution- and LLM-debug constructors. The remaining
+Redis-provider exceptions are the skills store's returned/logged backend
+errors, skills-backend construction, and distributed-lock operational logging;
+they are retained unchanged pending the repository-wide audit. These are
+documented implementation facts, not approved extensions of the policy:
 
 - new persistence, execution, checkpoint, debug, or observability paths must
   comply with the fidelity rules above immediately;
@@ -309,6 +313,11 @@ Standard precedence order (highest to lowest):
 2. `REDIS_URL`, `OPENAI_API_KEY`, etc. (standard names)
 3. `TRUVAG3_*` prefixed variables
 4. Sensible defaults (`localhost:6379`, etc.)
+
+Precedence selects among valid representations of one configuration concept.
+Mutually exclusive or contradictory configuration forms are rejected rather
+than ranked. For example, `REDIS_URL` cannot be combined with structured
+`TRUVAG3_REDIS_MODE` / `TRUVAG3_REDIS_ADDRS` topology configuration.
 
 #### 3. **Environment Variable Naming - No Duplicates**
 Before adding a new `TRUVAG3_*` environment variable, **always check for existing variables** that serve the same purpose:
@@ -533,11 +542,11 @@ type Registry interface {
 
 ### Error Messages
 ```go
-// ✅ Good: Actionable error messages
-return fmt.Errorf("failed to connect to Redis at %s: %w (check REDIS_URL environment variable)", url, err)
+// ✅ Good: Actionable, bounded infrastructure error that preserves its cause
+return &RedisStartupError{Mode: config.Mode, cause: err}
 
-// ❌ Bad: Vague error messages  
-return fmt.Errorf("connection failed: %w", err)
+// ❌ Bad: Leaks a credential-bearing URL through a framework-owned diagnostic
+return fmt.Errorf("failed to connect to Redis at %s: %w", url, err)
 ```
 
 ### Documentation
@@ -716,6 +725,9 @@ func (t *BaseTool) processRequest() {
       architecture decision and corresponding principles update
 - [ ] Telemetry usage is nil-safe (checks before use)
 - [ ] Application examples show proper telemetry initialization
+- [ ] Storage-topology changes are exercised against every claimed real
+      topology/provider family, including routing changes and failover—not only
+      mocks, emulators, or locally computed partition keys
 
 ---
 
@@ -723,6 +735,9 @@ func (t *BaseTool) processRequest() {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.9 | 2026-09-01 | Required real provider/topology integration gates for storage-routing claims, including routing transitions and failover beyond mock or computed-key coverage |
+| 1.8 | 2026-08-31 | Recorded the Redis/Valkey constructor-redaction retirement, bounded startup-error contract, and the exact Redis-provider legacy transformations retained for the later repository-wide audit |
+| 1.7 | 2026-08-31 | Clarified that precedence ranks valid representations, while contradictory or mutually exclusive configuration forms fail validation instead of silently overriding one another |
 | 1.6 | 2026-08-28 | Made the transitional redaction inventory explicitly include both returned skills-authoring AI errors and skills errors recorded for debugging |
 | 1.5 | 2026-08-28 | Recorded the narrowly scoped legacy error-redaction exceptions pending a dedicated audit without weakening the exact-payload end-state policy for new or modified paths |
 | 1.4 | 2026-08-28 | Established exact application-payload fidelity, prohibited framework-inferred domain secrets and automatic observability redaction, and assigned sanitization and debug-data controls to adopters |

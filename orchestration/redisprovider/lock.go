@@ -12,7 +12,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-const defaultLockKeyPrefix = "truvag3:lock"
+const defaultLockKeyPrefix = "truvag3:v1:default:locks"
 
 var releaseOwnedLock = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then

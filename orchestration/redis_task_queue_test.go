@@ -1,11 +1,59 @@
 package orchestration
 
 import (
+	"context"
+	"errors"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 )
+
+type taskQueueCommandFailureHook struct {
+	mu        sync.Mutex
+	command   string
+	key       string
+	remaining int
+	after     bool
+}
+
+func (*taskQueueCommandFailureHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (hook *taskQueueCommandFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		args := command.Args()
+		key := ""
+		if len(args) > 1 {
+			key, _ = args[1].(string)
+		}
+		hook.mu.Lock()
+		fail := command.Name() == hook.command && key == hook.key && hook.remaining > 0
+		if fail {
+			hook.remaining--
+		}
+		after := hook.after
+		hook.mu.Unlock()
+		if !fail {
+			return next(ctx, command)
+		}
+		injected := errors.New("injected Redis task-queue failure")
+		if !after {
+			return injected
+		}
+		if err := next(ctx, command); err != nil {
+			return err
+		}
+		return injected
+	}
+}
+
+func (*taskQueueCommandFailureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
 
 // =============================================================================
 // Queue Key Precedence Tests (RC1)
@@ -28,14 +76,14 @@ func TestQueueKeyPrecedence(t *testing.T) {
 			name:         "K8s default — env set, no explicit key",
 			serviceName:  "event-driven-agent",
 			explicitKey:  "",
-			expectedKey:  "truvag3:tasks:queue:event-driven-agent",
+			expectedKey:  "truvag3:v1:default:tasks:queue:event-driven-agent",
 			useNilConfig: false,
 		},
 		{
 			name:         "local dev — env unset, no explicit key",
 			serviceName:  "",
 			explicitKey:  "",
-			expectedKey:  "truvag3:tasks:queue",
+			expectedKey:  "truvag3:v1:default:tasks:queue",
 			useNilConfig: false,
 		},
 		{
@@ -56,13 +104,13 @@ func TestQueueKeyPrecedence(t *testing.T) {
 			name:         "nil config with env set uses DefaultRedisTaskQueueConfig",
 			serviceName:  "async-travel-agent",
 			useNilConfig: true,
-			expectedKey:  "truvag3:tasks:queue:async-travel-agent",
+			expectedKey:  "truvag3:v1:default:tasks:queue:async-travel-agent",
 		},
 		{
 			name:         "nil config without env uses hardcoded default",
 			serviceName:  "",
 			useNilConfig: true,
-			expectedKey:  "truvag3:tasks:queue",
+			expectedKey:  "truvag3:v1:default:tasks:queue",
 		},
 	}
 
@@ -92,9 +140,9 @@ func TestQueueKeyPrecedence(t *testing.T) {
 				// Simulate the inline fallback in NewRedisTaskQueue
 				if config.QueueKey == "" {
 					if svc := os.Getenv(core.EnvServiceName); svc != "" {
-						config.QueueKey = "truvag3:tasks:queue:" + svc
+						config.QueueKey = defaultRedisKeyspace().Plain("tasks", "queue", svc)
 					} else {
-						config.QueueKey = "truvag3:tasks:queue"
+						config.QueueKey = defaultRedisKeyspace().Plain("tasks", "queue")
 					}
 				}
 				if config.QueueKey != tc.expectedKey {
@@ -112,30 +160,119 @@ func TestDefaultRedisTaskQueueConfig_EnvIsolation(t *testing.T) {
 	// First call without env
 	t.Setenv(core.EnvServiceName, "")
 	cfg1 := DefaultRedisTaskQueueConfig()
-	if cfg1.QueueKey != "truvag3:tasks:queue" {
-		t.Errorf("Without env: QueueKey = %q, want %q", cfg1.QueueKey, "truvag3:tasks:queue")
+	if cfg1.QueueKey != "truvag3:v1:default:tasks:queue" {
+		t.Errorf("Without env: QueueKey = %q, want %q", cfg1.QueueKey, "truvag3:v1:default:tasks:queue")
 	}
 
 	// Second call with env set
 	t.Setenv(core.EnvServiceName, "my-agent")
 	cfg2 := DefaultRedisTaskQueueConfig()
-	if cfg2.QueueKey != "truvag3:tasks:queue:my-agent" {
-		t.Errorf("With env: QueueKey = %q, want %q", cfg2.QueueKey, "truvag3:tasks:queue:my-agent")
+	if cfg2.QueueKey != "truvag3:v1:default:tasks:queue:my-agent" {
+		t.Errorf("With env: QueueKey = %q, want %q", cfg2.QueueKey, "truvag3:v1:default:tasks:queue:my-agent")
 	}
 
 	// Verify other defaults are always set
 	if cfg2.RetryAttempts != 3 {
 		t.Errorf("RetryAttempts = %d, want 3", cfg2.RetryAttempts)
 	}
-	if cfg2.ProcessingKey != "truvag3:tasks:processing:my-agent" {
-		t.Errorf("ProcessingKey = %q, want %q", cfg2.ProcessingKey, "truvag3:tasks:processing:my-agent")
+	if cfg2.ProcessingKey != "truvag3:v1:default:tasks:processing:my-agent" {
+		t.Errorf("ProcessingKey = %q, want %q", cfg2.ProcessingKey, "truvag3:v1:default:tasks:processing:my-agent")
 	}
 }
 
 func TestRedisTaskQueueDerivesProcessingKeyFromExplicitQueue(t *testing.T) {
 	config := &RedisTaskQueueConfig{QueueKey: "custom:queue"}
-	queue := NewRedisTaskQueueWithClient(nil, config)
+	queue := NewRedisTaskQueue(nil, config)
 	if queue.config.ProcessingKey != "custom:queue:processing" {
 		t.Fatalf("ProcessingKey = %q, want %q", queue.config.ProcessingKey, "custom:queue:processing")
+	}
+}
+
+func TestRedisTaskQueueRecoversPayloadWhenInflightTrackingFails(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	config := &RedisTaskQueueConfig{
+		QueueKey: "queue:recovery", ProcessingKey: "processing:recovery",
+		RetryAttempts: 1, RetryDelay: time.Nanosecond,
+	}
+	queue := NewRedisTaskQueue(client, config)
+	task := &core.Task{ID: "task-recovery", Type: "test"}
+	if err := queue.Enqueue(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	client.AddHook(&taskQueueCommandFailureHook{
+		command: "lpush", key: config.ProcessingKey, remaining: 1,
+	})
+
+	if got, err := queue.Dequeue(t.Context(), time.Second); err == nil || got != nil {
+		t.Fatalf("Dequeue after tracking failure = %#v, %v; want nil and error", got, err)
+	}
+	if queued := client.LLen(t.Context(), config.QueueKey).Val(); queued != 1 {
+		t.Fatalf("recovered queue length = %d, want 1", queued)
+	}
+	if processing := client.LLen(t.Context(), config.ProcessingKey).Val(); processing != 0 {
+		t.Fatalf("processing length after failed tracking = %d, want 0", processing)
+	}
+	recovered, err := queue.Dequeue(t.Context(), time.Second)
+	if err != nil || recovered == nil || recovered.ID != task.ID {
+		t.Fatalf("recovered Dequeue = %#v, %v", recovered, err)
+	}
+	if err := queue.Acknowledge(t.Context(), recovered.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRedisTaskQueueRejectRetryAllowsDuplicatesWithoutLoss(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	config := &RedisTaskQueueConfig{
+		QueueKey: "queue:reject", ProcessingKey: "processing:reject",
+		RetryAttempts: 1, RetryDelay: time.Nanosecond,
+	}
+	queue := NewRedisTaskQueue(client, config)
+	task := &core.Task{ID: "task-reject", Type: "test"}
+	if err := queue.Enqueue(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := queue.Dequeue(t.Context(), time.Second); err != nil || got == nil {
+		t.Fatalf("Dequeue = %#v, %v", got, err)
+	}
+	client.AddHook(&taskQueueCommandFailureHook{
+		command: "lrem", key: config.ProcessingKey, remaining: 1,
+	})
+
+	if err := queue.Reject(t.Context(), task.ID, "retryable"); err == nil {
+		t.Fatal("Reject succeeded despite injected cleanup failure")
+	}
+	if queued, processing := client.LLen(t.Context(), config.QueueKey).Val(), client.LLen(t.Context(), config.ProcessingKey).Val(); queued != 1 || processing != 1 {
+		t.Fatalf("post-failure lengths = queue %d, processing %d; want 1, 1", queued, processing)
+	}
+	if err := queue.Reject(t.Context(), task.ID, "retry cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	if queued, processing := client.LLen(t.Context(), config.QueueKey).Val(), client.LLen(t.Context(), config.ProcessingKey).Val(); queued != 2 || processing != 0 {
+		t.Fatalf("post-retry lengths = queue %d, processing %d; want allowed duplicate 2, 0", queued, processing)
+	}
+}
+
+func TestRedisTaskQueueAmbiguousEnqueueRetryDuplicatesWithoutLoss(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	config := &RedisTaskQueueConfig{
+		QueueKey: "queue:ambiguous", ProcessingKey: "processing:ambiguous",
+		RetryAttempts: 2, RetryDelay: time.Nanosecond,
+	}
+	client.AddHook(&taskQueueCommandFailureHook{
+		command: "lpush", key: config.QueueKey, remaining: 1, after: true,
+	})
+	queue := NewRedisTaskQueue(client, config)
+	if err := queue.Enqueue(t.Context(), &core.Task{ID: "task-ambiguous", Type: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if queued := client.LLen(t.Context(), config.QueueKey).Val(); queued != 2 {
+		t.Fatalf("queue length after ambiguous retry = %d, want allowed duplicate 2", queued)
 	}
 }

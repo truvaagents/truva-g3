@@ -108,10 +108,9 @@ func extendRedisKeyMinimumTTL(
 	return previous != redisPTTLKeyMissing, nil
 }
 
-// extendRedisKeysMinimumTTL atomically keeps an existing primary key and any
-// present related keys for at least minTTL. A missing primary key causes a
-// no-op for the whole key set. Missing related keys are never created and
-// persistent keys remain persistent.
+// extendRedisKeysMinimumTTL atomically keeps one pre-validated, single-slot
+// aggregate for at least minTTL. Callers must never pass keys from different
+// hash slots. A missing primary key causes a no-op for the whole aggregate.
 func extendRedisKeysMinimumTTL(
 	ctx context.Context,
 	client redis.UniversalClient,
@@ -160,9 +159,9 @@ func setRedisValueWithMinimumTTL(
 	).Err()
 }
 
-// setRedisValuesWithMinimumTTL atomically writes related values while
-// preserving each key's larger previous remaining TTL. Missing keys are
-// created with minTTL and previously persistent keys remain persistent.
+// setRedisValuesWithMinimumTTL atomically writes one pre-validated,
+// single-slot aggregate while preserving each key's larger previous remaining
+// TTL. It does not split or regroup keys by cluster slot.
 func setRedisValuesWithMinimumTTL(
 	ctx context.Context,
 	client redis.UniversalClient,

@@ -1,6 +1,7 @@
 // Package telemetry provides a write-only Redis-backed LLM call recorder for agents.
 //
-// This file implements telemetry.LLMCallRecorder by writing directly to Redis DB 7
+// This file implements telemetry.LLMCallRecorder by writing to the shared DB-0
+// versioned Redis keyspace
 // in the same format as orchestration.RedisLLMDebugStore.RecordInteraction. This
 // allows agents to record LLM calls WITHOUT importing the orchestration module.
 //
@@ -14,9 +15,13 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,12 +30,6 @@ import (
 )
 
 const (
-	// Redis key patterns — must match orchestration/redis_llm_debug_store.go
-	recorderKeyPrefix                 = "truvag3:llm:debug:"
-	recorderIndexKey                  = "truvag3:llm:debug:index"
-	recorderMetaSuffix                = ":meta"
-	recorderInterSuffix               = ":interactions"
-	recorderFloorSuffix               = ":retention-floor"
 	recorderConversationMetadataField = "meta:" + core.MetadataConversationID
 
 	// Default TTLs — match orchestration defaults
@@ -43,7 +42,16 @@ const (
 	recorderMaxBackoff     = 2 * time.Second
 	recorderFailureWindow  = 30 * time.Second
 	recorderMaxFailures    = 5
+	recorderStartupTimeout = 5 * time.Second
 )
+
+func telemetryDefaultRedisKeyspace() core.RedisKeyspace {
+	keyspace, err := core.NewRedisKeyspace("default")
+	if err != nil {
+		panic("telemetry: invalid built-in Redis keyspace: " + err.Error())
+	}
+	return keyspace
+}
 
 // recordLLMCallScript is the format-twin of orchestration's LLM interaction
 // writer. Reading the prior TTL and applying the write in one script prevents
@@ -53,7 +61,7 @@ const (
 var recordLLMCallScript = redis.NewScript(`
 local meta_ttl = redis.call("PTTL", KEYS[1])
 local interaction_ttl = redis.call("PTTL", KEYS[2])
-local floor_ttl = redis.call("PTTL", KEYS[4])
+local floor_ttl = redis.call("PTTL", KEYS[3])
 redis.call("RPUSH", KEYS[2], ARGV[1])
 redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
 redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
@@ -61,7 +69,7 @@ redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
 redis.call("HSET", KEYS[1], "request_id", ARGV[4])
 redis.call("HSET", KEYS[1], "original_request_id", ARGV[5])
 if ARGV[6] ~= "" then
-	redis.call("HSETNX", KEYS[1], ARGV[11], ARGV[6])
+	redis.call("HSETNX", KEYS[1], ARGV[10], ARGV[6])
 end
 if ARGV[7] ~= "" then
 	redis.call("HSETNX", KEYS[1], "source_component", ARGV[7])
@@ -69,8 +77,7 @@ end
 if ARGV[8] ~= "" then
 	redis.call("HSETNX", KEYS[1], "originating_agent", ARGV[8])
 end
-redis.call("ZADD", KEYS[3], ARGV[9], ARGV[4])
-local requested = tonumber(ARGV[10])
+local requested = tonumber(ARGV[9])
 if floor_ttl == -1 then
 	requested = -1
 elseif floor_ttl > requested then
@@ -91,33 +98,48 @@ return 1
 `)
 
 // RedisLLMCallRecorder is a write-only Redis-backed implementation of LLMCallRecorder.
-// It writes LLM call records to Redis DB 7 in the same format as the orchestration
-// module's RedisLLMDebugStore, enabling the registry-viewer to display agent LLM calls
-// alongside orchestrator LLM calls.
+// It writes LLM call records to the shared versioned DB-0 keyspace in the same
+// format as orchestration.RedisLLMDebugStore, enabling a common debug reader.
 //
 // Agents use this instead of importing the orchestration module directly.
 type RedisLLMCallRecorder struct {
-	client *redis.Client
-	logger core.Logger
-	ttl    time.Duration
-	errTTL time.Duration
+	client     redis.UniversalClient
+	ownsClient bool
+	logger     core.Logger
+	keys       RedisLLMDebugKeys
+	ttl        time.Duration
+	errTTL     time.Duration
 
 	// Layer 1 resilience state
 	failureCount int
 	failureMu    sync.Mutex
 	lastFailure  time.Time
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 // RecorderOption configures a RedisLLMCallRecorder.
 type RecorderOption func(*recorderConfig)
 
 type recorderConfig struct {
-	redisURL string
-	redisDB  int
-	logger   core.Logger
-	ttl      time.Duration
-	errTTL   time.Duration
+	redisURL         string
+	redisDB          int
+	logger           core.Logger
+	keys             RedisLLMDebugKeys
+	ttl              time.Duration
+	errTTL           time.Duration
+	keyspaceExplicit bool
 }
+
+type recorderStartupError struct {
+	cause error
+}
+
+func (*recorderStartupError) Error() string {
+	return "telemetry Redis startup check failed"
+}
+
+func (err *recorderStartupError) Unwrap() error { return err.cause }
 
 // WithRecorderLogger sets the logger for recorder operations.
 func WithRecorderLogger(logger core.Logger) RecorderOption {
@@ -129,7 +151,8 @@ func WithRecorderRedisURL(url string) RecorderOption {
 	return func(c *recorderConfig) { c.redisURL = url }
 }
 
-// WithRecorderRedisDB sets the Redis database number (default: 7).
+// WithRecorderRedisDB selects a numbered standalone database for compatibility.
+// Deprecated: use DB 0 and WithRecorderKeyspace.
 func WithRecorderRedisDB(db int) RecorderOption {
 	return func(c *recorderConfig) { c.redisDB = db }
 }
@@ -144,13 +167,23 @@ func WithRecorderErrorTTL(ttl time.Duration) RecorderOption {
 	return func(c *recorderConfig) { c.errTTL = ttl }
 }
 
-// NewRedisLLMCallRecorder creates a write-only Redis recorder for agent LLM calls.
-// Environment variable precedence: explicit options > REDIS_URL > TRUVAG3_REDIS_URL > localhost:6379
+// WithRecorderKeyspace selects the canonical versioned DB-0 keyspace.
+func WithRecorderKeyspace(keyspace core.RedisKeyspace) RecorderOption {
+	return func(c *recorderConfig) {
+		c.keys = NewRedisLLMDebugKeys(keyspace)
+		c.keyspaceExplicit = true
+	}
+}
+
+// NewRedisLLMCallRecorder creates an owning write-only Redis recorder for agent
+// LLM calls. Connection resolution is shared with every other Redis adapter and
+// therefore supports standalone, Sentinel, and cluster topology.
 func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, error) {
 	cfg := &recorderConfig{
-		redisURL: recorderGetRedisURL(),
-		redisDB:  recorderGetEnvInt("TRUVAG3_LLM_DEBUG_REDIS_DB", core.RedisDBLLMDebug),
+		redisURL: "",
+		redisDB:  0,
 		logger:   &core.NoOpLogger{},
+		keys:     NewRedisLLMDebugKeys(telemetryDefaultRedisKeyspace()),
 		ttl:      recorderGetEnvDuration("TRUVAG3_LLM_DEBUG_TTL", recorderDefaultTTL),
 		errTTL:   recorderGetEnvDuration("TRUVAG3_LLM_DEBUG_ERROR_TTL", recorderErrorTTL),
 	}
@@ -159,41 +192,128 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 			opt(cfg)
 		}
 	}
+	if !cfg.keyspaceExplicit {
+		keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+		if err != nil {
+			return nil, fmt.Errorf("resolve Redis LLM recorder keyspace: %w", err)
+		}
+		cfg.keys = NewRedisLLMDebugKeys(keyspace)
+	}
 	normalizeRecorderConfig(cfg)
 
-	redisOpt, err := redis.ParseURL(cfg.redisURL)
+	connection, diagnostics, err := resolveRecorderRedisConnection(cfg.redisURL, cfg.redisDB)
 	if err != nil {
-		redisOpt = &redis.Options{Addr: cfg.redisURL}
+		return nil, fmt.Errorf("resolve Redis recorder connection: %w", err)
 	}
-	redisOpt.DB = cfg.redisDB
-	redisOpt.PoolSize = 10    // Match core.RedisRegistry connection pool pattern
-	redisOpt.MinIdleConns = 5 // Keep connections warm for async recording bursts
-
-	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed at %s (DB %d): %w\n"+
-			"Hint: Check REDIS_URL or TRUVAG3_REDIS_URL environment variables",
-			cfg.redisURL, cfg.redisDB, err)
+	if cfg.logger != nil {
+		for _, diagnostic := range diagnostics {
+			cfg.logger.Warn("Redis configuration notice", map[string]interface{}{
+				"operation":  "redis_configuration_notice",
+				"diagnostic": diagnostic,
+			})
+		}
+	}
+	client, err := core.NewRedisUniversalClientForCompatibility(connection)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Redis LLM recorder: %w", err)
 	}
 
-	cfg.logger.Info("Redis LLM call recorder initialized", map[string]interface{}{
-		"redis_db":  cfg.redisDB,
-		"ttl":       cfg.ttl.String(),
-		"error_ttl": cfg.errTTL.String(),
-	})
+	if cfg.logger != nil {
+		cfg.logger.Info("Redis LLM call recorder initialized", map[string]interface{}{
+			"operation":  "llm_debug_recorder_initialize",
+			"redis_mode": connection.Mode,
+			"seed_count": len(connection.Addrs),
+			"redis_db":   connection.DB,
+			"ttl":        cfg.ttl.String(),
+			"error_ttl":  cfg.errTTL.String(),
+		})
+	}
 
+	return &RedisLLMCallRecorder{
+		client:     client,
+		ownsClient: true,
+		logger:     cfg.logger,
+		keys:       cfg.keys,
+		ttl:        cfg.ttl,
+		errTTL:     cfg.errTTL,
+	}, nil
+}
+
+func resolveRecorderRedisConnection(explicitURL string, compatibilityDB int) (core.RedisConnectionConfig, []string, error) {
+	if strings.TrimSpace(explicitURL) != "" {
+		connection, err := core.ParseStandaloneRedisURLForCompatibility(explicitURL)
+		if err != nil {
+			return core.RedisConnectionConfig{}, nil, err
+		}
+		connection.DB = compatibilityDB
+		resolution, err := core.ResolveRedisConnectionConfig(&connection, nil)
+		return resolution.Config, resolution.Diagnostics, err
+	}
+	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		return core.RedisConnectionConfig{}, nil, err
+	}
+	if compatibilityDB != 0 {
+		resolution.Config.DB = compatibilityDB
+		resolution, err = core.ResolveRedisConnectionConfig(&resolution.Config, nil)
+	}
+	return resolution.Config, resolution.Diagnostics, err
+}
+
+// NewRedisLLMCallRecorderWithClient creates a recorder using an
+// application-owned topology-aware client. Close leaves the client open.
+func NewRedisLLMCallRecorderWithClient(
+	client redis.UniversalClient,
+	keyspace core.RedisKeyspace,
+	opts ...RecorderOption,
+) (*RedisLLMCallRecorder, error) {
+	if nilRedisLLMRecorderClient(client) {
+		return nil, fmt.Errorf("redis LLM call recorder client is required")
+	}
+	cfg := &recorderConfig{
+		logger:           &core.NoOpLogger{},
+		keys:             NewRedisLLMDebugKeys(keyspace),
+		ttl:              recorderDefaultTTL,
+		errTTL:           recorderErrorTTL,
+		keyspaceExplicit: true,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	normalizeRecorderConfig(cfg)
+	if err := core.CheckRedisStartup(client, recorderStartupTimeout); err != nil {
+		return nil, &recorderStartupError{cause: err}
+	}
 	return &RedisLLMCallRecorder{
 		client: client,
 		logger: cfg.logger,
+		keys:   cfg.keys,
 		ttl:    cfg.ttl,
 		errTTL: cfg.errTTL,
 	}, nil
 }
 
+func nilRedisLLMRecorderClient(client redis.UniversalClient) bool {
+	if client == nil {
+		return true
+	}
+	value := reflect.ValueOf(client)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func normalizeRecorderConfig(cfg *recorderConfig) {
+	if cfg.logger == nil {
+		cfg.logger = &core.NoOpLogger{}
+	} else if componentAware, ok := cfg.logger.(core.ComponentAwareLogger); ok {
+		cfg.logger = componentAware.WithComponent("framework/telemetry")
+	}
 	if cfg.ttl <= 0 {
 		cfg.ttl = recorderDefaultTTL
 	}
@@ -228,18 +348,19 @@ type llmInteractionJSON struct {
 	PhaseNumber      int       `json:"phase_number,omitempty"`
 }
 
-// RecordLLMCall appends an LLM call record to Redis DB 7.
+// RecordLLMCall appends an LLM call record to the versioned DB-0 keyspace.
 // Uses the same atomic minimum-retention format as
 // orchestration.RedisLLMDebugStore.RecordInteraction.
 func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID string, record LLMCallRecord) error {
 	if requestID == "" {
 		return nil // Not called from orchestration — skip silently
 	}
+	if core.GetRequestID(ctx) == "" {
+		ctx = core.WithRequestID(ctx, requestID)
+	}
 
+	var indexScore int64
 	operation := func() error {
-		metaKey := recorderKeyPrefix + requestID + recorderMetaSuffix
-		interKey := recorderKeyPrefix + requestID + recorderInterSuffix
-
 		// Convert telemetry.LLMCallRecord → orchestration.LLMInteraction JSON format
 		interaction := llmInteractionJSON{
 			Type:             record.CallType,
@@ -287,6 +408,7 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		}
 
 		now := time.Now()
+		indexScore = now.Unix()
 		ttl := r.ttl
 		if !record.Success {
 			ttl = r.errTTL
@@ -300,10 +422,9 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 			ctx,
 			r.client,
 			[]string{
-				metaKey,
-				interKey,
-				recorderIndexKey,
-				recorderKeyPrefix + requestID + recorderFloorSuffix,
+				r.keys.Meta(requestID),
+				r.keys.Interactions(requestID),
+				r.keys.RetentionFloor(requestID),
 			},
 			data,
 			strconv.FormatInt(now.Unix(), 10),
@@ -313,16 +434,82 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 			conversationID,
 			interaction.SourceComponent,
 			originatingAgent,
-			strconv.FormatInt(now.Unix(), 10),
 			strconv.FormatInt(ttlMilliseconds, 10),
 			recorderConversationMetadataField,
 		).Err(); err != nil {
-			return fmt.Errorf("redis interaction write failed: %w", err)
+			return fmt.Errorf("write authoritative LLM debug record: %w", err)
 		}
 		return nil
 	}
 
-	return r.executeWithRetry(ctx, operation)
+	if err := r.executeWithRetry(ctx, operation); err != nil {
+		return err
+	}
+	indexStartedAt := time.Now()
+	if err := retryRecorderIndexOnly(ctx, func() error {
+		return r.client.ZAdd(ctx, r.keys.RecentIndex(), redis.Z{
+			Score:  float64(indexScore),
+			Member: requestID,
+		}).Err()
+	}); err != nil {
+		if r.logger != nil {
+			r.logger.WarnWithContext(ctx, "Failed to update LLM debug recent index", map[string]interface{}{
+				"operation":     "llm_debug_recent_index",
+				"request_id":    requestID,
+				"error":         "redis LLM debug index update failed",
+				"error_type":    "index_write",
+				"failure_class": classifyRecorderRedisDiagnostic(err),
+				"duration_ms":   time.Since(indexStartedAt).Milliseconds(),
+			})
+		}
+	}
+	return nil
+}
+
+func retryRecorderIndexOnly(ctx context.Context, operation func() error) error {
+	var lastErr error
+	backoff := recorderInitialBackoff
+	for attempt := 1; attempt <= recorderMaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := operation(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt < recorderMaxRetries {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			backoff *= 2
+			if backoff > recorderMaxBackoff {
+				backoff = recorderMaxBackoff
+			}
+		}
+	}
+	return lastErr
+}
+
+func classifyRecorderRedisDiagnostic(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return "timeout"
+		}
+		return "redis_backend_failure"
+	}
 }
 
 func recorderTTLMilliseconds(ttl time.Duration) (int64, error) {
@@ -355,7 +542,11 @@ func recorderConversationIDFromContext(ctx context.Context) string {
 
 // Close closes the Redis connection.
 func (r *RedisLLMCallRecorder) Close() error {
-	return r.client.Close()
+	if !r.ownsClient {
+		return nil
+	}
+	r.closeOnce.Do(func() { r.closeErr = r.client.Close() })
+	return r.closeErr
 }
 
 // executeWithRetry implements Layer 1 built-in resilience.
@@ -363,10 +554,15 @@ func (r *RedisLLMCallRecorder) executeWithRetry(ctx context.Context, operation f
 	r.failureMu.Lock()
 	if r.failureCount >= recorderMaxFailures && time.Since(r.lastFailure) < recorderFailureWindow {
 		r.failureMu.Unlock()
-		r.logger.Warn("LLM recorder: in cooldown period", map[string]interface{}{
-			"failures":     r.failureCount,
-			"cooldown_sec": recorderFailureWindow.Seconds(),
-		})
+		if r.logger != nil {
+			r.logger.WarnWithContext(ctx, "LLM recorder: in cooldown period", map[string]interface{}{
+				"operation":    "llm_debug_recorder_retry",
+				"request_id":   core.GetRequestID(ctx),
+				"status":       "cooldown",
+				"failures":     r.failureCount,
+				"cooldown_sec": recorderFailureWindow.Seconds(),
+			})
+		}
 		return fmt.Errorf("recorder in cooldown after %d failures", r.failureCount)
 	}
 	r.failureMu.Unlock()
@@ -390,12 +586,18 @@ func (r *RedisLLMCallRecorder) executeWithRetry(ctx context.Context, operation f
 		}
 
 		lastErr = err
-		r.logger.Warn("LLM recorder: operation failed, retrying", map[string]interface{}{
-			"attempt": attempt,
-			"max":     recorderMaxRetries,
-			"backoff": backoff.String(),
-			"error":   err.Error(),
-		})
+		if r.logger != nil {
+			r.logger.WarnWithContext(ctx, "LLM recorder: operation failed, retrying", map[string]interface{}{
+				"operation":     "llm_debug_recorder_retry",
+				"request_id":    core.GetRequestID(ctx),
+				"attempt":       attempt,
+				"max":           recorderMaxRetries,
+				"backoff":       backoff.String(),
+				"error":         "redis LLM recorder operation failed",
+				"error_type":    "backend",
+				"failure_class": classifyRecorderRedisDiagnostic(err),
+			})
+		}
 
 		if attempt < recorderMaxRetries {
 			select {
@@ -422,16 +624,6 @@ func (r *RedisLLMCallRecorder) executeWithRetry(ctx context.Context, operation f
 var _ LLMCallRecorder = (*RedisLLMCallRecorder)(nil)
 
 // Environment variable helpers (duplicated from orchestration to avoid import)
-
-func recorderGetRedisURL() string {
-	if url := os.Getenv("REDIS_URL"); url != "" {
-		return url
-	}
-	if url := os.Getenv("TRUVAG3_REDIS_URL"); url != "" {
-		return url
-	}
-	return "localhost:6379"
-}
 
 func recorderGetEnvInt(key string, defaultVal int) int {
 	if val := os.Getenv(key); val != "" {

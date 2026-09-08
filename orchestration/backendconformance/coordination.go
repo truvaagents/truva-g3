@@ -44,8 +44,8 @@ func RunCommandStoreConformance(t *testing.T, factory func(*testing.T) CommandFi
 }
 
 type WorkflowFixture struct {
-	First  orchestration.StateStore
-	Second orchestration.StateStore
+	First  orchestration.WorkflowStateStore
+	Second orchestration.WorkflowStateStore
 }
 
 func RunWorkflowStateConformance(t *testing.T, factory func(*testing.T) WorkflowFixture) {
@@ -58,7 +58,7 @@ func RunWorkflowStateConformance(t *testing.T, factory func(*testing.T) Workflow
 	if err := fixture.First.SaveExecution(t.Context(), execution); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := fixture.Second.GetExecution(t.Context(), execution.ID)
+	loaded, err := fixture.Second.GetExecution(t.Context(), execution.WorkflowID, execution.ID)
 	if err != nil || loaded.ID != execution.ID {
 		t.Fatalf("cross-instance workflow = %#v, %v", loaded, err)
 	}
@@ -67,10 +67,10 @@ func RunWorkflowStateConformance(t *testing.T, factory func(*testing.T) Workflow
 		t.Fatal(err)
 	}
 	step := &orchestration.StepExecution{StepID: "step-1", Status: orchestration.StepCompleted, Attempts: 1}
-	if err := fixture.First.UpdateStepExecution(t.Context(), execution.ID, step); err != nil {
+	if err := fixture.First.UpdateStepExecution(t.Context(), execution.WorkflowID, execution.ID, step); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err = fixture.Second.GetExecution(t.Context(), execution.ID)
+	loaded, err = fixture.Second.GetExecution(t.Context(), execution.WorkflowID, execution.ID)
 	if err != nil || loaded.Status != orchestration.ExecutionRunning || loaded.Steps[step.StepID] == nil ||
 		loaded.Steps[step.StepID].Status != orchestration.StepCompleted {
 		t.Fatalf("updated workflow = %#v, %v", loaded, err)
@@ -78,5 +78,46 @@ func RunWorkflowStateConformance(t *testing.T, factory func(*testing.T) Workflow
 	listed, err := fixture.Second.ListExecutions(t.Context(), execution.WorkflowID)
 	if err != nil || len(listed) != 1 || listed[0].ID != execution.ID {
 		t.Fatalf("workflow list = %#v, %v", listed, err)
+	}
+}
+
+// LegacyWorkflowFixture exists only for the precursor compatibility window.
+// It behaviorally verifies the execution-ID-only adapter instead of treating
+// successful construction as evidence that the compatibility contract works.
+type LegacyWorkflowFixture struct {
+	First  orchestration.StateStore
+	Second orchestration.StateStore
+}
+
+func RunLegacyWorkflowStateConformance(t *testing.T, factory func(*testing.T) LegacyWorkflowFixture) {
+	t.Helper()
+	fixture := factory(t)
+	execution := &orchestration.WorkflowExecution{
+		ID: "legacy-workflow-execution-1", WorkflowID: "legacy-workflow-1",
+		Status: orchestration.ExecutionPending, Steps: make(map[string]*orchestration.StepExecution),
+	}
+	if err := fixture.First.SaveExecution(t.Context(), execution); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := fixture.Second.GetExecution(t.Context(), execution.ID)
+	if err != nil || loaded.ID != execution.ID || loaded.WorkflowID != execution.WorkflowID {
+		t.Fatalf("legacy cross-instance workflow = %#v, %v", loaded, err)
+	}
+	execution.Status = orchestration.ExecutionRunning
+	if err := fixture.Second.UpdateExecution(t.Context(), execution); err != nil {
+		t.Fatal(err)
+	}
+	step := &orchestration.StepExecution{StepID: "legacy-step-1", Status: orchestration.StepCompleted, Attempts: 1}
+	if err := fixture.First.UpdateStepExecution(t.Context(), execution.ID, step); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = fixture.Second.GetExecution(t.Context(), execution.ID)
+	if err != nil || loaded.Status != orchestration.ExecutionRunning || loaded.Steps[step.StepID] == nil ||
+		loaded.Steps[step.StepID].Status != orchestration.StepCompleted {
+		t.Fatalf("updated legacy workflow = %#v, %v", loaded, err)
+	}
+	listed, err := fixture.Second.ListExecutions(t.Context(), execution.WorkflowID)
+	if err != nil || len(listed) != 1 || listed[0].ID != execution.ID {
+		t.Fatalf("legacy workflow list = %#v, %v", listed, err)
 	}
 }

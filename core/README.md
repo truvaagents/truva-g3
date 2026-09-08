@@ -1448,6 +1448,34 @@ to core. See the
 [Pipeline Hooks Guide](../docs/orchestration/PIPELINE_HOOKS_GUIDE.md) for the
 complete lifecycle and compatibility rules.
 
+### Pipeline Hook Effect Evidence
+
+Custom hooks can optionally publish structured troubleshooting evidence through
+the invocation-bound reporter supplied in their `context.Context`:
+
+```go
+payload, _ := json.Marshal(map[string]interface{}{
+    "documents": 3,
+    "context":   exactContext,
+})
+_ = core.ReportPipelineHookEffect(ctx, core.PipelineHookEffect{
+    EffectID:      "retrieval",
+    SchemaVersion: 1,
+    Name:          "RAG retrieval",
+    Status:        core.PipelineHookEffectSucceeded,
+    Data:          payload,
+})
+```
+
+When execution debugging is disabled, the helper is a no-op. When enabled,
+orchestration attaches the effect to the current hook invocation and persists
+it through the configured provider-neutral execution store. Announce a new
+asynchronous effect as `pending` before the invocation returns, then re-report
+that `EffectID` as `succeeded`, `partial`, `failed`, or `skipped`. The framework
+does not redact or truncate effect data; the application owns the custom
+schema, sensitivity, and access policy. Status is what the producer observed,
+not an independent backend-durability attestation.
+
 ### 🌊 Streaming Interface: Real-Time AI Responses
 
 For chat agents and real-time AI applications, the core module provides streaming types that enable token-by-token delivery of AI responses.
@@ -1856,7 +1884,7 @@ export TRUVAG3_CORS_ENABLED=true
 export TRUVAG3_CORS_ORIGINS="https://app.example.com,https://*.example.com"
 
 # Redis configuration
-export TRUVAG3_REDIS_URL="redis://localhost:6379"
+export REDIS_URL="redis://localhost:6379"
 export TRUVAG3_REDIS_PASSWORD="secret"
 
 # Development mode
@@ -2422,10 +2450,10 @@ gateway := core.NewBaseAgent("api-gateway")
 
 ```bash
 # See what's registered in Redis
-redis-cli KEYS "truvag3:*"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Check specific component
-redis-cli GET "truvag3:services:calculator-tool-abc123"
+redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:calculator-tool-abc123'
 ```
 
 ### Component Health Checks

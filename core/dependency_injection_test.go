@@ -47,7 +47,7 @@ func TestWithDiscoveryAutoConfiguresRedisURL(t *testing.T) {
 		}
 	})
 
-	t.Run("REDIS_URL takes precedence over TRUVAG3_REDIS_URL", func(t *testing.T) {
+	t.Run("rejects REDIS_URL combined with deprecated alias", func(t *testing.T) {
 		// Clean environment first
 		os.Unsetenv("REDIS_URL")
 		os.Unsetenv("TRUVAG3_REDIS_URL")
@@ -56,13 +56,9 @@ func TestWithDiscoveryAutoConfiguresRedisURL(t *testing.T) {
 		os.Setenv("REDIS_URL", "redis://primary.example.com:6379")
 		os.Setenv("TRUVAG3_REDIS_URL", "redis://secondary.example.com:6379")
 
-		config, err := NewConfig(WithDiscovery(true, "redis"))
-		if err != nil {
-			t.Fatalf("NewConfig failed: %v", err)
-		}
-
-		if config.Discovery.RedisURL != "redis://primary.example.com:6379" {
-			t.Errorf("Expected REDIS_URL to take precedence, got: %s", config.Discovery.RedisURL)
+		_, err := NewConfig(WithDiscovery(true, "redis"))
+		if err == nil {
+			t.Fatal("expected mixed Redis connection sources to fail")
 		}
 	})
 
@@ -151,9 +147,9 @@ func TestWithRedisDiscoveryHelper(t *testing.T) {
 		t.Errorf("Expected RedisURL to be set, got: %s", config.Discovery.RedisURL)
 	}
 
-	// Verify memory Redis URL is also set
-	if config.Memory.RedisURL != "redis://helper.example.com:6379" {
-		t.Errorf("Expected Memory RedisURL to be set, got: %s", config.Memory.RedisURL)
+	// Verify shared-memory Redis uses the same resolved standalone shorthand.
+	if config.SharedMemory.RedisURL != "redis://helper.example.com:6379" {
+		t.Errorf("Expected SharedMemory RedisURL to be set, got: %s", config.SharedMemory.RedisURL)
 	}
 }
 

@@ -1335,7 +1335,7 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of the provider-neutral `LLMDebugStore` contract |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | unset (DB 0) | Deprecated standalone-only role-database compatibility input; canonical composition uses the versioned shared DB 0 keyspace |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
@@ -1855,8 +1855,9 @@ These features are not yet implemented but could be added:
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
-- `StoredExecution` - DAG evidence, including optional post-hook terminal response
-- `FinalResponseSourceAfterSynthesisHooks` - Source label for governed terminal responses
+- `StoredExecution` - DAG evidence, including provider-neutral pipeline-hook invocation outcomes and the optional terminal application response
+- `PipelineHookExecution` - Ordered request-local hook phase, invocation outcome, timing, sequence, plan phase, and failure evidence
+- `FinalResponseSourceAfterSynthesisHooks` / `FinalResponseSourceBeforePlanningShortCircuit` - Source labels for terminal application responses
 - `ErrExecutionRecordNotFound` - Typed absence for optional execution evidence
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup
 - `IndexTTLManager` - Optional `StorageProvider` capability for extending conversation-index TTL
@@ -1933,6 +1934,11 @@ response produced after `AfterSynthesis` hooks in
 `FinalResponseSource` is `FinalResponseSourceAfterSynthesisHooks`. This is the
 application-level outcome evidence; the synthesis interaction in the LLM debug
 store remains the model's pre-hook draft.
+
+An accepted `BeforePlanning` short-circuit is also a successful terminal
+application outcome. It is stored as a zero-step successful result with source
+`FinalResponseSourceBeforePlanningShortCircuit`, so execution lists and hook
+diagnostics remain accurate even though planning never ran.
 
 For native streaming, emitted tokens precede `AfterSynthesis`; the stored value
 is the post-hook response object and may differ from the text already streamed
@@ -2197,8 +2203,8 @@ export TRUVAG3_LLM_DEBUG_ENABLED=true
 export TRUVAG3_LLM_DEBUG_TTL=24h
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h
 
-# Included Redis preset / compatibility database assignment (default: 7)
-export TRUVAG3_LLM_DEBUG_REDIS_DB=7
+# Optional deployment namespace shared by the debug writer and viewer
+export TRUVAG3_REDIS_NAMESPACE=production
 ```
 
 **Programmatic Configuration:**
@@ -2396,6 +2402,20 @@ agent.RegisterCapability(core.Capability{
 ### Cross-Agent Shared Memory (Pipeline Hooks)
 
 The orchestration module provides five built-in pipeline hooks for cross-agent shared memory. These hooks run automatically during orchestration phases, giving agents awareness of what other agents have done and are currently doing.
+
+When execution debugging is enabled, each invocation is recorded in
+`StoredExecution.PipelineHooks`. The record belongs only to that orchestration
+request and is persisted through the configured `ExecutionStore`; consumers do
+not need Jaeger or another tracing backend to determine which hooks ran.
+Invocation status describes the callback return only. Versioned effect records
+separately show what the hook attempted and the outcome reported by its
+producer—success, partial success, failure, skipped, or pending. Asynchronous
+hooks announce a pending effect before returning and later update that same
+effect ID. Exact `BeforePlanning` enrichment changes are captured automatically.
+The five built-ins also report activity signals/context, memory context,
+episodic submissions, knowledge fragments, and cleanup calls. A reported
+success is not an independent durability attestation; fail-open memory backends
+may retain stronger failure detail only in their logs.
 
 **Hook execution order:**
 
