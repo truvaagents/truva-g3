@@ -334,7 +334,7 @@ func TestSchemaCache_CorruptData(t *testing.T) {
 	ctx := context.Background()
 
 	// Manually insert corrupt data into Redis
-	corruptKey := "truvag3:schema:tool1:cap1"
+	corruptKey := "truvag3:v1:default:schema:tool1:cap1"
 	mr.Set(corruptKey, "not-valid-json")
 
 	// Get should handle corrupt data gracefully (treat as cache miss)

@@ -18,7 +18,7 @@ import (
 type WorkflowEngine struct {
 	discovery  core.Discovery
 	executor   *WorkflowExecutor
-	stateStore StateStore
+	stateStore WorkflowStateStore
 	metrics    *WorkflowMetrics
 	logger     core.Logger // For structured logging
 
@@ -179,7 +179,7 @@ const (
 )
 
 // NewWorkflowEngine creates a new workflow execution engine
-func NewWorkflowEngine(discovery core.Discovery, stateStore StateStore, logger core.Logger) *WorkflowEngine {
+func NewWorkflowEngine(discovery core.Discovery, stateStore WorkflowStateStore, logger core.Logger) *WorkflowEngine {
 	if logger == nil {
 		logger = &core.NoOpLogger{}
 	}
@@ -558,7 +558,7 @@ func (e *WorkflowEngine) executeDAG(ctx context.Context, execution *WorkflowExec
 			stepExec.EndTime = &endTime
 
 			// Update state only if step exists
-			if err := e.stateStore.UpdateStepExecution(ctx, execution.ID, stepExec); err != nil {
+			if err := e.stateStore.UpdateStepExecution(ctx, execution.WorkflowID, execution.ID, stepExec); err != nil {
 				// Log error but don't fail the step
 				e.logger.ErrorWithContext(ctx, "Failed to update step state", map[string]interface{}{
 					"execution_id": execution.ID,

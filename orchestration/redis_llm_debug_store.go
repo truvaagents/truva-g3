@@ -1,11 +1,11 @@
 package orchestration
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -18,16 +18,15 @@ import (
 	"github.com/truvaagents/truva-g3/telemetry"
 )
 
-const (
+var (
 	// Redis key patterns
-	llmDebugKeyPrefix   = "truvag3:llm:debug:"
+	llmDebugKeyPrefix = defaultRedisKeyspace().Plain("llm-debug") + ":"
+)
+
+const (
 	llmDebugMetaSuffix  = ":meta"
 	llmDebugInterSuffix = ":interactions"
 	llmDebugFloorSuffix = ":retention-floor"
-
-	// Size thresholds for compression
-	compressionThreshold = 100 * 1024  // 100KB
-	maxPayloadSize       = 1024 * 1024 // 1MB
 
 	// Default TTLs
 	defaultDebugTTL = 24 * time.Hour
@@ -37,7 +36,7 @@ const (
 var recordLLMInteractionScript = redis.NewScript(`
 local meta_ttl = redis.call("PTTL", KEYS[1])
 local interaction_ttl = redis.call("PTTL", KEYS[2])
-local floor_ttl = redis.call("PTTL", KEYS[4])
+local floor_ttl = redis.call("PTTL", KEYS[3])
 redis.call("RPUSH", KEYS[2], ARGV[1])
 redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
 redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
@@ -53,8 +52,7 @@ end
 if ARGV[9] ~= "" then
 	redis.call("HSETNX", KEYS[1], "originating_agent", ARGV[9])
 end
-redis.call("ZADD", KEYS[3], ARGV[10], ARGV[4])
-local requested = tonumber(ARGV[11])
+local requested = tonumber(ARGV[10])
 if floor_ttl == -1 then
 	requested = -1
 elseif floor_ttl > requested then
@@ -99,13 +97,16 @@ return floor_ttl
 type RedisLLMDebugStoreOption func(*redisDebugStoreConfig)
 
 type redisDebugStoreConfig struct {
-	redisURL       string
-	redisDB        int
-	logger         core.Logger
-	circuitBreaker core.CircuitBreaker // Interface - injected by application (optional)
-	ttl            time.Duration
-	errorTTL       time.Duration
-	keyPrefix      string
+	redisURL         string
+	redisDB          int
+	logger           core.Logger
+	circuitBreaker   core.CircuitBreaker // Interface - injected by application (optional)
+	ttl              time.Duration
+	errorTTL         time.Duration
+	keyPrefix        string
+	keys             telemetry.RedisLLMDebugKeys
+	legacyPrefix     string
+	keyspaceExplicit bool
 }
 
 // WithDebugRedisURL sets the Redis connection URL
@@ -115,7 +116,8 @@ func WithDebugRedisURL(url string) RedisLLMDebugStoreOption {
 	}
 }
 
-// WithDebugRedisDB sets the Redis database number (default: 7)
+// WithDebugRedisDB selects a numbered standalone database.
+// Deprecated: use DB 0 and WithDebugKeyspace.
 func WithDebugRedisDB(db int) RedisLLMDebugStoreOption {
 	return func(c *redisDebugStoreConfig) {
 		c.redisDB = db
@@ -153,10 +155,24 @@ func WithDebugErrorTTL(ttl time.Duration) RedisLLMDebugStoreOption {
 	}
 }
 
-// WithDebugKeyPrefix sets the Redis key prefix. A trailing colon is normalized.
+// WithDebugKeyPrefix sets the precursor standalone key prefix. A trailing colon
+// is normalized.
+// Deprecated: use WithDebugKeyspace for cluster-capable composition.
 func WithDebugKeyPrefix(prefix string) RedisLLMDebugStoreOption {
 	return func(c *redisDebugStoreConfig) {
-		c.keyPrefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":") + ":"
+		c.legacyPrefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":") + ":"
+		c.keyPrefix = c.legacyPrefix
+		c.keyspaceExplicit = true
+	}
+}
+
+// WithDebugKeyspace selects the canonical versioned DB-0 key schema.
+func WithDebugKeyspace(keyspace core.RedisKeyspace) RedisLLMDebugStoreOption {
+	return func(c *redisDebugStoreConfig) {
+		c.keys = telemetry.NewRedisLLMDebugKeys(keyspace)
+		c.legacyPrefix = ""
+		c.keyPrefix = keyspace.Plain("llm-debug")
+		c.keyspaceExplicit = true
 	}
 }
 
@@ -176,15 +192,19 @@ type RedisLLMDebugStore struct {
 	ttl            time.Duration
 	errorTTL       time.Duration
 	keyPrefix      string
+	keys           telemetry.RedisLLMDebugKeys
+	legacyPrefix   string
 
 	// Layer 1 resilience state (simple failure tracking)
 	failureCount int
 	failureMu    sync.Mutex
 	lastFailure  time.Time
+	closeOnce    sync.Once
+	closeErr     error
 }
 
-// NewRedisLLMDebugStore creates a Redis-backed debug store with intelligent defaults.
-// Environment variable precedence: explicit options > REDIS_URL > TRUVAG3_REDIS_URL > localhost:6379
+// NewRedisLLMDebugStore creates an owning Redis-backed debug store. Connection
+// topology is resolved by core.ResolveRedisConnectionConfig.
 func NewRedisLLMDebugStore(opts ...RedisLLMDebugStoreOption) (*RedisLLMDebugStore, error) {
 	// Apply intelligent defaults
 	cfg := defaultRedisLLMDebugStoreConfig()
@@ -195,41 +215,40 @@ func NewRedisLLMDebugStore(opts ...RedisLLMDebugStoreOption) (*RedisLLMDebugStor
 			opt(cfg)
 		}
 	}
+	if !cfg.keyspaceExplicit {
+		keyspace, err := redisKeyspaceFromEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("resolve Redis LLM debug keyspace: %w", err)
+		}
+		cfg.keys = telemetry.NewRedisLLMDebugKeys(keyspace)
+		cfg.keyPrefix = keyspace.Plain("llm-debug")
+	}
 	normalizeRedisLLMDebugStoreConfig(cfg)
 
-	// Parse Redis URL and create client
-	redisOpt, err := redis.ParseURL(cfg.redisURL)
+	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, cfg.redisDB, cfg.logger)
 	if err != nil {
-		// Try treating it as a simple address if URL parsing fails
-		redisOpt = &redis.Options{
-			Addr: cfg.redisURL,
-		}
+		return nil, fmt.Errorf("initialize Redis LLM debug store: %w", err)
 	}
-	redisOpt.DB = cfg.redisDB
-
-	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-	// Verify connection with actionable error message
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
+	if err := rejectLegacyRedisPrefixForMode(connection.Mode, cfg.legacyPrefix != "", "LLM debug store"); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("redis connection failed (DB %d): %w\n"+
-			"Hint: Check REDIS_URL or TRUVAG3_REDIS_URL environment variables, "+
-			"or use WithDebugRedisURL() option", cfg.redisDB, core.RedactSensitiveError(err))
+		return nil, err
 	}
 
 	// Note: Circuit breaker is optional and injected by application (per ARCHITECTURE.md)
 	// If not provided, built-in Layer 1 resilience (simple retry) is used
 
-	cfg.logger.Info("Redis LLM debug store initialized", map[string]interface{}{
-		"redis_addr":      redisOpt.Addr,
-		"redis_db":        cfg.redisDB,
-		"ttl":             cfg.ttl.String(),
-		"error_ttl":       cfg.errorTTL.String(),
-		"circuit_breaker": cfg.circuitBreaker != nil,
-		"resilience":      "layer1_builtin", // Always has Layer 1
-	})
+	if cfg.logger != nil {
+		cfg.logger.Info("Redis LLM debug store initialized", map[string]interface{}{
+			"operation":        "llm_debug_store_initialize",
+			"redis_mode":       connection.Mode,
+			"redis_seed_count": len(connection.Addrs),
+			"redis_db":         connection.DB,
+			"ttl":              cfg.ttl.String(),
+			"error_ttl":        cfg.errorTTL.String(),
+			"circuit_breaker":  cfg.circuitBreaker != nil,
+			"resilience":       "layer1_builtin", // Always has Layer 1
+		})
+	}
 
 	return newRedisLLMDebugStore(client, true, cfg), nil
 }
@@ -242,7 +261,8 @@ func NewRedisLLMDebugStoreWithClient(client redis.UniversalClient, opts ...Redis
 	}
 	cfg := &redisDebugStoreConfig{
 		logger: &core.NoOpLogger{}, ttl: defaultDebugTTL,
-		errorTTL: errorDebugTTL, keyPrefix: llmDebugKeyPrefix,
+		errorTTL: errorDebugTTL, keyPrefix: strings.TrimSuffix(llmDebugKeyPrefix, ":"),
+		keys: telemetry.NewRedisLLMDebugKeys(defaultRedisKeyspace()),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -250,10 +270,14 @@ func NewRedisLLMDebugStoreWithClient(client redis.UniversalClient, opts ...Redis
 		}
 	}
 	normalizeRedisLLMDebugStoreConfig(cfg)
+	if err := rejectLegacyRedisPrefixForClient(client, cfg.legacyPrefix != "", "LLM debug store"); err != nil {
+		return nil, err
+	}
 	return newRedisLLMDebugStore(client, false, cfg), nil
 }
 
 func normalizeRedisLLMDebugStoreConfig(cfg *redisDebugStoreConfig) {
+	cfg.logger = orchestrationComponentLogger(cfg.logger)
 	if cfg.ttl <= 0 {
 		cfg.ttl = defaultDebugTTL
 	}
@@ -264,12 +288,13 @@ func normalizeRedisLLMDebugStoreConfig(cfg *redisDebugStoreConfig) {
 
 func defaultRedisLLMDebugStoreConfig() *redisDebugStoreConfig {
 	return &redisDebugStoreConfig{
-		redisURL:  getRedisURLWithFallback(),
-		redisDB:   getEnvInt("TRUVAG3_LLM_DEBUG_REDIS_DB", core.RedisDBLLMDebug),
+		redisURL:  "",
+		redisDB:   0,
 		logger:    &core.NoOpLogger{},
 		ttl:       getEnvDuration("TRUVAG3_LLM_DEBUG_TTL", defaultDebugTTL),
 		errorTTL:  getEnvDuration("TRUVAG3_LLM_DEBUG_ERROR_TTL", errorDebugTTL),
 		keyPrefix: llmDebugKeyPrefix,
+		keys:      telemetry.NewRedisLLMDebugKeys(defaultRedisKeyspace()),
 	}
 }
 
@@ -282,19 +307,20 @@ func newRedisLLMDebugStore(client redis.UniversalClient, ownsClient bool, cfg *r
 		ttl:            cfg.ttl,
 		errorTTL:       cfg.errorTTL,
 		keyPrefix:      cfg.keyPrefix,
+		keys:           cfg.keys,
+		legacyPrefix:   cfg.legacyPrefix,
 	}
 }
 
 // RecordInteraction appends an LLM interaction to the debug record.
-// A Redis script atomically appends the interaction, updates metadata/index
-// fields, and preserves any longer or persistent retention already applied.
+// A Redis script atomically appends the interaction, updates request metadata,
+// and preserves any longer or persistent retention already applied. The global
+// recent index is updated separately as a repairable projection.
 // It is safe for concurrent writes from multiple processes (orchestrator + agents).
 // Uses Layer 2 circuit breaker if injected, otherwise falls back to Layer 1 simple retry.
 func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID string, interaction LLMInteraction) error {
+	var indexScore int64
 	operation := func() error {
-		metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
-		interKey := s.recordPrefix() + requestID + llmDebugInterSuffix
-
 		// Serialize the single interaction as JSON
 		data, err := json.Marshal(interaction)
 		if err != nil {
@@ -320,6 +346,7 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		}
 
 		now := time.Now()
+		indexScore = now.Unix()
 		ttl := s.ttl
 		if !interaction.Success {
 			ttl = s.errorTTL
@@ -337,9 +364,8 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 			ctx,
 			s.client,
 			[]string{
-				metaKey,
-				interKey,
-				s.indexKey(),
+				s.metaKey(requestID),
+				s.interactionsKey(requestID),
 				s.retentionFloorKey(requestID),
 			},
 			data,
@@ -351,29 +377,47 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 			conversationID,
 			interaction.SourceComponent,
 			originatingAgent,
-			strconv.FormatInt(now.Unix(), 10),
 			strconv.FormatInt(ttlMilliseconds, 10),
 		).Err(); err != nil {
-			return fmt.Errorf("redis interaction write failed: %w", err)
+			return fmt.Errorf("write authoritative LLM debug record: %w", err)
 		}
 
 		return nil
 	}
 
 	// Layer 2: Use injected circuit breaker if available
+	var err error
 	if s.circuitBreaker != nil {
-		return s.circuitBreaker.Execute(ctx, operation)
+		err = s.circuitBreaker.Execute(ctx, operation)
+	} else {
+		err = s.executeWithRetry(ctx, operation)
 	}
-
-	// Layer 1: Built-in simple retry with exponential backoff
-	return s.executeWithRetry(ctx, operation)
+	if err != nil {
+		return err
+	}
+	indexStartedAt := time.Now()
+	if err := retryLLMDebugIndexOnly(ctx, func() error {
+		return s.client.ZAdd(ctx, s.indexKey(), redis.Z{
+			Score:  float64(indexScore),
+			Member: requestID,
+		}).Err()
+	}); err != nil && s.logger != nil {
+		s.logger.WarnWithContext(ctx, "Failed to update LLM debug recent index", map[string]interface{}{
+			"operation":     "llm_debug_recent_index",
+			"request_id":    requestID,
+			"error":         "redis LLM debug index update failed",
+			"error_type":    "index_write",
+			"failure_class": classifyRedisDiagnostic(err),
+			"duration_ms":   time.Since(indexStartedAt).Milliseconds(),
+		})
+	}
+	return nil
 }
 
 // GetRecord retrieves the complete debug record for a request.
-// Supports both new list-based format (Phase 2) and old string-based format (backward compat).
 func (s *RedisLLMDebugStore) GetRecord(ctx context.Context, requestID string) (*LLMDebugRecord, error) {
-	metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
-	interKey := s.recordPrefix() + requestID + llmDebugInterSuffix
+	metaKey := s.metaKey(requestID)
+	interKey := s.interactionsKey(requestID)
 
 	// Check if this is the new list-based format
 	keyType, err := s.client.Type(ctx, metaKey).Result()
@@ -381,14 +425,13 @@ func (s *RedisLLMDebugStore) GetRecord(ctx context.Context, requestID string) (*
 		return nil, fmt.Errorf("redis type check failed: %w", err)
 	}
 
-	if keyType == "hash" {
-		// New list-based format
-		return s.getRecordFromList(ctx, requestID, metaKey, interKey)
+	if keyType == "none" {
+		return nil, fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 	}
-
-	// Backward compatibility: old string-based format (pre-migration)
-	oldKey := s.recordPrefix() + requestID
-	return s.getRecordFromString(ctx, requestID, oldKey)
+	if keyType != "hash" {
+		return nil, fmt.Errorf("LLM debug metadata has unsupported Redis type %q", keyType)
+	}
+	return s.getRecordFromList(ctx, requestID, metaKey, interKey)
 }
 
 // getRecordFromList reads the new list-based format.
@@ -437,29 +480,20 @@ func (s *RedisLLMDebugStore) getRecordFromList(ctx context.Context, requestID, m
 	for _, raw := range interData {
 		var interaction LLMInteraction
 		if err := json.Unmarshal([]byte(raw), &interaction); err != nil {
-			s.logger.Warn("Failed to deserialize interaction, skipping", map[string]interface{}{
-				"request_id": requestID,
-				"error":      err.Error(),
-			})
+			if s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Failed to deserialize interaction, skipping", map[string]interface{}{
+					"operation":  "llm_debug_interaction_decode",
+					"request_id": requestID,
+					"error":      "stored LLM interaction is malformed",
+					"error_type": "unmarshal",
+				})
+			}
 			continue
 		}
 		record.Interactions = append(record.Interactions, interaction)
 	}
 
 	return record, nil
-}
-
-// getRecordFromString reads the old string-based format (backward compatibility).
-// This is the original format: single string key with compression flag + JSON.
-func (s *RedisLLMDebugStore) getRecordFromString(ctx context.Context, requestID, key string) (*LLMDebugRecord, error) {
-	data, err := s.client.Get(ctx, key).Bytes()
-	if err == redis.Nil {
-		return nil, fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("redis get failed: %w", err)
-	}
-	return s.deserialize(data)
 }
 
 // SetMetadata adds metadata to an existing record.
@@ -469,35 +503,19 @@ func (s *RedisLLMDebugStore) SetMetadata(ctx context.Context, requestID string, 
 		return fmt.Errorf("%s is framework-owned and cannot be changed", MetadataConversationID)
 	}
 	operation := func() error {
-		metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
+		metaKey := s.metaKey(requestID)
 
-		// Check format
 		keyType, err := s.client.Type(ctx, metaKey).Result()
 		if err != nil {
 			return fmt.Errorf("redis type check failed: %w", err)
 		}
-
-		if keyType == "hash" {
-			// New format: store metadata directly in hash with "meta:" prefix
-			return s.client.HSet(ctx, metaKey, "meta:"+key, value).Err()
+		if keyType == "none" {
+			return fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
 		}
-
-		// Old format: read-modify-write (single-writer safe, no migration needed)
-		oldKey := s.recordPrefix() + requestID
-		record, err := s.getRecordFromString(ctx, requestID, oldKey)
-		if err != nil {
-			return err
+		if keyType != "hash" {
+			return fmt.Errorf("LLM debug metadata has unsupported Redis type %q", keyType)
 		}
-		if record.Metadata == nil {
-			record.Metadata = make(map[string]string)
-		}
-		record.Metadata[key] = value
-		record.UpdatedAt = time.Now()
-		data, err := s.serialize(record)
-		if err != nil {
-			return err
-		}
-		return setRedisValueWithMinimumTTL(ctx, s.client, oldKey, data, s.ttl)
+		return s.client.HSet(ctx, metaKey, "meta:"+key, value).Err()
 	}
 
 	if s.circuitBreaker != nil {
@@ -514,20 +532,12 @@ func (s *RedisLLMDebugStore) ExtendTTL(ctx context.Context, requestID string, du
 	if duration <= 0 {
 		return fmt.Errorf("duration must be positive")
 	}
-	metaKey := s.recordPrefix() + requestID + llmDebugMetaSuffix
-	interKey := s.recordPrefix() + requestID + llmDebugInterSuffix
-
-	found := false
-	for _, key := range []string{
-		metaKey,
-		interKey,
-		s.recordPrefix() + requestID,
-	} {
-		exists, err := extendRedisKeyMinimumTTL(ctx, s.client, key, duration)
-		if err != nil {
-			return err
-		}
-		found = found || exists
+	found, err := extendRedisKeysMinimumTTL(ctx, s.client, []string{
+		s.metaKey(requestID),
+		s.interactionsKey(requestID),
+	}, duration)
+	if err != nil {
+		return err
 	}
 	if !found {
 		return fmt.Errorf("%w: %s", ErrLLMDebugRecordNotFound, requestID)
@@ -557,9 +567,8 @@ func (s *RedisLLMDebugStore) PreserveRetention(
 			s.client,
 			[]string{
 				s.retentionFloorKey(requestID),
-				s.recordPrefix() + requestID + llmDebugMetaSuffix,
-				s.recordPrefix() + requestID + llmDebugInterSuffix,
-				s.recordPrefix() + requestID,
+				s.metaKey(requestID),
+				s.interactionsKey(requestID),
 			},
 			strconv.FormatInt(milliseconds, 10),
 		).Err()
@@ -603,10 +612,13 @@ func (s *RedisLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMDe
 			break
 		}
 		record, err := s.GetRecord(ctx, id)
-		if err != nil {
-			// Record expired but index entry remains — mark for cleanup
+		if errors.Is(err, ErrLLMDebugRecordNotFound) {
+			// Only confirmed expired records are safe to prune from the index.
 			orphanedIDs = append(orphanedIDs, id)
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load recent LLM debug record %q: %w", id, err)
 		}
 
 		// Build lightweight summary from the deduped view so historical
@@ -656,18 +668,29 @@ func (s *RedisLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMDe
 	// This is a maintenance task not tied to any user request — no trace context to propagate.
 	if len(orphanedIDs) > 0 {
 		go func() {
+			startedAt := time.Now()
 			pruneCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			removed, err := s.client.ZRem(pruneCtx, s.indexKey(), orphanedIDs...).Result()
 			if err != nil {
-				s.logger.Warn("Failed to prune orphaned index entries", map[string]interface{}{
-					"orphaned_count": len(orphanedIDs),
-					"error":          err.Error(),
-				})
+				if s.logger != nil {
+					s.logger.Warn("Failed to prune orphaned index entries", map[string]interface{}{
+						"operation":      "llm_debug_orphan_cleanup",
+						"error":          "redis LLM debug index cleanup failed",
+						"error_type":     "index_write",
+						"orphaned_count": len(orphanedIDs),
+						"duration_ms":    time.Since(startedAt).Milliseconds(),
+					})
+				}
 			} else if removed > 0 {
-				s.logger.Info("Pruned orphaned index entries from sorted set", map[string]interface{}{
-					"removed": removed,
-				})
+				if s.logger != nil {
+					s.logger.Info("Pruned orphaned index entries from sorted set", map[string]interface{}{
+						"operation":   "llm_debug_orphan_cleanup",
+						"status":      "success",
+						"removed":     removed,
+						"duration_ms": time.Since(startedAt).Milliseconds(),
+					})
+				}
 			}
 		}()
 	}
@@ -680,22 +703,82 @@ func (s *RedisLLMDebugStore) Close() error {
 	if !s.ownsClient {
 		return nil
 	}
-	return s.client.Close()
+	s.closeOnce.Do(func() { s.closeErr = s.client.Close() })
+	return s.closeErr
 }
 
 func (s *RedisLLMDebugStore) indexKey() string {
-	return strings.TrimSuffix(s.recordPrefix(), ":") + ":index"
+	if s.legacyPrefix != "" {
+		return strings.TrimSuffix(s.legacyPrefix, ":") + ":index"
+	}
+	return s.keys.RecentIndex()
 }
 
-func (s *RedisLLMDebugStore) recordPrefix() string {
-	if s.keyPrefix == "" {
-		return llmDebugKeyPrefix
+func (s *RedisLLMDebugStore) metaKey(requestID string) string {
+	if s.legacyPrefix != "" {
+		return s.legacyPrefix + requestID + llmDebugMetaSuffix
 	}
-	return s.keyPrefix
+	return s.keys.Meta(requestID)
+}
+
+func (s *RedisLLMDebugStore) interactionsKey(requestID string) string {
+	if s.legacyPrefix != "" {
+		return s.legacyPrefix + requestID + llmDebugInterSuffix
+	}
+	return s.keys.Interactions(requestID)
 }
 
 func (s *RedisLLMDebugStore) retentionFloorKey(requestID string) string {
-	return s.recordPrefix() + requestID + llmDebugFloorSuffix
+	if s.legacyPrefix != "" {
+		return s.legacyPrefix + requestID + llmDebugFloorSuffix
+	}
+	return s.keys.RetentionFloor(requestID)
+}
+
+func retryLLMDebugIndexOnly(ctx context.Context, operation func() error) error {
+	var lastErr error
+	backoff := layer1InitialBackoff
+	for attempt := 1; attempt <= layer1MaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := operation(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt < layer1MaxRetries {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			backoff *= 2
+			if backoff > layer1MaxBackoff {
+				backoff = layer1MaxBackoff
+			}
+		}
+	}
+	return lastErr
+}
+
+func classifyRedisDiagnostic(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return "timeout"
+		}
+		return "redis_backend_failure"
+	}
 }
 
 var _ LLMDebugRetentionPreserver = (*RedisLLMDebugStore)(nil)
@@ -718,7 +801,10 @@ func (s *RedisLLMDebugStore) executeWithRetry(ctx context.Context, operation fun
 	if s.failureCount >= layer1MaxFailures && time.Since(s.lastFailure) < layer1FailureWindow {
 		s.failureMu.Unlock()
 		if s.logger != nil {
-			s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
+			s.logger.WarnWithContext(ctx, "Layer 1 resilience: in cooldown period", map[string]interface{}{
+				"operation":    "llm_debug_store_retry",
+				"request_id":   core.GetRequestID(ctx),
+				"status":       "cooldown",
 				"failures":     s.failureCount,
 				"cooldown_sec": layer1FailureWindow.Seconds(),
 			})
@@ -749,11 +835,15 @@ func (s *RedisLLMDebugStore) executeWithRetry(ctx context.Context, operation fun
 
 		lastErr = err
 		if s.logger != nil {
-			s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
-				"attempt": attempt,
-				"max":     layer1MaxRetries,
-				"backoff": backoff.String(),
-				"error":   err.Error(),
+			s.logger.WarnWithContext(ctx, "Layer 1 resilience: operation failed, retrying", map[string]interface{}{
+				"operation":     "llm_debug_store_retry",
+				"request_id":    core.GetRequestID(ctx),
+				"attempt":       attempt,
+				"max":           layer1MaxRetries,
+				"backoff":       backoff.String(),
+				"error":         "redis LLM debug operation failed",
+				"error_type":    "backend",
+				"failure_class": classifyRedisDiagnostic(err),
 			})
 		}
 
@@ -780,84 +870,6 @@ func (s *RedisLLMDebugStore) executeWithRetry(ctx context.Context, operation fun
 	s.failureMu.Unlock()
 
 	return fmt.Errorf("operation failed after %d attempts: %w", layer1MaxRetries, lastErr)
-}
-
-// serialize with optional gzip compression
-func (s *RedisLLMDebugStore) serialize(record *LLMDebugRecord) ([]byte, error) {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compress if over threshold
-	if len(data) > compressionThreshold {
-		var buf bytes.Buffer
-		buf.WriteByte(1) // Compression flag
-		gz := gzip.NewWriter(&buf)
-		if _, err := gz.Write(data); err != nil {
-			return nil, err
-		}
-		if err := gz.Close(); err != nil {
-			return nil, err
-		}
-		return buf.Bytes(), nil
-	}
-
-	// Prepend 0 byte to indicate no compression
-	return append([]byte{0}, data...), nil
-}
-
-// deserialize with optional gzip decompression
-func (s *RedisLLMDebugStore) deserialize(data []byte) (*LLMDebugRecord, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data")
-	}
-
-	var jsonData []byte
-	if data[0] == 1 { // Compressed
-		gz, err := gzip.NewReader(bytes.NewReader(data[1:]))
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = gz.Close() }() // Error intentionally ignored for reader
-
-		var buf bytes.Buffer
-		if _, err := buf.ReadFrom(gz); err != nil {
-			return nil, err
-		}
-		jsonData = buf.Bytes()
-	} else {
-		jsonData = data[1:]
-	}
-
-	var record LLMDebugRecord
-	if err := json.Unmarshal(jsonData, &record); err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
-// Helper functions for environment variable parsing
-
-// getRedisURLWithFallback returns Redis URL with environment variable precedence
-func getRedisURLWithFallback() string {
-	if url := os.Getenv("REDIS_URL"); url != "" {
-		return url
-	}
-	if url := os.Getenv("TRUVAG3_REDIS_URL"); url != "" {
-		return url
-	}
-	return "localhost:6379"
-}
-
-// getEnvInt parses an integer from environment variable with fallback
-func getEnvInt(key string, defaultVal int) int {
-	if val := os.Getenv(key); val != "" {
-		if result, err := strconv.Atoi(val); err == nil {
-			return result
-		}
-	}
-	return defaultVal
 }
 
 // getEnvDuration parses a duration from environment variable with fallback

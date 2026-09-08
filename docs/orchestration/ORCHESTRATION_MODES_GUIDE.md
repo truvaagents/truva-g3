@@ -439,7 +439,7 @@ The orchestrator can't find the tool you're trying to call.
 
 **Check:**
 1. Is the tool running? `curl http://tool-host:port/health`
-2. Is it registered in Redis? `redis-cli keys "truvag3:services:*"`
+2. Is it registered in Redis/Valkey? Page the all-services index with `redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100`.
 3. Is the tool name spelled correctly? (case-sensitive)
 
 ### 8.2 Steps executing in wrong order (Predefined Workflow)

@@ -27,6 +27,7 @@ var (
 	ErrInvalidConfiguration = errors.New("invalid configuration")
 	ErrMissingConfiguration = errors.New("missing required configuration")
 	ErrPortOutOfRange       = errors.New("port out of range")
+	ErrCapacityExceeded     = errors.New("capacity exceeded")
 
 	// State errors
 	ErrAlreadyStarted    = errors.New("already started")

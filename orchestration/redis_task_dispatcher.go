@@ -40,7 +40,7 @@ var _ core.TaskDispatcher = (*RedisTaskDispatcher)(nil)
 // matches orchestration.RedisTaskQueue's default key format ("truvag3:tasks:queue:{name}")
 // so scheduled tasks are picked up by existing worker pools without any
 // special routing.
-const taskQueueKeyPrefix = "truvag3:tasks:queue:"
+var taskQueueKeyPrefix = defaultRedisKeyspace().Plain("tasks", "queue") + ":"
 
 // RedisTaskDispatcher is a Redis-backed implementation of core.TaskDispatcher.
 // Uses LPUSH to write tasks to per-agent queue lists.
@@ -60,7 +60,7 @@ type RedisTaskDispatcher struct {
 // return pattern in memory.NewRedisDistributedLock. The scheduler-tool's
 // main.go should propagate this via log.Fatal during startup.
 func NewRedisTaskDispatcher(client redis.Cmdable) (*RedisTaskDispatcher, error) {
-	return NewRedisTaskDispatcherWithPrefix(client, "truvag3:tasks")
+	return NewRedisTaskDispatcherWithPrefix(client, defaultRedisKeyspace().Plain("tasks"))
 }
 
 func NewRedisTaskDispatcherWithPrefix(client redis.Cmdable, prefix string) (*RedisTaskDispatcher, error) {

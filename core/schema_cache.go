@@ -30,7 +30,7 @@ type SchemaCache interface {
 // Schemas are stored in Redis with configurable TTL and prefix.
 // This provides shared caching across agent replicas with ~1-2ms latency.
 type RedisSchemaCache struct {
-	client *redis.Client
+	client redis.Cmdable
 	ttl    time.Duration
 	prefix string
 
@@ -70,7 +70,7 @@ func WithPrefix(prefix string) SchemaCacheOption {
 //	    WithTTL(1 * time.Hour),      // Shorter TTL
 //	    WithPrefix("myapp:schemas:"), // Custom prefix
 //	)
-func NewSchemaCache(redisClient *redis.Client, opts ...SchemaCacheOption) SchemaCache {
+func NewSchemaCache(redisClient redis.Cmdable, opts ...SchemaCacheOption) SchemaCache {
 	cache := &RedisSchemaCache{
 		client: redisClient,
 		ttl:    DefaultSchemaCacheTTL, // Schemas rarely change

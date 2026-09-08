@@ -16,10 +16,10 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+var executionDebugKeyPrefix = defaultRedisKeyspace().Plain("execution-debug") + ":"
+
 const (
 	// Redis key patterns for execution debug store
-	executionDebugKeyPrefix = "truvag3:execution:debug:"
-
 	// Size thresholds for compression (same as LLM Debug Store)
 	executionCompressionThreshold = 100 * 1024  // 100KB
 	executionMaxPayloadSize       = 1024 * 1024 // 1MB
@@ -45,15 +45,17 @@ return previous_ttl
 type RedisExecutionDebugStoreOption func(*redisExecutionDebugStoreConfig)
 
 type redisExecutionDebugStoreConfig struct {
-	redisURL       string
-	redisDB        int
-	logger         core.Logger
-	circuitBreaker core.CircuitBreaker // Interface - injected by application (optional)
-	keyPrefix      string
-	ttl            time.Duration
-	errorTTL       time.Duration
-	queryLimit     int
-	indexScanLimit int
+	redisURL         string
+	redisDB          int
+	logger           core.Logger
+	circuitBreaker   core.CircuitBreaker // Interface - injected by application (optional)
+	keyPrefix        string
+	keys             RedisExecutionDebugKeys
+	ttl              time.Duration
+	errorTTL         time.Duration
+	queryLimit       int
+	indexScanLimit   int
+	keyspaceExplicit bool
 }
 
 // WithExecutionDebugRedisURL sets the Redis connection URL
@@ -63,7 +65,8 @@ func WithExecutionDebugRedisURL(url string) RedisExecutionDebugStoreOption {
 	}
 }
 
-// WithExecutionDebugRedisDB sets the Redis database number (default: 8)
+// WithExecutionDebugRedisDB selects a numbered standalone database.
+// Deprecated: use DB 0 and WithExecutionDebugKeyspace.
 func WithExecutionDebugRedisDB(db int) RedisExecutionDebugStoreOption {
 	return func(c *redisExecutionDebugStoreConfig) {
 		c.redisDB = db
@@ -87,10 +90,22 @@ func WithExecutionDebugCircuitBreaker(cb core.CircuitBreaker) RedisExecutionDebu
 	}
 }
 
-// WithExecutionDebugKeyPrefix sets a custom key prefix for execution debug records
+// WithExecutionDebugKeyPrefix sets the precursor standalone key prefix.
+// Deprecated: use WithExecutionDebugKeyspace for cluster-capable composition.
 func WithExecutionDebugKeyPrefix(prefix string) RedisExecutionDebugStoreOption {
 	return func(c *redisExecutionDebugStoreConfig) {
 		c.keyPrefix = prefix
+		c.keys = legacyRedisExecutionDebugKeys(prefix)
+		c.keyspaceExplicit = true
+	}
+}
+
+// WithExecutionDebugKeyspace sets the canonical DB-0 execution-debug schema.
+func WithExecutionDebugKeyspace(keyspace core.RedisKeyspace) RedisExecutionDebugStoreOption {
+	return func(c *redisExecutionDebugStoreConfig) {
+		c.keys = NewRedisExecutionDebugKeys(keyspace)
+		c.keyPrefix = keyspace.Plain("execution-debug")
+		c.keyspaceExplicit = true
 	}
 }
 
@@ -122,6 +137,7 @@ type RedisExecutionDebugStore struct {
 	logger         core.Logger
 	circuitBreaker core.CircuitBreaker // Optional - injected by application
 	keyPrefix      string
+	keys           RedisExecutionDebugKeys
 	ttl            time.Duration
 	errorTTL       time.Duration
 	queryLimit     int
@@ -131,17 +147,21 @@ type RedisExecutionDebugStore struct {
 	failureCount int
 	failureMu    sync.Mutex
 	lastFailure  time.Time
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 // NewRedisExecutionDebugStore creates a Redis-backed execution debug store with intelligent defaults.
 // This provides the same zero-configuration experience as NewRedisLLMDebugStore.
 //
-// Environment variable precedence:
-//   - REDIS_URL or TRUVAG3_REDIS_URL: Redis connection URL (default: localhost:6379)
-//   - TRUVAG3_EXECUTION_DEBUG_REDIS_DB: Redis database number (default: 8)
+// Connection topology is resolved by core.ResolveRedisConnectionConfig. The
+// canonical schema uses DB 0; URL/DB options remain compatibility wrappers for
+// the precursor release.
+//
+// Store-specific environment:
 //   - TRUVAG3_EXECUTION_DEBUG_TTL: TTL for successful records (default: 24h)
 //   - TRUVAG3_EXECUTION_DEBUG_ERROR_TTL: TTL for error records (default: 168h)
-//   - TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX: Key prefix (default: truvag3:execution:debug)
+//   - TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX: deprecated standalone compatibility prefix
 //   - TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT: per-query result ceiling (default: 1000)
 //   - TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT: per-query index scan ceiling (default: 5000)
 //
@@ -174,46 +194,51 @@ func NewRedisExecutionDebugStoreWithConfig(
 
 	// Apply explicit options (override defaults)
 	for _, opt := range opts {
-		opt(cfg)
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	if !cfg.keyspaceExplicit {
+		keyspace, err := redisKeyspaceFromEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("resolve Redis execution debug keyspace: %w", err)
+		}
+		cfg.keys = NewRedisExecutionDebugKeys(keyspace)
+		cfg.keyPrefix = keyspace.Plain("execution-debug")
 	}
 	normalizeRedisExecutionDebugStoreConfig(cfg)
 
-	// Parse Redis URL and create client
-	redisOpt, err := redis.ParseURL(cfg.redisURL)
+	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, cfg.redisDB, cfg.logger)
 	if err != nil {
-		// Try treating it as a simple address if URL parsing fails
-		redisOpt = &redis.Options{
-			Addr: cfg.redisURL,
-		}
+		return nil, fmt.Errorf("initialize Redis execution debug store: %w", err)
 	}
-	redisOpt.DB = cfg.redisDB
-
-	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-	// Verify connection with actionable error message
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
+	if err := rejectLegacyRedisPrefixForMode(
+		connection.Mode,
+		cfg.keys.legacyPrefix != "",
+		"execution debug store",
+	); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("redis connection failed (DB %d): %w\n"+
-			"Hint: Check REDIS_URL or TRUVAG3_REDIS_URL environment variables, "+
-			"or use WithExecutionDebugRedisURL() option", cfg.redisDB, core.RedactSensitiveError(err))
+		return nil, err
 	}
 
 	// Note: Circuit breaker is optional and injected by application (per ARCHITECTURE.md)
 	// If not provided, built-in Layer 1 resilience (simple retry) is used
 
-	cfg.logger.Info("Redis execution debug store initialized", map[string]interface{}{
-		"redis_addr":                    redisOpt.Addr,
-		"redis_db":                      cfg.redisDB,
-		"key_prefix":                    cfg.keyPrefix,
-		"ttl":                           cfg.ttl.String(),
-		"error_ttl":                     cfg.errorTTL.String(),
-		"conversation_query_limit":      cfg.queryLimit,
-		"conversation_index_scan_limit": cfg.indexScanLimit,
-		"circuit_breaker":               cfg.circuitBreaker != nil,
-		"resilience":                    "layer1_builtin", // Always has Layer 1
-	})
+	if cfg.logger != nil {
+		cfg.logger.Info("Redis execution debug store initialized", map[string]interface{}{
+			"operation":                     "execution_store_initialize",
+			"redis_mode":                    connection.Mode,
+			"redis_seed_count":              len(connection.Addrs),
+			"redis_db":                      connection.DB,
+			"key_prefix":                    cfg.keyPrefix,
+			"ttl":                           cfg.ttl.String(),
+			"error_ttl":                     cfg.errorTTL.String(),
+			"conversation_query_limit":      cfg.queryLimit,
+			"conversation_index_scan_limit": cfg.indexScanLimit,
+			"circuit_breaker":               cfg.circuitBreaker != nil,
+			"resilience":                    "layer1_builtin", // Always has Layer 1
+		})
+	}
 
 	return newRedisExecutionDebugStore(client, true, cfg), nil
 }
@@ -235,40 +260,62 @@ func NewRedisExecutionDebugStoreWithClient(
 		}
 	}
 	normalizeRedisExecutionDebugStoreConfig(cfg)
+	if err := rejectLegacyRedisPrefixForClient(
+		client,
+		cfg.keys.legacyPrefix != "",
+		"execution debug store",
+	); err != nil {
+		return nil, err
+	}
 	return newRedisExecutionDebugStore(client, false, cfg), nil
 }
 
 func normalizeRedisExecutionDebugStoreConfig(cfg *redisExecutionDebugStoreConfig) {
 	defaults := DefaultExecutionStoreConfig()
+	cfg.logger = orchestrationComponentLogger(cfg.logger)
 	if cfg.ttl <= 0 {
 		cfg.ttl = defaults.TTL
 	}
 	if cfg.errorTTL <= 0 {
 		cfg.errorTTL = defaults.ErrorTTL
 	}
-	cfg.keyPrefix = normalizeExecutionKeyPrefix(cfg.keyPrefix)
+	if cfg.keys == (RedisExecutionDebugKeys{}) {
+		cfg.keys = legacyRedisExecutionDebugKeys(cfg.keyPrefix)
+	}
+	cfg.keyPrefix = cfg.keys.PrefixForDiagnostics()
 }
 
 func redisExecutionDebugStoreConfigForClient(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
 	config = normalizeExecutionStoreConfig(config)
+	keys := NewRedisExecutionDebugKeys(defaultRedisKeyspace())
+	if config.KeyPrefix != DefaultExecutionKeyPrefix {
+		keys = legacyRedisExecutionDebugKeys(config.KeyPrefix)
+	}
 	return &redisExecutionDebugStoreConfig{
-		logger: &core.NoOpLogger{}, keyPrefix: config.KeyPrefix,
+		logger: &core.NoOpLogger{}, keyPrefix: config.KeyPrefix, keys: keys,
 		ttl: config.TTL, errorTTL: config.ErrorTTL,
 		queryLimit: config.ConversationQueryLimit, indexScanLimit: config.ConversationIndexScanLimit,
+		keyspaceExplicit: config.KeyPrefix != DefaultExecutionKeyPrefix,
 	}
 }
 
 func defaultRedisExecutionDebugStoreConfig(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
 	config = normalizeExecutionStoreConfig(config)
+	keys := NewRedisExecutionDebugKeys(defaultRedisKeyspace())
+	if config.KeyPrefix != DefaultExecutionKeyPrefix {
+		keys = legacyRedisExecutionDebugKeys(config.KeyPrefix)
+	}
 	return &redisExecutionDebugStoreConfig{
-		redisURL:       getRedisURLWithFallback(),
-		redisDB:        getEnvInt("TRUVAG3_EXECUTION_DEBUG_REDIS_DB", core.RedisDBExecutionDebug),
-		logger:         &core.NoOpLogger{},
-		keyPrefix:      config.KeyPrefix,
-		ttl:            config.TTL,
-		errorTTL:       config.ErrorTTL,
-		queryLimit:     config.ConversationQueryLimit,
-		indexScanLimit: config.ConversationIndexScanLimit,
+		redisURL:         "",
+		redisDB:          0,
+		logger:           &core.NoOpLogger{},
+		keyPrefix:        config.KeyPrefix,
+		keys:             keys,
+		ttl:              config.TTL,
+		errorTTL:         config.ErrorTTL,
+		queryLimit:       config.ConversationQueryLimit,
+		indexScanLimit:   config.ConversationIndexScanLimit,
+		keyspaceExplicit: config.KeyPrefix != DefaultExecutionKeyPrefix,
 	}
 }
 
@@ -279,6 +326,7 @@ func newRedisExecutionDebugStore(client redis.UniversalClient, ownsClient bool, 
 		logger:         cfg.logger,
 		circuitBreaker: cfg.circuitBreaker,
 		keyPrefix:      cfg.keyPrefix,
+		keys:           cfg.keys,
 		ttl:            cfg.ttl,
 		errorTTL:       cfg.errorTTL,
 		queryLimit:     cfg.queryLimit,
@@ -304,7 +352,7 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 
 	operation := func() error {
 		// Serialize with optional compression
-		data, err := s.serialize(storedExecution)
+		data, err := s.serialize(ctx, storedExecution)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
@@ -374,9 +422,11 @@ func (s *RedisExecutionDebugStore) Store(ctx context.Context, execution *StoredE
 				ttl,
 			); err != nil {
 				if s.logger != nil {
-					s.logger.Warn("Failed to store trace ID mapping", map[string]interface{}{
+					s.logger.WarnWithContext(ctx, "Failed to store trace ID mapping", map[string]interface{}{
+						"operation":  "execution_store_trace_index",
 						"request_id": storedExecution.RequestID,
 						"trace_id":   storedExecution.TraceID,
+						"error_type": "index_write",
 						"error":      safeExecutionStoreError(err),
 					})
 				}
@@ -470,7 +520,7 @@ func (s *RedisExecutionDebugStore) Update(ctx context.Context, requestID string,
 		}
 
 		// Serialize with optional compression
-		data, err := s.serialize(storedExecution)
+		data, err := s.serialize(ctx, storedExecution)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
@@ -555,14 +605,8 @@ func (s *RedisExecutionDebugStore) extendTTL(
 		}
 		return err
 	}
-	keys := []string{s.recordKey(requestID), linkKey}
-	if link.TraceID != "" {
-		keys = append(keys, s.traceKey(link.TraceID))
-	}
-	if link.ConversationID != "" {
-		keys = append(keys, s.conversationIndexKey(link.ConversationID))
-	}
-	exists, err := extendRedisKeysMinimumTTL(ctx, s.client, keys, duration)
+	requestKeys := []string{s.recordKey(requestID), linkKey}
+	exists, err := extendRedisKeysMinimumTTL(ctx, s.client, requestKeys, duration)
 	if err != nil {
 		return err
 	}
@@ -572,10 +616,38 @@ func (s *RedisExecutionDebugStore) extendTTL(
 		}
 		return fmt.Errorf("%w: %s", ErrExecutionRecordNotFound, requestID)
 	}
+	if link.TraceID != "" {
+		s.extendProjectionTTLBestEffort(ctx, requestID, "trace", s.traceKey(link.TraceID), duration)
+	}
+	if link.ConversationID != "" {
+		s.extendProjectionTTLBestEffort(
+			ctx,
+			requestID,
+			"conversation",
+			s.conversationIndexKey(link.ConversationID),
+			duration,
+		)
+	}
 	if rootID := strings.TrimSpace(link.OriginalRequestID); rootID != "" && rootID != requestID {
 		return s.extendTTL(ctx, rootID, duration, visited, false)
 	}
 	return nil
+}
+
+func (s *RedisExecutionDebugStore) extendProjectionTTLBestEffort(
+	ctx context.Context,
+	requestID, projection, key string,
+	duration time.Duration,
+) {
+	if _, err := extendRedisKeyMinimumTTL(ctx, s.client, key, duration); err != nil && s.logger != nil {
+		s.logger.WarnWithContext(ctx, "Failed to extend execution debug projection TTL", map[string]interface{}{
+			"operation":  "execution_store_projection_ttl",
+			"request_id": requestID,
+			"projection": projection,
+			"error_type": "ttl_update",
+			"error":      safeExecutionStoreError(err),
+		})
+	}
 }
 
 func (s *RedisExecutionDebugStore) loadExecutionRetentionLink(
@@ -591,7 +663,8 @@ func (s *RedisExecutionDebugStore) loadExecutionRetentionLink(
 		return executionRetentionLink{}, fmt.Errorf("redis retention link get failed: %w", err)
 	}
 
-	// Compatibility fallback for records stored before retention links existed.
+	// A retention link is a repairable projection. Reconstruct it from the
+	// authoritative execution record when an earlier projection write failed.
 	execution, err := s.Get(ctx, requestID)
 	if err != nil {
 		return executionRetentionLink{}, err
@@ -623,7 +696,7 @@ func (s *RedisExecutionDebugStore) SetMetadata(ctx context.Context, requestID st
 		execution.Metadata[key] = value
 
 		// Serialize with optional compression
-		data, err := s.serialize(execution)
+		data, err := s.serialize(ctx, execution)
 		if err != nil {
 			return fmt.Errorf("serialization failed: %w", err)
 		}
@@ -663,10 +736,13 @@ func (s *RedisExecutionDebugStore) ListRecent(ctx context.Context, limit int) ([
 	summaries := make([]ExecutionSummary, 0, len(ids))
 	for _, id := range ids {
 		execution, err := s.Get(ctx, id)
-		if err != nil {
-			// Clean up stale index entry
+		if errors.Is(err, ErrExecutionRecordNotFound) {
+			// Clean up only a confirmed stale index entry.
 			_ = s.client.ZRem(ctx, indexKey, id)
-			continue // Skip missing records (TTL expired)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load recent execution %q: %w", id, err)
 		}
 
 		summaries = append(summaries, executionSummaryFromStored(execution))
@@ -722,26 +798,26 @@ func (s *RedisExecutionDebugStore) ListByConversationID(
 		requestIDs = filterUnseenConversationMembers(requestIDs, seenMembers)
 
 		if len(requestIDs) > 0 {
-			recordKeys := make([]string, len(requestIDs))
+			pipe := s.client.Pipeline()
+			records := make([]*redis.StringCmd, len(requestIDs))
 			for i, requestID := range requestIDs {
-				recordKeys[i] = s.recordKey(requestID)
+				records[i] = pipe.Get(ctx, s.recordKey(requestID))
 			}
-			rawRecords, err := s.client.MGet(ctx, recordKeys...).Result()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load conversation executions: %w", err)
+			_, execErr := pipe.Exec(ctx)
+			if execErr != nil && !errors.Is(execErr, redis.Nil) {
+				return nil, fmt.Errorf("load conversation execution records: %w", execErr)
 			}
-			for i, rawRecord := range rawRecords {
+			for i, command := range records {
 				requestID := requestIDs[i]
-				if rawRecord == nil {
+				serialized, err := command.Bytes()
+				if errors.Is(err, redis.Nil) {
 					staleMembers = append(staleMembers, requestID)
 					continue
 				}
-				serialized, ok := rawRecord.(string)
-				if !ok {
-					staleMembers = append(staleMembers, requestID)
-					continue
+				if err != nil {
+					return nil, fmt.Errorf("load execution %q: %w", requestID, err)
 				}
-				execution, err := s.deserialize([]byte(serialized))
+				execution, err := s.deserialize(serialized)
 				if err != nil || ExecutionConversationID(execution) != conversationID {
 					staleMembers = append(staleMembers, requestID)
 					continue
@@ -782,29 +858,30 @@ func (s *RedisExecutionDebugStore) Close() error {
 	if !s.ownsClient {
 		return nil
 	}
-	return s.client.Close()
+	s.closeOnce.Do(func() { s.closeErr = s.client.Close() })
+	return s.closeErr
 }
 
 // Key building helper methods using configurable keyPrefix
 
 func (s *RedisExecutionDebugStore) recordKey(requestID string) string {
-	return normalizeExecutionKeyPrefix(s.keyPrefix) + requestID
+	return s.keys.Record(requestID)
 }
 
 func (s *RedisExecutionDebugStore) indexKey() string {
-	return normalizeExecutionKeyPrefix(s.keyPrefix) + "index"
+	return s.keys.RecentIndex()
 }
 
 func (s *RedisExecutionDebugStore) traceKey(traceID string) string {
-	return normalizeExecutionKeyPrefix(s.keyPrefix) + "trace:" + traceID
+	return s.keys.Trace(traceID)
 }
 
 func (s *RedisExecutionDebugStore) retentionLinkKey(requestID string) string {
-	return executionRetentionLinkKey(s.keyPrefix, requestID)
+	return s.keys.RetentionLink(requestID)
 }
 
 func (s *RedisExecutionDebugStore) conversationIndexKey(conversationID string) string {
-	return executionConversationIndexKey(s.keyPrefix, conversationID)
+	return s.keys.Conversation(conversationID)
 }
 
 func (s *RedisExecutionDebugStore) upsertConversationIndex(
@@ -846,7 +923,10 @@ func (s *RedisExecutionDebugStore) executeWithRetry(ctx context.Context, operati
 	if s.failureCount >= execLayer1MaxFailures && time.Since(s.lastFailure) < execLayer1FailureWindow {
 		s.failureMu.Unlock()
 		if s.logger != nil {
-			s.logger.Warn("Layer 1 resilience: in cooldown period", map[string]interface{}{
+			s.logger.WarnWithContext(ctx, "Layer 1 resilience: in cooldown period", map[string]interface{}{
+				"operation":    "execution_store_retry",
+				"request_id":   core.GetRequestID(ctx),
+				"status":       "cooldown",
 				"failures":     s.failureCount,
 				"cooldown_sec": execLayer1FailureWindow.Seconds(),
 			})
@@ -880,11 +960,15 @@ func (s *RedisExecutionDebugStore) executeWithRetry(ctx context.Context, operati
 
 		lastErr = err
 		if s.logger != nil {
-			s.logger.Warn("Layer 1 resilience: operation failed, retrying", map[string]interface{}{
-				"attempt": attempt,
-				"max":     execLayer1MaxRetries,
-				"backoff": backoff.String(),
-				"error":   err.Error(),
+			s.logger.WarnWithContext(ctx, "Layer 1 resilience: operation failed, retrying", map[string]interface{}{
+				"operation":     "execution_store_retry",
+				"request_id":    core.GetRequestID(ctx),
+				"attempt":       attempt,
+				"max":           execLayer1MaxRetries,
+				"backoff":       backoff.String(),
+				"error":         "redis execution debug operation failed",
+				"error_type":    "backend",
+				"failure_class": classifyRedisDiagnostic(err),
 			})
 		}
 
@@ -914,7 +998,7 @@ func (s *RedisExecutionDebugStore) executeWithRetry(ctx context.Context, operati
 }
 
 // serialize with optional gzip compression (same pattern as LLM Debug Store)
-func (s *RedisExecutionDebugStore) serialize(execution *StoredExecution) ([]byte, error) {
+func (s *RedisExecutionDebugStore) serialize(ctx context.Context, execution *StoredExecution) ([]byte, error) {
 	data, err := json.Marshal(execution)
 	if err != nil {
 		return nil, err
@@ -931,10 +1015,14 @@ func (s *RedisExecutionDebugStore) serialize(execution *StoredExecution) ([]byte
 		if err := gz.Close(); err != nil {
 			return nil, err
 		}
-		s.logger.Debug("Compressed execution debug record", map[string]interface{}{
-			"original_size":   len(data),
-			"compressed_size": buf.Len(),
-		})
+		if s.logger != nil {
+			s.logger.DebugWithContext(ctx, "Compressed execution debug record", map[string]interface{}{
+				"operation":       "execution_store_compression",
+				"request_id":      execution.RequestID,
+				"original_size":   len(data),
+				"compressed_size": buf.Len(),
+			})
+		}
 		return buf.Bytes(), nil
 	}
 
@@ -978,41 +1066,41 @@ var (
 	_ ConversationExecutionLister = (*RedisExecutionDebugStore)(nil)
 )
 
-// Deprecated option function aliases for backwards compatibility
-// These will be removed in a future version
+// Deprecated option aliases retained for the precursor compatibility window.
+// They are removed at the next major release.
 
-// WithExecutionRedisURL is deprecated. Use WithExecutionDebugRedisURL instead.
+// Deprecated: use WithExecutionDebugRedisURL.
 func WithExecutionRedisURL(url string) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugRedisURL(url)
 }
 
-// WithExecutionRedisDB is deprecated. Use WithExecutionDebugRedisDB instead.
+// Deprecated: use DB 0, an injected client, and WithExecutionDebugKeyspace.
 func WithExecutionRedisDB(db int) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugRedisDB(db)
 }
 
-// WithExecutionLogger is deprecated. Use WithExecutionDebugLogger instead.
+// Deprecated: use WithExecutionDebugLogger.
 func WithExecutionLogger(logger core.Logger) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugLogger(logger)
 }
 
-// WithExecutionKeyPrefix is deprecated. Use WithExecutionDebugKeyPrefix instead.
+// Deprecated: use WithExecutionDebugKeyspace.
 func WithExecutionKeyPrefix(prefix string) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugKeyPrefix(prefix)
 }
 
-// WithExecutionTTL is deprecated. Use WithExecutionDebugTTL instead.
+// Deprecated: use WithExecutionDebugTTL.
 func WithExecutionTTL(ttl time.Duration) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugTTL(ttl)
 }
 
-// WithExecutionErrorTTL is deprecated. Use WithExecutionDebugErrorTTL instead.
+// Deprecated: use WithExecutionDebugErrorTTL.
 func WithExecutionErrorTTL(ttl time.Duration) RedisExecutionDebugStoreOption {
 	return WithExecutionDebugErrorTTL(ttl)
 }
 
-// NewRedisExecutionStore is deprecated. Use NewRedisExecutionDebugStore instead.
-// This alias is provided for backwards compatibility and will be removed in a future version.
+// Deprecated: use NewRedisExecutionDebugStore. This alias is removed at the
+// next major release.
 func NewRedisExecutionStore(opts ...RedisExecutionDebugStoreOption) (*RedisExecutionDebugStore, error) {
 	return NewRedisExecutionDebugStore(opts...)
 }

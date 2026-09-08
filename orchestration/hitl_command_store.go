@@ -43,6 +43,7 @@ type RedisCommandStore struct {
 	client     redis.UniversalClient
 	ownsClient bool
 	keyPrefix  string
+	keys       hitlKeys
 
 	// Optional dependencies (injected per framework patterns)
 	logger    core.Logger    // Defaults to NoOp
@@ -51,15 +52,19 @@ type RedisCommandStore struct {
 	// Subscription management
 	subscriptions map[string]context.CancelFunc
 	subMu         sync.RWMutex
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 // redisCommandStoreConfig holds configuration for the command store
 type redisCommandStoreConfig struct {
-	redisURL  string
-	redisDB   int
-	keyPrefix string
-	logger    core.Logger
-	telemetry core.Telemetry
+	redisURL          string
+	redisDB           int
+	keyPrefix         string
+	logger            core.Logger
+	telemetry         core.Telemetry
+	keyPrefixExplicit bool
+	legacyPrefix      bool
 }
 
 // RedisCommandStoreOption configures the command store
@@ -72,17 +77,30 @@ func WithCommandStoreRedisURL(url string) RedisCommandStoreOption {
 	}
 }
 
-// WithCommandStoreRedisDB sets the Redis database number
+// WithCommandStoreRedisDB selects a numbered standalone database.
+// Deprecated: use DB 0 and an injected provider client.
 func WithCommandStoreRedisDB(db int) RedisCommandStoreOption {
 	return func(c *redisCommandStoreConfig) {
 		c.redisDB = db
 	}
 }
 
-// WithCommandStoreKeyPrefix sets the key prefix for command storage
+// WithCommandStoreKeyPrefix sets the precursor standalone key prefix.
+// Deprecated: use WithCommandStoreKeyspace for cluster-capable composition.
 func WithCommandStoreKeyPrefix(prefix string) RedisCommandStoreOption {
 	return func(c *redisCommandStoreConfig) {
 		c.keyPrefix = prefix
+		c.keyPrefixExplicit = true
+		c.legacyPrefix = true
+	}
+}
+
+// WithCommandStoreKeyspace selects the canonical versioned DB-0 HITL keyspace.
+func WithCommandStoreKeyspace(keyspace core.RedisKeyspace, agentScope string) RedisCommandStoreOption {
+	return func(c *redisCommandStoreConfig) {
+		c.keyPrefix = keyspace.Tagged("hitl", agentScope)
+		c.keyPrefixExplicit = true
+		c.legacyPrefix = false
 	}
 }
 
@@ -113,45 +131,43 @@ func WithCommandStoreTelemetry(t core.Telemetry) RedisCommandStoreOption {
 //
 // Configuration priority:
 //  1. Explicit option (e.g., WithCommandStoreRedisURL)
-//  2. Environment variable (REDIS_URL, TRUVAG3_HITL_REDIS_DB)
+//  2. Shared Redis connection environment (REDIS_URL or structured topology)
 //  3. Default value
 func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, error) {
+	identity := resolveRedisCheckpointIdentity()
 	// Initialize config with defaults
 	config := &redisCommandStoreConfig{
-		redisURL:  getEnvOrDefault("REDIS_URL", "redis://localhost:6379"),
-		redisDB:   getEnvIntOrDefault("TRUVAG3_HITL_REDIS_DB", 6), // Default to DB 6 for HITL
-		keyPrefix: getEnvOrDefault("TRUVAG3_HITL_KEY_PREFIX", "truvag3:hitl"),
-		logger:    &core.NoOpLogger{},
+		redisURL:     "",
+		redisDB:      0,
+		keyPrefix:    identity.keyPrefix,
+		logger:       &core.NoOpLogger{},
+		legacyPrefix: identity.legacyPrefix,
 	}
 
 	// Apply options
 	for _, opt := range opts {
-		opt(config)
+		if opt != nil {
+			opt(config)
+		}
+	}
+	if identity.validationErr != nil && !config.keyPrefixExplicit {
+		return nil, identity.validationErr
 	}
 
-	// Parse Redis URL and create options
-	redisOpts, err := redis.ParseURL(config.redisURL)
+	client, connection, err := newOwnedRedisUniversalClient(config.redisURL, config.redisDB, config.logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Redis configuration: %w (check REDIS_URL environment variable)", core.ErrInvalidConfiguration)
+		return nil, fmt.Errorf("initialize Redis command store: %w", err)
 	}
-	redisOpts.DB = config.redisDB
-
-	// Create Redis client
-	client := redis.NewClient(core.ApplyRedisClientDefaults(redisOpts))
-
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := client.Ping(ctx).Err(); err != nil {
+	if err := rejectLegacyRedisPrefixForMode(connection.Mode, config.legacyPrefix, "HITL command store"); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("failed to connect to Redis: %w (check REDIS_URL and Redis connectivity)", core.RedactSensitiveError(err))
+		return nil, err
 	}
 
 	return &RedisCommandStore{
 		client:        client,
 		ownsClient:    true,
 		keyPrefix:     config.keyPrefix,
+		keys:          newHITLKeys(config.keyPrefix),
 		logger:        config.logger,
 		telemetry:     config.telemetry,
 		subscriptions: make(map[string]context.CancelFunc),
@@ -165,17 +181,25 @@ func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisC
 	if client == nil {
 		return nil, fmt.Errorf("redis command client is required")
 	}
+	identity := resolveRedisCheckpointIdentity()
 	config := &redisCommandStoreConfig{
-		keyPrefix: "truvag3:hitl",
-		logger:    &core.NoOpLogger{},
+		keyPrefix:    identity.keyPrefix,
+		logger:       &core.NoOpLogger{},
+		legacyPrefix: identity.legacyPrefix,
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(config)
 		}
 	}
+	if identity.validationErr != nil && !config.keyPrefixExplicit {
+		return nil, identity.validationErr
+	}
+	if err := rejectLegacyRedisPrefixForClient(client, config.legacyPrefix, "HITL command store"); err != nil {
+		return nil, err
+	}
 	return &RedisCommandStore{
-		client: client, keyPrefix: config.keyPrefix, logger: config.logger,
+		client: client, keyPrefix: config.keyPrefix, keys: newHITLKeys(config.keyPrefix), logger: config.logger,
 		telemetry: config.telemetry, subscriptions: make(map[string]context.CancelFunc),
 	}, nil
 }
@@ -187,7 +211,7 @@ func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisC
 // PublishCommand publishes a command for a waiting handler to receive.
 // Uses Redis Pub/Sub for cross-instance delivery.
 func (s *RedisCommandStore) PublishCommand(ctx context.Context, command *Command) error {
-	channel := fmt.Sprintf("%s:command:%s", s.keyPrefix, command.CheckpointID)
+	channel := s.keys.command(command.CheckpointID)
 
 	// Set timestamp if not set
 	if command.Timestamp.IsZero() {
@@ -196,30 +220,29 @@ func (s *RedisCommandStore) PublishCommand(ctx context.Context, command *Command
 
 	data, err := json.Marshal(command)
 	if err != nil {
-		telemetry.RecordSpanError(ctx, err)
 		return fmt.Errorf("failed to marshal command: %w", err)
 	}
 
 	// Publish to Redis channel
 	if err := s.client.Publish(ctx, channel, data).Err(); err != nil {
-		telemetry.RecordSpanError(ctx, err)
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to publish command", map[string]interface{}{
+				"request_id":    core.GetRequestID(ctx),
 				"operation":     "hitl_command_publish",
 				"checkpoint_id": command.CheckpointID,
 				"command_type":  command.Type,
-				"channel":       channel,
-				"error":         err.Error(),
+				"error":         "redis command publication failed",
+				"error_type":    "backend_operation",
 			})
 		}
-		return fmt.Errorf("failed to publish command to Redis: %w (check REDIS_URL and Redis connectivity)", err)
+		return fmt.Errorf("failed to publish command to Redis: %w (check Redis connection configuration and connectivity)", err)
 	}
 
 	// Add span event for tracing visibility
 	telemetry.AddSpanEvent(ctx, "hitl.command.published",
+		attribute.String("request_id", core.GetRequestID(ctx)),
 		attribute.String("checkpoint_id", command.CheckpointID),
 		attribute.String("command_type", string(command.Type)),
-		attribute.String("channel", channel),
 	)
 
 	// Record metric (Phase 4 - Metrics Integration)
@@ -227,10 +250,10 @@ func (s *RedisCommandStore) PublishCommand(ctx context.Context, command *Command
 
 	if s.logger != nil {
 		s.logger.DebugWithContext(ctx, "Command published", map[string]interface{}{
+			"request_id":    core.GetRequestID(ctx),
 			"operation":     "hitl_command_publish_complete",
 			"checkpoint_id": command.CheckpointID,
 			"command_type":  command.Type,
-			"channel":       channel,
 		})
 	}
 
@@ -240,7 +263,7 @@ func (s *RedisCommandStore) PublishCommand(ctx context.Context, command *Command
 // SubscribeCommand subscribes to commands for a specific checkpoint.
 // Returns a channel that receives commands. Call the cancel func when done.
 func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID string) (<-chan *Command, func(), error) {
-	channel := fmt.Sprintf("%s:command:%s", s.keyPrefix, checkpointID)
+	channel := s.keys.command(checkpointID)
 
 	// Create subscription context
 	subCtx, cancel := context.WithCancel(ctx)
@@ -252,8 +275,7 @@ func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID s
 	_, err := pubsub.Receive(subCtx)
 	if err != nil {
 		cancel()
-		telemetry.RecordSpanError(ctx, err)
-		return nil, nil, fmt.Errorf("failed to subscribe to command channel: %w (check REDIS_URL and Redis connectivity)", err)
+		return nil, nil, fmt.Errorf("failed to subscribe to command channel: %w (check Redis connection configuration and connectivity)", err)
 	}
 
 	// Create command channel
@@ -289,9 +311,11 @@ func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID s
 				if err := json.Unmarshal([]byte(msg.Payload), &cmd); err != nil {
 					if s.logger != nil {
 						s.logger.WarnWithContext(ctx, "Failed to unmarshal command", map[string]interface{}{
+							"request_id":    core.GetRequestID(ctx),
 							"operation":     "hitl_command_receive",
 							"checkpoint_id": checkpointID,
-							"error":         err.Error(),
+							"error":         "redis command decoding failed",
+							"error_type":    "decode",
 						})
 					}
 					continue
@@ -299,6 +323,7 @@ func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID s
 
 				// Add span event
 				telemetry.AddSpanEvent(ctx, "hitl.command.received",
+					attribute.String("request_id", core.GetRequestID(ctx)),
 					attribute.String("checkpoint_id", checkpointID),
 					attribute.String("command_type", string(cmd.Type)),
 				)
@@ -315,9 +340,9 @@ func (s *RedisCommandStore) SubscribeCommand(ctx context.Context, checkpointID s
 
 	if s.logger != nil {
 		s.logger.DebugWithContext(ctx, "Subscribed to command channel", map[string]interface{}{
+			"request_id":    core.GetRequestID(ctx),
 			"operation":     "hitl_command_subscribe",
 			"checkpoint_id": checkpointID,
-			"channel":       channel,
 		})
 	}
 
@@ -342,7 +367,8 @@ func (s *RedisCommandStore) Close() error {
 	if !s.ownsClient {
 		return nil
 	}
-	return s.client.Close()
+	s.closeOnce.Do(func() { s.closeErr = s.client.Close() })
+	return s.closeErr
 }
 
 // Compile-time interface compliance check

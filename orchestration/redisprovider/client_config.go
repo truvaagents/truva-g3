@@ -1,8 +1,8 @@
 package redisprovider
 
 import (
+	"crypto/tls"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/redis/go-redis/v9"
@@ -10,39 +10,29 @@ import (
 )
 
 type ClientConfig struct {
-	url    string
-	roleDB map[ClientRole]int
+	connection   core.RedisConnectionConfig
+	legacyRoleDB map[ClientRole]int
+	diagnostics  []string
 }
 
 type ClientConfigOption interface{ applyClientConfig(*ClientConfig) error }
 type clientConfigOption func(*ClientConfig) error
 
-var clientRoleDatabaseVariables = map[ClientRole]string{
-	ClientRoleExecution:  "TRUVAG3_EXECUTION_DEBUG_REDIS_DB",
-	ClientRoleLLMDebug:   "TRUVAG3_LLM_DEBUG_REDIS_DB",
-	ClientRoleHITL:       "TRUVAG3_HITL_REDIS_DB",
-	ClientRoleWorkflow:   "TRUVAG3_WORKFLOW_REDIS_DB",
-	ClientRoleScheduling: "TRUVAG3_SCHEDULING_REDIS_DB",
-	ClientRoleSkills:     "TRUVAG3_SKILLS_REDIS_DB",
+type completeConnectionConfigOption struct {
+	apply clientConfigOption
 }
 
 func (option clientConfigOption) applyClientConfig(config *ClientConfig) error { return option(config) }
 
+func (option completeConnectionConfigOption) applyClientConfig(config *ClientConfig) error {
+	return option.apply(config)
+}
+
+func (completeConnectionConfigOption) replacesRedisConnectionSource() {}
+
 func DefaultClientConfig() ClientConfig {
 	return ClientConfig{
-		url: "redis://localhost:6379",
-		// These database assignments preserve the behavior of the legacy
-		// constructors and examples. They are compatibility defaults, not
-		// recommendations for a new Redis deployment. Role-specific environment
-		// variables or WithRoleDatabase may isolate them differently.
-		roleDB: map[ClientRole]int{
-			ClientRoleExecution:  core.RedisDBExecutionDebug,
-			ClientRoleLLMDebug:   core.RedisDBLLMDebug,
-			ClientRoleHITL:       core.RedisDBTelemetry,
-			ClientRoleWorkflow:   core.RedisDBServiceDiscovery,
-			ClientRoleScheduling: core.RedisDBServiceDiscovery,
-			ClientRoleSkills:     core.RedisDBReserved9,
-		},
+		connection: core.DefaultRedisConnectionConfig(),
 	}
 }
 
@@ -56,67 +46,157 @@ func ConfigureClientConfig(base ClientConfig, options ...ClientConfigOption) (Cl
 			return ClientConfig{}, err
 		}
 	}
-	if _, err := redis.ParseURL(configured.url); err != nil {
-		return ClientConfig{}, fmt.Errorf("redisprovider: invalid Redis URL: %w", core.ErrInvalidConfiguration)
+	resolution, err := core.ResolveRedisConnectionConfig(&configured.connection, nil)
+	if err != nil {
+		return ClientConfig{}, fmt.Errorf("redisprovider: Redis connection: %w", err)
 	}
+	if resolution.Config.DB != 0 {
+		return ClientConfig{}, fmt.Errorf("redisprovider: canonical Redis connections require DB 0: %w", core.ErrInvalidConfiguration)
+	}
+	configured.connection = resolution.Config
 	return configured, nil
 }
 
 func WithClientURL(url string) ClientConfigOption {
-	return clientConfigOption(func(config *ClientConfig) error {
+	return completeConnectionConfigOption{apply: func(config *ClientConfig) error {
 		url = strings.TrimSpace(url)
 		if url == "" {
 			return fmt.Errorf("redisprovider: Redis URL is required")
 		}
-		config.url = url
+		connection, err := core.ParseStandaloneRedisURL(url)
+		if err != nil {
+			return fmt.Errorf("redisprovider: Redis URL: %w", err)
+		}
+		config.connection = connection
+		return nil
+	}}
+}
+
+// WithConnectionConfig replaces the complete Redis topology profile. It is the
+// direct Go configuration path and is validated after all options are applied.
+func WithConnectionConfig(connection core.RedisConnectionConfig) ClientConfigOption {
+	return completeConnectionConfigOption{apply: func(config *ClientConfig) error {
+		config.connection = connection
+		return nil
+	}}
+}
+
+// WithConnectionMode selects standalone, Sentinel, or cluster topology.
+func WithConnectionMode(mode core.RedisMode) ClientConfigOption {
+	return clientConfigOption(func(config *ClientConfig) error {
+		config.connection.Mode = mode
 		return nil
 	})
 }
 
-func WithRoleDatabase(role ClientRole, database int) ClientConfigOption {
+// WithAddresses replaces the Redis seed or Sentinel address list.
+func WithAddresses(addresses ...string) ClientConfigOption {
+	snapshot := append([]string(nil), addresses...)
 	return clientConfigOption(func(config *ClientConfig) error {
-		if _, ok := knownClientRoles[role]; !ok {
-			return fmt.Errorf("redisprovider: unknown client role %q", role)
+		config.connection.Addrs = append([]string(nil), snapshot...)
+		return nil
+	})
+}
+
+// WithSentinelMasterName sets the explicit Sentinel master name.
+func WithSentinelMasterName(masterName string) ClientConfigOption {
+	return clientConfigOption(func(config *ClientConfig) error {
+		config.connection.MasterName = masterName
+		return nil
+	})
+}
+
+// WithTLSConfig sets transport security without transferring ownership of the
+// caller's mutable TLS configuration.
+func WithTLSConfig(tlsConfig *tls.Config) ClientConfigOption {
+	return clientConfigOption(func(config *ClientConfig) error {
+		if tlsConfig == nil {
+			config.connection.TLSConfig = nil
+		} else {
+			config.connection.TLSConfig = tlsConfig.Clone()
 		}
-		if database < 0 {
-			return fmt.Errorf("redisprovider: database for role %q cannot be negative", role)
+		return nil
+	})
+}
+
+// WithDatabase sets the shared logical database. Canonical provider
+// composition is portable across standalone, Sentinel, and cluster topology,
+// so only DB 0 is accepted.
+func WithDatabase(database int) ClientConfigOption {
+	return clientConfigOption(func(config *ClientConfig) error {
+		if database != 0 {
+			return fmt.Errorf("redisprovider: canonical Redis connections require DB 0: %w", core.ErrInvalidConfiguration)
 		}
-		if config.roleDB == nil {
-			config.roleDB = make(map[ClientRole]int)
-		}
-		config.roleDB[role] = database
+		config.connection.DB = database
 		return nil
 	})
 }
 
 func LoadClientConfigFromEnvironment(base ClientConfig, lookup func(string) (string, bool)) (ClientConfig, error) {
+	return loadClientConfigFromEnvironment(base, lookup, true)
+}
+
+func loadClientConfigFromEnvironment(
+	base ClientConfig,
+	lookup func(string) (string, bool),
+	loadConnection bool,
+) (ClientConfig, error) {
 	if lookup == nil {
 		return ClientConfig{}, fmt.Errorf("redisprovider: environment lookup is required")
 	}
-	options := make([]ClientConfigOption, 0, 6)
-	if value, ok := lookup("REDIS_URL"); ok {
-		options = append(options, WithClientURL(value))
-	} else if value, ok := lookup("TRUVAG3_REDIS_URL"); ok {
-		options = append(options, WithClientURL(value))
+	configured := cloneClientConfig(base)
+	if loadConnection {
+		resolution, err := core.ResolveRedisConnectionConfig(nil, core.LookupEnv(lookup))
+		if err != nil {
+			return ClientConfig{}, fmt.Errorf("redisprovider: resolve Redis connection: %w", err)
+		}
+		configured.connection = resolution.Config
+		configured.diagnostics = append(configured.diagnostics, resolution.Diagnostics...)
 	}
-	for role, name := range clientRoleDatabaseVariables {
-		if value, ok := lookup(name); ok {
-			database, err := strconv.Atoi(strings.TrimSpace(value))
-			if err != nil {
-				return ClientConfig{}, fmt.Errorf("redisprovider: %s must be an integer", name)
-			}
-			options = append(options, WithRoleDatabase(role, database))
+	options, err := loadLegacyRoleDatabaseOptions(lookup)
+	if err != nil {
+		return ClientConfig{}, err
+	}
+	return ConfigureClientConfig(configured, options...)
+}
+
+func hasCompleteRedisConnectionOption(options []ClientConfigOption) bool {
+	for _, option := range options {
+		if _, complete := option.(interface{ replacesRedisConnectionSource() }); complete {
+			return true
 		}
 	}
-	return ConfigureClientConfig(base, options...)
+	return false
 }
 
 func cloneClientConfig(config ClientConfig) ClientConfig {
-	clone := ClientConfig{url: config.url, roleDB: make(map[ClientRole]int, len(config.roleDB))}
-	for role, database := range config.roleDB {
-		clone.roleDB[role] = database
+	clone := ClientConfig{
+		connection:   config.connection,
+		legacyRoleDB: make(map[ClientRole]int, len(config.legacyRoleDB)),
+		diagnostics:  append([]string(nil), config.diagnostics...),
+	}
+	clone.connection.Addrs = append([]string(nil), config.connection.Addrs...)
+	if config.connection.TLSConfig != nil {
+		clone.connection.TLSConfig = config.connection.TLSConfig.Clone()
+	}
+	for role, database := range config.legacyRoleDB {
+		clone.legacyRoleDB[role] = database
 	}
 	return clone
+}
+
+// Diagnostics returns bounded configuration notices for application bootstrap.
+func (config ClientConfig) Diagnostics() []string {
+	return append([]string(nil), config.diagnostics...)
+}
+
+func appendRedisDiagnostic(diagnostics []string, diagnostic string) []string {
+	for _, existing := range diagnostics {
+		if existing == diagnostic {
+			return diagnostics
+		}
+	}
+	return append(diagnostics, diagnostic)
 }
 
 type OwnedClients struct {
@@ -180,42 +260,31 @@ func NewOwnedClients(config ClientConfig, options ...OwnedClientsOption) (*Owned
 			return nil, err
 		}
 	}
-	byDatabase := make(map[int]redis.UniversalClient)
-	roleOptions := make([]ClientSetOption, 0, len(configured.roleDB))
-	for _, role := range orderedClientRoles {
-		if ownedConfig.restricted {
-			if _, selected := ownedConfig.roles[role]; !selected {
-				continue
-			}
-		}
-		database, ok := configured.roleDB[role]
-		if !ok {
-			continue
-		}
-		client := byDatabase[database]
-		if client == nil {
-			redisOptions, parseErr := redis.ParseURL(configured.url)
-			if parseErr != nil {
-				return nil, fmt.Errorf("redisprovider: invalid Redis URL: %w", core.ErrInvalidConfiguration)
-			}
-			redisOptions.DB = database
-			client = redis.NewClient(core.ApplyRedisClientDefaults(redisOptions))
-			byDatabase[database] = client
-		}
-		roleOptions = append(roleOptions, WithRoleClient(role, client))
+	if len(configured.legacyRoleDB) > 0 {
+		return newLegacyRoleDatabaseClients(configured, ownedConfig)
 	}
-	clientSet, err := NewClientSet(nil, roleOptions...)
+
+	client, err := core.NewRedisUniversalClient(configured.connection)
 	if err != nil {
-		for _, client := range byDatabase {
-			_ = client.Close()
+		return nil, fmt.Errorf("redisprovider: create shared client: %w", err)
+	}
+	var clientSet *ClientSet
+	if ownedConfig.restricted {
+		roleOptions := make([]ClientSetOption, 0, len(ownedConfig.roles))
+		for _, role := range orderedClientRoles {
+			if _, selected := ownedConfig.roles[role]; selected {
+				roleOptions = append(roleOptions, WithRoleClient(role, client))
+			}
 		}
+		clientSet, err = NewClientSet(nil, roleOptions...)
+	} else {
+		clientSet, err = NewClientSet(client)
+	}
+	if err != nil {
+		_ = client.Close()
 		return nil, err
 	}
-	owned := &OwnedClients{clientSet: clientSet, clients: make([]redis.UniversalClient, 0, len(byDatabase))}
-	for _, client := range byDatabase {
-		owned.clients = append(owned.clients, client)
-	}
-	return owned, nil
+	return &OwnedClients{clientSet: clientSet, clients: []redis.UniversalClient{client}}, nil
 }
 
 func (clients *OwnedClients) ClientSet() *ClientSet {

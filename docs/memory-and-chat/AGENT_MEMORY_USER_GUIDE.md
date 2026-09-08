@@ -557,7 +557,7 @@ Aliases (`fast`, `smart`, `default`) are resolved per-provider by the chain clie
 
 - **Cost grows with pass frequency, but sub-linearly.** A 1-hour `INTERVAL` runs 24× more passes per day than the 24-hour default, but each of those passes discovers fewer *newly-eligible* entities (fewer have crossed `AGE_THRESHOLD` since the last run), so total LLM spend grows less than 24×. Pick the interval based on how fast your event log actually accumulates patterns worth learning, not on raw cadence, and validate the real cost by inspecting `entities_processed`, `embedding_tokens`, and per-entity LLM call counts in the "Reflection pass completed" log line.
 - **`MIN_EVENTS` is a quality knob**: very low values (2-3) extract patterns from sparse data, which is hit-or-miss. Production-grade fragments usually need ≥5 events.
-- **Multi-replica safe**: the job acquires a Redis distributed lock (`truvag3:lock:reflection:<domain>`) before each pass. Other replicas log "lock held by another replica, skipping" and return.
+- **Multi-replica safe**: the job acquires a deployment-scoped, versioned Redis lock (`truvag3:v1:<deployment>:locks:{...}:lease`) before each pass. Other replicas log "lock held by another replica, skipping" and return.
 - **Fail-open**: if the LLM call fails or Qdrant is down, the pass logs and exits cleanly. The next interval will retry. No errors propagate to user requests.
 - **Append-only**: reflection never deletes episodic events. They expire naturally via the 60-day TTL. The reflection-produced fragments outlive them.
 

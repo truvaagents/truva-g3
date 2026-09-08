@@ -392,7 +392,7 @@ Redis-backed caching for JSON Schemas used in Phase 3 validation. Schemas are fe
 Create a Redis-backed schema cache for agents that perform Phase 3 validation.
 
 ```go
-func NewSchemaCache(redisClient *redis.Client, opts ...SchemaCacheOption) SchemaCache
+func NewSchemaCache(redisClient redis.Cmdable, opts ...SchemaCacheOption) SchemaCache
 ```
 
 **SchemaCache interface:**
@@ -3868,7 +3868,7 @@ recorder := &telemetry.NoOpLLMCallRecorder{}
 
 #### NewRedisLLMCallRecorder
 
-Write-only Redis-backed recorder that writes to Redis DB 7 in the same format as the orchestration module's `RedisLLMDebugStore`. Agents use this instead of importing the orchestration module directly.
+Write-only Redis/Valkey-backed recorder that writes to the versioned LLM-debug subspace of shared DB 0 in the same format as the orchestration module's `RedisLLMDebugStore`. Agents use this instead of importing the orchestration module directly.
 
 ```go
 func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, error)
@@ -4694,8 +4694,8 @@ func NewRedisCheckpointStoreWithClient(redis.UniversalClient, ...RedisCheckpoint
 func NewRedisCommandStoreWithClient(redis.UniversalClient, ...RedisCommandStoreOption) (*RedisCommandStore, error)
 func NewRedisStateStoreWithClient(redis.UniversalClient, time.Duration) (*RedisStateStore, error)
 func NewRedisStateStoreWithClientAndPrefix(redis.UniversalClient, time.Duration, string) (*RedisStateStore, error)
-func NewRedisTaskQueueWithClient(redis.Cmdable, *RedisTaskQueueConfig) *RedisTaskQueue
-func NewRedisTaskStoreWithClient(redis.Cmdable, *RedisTaskStoreConfig) *RedisTaskStore
+func NewRedisTaskQueue(redis.Cmdable, *RedisTaskQueueConfig) *RedisTaskQueue
+func NewRedisTaskStore(redis.Cmdable, *RedisTaskStoreConfig) *RedisTaskStore
 func NewRedisTaskDispatcherWithPrefix(redis.Cmdable, string) (*RedisTaskDispatcher, error)
 func NewRedisTaskConsumerWithPrefix(redis.Cmdable, string, string) (*RedisTaskConsumer, error)
 ```
@@ -5840,7 +5840,7 @@ type LLMDebugRecordSummary struct {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Included Redis preset and compatibility database assignment; not part of `LLMDebugStore` |
+| `TRUVAG3_LLM_DEBUG_REDIS_DB` | unset (DB 0) | Deprecated standalone-only role-database compatibility input; canonical composition uses the versioned shared DB 0 keyspace and this is not part of `LLMDebugStore` |
 
 ### Execution Debug Store
 
@@ -5852,14 +5852,103 @@ type StoredExecution struct {
     // Existing correlation, request, plan, result, HITL, phase, skill, and
     // metadata fields are omitted here for brevity.
 
+    // PipelineHooks is the ordered, request-local hook invocation record.
+    // It is provider-neutral and does not require a tracing backend.
+    PipelineHooks []PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+
     // FinalResponse is the terminal application response captured after
-    // AfterSynthesis hooks on the normal ProcessRequest paths.
+    // AfterSynthesis hooks or an accepted BeforePlanning short-circuit.
     FinalResponse       *string `json:"final_response,omitempty"`
     FinalResponseSource string  `json:"final_response_source,omitempty"`
 }
 
-const FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+type PipelineHookExecution struct {
+    HookName  string                      `json:"hook_name"`
+    Phase     string                      `json:"phase"`
+    Status    PipelineHookExecutionStatus `json:"status"`
+    Sequence  int                         `json:"sequence"`
+    PlanPhase int                         `json:"plan_phase,omitempty"`
+    StartedAt time.Time                   `json:"started_at"`
+    Duration  time.Duration               `json:"duration"`
+    Error     string                      `json:"error,omitempty"`
+    Effects   []core.PipelineHookEffect   `json:"effects,omitempty"`
+}
+
+type PipelineHookExecutionStatus string
+
+const (
+    PipelineHookSucceeded PipelineHookExecutionStatus = "succeeded"
+    PipelineHookFailed    PipelineHookExecutionStatus = "failed"
+    PipelineHookSkipped   PipelineHookExecutionStatus = "skipped"
+)
+
+const (
+    PipelineHookPhaseBeforePlanning = "before_planning"
+    PipelineHookPhaseAfterPlanning  = "after_planning"
+    PipelineHookPhaseAfterExecution = "after_execution"
+    PipelineHookPhaseAfterSynthesis = "after_synthesis"
+)
+
+const (
+    FinalResponseSourceAfterSynthesisHooks = "after_synthesis_hooks"
+    FinalResponseSourceBeforePlanningShortCircuit = "before_planning_short_circuit"
+)
+
+type PipelineHookEffect struct {
+    EffectID      string                   `json:"effect_id"`
+    SchemaVersion int                      `json:"schema_version"`
+    Name          string                   `json:"name"`
+    Status        PipelineHookEffectStatus `json:"status"`
+    Summary       string                   `json:"summary,omitempty"`
+    Data          json.RawMessage          `json:"data,omitempty"`
+    Error         string                   `json:"error,omitempty"`
+    StartedAt     time.Time                `json:"started_at,omitempty"`
+    Duration      time.Duration            `json:"duration,omitempty"`
+}
+
+type PipelineHookEffectStatus string
+
+const (
+    PipelineHookEffectPending   PipelineHookEffectStatus = "pending"
+    PipelineHookEffectSucceeded PipelineHookEffectStatus = "succeeded"
+    PipelineHookEffectPartial   PipelineHookEffectStatus = "partial"
+    PipelineHookEffectFailed    PipelineHookEffectStatus = "failed"
+    PipelineHookEffectSkipped   PipelineHookEffectStatus = "skipped"
+)
+
+var ErrInvalidPipelineHookEffect = errors.New("invalid pipeline hook effect")
 ```
+
+`Sequence` is one-based among hooks eligible for the same lifecycle phase.
+`PlanPhase` is populated for `after_planning` invocations so an iterative plan
+can place the hook without timestamp inference. `Duration` uses Go's
+`time.Duration` JSON representation (nanoseconds). `Error` preserves the exact
+hook or validation failure because execution-debug persistence is an explicit,
+fidelity-preserving opt-in. The field is carried by the existing
+`ExecutionStore.Store` contract, so custom providers receive the same record
+without any Redis-specific method or key.
+
+`Status` is the outcome of the framework invocation. It does not assert that
+all hook-initiated effects completed: hooks may fail open or schedule work that
+finishes after the invocation returns.
+
+`Effects` separately records those concrete outcomes. Effect IDs are stable
+within one invocation and carry a producer-owned schema version. A hook must
+announce a new `pending` effect before its invocation returns; detached work
+may then update that same ID to a terminal state. Hooks call
+`core.ReportPipelineHookEffect`; orchestration automatically captures exact
+`BeforePlanning` enrichment changes. `Data` and `Error` are exact
+execution-debug evidence and are not redacted, truncated, or summarized by the
+framework. Status is producer-reported, not independent proof of durable
+backend persistence; this distinction matters for documented fail-open memory
+providers that can return a neutral value after logging an internal runtime
+failure.
+
+Terminal effect rewrites apply to successful requests, failed requests,
+partial native streams, and HITL suspensions. Request-local revisions are
+admitted monotonically before the existing execution recorder serializes
+`ExecutionStore.Store` calls, preventing an older concurrent effect snapshot
+from overwriting a newer one without adding a provider-specific API.
 
 The LLM debug store retains the model's synthesis output. That output is a raw
 LLM draft, not proof of what the application ultimately returned. When the
@@ -5871,6 +5960,11 @@ under Post-Execution and keeps the synthesis interaction under LLM Calls.
 On native streaming, tokens were already emitted before `AfterSynthesis` ran;
 the stored value is the post-hook response object and may differ from text the
 client already received.
+
+An accepted `BeforePlanning` short-circuit stores a successful zero-step result
+and the exact response with
+`FinalResponseSourceBeforePlanningShortCircuit`. No model plan is required for
+that execution to appear as a successful terminal record.
 
 `ExecutePlanWithSynthesis` is workflow mode: it executes a supplied plan and
 performs synthesis, but it does not run application pipeline hooks and does not
@@ -6188,10 +6282,12 @@ func WithCommandStoreTelemetry(t core.Telemetry) RedisCommandStoreOption
 ```
 
 `NewRedisCommandStore` is the environment-aware compatibility constructor.
-`NewRedisCommandStoreWithClient` uses an application-owned client, performs no
-environment lookup for its key prefix, defaults deterministically to
-`truvag3:hitl`, and leaves the supplied client open on `Close`. Pass
-`WithCommandStoreKeyPrefix` for a deployment-specific prefix.
+`NewRedisCommandStoreWithClient` uses an application-owned client, derives its
+default versioned key prefix from deployment and agent-identity configuration,
+and leaves the supplied client open on `Close`.
+Canonical composition passes the same
+`keyspace.Tagged("hitl", agentScope)` value to
+`WithCommandStoreKeyPrefix` and `WithCheckpointKeyPrefix`.
 
 **InterruptHandler:**
 ```go
@@ -6473,7 +6569,8 @@ func WithExpiryProcessor(config ExpiryProcessorConfig) HITLOption
 | `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | Escalate to human after N retry failures |
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | Checkpoint expiration time |
 | `TRUVAG3_HITL_DEFAULT_ACTION` | `reject` | Action on timeout (approve, reject, abort) |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Base Redis key prefix; checkpoint stores append the resolved agent identity when present |
+| `TRUVAG3_REDIS_NAMESPACE` | `default` | Deployment namespace for canonical versioned DB 0 HITL keys |
+| `TRUVAG3_HITL_KEY_PREFIX` | unset | Deprecated precursor custom-prefix compatibility input |
 
 #### Expiry Processor Configuration
 

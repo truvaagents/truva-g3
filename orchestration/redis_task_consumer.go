@@ -30,12 +30,12 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+var dlqKeyPrefix = defaultRedisKeyspace().Plain("tasks", "dead") + ":"
+
 const (
 	// dlqKeyPrefix is the Redis list key for dead-lettered tasks.
 	// Shared with RedisStreamsTaskConsumer so operators see the same DLQ
 	// key pattern regardless of which backend they use.
-	dlqKeyPrefix = "truvag3:tasks:dead:"
-
 	// defaultBrpopTimeout is the BRPOP block duration. Short enough that
 	// ctx cancellation is observed within ~1s of the cancel; long enough
 	// to avoid tight-looping when the queue is empty.
@@ -59,7 +59,7 @@ type RedisTaskConsumer struct {
 // truvag3:tasks:queue:{name} list pattern. The queueName is captured here
 // so handles returned from Consume know where to write dead-letters.
 func NewRedisTaskConsumer(client redis.Cmdable, queueName string) (*RedisTaskConsumer, error) {
-	return NewRedisTaskConsumerWithPrefix(client, queueName, "truvag3:tasks")
+	return NewRedisTaskConsumerWithPrefix(client, queueName, defaultRedisKeyspace().Plain("tasks"))
 }
 
 func NewRedisTaskConsumerWithPrefix(client redis.Cmdable, queueName, prefix string) (*RedisTaskConsumer, error) {

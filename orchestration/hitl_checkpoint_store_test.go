@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -106,6 +107,7 @@ func newCheckpointTestStore(t *testing.T, client *redis.Client) *RedisCheckpoint
 	return &RedisCheckpointStore{
 		client:     client,
 		keyPrefix:  "test:hitl",
+		keys:       newHITLKeys("test:hitl"),
 		ttl:        24 * time.Hour,
 		logger:     &core.NoOpLogger{},
 		instanceID: "test-instance",
@@ -144,7 +146,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = legacyCommands.Close() })
-	if legacyCommands.keyPrefix != "legacy:hitl" {
+	if legacyCommands.keyPrefix != "legacy:hitl:travel-agent" {
 		t.Fatalf("legacy command prefix = %q, want environment value", legacyCommands.keyPrefix)
 	}
 
@@ -152,7 +154,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if commands.keyPrefix != "truvag3:hitl" {
+	if commands.keyPrefix != "legacy:hitl:travel-agent" {
 		t.Fatalf("application-owned command prefix = %q, want deterministic default", commands.keyPrefix)
 	}
 
@@ -162,6 +164,57 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 	}
 	if explicitCommands.keyPrefix != "explicit:hitl" {
 		t.Fatalf("explicit command prefix = %q, want explicit:hitl", explicitCommands.keyPrefix)
+	}
+}
+
+func TestHITLStoresRejectInvalidRedisNamespace(t *testing.T) {
+	mr, client := setupCheckpointTestRedis(t)
+	defer mr.Close()
+	defer func() { _ = client.Close() }()
+	t.Setenv("TRUVAG3_REDIS_NAMESPACE", "invalid{namespace")
+	t.Setenv("TRUVAG3_HITL_KEY_PREFIX", "")
+
+	tests := []struct {
+		name      string
+		construct func() error
+	}{
+		{
+			name: "checkpoint",
+			construct: func() error {
+				_, err := NewRedisCheckpointStoreWithClient(client)
+				return err
+			},
+		},
+		{
+			name: "command",
+			construct: func() error {
+				_, err := NewRedisCommandStoreWithClient(client)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.construct()
+			if !errors.Is(err, core.ErrInvalidConfiguration) {
+				t.Fatalf("constructor error = %v, want ErrInvalidConfiguration", err)
+			}
+		})
+	}
+
+	checkpoints, err := NewRedisCheckpointStoreWithClient(client, WithCheckpointKeyPrefix("explicit:hitl"))
+	if err != nil {
+		t.Fatalf("explicit checkpoint prefix did not override environment: %v", err)
+	}
+	if checkpoints.keyPrefix != "explicit:hitl" {
+		t.Fatalf("checkpoint prefix = %q, want explicit:hitl", checkpoints.keyPrefix)
+	}
+	commands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyPrefix("explicit:hitl"))
+	if err != nil {
+		t.Fatalf("explicit command prefix did not override environment: %v", err)
+	}
+	if commands.keyPrefix != "explicit:hitl" {
+		t.Fatalf("command prefix = %q, want explicit:hitl", commands.keyPrefix)
 	}
 }
 
@@ -247,6 +300,9 @@ func TestClaimExpiredCheckpointsPrunesTTLExpiredPendingReference(t *testing.T) {
 		!isMember(mr, "test:hitl:pending", checkpoint.CheckpointID) {
 		t.Fatal("checkpoint fixture was not persisted with its pending reference")
 	}
+	// A later checkpoint refresh can keep the shared pending index alive after
+	// this individual record expires; model that stale-candidate condition.
+	mr.SetTTL("test:hitl:pending", time.Hour)
 	mr.FastForward(2 * time.Second)
 	if mr.Exists("test:hitl:checkpoint:ttl-expired") ||
 		!isMember(mr, "test:hitl:pending", checkpoint.CheckpointID) {
@@ -288,7 +344,7 @@ func TestClaimExpiredCheckpointsReleasesPartialBatchOnError(t *testing.T) {
 	if err == nil || len(claimed) != 0 {
 		t.Fatalf("partial claim result = %#v, %v", claimed, err)
 	}
-	if mr.Exists("test:hitl:expiry:claim:a-good") {
+	if mr.Exists("test:hitl:claim:a-good") {
 		t.Fatal("partial-batch error leaked an acquired expiry lease")
 	}
 }
@@ -318,7 +374,7 @@ func TestClaimExpiredCheckpointsSkipsStatusChangedBeforeClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claimed) != 0 || mr.Exists("test:hitl:expiry:claim:approved") {
+	if len(claimed) != 0 || mr.Exists("test:hitl:claim:approved") {
 		t.Fatalf("approved checkpoint was claimed: %#v", claimed)
 	}
 }
@@ -361,7 +417,7 @@ func TestClaimExpiredCheckpointsDoesNotRacePastConcurrentApproval(t *testing.T) 
 	if hook.err != nil {
 		t.Fatal(hook.err)
 	}
-	if len(claimed) != 0 || mr.Exists("test:hitl:expiry:claim:racing") {
+	if len(claimed) != 0 || mr.Exists("test:hitl:claim:racing") {
 		t.Fatalf("concurrently approved checkpoint was claimed: %#v", claimed)
 	}
 	loaded, err := store.LoadCheckpoint(t.Context(), "racing")
@@ -750,7 +806,7 @@ func TestClaimExpiredCheckpoint_Success(t *testing.T) {
 	}
 
 	// Verify claim key was set
-	if !mr.Exists("test:hitl:expiry:claim:cp-123") {
+	if !mr.Exists("test:hitl:claim:cp-123") {
 		t.Error("Claim key should exist")
 	}
 }
@@ -764,7 +820,7 @@ func TestClaimExpiredCheckpoint_AlreadyClaimed(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-set the claim key to simulate another instance claiming it
-	_ = mr.Set("test:hitl:expiry:claim:cp-123", "other-instance")
+	_ = mr.Set("test:hitl:claim:cp-123", "other-instance")
 
 	claimed, err := store.claimExpiredCheckpoint(ctx, "cp-123")
 	if err != nil {
@@ -789,7 +845,7 @@ func TestReleaseExpiredCheckpointClaim_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// First claim it
-	_ = mr.Set("test:hitl:expiry:claim:cp-123", "test-instance")
+	_ = mr.Set("test:hitl:claim:cp-123", "test-instance")
 
 	err := store.releaseExpiredCheckpointClaim(ctx, "cp-123")
 	if err != nil {
@@ -797,7 +853,7 @@ func TestReleaseExpiredCheckpointClaim_Success(t *testing.T) {
 	}
 
 	// Verify claim key was deleted
-	if mr.Exists("test:hitl:expiry:claim:cp-123") {
+	if mr.Exists("test:hitl:claim:cp-123") {
 		t.Error("Claim key should be deleted")
 	}
 }
@@ -811,7 +867,7 @@ func TestReleaseExpiredCheckpointClaim_DifferentOwner(t *testing.T) {
 	ctx := context.Background()
 
 	// Claim owned by a different instance
-	_ = mr.Set("test:hitl:expiry:claim:cp-123", "other-instance")
+	_ = mr.Set("test:hitl:claim:cp-123", "other-instance")
 
 	err := store.releaseExpiredCheckpointClaim(ctx, "cp-123")
 	if err != nil {
@@ -819,7 +875,7 @@ func TestReleaseExpiredCheckpointClaim_DifferentOwner(t *testing.T) {
 	}
 
 	// Claim should NOT be deleted (different owner)
-	if !mr.Exists("test:hitl:expiry:claim:cp-123") {
+	if !mr.Exists("test:hitl:claim:cp-123") {
 		t.Error("Claim key should NOT be deleted (different owner)")
 	}
 }
@@ -1101,25 +1157,25 @@ func TestCheckpointStoreAgentNameFallback(t *testing.T) {
 			name:           "agent name set",
 			agentName:      "event-driven-agent",
 			serviceName:    "",
-			expectedPrefix: "truvag3:hitl:event-driven-agent",
+			expectedPrefix: "truvag3:v1:default:hitl:{default:hitl:event-driven-agent}",
 		},
 		{
 			name:           "K8s fallback",
 			agentName:      "",
 			serviceName:    "event-driven-agent",
-			expectedPrefix: "truvag3:hitl:event-driven-agent",
+			expectedPrefix: "truvag3:v1:default:hitl:{default:hitl:event-driven-agent}",
 		},
 		{
 			name:           "neither set — bare prefix",
 			agentName:      "",
 			serviceName:    "",
-			expectedPrefix: "truvag3:hitl",
+			expectedPrefix: "truvag3:v1:default:hitl:{default:hitl}",
 		},
 		{
 			name:           "agent name wins over service name",
 			agentName:      "agent",
 			serviceName:    "service",
-			expectedPrefix: "truvag3:hitl:agent",
+			expectedPrefix: "truvag3:v1:default:hitl:{default:hitl:agent}",
 		},
 	}
 

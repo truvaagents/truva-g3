@@ -258,14 +258,15 @@ func TestValidate(t *testing.T) {
 			wantErr: "telemetry endpoint is required when telemetry is enabled",
 		},
 		{
-			name: "Redis discovery without URL",
+			name: "Redis discovery without connection",
 			setup: func(cfg *Config) {
 				cfg.Discovery.Enabled = true
 				cfg.Discovery.Provider = "redis"
 				cfg.Discovery.RedisURL = ""
+				cfg.Discovery.RedisConnection = nil
 				cfg.Development.MockDiscovery = false
 			},
-			wantErr: "redis URL is required for Redis discovery provider",
+			wantErr: "redis connection is required for Redis discovery provider",
 		},
 		{
 			name: "Redis discovery with mock",

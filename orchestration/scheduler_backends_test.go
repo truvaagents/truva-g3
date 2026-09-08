@@ -1,10 +1,12 @@
 package orchestration
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestNewRedisSchedulerBackends_PopulatesBothPrimitives(t *testing.T) {
@@ -28,6 +30,38 @@ func TestNewRedisSchedulerBackends_NilClient_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errNilRedisClient)
 	assert.Nil(t, backends)
+}
+
+func TestNewRedisSchedulerBackends_UsesDeploymentKeyspace(t *testing.T) {
+	_, client := setupRedis(t)
+	keyspace, err := core.NewRedisKeyspace("production")
+	require.NoError(t, err)
+
+	backends, err := NewRedisSchedulerBackends(client, WithRedisSchedulerKeyspace(keyspace))
+	require.NoError(t, err)
+
+	store := backends.ScheduleStore.(*RedisScheduleStore)
+	dispatcher := backends.TaskDispatcher.(*RedisTaskDispatcher)
+	consumer := backends.TaskConsumer.(*RedisTaskConsumer)
+	for _, key := range []string{store.dueKey(), dispatcher.queuePrefix, dispatcher.idPrefix, consumer.queuePrefix, consumer.dlqPrefix} {
+		assert.True(t, strings.HasPrefix(key, "truvag3:v1:production:"), key)
+	}
+}
+
+func TestNewRedisStreamsSchedulerBackends_UsesDeploymentKeyspace(t *testing.T) {
+	_, client := setupRedis(t)
+	keyspace, err := core.NewRedisKeyspace("production")
+	require.NoError(t, err)
+
+	backends, runnable, err := NewRedisStreamsSchedulerBackends(client, WithRedisSchedulerKeyspace(keyspace))
+	require.NoError(t, err)
+
+	dispatcher := backends.TaskDispatcher.(*RedisStreamsTaskDispatcher)
+	consumer := backends.TaskConsumer.(*RedisStreamsTaskConsumer)
+	reaper := runnable.(*RedisStreamsReaper)
+	for _, key := range []string{dispatcher.streamPrefix, dispatcher.idPrefix, consumer.streamPrefix, consumer.dlqPrefix, reaper.streamKey} {
+		assert.True(t, strings.HasPrefix(key, "truvag3:v1:production:"), key)
+	}
 }
 
 func TestNewInMemorySchedulerBackends_PopulatesBothPrimitives(t *testing.T) {

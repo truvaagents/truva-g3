@@ -275,8 +275,8 @@ type LLMDebugConfig struct {
 	// Default: 168h (7 days). Override via TRUVAG3_LLM_DEBUG_ERROR_TTL
 	ErrorTTL time.Duration `json:"error_ttl"`
 
-	// RedisDB is the Redis database number for storage.
-	// Default: 7 (core.RedisDBLLMDebug). Override via TRUVAG3_LLM_DEBUG_REDIS_DB
+	// RedisDB is retained only for the direct-constructor compatibility window.
+	// Canonical provider composition uses DB 0 and RedisKeyspace.
 	// Deprecated: configure Redis client roles through redisprovider.ClientConfig.
 	// This field remains for the legacy compatibility factory.
 	RedisDB int `json:"redis_db"`
@@ -289,6 +289,6 @@ func DefaultLLMDebugConfig() LLMDebugConfig {
 		Enabled:  false,              // Disabled by default
 		TTL:      24 * time.Hour,     // 24 hours for success
 		ErrorTTL: 7 * 24 * time.Hour, // 7 days for errors
-		RedisDB:  7,                  // core.RedisDBLLMDebug
+		RedisDB:  0,
 	}
 }

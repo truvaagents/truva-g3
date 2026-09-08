@@ -13,6 +13,7 @@ package orchestration
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -40,9 +41,15 @@ type RedisStreamsReaper struct {
 
 // NewRedisStreamsReaper creates a reaper for the given stream and group.
 func NewRedisStreamsReaper(client redis.Cmdable, queueName, groupName string) *RedisStreamsReaper {
+	return NewRedisStreamsReaperWithPrefix(client, queueName, groupName, defaultRedisKeyspace().Plain("tasks"))
+}
+
+// NewRedisStreamsReaperWithPrefix creates a reaper in an explicit deployment
+// task keyspace.
+func NewRedisStreamsReaperWithPrefix(client redis.Cmdable, queueName, groupName, prefix string) *RedisStreamsReaper {
 	return &RedisStreamsReaper{
 		client:            client,
-		streamKey:         taskStreamKeyPrefix + queueName,
+		streamKey:         strings.TrimSuffix(strings.TrimSpace(prefix), ":") + ":stream:" + queueName,
 		groupName:         groupName,
 		consumerName:      consumerName(),
 		reapInterval:      defaultReapInterval,

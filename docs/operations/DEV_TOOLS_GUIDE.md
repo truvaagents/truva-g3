@@ -517,11 +517,11 @@ Sections 7 and 8 cover the second tool: the Registry Viewer web app. If Swagger 
 Open [http://registry.localhost](http://registry.localhost) against the local
 kind cluster and you land in a single-page web app with six tabs across the top:
 **Registry**, **LLM Debug**, **HITL Interrupted**, **Execution DAG**, **Skills**,
-and **Memory**. Each tab is backed by a framework store, management API, or
-optional trace query. Most activity is observational. Deliberate business/control
+and **Memory**. Each tab is backed by a framework store or management API; an
+optional trace link is navigation only. Most activity is observational. Deliberate business/control
 mutations are HITL Approve/Reject and skill publication/deletion; execution
 grouping also performs bounded maintenance by removing confirmed-dead IDs from
-DB 8 indexes.
+the DB 0 execution-debug indexes.
 
 The app is a reference implementation — not a framework component. It ships in [`examples/registry-viewer-app/`](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) and you can fork it, strip it down, or rewrite it for your own environment. It demonstrates how framework interfaces and the included Redis/Valkey and optional Qdrant adapters can back a small Go + vanilla-JS operational UI. The Skills view calls the provider-neutral `SkillAdminHandler`; it does not make raw Redis writes.
 
@@ -531,42 +531,42 @@ A quick tour of the six views before we go deep:
 
 | View | What it answers | Data source |
 |------|-----------------|-------------|
-| 📋 **Registry** | Which services are registered right now? What capabilities does each one expose? Are they healthy? When was each last seen? | Redis `truvag3:services:*` keys — the same data Swagger UI's `/swagger-urls.json` feed reads |
-| 🔍 **LLM Debug** | Every LLM call the orchestrator made on behalf of an agent (plan generation, synthesis, tool selection, semantic retry, memory hook calls, error analysis) plus any direct AI calls an agent made through an instrumented client — with full prompts and responses, searchable across all requests and agents. How many tokens? How long? Did it error? | Redis `truvag3:llm:debug:*` (DB 7). Two writers feed the same store with the same record format: the orchestration module's `RedisLLMDebugStore` (called directly by orchestrator-internal components like compactors, resolvers, error analyzers — gated by `TRUVAG3_LLM_DEBUG_ENABLED`) and `telemetry.RedisLLMCallRecorder` (called by agents that wrap their AI client in `InstrumentedAIClient` — used for direct AI calls that don't go through the orchestrator). Both writers can be active independently. |
+| 📋 **Registry** | Which services are registered right now? What capabilities does each one expose? Are they healthy? When was each last seen? | Versioned registry subspace in Redis/Valkey DB 0—the same store Swagger UI's `/swagger-urls.json` feed reads |
+| 🔍 **LLM Debug** | Every LLM call the orchestrator made on behalf of an agent (plan generation, synthesis, tool selection, semantic retry, memory hook calls, error analysis) plus any direct AI calls an agent made through an instrumented client—with full prompts and responses, searchable across all requests and agents. How many tokens? How long? Did it error? | Versioned `llm-debug` subspace in Redis/Valkey DB 0. Two writers feed the same schema: the orchestration module's `RedisLLMDebugStore` and `telemetry.RedisLLMCallRecorder`. Both writers can be active independently. |
 | ✋ **HITL Interrupted** | Is there a human approval waiting? What did the agent pause for? Who needs to act? How much time until it expires? | Redis HITL checkpoint store (`orchestration.CheckpointStore`) |
-| 🔀 **Execution DAG** | For this specific request, what happened? What was the plan? How did each step run? Which skills and LLM calls were involved? Were memory hooks involved? Did HITL interrupt it? Was the plan regenerated mid-flight? | Redis `truvag3:execution:debug:*` — populated by the orchestrator's debug recorder |
-| 🧩 **Skills** | Which skill packages are published? What domains and tags describe them? Does an edited package validate? What immutable versions exist, and which old versions may be deleted? | Provider-neutral `SkillAdminHandler`; the bundled host composes `redisprovider.SkillStore` in DB 9 |
+| 🔀 **Execution DAG** | For this specific request, what happened? What was the plan? How did each step run? Which skills and LLM calls were involved? Which pipeline hooks ran, in what order, for how long, and with what outcome? Did HITL interrupt it? Was the plan regenerated mid-flight? | Versioned `execution-debug` subspace in Redis/Valkey DB 0, populated by the orchestrator's debug recorder |
+| 🧩 **Skills** | Which skill packages are published? What domains and tags describe them? Does an edited package validate? What immutable versions exist, and which old versions may be deleted? | Provider-neutral `SkillAdminHandler`; the bundled host composes `redisprovider.SkillStore` in the versioned DB 0 skills subspace |
 | 📝 **Memory** | What's in shared memory right now for this domain? What events happened in the last 24 hours? What investigations are active? What's the current digest the LLM sees? | Redis shared-memory stores + optional Qdrant for knowledge vectors |
 
 All six views use a consistent list-and-detail visual language. Most have a **list panel** on the left and a **detail panel** on the right that populates when you pick a row. Each detail panel has view-specific tabs, and the header shows relevant stats such as record count, token count, pending count, or published-skill count.
 
 ### How It Gets Its Data
 
-The Registry Viewer does not scrape logs or query Prometheus. Its observational
-views read the included Redis and Qdrant-backed stores, and the execution detail
-endpoint optionally queries Jaeger for linked traces and deterministic pipeline-
-hook spans. HITL actions proxy a command to the owning agent, while Skills
-actions call the framework's management handler. Grouped execution reads also
-perform bounded DB 8 index hygiene as described below. Its data comes from these
+The Registry Viewer does not scrape logs, query Prometheus, or query Jaeger.
+Its observational execution and hook views read the included Redis-backed
+stores; an execution's stored trace ID is only an optional browser link to the
+configured Jaeger UI. HITL actions proxy a command to the owning agent, while
+Skills actions call the framework's management handler. Grouped execution reads also
+perform bounded execution-index hygiene as described below. Its data comes from these
 sources:
 
 | Source | What it holds | Which views use it |
 |--------|---------------|--------------------|
-| Redis `truvag3:services:*` (DB 0) | Service registrations (tools and agents) with TTL refresh | Registry view; also feeds `/swagger-urls.json` for the Swagger UI dropdown |
-| Redis `truvag3:llm:debug:*` (DB 7) | Full LLM interaction records (prompt, response, tokens, duration, type, category, success). The store has two writers (see `truvag3:llm:debug:*` row in §7 view summary above): the orchestration module's `RedisLLMDebugStore` and `telemetry.RedisLLMCallRecorder`. Both write the same record format. | LLM Debug view; DAG detail panel's LLM Calls tab fetches the same record by request ID |
-| Redis HITL checkpoint store (`{base-prefix}[:{agent-name}]:checkpoint:*`; base defaults to `truvag3:hitl`) | Pending and expired checkpoints with plan, current step, resolved parameters, decision, status, agent name, agent address, request mode. Configure the base with `TRUVAG3_HITL_KEY_PREFIX`; the framework appends `TRUVAG3_AGENT_NAME` or `TRUVAG3_K8S_SERVICE_NAME` when present. | HITL Interrupted view; DAG detail panel's HITL tab |
-| Redis `truvag3:execution:debug:*` (DB 8) | Full execution records (plan, per-step results, HITL state, phase history, skill evidence, metadata, and optional post-`AfterSynthesis` application response). Written by `orchestration.RedisExecutionDebugStore` independently of DB 7. Grouped/timeline reads may remove a confirmed-missing member from execution/conversation sorted-set indexes, but never delete an execution record. | Execution DAG view |
-| Jaeger Query API (optional) | Execution trace, linked trigger traces, and deterministic `BeforePlanning`, `AfterPlanning`, `AfterExecution`, and `AfterSynthesis` hook spans. Configured with `JAEGER_QUERY_URL`; trace links redirect through `JAEGER_UI_URL`. | Execution DAG full-flow graph and hook tabs |
-| Provider-neutral skill management API; included Redis keys under `truvag3:skills:{store}:*` (DB 9) | Published skill metadata, immutable manifests/resources, version history and tombstones, revision tokens, and body-free audit records | Skills view; Execution DAG's Skills tab reads the separate execution-debug evidence for a request |
+| Redis/Valkey DB 0 registry subspace | Service registrations (tools and agents) with TTL refresh | Registry view; also feeds `/swagger-urls.json` for the Swagger UI dropdown |
+| Redis/Valkey DB 0 `truvag3:v1:<deployment>:llm-debug:*` subspace | Full LLM interaction records (prompt, response, tokens, duration, type, category, success). `RedisLLMDebugStore` and `telemetry.RedisLLMCallRecorder` write the same format. | LLM Debug view; DAG detail panel's LLM Calls tab fetches the same record by request ID |
+| Redis/Valkey DB 0 HITL subspace (`truvag3:v1:<deployment>:hitl:{<deployment>:hitl:<agent>}:*`) | Pending and expired checkpoints with plan, current step, resolved parameters, decision, status, agent name, agent address, and request mode. | HITL Interrupted view; DAG detail panel's HITL tab |
+| Redis/Valkey DB 0 `truvag3:v1:<deployment>:execution-debug:*` subspace | Full execution records (plan, per-step results, HITL state, phase history, pipeline-hook outcomes, skill evidence, metadata, and optional post-`AfterSynthesis` application response). Grouped/timeline reads may remove a confirmed-missing member from advisory execution/conversation indexes, but never delete an execution record. | Execution DAG view |
+| Stored trace ID + `JAEGER_UI_URL` (optional navigation) | Browser link to the corresponding Jaeger trace. Registry Viewer does not query Jaeger or derive execution/hook data from spans. | Execution DAG header only |
+| Provider-neutral skill management API; included Redis/Valkey DB 0 skills subspace | Published skill metadata, immutable manifests/resources, version history and tombstones, revision tokens, and body-free audit records | Skills view; Execution DAG's Skills tab reads the separate execution-debug evidence for a request |
 | Redis shared memory keys (episodic events, activities, investigations, digest cache) | Source agents' episodic events; live activity signals from `ActivityCoordinator`; investigation locks from `InvestigationCoordinator`; cached compaction digests | Memory view |
 | Qdrant collections (when `TRUVAG3_VECTOR_DB_URL` is set) | Semantic knowledge vectors (Phase 2 shared memory) | Memory view (knowledge detail) — currently behind feature flag |
 
 Registry Viewer is not the source of truth: restarting it loses no persisted
 data. Its Registry, LLM Debug, execution, and memory surfaces are lenses over
 framework state. The execution list has one maintenance side effect: after an
-authoritative DB 8 record is confirmed absent, the Viewer removes that stale ID
-from the affected sorted-set index. Consequently DB 7 may be read-only to the
-Viewer, while DB 8 requires index-write permission. Its Skills surface is also
+authoritative execution record is confirmed absent, the Viewer removes that stale ID
+from the affected sorted-set index. Consequently the LLM-debug subspace may be
+read-only to the Viewer, while the execution-debug subspace requires index-write permission. Its Skills surface is also
 the bundled management client and host, so successful publication or deletion
 intentionally changes the authoritative skill store through framework
 concurrency, validation, protection, and audit rules.
@@ -577,7 +577,7 @@ concurrency, validation, protection, and audit rules.
 > preserves complete prompts and responses. A planning prompt can therefore
 > contain user-memory enrichment that was actually supplied to the model, and
 > the LLM Debug or execution LLM Calls view can display it. Protect Registry
-> Viewer and DB 7 accordingly; the framework does not silently redact those
+> Viewer and the LLM-debug keyspace accordingly; the framework does not silently redact those
 > payloads.
 
 ### Prerequisites
@@ -589,8 +589,8 @@ For the views to show data, the underlying features have to be enabled in your c
 | Registry | Services must register with a shared Redis via `core.WithDiscovery(true, "redis")`. This is the default for every example tool/agent in the repo. |
 | LLM Debug | Two enablement paths, often both at once: (a) **Orchestrator-internal calls** (`plan_generation`, `tiered_selection`, `synthesis_streaming`, memory hooks, error analysis, etc.) populate the store automatically when the orchestrator is constructed with `TRUVAG3_LLM_DEBUG_ENABLED=true` — the orchestration module's `RedisLLMDebugStore` is wired up by the factory. (b) **Direct agent AI calls** (an agent that calls `ai.GenerateResponse(...)` outside of an orchestration step) populate the store only when the agent wraps its AI client with `ai.NewInstrumentedClient(..., debugRecorder, ...)` using `telemetry.NewRedisLLMCallRecorder`. See [`examples/agent-with-telemetry/research_agent.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-telemetry/research_agent.go) for the wiring. Most chat agents in the kind cluster don't need (b) because their LLM calls go through the orchestrator and are captured by (a). |
 | HITL Interrupted | At least one agent must run the orchestration module with HITL enabled (`HITLConfig.Enabled: true` and a configured checkpoint store). See [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md). |
-| Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED`—DB 8 supplies execution evidence and DB 7 supplies LLM/hook interactions. Configure Registry Viewer `JAEGER_QUERY_URL` for optional trace-backed hook and linked-trace enrichment and `JAEGER_UI_URL` for the Trace link. Redis evidence remains usable when Jaeger is unavailable. |
-| Skills | The Registry Viewer must compose its skills backend and `SkillAdminHandler`; the bundled deployment does this with `TRUVAG3_SKILLS_REDIS_DB=9`. Runtime skill evidence inside an execution also requires that agent to enable skills and `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. Full skill-bearing prompts require `TRUVAG3_LLM_DEBUG_ENABLED=true`. |
+| Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED`; the DB 0 execution-debug and LLM-debug subspaces supply different evidence. Pipeline-hook diagnostics are stored with the execution record. Configure `JAEGER_UI_URL` only if the optional Trace browser link is wanted; Registry Viewer never queries Jaeger. |
+| Skills | The Registry Viewer must compose its skills backend and `SkillAdminHandler`; the bundled deployment uses the same topology and `TRUVAG3_REDIS_NAMESPACE` as runtime agents. Runtime skill evidence inside an execution also requires that agent to enable skills and `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. Full skill-bearing prompts require `TRUVAG3_LLM_DEBUG_ENABLED=true`. |
 | Memory | Agents must be wired with shared memory via `memory.NewSharedBackends(...)` and `orchestration.BuildMemoryHooks(...)`. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). `TRUVAG3_AGENT_DOMAIN` must be set so the view has a domain to pick from in its dropdown. |
 
 On the local kind cluster, **enablement varies per agent** because the env vars are independent and each example was originally written for its own purpose:
@@ -607,7 +607,7 @@ The asymmetric setup shown above explains why `agent-with-telemetry` can have a
 record in LLM Debug without a corresponding Execution DAG row. The reverse
 configuration is also possible for a custom or newly created agent: enabling
 the execution store but disabling LLM debug produces a DAG row whose LLM Calls
-tab has no DB 7 interactions. None of the other agents in this table currently
+tab has no LLM-debug interactions. None of the other agents in this table currently
 uses that reverse configuration. Always check both environment variables when
 diagnosing a new agent.
 
@@ -621,7 +621,7 @@ This section walks through each view in detail: what the list panel shows, what 
 
 **Use this view when you want to ask:** "Is my new tool actually registered? Is it healthy? When was it last seen? What capabilities did it publish?"
 
-This is the simplest view and the one you'll open first when checking whether a deployment succeeded. It lists every tool and agent currently registered in Redis under `truvag3:services:*`, with the Redis TTL driving health — a service that stops sending heartbeats drops off the list within 30 seconds.
+This is the simplest view and the one you'll open first when checking whether a deployment succeeded. It lists every tool and agent in the versioned Redis/Valkey DB 0 registry subspace, with the record TTL driving health—a service that stops sending heartbeats drops off the list within 30 seconds.
 
 **List panel.** A sortable table of registered service rows with these columns:
 - **Type** — `tool` or `agent` (with an icon for quick scanning)
@@ -763,9 +763,9 @@ Below the header, if the plan was regenerated mid-flight, a warning strip shows 
 A **Steps Only / Full Flow toggle** at the top switches between two modes:
 - **Steps Only** — just the tool-invocation steps, clean and compact
 - **Full Flow** — steps + orchestration/agent LLM calls + HITL checkpoints +
-  trace-backed deterministic pipeline hooks, interleaved by lifecycle and
-  timing evidence. Jaeger enrichment is optional; its absence does not remove
-  the Redis-backed execution record.
+  stored deterministic pipeline-hook outcomes, interleaved by lifecycle,
+  phase-local order, and timing evidence. The execution record is the source of
+  truth; the optional trace link is navigation only.
 
 #### Tab 2: Pre-Execution
 
@@ -776,10 +776,11 @@ deterministic/LLM-backed plan governance around the planner:
 - **User Memory Enrichment** — which recall calls ran (`user_memory_recall_identity`, `user_memory_recall_summary`, `user_memory_recall_query`, `user_memory_recall_universal`), how long each took, and whether the `user_memory_enrichment_injected` step succeeded (meaning the `<user_profile>` XML fragment made it into the plan-generation prompt). Note: this tab shows that the enrichment ran, not the contents of the profile itself — see the privacy note in §7.
 - **Memory Compaction** — `activity_compaction_incremental` calls and their durations. Useful for diagnosing slow first-requests where the digest cache was cold.
 
-Trace-backed hook cards can prove that a deterministic hook ran even when it
-made no LLM call. This tab is the place to look when you suspect the planner did
-not receive expected context or a post-planning policy altered/validated its
-plan.
+Stored hook cards prove that a deterministic hook ran even when it made no LLM
+call. They show the lifecycle phase, terminal status, phase-local order,
+duration, start time, iterative plan phase where applicable, and exact recorded
+failure. This tab is the place to look when you suspect the planner did not
+receive expected context or a post-planning policy altered/validated its plan.
 
 #### Tab 3: Step Details
 
@@ -826,6 +827,10 @@ application response existed after post-synthesis governance?" Workflow-mode
 the UI states that no post-hook evidence was stored instead of treating the raw
 synthesis as the outcome.
 
+The deterministic hook cards use the same stored fields as Pre-Execution. They
+do not expose a Jaeger span as “evidence”: the persisted execution record is the
+evidence, while a trace remains an optional, request-level FYI link.
+
 #### Tab 6: HITL
 
 Only visible when a checkpoint fired during this execution. Shows the checkpoint lifecycle *within* the execution timeline:
@@ -860,7 +865,7 @@ prompt text. Use the Skills tab for the safer lifecycle and integrity view.
 
 #### Tab 8: Raw JSON
 
-The full execution record as stored in Redis under `truvag3:execution:debug:*`. When you need to copy-paste into a bug report or pipe into external tooling.
+The full execution record as stored in the versioned Redis/Valkey DB 0 execution-debug subspace. Use it when you need to copy-paste into a bug report or pipe into external tooling.
 
 **Header stats.** Executions, Success Rate.
 

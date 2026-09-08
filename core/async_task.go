@@ -363,7 +363,7 @@ type AsyncTaskConfig struct {
 // These values are suitable for most production deployments.
 func DefaultAsyncTaskConfig() AsyncTaskConfig {
 	return AsyncTaskConfig{
-		QueuePrefix:     "truvag3:tasks",
+		QueuePrefix:     "truvag3:v1:default:tasks",
 		WorkerCount:     5,
 		DequeueTimeout:  30 * time.Second,
 		ShutdownTimeout: 30 * time.Second,

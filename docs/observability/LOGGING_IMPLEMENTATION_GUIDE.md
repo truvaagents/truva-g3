@@ -730,7 +730,7 @@ values. That request family is narrower than a multi-turn conversation.
 application `session_id` remains generic: a reference chat agent may map its
 session UUID to `conversation_id`, but the framework does not assign that
 meaning to every session. Registry Viewer reads the validated conversation
-value from execution DB 8 and LLM-debug DB 7; it does not infer the value from
+value from the versioned DB 0 execution-debug and LLM-debug subspaces; it does not infer the value from
 session metadata.
 
 ### The Challenge: Multiple Requests, One Request Family
@@ -1338,7 +1338,9 @@ if o.logger != nil {
 | orchestration | `orchestrator_construction_rejection` | A public operation reached a compatibility orchestrator whose construction had failed. ERROR with `requested_operation`, `status=rejected`, `error_type=preparation`, request correlation when available, and a bounded error string |
 | orchestration | `streaming_fallback` | Caller requested streaming but the effective AI client reported no native streaming support. WARN with request correlation, `status=fallback`, and bounded `reason=client_streaming_unsupported` |
 | orchestration | `pipeline_short_circuit_decision` | WARN diagnostic for a rejected provenance-aware decision or an accepted legacy short-circuit when reserved cache dimensions exist. Carries request ID, hook, bounded kind/reason/status. Accepted modern decisions are intentionally trace/metric-only to avoid routine log volume |
+| orchestration | `before_planning_hook` / `after_execution_hook` / `after_synthesis_hook` | A phase callback returned an error and the fail-open runner continued. WARN with `request_id`, hook name, exact hook error, and bounded `error_type=hook_error` |
 | orchestration | `after_planning_hook` | An after-planning hook error, wrong return type, clone failure, or invalid mutation was rejected. WARN with request ID, hook, and bounded reason; the last valid plan continues. Accepted mutations are metric/span-only |
+| orchestration | `knowledge_extraction` | Detached knowledge-extraction work. Context-aware WARN/INFO records run under the linked async span, carry `request_id`, and use bounded error types such as `llm_unavailable`, `parse_failure`, `embedding`, and `knowledge_store` |
 | orchestration | `clarification_short_circuit` | Phase loop terminated early because the planner emitted `needs_user_input` |
 | orchestration | `synthesis_clarification_mode` | Synthesizer entered clarification mode and used the augmented system prompt |
 | orchestration | `result_distill` | Result distillation lifecycle (Stage-1 pre-filter → Stage-2 LLM distill). Success logs carry `original_bytes` / `distilled_bytes` / `duration_ms`; failures use `error_type: compaction` and fall open to the structural floor |
@@ -1368,8 +1370,24 @@ if o.logger != nil {
 | core | `framework_runnable_start` | `Framework.Run` is about to launch all registered runnables in parallel goroutines. Emitted once per `Run`, skipped when no runnables are registered |
 | core | `framework_runnable_exit` | A registered runnable's `Start` method returned. Emitted at INFO level on clean exit (returned `nil` or `context.Canceled`), or at ERROR level with `error_type=runnable_exit` on any other error |
 | core | `framework_runnable_drain` | Runnable drain lifecycle event. Emitted in three contexts: (1) INFO when draining begins after the HTTP server stops, (2) INFO when all runnables exit cleanly within the drain budget, (3) WARN with `error_type=runnable_drain_timeout` when the drain budget (`TRUVAG3_FRAMEWORK_RUNNABLE_DRAIN_TIMEOUT`, default `10s`) is exceeded |
+| core | `redis_configuration_notice` | One bounded, deduplicated startup advisory for deprecated Redis configuration. Carries no URL, address, credential, or raw environment value |
+| core | `redis_client_compatibility` / `redis_client_connect` / `redis_client_close` / `redis_health_check` | Namespaced Redis-client compatibility, lifecycle, and explicit health checks. These records are scoped to `framework/core`; request-scoped health checks carry `request_id` and `duration_ms`; failures use fixed text and bounded `error_type=backend` |
+| core | `redis_discovery_initialize` / `redis_registry_initialize` | Agent/tool Redis discovery startup. Carries topology mode and bounded startup status, never seed addresses or credentials |
+| core | `discovery_index_cleanup` | Fail-open removal of stale members from a Redis discovery index. WARN with request correlation, bounded counts, and `error_type=index_write`; the authoritative discovery result remains successful |
+| core | `redis_registry_retry_configuration` | Retry startup was rejected before the background loop because topology configuration was invalid. WARN with `status=rejected`, request correlation when available, and bounded `error_type=invalid_configuration` |
+| orchestration | `execution_store_initialize` / `llm_debug_store_initialize` | Startup summaries for opt-in Redis debug stores. Include mode, seed count, DB, and retention policy without addresses or credentials. Direct and provider-created stores scope component-aware loggers to `framework/orchestration` |
+| orchestration | `execution_store_index` / `execution_store_conversation_index` / `execution_store_trace_index` / `execution_store_projection_ttl` / `llm_debug_recent_index` | Fail-open debug projection maintenance. Carries `request_id`, a bounded index/TTL classification, sanitized error text, and retry duration where applicable; exact debug bodies are not logged |
+| orchestration | `execution_store_retry` / `llm_debug_store_retry` / `execution_store_compression` / `llm_debug_interaction_decode` / `llm_debug_orphan_cleanup` | Redis debug-store retry, encoding, and maintenance diagnostics. Request work uses context-aware logging and explicit request correlation; detached orphan cleanup uses a bounded non-context record. Retry and decode failures use fixed error text and bounded classifications rather than Redis or stored payload text |
+| orchestration | `schedule_create` / `schedule_update` / `schedule_delete` / `schedule_load` / `schedule_index_cleanup` | Request-correlated schedule lifecycle plus malformed-record and stale-index diagnostics. Failure observations are bounded and exclude stored JSON and backend error text |
+| orchestration | `task_create` / `task_get` / `task_update` / `task_delete` / `task_cancel` | Request-correlated task lifecycle. Backend and serialization failures use fixed messages and bounded error types; task payloads and Redis error text are excluded |
+| orchestration | `task_index_reconcile` | Failure-only background log for bounded task projection repair. Uses the non-context logger, fixed error text, `error_type=index_reconcile`, and `duration_ms`; successful periodic passes are silent |
 | memory | `memory_enrichment` | `MemoryEnrichmentHook.BeforePlanning` lifecycle — covers recent-events query failures (`error_type=episodic_recent_read`), entity-keyed history query failures (`error_type=episodic_read`), digest cache decisions (DEBUG-level path tracking), and successful enrichment with `entities_found` and `context_chars` summary at INFO level |
 | memory | `memory_record` | `MemoryRecordHook.AfterExecution` lifecycle — covers per-step event recording. INFO on successful batch (`events_recorded` count), WARN on summarizer failure (`error_type=summarizer_error`), WARN on episodic write failure (`error_type=episodic_write`) for both entity-indexed and entity-less events, WARN on investigation release failure (`error_type=release`) |
+| memory | `record_event` / `query_events` / `delete_events` / `digest_cache` / `distributed_lock` / `activity_*` / `*_investigation_*` | Redis memory-adapter diagnostics. Carry request/entity correlation, fixed error text, and bounded classifications; raw Redis errors and payloads are excluded. All component-aware loggers are scoped to `framework/memory` |
+| memory | `shared_backends_setup` / `shared_backends_shutdown` | Non-request startup/shutdown summaries for the shared memory bundle. Optional-backend degradation uses fixed diagnostics without Redis, vector-store, or credential-bearing error text |
+| telemetry | `llm_debug_recorder_initialize` / `llm_debug_recorder_retry` / `llm_debug_recent_index` | Redis LLM-recorder startup, authoritative-write retry, and fail-open recent-index maintenance. The recorder scopes component-aware loggers to `framework/telemetry`; request work is correlated and bounded, while startup remains non-contextual and credential-free |
+| registry-viewer | `viewer_mode_selection` / `viewer_redis_close` / `viewer_telemetry_initialize` / `viewer_telemetry_shutdown` / `viewer_skills_backend_close` | Registry Viewer startup/shutdown lifecycle. Uses fixed status/error values and excludes Redis endpoints, credentials, and exporter/backend error text |
+| registry-viewer | `viewer_execution_index_cleanup` / `viewer_execution_index_maintenance` / `viewer_execution_analytics` | Request-triggered reads and cleanup of confirmed-missing execution projections. Uses the viewer's structured logger with request context, a bounded stage/error type, and no index key, stored body, or backend error text |
 | memory | `reflection_job` | Outer reflection-job lifecycle — just two log lines: "Reflection job started" (once at registration) and "Reflection job stopping (context cancelled)" (once at shutdown). Does not cover any individual pass |
 | memory | `reflection_pass` | One reflection pass. Covers pass start/completion, distributed-lock acquire/skip outcomes, entity-discovery errors, per-fragment embed and knowledge-store errors. Per-entity reflector events (including the per-entity LLM call outcome) are logged under `operation=reflect` instead |
 | core | `memory_sweeper` | Outer `*core.MemoryStoreSweeper` lifecycle — INFO at start, INFO at clean shutdown on ctx cancellation, WARN with `error_type=runnable_exit` if `Start` returned without ctx being cancelled (defensive, fires alongside the `memory.sweeper.unexpected_exits` counter). Does not cover any individual pass |
@@ -1517,6 +1535,58 @@ payload-fidelity audit. They are not complete coverage and applications must
 not rely on them as a security boundary. Built-in debug stores preserve the
 values supplied to them; adopters own classification, access control, and any
 required sanitization policy.
+
+### Pipeline-Hook Evidence Logging Boundary
+
+Pipeline-hook effect capture does not create a second log stream. The
+framework records ordinary callback failures once through the phase runner,
+using a context-aware WARN with `operation`, `request_id`, `hook`, exact
+application-owned error text, and bounded `error_type=hook_error`. Built-in
+hooks retain their documented operation-specific logs. Exact structured effect
+payloads are written only through the opt-in `ExecutionStore` and are not
+expanded into log fields.
+
+Built-in fail-open provider warnings carry a bounded `error_type` but do not
+copy raw provider error text or body-bearing effect data into the ordinary log.
+The matching execution-debug effect retains the exact provider observation.
+This is a provider-boundary classification, not a transformation of the
+application-owned hook callback error described above.
+
+The asynchronous `KnowledgeExtractionHook` starts a linked root span on its
+hook-owned shutdown context and copies request baggage before it logs. Its
+`WithContext` records therefore retain `trace_id`, `span_id`, and `request_id`
+without inheriting request cancellation. The supplied logger is component
+scoped to `framework/orchestration` when it supports
+`core.ComponentAwareLogger`.
+
+Late effect snapshots reuse the existing detached execution recorder. Storage
+failures continue to use a non-context WARN with explicitly captured
+`request_id`, optional trace/conversation/checkpoint correlation, the
+`execution_store` operation, and bounded `error_type`; effect bodies are never
+logged. This is the same detached-storage contract documented in the HITL
+section above.
+
+### Redis/Valkey Backend Logging Boundary
+
+Redis and Valkey topology resolution, client construction, and shutdown occur
+outside a user request, so those paths use the basic logger methods. Their
+records expose only bounded topology facts such as mode, seed count, DB, and
+the validated keyspace prefix. They never expose seed addresses, URLs,
+credentials, TLS material, or raw environment values. Startup failures retain
+their original causes through `Unwrap`, but framework-owned log fields use
+fixed text and bounded `error_type` values.
+
+Request-driven adapter diagnostics use `WithContext`, preserve the supplied
+context for the Redis command, and include `request_id`. Advisory projection
+failures—discovery cleanup, execution/LLM debug indexes and TTLs, schedule
+cleanup, and fail-open memory coordination—log a bounded WARN without changing
+the authoritative result. Raw Redis errors, stored payloads, and full Redis
+keys are not ordinary log fields.
+
+`TaskIndexReconciler` is application-lifecycle maintenance rather than a user
+request. It uses the non-context logger, emits only a bounded failure record,
+and keeps successful periodic passes silent. This avoids inventing request
+correlation or retaining a trace context across ticks.
 
 ---
 

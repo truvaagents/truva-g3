@@ -605,7 +605,7 @@ func DefaultHITLConfig() HITLConfig {
 		DefaultTimeout:       5 * time.Minute,
 		DefaultAction:        CommandReject, // HITL enabled = require explicit approval
 		CheckpointTTL:        24 * time.Hour,
-		KeyPrefix:            "truvag3:hitl",
+		KeyPrefix:            defaultRedisKeyspace().Tagged("hitl", ""),
 		ExpiryProcessor: ExpiryProcessorConfig{
 			Enabled:           true,             // Expiry processing enabled by default
 			ScanInterval:      10 * time.Second, // Scan every 10 seconds

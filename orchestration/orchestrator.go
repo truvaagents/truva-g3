@@ -1312,6 +1312,8 @@ func rebuildCheckpointCompletedSteps(checkpoint *ExecutionCheckpoint) {
 //
 // Contract (post ORCH-022):
 //   - For executions that have reached model execution, result is non-nil.
+//   - A successful BeforePlanning short-circuit also stores a non-nil,
+//     zero-step result so list consumers can distinguish it from a failure.
 //   - A typed lifecycle-boundary failure may store a nil result with its
 //     request-local debug evidence before any model call occurs.
 //   - checkpoint != nil signals HITL interruption.
@@ -1332,7 +1334,21 @@ func (o *AIOrchestrator) storeExecutionAsync(
 	result *ExecutionResult,
 	checkpoint *ExecutionCheckpoint,
 ) {
-	o.storeExecutionSnapshotAsync(ctx, request, requestID, plan, result, checkpoint, nil, "")
+	o.storeExecutionSnapshotAsync(ctx, request, requestID, plan, result, checkpoint, nil, "", false)
+}
+
+// storeTerminalExecutionAsync records a request-ending failure or suspension.
+// Unlike an intermediate phase snapshot, it also installs the request-local
+// publisher that can replace pending hook effects with their terminal state.
+func (o *AIOrchestrator) storeTerminalExecutionAsync(
+	ctx context.Context,
+	request string,
+	requestID string,
+	plan *RoutingPlan,
+	result *ExecutionResult,
+	checkpoint *ExecutionCheckpoint,
+) {
+	o.storeExecutionSnapshotAsync(ctx, request, requestID, plan, result, checkpoint, nil, "", true)
 }
 
 func (o *AIOrchestrator) storeExecutionWithFinalResponseAsync(
@@ -1343,6 +1359,26 @@ func (o *AIOrchestrator) storeExecutionWithFinalResponseAsync(
 	result *ExecutionResult,
 	finalResponse string,
 ) {
+	o.storeExecutionWithFinalResponseSourceAsync(
+		ctx,
+		request,
+		requestID,
+		plan,
+		result,
+		finalResponse,
+		FinalResponseSourceAfterSynthesisHooks,
+	)
+}
+
+func (o *AIOrchestrator) storeExecutionWithFinalResponseSourceAsync(
+	ctx context.Context,
+	request string,
+	requestID string,
+	plan *RoutingPlan,
+	result *ExecutionResult,
+	finalResponse string,
+	finalResponseSource string,
+) {
 	responseCopy := finalResponse
 	o.storeExecutionSnapshotAsync(
 		ctx,
@@ -1352,7 +1388,8 @@ func (o *AIOrchestrator) storeExecutionWithFinalResponseAsync(
 		result,
 		nil,
 		&responseCopy,
-		FinalResponseSourceAfterSynthesisHooks,
+		finalResponseSource,
+		true,
 	)
 }
 
@@ -1365,6 +1402,7 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 	checkpoint *ExecutionCheckpoint,
 	finalResponse *string,
 	finalResponseSource string,
+	terminal bool,
 ) {
 	if o.executionStore == nil {
 		return
@@ -1413,6 +1451,12 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 		skillState, _ := holder.Snapshot()
 		debug := cloneSkillExecutionState(skillState).Debug
 		stored.Skills = &debug
+	}
+	var hookHolder *pipelineHookExecutionHolder
+	var hookRevision uint64
+	if holder, ok := pipelineHookExecutionHolderFromContext(ctx); ok {
+		hookHolder = holder
+		stored.PipelineHooks, hookRevision = holder.SnapshotWithRevision()
 	}
 
 	if conversationID != "" {
@@ -1464,7 +1508,7 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 		checkpointID = checkpoint.CheckpointID
 	}
 	recorder := o.executionRecorderFor(requestID)
-	recorder.Record(executionRecordSnapshot{
+	recordSnapshot := executionRecordSnapshot{
 		Record:             stored,
 		CorrelationContext: ctx,
 		RequestID:          requestID,
@@ -1477,7 +1521,27 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 			o.config.ExecutionStore.TTL,
 			o.config.ExecutionStore.ErrorTTL,
 		),
-	})
+	}
+	recorder.Record(recordSnapshot)
+
+	// Detached hook effects (for example knowledge extraction) can finish after
+	// a response, failure, or HITL suspension has ended the request. Reuse the
+	// same provider-neutral Store contract to rewrite that terminal record with
+	// the newer effect snapshot. The revision gate makes concurrent submissions
+	// monotonic before the recorder serializes their provider writes.
+	if terminal && hookHolder != nil {
+		publisher := newOrderedPipelineHookExecutionPublisher(
+			hookRevision,
+			func(hooks []PipelineHookExecution) {
+				updated := *stored
+				updated.PipelineHooks = hooks
+				updateSnapshot := recordSnapshot
+				updateSnapshot.Record = &updated
+				recorder.Record(updateSnapshot)
+			},
+		)
+		hookHolder.SetTerminalPublisher(hookRevision, publisher)
+	}
 }
 
 func (o *AIOrchestrator) executionRecorderFor(requestID string) *executionRecorder {
@@ -2112,7 +2176,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 
 		// --- Normalize + validate plan (fixpoint) ---
 		// Skip for HITL resume plans: they were validated at generation time and contain
-		// the exact checkpoint plan restored from DB 6. Re-validating against the current
+		// the exact checkpoint plan restored from the DB-0 HITL keyspace. Re-validating against the current
 		// agent registry could reject the plan for transient agent availability changes
 		// between interrupt and resume, discarding the user-approved plan.
 		// See Issue 5 in BUG_CONTINUATION_PROMPT_MISSING_CUSTOM_INSTRUCTIONS_AND_RESUME_REPLAY.md.
@@ -2364,7 +2428,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				// Result.Steps slice. Plan-level HITL fires BEFORE executor runs for
 				// this phase, so currentPhaseSteps is nil.
 				rebuildCheckpointCompletedSteps(checkpoint)
-				o.storeExecutionAsync(ctx, request, requestID, plan,
+				o.storeTerminalExecutionAsync(ctx, request, requestID, plan,
 					buildNonSuccessResult(nil, phasePlans, phaseCount, forcedTerminal, allStepsList, plan.PlanID, false),
 					checkpoint,
 				)
@@ -2427,7 +2491,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				// executor.go:831-838); pull them via extractCurrentPhaseFromCheckpoint.
 				currentPhaseSteps := extractCurrentPhaseFromCheckpoint(checkpoint, allStepResults)
 				rebuildCheckpointCompletedSteps(checkpoint)
-				o.storeExecutionAsync(ctx, request, requestID, plan,
+				o.storeTerminalExecutionAsync(ctx, request, requestID, plan,
 					buildNonSuccessResult(currentPhaseSteps, phasePlans, phaseCount, forcedTerminal, allStepsList, plan.PlanID, false),
 					checkpoint,
 				)
@@ -2458,7 +2522,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			if phaseResult != nil {
 				errorCurrentPhaseSteps = phaseResult.Steps
 			}
-			o.storeExecutionAsync(ctx, request, requestID, plan,
+			o.storeTerminalExecutionAsync(ctx, request, requestID, plan,
 				buildNonSuccessResult(errorCurrentPhaseSteps, phasePlans, phaseCount, forcedTerminal, allStepsList, plan.PlanID, false),
 				nil,
 			)
@@ -2893,6 +2957,21 @@ func (o *AIOrchestrator) synthesizeBuffered(state *executionRunState) (*Orchestr
 		synthesisSpan.End()
 	}
 	if err != nil {
+		// The phase-loop snapshot predates AfterExecution. Persist another
+		// snapshot before returning so a failed synthesis cannot hide hook
+		// outcomes from the execution-debug record. Use a shallow copy so the
+		// terminal snapshot is failed without mutating the result used by other
+		// request-lifecycle observers.
+		failedResult := *loopResult.CombinedResult
+		failedResult.Success = false
+		o.storeTerminalExecutionAsync(
+			ctx,
+			request,
+			requestID,
+			loopResult.LastPlan,
+			&failedResult,
+			nil,
+		)
 		return nil, fmt.Errorf("synthesis failed: %w", err)
 	}
 
@@ -3101,7 +3180,9 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 				}
 				synthesisSpan.End()
 			}
-			o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
+			partialResult := *loopResult.CombinedResult
+			partialResult.Success = false
+			o.storeTerminalExecutionAsync(ctx, request, requestID, loopResult.LastPlan, &partialResult, nil)
 			partialUsage, partialByPhase := usageAcc.Snapshot()
 			return &StreamingOrchestratorResponse{
 				OrchestratorResponse: OrchestratorResponse{
@@ -3149,7 +3230,9 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			synthesisSpan.SetAttribute("synthesis.duration_ms", time.Since(synthesisStart).Milliseconds())
 			synthesisSpan.End()
 		}
-		o.storeExecutionAsync(ctx, request, requestID, loopResult.LastPlan, loopResult.CombinedResult, nil)
+		failedResult := *loopResult.CombinedResult
+		failedResult.Success = false
+		o.storeTerminalExecutionAsync(ctx, request, requestID, loopResult.LastPlan, &failedResult, nil)
 		return nil, fmt.Errorf("synthesis streaming failed: %w", err)
 	}
 

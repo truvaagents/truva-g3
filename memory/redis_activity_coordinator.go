@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
@@ -12,17 +13,26 @@ import (
 var _ core.ActivityCoordinator = (*RedisActivityCoordinator)(nil)
 
 // RedisActivityCoordinator uses Redis SET with TTL for transient activity signals.
-// Key pattern: truvag3:activity:{domain}:{requestID} → signal JSON
+// Signals and the domain index share one cluster hash slot.
 //
-// AnnounceActivity: SET with TTL
+// AnnounceActivity: transactional SET with TTL + index membership
 // UpdateStatus: GET + modify + SET (refreshes TTL)
-// GetDomainActivities: SCAN truvag3:activity:{domain}:*
-// CompleteActivity: DEL
+// GetDomainActivities: SSCAN the domain index and hydrate candidates
+// CompleteActivity: transactional DEL + index removal
 // TTL handles crash cleanup — no orphaned signals.
 type RedisActivityCoordinator struct {
-	client redis.Cmdable
-	domain string
-	logger core.Logger
+	client   redis.Cmdable
+	domain   string
+	keyspace core.RedisKeyspace
+	logger   core.Logger
+}
+
+// WithActivityCoordinatorKeyspace sets the deployment-scoped Redis keyspace.
+func WithActivityCoordinatorKeyspace(keyspace core.RedisKeyspace) RedisActivityCoordinatorOption {
+	return func(c *RedisActivityCoordinator) error {
+		c.keyspace = keyspace
+		return nil
+	}
 }
 
 // RedisActivityCoordinatorOption configures RedisActivityCoordinator.
@@ -49,9 +59,10 @@ func NewRedisActivityCoordinator(client redis.Cmdable, domain string, opts ...Re
 		return nil, fmt.Errorf("redis client is required for RedisActivityCoordinator")
 	}
 	c := &RedisActivityCoordinator{
-		client: client,
-		domain: domain,
-		logger: &core.NoOpLogger{},
+		client:   client,
+		domain:   domain,
+		keyspace: defaultRedisKeyspace(),
+		logger:   &core.NoOpLogger{},
 	}
 	for _, opt := range opts {
 		if err := opt(c); err != nil {
@@ -62,32 +73,31 @@ func NewRedisActivityCoordinator(client redis.Cmdable, domain string, opts ...Re
 }
 
 func (c *RedisActivityCoordinator) signalKey(requestID string) string {
-	return fmt.Sprintf("truvag3:activity:%s:%s", c.domain, requestID)
+	return c.signalKeyForDomain(c.domain, requestID)
+}
+
+func (c *RedisActivityCoordinator) signalKeyForDomain(domain, requestID string) string {
+	return c.keyspace.Tagged("activity", domain, "signal", requestID)
+}
+
+func (c *RedisActivityCoordinator) signalIndexKey(domain string) string {
+	return c.keyspace.Tagged("activity", domain, "signals")
 }
 
 func (c *RedisActivityCoordinator) AnnounceActivity(ctx context.Context, signal core.ActivitySignal) error {
 	data, err := MarshalSignal(signal)
 	if err != nil {
-		if c.logger != nil {
-			c.logger.WarnWithContext(ctx, "Failed to marshal activity signal", map[string]interface{}{
-				"operation":  "activity_announce",
-				"request_id": signal.RequestID,
-				"error":      err.Error(),
-				"error_type": "marshal_failure",
-			})
-		}
-		return fmt.Errorf("failed to marshal activity signal: %w", err)
+		c.observeRuntimeFailure(ctx, "activity_announce_marshal", signal.RequestID, err)
+		return nil
 	}
-	if setErr := c.client.Set(ctx, c.signalKey(signal.RequestID), data, signal.TTL).Err(); setErr != nil {
-		if c.logger != nil {
-			c.logger.WarnWithContext(ctx, "Failed to write activity signal to Redis", map[string]interface{}{
-				"operation":  "activity_announce",
-				"request_id": signal.RequestID,
-				"error":      setErr.Error(),
-				"error_type": "redis_write",
-			})
-		}
-		return setErr
+	_, setErr := c.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, c.signalKey(signal.RequestID), data, signal.TTL)
+		pipe.SAdd(ctx, c.signalIndexKey(c.domain), signal.RequestID)
+		return nil
+	})
+	if setErr != nil {
+		c.observeRuntimeFailure(ctx, "activity_announce", signal.RequestID, setErr)
+		return nil
 	}
 	return nil
 }
@@ -101,64 +111,129 @@ func (c *RedisActivityCoordinator) UpdateStatus(ctx context.Context, requestID, 
 		return nil // Signal expired or was completed — no-op
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get activity signal for status update: %w", err)
+		c.observeRuntimeFailure(ctx, "activity_status_read", requestID, err)
+		return nil
 	}
 
 	// Modify status
 	signal, err := UnmarshalSignal(data)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal activity signal: %w", err)
+		c.observeRuntimeFailure(ctx, "activity_status_unmarshal", requestID, err)
+		return nil
 	}
 	signal.Status = status
 
 	// Re-SET with remaining TTL
 	ttl, err := c.client.TTL(ctx, key).Result()
-	if err != nil || ttl <= 0 {
+	if err != nil {
+		c.observeRuntimeFailure(ctx, "activity_status_ttl", requestID, err)
+		return nil
+	}
+	if ttl <= 0 {
 		return nil // Signal about to expire — don't refresh
 	}
 
 	updated, err := MarshalSignal(signal)
 	if err != nil {
-		return fmt.Errorf("failed to marshal updated signal: %w", err)
+		c.observeRuntimeFailure(ctx, "activity_status_marshal", requestID, err)
+		return nil
 	}
-	return c.client.Set(ctx, key, updated, ttl).Err()
+	if err := c.client.Set(ctx, key, updated, ttl).Err(); err != nil {
+		c.observeRuntimeFailure(ctx, "activity_status_write", requestID, err)
+	}
+	return nil
 }
 
 func (c *RedisActivityCoordinator) GetDomainActivities(ctx context.Context, domain string) ([]core.ActivitySignal, error) {
-	pattern := fmt.Sprintf("truvag3:activity:%s:*", domain)
+	ids, err := c.scanSetMembers(ctx, c.signalIndexKey(domain), 256)
+	if err != nil {
+		c.observeRuntimeFailure(ctx, "activity_index_scan", "", err)
+		return nil, nil
+	}
+	pipe := c.client.Pipeline()
+	commands := make([]*redis.StringCmd, len(ids))
+	for i, id := range ids {
+		commands[i] = pipe.Get(ctx, c.signalKeyForDomain(domain, id))
+	}
+	_, execErr := pipe.Exec(ctx)
+	if execErr != nil && execErr != redis.Nil {
+		c.observeRuntimeFailure(ctx, "activity_signal_load", "", execErr)
+		return nil, nil
+	}
+	signals := make([]core.ActivitySignal, 0, len(ids))
+	stale := make([]interface{}, 0)
+	for i, command := range commands {
+		data, err := command.Bytes()
+		if err == redis.Nil {
+			stale = append(stale, ids[i])
+			continue
+		}
+		if err != nil {
+			c.observeRuntimeFailure(ctx, "activity_signal_load", ids[i], err)
+			return nil, nil
+		}
+		signal, err := UnmarshalSignal(data)
+		if err != nil {
+			c.observeRuntimeFailure(ctx, "activity_signal_unmarshal", ids[i], err)
+			continue
+		}
+		signals = append(signals, signal)
+	}
+	if len(stale) > 0 {
+		if err := c.client.SRem(ctx, c.signalIndexKey(domain), stale...).Err(); err != nil {
+			c.observeRuntimeFailure(ctx, "activity_index_cleanup", "", err)
+		}
+	}
+	return signals, nil
+}
 
-	var signals []core.ActivitySignal
+func (c *RedisActivityCoordinator) scanSetMembers(ctx context.Context, key string, countHint int64) ([]string, error) {
+	seen := make(map[string]struct{})
 	var cursor uint64
 	for {
-		keys, nextCursor, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+		ids, nextCursor, err := c.client.SScan(ctx, key, cursor, "", countHint).Result()
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan activity signals: %w", err)
+			return nil, err
 		}
-
-		for _, key := range keys {
-			data, err := c.client.Get(ctx, key).Bytes()
-			if err == redis.Nil {
-				continue // Expired between SCAN and GET
-			}
-			if err != nil {
-				continue // Skip errors, fail-open
-			}
-			signal, err := UnmarshalSignal(data)
-			if err != nil {
-				continue // Malformed — skip
-			}
-			signals = append(signals, signal)
+		for _, id := range ids {
+			seen[id] = struct{}{}
 		}
-
 		cursor = nextCursor
 		if cursor == 0 {
 			break
 		}
 	}
-
-	return signals, nil
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (c *RedisActivityCoordinator) CompleteActivity(ctx context.Context, requestID string) error {
-	return c.client.Del(ctx, c.signalKey(requestID)).Err()
+	_, err := c.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, c.signalKey(requestID))
+		pipe.SRem(ctx, c.signalIndexKey(c.domain), requestID)
+		return nil
+	})
+	if err != nil {
+		c.observeRuntimeFailure(ctx, "activity_complete", requestID, err)
+	}
+	return nil
+}
+
+func (c *RedisActivityCoordinator) observeRuntimeFailure(ctx context.Context, operation, requestID string, _ error) {
+	if c.logger == nil {
+		return
+	}
+	errorType := "backend"
+	if strings.HasSuffix(operation, "_marshal") || strings.HasSuffix(operation, "_unmarshal") {
+		errorType = "serialization"
+	}
+	c.logger.WarnWithContext(ctx, "Redis activity coordination failed open", map[string]interface{}{
+		"operation":  operation,
+		"request_id": requestID,
+		"error":      "redis activity coordination unavailable",
+		"error_type": errorType,
+	})
 }

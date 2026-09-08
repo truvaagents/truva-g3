@@ -18,12 +18,11 @@ func NewOrchestrationBackends(
 	backendOptions := make([]orchestration.OrchestrationBackendOption, 0, 19)
 
 	if client := clients.Resolve(ClientRoleExecution); client != nil {
-		executionOptions := []orchestration.RedisExecutionDebugStoreOption{}
-		if options.logger != nil {
-			executionOptions = append(executionOptions, orchestration.WithExecutionDebugLogger(componentLogger(options.logger)))
+		executionOptions := []orchestration.RedisExecutionDebugStoreOption{
+			orchestration.WithExecutionDebugKeyspace(options.keyspace),
 		}
-		if options.namespace != "" {
-			executionOptions = append(executionOptions, orchestration.WithExecutionDebugKeyPrefix(options.namespace+":execution:debug"))
+		if options.logger != nil {
+			executionOptions = append(executionOptions, orchestration.WithExecutionDebugLogger(options.logger))
 		}
 		store, err := orchestration.NewRedisExecutionDebugStoreWithClient(client, options.executionConfig, executionOptions...)
 		if err != nil {
@@ -36,12 +35,10 @@ func NewOrchestrationBackends(
 		llmOptions := []orchestration.RedisLLMDebugStoreOption{
 			orchestration.WithDebugTTL(options.llmDebugTTL),
 			orchestration.WithDebugErrorTTL(options.llmDebugErrorTTL),
+			orchestration.WithDebugKeyspace(options.keyspace),
 		}
 		if options.logger != nil {
-			llmOptions = append(llmOptions, orchestration.WithDebugLogger(componentLogger(options.logger)))
-		}
-		if options.namespace != "" {
-			llmOptions = append(llmOptions, orchestration.WithDebugKeyPrefix(options.namespace+":llm:debug"))
+			llmOptions = append(llmOptions, orchestration.WithDebugLogger(options.logger))
 		}
 		store, err := orchestration.NewRedisLLMDebugStoreWithClient(client, llmOptions...)
 		if err != nil {
@@ -53,15 +50,14 @@ func NewOrchestrationBackends(
 	if client := clients.Resolve(ClientRoleHITL); client != nil {
 		checkpointOptions := []orchestration.RedisCheckpointStoreOption{
 			orchestration.WithCheckpointTTL(options.checkpointTTL),
+			orchestration.WithCheckpointKeyspace(options.keyspace, options.agentScope),
 		}
-		commandOptions := []orchestration.RedisCommandStoreOption{}
+		commandOptions := []orchestration.RedisCommandStoreOption{
+			orchestration.WithCommandStoreKeyspace(options.keyspace, options.agentScope),
+		}
 		if options.logger != nil {
 			checkpointOptions = append(checkpointOptions, orchestration.WithCheckpointStoreLogger(options.logger))
 			commandOptions = append(commandOptions, orchestration.WithCommandStoreLogger(options.logger))
-		}
-		if options.namespace != "" {
-			checkpointOptions = append(checkpointOptions, orchestration.WithCheckpointKeyPrefix(options.namespace+":hitl"))
-			commandOptions = append(commandOptions, orchestration.WithCommandStoreKeyPrefix(options.namespace+":hitl"))
 		}
 		checkpoints, err := orchestration.NewRedisCheckpointStoreWithClient(client, checkpointOptions...)
 		if err != nil {
@@ -79,11 +75,7 @@ func NewOrchestrationBackends(
 	}
 
 	if client := clients.Resolve(ClientRoleWorkflow); client != nil {
-		workflowPrefix := "workflow"
-		if options.namespace != "" {
-			workflowPrefix = options.namespace + ":workflow"
-		}
-		workflow, err := orchestration.NewRedisStateStoreWithClientAndPrefix(client, options.workflowTTL, workflowPrefix)
+		workflow, err := orchestration.NewRedisStateStoreWithClient(client, options.keyspace, options.workflowTTL)
 		if err != nil {
 			return nil, fmt.Errorf("redisprovider: workflow backend: %w", err)
 		}
@@ -92,14 +84,12 @@ func NewOrchestrationBackends(
 
 	if client := clients.Resolve(ClientRoleScheduling); client != nil {
 		scheduleConfig := orchestration.DefaultRedisScheduleStoreConfig()
+		scheduleConfig.Keyspace = &options.keyspace
+		scheduleConfig.MaxSchedules = options.scheduleMax
 		if options.logger != nil {
-			scheduleConfig.Logger = componentLogger(options.logger)
+			scheduleConfig.Logger = options.logger
 		}
-		taskPrefix := "truvag3:tasks"
-		if options.namespace != "" {
-			scheduleConfig.KeyPrefix = options.namespace + ":schedules"
-			taskPrefix = options.namespace + ":tasks"
-		}
+		taskPrefix := options.keyspace.Plain("tasks")
 		schedules, err := orchestration.NewRedisScheduleStore(client, scheduleConfig)
 		if err != nil {
 			return nil, fmt.Errorf("redisprovider: schedule backend: %w", err)
@@ -115,20 +105,22 @@ func NewOrchestrationBackends(
 		taskConfig := orchestration.DefaultRedisTaskStoreConfig()
 		taskConfig.KeyPrefix = taskPrefix
 		taskConfig.Logger = options.logger
-		tasks := orchestration.NewRedisTaskStoreWithClient(client, &taskConfig)
-		queueConfig := orchestration.DefaultRedisTaskQueueConfig()
-		queueConfig.Logger = options.logger
-		if options.namespace != "" {
-			queueConfig.QueueKey = taskPrefix + ":queue"
-			queueConfig.ProcessingKey = taskPrefix + ":processing"
+		tasks := orchestration.NewRedisTaskStore(client, &taskConfig)
+		queueSuffix := []string{"queue"}
+		processingSuffix := []string{"processing"}
+		if options.taskQueueScope != "" {
+			queueSuffix = append(queueSuffix, options.taskQueueScope)
+			processingSuffix = append(processingSuffix, options.taskQueueScope)
 		}
-		queueConfig.RetryAttempts = options.taskRetryCount
-		queueConfig.RetryDelay = options.taskRetryDelay
-		queue := orchestration.NewRedisTaskQueueWithClient(client, &queueConfig)
-		lockPrefix := defaultLockKeyPrefix
-		if options.namespace != "" {
-			lockPrefix = options.namespace + ":locks"
+		queueConfig := orchestration.RedisTaskQueueConfig{
+			QueueKey:      options.keyspace.Plain("tasks", queueSuffix...),
+			ProcessingKey: options.keyspace.Plain("tasks", processingSuffix...),
+			RetryAttempts: options.taskRetryCount,
+			RetryDelay:    options.taskRetryDelay,
+			Logger:        options.logger,
 		}
+		queue := orchestration.NewRedisTaskQueue(client, &queueConfig)
+		lockPrefix := options.keyspace.Plain("locks")
 		lock, err := newRedisDistributedLock(client, lockPrefix, componentLogger(options.logger))
 		if err != nil {
 			return nil, fmt.Errorf("redisprovider: distributed lock backend: %w", err)
@@ -144,9 +136,8 @@ func NewOrchestrationBackends(
 	}
 
 	if client := clients.Resolve(ClientRoleSkills); client != nil {
-		skillOptions := []SkillStoreOption{}
-		if options.namespace != "" {
-			skillOptions = append(skillOptions, WithSkillStoreKeyPrefix(options.namespace+":skills"))
+		skillOptions := []SkillStoreOption{
+			WithSkillStoreKeyspace(options.keyspace),
 		}
 		if options.logger != nil {
 			skillOptions = append(skillOptions, WithSkillStoreLogger(componentLogger(options.logger)))
@@ -171,6 +162,20 @@ func NewOrchestrationBackends(
 	backends, err = backends.With(overrides...)
 	if err != nil {
 		return nil, err
+	}
+	if taskStore, ok := backends.Tasks().(*orchestration.RedisTaskStore); ok {
+		reconciler, err := orchestration.NewTaskIndexReconciler(
+			taskStore,
+			options.taskIndexInterval,
+			options.taskIndexMaxIDs,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("redisprovider: task index reconciler: %w", err)
+		}
+		backends, err = backends.With(orchestration.WithRunnables(reconciler))
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Compose the provider default only after caller overrides have established
 	// the final checkpoint dependencies. A caller-supplied processor wins, and

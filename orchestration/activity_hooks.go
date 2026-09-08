@@ -156,13 +156,34 @@ func (h *ActivityAnnouncementHook) BeforePlanning(ctx context.Context, pctx *cor
 		StartedAt:   time.Now(),
 		TTL:         h.signalTTL,
 	}
-	if err := h.coordinator.AnnounceActivity(ctx, signal); err != nil {
-		telemetry.RecordSpanError(ctx, err)
+	announceStart := time.Now()
+	announceErr := h.coordinator.AnnounceActivity(ctx, signal)
+	announceStatus := core.PipelineHookEffectSucceeded
+	announceSummary := "Submitted the request's activity signal to the coordinator"
+	if announceErr != nil {
+		announceStatus = core.PipelineHookEffectFailed
+		announceSummary = "The coordinator returned an activity-signal submission error"
+	}
+	announcement := struct {
+		Signal core.ActivitySignal `json:"signal"`
+		TTL    time.Duration       `json:"ttl"`
+	}{Signal: signal, TTL: signal.TTL}
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"activity_signal",
+		"Activity signal",
+		announceStatus,
+		announceSummary,
+		announcement,
+		announceErr,
+		announceStart,
+	)
+	if err := announceErr; err != nil {
+		recordPipelineHookEffectSpanError(ctx, "activity_announce")
 		if h.logger != nil {
 			h.logger.WarnWithContext(ctx, "Failed to announce activity, continuing", map[string]interface{}{
 				"operation":  "activity_coordination",
 				"request_id": requestID,
-				"error":      err.Error(),
 				"error_type": "activity_announce",
 			})
 		}
@@ -174,14 +195,26 @@ func (h *ActivityAnnouncementHook) BeforePlanning(ctx context.Context, pctx *cor
 	}
 
 	// 2. Discover domain activities
+	discoveryStart := time.Now()
 	domainActivities, err := h.coordinator.GetDomainActivities(ctx, h.agentDomain)
 	if err != nil {
-		telemetry.RecordSpanError(ctx, err)
+		reportStructuredPipelineHookEffect(
+			ctx,
+			"activity_context",
+			"Activity coordination context",
+			core.PipelineHookEffectFailed,
+			"Could not discover domain activity; no coordination context was injected",
+			struct {
+				AgentDomain string `json:"agent_domain"`
+			}{AgentDomain: h.agentDomain},
+			err,
+			discoveryStart,
+		)
+		recordPipelineHookEffectSpanError(ctx, "activity_discover")
 		if h.logger != nil {
 			h.logger.WarnWithContext(ctx, "Failed to discover domain activities, continuing", map[string]interface{}{
 				"operation":  "activity_coordination",
 				"request_id": requestID,
-				"error":      err.Error(),
 				"error_type": "activity_discover",
 			})
 		}
@@ -194,10 +227,35 @@ func (h *ActivityAnnouncementHook) BeforePlanning(ctx context.Context, pctx *cor
 	relevant := h.filter.Filter(ctx, requestID, domainActivities)
 
 	// 4. Inject into enrichments
+	section := ""
 	if len(relevant) > 0 {
-		section := formatActivitySignals(relevant)
+		section = formatActivitySignals(relevant)
 		pctx.Enrichments[core.EnrichmentActivityCoordination] = section
 	}
+	contextStatus := core.PipelineHookEffectSucceeded
+	contextSummary := "Selected activity coordination context for planning"
+	if len(relevant) == 0 {
+		contextStatus = core.PipelineHookEffectSkipped
+		contextSummary = "No relevant concurrent activity was available to inject"
+	}
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"activity_context",
+		"Activity coordination context",
+		contextStatus,
+		contextSummary,
+		struct {
+			AgentDomain string                `json:"agent_domain"`
+			Discovered  []core.ActivitySignal `json:"discovered"`
+			Selected    []core.ActivitySignal `json:"selected"`
+		}{
+			AgentDomain: h.agentDomain,
+			Discovered:  domainActivities,
+			Selected:    relevant,
+		},
+		nil,
+		discoveryStart,
+	)
 
 	durationMs := float64(time.Since(startTime).Milliseconds())
 	telemetry.AddSpanEvent(ctx, "activity.coordination.complete",
@@ -251,17 +309,37 @@ func (h *ActivityCleanupHook) Name() string { return "activity-cleanup" }
 
 func (h *ActivityCleanupHook) AfterSynthesis(ctx context.Context, pctx *core.PipelineContext, response string) (string, error) {
 	requestID := GetRequestID(ctx)
-	if err := h.coordinator.CompleteActivity(ctx, requestID); err != nil {
-		telemetry.RecordSpanError(ctx, err)
+	cleanupStart := time.Now()
+	cleanupErr := h.coordinator.CompleteActivity(ctx, requestID)
+	cleanupStatus := core.PipelineHookEffectSucceeded
+	cleanupSummary := "Submitted activity-signal removal to the coordinator"
+	if cleanupErr != nil {
+		cleanupStatus = core.PipelineHookEffectFailed
+		cleanupSummary = "The coordinator returned an activity-signal removal error; TTL is the fallback"
+	}
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"activity_signal_cleanup",
+		"Activity signal cleanup",
+		cleanupStatus,
+		cleanupSummary,
+		struct {
+			RequestID             string `json:"request_id"`
+			ProviderErrorObserved bool   `json:"provider_error_observed"`
+		}{RequestID: requestID, ProviderErrorObserved: cleanupErr != nil},
+		cleanupErr,
+		cleanupStart,
+	)
+	if err := cleanupErr; err != nil {
+		recordPipelineHookEffectSpanError(ctx, "activity_complete")
 		telemetry.AddSpanEvent(ctx, "activity.cleanup.failed",
 			attribute.String("request_id", requestID),
-			attribute.String("error", err.Error()),
+			attribute.String("error_type", "activity_complete"),
 		)
 		if h.logger != nil {
 			h.logger.WarnWithContext(ctx, "Failed to complete activity signal, TTL will expire", map[string]interface{}{
 				"operation":  "activity_cleanup",
 				"request_id": requestID,
-				"error":      err.Error(),
 				"error_type": "activity_complete",
 			})
 		}

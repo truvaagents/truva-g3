@@ -431,7 +431,7 @@ func createOrchestrator(
 						"status":     "fallback",
 						"error_type": "preparation",
 						"error":      safeBackendInitializationError(err),
-						"hint":       "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_LLM_DEBUG_ENABLED=false",
+						"hint":       "Set REDIS_URL or structured TRUVAG3_REDIS_* topology fields, or disable via TRUVAG3_LLM_DEBUG_ENABLED=false",
 					})
 					config.LLMDebugStore = NewNoOpLLMDebugStore()
 				} else {
@@ -481,7 +481,7 @@ func createOrchestrator(
 				// Compatibility constructors retain the historical Redis default.
 				store, err := NewRedisExecutionDebugStoreWithConfig(
 					config.ExecutionStore,
-					WithExecutionDebugRedisDB(core.RedisDBExecutionDebug),
+					WithExecutionDebugRedisDB(0),
 					WithExecutionDebugLogger(deps.Logger),
 				)
 				if err != nil {
@@ -491,15 +491,14 @@ func createOrchestrator(
 						"status":     "fallback",
 						"error_type": "preparation",
 						"error":      safeBackendInitializationError(err),
-						"hint":       "Set REDIS_URL or TRUVAG3_REDIS_URL, or disable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=false",
+						"hint":       "Set REDIS_URL or structured TRUVAG3_REDIS_* topology fields, or disable via TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=false",
 					})
 					orchestrator.SetExecutionStore(NewNoOpExecutionStore())
 				} else {
 					orchestrator.SetExecutionStore(store)
 					factoryLogger.Info("Redis execution debug store initialized", map[string]interface{}{
 						"operation":                     "execution_debug_store_initialization",
-						"redis_db":                      core.RedisDBExecutionDebug,
-						"key_prefix":                    config.ExecutionStore.KeyPrefix,
+						"redis_db":                      0,
 						"ttl":                           config.ExecutionStore.TTL.String(),
 						"error_ttl":                     config.ExecutionStore.ErrorTTL.String(),
 						"conversation_query_limit":      config.ExecutionStore.ConversationQueryLimit,
@@ -1073,7 +1072,8 @@ func WithLogger(logger core.Logger) func(*OrchestratorDependencies) {
 
 // WithLLMDebug enables or disables LLM debug payload storage.
 // When enabled without explicit store, auto-uses Redis from discovery if available.
-// Precedence: explicit config > REDIS_URL > TRUVAG3_REDIS_URL > discovery Redis
+// Precedence: explicit config > canonical Redis connection environment >
+// discovery Redis. Contradictory topology forms fail validation.
 func WithLLMDebug(enabled bool) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		c.LLMDebug.Enabled = enabled

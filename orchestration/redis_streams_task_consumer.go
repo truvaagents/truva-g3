@@ -26,8 +26,7 @@ import (
 )
 
 const (
-	taskStreamKeyPrefix = "truvag3:tasks:stream:"
-	defaultXreadBlock   = 1 * time.Second
+	defaultXreadBlock = 1 * time.Second
 )
 
 var _ core.TaskConsumer = (*RedisStreamsTaskConsumer)(nil)
@@ -40,12 +39,18 @@ type RedisStreamsTaskConsumer struct {
 	queueName    string
 	groupName    string
 	consumerName string
+	streamPrefix string
+	dlqPrefix    string
 }
 
 // NewRedisStreamsTaskConsumer creates a Streams-based consumer. It calls
 // XGROUP CREATE with MKSTREAM on construction so the stream and group
 // exist before the first Consume call.
 func NewRedisStreamsTaskConsumer(client redis.Cmdable, queueName, groupName string) (*RedisStreamsTaskConsumer, error) {
+	return NewRedisStreamsTaskConsumerWithPrefix(client, queueName, groupName, defaultRedisKeyspace().Plain("tasks"))
+}
+
+func NewRedisStreamsTaskConsumerWithPrefix(client redis.Cmdable, queueName, groupName, prefix string) (*RedisStreamsTaskConsumer, error) {
 	if client == nil {
 		return nil, errNilRedisClient
 	}
@@ -55,8 +60,13 @@ func NewRedisStreamsTaskConsumer(client redis.Cmdable, queueName, groupName stri
 	if groupName == "" {
 		return nil, fmt.Errorf("orchestration: NewRedisStreamsTaskConsumer groupName is required")
 	}
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":")
+	if prefix == "" {
+		return nil, fmt.Errorf("orchestration: task streams consumer prefix is required")
+	}
 
-	streamKey := taskStreamKeyPrefix + queueName
+	streamPrefix := prefix + ":stream:"
+	streamKey := streamPrefix + queueName
 	// Create the consumer group. The "$" ID means "only new messages."
 	// MKSTREAM creates the stream if it doesn't exist.
 	err := client.XGroupCreateMkStream(context.Background(), streamKey, groupName, "$").Err()
@@ -69,12 +79,14 @@ func NewRedisStreamsTaskConsumer(client redis.Cmdable, queueName, groupName stri
 		queueName:    queueName,
 		groupName:    groupName,
 		consumerName: consumerName(),
+		streamPrefix: streamPrefix,
+		dlqPrefix:    prefix + ":dead:",
 	}, nil
 }
 
 // Consume implements core.TaskConsumer.
 func (c *RedisStreamsTaskConsumer) Consume(ctx context.Context, queueName string) (core.TaskHandle, error) {
-	streamKey := taskStreamKeyPrefix + queueName
+	streamKey := c.streamPrefix + queueName
 
 	select {
 	case <-ctx.Done():
@@ -116,7 +128,7 @@ func (c *RedisStreamsTaskConsumer) Consume(ctx context.Context, queueName string
 	return &redisStreamsHandle{
 		client:    c.client,
 		streamKey: streamKey,
-		dlqKey:    dlqKeyPrefix + queueName,
+		dlqKey:    c.dlqPrefix + queueName,
 		group:     c.groupName,
 		messageID: msg.ID,
 		task:      &task,
@@ -181,14 +193,26 @@ func (h *redisStreamsHandle) Nack(ctx context.Context, reason string) error {
 // RedisStreamsTaskDispatcher dispatches tasks via XADD to a Redis Stream.
 // Wire-compatible with RedisStreamsTaskConsumer.
 type RedisStreamsTaskDispatcher struct {
-	client redis.Cmdable
+	client       redis.Cmdable
+	streamPrefix string
+	idPrefix     string
 }
 
 func NewRedisStreamsTaskDispatcher(client redis.Cmdable, queueName string) (*RedisStreamsTaskDispatcher, error) {
+	return NewRedisStreamsTaskDispatcherWithPrefix(client, queueName, defaultRedisKeyspace().Plain("tasks"))
+}
+
+func NewRedisStreamsTaskDispatcherWithPrefix(client redis.Cmdable, queueName, prefix string) (*RedisStreamsTaskDispatcher, error) {
 	if client == nil {
 		return nil, errNilRedisClient
 	}
-	return &RedisStreamsTaskDispatcher{client: client}, nil
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":")
+	if prefix == "" {
+		return nil, fmt.Errorf("orchestration: task streams dispatcher prefix is required")
+	}
+	return &RedisStreamsTaskDispatcher{
+		client: client, streamPrefix: prefix + ":stream:", idPrefix: prefix + ":id:",
+	}, nil
 }
 
 var _ core.TaskDispatcher = (*RedisStreamsTaskDispatcher)(nil)
@@ -202,7 +226,7 @@ func (d *RedisStreamsTaskDispatcher) Dispatch(ctx context.Context, queueName str
 	}
 
 	// Idempotency check via a Redis SET with NX.
-	idKey := "truvag3:tasks:id:" + task.ID
+	idKey := d.idPrefix + task.ID
 	ok, err := d.client.SetNX(ctx, idKey, "1", 24*time.Hour).Result()
 	if err != nil {
 		return fmt.Errorf("orchestration: idempotency check: %w", err)
@@ -216,7 +240,7 @@ func (d *RedisStreamsTaskDispatcher) Dispatch(ctx context.Context, queueName str
 		return fmt.Errorf("orchestration: marshal task: %w", err)
 	}
 
-	streamKey := taskStreamKeyPrefix + queueName
+	streamKey := d.streamPrefix + queueName
 	return d.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: map[string]interface{}{"task": string(payload)},

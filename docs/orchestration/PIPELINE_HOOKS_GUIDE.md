@@ -532,7 +532,57 @@ The runners in `orchestration/pipeline_hooks.go` all share one shape: iterate `p
 
 **Short-circuit precedence.** The first `BeforePlanning` hook to return a non-nil short-circuit wins; subsequent `BeforePlanning` hooks are not called. Put your cache hook early if you want it to pre-empt expensive enrichment hooks.
 
-**Telemetry.** Each hook invocation is wrapped in its own span (when a telemetry provider is configured), so you can see in a trace exactly which hooks ran and how long each took — e.g. `pipeline.hook.before_planning.rag-retriever`. Errors are recorded on the span. See the [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
+**Execution-debug evidence.** When an `ExecutionStore` is configured, every
+eligible hook invocation is also appended to the request's
+`StoredExecution.PipelineHooks` record. Each entry contains the hook name,
+lifecycle phase, terminal invocation outcome, phase-local sequence, optional iterative-plan
+phase, start time, duration, and exact failure text. This is the authoritative,
+provider-neutral source for troubleshooting which hooks ran; it does not require
+Redis specifically or a tracing backend. Workflow-mode
+`ExecutePlanWithSynthesis` does not run application pipeline hooks and therefore
+does not populate this field.
+
+Invocation outcome and effect outcome are intentionally separate. Orchestration
+automatically records exact added, changed, or removed `BeforePlanning`
+enrichment values as versioned `PipelineHookEffect` entries. The built-in
+activity and shared-memory hooks also report submitted writes, observed reads,
+retrieval metadata, submitted episodic events, extracted knowledge fragments,
+and cleanup calls. A custom hook may call `core.ReportPipelineHookEffect`. It must
+announce a new `pending` effect before the invocation returns; detached work
+may then update the same `EffectID` to a terminal state. Success, request
+failure, partial native-stream delivery, and HITL suspension all establish the
+same terminal rewrite path. Concurrent detached completions are revision-gated
+before per-request store serialization, so a stale snapshot cannot overwrite a
+newer one. This keeps shutdown accounting race-free and avoids duplicate cards.
+
+Effect status is the producer's observation, not independent proof of durable
+persistence. In particular, the memory module deliberately fails open: a
+backend can log an internal runtime failure and return a neutral result so the
+request continues. Built-in payloads therefore say `submitted_event`,
+`provider_call_status`, or `observed_outcome` rather than claiming that a
+write was durably committed. Correlate an unexpected result with memory logs
+when the provider contract cannot expose a stronger acknowledgement. Exact
+injected context appears only in the automatically captured enrichment effect;
+the hook-specific effect retains retrieval metadata without duplicating it.
+
+Effects use `json.RawMessage` so their producer owns a versioned structured
+schema without widening the hook interfaces. The execution-debug boundary is
+an explicit exact-fidelity opt-in: the framework does not redact, truncate, or
+summarize effect data or errors. Do not emit secrets unless your execution store
+and Viewer access policy are designed to retain them.
+
+**Telemetry.** Each hook invocation is independently wrapped in its own span
+(when a telemetry provider is configured), so tracing systems can provide a
+distributed timing view — e.g.
+`pipeline.hook.before_planning.rag-retriever`. The span covers the complete
+framework-observed boundary, including after-planning result validation, and
+errors are recorded on it. Built-in provider failures use bounded trace/log
+classifications while their exact provider observations remain in the opt-in
+effect record. `KnowledgeExtractionHook` runs its detached work under a fresh
+`pipeline.hook.async.knowledge-extraction` root span linked to the scheduling
+span, with copied request baggage but independent cancellation. Trace spans are
+optional correlation evidence, not the source of truth for hook ownership or
+execution. See the [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
 
 **Concurrency.** Hooks for a single request run sequentially with no concurrent access to `PipelineContext` (`core/interfaces.go:250`), so you don't need locks around reads/writes of `Enrichments`. Hooks across *different* requests run on different `PipelineContext` instances; any shared state *your* hook holds (a cache client, a retriever) must be safe for concurrent use.
 
@@ -552,6 +602,17 @@ These ship in the `orchestration` module and are the best worked examples to rea
 | `ConversationHistoryHook` | `orchestration/conversation_history_hook.go:15` | `BeforePlanning` | Adapter that injects memory-backed conversation history into `Enrichments[EnrichmentConversationHistory]`. Constructed manually via `NewConversationHistoryHook` — not wired by the builders. (For raw turns, prefer the metadata path in §5.4.) |
 | `ActivityAnnouncementHook` | `orchestration/activity_hooks.go:52` | `BeforePlanning` | Announces this agent's activity to the coordinator and injects concurrent activities into `Enrichments[EnrichmentActivityCoordination]`. |
 | `ActivityCleanupHook` | `orchestration/activity_hooks.go:228` | `AfterSynthesis` | Clears this agent's announced activity signal after the response. Pass-through. |
+
+The built-in effect IDs are stable within each invocation:
+
+| Hook/boundary | Effect ID | Captured values |
+|---|---|---|
+| Every `BeforePlanning` hook | `planning_enrichment:<key>` | Exact before/after JSON value and `added`, `updated`, or `removed` operation |
+| `ActivityAnnouncementHook` | `activity_signal`, `activity_context` | Submitted signal and TTL; discovered/selected signals. The exact injected text is carried once by `planning_enrichment:<key>`. |
+| `MemoryEnrichmentHook` | `memory_planning_context` | Extracted entity references and section count. The exact bounded context is carried once by `planning_enrichment:<key>`. |
+| `MemoryRecordHook` | `episodic_memory_records` | Per-step submitted event envelope, provider-call observation/error, backend-assigned identity notice, and claim-release call observations |
+| `KnowledgeExtractionHook` | `knowledge_extraction` | Pending async state, exact model extraction response, normalized fragments, and explicit per-fragment observed outcome/error |
+| `ActivityCleanupHook` | `activity_signal_cleanup` | Request ID and whether the coordinator returned an explicit error |
 
 Notice the symmetry: the `BeforePlanning` hooks **read/enrich**, the `AfterExecution`/`AfterSynthesis` hooks **write/record**. Several also declare the compile-time conformance assertion recommended in [§7](#7-writing-your-own-hook) — a habit worth adopting in your own hooks.
 

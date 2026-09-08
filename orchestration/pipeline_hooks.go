@@ -230,17 +230,28 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 	gate pipelineGate,
 	reservedDimensions ...string,
 ) (*evaluatedPipelineShortCircuit, error) {
+	sequence := 0
 	for _, hook := range o.pipelineHooks {
 		decisionHook, hasDecisionHook := hook.(core.BeforePlanningDecisionHook)
 		legacyHook, hasLegacyHook := hook.(core.BeforePlanningHook)
 		if !hasDecisionHook && !hasLegacyHook {
 			continue
 		}
+		sequence++
+		startedAt := time.Now()
+		invocation := beginPipelineHookInvocation(
+			ctx, hook.Name(), PipelineHookPhaseBeforePlanning, sequence, 0, startedAt,
+		)
 
 		var hookSpan core.Span
 		hookCtx := ctx
 		if o.telemetry != nil {
 			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.before_planning."+hook.Name())
+		}
+		hookCtx = invocation.Context(hookCtx)
+		var enrichmentsBefore map[string]pipelineEnrichmentValueSnapshot
+		if invocation != nil {
+			enrichmentsBefore = snapshotPipelineEnrichments(pctx)
 		}
 
 		var (
@@ -264,27 +275,28 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 				}
 			}
 		}
-
-		if hookSpan != nil {
-			if err != nil {
-				hookSpan.RecordError(err)
-			}
-			hookSpan.End()
+		if invocation != nil {
+			reportPipelineEnrichmentChanges(hookCtx, enrichmentsBefore, pctx)
 		}
 
 		if err != nil {
+			finishPipelineHookSpan(hookSpan, err)
+			invocation.Complete(PipelineHookFailed, err)
 			if o.logger != nil {
 				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
 					"operation":  "before_planning_hook",
 					"request_id": requestIDFromBaggage(ctx),
 					"hook":       hook.Name(),
 					"error":      err.Error(),
+					"error_type": "hook_error",
 				})
 			}
 			continue
 		}
 
 		if decision == nil {
+			finishPipelineHookSpan(hookSpan, nil)
+			invocation.Complete(PipelineHookSucceeded, nil)
 			continue
 		}
 
@@ -311,8 +323,12 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 			accepted, decisionErr, time.Since(decisionStartedAt),
 		)
 		if decisionErr != nil {
+			finishPipelineHookSpan(hookSpan, decisionErr)
+			invocation.Complete(PipelineHookFailed, decisionErr)
 			return nil, fmt.Errorf("before-planning hook %q: %w", hook.Name(), decisionErr)
 		}
+		finishPipelineHookSpan(hookSpan, nil)
+		invocation.Complete(PipelineHookSucceeded, nil)
 		if !accepted {
 			continue
 		}
@@ -404,36 +420,44 @@ func (o *AIOrchestrator) runValidatedAfterPlanningHooks(
 	requestID string,
 ) *RoutingPlan {
 	current := plan
+	sequence := 0
 	for _, hook := range o.pipelineHooks {
 		afterPlanning, ok := hook.(core.AfterPlanningHook)
 		if !ok {
 			continue
 		}
-
-		candidate, cloneErr := cloneRoutingPlanForHook(current)
-		if cloneErr != nil {
-			o.recordAfterPlanningDecision(ctx, hook.Name(), "clone_failed", false)
-			continue
-		}
-
+		sequence++
+		startedAt := time.Now()
+		invocation := beginPipelineHookInvocation(
+			ctx, hook.Name(), PipelineHookPhaseAfterPlanning, sequence, phaseCount, startedAt,
+		)
 		var hookSpan core.Span
 		hookCtx := ctx
 		if o.telemetry != nil {
 			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_planning."+hook.Name())
 		}
-		mutated, err := afterPlanning.AfterPlanning(hookCtx, pctx, candidate)
-		if hookSpan != nil {
-			if err != nil {
-				hookSpan.RecordError(err)
-			}
-			hookSpan.End()
+
+		candidate, cloneErr := cloneRoutingPlanForHook(current)
+		if cloneErr != nil {
+			finishPipelineHookSpan(hookSpan, cloneErr)
+			invocation.Complete(PipelineHookSkipped, cloneErr)
+			o.recordAfterPlanningDecision(ctx, hook.Name(), "clone_failed", false)
+			continue
 		}
+
+		hookCtx = invocation.Context(hookCtx)
+		mutated, err := afterPlanning.AfterPlanning(hookCtx, pctx, candidate)
 		if err != nil {
+			finishPipelineHookSpan(hookSpan, err)
+			invocation.Complete(PipelineHookFailed, err)
 			o.recordAfterPlanningDecision(ctx, hook.Name(), "hook_error", false)
 			continue
 		}
 		mutatedPlan, ok := mutated.(*RoutingPlan)
 		if !ok || mutatedPlan == nil {
+			typeErr := fmt.Errorf("hook returned %T, want *RoutingPlan", mutated)
+			finishPipelineHookSpan(hookSpan, typeErr)
+			invocation.Complete(PipelineHookFailed, typeErr)
 			o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_type", false)
 			continue
 		}
@@ -446,10 +470,14 @@ func (o *AIOrchestrator) runValidatedAfterPlanningHooks(
 			}
 		}
 		if validationErr := o.runPlanValidationGauntlet(ctx, mutatedPlan, executedCaps, executedStepIDs, phaseCount, requestID); validationErr != nil {
+			finishPipelineHookSpan(hookSpan, validationErr)
+			invocation.Complete(PipelineHookFailed, validationErr)
 			o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_plan", false)
 			continue
 		}
 		current = mutatedPlan
+		finishPipelineHookSpan(hookSpan, nil)
+		invocation.Complete(PipelineHookSucceeded, nil)
 		o.recordAfterPlanningDecision(ctx, hook.Name(), "accepted", true)
 	}
 	return current
@@ -492,19 +520,31 @@ func (o *AIOrchestrator) recordAfterPlanningDecision(ctx context.Context, hook, 
 
 // runAfterExecutionHooks executes all registered AfterExecutionHook implementations.
 func (o *AIOrchestrator) runAfterExecutionHooks(ctx context.Context, pctx *core.PipelineContext, results interface{}) {
+	sequence := 0
 	for _, hook := range o.pipelineHooks {
 		h, ok := hook.(core.AfterExecutionHook)
 		if !ok {
 			continue
 		}
+		sequence++
+		startedAt := time.Now()
+		invocation := beginPipelineHookInvocation(
+			ctx, hook.Name(), PipelineHookPhaseAfterExecution, sequence, 0, startedAt,
+		)
 
 		var hookSpan core.Span
 		hookCtx := ctx
 		if o.telemetry != nil {
 			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_execution."+hook.Name())
 		}
+		hookCtx = invocation.Context(hookCtx)
 
 		err := h.AfterExecution(hookCtx, pctx, results)
+		status := PipelineHookSucceeded
+		if err != nil {
+			status = PipelineHookFailed
+		}
+		invocation.Complete(status, err)
 
 		if hookSpan != nil {
 			if err != nil {
@@ -516,9 +556,11 @@ func (o *AIOrchestrator) runAfterExecutionHooks(ctx context.Context, pctx *core.
 		if err != nil {
 			if o.logger != nil {
 				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
-					"operation": "after_execution_hook",
-					"hook":      hook.Name(),
-					"error":     err.Error(),
+					"operation":  "after_execution_hook",
+					"request_id": requestIDFromBaggage(ctx),
+					"hook":       hook.Name(),
+					"error":      err.Error(),
+					"error_type": "hook_error",
 				})
 			}
 		}
@@ -528,19 +570,31 @@ func (o *AIOrchestrator) runAfterExecutionHooks(ctx context.Context, pctx *core.
 // runAfterSynthesisHooks executes all registered AfterSynthesisHook implementations.
 // Each hook may mutate the response; the returned response is passed to the next hook.
 func (o *AIOrchestrator) runAfterSynthesisHooks(ctx context.Context, pctx *core.PipelineContext, response string) string {
+	sequence := 0
 	for _, hook := range o.pipelineHooks {
 		h, ok := hook.(core.AfterSynthesisHook)
 		if !ok {
 			continue
 		}
+		sequence++
+		startedAt := time.Now()
+		invocation := beginPipelineHookInvocation(
+			ctx, hook.Name(), PipelineHookPhaseAfterSynthesis, sequence, 0, startedAt,
+		)
 
 		var hookSpan core.Span
 		hookCtx := ctx
 		if o.telemetry != nil {
 			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_synthesis."+hook.Name())
 		}
+		hookCtx = invocation.Context(hookCtx)
 
 		mutated, err := h.AfterSynthesis(hookCtx, pctx, response)
+		status := PipelineHookSucceeded
+		if err != nil {
+			status = PipelineHookFailed
+		}
+		invocation.Complete(status, err)
 
 		if hookSpan != nil {
 			if err != nil {
@@ -552,9 +606,11 @@ func (o *AIOrchestrator) runAfterSynthesisHooks(ctx context.Context, pctx *core.
 		if err != nil {
 			if o.logger != nil {
 				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
-					"operation": "after_synthesis_hook",
-					"hook":      hook.Name(),
-					"error":     err.Error(),
+					"operation":  "after_synthesis_hook",
+					"request_id": requestIDFromBaggage(ctx),
+					"hook":       hook.Name(),
+					"error":      err.Error(),
+					"error_type": "hook_error",
 				})
 			}
 			continue
@@ -563,4 +619,14 @@ func (o *AIOrchestrator) runAfterSynthesisHooks(ctx context.Context, pctx *core.
 		response = mutated
 	}
 	return response
+}
+
+func finishPipelineHookSpan(span core.Span, err error) {
+	if span == nil {
+		return
+	}
+	if err != nil {
+		span.RecordError(err)
+	}
+	span.End()
 }

@@ -1204,7 +1204,7 @@ validates and persists it from the first turn even when no prior history
 exists. It is available in execution metadata, LLM-debug metadata, validated
 structured logs, the explicit framework header, and instrumented span
 attributes. In the reference deployment, Registry Viewer reads the same value
-from execution DB 8 and LLM-debug DB 7.
+from the versioned execution-debug and LLM-debug subspaces in shared Redis/Valkey DB 0.
 
 In Jaeger, search a service with:
 
@@ -1441,6 +1441,46 @@ telemetry.AddSpanEvent(ctx, "llm.plan_generation.request",
     attribute.Int("attempt", attempt),
 )
 ```
+
+### Redis/Valkey Adapter Boundary
+
+The Redis/Valkey adapters added for the DB-0 cluster keyspace do not create a
+span for every Redis command. They preserve the caller's `context.Context`, so
+an existing request span remains correlated through command cancellation and
+any context-aware diagnostic log, while higher-level discovery,
+orchestration, HITL, memory, and hook spans remain the useful trace boundary.
+Topology resolution, startup probes, and owned-client shutdown occur outside a
+user request and therefore do not manufacture trace context.
+
+Repairable projection failures—such as stale discovery cleanup, execution or
+LLM-debug index updates, TTL extension, and schedule-index cleanup—remain
+fail-open. They emit bounded logs but do not call `RecordSpanError`, because the
+authoritative business operation succeeded. A Redis failure returned by the
+authoritative adapter path remains the caller's responsibility to record on
+the enclosing business span.
+
+The same ownership rule applies to Redis-backed memory. Episodic memory,
+activity, investigation, and digest operations that deliberately fail open do
+not mark the active request span as failed; their enclosing memory hook records
+the meaningful degraded business outcome. Distributed-lock operations return
+their errors without also recording them in the adapter, so the reflection or
+other maintenance workflow that owns the lock decision determines whether its
+span failed. This avoids both false failures and duplicate exception events.
+
+`TaskIndexReconciler` is low-level periodic projection maintenance. Successful
+ticks intentionally create neither logs nor spans; a failure emits one bounded
+non-context WARN. This follows the rule against tracing every internal
+operation and prevents a framework-lifecycle context from being presented as a
+user-request trace. Applications that need a trace for a larger maintenance
+workflow should create one root span around that workflow rather than one per
+Redis command.
+
+The Registry Viewer's readiness check is an application-level exception, not a
+framework adapter call. Concurrent HTTP waiters share one process-wide PING;
+each waiter honors its own request deadline, while the coalesced PING is
+detached and bounded by the Redis client's socket deadline. It emits no
+request-scoped log or span, so no canceled request trace is retained or
+misattributed to another waiter.
 
 ### Complete Error Handling Pattern
 
@@ -1846,7 +1886,7 @@ The orchestration module emits span events for every LLM interaction:
 
 ### Background-Job Spans
 
-Most orchestration instrumentation in the table above is **span events** attached to a parent span that already exists for the user request. Background jobs are different: they run detached from any user request (no inbound HTTP call), so there is no pre-existing parent span to attach events to. Instead each background `core.Runnable` creates its own dedicated root spans so each pass appears as a self-contained trace tree in Jaeger.
+Most orchestration instrumentation in the table above is **span events** attached to a parent span that already exists for the user request. Meaningful instrumented background jobs are different: they run detached from any user request (no inbound HTTP call), so there is no pre-existing parent span to attach events to. Those jobs create dedicated root spans so each significant pass appears as a self-contained trace tree in Jaeger. Low-level storage maintenance such as `TaskIndexReconciler` remains failure-log-only, as described in the Redis/Valkey adapter boundary above.
 
 In-tree background jobs that follow this pattern: `memory.ReflectionJob` (LLM-driven Tier 2→3 reflection — bridging episodic events to semantic knowledge; distinct from Tier 2 `compact` maintenance), `core.MemoryStoreSweeper` (periodic eviction of expired `*core.MemoryStore` entries), and `orchestration.CheckpointExpiryProcessor` (provider-neutral HITL expiry polling and delivery).
 
@@ -2019,6 +2059,44 @@ counted by `orchestration.pipeline.after_planning`; rejected mutations also
 emit the bounded `after_planning_hook` WARN documented in the logging guide.
 HITL resume plans do not emit this span because they restore approved checkpoint
 state rather than a new planner-produced plan.
+
+### Pipeline-Hook Evidence: Traces vs Execution Debug
+
+Pipeline-hook traces and execution-debug evidence answer different questions:
+
+| Surface | Authoritative for | Payload policy |
+|---------|-------------------|----------------|
+| `pipeline.hook.<phase>.<hook-name>` spans | Request timing, causal placement, and whether the complete callback/validation boundary failed | Bounded span attributes and ordinary error observations; hook-returned plans and effect payloads are excluded |
+| `StoredExecution.PipelineHooks` | Ordered invocation outcomes and the exact, versioned effects reported by each hook | Exact-fidelity, opt-in execution-debug data governed by the configured `ExecutionStore` |
+
+The Registry Viewer reads `StoredExecution.PipelineHooks`; it does not query
+Jaeger or another tracing backend to reconstruct hook cards. The effect-capture
+path does not copy an effect's `Data` or `Error` into span attributes, span
+events, or logs. This keeps distributed tracing useful for timing and causality
+without turning it into an unbounded body store.
+
+An `AfterPlanningHook` span remains open through clone, return-type, and plan
+validation checks, so a rejected hook result cannot appear as a successful
+span. Callback failures are also recorded on their phase span while the exact
+failure remains available in the opt-in execution record.
+
+For built-in hook provider calls, a fail-open provider error marks the active
+span failed with a bounded `error_type` and a fixed exception message. Raw
+provider text is not copied into ordinary trace attributes or events; the exact
+value remains in the corresponding execution-debug effect. Custom hook
+callback errors remain application-owned observations and are not silently
+rewritten by the framework.
+
+`KnowledgeExtractionHook` is asynchronous. Its scheduling callback remains on
+the request's `pipeline.hook.after_synthesis.knowledge-extraction` span, while
+the detached work starts a fresh
+`pipeline.hook.async.knowledge-extraction` root span linked to that scheduling
+span. The detached context copies bounded W3C baggage, including `request_id`,
+onto the hook-owned shutdown context; it does not inherit request cancellation
+or keep the ended request span as a parent. If trace context is absent, the
+operation degrades to an unlinked root span. Exact model output, fragments, and
+per-provider observations remain execution-debug effects rather than trace
+attributes.
 
 For **conversation-history preparation**, the orchestration request trace now includes a dedicated prepare span, and optionally a nested compaction span on Tier 2 paths:
 

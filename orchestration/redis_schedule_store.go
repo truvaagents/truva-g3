@@ -2,8 +2,9 @@
 //
 // Storage model:
 //
-//	truvag3:schedules:data:{id}   — JSON string, the canonical schedule record
-//	truvag3:schedules:due         — sorted set, score = RunAt.Unix(), member = id
+//	truvag3:v1:<deployment>:{schedules:<deployment>}:data:<id> — canonical record
+//	truvag3:v1:<deployment>:{schedules:<deployment>}:index:all — bounded catalog
+//	truvag3:v1:<deployment>:{schedules:<deployment>}:index:due — due-time index
 //
 // The sorted set is a time-ordered index: GetDue uses ZRangeByScore to
 // fetch schedules due at or before "now" in O(log N + M) instead of
@@ -21,7 +22,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -31,10 +34,13 @@ import (
 // Compile-time check: RedisScheduleStore satisfies core.ScheduleStore.
 var _ core.ScheduleStore = (*RedisScheduleStore)(nil)
 
+var defaultScheduleKeyPrefix = defaultRedisKeyspace().Plain("schedules")
+
 const (
-	defaultScheduleKeyPrefix = "truvag3:schedules"
-	dataKeySuffix            = ":data:"
-	dueKeySuffix             = ":due"
+	dataKeySuffix       = ":data:"
+	dueKeySuffix        = ":due"
+	allKeySuffix        = ":all"
+	defaultMaxSchedules = 10_000
 )
 
 // RedisScheduleStoreConfig configures a RedisScheduleStore.
@@ -43,6 +49,14 @@ type RedisScheduleStoreConfig struct {
 	// Default: "truvag3:schedules"
 	KeyPrefix string
 
+	// Keyspace selects the canonical tagged DB-0 schema. A custom KeyPrefix
+	// without Keyspace retains the standalone-only compatibility layout and is
+	// rejected when the client uses Redis Cluster topology.
+	Keyspace *core.RedisKeyspace
+
+	// MaxSchedules bounds the control-plane catalog enumerated by List.
+	MaxSchedules int
+
 	// Logger for operational logs. Defaults to core.NoOpLogger{} if nil.
 	Logger core.Logger
 }
@@ -50,7 +64,8 @@ type RedisScheduleStoreConfig struct {
 // DefaultRedisScheduleStoreConfig returns a config with sensible defaults.
 func DefaultRedisScheduleStoreConfig() *RedisScheduleStoreConfig {
 	return &RedisScheduleStoreConfig{
-		KeyPrefix: defaultScheduleKeyPrefix,
+		KeyPrefix:    defaultScheduleKeyPrefix,
+		MaxSchedules: defaultMaxSchedules,
 	}
 }
 
@@ -60,9 +75,12 @@ func DefaultRedisScheduleStoreConfig() *RedisScheduleStoreConfig {
 // can inject miniredis clients and production can use *redis.ClusterClient
 // transparently — matching the pattern established by memory.RedisDistributedLock.
 type RedisScheduleStore struct {
-	client redis.Cmdable
-	prefix string
-	logger core.Logger
+	client       redis.UniversalClient
+	prefix       string
+	keyspace     core.RedisKeyspace
+	legacyPrefix bool
+	maxSchedules int
+	logger       core.Logger
 }
 
 // NewRedisScheduleStore creates a new Redis-backed schedule store.
@@ -71,10 +89,11 @@ type RedisScheduleStore struct {
 // Returns errNilRedisClient if client is nil — consistent with the error-
 // return pattern in memory.NewRedisDistributedLock. The scheduler-tool's
 // main.go should propagate this via log.Fatal during startup.
-func NewRedisScheduleStore(client redis.Cmdable, config *RedisScheduleStoreConfig) (*RedisScheduleStore, error) {
+func NewRedisScheduleStore(client redis.UniversalClient, config *RedisScheduleStoreConfig) (*RedisScheduleStore, error) {
 	if client == nil {
 		return nil, errNilRedisClient
 	}
+	configProvided := config != nil
 	if config == nil {
 		config = DefaultRedisScheduleStoreConfig()
 	}
@@ -82,25 +101,70 @@ func NewRedisScheduleStore(client redis.Cmdable, config *RedisScheduleStoreConfi
 	if prefix == "" {
 		prefix = defaultScheduleKeyPrefix
 	}
+	explicitMaxSchedules := config.MaxSchedules
+	if !configProvided {
+		explicitMaxSchedules = 0
+	}
+	maxSchedules, err := resolveMaxSchedules(explicitMaxSchedules)
+	if err != nil {
+		return nil, err
+	}
+	keyspace := defaultRedisKeyspace()
+	legacyPrefix := false
+	if config.Keyspace != nil {
+		keyspace = *config.Keyspace
+	} else if prefix != defaultScheduleKeyPrefix {
+		legacyPrefix = true
+	}
+	if err := rejectLegacyRedisPrefixForClient(client, legacyPrefix, "schedule store"); err != nil {
+		return nil, err
+	}
 	var logger core.Logger = &core.NoOpLogger{}
 	if config.Logger != nil {
 		logger = config.Logger
 	}
+	logger = orchestrationComponentLogger(logger)
 	return &RedisScheduleStore{
-		client: client,
-		prefix: prefix,
-		logger: logger,
+		client: client, prefix: prefix, keyspace: keyspace,
+		legacyPrefix: legacyPrefix, maxSchedules: maxSchedules, logger: logger,
 	}, nil
+}
+
+func resolveMaxSchedules(explicit int) (int, error) {
+	if explicit > 0 {
+		return explicit, nil
+	}
+	if raw, ok := os.LookupEnv("TRUVAG3_SCHEDULER_MAX_SCHEDULES"); ok {
+		value, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || value <= 0 {
+			return 0, fmt.Errorf("TRUVAG3_SCHEDULER_MAX_SCHEDULES must be a positive integer: %w", core.ErrInvalidConfiguration)
+		}
+		return value, nil
+	}
+	return defaultMaxSchedules, nil
 }
 
 // dataKey returns the Redis key for a schedule's JSON data.
 func (s *RedisScheduleStore) dataKey(id string) string {
+	if !s.legacyPrefix {
+		return s.keyspace.Tagged("schedules", "", "data", id)
+	}
 	return s.prefix + dataKeySuffix + id
 }
 
 // dueKey returns the Redis key for the due-index sorted set.
 func (s *RedisScheduleStore) dueKey() string {
+	if !s.legacyPrefix {
+		return s.keyspace.Tagged("schedules", "", "index", "due")
+	}
 	return s.prefix + dueKeySuffix
+}
+
+func (s *RedisScheduleStore) allKey() string {
+	if !s.legacyPrefix {
+		return s.keyspace.Tagged("schedules", "", "index", "all")
+	}
+	return s.prefix + allKeySuffix
 }
 
 // Create persists a new schedule.
@@ -121,26 +185,40 @@ func (s *RedisScheduleStore) Create(ctx context.Context, schedule *core.Schedule
 		return fmt.Errorf("scheduler: failed to marshal schedule: %w", err)
 	}
 
-	ok, err := s.client.SetNX(ctx, s.dataKey(schedule.ID), data, 0).Result()
+	err = s.watchSchedule(ctx, []string{s.dataKey(schedule.ID), s.allKey()}, func(tx *redis.Tx) error {
+		exists, err := tx.Exists(ctx, s.dataKey(schedule.ID)).Result()
+		if err != nil {
+			return err
+		}
+		if exists != 0 {
+			return core.ErrScheduleAlreadyExists
+		}
+		count, err := tx.SCard(ctx, s.allKey()).Result()
+		if err != nil {
+			return err
+		}
+		if count >= int64(s.maxSchedules) {
+			return core.ErrCapacityExceeded
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, s.dataKey(schedule.ID), data, 0)
+			pipe.SAdd(ctx, s.allKey(), schedule.ID)
+			if schedule.Enabled {
+				pipe.ZAdd(ctx, s.dueKey(), redis.Z{Score: float64(schedule.RunAt.Unix()), Member: schedule.ID})
+			} else {
+				pipe.ZRem(ctx, s.dueKey(), schedule.ID)
+			}
+			return nil
+		})
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to create schedule: %w", err)
 	}
-	if !ok {
-		return core.ErrScheduleAlreadyExists
-	}
-
-	if schedule.Enabled {
-		if err := s.addToDueIndex(ctx, schedule); err != nil {
-			// Best-effort rollback of the data key so the store is
-			// consistent. If the rollback itself fails we log and move on —
-			// the schedule will still be visible via Get but won't be
-			// picked up by GetDue until the next Update.
-			_ = s.client.Del(ctx, s.dataKey(schedule.ID)).Err()
-			return err
-		}
-	}
 
 	s.logger.InfoWithContext(ctx, "Schedule created", map[string]interface{}{
+		"operation":    "schedule_create",
+		"request_id":   core.GetRequestID(ctx),
 		"schedule_id":  schedule.ID,
 		"target_agent": schedule.TargetAgent,
 		"enabled":      schedule.Enabled,
@@ -166,54 +244,12 @@ func (s *RedisScheduleStore) Get(ctx context.Context, id string) (*core.Schedule
 }
 
 // List returns all schedules under this store's prefix.
-//
-// Uses SCAN to iterate data keys, then MGET to batch-fetch their JSON.
-// For large schedule counts (>10k), consider adding pagination.
 func (s *RedisScheduleStore) List(ctx context.Context) ([]*core.Schedule, error) {
-	pattern := s.prefix + dataKeySuffix + "*"
-	var keys []string
-	var cursor uint64
-
-	for {
-		batch, nextCursor, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			return nil, fmt.Errorf("scheduler: scan failed: %w", err)
-		}
-		keys = append(keys, batch...)
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
-	}
-
-	if len(keys) == 0 {
-		return []*core.Schedule{}, nil
-	}
-
-	values, err := s.client.MGet(ctx, keys...).Result()
+	ids, err := s.client.SMembers(ctx, s.allKey()).Result()
 	if err != nil {
-		return nil, fmt.Errorf("scheduler: mget failed: %w", err)
+		return nil, fmt.Errorf("scheduler: list index failed: %w", err)
 	}
-
-	out := make([]*core.Schedule, 0, len(values))
-	for _, v := range values {
-		if v == nil {
-			continue // Race: deleted between SCAN and MGET.
-		}
-		str, ok := v.(string)
-		if !ok {
-			continue
-		}
-		var schedule core.Schedule
-		if err := json.Unmarshal([]byte(str), &schedule); err != nil {
-			s.logger.WarnWithContext(ctx, "Skipped malformed schedule JSON", map[string]interface{}{
-				"error": err.Error(),
-			})
-			continue
-		}
-		out = append(out, &schedule)
-	}
-	return out, nil
+	return s.loadSchedules(ctx, ids, false)
 }
 
 // Update persists changes to an existing schedule.
@@ -231,35 +267,37 @@ func (s *RedisScheduleStore) Update(ctx context.Context, schedule *core.Schedule
 		return errEmptyScheduleID
 	}
 
-	// Check existence first. We can't use SETXX because we'd lose the
-	// pre-check's ErrScheduleNotFound signal if the key doesn't exist.
-	exists, err := s.client.Exists(ctx, s.dataKey(schedule.ID)).Result()
-	if err != nil {
-		return fmt.Errorf("scheduler: exists check failed: %w", err)
-	}
-	if exists == 0 {
-		return core.ErrScheduleNotFound
-	}
-
 	data, err := json.Marshal(schedule)
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to marshal schedule: %w", err)
 	}
-	if err := s.client.Set(ctx, s.dataKey(schedule.ID), data, 0).Err(); err != nil {
+	err = s.watchSchedule(ctx, []string{s.dataKey(schedule.ID), s.allKey()}, func(tx *redis.Tx) error {
+		exists, err := tx.Exists(ctx, s.dataKey(schedule.ID)).Result()
+		if err != nil {
+			return err
+		}
+		if exists == 0 {
+			return core.ErrScheduleNotFound
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, s.dataKey(schedule.ID), data, 0)
+			pipe.SAdd(ctx, s.allKey(), schedule.ID)
+			if schedule.Enabled {
+				pipe.ZAdd(ctx, s.dueKey(), redis.Z{Score: float64(schedule.RunAt.Unix()), Member: schedule.ID})
+			} else {
+				pipe.ZRem(ctx, s.dueKey(), schedule.ID)
+			}
+			return nil
+		})
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("scheduler: failed to persist schedule update: %w", err)
 	}
 
-	if schedule.Enabled {
-		if err := s.addToDueIndex(ctx, schedule); err != nil {
-			return err
-		}
-	} else {
-		if err := s.client.ZRem(ctx, s.dueKey(), schedule.ID).Err(); err != nil {
-			return fmt.Errorf("scheduler: failed to remove from due index: %w", err)
-		}
-	}
-
 	s.logger.InfoWithContext(ctx, "Schedule updated", map[string]interface{}{
+		"operation":   "schedule_update",
+		"request_id":  core.GetRequestID(ctx),
 		"schedule_id": schedule.ID,
 		"enabled":     schedule.Enabled,
 	})
@@ -271,18 +309,28 @@ func (s *RedisScheduleStore) Update(ctx context.Context, schedule *core.Schedule
 // Removes both the data key and the entry from the due index. Returns
 // core.ErrScheduleNotFound if the data key didn't exist.
 func (s *RedisScheduleStore) Delete(ctx context.Context, id string) error {
-	deleted, err := s.client.Del(ctx, s.dataKey(id)).Result()
+	err := s.watchSchedule(ctx, []string{s.dataKey(id), s.allKey()}, func(tx *redis.Tx) error {
+		exists, err := tx.Exists(ctx, s.dataKey(id)).Result()
+		if err != nil {
+			return err
+		}
+		if exists == 0 {
+			return core.ErrScheduleNotFound
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Del(ctx, s.dataKey(id))
+			pipe.SRem(ctx, s.allKey(), id)
+			pipe.ZRem(ctx, s.dueKey(), id)
+			return nil
+		})
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to delete schedule: %w", err)
 	}
-	// Remove from due index regardless — even if the data key is already
-	// gone, a stale due-index entry could cause phantom fires.
-	_ = s.client.ZRem(ctx, s.dueKey(), id).Err()
-
-	if deleted == 0 {
-		return core.ErrScheduleNotFound
-	}
 	s.logger.InfoWithContext(ctx, "Schedule deleted", map[string]interface{}{
+		"operation":   "schedule_delete",
+		"request_id":  core.GetRequestID(ctx),
 		"schedule_id": id,
 	})
 	return nil
@@ -290,8 +338,8 @@ func (s *RedisScheduleStore) Delete(ctx context.Context, id string) error {
 
 // GetDue returns all enabled schedules where RunAt <= now.
 //
-// Uses ZRangeByScore on the due-index sorted set to fetch IDs, then MGET
-// to batch-fetch their JSON payloads.
+// Uses ZRangeByScore on the due-index sorted set to fetch IDs, then a pipeline
+// of single-key GETs to hydrate their JSON payloads.
 //
 // Defensive filter: even though disabled schedules shouldn't be in the
 // due index, we check Enabled on each returned schedule so a partially-
@@ -308,50 +356,91 @@ func (s *RedisScheduleStore) GetDue(ctx context.Context, now time.Time) ([]*core
 		return []*core.Schedule{}, nil
 	}
 
-	// Build the full data keys for MGET.
-	keys := make([]string, len(ids))
-	for i, id := range ids {
-		keys[i] = s.dataKey(id)
-	}
-	values, err := s.client.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("scheduler: mget failed: %w", err)
-	}
+	return s.loadSchedules(ctx, ids, true)
+}
 
-	out := make([]*core.Schedule, 0, len(values))
-	for _, v := range values {
-		if v == nil {
-			// Race: the schedule was deleted between ZRANGEBYSCORE and MGET.
+func (s *RedisScheduleStore) watchSchedule(
+	ctx context.Context,
+	keys []string,
+	operation func(*redis.Tx) error,
+) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := s.client.Watch(ctx, operation, keys...)
+		if !errors.Is(err, redis.TxFailedErr) {
+			return err
+		}
+	}
+	return redis.TxFailedErr
+}
+
+func (s *RedisScheduleStore) loadSchedules(
+	ctx context.Context,
+	ids []string,
+	dueOnly bool,
+) ([]*core.Schedule, error) {
+	if len(ids) == 0 {
+		return []*core.Schedule{}, nil
+	}
+	pipe := s.client.Pipeline()
+	commands := make([]*redis.StringCmd, len(ids))
+	for i, id := range ids {
+		commands[i] = pipe.Get(ctx, s.dataKey(id))
+	}
+	_, execErr := pipe.Exec(ctx)
+	if execErr != nil && !errors.Is(execErr, redis.Nil) {
+		return nil, fmt.Errorf("scheduler: load schedules failed: %w", execErr)
+	}
+	out := make([]*core.Schedule, 0, len(ids))
+	stale := make([]interface{}, 0)
+	for i, command := range commands {
+		raw, err := command.Bytes()
+		if errors.Is(err, redis.Nil) {
+			stale = append(stale, ids[i])
 			continue
 		}
-		str, ok := v.(string)
-		if !ok {
-			continue
+		if err != nil {
+			return nil, fmt.Errorf("scheduler: load schedule %q failed: %w", ids[i], err)
 		}
 		var schedule core.Schedule
-		if err := json.Unmarshal([]byte(str), &schedule); err != nil {
-			s.logger.WarnWithContext(ctx, "Skipped malformed due schedule JSON", map[string]interface{}{
-				"error": err.Error(),
-			})
+		if err := json.Unmarshal(raw, &schedule); err != nil {
+			if s.logger != nil {
+				s.logger.WarnWithContext(ctx, "Skipped malformed schedule JSON", map[string]interface{}{
+					"operation":   "schedule_load",
+					"request_id":  core.GetRequestID(ctx),
+					"schedule_id": ids[i],
+					"error":       "stored schedule is malformed",
+					"error_type":  "unmarshal",
+				})
+			}
 			continue
 		}
-		// Defensive: skip disabled schedules even if they're in the due index.
-		if !schedule.Enabled {
+		if dueOnly && !schedule.Enabled {
+			_ = s.client.ZRem(ctx, s.dueKey(), ids[i]).Err()
 			continue
 		}
 		out = append(out, &schedule)
 	}
+	if len(stale) > 0 {
+		cleanup := s.client.Pipeline()
+		cleanup.SRem(ctx, s.allKey(), stale...)
+		cleanup.ZRem(ctx, s.dueKey(), stale...)
+		if _, err := cleanup.Exec(ctx); err != nil && s.logger != nil {
+			s.logger.WarnWithContext(ctx, "Failed to prune stale schedule indexes", map[string]interface{}{
+				"operation":   "schedule_index_cleanup",
+				"request_id":  core.GetRequestID(ctx),
+				"error":       "redis schedule index cleanup failed",
+				"error_type":  "index_write",
+				"stale_count": len(stale),
+			})
+		}
+	}
 	return out, nil
 }
 
-// addToDueIndex adds (or updates) a schedule's entry in the due-index
-// sorted set, with score = RunAt.Unix().
 func (s *RedisScheduleStore) addToDueIndex(ctx context.Context, schedule *core.Schedule) error {
-	err := s.client.ZAdd(ctx, s.dueKey(), redis.Z{
-		Score:  float64(schedule.RunAt.Unix()),
-		Member: schedule.ID,
-	}).Err()
-	if err != nil {
+	if err := s.client.ZAdd(ctx, s.dueKey(), redis.Z{
+		Score: float64(schedule.RunAt.Unix()), Member: schedule.ID,
+	}).Err(); err != nil {
 		return fmt.Errorf("scheduler: failed to add to due index: %w", err)
 	}
 	return nil

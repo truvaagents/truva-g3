@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -39,6 +40,25 @@ func TestNewSharedBackends_NilClient(t *testing.T) {
 	_, err := NewSharedBackends(nil, &core.NoOpLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "redis client is required")
+}
+
+func TestSharedBackendsStartupFailureLeavesInjectedClientOpen(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	server.Close()
+	_, err := NewSharedBackends(client, &core.NoOpLogger{})
+	require.Error(t, err)
+	pingErr := client.Ping(t.Context()).Err()
+	require.Error(t, pingErr)
+	assert.False(t, errors.Is(pingErr, redis.ErrClosed), "factory closed caller-owned client")
+}
+
+func TestSharedBackendsCloseLeavesInjectedClientOpen(t *testing.T) {
+	client := newTestRedisClient(t)
+	backends, err := NewSharedBackends(client, &core.NoOpLogger{})
+	require.NoError(t, err)
+	backends.Close()
+	require.NoError(t, client.Ping(t.Context()).Err())
 }
 
 func TestNewSharedBackends_WithDomain(t *testing.T) {
@@ -128,12 +148,31 @@ func TestNewSharedBackends_Phase2RequiresEmbedder(t *testing.T) {
 }
 
 func TestNewSharedBackends_InvalidOption(t *testing.T) {
-	client := newTestRedisClient(t)
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	server.Close()
 	_, err := NewSharedBackends(client, &core.NoOpLogger{},
 		WithDomain(""), // empty domain should fail
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "domain cannot be empty")
+	assert.NotContains(t, err.Error(), "startup check", "local validation must happen before Redis I/O")
+}
+
+func TestNewSharedBackends_ExplicitKeyspaceOverridesInvalidEnvironment(t *testing.T) {
+	t.Setenv("TRUVAG3_REDIS_NAMESPACE", "invalid{namespace")
+	client := newTestRedisClient(t)
+	backends, err := NewSharedBackends(
+		client,
+		&core.NoOpLogger{},
+		WithRedisDeployment("explicit-deployment"),
+	)
+	require.NoError(t, err)
+	t.Cleanup(backends.Close)
+
+	episodic, ok := backends.ToDeps().Episodic.(*StreamEpisodicMemory)
+	require.True(t, ok)
+	assert.Equal(t, "explicit-deployment", episodic.keyspace.Deployment())
 }
 
 func TestNewSharedBackends_ToDepsNilSafe(t *testing.T) {

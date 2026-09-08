@@ -34,33 +34,20 @@ func TestLLMDebugConversationID(t *testing.T) {
 	}
 }
 
-func TestRedisLLMDebugStoreOldStringConversationCompatibility(t *testing.T) {
+func TestRedisLLMDebugStoreDoesNotReadRemovedStringFormat(t *testing.T) {
 	_, store := setupRedisLLMDebugTestStore(t)
-	record := &LLMDebugRecord{
-		RequestID: "request-old-string",
-		Metadata: map[string]string{
-			MetadataConversationID: "conversation-old-string",
-		},
-	}
-	serialized, err := store.serialize(record)
-	if err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
+	requestID := "request-old-string"
 	if err := store.client.Set(
 		context.Background(),
-		llmDebugKeyPrefix+record.RequestID,
-		serialized,
+		llmDebugKeyPrefix+requestID,
+		"removed-format",
 		defaultDebugTTL,
 	).Err(); err != nil {
 		t.Fatalf("seed old record: %v", err)
 	}
 
-	got, err := store.GetRecord(context.Background(), record.RequestID)
-	if err != nil {
-		t.Fatalf("GetRecord: %v", err)
-	}
-	if conversationID := LLMDebugConversationID(got); conversationID != "conversation-old-string" {
-		t.Fatalf("old-string conversation ID = %q", conversationID)
+	if _, err := store.GetRecord(context.Background(), requestID); !errors.Is(err, ErrLLMDebugRecordNotFound) {
+		t.Fatalf("GetRecord error = %v, want typed not-found", err)
 	}
 }
 
@@ -332,7 +319,7 @@ func TestLLMDebugRedisWritersUseCompatibleConversationField(t *testing.T) {
 		"request-orchestration-writer",
 		"request-telemetry-writer",
 	} {
-		metaKey := llmDebugKeyPrefix + requestID + llmDebugMetaSuffix
+		metaKey := orchestrationStore.metaKey(requestID)
 		if got := mr.HGet(metaKey, "meta:"+MetadataConversationID); got != "conversation-format" {
 			t.Fatalf("%s conversation field = %q", requestID, got)
 		}
@@ -396,9 +383,9 @@ func TestLLMDebugRedisWritersShareMinimumRetentionContract(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		llmDebugKeyPrefix + requestID + llmDebugFloorSuffix,
-		llmDebugKeyPrefix + requestID + llmDebugMetaSuffix,
-		llmDebugKeyPrefix + requestID + llmDebugInterSuffix,
+		orchestrationStore.retentionFloorKey(requestID),
+		orchestrationStore.metaKey(requestID),
+		orchestrationStore.interactionsKey(requestID),
 	} {
 		if got := mr.TTL(key); got != promotedTTL {
 			t.Fatalf("%s TTL = %v, want %v", key, got, promotedTTL)

@@ -218,7 +218,7 @@ func (c phaseCoordinator) Run(
 		// A boundary failure occurs before the planner/executor can produce a
 		// result. Persist the request-local debug snapshot that the boundary
 		// contributor captured so the failure is still diagnosable.
-		c.orchestrator.storeExecutionAsync(
+		c.orchestrator.storeTerminalExecutionAsync(
 			state.Context,
 			state.Input.Request,
 			state.Correlation.RequestID,
@@ -435,6 +435,9 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	defer state.Span.End()
 	defer o.releaseExecutionRecorder(state.Correlation.RequestID)
 	defer func() {
+		if runErr != nil {
+			o.ensureTerminalPipelineHookSnapshot(state, runErr)
+		}
 		if runErr != nil && !IsInterrupted(runErr) {
 			recordRunSpanFailure(state)
 		}
@@ -473,7 +476,7 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 					state.setSkillState(skillState)
 					debug := skillState.Debug
 					state.Debug.Skills = &debug
-					o.storeExecutionAsync(
+					o.storeTerminalExecutionAsync(
 						state.Context, state.Input.Request, state.Correlation.RequestID,
 						nil, nil, nil,
 					)
@@ -515,7 +518,7 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 		state.setSkillState(checkpointState)
 		debug := checkpointState.Debug
 		state.Debug.Skills = &debug
-		o.storeExecutionAsync(
+		o.storeTerminalExecutionAsync(
 			state.Context, state.Input.Request, state.Correlation.RequestID,
 			nil, nil, nil,
 		)
@@ -529,6 +532,17 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	)
 	if err != nil {
 		state.completionReason = "before_planning_failed"
+		// The hook contract failed before a plan/result existed. Persist the
+		// request-local hook record so execution-debug consumers can diagnose
+		// the boundary without relying on tracing.
+		o.storeTerminalExecutionAsync(
+			state.Context,
+			state.Input.Request,
+			state.Correlation.RequestID,
+			nil,
+			nil,
+			nil,
+		)
 		return nil, fmt.Errorf("before-planning pipeline contract: %w", err)
 	}
 	if decision != nil {
@@ -544,6 +558,19 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 			usageByPhase,
 		)
 		if input.Delivery == deliverBuffered {
+			executionResult := &ExecutionResult{
+				Success:       true,
+				TotalDuration: time.Since(state.StartedAt),
+			}
+			o.storeExecutionWithFinalResponseSourceAsync(
+				state.Context,
+				state.Input.Request,
+				state.Correlation.RequestID,
+				nil,
+				executionResult,
+				response.Response,
+				FinalResponseSourceBeforePlanningShortCircuit,
+			)
 			result := &requestRunResult{Response: *response}
 			o.completeRun(state, result)
 			return result, nil
@@ -552,6 +579,19 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 		if callbackErr != nil {
 			response.Errors = append(response.Errors, "stream callback stopped delivery")
 		}
+		executionResult := &ExecutionResult{
+			Success:       callbackErr == nil && !deliveryState.PartialContent,
+			TotalDuration: time.Since(state.StartedAt),
+		}
+		o.storeExecutionWithFinalResponseSourceAsync(
+			state.Context,
+			state.Input.Request,
+			state.Correlation.RequestID,
+			nil,
+			executionResult,
+			response.Response,
+			FinalResponseSourceBeforePlanningShortCircuit,
+		)
 		result := &requestRunResult{Response: *response, Delivery: deliveryState}
 		o.completeRun(state, result)
 		return result, nil
@@ -589,6 +629,46 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	}
 	o.completeRun(state, result)
 	return result, err
+}
+
+// ensureTerminalPipelineHookSnapshot closes the uncommon error paths that end
+// before the phase loop has enough state to write its own terminal record. It
+// is deliberately limited to requests that actually observed a hook and have
+// not already installed a richer terminal publisher.
+func (o *AIOrchestrator) ensureTerminalPipelineHookSnapshot(
+	state *executionRunState,
+	runErr error,
+) {
+	if state == nil || o.executionStore == nil {
+		return
+	}
+	holder, ok := pipelineHookExecutionHolderFromContext(state.Context)
+	if !ok || !holder.HasExecutions() || holder.HasTerminalPublisher() {
+		return
+	}
+
+	var plan *RoutingPlan
+	var result *ExecutionResult
+	if state.Phase.Result != nil {
+		plan = state.Phase.Result.LastPlan
+		if state.Phase.Result.CombinedResult != nil {
+			failedResult := *state.Phase.Result.CombinedResult
+			failedResult.Success = false
+			result = &failedResult
+		}
+	}
+	var checkpoint *ExecutionCheckpoint
+	if IsInterrupted(runErr) {
+		checkpoint = GetCheckpoint(runErr)
+	}
+	o.storeTerminalExecutionAsync(
+		state.Context,
+		state.Input.Request,
+		state.Correlation.RequestID,
+		plan,
+		result,
+		checkpoint,
+	)
 }
 
 func checkpointHasEffectiveSkillState(
@@ -697,6 +777,9 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 		)
 	}
 	ctx, accumulator := core.WithTokenUsageAccumulator(ctx)
+	if o.executionStore != nil {
+		ctx = withPipelineHookExecutionHolder(ctx, newPipelineHookExecutionHolder(&o.executionWg))
+	}
 	pctx := &core.PipelineContext{Request: input.Request, Metadata: metadata, Enrichments: make(map[string]interface{})}
 	prepareKnownEnrichments(ctx, metadata, pctx.Enrichments, o.conversationHistoryPreparer)
 

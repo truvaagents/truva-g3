@@ -206,18 +206,21 @@ When a tool starts up and an agent needs it, here's the full lifecycle:
       ├──────────────────► ┌──────────────────────────────────┐     │
       │                    │ Service Registry (Redis/Valkey)  │     │
       │                    │                                  │     │
-      │                    │ truvag3:services:weather-tool-v2 │     │ 4. FindByCapability
+      │                    │ ...:registry:{...}:service:      │     │ 4. FindByCapability
+      │                    │     weather-tool-v2              │     │
       │                    │  → {ID, Name, Address, Port,     │◄────┤    "get_weather_forecast"
       │                    │     Capabilities, Metadata, ...} │     │
       │                    │                                  │     │
-      │                    │ truvag3:capabilities:            │     │ 5. Returns
+      │                    │ ...:registry:{...}:index:        │     │ 5. Returns
+      │                    │     capability:                  │     │
       │                    │     get_weather_forecast         ├────►│    [ServiceInfo, ...]
       │                    │  → {weather-tool-v2}             │     │
       │ 3. Heartbeat       │                                  │     │ 6. HTTP call
-      │    every 15s       │ truvag3:names:weather-tool-v2    │     │    Address:Port
+      │    every 15s       │ ...:registry:{...}:index:name:   │     │    Address:Port
+      │                    │     weather-tool-v2              │     │
       │ ──────────────────►│  → {weather-tool-v2}             │     │    (Service DNS)
       │                    │                                  │     │
-      │                    │ truvag3:types:tool               │     │
+      │                    │ ...:registry:{...}:index:type:tool│    │
       │                    │  → {weather-tool-v2, …}          │     │
       │                    └──────────────────────────────────┘     │
       │                                                             │
@@ -271,26 +274,40 @@ In service-scoped mode (multiple pods writing the same key), `pod_name` reflects
 
 The `Capability` struct ([`core/agent.go:70`](https://github.com/truvaagents/truva-g3/blob/main/core/agent.go#L70)) carries more than just a name and description — it also includes optional payload-generation hints (`InputSummary`, `OutputSummary`) and an auto-generated schema endpoint. Those are explained in the [Tool Development Guide](../building/TOOL_DEVELOPMENT_GUIDE.md); for discovery purposes, you mainly care about `Name`, `Description`, `Endpoint`, and `Internal` (a flag that hides admin-style capabilities from the AI-facing catalog).
 
-### What the Registry Stores: Four Key Types
+### What the Registry Stores: Versioned, Co-Located Key Types
 
-A single registration writes four key families to Redis (verified at [`core/redis_registry.go:198-234`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L198-L234)). All keys are namespace-prefixed; the default namespace is `truvag3`.
+A single registration writes the record and its lookup indexes to Redis/Valkey.
+With the default deployment namespace, every registry key starts with
+`truvag3:v1:default:registry:{default:registry}`. The repeated value in braces
+is the Redis Cluster hash tag, so the transaction remains single-slot.
 
 | Key | Type | Contents | TTL |
 |---|---|---|---|
-| `truvag3:services:<id>` | string (JSON) | Full `ServiceInfo` for this instance | 30 s (default; tunable) |
-| `truvag3:capabilities:<cap_name>` | set | Instance IDs that provide this capability | 60 s (= 2× service TTL) |
-| `truvag3:names:<name>` | set | Instance IDs registered under this logical name | 60 s |
-| `truvag3:types:<type>` | set | Instance IDs of this type (`tool` / `agent`) | 60 s |
+| `...:service:<id>` | string (JSON) | Full `ServiceInfo` for this instance | 30 s (default; tunable) |
+| `...:index:all` | set | All registered service IDs | 60 s (= 2× service TTL) |
+| `...:index:capability:<cap_name>` | set | Instance IDs that provide this capability | 60 s |
+| `...:index:name:<name>` | set | Instance IDs registered under this logical name | 60 s |
+| `...:index:type:<type>` | set | Instance IDs of this type (`tool` / `agent`) | 60 s |
 
-The individual record is the source of truth; the three index sets exist purely for fast lookups. When an agent calls `FindByCapability("current_weather")`, the framework reads the capability index set, then does a parallel `GET` on each `truvag3:services:<id>` to fetch the live record.
+The individual record is the source of truth; the index sets are repairable
+lookup projections. When an agent calls `FindByCapability("current_weather")`,
+the framework reads the capability index, then fetches each versioned service
+record. Unfiltered discovery traverses `index:all` with `SSCAN`, not a cluster
+keyspace scan.
 
 The two TTL values are deliberate. The service record's short TTL (30 s) means a crashed instance disappears within half a minute. The longer index TTL (60 s) means a slow heartbeat from one replica doesn't drop the whole capability index — see [Multi-Replica Behaviour](#multi-replica-behaviour) below.
 
 ### Atomic Registration
 
-All four writes — service record + each capability set + name set + type set — happen in a single `TxPipeline` ([`core/redis_registry.go:194-264`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L194-L264)). Either all writes commit together, or none of them do.
+The service record, all-services index, capability sets, name set, and type set
+are written in one `TxPipeline`. Their common hash tag keeps that transaction
+valid in Redis and Valkey Cluster. Either all writes commit together, or none
+of them do.
 
-The practical implication: an agent will never see a half-registered component. There's no window where `truvag3:capabilities:current_weather` lists an ID whose `truvag3:services:<id>` record hasn't been written yet. This matters during fast scale-up bursts and during recovery from a transient registry outage.
+The practical implication: an agent will never see a half-registered component.
+There's no committed window where the capability index lists an ID whose
+service record was omitted. Stale IDs can still exist after a service record's
+shorter TTL expires; readers tolerate and lazily remove them.
 
 ### Address Resolution: Pod IP vs Service DNS
 
@@ -320,7 +337,10 @@ if len(weather) == 0 {
 // Returns []*ServiceInfo for every healthy component that advertised "current_weather".
 ```
 
-Backed by `truvag3:capabilities:<cap>` (a Redis set), so it's a single `SMEMBERS` followed by parallel `GET`s. Fast, returns all healthy providers, and supports automatic load-distribution downstream — pick one at random, round-robin, or pass the list to your routing logic.
+Backed by `...:registry:{...}:index:capability:<cap>` (a Redis set), so it is a
+single index read followed by record fetches. It returns all healthy providers
+and supports downstream load distribution—pick one at random, round-robin, or
+pass the list to your routing logic.
 
 ### `FindService` — when you want a specific component
 
@@ -331,7 +351,8 @@ weatherInstances, _ := agent.FindService(ctx, "weather-tool")
 // Returns all healthy replicas of "weather-tool" — typically one per pod.
 ```
 
-Backed by the `truvag3:names:<name>` set. Same shape as `FindByCapability`, but indexed by logical name instead of capability.
+Backed by the `...:registry:{...}:index:name:<name>` set. It has the same shape
+as `FindByCapability`, but is indexed by logical name instead of capability.
 
 ### `Discover` with a filter — multi-criteria
 
@@ -370,8 +391,8 @@ Two TTL values, intentionally different:
 
 | Layer | Default | Why this value |
 |---|---|---|
-| **Service record** (`truvag3:services:<id>`) | 30 s | Fast detection of crashed instances. Within 30 s of the last heartbeat, an unresponsive instance disappears from the registry. |
-| **Index sets** (`truvag3:capabilities:`, `:names:`, `:types:`) | 60 s (= 2× service TTL) | Index sets are *shared* across all instances of a name/capability. The longer TTL means a single replica that's slow to heartbeat doesn't drop the whole capability index for everyone. |
+| **Service record** (`...:registry:{...}:service:<id>`) | 30 s | Fast detection of crashed instances. Within 30 s of the last heartbeat, an unresponsive instance disappears from the registry. |
+| **Index sets** (`...:index:all`, `:capability:`, `:name:`, `:type:`) | 60 s (= 2× service TTL) | Index sets are *shared* across instances. The longer TTL means a slow replica does not drop the lookup projection for everyone. |
 
 Both TTLs are set on every successful registration *and* on every heartbeat. The `TxPipeline` re-applies them all at once.
 
@@ -408,7 +429,7 @@ The framework default remains `ttl/2`; deployments choose to opt in to a differe
 Each heartbeat tick calls `UpdateHealth(ctx, id, status)` ([`core/redis_registry.go:294`](https://github.com/truvaagents/truva-g3/blob/main/core/redis_registry.go#L294)), which re-runs the same `TxPipeline` as registration:
 
 1. Re-write the service record with fresh TTL (`SET <key> <data> EX <ttl>`)
-2. Re-add the ID to all four index sets (`SADD`)
+2. Re-add the ID to the all-services, capability, name, and type indexes (`SADD`)
 3. Re-apply each index set's TTL (`EXPIRE <key> <ttl*2>`)
 
 So heartbeats don't just refresh a single key — they refresh *the whole picture*. This matters when an index set has expired entirely and needs to be reconstructed (for instance, after a Redis restart): the heartbeat from any healthy replica will rebuild the affected sets.
@@ -421,19 +442,19 @@ Running multiple replicas of the same tool or agent — `replicas: 3` in your De
 
 ### Mode 1 — Service-Scoped Registration (the K8s default)
 
-When `TRUVAG3_K8S_SERVICE_NAME` is set, every replica of the Deployment registers with `ID = Name`. They all write to the same `truvag3:services:<name>` key, and they all carry the same K8s Service DNS as their `Address`.
+When `TRUVAG3_K8S_SERVICE_NAME` is set, every replica of the Deployment registers with `ID = Name`. They all write to the same versioned `...:service:<name>` key, and they all carry the same K8s Service DNS as their `Address`.
 
 ```
-truvag3:services:async-travel-agent
+truvag3:v1:default:registry:{default:registry}:service:async-travel-agent
   → {ID: "async-travel-agent",
      Name: "async-travel-agent",
      Address: "async-travel-agent-service.<ns>.svc.cluster.local",
      Port: 80,
      ...}
 
-truvag3:names:async-travel-agent → {async-travel-agent}        # one member
-truvag3:capabilities:<cap>       → {async-travel-agent, …}     # one entry per Deployment, not per pod
-truvag3:types:agent              → {async-travel-agent, …}
+...:index:name:async-travel-agent → {async-travel-agent}       # one member
+...:index:capability:<cap>        → {async-travel-agent, …}    # one entry per Deployment, not per pod
+...:index:type:agent              → {async-travel-agent, …}
 ```
 
 This is what's running in the canonical kind cluster: `async-travel-agent` has `replicas: 2` and shows up as **one** registry entry. Both pods race to write the same record on every heartbeat — last-writer-wins on `SET` and `SADD` semantics — and the K8s Service handles the actual load balancing across the live pods.
@@ -451,11 +472,11 @@ The trade-offs of this mode:
 In this mode, every instance generates a unique ID (`<name>-<uuid8>`) at process start. Each registers independently:
 
 ```
-truvag3:services:weather-tool-a1b2c3d4 → {Address: localhost:8080, ...}
-truvag3:services:weather-tool-e5f6g7h8 → {Address: localhost:8081, ...}
+...:service:weather-tool-a1b2c3d4 → {Address: localhost:8080, ...}
+...:service:weather-tool-e5f6g7h8 → {Address: localhost:8081, ...}
 
-truvag3:names:weather-tool        → {weather-tool-a1b2c3d4, weather-tool-e5f6g7h8}
-truvag3:capabilities:<cap>        → {weather-tool-a1b2c3d4, weather-tool-e5f6g7h8}
+...:index:name:weather-tool       → {weather-tool-a1b2c3d4, weather-tool-e5f6g7h8}
+...:index:capability:<cap>        → {weather-tool-a1b2c3d4, weather-tool-e5f6g7h8}
 ```
 
 This is what you get when running the tool standalone, in a non-K8s container, or in K8s without service-fronted wiring. `FindByCapability` returns both instances, and the caller (or its routing layer) picks one.
@@ -473,7 +494,7 @@ The two modes behave differently when a replica dies:
 **Mode 1 (service-scoped, K8s default):**
 
 ```
-T=0s    Replicas A, B, C all heartbeating against truvag3:services:async-travel-agent
+T=0s    Replicas A, B, C all heartbeating against ...:service:async-travel-agent
         Record TTL: 30 s (refreshed by whichever pod heartbeated last)
 
 T=15s   Pod A heartbeat → record TTL pushed back to 30 s
@@ -500,7 +521,7 @@ T=30s   Pod e5f6g7h8 heartbeat → its record TTL refreshed
         Pod a1b2c3d4's record TTL: ~15 s remaining (no refresh since T=15s)
 
 T=45s   Pod a1b2c3d4's service record expires
-        truvag3:capabilities:<cap> still lists a1b2c3d4 (set entries don't
+        ...:index:capability:<cap> still lists a1b2c3d4 (set entries don't
         auto-remove); but Discover() filters it out because the service
         record is gone — callers never see it.
 
@@ -561,7 +582,7 @@ The discovery-related variables — full reference with precedence rules in [`do
 |---|---|---|
 | `TRUVAG3_DISCOVERY_ENABLED` | `false` | Master switch. If false, no registration or discovery. |
 | `TRUVAG3_DISCOVERY_PROVIDER` | `redis` | Backend identifier. The in-tree default. |
-| `TRUVAG3_REDIS_URL` / `REDIS_URL` | — | Connection string for the default Redis backend. Standard `REDIS_URL` is honoured. |
+| `REDIS_URL` | — | Standalone Redis/Valkey URL shorthand. Use structured `TRUVAG3_REDIS_*` fields for Sentinel or cluster topology. |
 | `TRUVAG3_DISCOVERY_TTL` | `30s` | Service record TTL. Index TTL is always 2× this. |
 | `TRUVAG3_DISCOVERY_HEARTBEAT` | `0` (= ttl/2) | Heartbeat interval. Clamped: min 2 s, must be < TTL. |
 | `TRUVAG3_DISCOVERY_CACHE` | `true` | Local read-side cache for discovery results (within an agent). |
@@ -577,7 +598,7 @@ When configuring the framework in code:
 
 | Option | Effect |
 |---|---|
-| `core.WithRedisURL(url)` | Set Redis URL (also honours `REDIS_URL` / `TRUVAG3_REDIS_URL`) |
+| `core.WithRedisURL(url)` | Explicit standalone URL compatibility option; use `core.WithRedisConnection(profile)` for topology-aware code configuration |
 | `core.WithDiscovery(true, "redis")` | Enable discovery with the named provider |
 | `core.WithRedisDiscovery(url)` | Convenience: enables discovery + sets Redis URL in one call |
 | `core.WithDiscoveryTTL(d)` | Override service-record TTL |
@@ -602,23 +623,26 @@ When `redis-cli` is available and Redis is reachable (port-forward in K8s if nee
 # Port-forward to Redis if you're running in kind:
 kubectl port-forward service/redis 6379:6379 &
 
-# Every registered component
-redis-cli KEYS "truvag3:services:*"
+# The commands below use the shipped examples' "default" deployment namespace.
+REGISTRY_PREFIX='truvag3:v1:default:registry:{default:registry}'
+
+# Page through every registered component ID (repeat with the returned cursor).
+redis-cli SSCAN "$REGISTRY_PREFIX:index:all" 0 COUNT 100
 
 # Inspect a specific service record (returns the full ServiceInfo JSON)
-redis-cli GET "truvag3:services:weather-tool-abc123"
+redis-cli GET "$REGISTRY_PREFIX:service:weather-tool-abc123"
 
 # Find which components advertise a capability
-redis-cli SMEMBERS "truvag3:capabilities:current_weather"
+redis-cli SSCAN "$REGISTRY_PREFIX:index:capability:current_weather" 0 COUNT 100
 
 # Count replicas of a named component
-redis-cli SCARD "truvag3:names:weather-tool"
+redis-cli SCARD "$REGISTRY_PREFIX:index:name:weather-tool"
 
 # Watch heartbeats in real time (renews every ~15 s by default)
-redis-cli MONITOR | grep "truvag3:services"
+redis-cli MONITOR | grep ':registry:'
 
 # Check remaining TTL on a record (useful for diagnosing heartbeat gaps)
-redis-cli TTL "truvag3:services:weather-tool-abc123"
+redis-cli TTL "$REGISTRY_PREFIX:service:weather-tool-abc123"
 # Healthy: 15-30 (always between heartbeat-window-fresh and just-renewed).
 # 0 or -2 means the record has expired or doesn't exist.
 ```
@@ -631,7 +655,7 @@ optional trace enrichment. Its backend currently imports TruvaG3 modules, so
 moving the source to another repository requires dependency and container-build
 changes. Most views are observational, but it is not globally read-only: HITL
 commands and Skills administration are intentional mutation surfaces, and
-grouped execution reads prune only confirmed-missing DB 8 index members.
+grouped execution reads prune only confirmed-missing DB 0 execution-index members.
 
 The framework also emits Prometheus metrics for discovery operations (`discovery.registrations`, `discovery.lookups`, `discovery.lookup.duration_ms`). See [`examples/k8-deployment/OBSERVABILITY.md`](https://github.com/truvaagents/truva-g3/blob/main/examples/k8-deployment/OBSERVABILITY.md) for the full metric catalog.
 
@@ -649,7 +673,7 @@ Useful for ops alerting — set an alert if `success_rate` drops below a thresho
 
 These behaviours look surprising but are by design:
 
-**An ID appears in `truvag3:capabilities:foo` but its service record is missing.**
+**An ID appears in a capability index but its service record is missing.**
 The replica died. Its 30 s service-record TTL elapsed before the index set's 60 s TTL. `Discover()` filters this out — callers never see the dead instance, even though the index entry hasn't been GC'd yet.
 
 **Discovery results differ between methods during a deployment.**
@@ -667,7 +691,7 @@ Initial registration sets status to `healthy`, but `LastSeen` is updated on each
 
 ```bash
 # 1. Confirm the framework actually registered the tool.
-redis-cli GET "truvag3:services:<your-tool-id>"
+redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:<your-tool-id>'
 # Empty result → registration never succeeded. Check tool startup logs for connection errors.
 
 # 2. Check the Address field in the JSON. If it's "0.0.0.0:8080" or a pod IP,
@@ -676,7 +700,7 @@ redis-cli GET "truvag3:services:<your-tool-id>"
 
 # 3. Check capability spelling. A typo in the agent's FindByCapability call
 #    won't error; it'll silently return zero results.
-redis-cli SMEMBERS "truvag3:capabilities:<exact-capability-name>"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:capability:<exact-capability-name>' 0 COUNT 100
 ```
 
 **Symptom: heartbeat failures in logs.**
@@ -767,7 +791,12 @@ framework, _ := core.NewFramework(agent,
 
 **My agent calls `FindByCapability` and gets nothing back. What's wrong?**
 
-Three likely causes. (1) The tool isn't registered — check `redis-cli GET "truvag3:services:<id>"`. (2) Capability name mismatch — check `redis-cli SMEMBERS "truvag3:capabilities:<exact-name>"`; typos in the lookup key silently return zero results. (3) The Redis URL is wrong — agent and tool must point at the same Redis. See [Troubleshooting](#troubleshooting) for the diagnostic walkthrough.
+Three likely causes. (1) The tool is not registered—read its versioned
+`...:registry:{...}:service:<id>` record. (2) The capability name differs—page
+the corresponding `...:index:capability:<exact-name>` set with `SSCAN`; typos
+return zero results. (3) The agent and tool resolve different Redis/Valkey
+topologies or `TRUVAG3_REDIS_NAMESPACE` values. See
+[Troubleshooting](#troubleshooting) for the diagnostic walkthrough.
 
 **What happens if Redis goes down?**
 

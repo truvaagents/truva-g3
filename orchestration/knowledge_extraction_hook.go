@@ -43,7 +43,11 @@ func WithExtractionLogger(logger core.Logger) KnowledgeExtractionOption {
 		if logger == nil {
 			return fmt.Errorf("logger cannot be nil: use &core.NoOpLogger{} to disable logging")
 		}
-		h.logger = logger
+		if cal, ok := logger.(core.ComponentAwareLogger); ok {
+			h.logger = cal.WithComponent("framework/orchestration")
+		} else {
+			h.logger = logger
+		}
 		return nil
 	}
 }
@@ -100,17 +104,62 @@ func (h *KnowledgeExtractionHook) Name() string { return "knowledge-extraction" 
 // AfterSynthesis extracts knowledge from the synthesized response and stores it.
 // Runs the extraction asynchronously to avoid blocking the response.
 func (h *KnowledgeExtractionHook) AfterSynthesis(ctx context.Context, pctx *core.PipelineContext, response string) (string, error) {
+	effectStart := time.Now()
 	if response == "" || h.knowledge == nil || h.embedder == nil || h.aiClient == nil {
+		reportStructuredPipelineHookEffect(
+			ctx,
+			"knowledge_extraction",
+			"Knowledge extraction",
+			core.PipelineHookEffectSkipped,
+			"Knowledge extraction was not applicable",
+			nil,
+			nil,
+			effectStart,
+		)
 		return response, nil // Nothing to extract or no storage configured
 	}
 
 	requestID := GetRequestID(ctx)
+	traceContext := telemetry.GetTraceContext(ctx)
+	reportStructuredPipelineHookEffect(
+		ctx,
+		"knowledge_extraction",
+		"Knowledge extraction",
+		core.PipelineHookEffectPending,
+		"Asynchronous knowledge extraction is scheduled",
+		struct {
+			Asynchronous bool `json:"asynchronous"`
+		}{Asynchronous: true},
+		nil,
+		effectStart,
+	)
+	// The extraction outlives the request, so it must not retain the request's
+	// cancellation or parent span. Copy bounded correlation baggage onto the
+	// hook-owned shutdown context and start a linked root span in the goroutine.
+	backgroundCtx := telemetry.CopyBaggage(h.shutdownCtx, ctx)
+	backgroundCtx = core.WithRequestID(backgroundCtx, requestID)
+	if reporter, ok := core.PipelineHookEffectReporterFromContext(ctx); ok {
+		backgroundCtx = core.WithPipelineHookEffectReporter(backgroundCtx, reporter)
+	}
+	originalRequest := pctx.Request
 
 	// Run extraction asynchronously — tracked by WaitGroup, cancellable via shutdownCtx
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.extractAndStore(h.shutdownCtx, pctx.Request, response, requestID)
+		asyncCtx, endSpan := telemetry.StartLinkedSpan(
+			backgroundCtx,
+			"pipeline.hook.async.knowledge-extraction",
+			traceContext.TraceID,
+			traceContext.SpanID,
+			map[string]string{
+				"request_id":          requestID,
+				"pipeline.hook.name":  h.Name(),
+				"pipeline.hook.phase": PipelineHookPhaseAfterSynthesis,
+			},
+		)
+		defer endSpan()
+		h.extractAndStore(asyncCtx, originalRequest, response, requestID, effectStart)
 	}()
 
 	return response, nil // Response is never mutated
@@ -118,8 +167,30 @@ func (h *KnowledgeExtractionHook) AfterSynthesis(ctx context.Context, pctx *core
 
 // extractAndStore performs the actual LLM extraction, embedding, and storage.
 // Runs in a background goroutine — all errors are logged, never propagated.
-func (h *KnowledgeExtractionHook) extractAndStore(ctx context.Context, originalRequest, synthesizedResponse, requestID string) {
+func (h *KnowledgeExtractionHook) extractAndStore(
+	ctx context.Context,
+	originalRequest string,
+	synthesizedResponse string,
+	requestID string,
+	effectStart time.Time,
+) {
 	startTime := time.Now()
+	effectStatus := core.PipelineHookEffectSkipped
+	effectSummary := "No reusable knowledge fragments were extracted"
+	var effectErr error
+	effectData := knowledgeExtractionEffectData{}
+	defer func() {
+		reportStructuredPipelineHookEffect(
+			ctx,
+			"knowledge_extraction",
+			"Knowledge extraction",
+			effectStatus,
+			effectSummary,
+			effectData,
+			effectErr,
+			effectStart,
+		)
+	}()
 
 	// 1. Ask LLM to extract learnings from the execution
 	extractionPrompt := fmt.Sprintf(`Extract 0-3 reusable knowledge fragments from this completed agent execution.
@@ -149,15 +220,21 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 		},
 	})
 	if err != nil {
-		h.logger.WarnWithContext(ctx, "Knowledge extraction LLM call failed", map[string]interface{}{
-			"operation":  "knowledge_extraction",
-			"request_id": requestID,
-			"error":      err.Error(),
-			"error_type": "llm_unavailable",
-		})
+		effectStatus = core.PipelineHookEffectFailed
+		effectSummary = "Knowledge extraction LLM call failed"
+		effectErr = err
+		recordPipelineHookEffectSpanError(ctx, "llm_unavailable")
+		if h.logger != nil {
+			h.logger.WarnWithContext(ctx, "Knowledge extraction LLM call failed", map[string]interface{}{
+				"operation":  "knowledge_extraction",
+				"request_id": requestID,
+				"error_type": "llm_unavailable",
+			})
+		}
 		return
 	}
 	aiResp := invocationResult.Response
+	effectData.ModelResponse = aiResp.Content
 
 	// 2. Parse LLM response
 	var fragments []extractedFragment
@@ -165,15 +242,25 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 		// Try to find JSON array in the response (LLM may add prose around it)
 		if extracted := extractJSONArray(aiResp.Content); extracted != "" {
 			if err := json.Unmarshal([]byte(extracted), &fragments); err != nil {
-				h.logger.WarnWithContext(ctx, "Failed to parse knowledge extraction response", map[string]interface{}{
-					"operation":  "knowledge_extraction",
-					"request_id": requestID,
-					"error":      err.Error(),
-					"error_type": "parse_failure",
-				})
+				effectStatus = core.PipelineHookEffectFailed
+				effectSummary = "Knowledge extraction response could not be parsed"
+				effectErr = err
+				telemetry.RecordSpanError(ctx, err)
+				if h.logger != nil {
+					h.logger.WarnWithContext(ctx, "Failed to parse knowledge extraction response", map[string]interface{}{
+						"operation":  "knowledge_extraction",
+						"request_id": requestID,
+						"error":      err.Error(),
+						"error_type": "parse_failure",
+					})
+				}
 				return
 			}
 		} else {
+			effectStatus = core.PipelineHookEffectFailed
+			effectSummary = "Knowledge extraction response contained no JSON array"
+			effectErr = fmt.Errorf("knowledge extraction response contained no JSON array")
+			telemetry.RecordSpanError(ctx, effectErr)
 			return // No parseable fragments
 		}
 	}
@@ -186,18 +273,44 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 	storedCount := 0
 	for _, f := range fragments {
 		if f.Content == "" {
+			effectData.Fragments = append(effectData.Fragments, knowledgeFragmentEffect{
+				Namespace:       f.Namespace,
+				Importance:      f.Importance,
+				Status:          core.PipelineHookEffectSkipped,
+				ObservedOutcome: "empty_content",
+				Error:           "content is empty",
+			})
 			continue
+		}
+		fragmentEffect := knowledgeFragmentEffect{
+			Content:         f.Content,
+			Namespace:       f.Namespace,
+			Importance:      f.Importance,
+			Status:          core.PipelineHookEffectPending,
+			ObservedOutcome: "embedding_pending",
 		}
 
 		// Generate embedding
 		embResp, embErr := h.embedder.GenerateEmbeddings(ctx, []string{f.Content}, nil)
 		if embErr != nil || len(embResp.Embeddings) == 0 || len(embResp.Embeddings[0]) == 0 {
-			h.logger.WarnWithContext(ctx, "Failed to embed knowledge fragment", map[string]interface{}{
-				"operation":  "knowledge_extraction",
-				"request_id": requestID,
-				"content":    truncateForExtraction(f.Content, 100),
-				"error_type": "embedding",
-			})
+			if embErr == nil {
+				embErr = fmt.Errorf("embedding provider returned no vector")
+			}
+			fragmentEffect.Status = core.PipelineHookEffectFailed
+			fragmentEffect.ObservedOutcome = "embedding_failed"
+			fragmentEffect.Error = embErr.Error()
+			if effectErr == nil {
+				effectErr = embErr
+			}
+			effectData.Fragments = append(effectData.Fragments, fragmentEffect)
+			recordPipelineHookEffectSpanError(ctx, "embedding")
+			if h.logger != nil {
+				h.logger.WarnWithContext(ctx, "Failed to embed knowledge fragment", map[string]interface{}{
+					"operation":  "knowledge_extraction",
+					"request_id": requestID,
+					"error_type": "embedding",
+				})
+			}
 			continue
 		}
 
@@ -212,6 +325,8 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 		if importance <= 0 {
 			importance = 5.0
 		}
+		fragmentEffect.Namespace = namespace
+		fragmentEffect.Importance = importance
 
 		fragment := core.KnowledgeFragment{
 			Namespace:    namespace,
@@ -225,24 +340,58 @@ Return [] if no reusable knowledge.`, originalRequest, truncateForExtraction(syn
 		}
 
 		if err := h.knowledge.StoreKnowledge(ctx, fragment); err != nil {
-			h.logger.WarnWithContext(ctx, "Failed to store knowledge fragment", map[string]interface{}{
-				"operation":  "knowledge_extraction",
-				"request_id": requestID,
-				"error":      err.Error(),
-				"error_type": "knowledge_store",
-			})
+			fragmentEffect.Status = core.PipelineHookEffectFailed
+			fragmentEffect.ObservedOutcome = "provider_call_returned_error"
+			fragmentEffect.Error = err.Error()
+			if effectErr == nil {
+				effectErr = err
+			}
+			effectData.Fragments = append(effectData.Fragments, fragmentEffect)
+			recordPipelineHookEffectSpanError(ctx, "knowledge_store")
+			if h.logger != nil {
+				h.logger.WarnWithContext(ctx, "Failed to store knowledge fragment", map[string]interface{}{
+					"operation":  "knowledge_extraction",
+					"request_id": requestID,
+					"error_type": "knowledge_store",
+				})
+			}
 			continue
 		}
+		fragmentEffect.Status = core.PipelineHookEffectSucceeded
+		fragmentEffect.ObservedOutcome = "provider_call_returned_without_error"
+		effectData.Fragments = append(effectData.Fragments, fragmentEffect)
 		storedCount++
 	}
 
+	failedCount := 0
+	for _, fragment := range effectData.Fragments {
+		if fragment.Status == core.PipelineHookEffectFailed {
+			failedCount++
+		}
+	}
+	switch {
+	case len(effectData.Fragments) == 0:
+		effectStatus = core.PipelineHookEffectSkipped
+	case storedCount == 0 && failedCount > 0:
+		effectStatus = core.PipelineHookEffectFailed
+		effectSummary = "Every shared-knowledge provider call returned an error"
+	case failedCount > 0:
+		effectStatus = core.PipelineHookEffectPartial
+		effectSummary = fmt.Sprintf("Provider calls accepted %d of %d extracted knowledge fragments", storedCount, len(effectData.Fragments))
+	default:
+		effectStatus = core.PipelineHookEffectSucceeded
+		effectSummary = fmt.Sprintf("Submitted %d reusable knowledge fragment(s) to the fail-open provider", storedCount)
+	}
+
 	if storedCount > 0 {
-		h.logger.InfoWithContext(ctx, "Knowledge fragments extracted and stored", map[string]interface{}{
-			"operation":        "knowledge_extraction",
-			"request_id":       requestID,
-			"fragments_stored": storedCount,
-			"duration_ms":      time.Since(startTime).Milliseconds(),
-		})
+		if h.logger != nil {
+			h.logger.InfoWithContext(ctx, "Knowledge fragments extracted and stored", map[string]interface{}{
+				"operation":        "knowledge_extraction",
+				"request_id":       requestID,
+				"fragments_stored": storedCount,
+				"duration_ms":      time.Since(startTime).Milliseconds(),
+			})
+		}
 
 		telemetry.AddSpanEvent(ctx, "memory.knowledge.extracted",
 			attribute.String("request_id", requestID),
@@ -261,6 +410,20 @@ type extractedFragment struct {
 	Content    string  `json:"content"`
 	Namespace  string  `json:"namespace"`
 	Importance float64 `json:"importance"`
+}
+
+type knowledgeExtractionEffectData struct {
+	ModelResponse string                    `json:"model_response,omitempty"`
+	Fragments     []knowledgeFragmentEffect `json:"fragments"`
+}
+
+type knowledgeFragmentEffect struct {
+	Content         string                        `json:"content,omitempty"`
+	Namespace       string                        `json:"namespace,omitempty"`
+	Importance      float64                       `json:"importance,omitempty"`
+	Status          core.PipelineHookEffectStatus `json:"status"`
+	ObservedOutcome string                        `json:"observed_outcome"`
+	Error           string                        `json:"error,omitempty"`
 }
 
 // truncateForExtraction limits text length for LLM prompts.

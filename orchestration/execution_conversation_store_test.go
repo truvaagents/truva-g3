@@ -867,7 +867,7 @@ func TestDirectRedisConversationIndexTTLDoesNotDowngrade(t *testing.T) {
 	config := DefaultExecutionStoreConfig()
 	mr, store := newRedisExecutionConversationTestStore(t, config)
 	conversationID := "conversation-direct-ttl"
-	indexKey := executionConversationIndexKey(config.KeyPrefix, conversationID)
+	indexKey := store.conversationIndexKey(conversationID)
 
 	failed := executionWithConversation("failed", conversationID, time.Now())
 	failed.Result.Success = false
@@ -958,7 +958,10 @@ func TestExecutionStoreCanonicalKeysMatchAcrossImplementations(t *testing.T) {
 			config,
 			nil,
 		).(*executionStoreImpl)
-		directStore := &RedisExecutionDebugStore{keyPrefix: prefix}
+		directStore := &RedisExecutionDebugStore{
+			keyPrefix: normalizeExecutionKeyPrefix(prefix),
+			keys:      legacyRedisExecutionDebugKeys(prefix),
+		}
 		conversationID := "conversation-key"
 
 		keys := [][2]string{

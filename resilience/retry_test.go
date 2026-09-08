@@ -378,6 +378,54 @@ func TestRetryWithCircuitBreakerIntegration(t *testing.T) {
 		attempts, cb.GetState(), err)
 }
 
+func TestRetryWithCircuitBreakerClosesAfterSuccessfulHalfOpenProbe(t *testing.T) {
+	cbConfig := &CircuitBreakerConfig{
+		Name:             "retry-half-open-recovery",
+		FailureThreshold: 1,
+		SleepWindow:      20 * time.Millisecond,
+		HalfOpenRequests: 1,
+		SuccessThreshold: 1,
+		VolumeThreshold:  1,
+		WindowSize:       time.Second,
+		BucketCount:      10,
+		ErrorClassifier:  DefaultErrorClassifier,
+		Logger:           &core.NoOpLogger{},
+		Metrics:          &noopMetrics{},
+	}
+	cb, err := NewCircuitBreaker(cbConfig)
+	if err != nil {
+		t.Fatalf("NewCircuitBreaker() error = %v", err)
+	}
+
+	oneAttempt := &RetryConfig{
+		MaxAttempts:   1,
+		InitialDelay:  time.Millisecond,
+		MaxDelay:      time.Millisecond,
+		BackoffFactor: 1,
+		JitterEnabled: false,
+	}
+
+	wantFailure := errors.New("dependency unavailable")
+	if err := RetryWithCircuitBreaker(context.Background(), oneAttempt, cb, func() error {
+		return wantFailure
+	}); !errors.Is(err, core.ErrMaxRetriesExceeded) {
+		t.Fatalf("initial RetryWithCircuitBreaker() error = %v, want max-retries error", err)
+	}
+	if got := cb.GetState(); got != "open" {
+		t.Fatalf("state after threshold failure = %q, want open", got)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	if err := RetryWithCircuitBreaker(context.Background(), oneAttempt, cb, func() error {
+		return nil
+	}); err != nil {
+		t.Fatalf("half-open RetryWithCircuitBreaker() error = %v", err)
+	}
+	if got := cb.GetState(); got != "closed" {
+		t.Fatalf("state after successful half-open probe = %q, want closed", got)
+	}
+}
+
 // TestRetryPanicRecovery tests panic behavior in retry
 func TestRetryPanicRecovery(t *testing.T) {
 	config := &RetryConfig{

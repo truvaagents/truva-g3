@@ -66,7 +66,35 @@ func TestRedisPresetPreservesServiceScopedTaskQueueDefault(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	t.Setenv(core.EnvServiceName, "travel-agent")
+	clients, err := NewClientSet(nil, WithRoleClient(ClientRoleScheduling, client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := NewOptions(WithTaskQueueScope("travel-agent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends, err := NewOrchestrationBackends(clients, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.TaskQueue().Enqueue(t.Context(), &core.Task{ID: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := server.List("truvag3:v1:default:tasks:queue:travel-agent")
+	if err != nil || len(items) != 1 {
+		t.Fatalf("service-scoped task queue contents = %#v, %v", items, err)
+	}
+	if server.Exists("truvag3:v1:default:tasks:queue") {
+		t.Fatal("Redis preset used the shared task queue despite a service name")
+	}
+}
+
+func TestRedisPresetLayer2DoesNotReadTaskQueueScopeFromEnvironment(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	t.Setenv(core.EnvServiceName, "ambient-service")
 	clients, err := NewClientSet(nil, WithRoleClient(ClientRoleScheduling, client))
 	if err != nil {
 		t.Fatal(err)
@@ -79,15 +107,40 @@ func TestRedisPresetPreservesServiceScopedTaskQueueDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := backends.TaskQueue().Enqueue(t.Context(), &core.Task{ID: "task-1"}); err != nil {
+	if err := backends.TaskQueue().Enqueue(t.Context(), &core.Task{ID: "task-unscoped"}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := server.List("truvag3:tasks:queue:travel-agent")
-	if err != nil || len(items) != 1 {
-		t.Fatalf("service-scoped task queue contents = %#v, %v", items, err)
+	if !server.Exists("truvag3:v1:default:tasks:queue") {
+		t.Fatal("Layer 2 composition read ambient service scope")
 	}
-	if server.Exists("truvag3:tasks:queue") {
-		t.Fatal("Redis preset used the shared task queue despite a service name")
+	if server.Exists("truvag3:v1:default:tasks:queue:ambient-service") {
+		t.Fatal("Layer 2 composition created an environment-scoped queue")
+	}
+}
+
+func TestLoadOptionsFromEnvironmentResolvesTaskQueueScope(t *testing.T) {
+	options, err := NewOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err = LoadOptionsFromEnvironment(options, func(name string) (string, bool) {
+		if name == core.EnvServiceName {
+			return "environment-service", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.taskQueueScope != "environment-service" {
+		t.Fatalf("task queue scope = %q, want environment-service", options.taskQueueScope)
+	}
+	options, err = ConfigureOptions(options, WithTaskQueueScope("code-service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.taskQueueScope != "code-service" {
+		t.Fatalf("code task queue scope = %q, want code-service", options.taskQueueScope)
 	}
 }
 
@@ -115,7 +168,7 @@ func TestRedisPresetTaskQueuePreservesInflightListRepresentation(t *testing.T) {
 	if err != nil || dequeued == nil {
 		t.Fatalf("Dequeue = %#v, %v", dequeued, err)
 	}
-	if got := server.Type("settlement:tasks:processing"); got != "list" {
+	if got := server.Type("truvag3:v1:settlement:tasks:processing"); got != "list" {
 		t.Fatalf("in-flight Redis type = %q, want list", got)
 	}
 	if err := backends.TaskQueue().Acknowledge(t.Context(), task.ID); err != nil {
@@ -123,7 +176,7 @@ func TestRedisPresetTaskQueuePreservesInflightListRepresentation(t *testing.T) {
 	}
 }
 
-func TestRedisPresetPreservesAgentScopedCheckpointPrefixDefault(t *testing.T) {
+func TestRedisPresetUsesVersionedAgentScopedCheckpointPrefix(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -133,7 +186,7 @@ func TestRedisPresetPreservesAgentScopedCheckpointPrefixDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options, err := NewOptions()
+	options, err := NewOptions(WithAgentScope("travel-agent"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +200,11 @@ func TestRedisPresetPreservesAgentScopedCheckpointPrefixDefault(t *testing.T) {
 	if err := backends.Checkpoints().SaveCheckpoint(t.Context(), checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	if !server.Exists("legacy:hitl:travel-agent:checkpoint:prefix-default") {
-		t.Fatal("Redis preset did not preserve the agent-scoped checkpoint prefix")
+	if !server.Exists("truvag3:v1:default:hitl:{default:hitl:travel-agent}:checkpoint:prefix-default") {
+		t.Fatal("Redis preset did not use the versioned agent-scoped checkpoint prefix")
 	}
-	if server.Exists("legacy:hitl:checkpoint:prefix-default") {
-		t.Fatal("Redis preset wrote the checkpoint under the shared base prefix")
+	if server.Exists("legacy:hitl:travel-agent:checkpoint:prefix-default") {
+		t.Fatal("Redis preset used the deprecated direct-constructor prefix")
 	}
 }
 
@@ -175,7 +228,7 @@ func TestRedisPresetTaskDeliveryConformance(t *testing.T) {
 			Consumer: backends.TaskConsumer(), Dispatcher: backends.TaskDispatcher(),
 			Cleanup: func() { _ = client.Close() },
 			DeadLetterContains: func(ctx context.Context, queueName, taskID, reason string) (bool, error) {
-				entries, err := client.LRange(ctx, "conformance:tasks:dead:"+queueName, 0, -1).Result()
+				entries, err := client.LRange(ctx, "truvag3:v1:conformance:tasks:dead:"+queueName, 0, -1).Result()
 				if err != nil {
 					return false, err
 				}
@@ -378,15 +431,30 @@ func TestRedisCoordinationConformance(t *testing.T) {
 		return backendconformance.CommandFixture{Publisher: publisher, Subscriber: subscriber}
 	})
 	backendconformance.RunWorkflowStateConformance(t, func(t *testing.T) backendconformance.WorkflowFixture {
-		first, err := orchestration.NewRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:workflow")
+		keyspace, err := core.NewRedisKeyspace("conformance")
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := orchestration.NewRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:workflow")
+		first, err := orchestration.NewRedisStateStoreWithClient(newClient(t), keyspace, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := orchestration.NewRedisStateStoreWithClient(newClient(t), keyspace, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return backendconformance.WorkflowFixture{First: first, Second: second}
+	})
+	backendconformance.RunLegacyWorkflowStateConformance(t, func(t *testing.T) backendconformance.LegacyWorkflowFixture {
+		first, err := orchestration.NewLegacyRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:legacy-workflow")
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := orchestration.NewLegacyRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:legacy-workflow")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return backendconformance.LegacyWorkflowFixture{First: first, Second: second}
 	})
 }
 
@@ -624,7 +692,6 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		values := map[string]string{
 			"REDIS_URL":                   "redis://standard:6379",
-			"TRUVAG3_REDIS_URL":           "redis://alias:6379",
 			"TRUVAG3_HITL_REDIS_DB":       "4",
 			"TRUVAG3_SCHEDULING_REDIS_DB": "5",
 			"TRUVAG3_SKILLS_REDIS_DB":     "9",
@@ -636,8 +703,8 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fromEnvironment.url != "redis://standard:6379" || fromEnvironment.roleDB[ClientRoleHITL] != 4 ||
-		fromEnvironment.roleDB[ClientRoleScheduling] != 5 || fromEnvironment.roleDB[ClientRoleSkills] != 9 {
+	if fromEnvironment.connection.Mode != core.RedisModeStandalone || fromEnvironment.connection.Addrs[0] != "standard:6379" || fromEnvironment.legacyRoleDB[ClientRoleHITL] != 4 ||
+		fromEnvironment.legacyRoleDB[ClientRoleScheduling] != 5 || fromEnvironment.legacyRoleDB[ClientRoleSkills] != 9 {
 		t.Fatalf("environment config = %#v", fromEnvironment)
 	}
 	configured, err := ConfigureClientConfig(fromEnvironment,
@@ -646,7 +713,7 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.url != "redis://code:6379" || configured.roleDB[ClientRoleHITL] != 9 {
+	if configured.connection.Addrs[0] != "code:6379" || configured.legacyRoleDB[ClientRoleHITL] != 9 {
 		t.Fatalf("code overrides did not win: %#v", configured)
 	}
 
@@ -661,14 +728,28 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("malformed environment database was accepted")
 	}
+	if _, err := LoadClientConfigFromEnvironment(DefaultClientConfig(), lookupValues(map[string]string{
+		"REDIS_URL":         "redis://standard:6379",
+		"TRUVAG3_REDIS_URL": "redis://deprecated:6379",
+	})); err == nil {
+		t.Fatal("mixed standard and deprecated Redis connection sources were accepted")
+	}
 	if _, err := NewOptions(WithNamespace("invalid namespace")); err == nil {
 		t.Fatal("invalid namespace was accepted")
 	}
 }
 
 func TestOwnedClientsCanConstructOnlySelectedRoles(t *testing.T) {
-	owned, err := NewOwnedClients(
+	server := miniredis.RunT(t)
+	config, err := ConfigureClientConfig(
 		DefaultClientConfig(),
+		WithClientURL("redis://"+server.Addr()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := NewOwnedClients(
+		config,
 		WithOwnedClientRoles(ClientRoleSkills),
 	)
 	if err != nil {
@@ -726,12 +807,15 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 	}
 	fromEnvironment, err := LoadOptionsFromEnvironment(base, func(name string) (string, bool) {
 		values := map[string]string{
-			"TRUVAG3_WORKFLOW_STATE_TTL":        "48h",
-			"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "5",
-			"TRUVAG3_TASK_QUEUE_RETRY_DELAY":    "250ms",
-			"TRUVAG3_LLM_DEBUG_TTL":             "2h",
-			"TRUVAG3_LLM_DEBUG_ERROR_TTL":       "96h",
-			"TRUVAG3_HITL_CHECKPOINT_TTL":       "36h",
+			"TRUVAG3_WORKFLOW_STATE_TTL":            "48h",
+			"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS":     "5",
+			"TRUVAG3_TASK_QUEUE_RETRY_DELAY":        "250ms",
+			"TRUVAG3_LLM_DEBUG_TTL":                 "2h",
+			"TRUVAG3_LLM_DEBUG_ERROR_TTL":           "96h",
+			"TRUVAG3_HITL_CHECKPOINT_TTL":           "36h",
+			"TRUVAG3_TASK_INDEX_RECONCILE_INTERVAL": "2m",
+			"TRUVAG3_TASK_INDEX_RECONCILE_MAX_IDS":  "2000",
+			"TRUVAG3_SCHEDULER_MAX_SCHEDULES":       "12000",
 		}
 		value, present := values[name]
 		return value, present
@@ -751,23 +835,29 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 		WithCheckpointTTL(48*time.Hour),
 		WithWorkflowStateTTL(72*time.Hour),
 		WithTaskQueueRetryPolicy(7, 500*time.Millisecond),
+		WithTaskIndexReconciliation(3*time.Minute, 3000),
+		WithMaxSchedules(15000),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if configured.executionConfig != executionConfig || configured.workflowTTL != 72*time.Hour || configured.taskRetryCount != 7 ||
 		configured.taskRetryDelay != 500*time.Millisecond || configured.llmDebugTTL != 3*time.Hour ||
-		configured.llmDebugErrorTTL != 120*time.Hour || configured.checkpointTTL != 48*time.Hour {
+		configured.llmDebugErrorTTL != 120*time.Hour || configured.checkpointTTL != 48*time.Hour ||
+		configured.taskIndexInterval != 3*time.Minute || configured.taskIndexMaxIDs != 3000 || configured.scheduleMax != 15000 {
 		t.Fatalf("code precedence = %#v", configured)
 	}
 
 	for variable, value := range map[string]string{
-		"TRUVAG3_WORKFLOW_STATE_TTL":        "0s",
-		"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "0",
-		"TRUVAG3_TASK_QUEUE_RETRY_DELAY":    "invalid",
-		"TRUVAG3_LLM_DEBUG_TTL":             "0s",
-		"TRUVAG3_LLM_DEBUG_ERROR_TTL":       "invalid",
-		"TRUVAG3_HITL_CHECKPOINT_TTL":       "-1h",
+		"TRUVAG3_WORKFLOW_STATE_TTL":            "0s",
+		"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS":     "0",
+		"TRUVAG3_TASK_QUEUE_RETRY_DELAY":        "invalid",
+		"TRUVAG3_LLM_DEBUG_TTL":                 "0s",
+		"TRUVAG3_LLM_DEBUG_ERROR_TTL":           "invalid",
+		"TRUVAG3_HITL_CHECKPOINT_TTL":           "-1h",
+		"TRUVAG3_TASK_INDEX_RECONCILE_INTERVAL": "0s",
+		"TRUVAG3_TASK_INDEX_RECONCILE_MAX_IDS":  "0",
+		"TRUVAG3_SCHEDULER_MAX_SCHEDULES":       "0",
 	} {
 		t.Run(variable, func(t *testing.T) {
 			if _, err := LoadOptionsFromEnvironment(base, func(name string) (string, bool) {
@@ -782,6 +872,12 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 	}
 	if _, err := NewOptions(WithCheckpointTTL(0)); err == nil {
 		t.Fatal("non-positive checkpoint retention was accepted")
+	}
+	if _, err := NewOptions(WithTaskIndexReconciliation(0, 1)); err == nil {
+		t.Fatal("non-positive task reconciliation interval was accepted")
+	}
+	if _, err := NewOptions(WithMaxSchedules(0)); err == nil {
+		t.Fatal("non-positive schedule capacity was accepted")
 	}
 }
 
@@ -813,10 +909,10 @@ func TestRedisPresetAppliesDebugAndCheckpointRetention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := server.TTL("retention:llm:debug:success:meta"); got != 2*time.Hour {
+	if got := server.TTL("truvag3:v1:retention:llm-debug:{retention:llm-debug:success}:meta"); got != 2*time.Hour {
 		t.Fatalf("successful LLM debug TTL = %v, want %v", got, 2*time.Hour)
 	}
-	if got := server.TTL("retention:llm:debug:failure:meta"); got != 6*time.Hour {
+	if got := server.TTL("truvag3:v1:retention:llm-debug:{retention:llm-debug:failure}:meta"); got != 6*time.Hour {
 		t.Fatalf("failed LLM debug TTL = %v, want %v", got, 6*time.Hour)
 	}
 	checkpoint := &orchestration.ExecutionCheckpoint{
@@ -825,12 +921,12 @@ func TestRedisPresetAppliesDebugAndCheckpointRetention(t *testing.T) {
 	if err := backends.Checkpoints().SaveCheckpoint(t.Context(), checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	if got := server.TTL("retention:hitl:checkpoint:retained"); got != 4*time.Hour {
+	if got := server.TTL("truvag3:v1:retention:hitl:{retention:hitl}:checkpoint:retained"); got != 4*time.Hour {
 		t.Fatalf("checkpoint TTL = %v, want %v", got, 4*time.Hour)
 	}
 }
 
-func TestOwnedClientsPreserveRoleDatabasesAndCloseOnce(t *testing.T) {
+func TestOwnedClientsShareDBZeroClientAndCloseOnce(t *testing.T) {
 	server := miniredis.RunT(t)
 	config, err := ConfigureClientConfig(DefaultClientConfig(), WithClientURL("redis://"+server.Addr()))
 	if err != nil {
@@ -841,7 +937,7 @@ func TestOwnedClientsPreserveRoleDatabasesAndCloseOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	execution, ok := owned.ClientSet().Resolve(ClientRoleExecution).(*redis.Client)
-	if !ok || execution.Options().DB != 8 {
+	if !ok || execution.Options().DB != 0 {
 		t.Fatalf("execution client = %#v", execution)
 	}
 	workflow, ok := owned.ClientSet().Resolve(ClientRoleWorkflow).(*redis.Client)
@@ -849,8 +945,11 @@ func TestOwnedClientsPreserveRoleDatabasesAndCloseOnce(t *testing.T) {
 		t.Fatalf("workflow client = %#v", workflow)
 	}
 	skills, ok := owned.ClientSet().Resolve(ClientRoleSkills).(*redis.Client)
-	if !ok || skills.Options().DB != core.RedisDBReserved9 {
+	if !ok || skills.Options().DB != 0 {
 		t.Fatalf("skills client = %#v", skills)
+	}
+	if execution != workflow || execution != skills || len(owned.clients) != 1 {
+		t.Fatal("canonical Redis roles did not share one DB-0 client")
 	}
 	if err := owned.Close(); err != nil {
 		t.Fatal(err)

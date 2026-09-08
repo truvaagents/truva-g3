@@ -2,11 +2,16 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestKnowledgeExtractionHook_Name(t *testing.T) {
@@ -29,6 +34,100 @@ func TestKnowledgeExtractionHook_FailFastNilParams(t *testing.T) {
 	_, err = NewKnowledgeExtractionHook(&core.MockSharedKnowledge{}, &core.MockEmbeddingClient{}, nil, "agent", "domain")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "AI client is required")
+}
+
+func TestKnowledgeExtractionHook_ScopesComponentAwareLogger(t *testing.T) {
+	logger := &mockComponentAwareLogger{}
+	hook, err := NewKnowledgeExtractionHook(
+		&core.MockSharedKnowledge{},
+		&core.MockEmbeddingClient{},
+		&mockAIClient{},
+		"agent",
+		"domain",
+		WithExtractionLogger(logger),
+	)
+	if err != nil {
+		t.Fatalf("NewKnowledgeExtractionHook() error = %v", err)
+	}
+	t.Cleanup(hook.Close)
+	if logger.component != "framework/orchestration" {
+		t.Fatalf("logger component = %q, want framework/orchestration", logger.component)
+	}
+}
+
+func TestKnowledgeExtractionHook_AsyncWorkUsesLinkedSpanAndCorrelationBaggage(t *testing.T) {
+	originalProvider := otel.GetTracerProvider()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(originalProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	requestIDObserved := ""
+	aiClient := &mockAIClient{
+		generateFunc: func(ctx context.Context, prompt string, opts *core.AIOptions) (*core.AIResponse, error) {
+			requestIDObserved = telemetry.GetBaggage(ctx)["request_id"]
+			return &core.AIResponse{Content: `[]`}, nil
+		},
+	}
+	hook, err := NewKnowledgeExtractionHook(
+		&core.MockSharedKnowledge{},
+		&core.MockEmbeddingClient{},
+		aiClient,
+		"agent",
+		"domain",
+	)
+	if err != nil {
+		t.Fatalf("NewKnowledgeExtractionHook() error = %v", err)
+	}
+
+	ctx := telemetry.WithBaggage(t.Context(), "request_id", "request-linked-hook")
+	ctx = WithRequestID(ctx, "request-linked-hook")
+	ctx, requestSpan := provider.Tracer("knowledge-extraction-test").Start(ctx, "request")
+	requestSpanContext := requestSpan.SpanContext()
+	response, hookErr := hook.AfterSynthesis(
+		ctx,
+		&core.PipelineContext{Request: "extract reusable knowledge"},
+		"no reusable knowledge",
+	)
+	requestSpan.End()
+	if hookErr != nil || response != "no reusable knowledge" {
+		t.Fatalf("AfterSynthesis() = %q, %v", response, hookErr)
+	}
+	hook.Close()
+
+	if requestIDObserved != "request-linked-hook" {
+		t.Fatalf("async request_id baggage = %q", requestIDObserved)
+	}
+	var asyncSpan sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "pipeline.hook.async.knowledge-extraction" {
+			asyncSpan = span
+			break
+		}
+	}
+	if asyncSpan == nil {
+		t.Fatal("linked knowledge-extraction span was not recorded")
+	}
+	if asyncSpan.Parent().IsValid() {
+		t.Fatalf("async span unexpectedly has parent %v", asyncSpan.Parent())
+	}
+	links := asyncSpan.Links()
+	if len(links) != 1 || links[0].SpanContext.TraceID() != requestSpanContext.TraceID() ||
+		links[0].SpanContext.SpanID() != requestSpanContext.SpanID() {
+		t.Fatalf("async span links = %#v, want link to %s/%s", links, requestSpanContext.TraceID(), requestSpanContext.SpanID())
+	}
+	attrs := make(map[string]string)
+	for _, attr := range asyncSpan.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	if attrs["request_id"] != "request-linked-hook" ||
+		attrs["pipeline.hook.name"] != "knowledge-extraction" ||
+		attrs["pipeline.hook.phase"] != PipelineHookPhaseAfterSynthesis {
+		t.Fatalf("async span attributes = %#v", attrs)
+	}
 }
 
 func TestKnowledgeExtractionHook_NeverMutatesResponse(t *testing.T) {
@@ -73,9 +172,15 @@ func TestKnowledgeExtractionHook_ExtractsAndStores(t *testing.T) {
 
 	hook, _ := NewKnowledgeExtractionHook(knowledge, embedder, aiClient, "test-agent", "infrastructure")
 	t.Cleanup(hook.Close)
+	holder := newPipelineHookExecutionHolder()
+	ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterSynthesis, 1, 0, time.Now(),
+	)
 
 	// Call AfterSynthesis — extraction runs async
-	hook.AfterSynthesis(context.Background(), &core.PipelineContext{Request: "investigate latency"}, "Found high latency caused by GC pressure")
+	hook.AfterSynthesis(invocation.Context(ctx), &core.PipelineContext{Request: "investigate latency"}, "Found high latency caused by GC pressure")
+	invocation.Complete(PipelineHookSucceeded, nil)
 
 	select {
 	case fragment := <-storedFragments:
@@ -87,6 +192,26 @@ func TestKnowledgeExtractionHook_ExtractsAndStores(t *testing.T) {
 		assert.NotEmpty(t, fragment.Embedding)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for stored fragment")
+	}
+	hook.Close()
+	records := holder.Snapshot()
+	if len(records) != 1 || len(records[0].Effects) != 1 {
+		t.Fatalf("knowledge extraction effects = %#v", records)
+	}
+	effect := records[0].Effects[0]
+	if effect.Status != core.PipelineHookEffectSucceeded {
+		t.Fatalf("knowledge extraction effect = %#v", effect)
+	}
+	var data knowledgeExtractionEffectData
+	if err := json.Unmarshal(effect.Data, &data); err != nil {
+		t.Fatalf("decode knowledge extraction effect: %v", err)
+	}
+	if len(data.Fragments) != 1 ||
+		data.Fragments[0].Content != "High latency is caused by GC pressure" ||
+		data.Fragments[0].Namespace != "incidents" ||
+		data.Fragments[0].Status != core.PipelineHookEffectSucceeded ||
+		data.Fragments[0].ObservedOutcome != "provider_call_returned_without_error" {
+		t.Fatalf("knowledge extraction effect data = %#v", data)
 	}
 }
 

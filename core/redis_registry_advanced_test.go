@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
@@ -296,6 +297,33 @@ func TestProductionGradeSettings(t *testing.T) {
 		assert.NotNil(t, registry.registrationState)
 		assert.Equal(t, 30*time.Second, registry.ttl)
 	})
+}
+
+func TestRedisRegistryInjectedClientRemainsApplicationOwned(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	keyspace, err := NewRedisKeyspace("ownership-test")
+	assert.NoError(t, err)
+	registry, err := NewRedisRegistryWithClient(client, keyspace, time.Minute)
+	assert.NoError(t, err)
+	assert.NoError(t, registry.Close())
+	assert.NoError(t, registry.Close())
+	assert.NoError(t, client.Ping(t.Context()).Err())
+}
+
+func TestRedisDiscoveryInjectedClientRemainsApplicationOwned(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	keyspace, err := NewRedisKeyspace("ownership-test")
+	assert.NoError(t, err)
+	discovery, err := NewRedisDiscoveryWithClient(client, keyspace, time.Minute)
+	assert.NoError(t, err)
+	assert.NoError(t, discovery.Close())
+	assert.NoError(t, client.Ping(t.Context()).Err())
 }
 
 // TestMetadataCopy tests the metadata copying functionality

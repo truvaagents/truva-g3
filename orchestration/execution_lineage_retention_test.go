@@ -777,34 +777,15 @@ func TestRedisLLMRetentionIsNonDowngradingAndTypedWhenMissing(t *testing.T) {
 		t.Fatalf("second RecordInteraction: %v", err)
 	}
 	for _, key := range []string{
-		store.recordPrefix() + requestID + llmDebugMetaSuffix,
-		store.recordPrefix() + requestID + llmDebugInterSuffix,
+		store.metaKey(requestID),
+		store.interactionsKey(requestID),
 	} {
 		if got := mr.TTL(key); got != 7*24*time.Hour {
 			t.Fatalf("%s TTL = %v, want 7d", key, got)
 		}
 	}
-	legacyID := "legacy-llm-retention"
-	legacyData, err := store.serialize(&LLMDebugRecord{
-		RequestID: legacyID,
-		CreatedAt: time.Now(),
-	})
-	if err != nil {
-		t.Fatalf("serialize legacy record: %v", err)
-	}
-	legacyKey := store.recordPrefix() + legacyID
-	if err := store.client.Set(ctx, legacyKey, legacyData, time.Hour).Err(); err != nil {
-		t.Fatalf("seed legacy record: %v", err)
-	}
-	if err := store.ExtendTTL(ctx, legacyID, 7*24*time.Hour); err != nil {
-		t.Fatalf("extend legacy record: %v", err)
-	}
-	if got := mr.TTL(legacyKey); got != 7*24*time.Hour {
-		t.Fatalf("legacy record TTL = %v, want 7d", got)
-	}
-
 	missingID := "llm-record-does-not-exist"
-	err = store.ExtendTTL(ctx, missingID, time.Hour)
+	err := store.ExtendTTL(ctx, missingID, time.Hour)
 	if !errors.Is(err, ErrLLMDebugRecordNotFound) {
 		t.Fatalf("missing ExtendTTL error = %v, want typed not-found", err)
 	}
@@ -830,8 +811,8 @@ func TestRedisLLMRetentionFloorRepairsShorterExistingKeys(t *testing.T) {
 		t.Fatalf("RecordInteraction: %v", err)
 	}
 	keys := []string{
-		store.recordPrefix() + requestID + llmDebugMetaSuffix,
-		store.recordPrefix() + requestID + llmDebugInterSuffix,
+		store.metaKey(requestID),
+		store.interactionsKey(requestID),
 	}
 	for _, key := range keys {
 		mr.SetTTL(key, time.Hour)

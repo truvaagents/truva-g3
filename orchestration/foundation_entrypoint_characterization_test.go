@@ -147,6 +147,73 @@ func TestFoundationCharacterization_BufferedShortCircuitResponseAndRequestID(t *
 	}
 }
 
+func TestFoundationCharacterization_ShortCircuitPersistsTerminalHookEvidence(t *testing.T) {
+	tests := []struct {
+		name        string
+		streaming   bool
+		callbackErr error
+		wantSuccess bool
+	}{
+		{name: "buffered", wantSuccess: true},
+		{name: "streaming", streaming: true, wantSuccess: true},
+		{name: "streaming callback stop", streaming: true, callbackErr: errors.New("stop delivery")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &foundationStreamingCapabilityClient{MockAIClient: NewMockAIClient()}
+			orchestrator, _ := foundationShortCircuitOrchestrator(t, client, "policy response")
+			store := &terminalRecordStore{NoOpExecutionStore: NewNoOpExecutionStore()}
+			orchestrator.executionStore = store
+
+			var response *OrchestratorResponse
+			var err error
+			if test.streaming {
+				streamResponse, streamErr := orchestrator.ProcessRequestStreaming(
+					t.Context(),
+					"request",
+					nil,
+					func(core.StreamChunk) error { return test.callbackErr },
+				)
+				response, err = &streamResponse.OrchestratorResponse, streamErr
+			} else {
+				response, err = orchestrator.ProcessRequest(t.Context(), "request", nil)
+			}
+			if err != nil {
+				t.Fatalf("request error = %v", err)
+			}
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := orchestrator.Shutdown(shutdownCtx); err != nil {
+				t.Fatalf("Shutdown() error = %v", err)
+			}
+			records, _ := store.snapshot()
+			if len(records) != 1 {
+				t.Fatalf("stored records = %d, want 1", len(records))
+			}
+			record := records[0]
+			if record.Result == nil || record.Result.Success != test.wantSuccess || len(record.Result.Steps) != 0 {
+				t.Fatalf("stored short-circuit result = %#v, want zero-step success %v", record.Result, test.wantSuccess)
+			}
+			if len(record.PipelineHooks) != 1 ||
+				record.PipelineHooks[0].HookName != "foundation-short-circuit" ||
+				record.PipelineHooks[0].Phase != PipelineHookPhaseBeforePlanning ||
+				record.PipelineHooks[0].Status != PipelineHookSucceeded {
+				t.Fatalf("stored hook evidence = %#v", record.PipelineHooks)
+			}
+			if record.FinalResponse == nil || *record.FinalResponse != response.Response ||
+				record.FinalResponseSource != FinalResponseSourceBeforePlanningShortCircuit {
+				t.Fatalf("stored final response evidence = %#v", record)
+			}
+			summary := executionSummaryFromStored(record)
+			if summary.Success != test.wantSuccess || summary.StepCount != 0 {
+				t.Fatalf("stored summary = %#v", summary)
+			}
+		})
+	}
+}
+
 func TestFoundationCharacterization_NativeShortCircuitStreamingUsesByteChunks(t *testing.T) {
 	// The two-byte UTF-8 encoding of é straddles the current fixed 50-byte
 	// boundary. F3 intentionally replaces this behavior with rune-safe chunks.
@@ -385,6 +452,8 @@ func TestFoundationLifecycle_FailuresEmitExactlyOneDeliveryCompletion(t *testing
 			config := NewDefaultOrchestratorConfig()
 			config.EnableTelemetry = false
 			orchestrator := NewAIOrchestrator(config, NewMockDiscovery(), NewMockAIClient())
+			store := &terminalRecordStore{NoOpExecutionStore: NewNoOpExecutionStore()}
+			orchestrator.SetExecutionStore(store)
 			logger := &TestLogger{}
 			capture := &conversationCaptureTelemetry{}
 			orchestrator.SetLogger(logger)
@@ -393,6 +462,17 @@ func TestFoundationLifecycle_FailuresEmitExactlyOneDeliveryCompletion(t *testing
 
 			if err := test.invoke(orchestrator); err == nil {
 				t.Fatal("invalid decision unexpectedly completed")
+			}
+			orchestrator.executionWg.Wait()
+			records, _ := store.snapshot()
+			if len(records) != 1 || len(records[0].PipelineHooks) != 1 {
+				t.Fatalf("stored before-planning diagnostics = %#v, want one record and hook", records)
+			}
+			hookRecord := records[0].PipelineHooks[0]
+			if hookRecord.HookName != "foundation-invalid-decision" ||
+				hookRecord.Phase != PipelineHookPhaseBeforePlanning ||
+				hookRecord.Status != PipelineHookFailed || hookRecord.Error == "" {
+				t.Fatalf("stored before-planning diagnostic = %#v", hookRecord)
 			}
 			logs := logger.GetLogsByOperation(test.operation)
 			if len(logs) != 1 {

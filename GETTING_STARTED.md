@@ -947,10 +947,10 @@ redis-cli ping  # Should return "PONG"
 ```bash
 # Check the registry
 kubectl port-forward -n truvag3-examples svc/redis 6379:6379 &
-redis-cli KEYS "truvag3:*"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Verify a specific service is registered
-redis-cli HGETALL "truvag3:services:my-tool"
+redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:my-tool'
 
 # Check all components use the same namespace
 kubectl get pods -n truvag3-examples

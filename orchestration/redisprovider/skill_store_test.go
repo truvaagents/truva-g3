@@ -191,7 +191,7 @@ func TestRedisSkillPresetAndClientRoleComposition(t *testing.T) {
 		t.Fatalf("skill capabilities were not composed: %#v", backends)
 	}
 	store, ok := backends.SkillRegistry().(*SkillStore)
-	if !ok || store.keyPrefix != "tenant:skills" {
+	if !ok || store.storagePrefix() != "truvag3:v1:tenant:skills:{tenant:skills}" {
 		t.Fatalf("skill store = %#v", backends.SkillRegistry())
 	}
 }

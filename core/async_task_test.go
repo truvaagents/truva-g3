@@ -124,8 +124,8 @@ func TestTaskError_Error(t *testing.T) {
 func TestDefaultAsyncTaskConfig(t *testing.T) {
 	config := DefaultAsyncTaskConfig()
 
-	if config.QueuePrefix != "truvag3:tasks" {
-		t.Errorf("QueuePrefix = %v, want truvag3:tasks", config.QueuePrefix)
+	if config.QueuePrefix != "truvag3:v1:default:tasks" {
+		t.Errorf("QueuePrefix = %v, want truvag3:v1:default:tasks", config.QueuePrefix)
 	}
 	if config.WorkerCount != 5 {
 		t.Errorf("WorkerCount = %v, want 5", config.WorkerCount)

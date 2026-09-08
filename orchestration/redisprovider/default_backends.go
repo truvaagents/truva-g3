@@ -55,12 +55,16 @@ var clientRoleCapabilities = map[ClientRole][]orchestration.BackendCapability{
 }
 
 var providerOptionVariableRoles = map[string]ClientRole{
-	"TRUVAG3_LLM_DEBUG_TTL":             ClientRoleLLMDebug,
-	"TRUVAG3_LLM_DEBUG_ERROR_TTL":       ClientRoleLLMDebug,
-	"TRUVAG3_HITL_CHECKPOINT_TTL":       ClientRoleHITL,
-	"TRUVAG3_WORKFLOW_STATE_TTL":        ClientRoleWorkflow,
-	"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": ClientRoleScheduling,
-	"TRUVAG3_TASK_QUEUE_RETRY_DELAY":    ClientRoleScheduling,
+	"TRUVAG3_LLM_DEBUG_TTL":                 ClientRoleLLMDebug,
+	"TRUVAG3_LLM_DEBUG_ERROR_TTL":           ClientRoleLLMDebug,
+	"TRUVAG3_HITL_CHECKPOINT_TTL":           ClientRoleHITL,
+	"TRUVAG3_WORKFLOW_STATE_TTL":            ClientRoleWorkflow,
+	"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS":     ClientRoleScheduling,
+	"TRUVAG3_TASK_QUEUE_RETRY_DELAY":        ClientRoleScheduling,
+	"TRUVAG3_TASK_INDEX_RECONCILE_INTERVAL": ClientRoleScheduling,
+	"TRUVAG3_TASK_INDEX_RECONCILE_MAX_IDS":  ClientRoleScheduling,
+	"TRUVAG3_SCHEDULER_MAX_SCHEDULES":       ClientRoleScheduling,
+	core.EnvServiceName:                     ClientRoleScheduling,
 }
 
 // WithDefaultBackendRoles limits the convenience composition to the listed
@@ -165,13 +169,25 @@ func newDefaultBackends(
 	}
 	lookup = lookupForDefaultBackendRoles(lookup, configured.roles)
 
-	clientConfig, err := LoadClientConfigFromEnvironment(DefaultClientConfig(), lookup)
+	clientConfig, err := loadClientConfigFromEnvironment(
+		DefaultClientConfig(),
+		lookup,
+		!hasCompleteRedisConnectionOption(configured.clientOptions),
+	)
 	if err != nil {
 		return nil, err
 	}
 	clientConfig, err = ConfigureClientConfig(clientConfig, configured.clientOptions...)
 	if err != nil {
 		return nil, err
+	}
+	if logger != nil {
+		for _, diagnostic := range clientConfig.Diagnostics() {
+			logger.Warn("Redis configuration notice", map[string]interface{}{
+				"operation":  "redis_configuration_notice",
+				"diagnostic": diagnostic,
+			})
+		}
 	}
 	ownedClientOptions := []OwnedClientsOption(nil)
 	if len(configured.roles) > 0 {

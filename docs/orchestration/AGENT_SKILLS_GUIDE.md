@@ -1010,9 +1010,9 @@ application composition root chooses the included adapter. This helper is the
 func newSkillRegistry(
     logger core.Logger,
 ) (orchestration.SkillRegistry, io.Closer, error) {
-    clientConfig, err := redisprovider.LoadClientConfigFromEnvironment(
-        redisprovider.DefaultClientConfig(),
-        os.LookupEnv,
+    ownedBackends, err := redisprovider.NewDefaultBackends(
+        logger,
+        redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleSkills),
     )
     if err != nil {
         return nil, nil, fmt.Errorf(
@@ -1020,30 +1020,16 @@ func newSkillRegistry(
         )
     }
 
-    ownedClients, err := redisprovider.NewOwnedClients(clientConfig)
-    if err != nil {
-        return nil, nil, fmt.Errorf("create skill backend clients: %w", err)
-    }
-
-    skillStore, err := redisprovider.NewSkillStore(
-        ownedClients.ClientSet().Resolve(redisprovider.ClientRoleSkills),
-        redisprovider.WithSkillStoreLogger(logger),
-    )
-    if err != nil {
-        _ = ownedClients.Close()
-        return nil, nil, fmt.Errorf("create skill registry: %w", err)
-    }
-
-    return skillStore, ownedClients, nil
+    return ownedBackends.Backends().SkillRegistry(), ownedBackends, nil
 }
 ```
 
 The caller owns the returned `io.Closer` and closes it during application
-shutdown. The included client role uses Redis database `9` by default and
-honors `TRUVAG3_SKILLS_REDIS_DB`.
-`LoadClientConfigFromEnvironment` follows the orchestration-backend convention:
-`REDIS_URL` first, then `TRUVAG3_REDIS_URL`, then its configured/default URL.
-Avoid defining both URL variables with different values.
+shutdown. The included adapter uses the shared Redis/Valkey DB 0 and the
+versioned skill subspace for `TRUVAG3_REDIS_NAMESPACE`. `REDIS_URL` is the
+standalone shorthand; structured `TRUVAG3_REDIS_*` fields select standalone,
+Sentinel, or cluster topology. Supplying both topology forms is rejected as
+ambiguous.
 
 The runtime is not coupled to that choice. A custom runtime adapter implements
 this four-method framework contract:
@@ -2411,18 +2397,17 @@ the same provider-neutral contracts, but separate Kubernetes workloads own
 their own backend configuration. They must address the same logical skills
 datastore.
 
-With the included Redis implementation, keep the Redis address and
-`TRUVAG3_SKILLS_REDIS_DB` consistent between Registry Viewer and every
-skill-enabled agent. Keep Registry Viewer's default `truvag3` key namespace
-unless the agent's `SkillStore` prefix is changed in code at the same time. An
-agent `rollout` updates only that agent's ConfigMap. It does not update Registry
-Viewer's ConfigMap, so changing the skills database on the agent alone can make
-publication write to one database while runtime reads another.
+With the included Redis implementation, keep the topology and
+`TRUVAG3_REDIS_NAMESPACE` consistent between Registry Viewer and every
+skill-enabled agent. The shipped examples use the `default` deployment
+namespace. An agent `rollout` updates only that agent's ConfigMap; it does not
+update Registry Viewer's ConfigMap, so changing the namespace on only one side
+can make publication write to one logical keyspace while runtime reads another.
 
-For the local examples, apply a database change in this order:
+For the local examples, apply a deployment-namespace change in this order:
 
 ```bash
-# Set the same TRUVAG3_SKILLS_REDIS_DB in the environment used by setup.
+# Set the same TRUVAG3_REDIS_NAMESPACE in the environment used by setup.
 ./setup.sh infra        # redeploy the management host configuration
 ./setup.sh skills-sync  # publish through the updated management host
 ./setup.sh rollout      # update and restart the agent reader

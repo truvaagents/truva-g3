@@ -52,7 +52,7 @@ import (
 const (
 	defaultSchedulerTickInterval = 5 * time.Second
 	defaultSchedulerLockTTL      = 30 * time.Second
-	schedulerLockKey             = "truvag3:scheduler"
+	schedulerLockKey             = "scheduler"
 )
 
 // Environment variable names for Scheduler numeric tuning.

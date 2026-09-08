@@ -860,7 +860,8 @@ The Registry Viewer is a developer-facing runtime dashboard. It can inspect:
 - HITL checkpoints
 - conversation-grouped execution lineage and interactive DAGs
 - raw synthesis evidence versus stored post-`AfterSynthesis` application responses
-- optional Jaeger-linked traces and deterministic pipeline-hook spans
+- provider-neutral pipeline-hook outcomes stored with each execution
+- optional request-level Jaeger trace links for navigation only
 - skill package management and version history
 - per-execution skill pinning, activation, resource loading, and prompt projection evidence
 - shared memory

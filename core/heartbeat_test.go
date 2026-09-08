@@ -41,7 +41,11 @@ func TestToolHeartbeatRedisRegistry(t *testing.T) {
 	defer client.Close()
 
 	// Check initial registration
-	key := "truvag3:services:" + tool.ID
+	keyspace, err := NewRedisKeyspace("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := (registryKeys{keyspace: keyspace}).service(tool.ID)
 	exists, err := client.Exists(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("Failed to check Redis key: %v", err)
@@ -119,7 +123,11 @@ func TestAgentHeartbeatRedisDiscovery(t *testing.T) {
 	defer client.Close()
 
 	// Check initial registration
-	key := "truvag3:services:" + agent.ID
+	keyspace, err := NewRedisKeyspace("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := (registryKeys{keyspace: keyspace}).service(agent.ID)
 	exists, err := client.Exists(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("Failed to check Redis key: %v", err)
@@ -228,7 +236,11 @@ func TestHeartbeatPersistence(t *testing.T) {
 	})
 	defer client.Close()
 
-	key := "truvag3:services:" + tool.ID
+	keyspace, err := NewRedisKeyspace("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := (registryKeys{keyspace: keyspace}).service(tool.ID)
 	exists, err := client.Exists(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("Failed to check Redis key after TTL: %v", err)

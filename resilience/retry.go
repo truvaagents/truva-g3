@@ -41,18 +41,10 @@ func Retry(ctx context.Context, config *RetryConfig, fn func() error) error {
 // RetryWithCircuitBreaker combines retry logic with circuit breaker
 func RetryWithCircuitBreaker(ctx context.Context, config *RetryConfig, cb *CircuitBreaker, fn func() error) error {
 	return Retry(ctx, config, func() error {
-		if !cb.CanExecute() {
-			return core.ErrCircuitBreakerOpen
-		}
-
-		err := fn()
-		if err != nil {
-			cb.RecordFailure()
-			return err
-		}
-
-		cb.RecordSuccess()
-		return nil
+		// Execute owns the per-attempt token. This is required in half-open
+		// state so probes reserve capacity and their outcomes can close or
+		// reopen the circuit correctly.
+		return cb.Execute(ctx, fn)
 	})
 }
 
