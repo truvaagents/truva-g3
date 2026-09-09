@@ -147,7 +147,6 @@ type DiscoveryConfig struct {
 	RedisURL          string                 `json:"redis_url" env:"REDIS_URL"`
 	RedisConnection   *RedisConnectionConfig `json:"-"`
 	RedisKeyspace     RedisKeyspace          `json:"-"`
-	RedisDiagnostics  []string               `json:"-"`
 	CacheEnabled      bool                   `json:"cache_enabled" env:"TRUVAG3_DISCOVERY_CACHE" default:"true"`
 	CacheTTL          time.Duration          `json:"cache_ttl" env:"TRUVAG3_DISCOVERY_CACHE_TTL" default:"5m"`
 	HeartbeatInterval time.Duration          `json:"heartbeat_interval" env:"TRUVAG3_DISCOVERY_HEARTBEAT" default:"0"`
@@ -719,11 +718,8 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 			}
 			c.redisEnvironmentError = err
 		} else {
-			c.Discovery.RedisConnection = &resolution.Config
-			c.Discovery.RedisDiagnostics = append([]string(nil), resolution.Diagnostics...)
+			c.Discovery.RedisConnection = &resolution
 			if v := os.Getenv("REDIS_URL"); v != "" {
-				c.Discovery.RedisURL = v
-			} else if v := os.Getenv("TRUVAG3_REDIS_URL"); v != "" {
 				c.Discovery.RedisURL = v
 			} else {
 				c.Discovery.RedisURL = ""
@@ -734,7 +730,7 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 					"operation": "config_load",
 					"setting":   "redis_connection",
 					"source":    "environment",
-					"mode":      resolution.Config.Mode,
+					"mode":      resolution.Mode,
 				})
 			}
 		}
@@ -976,8 +972,6 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 	// Reuse existing Redis URL for shared memory if not separately configured
 	if c.SharedMemory.RedisURL == "" {
 		if v := os.Getenv("REDIS_URL"); v != "" {
-			c.SharedMemory.RedisURL = v
-		} else if v := os.Getenv("TRUVAG3_REDIS_URL"); v != "" {
 			c.SharedMemory.RedisURL = v
 		} else if c.Discovery.RedisURL != "" {
 			c.SharedMemory.RedisURL = c.Discovery.RedisURL
@@ -1462,7 +1456,6 @@ func WithRedisURL(url string) Option {
 		}
 		c.Discovery.RedisURL = url
 		c.Discovery.RedisConnection = &connection
-		c.Discovery.RedisDiagnostics = nil
 		c.redisEnvironmentError = nil
 		c.Discovery.Enabled = true // Auto-enable discovery when Redis is configured
 		return nil
@@ -1491,7 +1484,6 @@ func WithDiscovery(enabled bool, provider string) Option {
 			// Clear Redis configuration if discovery is disabled or non-Redis.
 			c.Discovery.RedisURL = ""
 			c.Discovery.RedisConnection = nil
-			c.Discovery.RedisDiagnostics = nil
 		}
 		return nil
 	}
@@ -1513,7 +1505,6 @@ func WithRedisDiscovery(redisURL string) Option {
 		c.Discovery.Provider = "redis"
 		c.Discovery.RedisURL = redisURL
 		c.Discovery.RedisConnection = &connection
-		c.Discovery.RedisDiagnostics = nil
 		c.redisEnvironmentError = nil
 		return nil
 	}
@@ -1531,8 +1522,7 @@ func WithRedisConnection(connection RedisConnectionConfig) Option {
 		c.Discovery.Enabled = true
 		c.Discovery.Provider = "redis"
 		c.Discovery.RedisURL = ""
-		c.Discovery.RedisConnection = &resolution.Config
-		c.Discovery.RedisDiagnostics = nil
+		c.Discovery.RedisConnection = &resolution
 		c.redisEnvironmentError = nil
 		return nil
 	}

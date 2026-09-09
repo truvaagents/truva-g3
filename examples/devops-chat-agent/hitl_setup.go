@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 )
@@ -21,15 +22,11 @@ type HITLInfrastructure struct {
 // SetupHITL initializes HITL infrastructure.
 // NOTE: The orchestrator's config.HITL is loaded from environment variables
 // by orchestration.DefaultConfig(). This function creates the runtime components.
-func SetupHITL(logger core.Logger, hitlConfig orchestration.HITLConfig) (*HITLInfrastructure, error) {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL environment variable is required")
-	}
-
-	// 1. Create checkpoint store (Redis DB 6)
-	checkpointStore, err := orchestration.NewRedisCheckpointStore(
-		orchestration.WithCheckpointRedisURL(redisURL),
+func SetupHITL(redisClient redis.UniversalClient, keyspace core.RedisKeyspace, agentScope string, logger core.Logger, hitlConfig orchestration.HITLConfig) (*HITLInfrastructure, error) {
+	// 1. Create checkpoint store (shared DB 0, versioned HITL keyspace)
+	checkpointStore, err := orchestration.NewRedisCheckpointStoreWithClient(
+		redisClient,
+		orchestration.WithCheckpointKeyspace(keyspace, agentScope),
 		orchestration.WithCheckpointStoreLogger(logger),
 	)
 	if err != nil {
@@ -71,15 +68,19 @@ func SetupHITL(logger core.Logger, hitlConfig orchestration.HITLConfig) (*HITLIn
 
 	// 1b. Start expiry processor to handle checkpoint timeouts
 	// Uses background context since this runs for the lifetime of the application
-	checkpointStore.StartExpiryProcessor(context.Background(), orchestration.ExpiryProcessorConfig{
+	if err := checkpointStore.StartExpiryProcessor(context.Background(), orchestration.ExpiryProcessorConfig{
 		Enabled:      true,
 		ScanInterval: 10 * time.Second,
 		BatchSize:    100,
-	})
+	}); err != nil {
+		_ = checkpointStore.Close()
+		return nil, fmt.Errorf("start checkpoint expiry processor: %w", err)
+	}
 
 	// 2. Create command store (Redis Pub/Sub)
-	commandStore, err := orchestration.NewRedisCommandStore(
-		orchestration.WithCommandStoreRedisURL(redisURL),
+	commandStore, err := orchestration.NewRedisCommandStoreWithClient(
+		redisClient,
+		orchestration.WithCommandStoreKeyspace(keyspace, agentScope),
 		orchestration.WithCommandStoreLogger(logger),
 	)
 	if err != nil {
@@ -133,10 +134,10 @@ func (h *HITLInfrastructure) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = h.CheckpointStore.StopExpiryProcessor(ctx)
-		h.CheckpointStore.Close()
+		_ = h.CheckpointStore.Close()
 	}
 	if h.CommandStore != nil {
-		h.CommandStore.Close()
+		_ = h.CommandStore.Close()
 	}
 	return nil
 }

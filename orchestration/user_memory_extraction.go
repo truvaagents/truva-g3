@@ -188,7 +188,6 @@ func (h *UserMemoryExtractionHook) SetLLMDebugStore(store LLMDebugStore) {
 // its own agent_llm_call emission when this hook will emit a typed
 // user_memory_* record itself. Gated on debugStore presence to preserve
 // the graceful-fallback invariant in orchestration/ARCHITECTURE.md.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
 func (h *UserMemoryExtractionHook) deferLLMRecordingIfWeWillRecord(ctx context.Context) context.Context {
 	if h.debugStore == nil {
 		return ctx

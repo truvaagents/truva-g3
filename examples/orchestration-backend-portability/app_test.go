@@ -100,8 +100,9 @@ func TestWorkerPersistsDeterministicResultBeforeAcknowledging(t *testing.T) {
 		t.Fatal(err)
 	}
 	worker := &Worker{
-		workflow: store,
-		logger:   &core.NoOpLogger{},
+		workflow:   store,
+		workflowID: DefaultWorkflowID,
+		logger:     &core.NoOpLogger{},
 	}
 	handle := &fakeTaskHandle{task: core.NewTask("task-1", "portable-weather", map[string]interface{}{"location": "Chicago"})}
 	if err := worker.process(t.Context(), handle); err != nil {
@@ -110,7 +111,7 @@ func TestWorkerPersistsDeterministicResultBeforeAcknowledging(t *testing.T) {
 	if !handle.acked || handle.nacked {
 		t.Fatalf("settlement = acked %t, nacked %t", handle.acked, handle.nacked)
 	}
-	completed, err := store.GetExecution(t.Context(), "task-1")
+	completed, err := store.GetExecution(t.Context(), DefaultWorkflowID, "task-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,10 +217,11 @@ func TestWorkerStopsCleanlyOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	worker := &Worker{
-		workflow: newFakeWorkflowStore(),
-		consumer: &cancellingConsumer{},
-		queue:    DefaultQueue,
-		logger:   &core.NoOpLogger{},
+		workflow:   newFakeWorkflowStore(),
+		consumer:   &cancellingConsumer{},
+		queue:      DefaultQueue,
+		workflowID: DefaultWorkflowID,
+		logger:     &core.NoOpLogger{},
 	}
 	if err := worker.Start(ctx); err != nil {
 		t.Fatalf("worker shutdown returned an error: %v", err)
@@ -396,6 +398,7 @@ func (store *fakeWorkflowStore) UpdateExecution(_ context.Context, execution *or
 
 func (store *fakeWorkflowStore) UpdateStepExecution(
 	_ context.Context,
+	_ string,
 	executionID string,
 	step *orchestration.StepExecution,
 ) error {
@@ -407,6 +410,7 @@ func (store *fakeWorkflowStore) UpdateStepExecution(
 
 func (store *fakeWorkflowStore) GetExecution(
 	_ context.Context,
+	_ string,
 	executionID string,
 ) (*orchestration.WorkflowExecution, error) {
 	store.mu.Lock()

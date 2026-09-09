@@ -30,11 +30,11 @@ type RedisTaskQueue struct {
 // RedisTaskQueueConfig configures the Redis task queue.
 type RedisTaskQueueConfig struct {
 	// QueueKey is the Redis key for the task queue list
-	// Default: "truvag3:tasks:queue"
+	// Default: "truvag3:v1:default:tasks:queue", service-scoped when EnvServiceName is set.
 	QueueKey string `json:"queue_key"`
 
 	// ProcessingKey is the Redis list key for tasks awaiting acknowledgement.
-	// Default: "truvag3:tasks:processing", service-scoped when EnvServiceName is set.
+	// Default: "truvag3:v1:default:tasks:processing", service-scoped when EnvServiceName is set.
 	ProcessingKey string `json:"processing_key"`
 
 	// CircuitBreaker is an optional circuit breaker for Redis operations

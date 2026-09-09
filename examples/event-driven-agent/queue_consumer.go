@@ -17,7 +17,7 @@ import (
 // This bridges the deterministic pipeline (webhook → dedup → LPUSH) with the
 // async task system (BRPOP → HandleAlertInvestigation).
 type AlertQueueConsumer struct {
-	redisClient *redis.Client
+	redisClient redis.UniversalClient
 	taskQueue   *orchestration.RedisTaskQueue
 	logger      core.Logger
 	queueKey    string
@@ -25,7 +25,8 @@ type AlertQueueConsumer struct {
 
 // NewAlertQueueConsumer creates a new consumer that bridges alert queue → task queue.
 func NewAlertQueueConsumer(
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
+	queueKey string,
 	taskQueue *orchestration.RedisTaskQueue,
 	logger core.Logger,
 ) *AlertQueueConsumer {
@@ -33,7 +34,7 @@ func NewAlertQueueConsumer(
 		redisClient: redisClient,
 		taskQueue:   taskQueue,
 		logger:      logger,
-		queueKey:    "truvag3:event:alert_queue",
+		queueKey:    queueKey,
 	}
 }
 
@@ -80,7 +81,7 @@ func (c *AlertQueueConsumer) Start(ctx context.Context) error {
 
 		envelopeJSON := result[1]
 
-		// Deserialize envelope carrying alert + trace context (RC5).
+		// Deserialize the envelope carrying the alert and its trace context.
 		// BACKWARD COMPAT: A legacy raw Alert JSON unmarshal into alertEnvelope succeeds
 		// (Go ignores unknown fields) but leaves AlertJSON == "". Check both conditions.
 		var envelope alertEnvelope

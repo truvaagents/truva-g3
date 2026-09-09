@@ -607,7 +607,6 @@ func (c *AgentCatalog) FindByCapability(capability string) []string {
 // happens at the source rather than at each consumption point.
 //
 // This method should be used by capability providers to ensure AgentNames matches FormattedInfo.
-// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for context.
 func (c *AgentCatalog) GetPublicAgentNames() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

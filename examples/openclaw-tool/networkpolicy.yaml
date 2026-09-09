@@ -44,11 +44,14 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Redis (service discovery) — adapter only, but pod-wide as noted above.
+    # Redis/Valkey (service discovery) — adapter only, but pod-wide as noted above.
+    # The topology-neutral backend label covers both the standalone example and
+    # the local three-primary cluster fixture without coupling this policy to a
+    # particular StatefulSet name.
     - to:
         - podSelector:
             matchLabels:
-              app: redis
+              truvag3.framework/backend: redis
       ports:
         - protocol: TCP
           port: 6379

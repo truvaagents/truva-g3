@@ -84,12 +84,10 @@ import (
 	_ "github.com/truvaagents/truva-g3/ai/providers/openai"
 )
 
-const asyncTravelTaskQueueKey = "truvag3:tasks:queue:async-travel-agent"
-
-func asyncTravelTaskQueueConfig() *orchestration.RedisTaskQueueConfig {
+func asyncTravelTaskQueueConfig(keyspace core.RedisKeyspace) *orchestration.RedisTaskQueueConfig {
 	return &orchestration.RedisTaskQueueConfig{
-		QueueKey:      asyncTravelTaskQueueKey,
-		ProcessingKey: asyncTravelTaskQueueKey + ":processing",
+		QueueKey:      keyspace.Plain("tasks", "queue", "async-travel-agent"),
+		ProcessingKey: keyspace.Plain("tasks", "processing", "async-travel-agent"),
 	}
 }
 
@@ -121,27 +119,29 @@ func main() {
 		}
 	}()
 
-	// 5. Connect to Redis
-	redisURL := os.Getenv("REDIS_URL")
-	redisOpt, err := redis.ParseURL(redisURL)
+	// 5. Resolve one Redis/Valkey topology and DB-0 keyspace for every role.
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		log.Fatalf("Failed to parse REDIS_URL: %v", err)
+		log.Fatalf("Failed to resolve Redis configuration: %v", err)
 	}
-	redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		cancel()
+	redisClient, err := core.NewRedisUniversalClient(redisResolution)
+	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
-	cancel()
+	defer redisClient.Close()
 	log.Println("Connected to Redis")
+	keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Invalid Redis deployment namespace: %v", err)
+	}
 
 	// 6. Create async task infrastructure
 	// API and worker pods advertise different Kubernetes services, so they must
 	// not derive their shared work queue from TRUVAG3_K8S_SERVICE_NAME.
-	taskQueue := orchestration.NewRedisTaskQueue(redisClient, asyncTravelTaskQueueConfig())
-	taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
+	taskQueue := orchestration.NewRedisTaskQueue(redisClient, asyncTravelTaskQueueConfig(keyspace))
+	taskStoreConfig := orchestration.DefaultRedisTaskStoreConfig()
+	taskStoreConfig.KeyPrefix = keyspace.Plain("tasks")
+	taskStore := orchestration.NewRedisTaskStore(redisClient, &taskStoreConfig)
 
 	// 7. Get port configuration
 	port := 8098
@@ -154,17 +154,17 @@ func main() {
 	// 8. Run based on deployment mode
 	switch mode {
 	case "api":
-		runAPIMode(redisURL, redisClient, taskQueue, taskStore, port, startupStart)
+		runAPIMode(redisResolution, redisClient, taskQueue, taskStore, port, startupStart)
 	case "worker":
-		runWorkerMode(redisClient, taskQueue, taskStore, port, startupStart)
+		runWorkerMode(keyspace, redisClient, taskQueue, taskStore, port, startupStart)
 	default:
-		runEmbeddedMode(redisURL, redisClient, taskQueue, taskStore, port, startupStart)
+		runEmbeddedMode(redisResolution, redisClient, taskQueue, taskStore, port, startupStart)
 	}
 }
 
 // runAPIMode runs HTTP API server only (no workers)
 // Workers are deployed separately with TRUVAG3_MODE=worker
-func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runAPIMode(redisConnection core.RedisConnectionConfig, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in API mode (HTTP server only, workers run separately)")
 
 	// Create the agent
@@ -195,7 +195,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 		core.WithName("async-travel-agent-api"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -239,7 +239,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 
 // runWorkerMode runs task workers only with minimal health endpoint
 // API is deployed separately with TRUVAG3_MODE=api
-func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runWorkerMode(keyspace core.RedisKeyspace, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in Worker mode (task processing only, API runs separately)")
 
 	// Create worker pool configuration
@@ -270,13 +270,9 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 	workerPool.RegisterHandler("travel_research", agent.HandleLegacyTravelResearch)
 	workerPool.SetLogger(agent.Logger)
 
-	// Initialize AI orchestrator (workers need it for task execution)
-	// Create a discovery client directly for worker mode
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		log.Fatalf("REDIS_URL environment variable is required for worker mode")
-	}
-	discovery, err := core.NewRedisDiscovery(redisURL)
+	// Initialize AI orchestrator (workers need it for task execution) using the
+	// same application-owned topology-aware client.
+	discovery, err := core.NewRedisDiscoveryWithClient(redisClient, keyspace, 0)
 	if err != nil {
 		log.Printf("Warning: Failed to create discovery: %v (AI orchestration will be disabled)", err)
 	} else {
@@ -353,7 +349,7 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 
 // runEmbeddedMode runs both API and workers in the same process
 // This is the default for local development
-func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in Embedded mode (API + workers in same process)")
 
 	// Create worker pool configuration
@@ -406,7 +402,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 		core.WithName("async-travel-agent"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -522,12 +518,8 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 }
 
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 	return nil
 }

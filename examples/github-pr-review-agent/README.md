@@ -7,9 +7,6 @@ webhooks, fetches PR bundles through the [`github-tool`](../github-tool/), runs
 sharded code review against exact source (no lossy distillation), and optionally
 posts a grouped review back to GitHub.
 
-Design proposal: [`PROPOSAL.md`](./PROPOSAL.md).
-Implementation plan: [`AGENT_PLAN.md`](./AGENT_PLAN.md).
-
 ## Table of Contents
 
 1. [Quickstart](#quickstart)

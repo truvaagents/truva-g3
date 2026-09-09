@@ -744,7 +744,7 @@ func TestExpiryProcessorConfigFromEnv_InvalidDeliveryUseDefault(t *testing.T) {
 }
 
 // =============================================================================
-// BuildResumeContext Trace Linking Tests (RC7-B3)
+// BuildResumeContext Trace Linking Tests
 // =============================================================================
 
 // TestBuildResumeContext_TraceLinking verifies that BuildResumeContext returns a

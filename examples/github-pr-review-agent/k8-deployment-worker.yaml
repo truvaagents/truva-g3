@@ -85,8 +85,6 @@ spec:
           value: "github-pr-review-agent"
         - name: REDIS_URL
           value: "redis://redis.truvag3-examples:6379"
-        - name: TRUVAG3_REDIS_URL
-          value: "redis://redis.truvag3-examples:6379"
         # Workers point at the API service (same name as embedded) for any
         # cross-component links (e.g. progress reporting, future admin API).
         - name: TRUVAG3_K8S_SERVICE_NAME

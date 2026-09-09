@@ -63,7 +63,7 @@ func TestRedisScheduleStore_New_NilClient_ReturnsError(t *testing.T) {
 func TestRedisScheduleStore_DefaultConfig(t *testing.T) {
 	cfg := DefaultRedisScheduleStoreConfig()
 	require.NotNil(t, cfg)
-	assert.Equal(t, defaultScheduleKeyPrefix, cfg.KeyPrefix)
+	assert.Nil(t, cfg.Keyspace)
 	assert.Equal(t, defaultMaxSchedules, cfg.MaxSchedules)
 }
 
@@ -78,16 +78,17 @@ func TestRedisScheduleStore_MaxSchedulesEnvironmentAndExplicitPrecedence(t *test
 	assert.Equal(t, 41, explicit.maxSchedules)
 }
 
-func TestRedisScheduleStore_CustomPrefix(t *testing.T) {
+func TestRedisScheduleStore_CustomKeyspace(t *testing.T) {
 	_, client := setupRedis(t)
-	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{KeyPrefix: "custom:ns"})
-	assert.Equal(t, "custom:ns:data:id-1", s.dataKey("id-1"))
-	assert.Equal(t, "custom:ns:due", s.dueKey())
+	keyspace := mustRedisTestKeyspace(t, "custom")
+	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{Keyspace: &keyspace})
+	assert.Equal(t, keyspace.Tagged("schedules", "", "data", "id-1"), s.dataKey("id-1"))
+	assert.Equal(t, keyspace.Tagged("schedules", "", "index", "due"), s.dueKey())
 }
 
-func TestRedisScheduleStore_EmptyPrefixFallsBack(t *testing.T) {
+func TestRedisScheduleStore_DefaultKeyspace(t *testing.T) {
 	_, client := setupRedis(t)
-	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{KeyPrefix: ""})
+	s := mustRedisStore(t, client, &RedisScheduleStoreConfig{})
 	assert.Equal(t, "truvag3:v1:default:schedules:{default:schedules}:data:x", s.dataKey("x"))
 }
 

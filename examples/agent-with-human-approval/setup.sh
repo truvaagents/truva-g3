@@ -303,8 +303,6 @@ setup_hitl_config() {
     local HITL_STREAMING_EXPIRY=""  # Empty = Go uses default (implicit_deny for streaming)
     local HITL_NON_STREAMING_EXPIRY=""  # Empty = Go uses default (apply_default for non-streaming)
     local HITL_ESCALATE_AFTER_RETRIES="3"
-    local HITL_REDIS_DB="6"
-    local HITL_KEY_PREFIX="truvag3:hitl"
     # K8s webhook URL uses service name
     local HITL_WEBHOOK_URL="http://agent-with-human-approval-service.truvag3-examples:80/internal/hitl-webhook"
     # Execution Debug Store (for DAG visualization in Registry Viewer)
@@ -347,12 +345,6 @@ setup_hitl_config() {
 
         val=$(grep "^TRUVAG3_HITL_ESCALATE_AFTER_RETRIES=" "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2)
         [ -n "$val" ] && HITL_ESCALATE_AFTER_RETRIES="$val"
-
-        val=$(grep "^TRUVAG3_HITL_REDIS_DB=" "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2)
-        [ -n "$val" ] && HITL_REDIS_DB="$val"
-
-        val=$(grep "^TRUVAG3_HITL_KEY_PREFIX=" "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2)
-        [ -n "$val" ] && HITL_KEY_PREFIX="$val"
 
         # Execution Debug Store
         val=$(grep "^TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=" "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2)
@@ -421,8 +413,6 @@ setup_hitl_config() {
         --from-literal=TRUVAG3_HITL_STREAMING_EXPIRY="${HITL_STREAMING_EXPIRY}" \
         --from-literal=TRUVAG3_HITL_NON_STREAMING_EXPIRY="${HITL_NON_STREAMING_EXPIRY}" \
         --from-literal=TRUVAG3_HITL_ESCALATE_AFTER_RETRIES="${HITL_ESCALATE_AFTER_RETRIES}" \
-        --from-literal=TRUVAG3_HITL_REDIS_DB="${HITL_REDIS_DB}" \
-        --from-literal=TRUVAG3_HITL_KEY_PREFIX="${HITL_KEY_PREFIX}" \
         --from-literal=TRUVAG3_HITL_WEBHOOK_URL="${HITL_WEBHOOK_URL}" \
         --from-literal=TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED="${EXECUTION_DEBUG_STORE_ENABLED}" \
         --from-literal=TRUVAG3_LLM_DEBUG_ENABLED="${LLM_DEBUG_ENABLED}" \

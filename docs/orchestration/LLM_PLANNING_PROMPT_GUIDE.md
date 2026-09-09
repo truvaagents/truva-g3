@@ -123,7 +123,7 @@ func main() {
     // Create base agent with discovery enabled
     agent := core.NewBaseAgent("my-agent")
     agent.Config.Discovery.Enabled = true
-    agent.Config.Discovery.RedisURL = os.Getenv("REDIS_URL") // e.g., "localhost:6379"
+    agent.Config.Discovery.RedisURL = os.Getenv("REDIS_URL") // e.g., "redis://localhost:6379/0"
 
     // Initialize agent (sets up discovery)
     if err := agent.Initialize(context.Background()); err != nil {

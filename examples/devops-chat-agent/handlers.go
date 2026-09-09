@@ -178,7 +178,7 @@ func (t *DevOpsChatAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	_ = json.NewEncoder(w).Encode(health)
 }
 
 // handleDiscover shows available tools and their capabilities.
@@ -248,7 +248,7 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // writeError writes an error response with CORS headers.
@@ -264,7 +264,7 @@ func writeError(w http.ResponseWriter, statusCode int, message string, err error
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // extractPathParam extracts a path parameter from a URL path.

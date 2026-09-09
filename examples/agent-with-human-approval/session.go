@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,8 +42,8 @@ type Message struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// SessionStore provides Redis-based session management.
-// Uses Redis DB 2 (RedisDBSessions) to isolate from service registry (DB 0).
+// SessionStore provides DB-0 Redis/Valkey session management under a versioned
+// deployment keyspace.
 type SessionStore struct {
 	client      *core.RedisClient
 	ttl         time.Duration
@@ -51,14 +52,14 @@ type SessionStore struct {
 }
 
 // NewSessionStore creates a new Redis-backed session store.
-// It uses Redis DB 2 (RedisDBSessions) with namespace "truvag3:sessions"
+// It uses Redis DB 0 with a versioned, deployment-scoped session namespace.
 // to keep session data separate from the service registry (DB 0).
-func NewSessionStore(redisURL string, ttl time.Duration, maxMessages int, logger core.Logger) (*SessionStore, error) {
-	client, err := core.NewRedisClient(core.RedisClientOptions{
-		RedisURL:  redisURL,
-		DB:        core.RedisDBSessions, // DB 2 - separate from registry (DB 0)
-		Namespace: "truvag3:sessions",
-		Logger:    logger,
+func NewSessionStore(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace, ttl time.Duration, maxMessages int, logger core.Logger) (*SessionStore, error) {
+	namespace := keyspace.Plain("sessions")
+	client, err := core.NewRedisClientWithConnection(core.RedisClientConnectionOptions{
+		Connection: connection,
+		Namespace:  namespace,
+		Logger:     logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Redis client for sessions: %w", err)
@@ -73,14 +74,26 @@ func NewSessionStore(redisURL string, ttl time.Duration, maxMessages int, logger
 
 	if logger != nil {
 		logger.Info("Session store initialized", map[string]interface{}{
-			"redis_db":     core.RedisDBSessions,
-			"namespace":    "truvag3:sessions",
+			"redis_db":     0,
+			"namespace":    namespace,
 			"ttl":          ttl.String(),
 			"max_messages": maxMessages,
 		})
 	}
 
 	return store, nil
+}
+
+func resolveRedisRuntime() (core.RedisConnectionConfig, core.RedisKeyspace, error) {
+	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		return core.RedisConnectionConfig{}, core.RedisKeyspace{}, err
+	}
+	keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		return core.RedisConnectionConfig{}, core.RedisKeyspace{}, err
+	}
+	return resolution, keyspace, nil
 }
 
 // Create creates a new session for the given user.

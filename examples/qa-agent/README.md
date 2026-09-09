@@ -308,7 +308,7 @@ curl -X POST http://localhost:8358/query \
   -d '{"data": {"query": "Test https://example.com"}}'
 ```
 
-> **Note:** This is a synchronous endpoint — the response is returned after the full workflow completes (typically 2–5 minutes). For production use, see [PRODUCTION_OBSERVABILITY_PLAN.md](PRODUCTION_OBSERVABILITY_PLAN.md) for the planned event-driven intake architecture.
+> **Note:** This is a synchronous endpoint — the response is returned after the full workflow completes (typically 2–5 minutes). For long-running production workloads, place an event-driven intake layer in front of the agent so callers do not need to hold the HTTP connection open.
 
 ### `GET /health`
 
@@ -394,7 +394,7 @@ Enable to capture complete LLM prompts and responses (Jaeger truncates large pay
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 ```
 
-Records are stored in Redis DB 7 with configurable TTL. View in Registry Viewer (http://localhost:8361).
+Records are stored in the versioned LLM-debug subspace of the shared Redis/Valkey DB 0 keyspace with configurable TTL. View them in Registry Viewer (http://localhost:8361).
 
 ### Execution DAG Store
 
@@ -404,7 +404,7 @@ Enable to store orchestration plans and step results for DAG visualization:
 export TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true
 ```
 
-Records are stored in Redis DB 8. View in Registry Viewer → Execution DAG tab.
+Records are stored in the versioned execution-debug subspace of the shared Redis/Valkey DB 0 keyspace. View them in Registry Viewer → Execution DAG tab.
 
 ### Metrics
 
@@ -451,7 +451,6 @@ qa-agent/
 ├── Dockerfile.workspace              # Development container with local modules
 ├── skills/
 │   └── packages/qa/                  # Git-authored QA skill packages
-├── PRODUCTION_OBSERVABILITY_PLAN.md  # Grafana dashboard + QA UI roadmap
 └── README.md                         # This file
 ```
 
@@ -483,7 +482,7 @@ cd ../slack-tool && ./setup.sh status
 
 Ensure tools are registered with Redis:
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **4. Requests timing out**

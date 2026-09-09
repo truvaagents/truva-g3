@@ -1653,7 +1653,7 @@ Ask your AI assistant:
 redis-cli -u $REDIS_URL ping
 
 # Check if tools are registered
-redis-cli KEYS "truvag3:services:*"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Verify agent has Discovery permissions
 ./setup.sh logs | grep -i discovery
@@ -1848,20 +1848,22 @@ When the research-agent is deployed and running, it automatically registers itse
 - Agents typically run as singletons or small replicas for coordination
 
 **Service Discovery Pattern:**
-- Both pod replicas send heartbeats to the same Redis key: `truvag3:services:research-assistant`
+- Both pod replicas send heartbeats to the same versioned registry record: `truvag3:v1:default:registry:{default:registry}:service:research-assistant`
 - Kubernetes Service (`research-agent-service`) load-balances traffic across pods
 - Other agents/tools discover one service entry, Kubernetes handles routing
 - Heartbeat keeps TTL fresh - service auto-expires if pods stop
 
 **Redis Index Structure:**
 ```
-truvag3:services:research-assistant       -> Full service data (30s TTL)
-truvag3:types:agent                       -> Set of all agents (60s TTL)
-truvag3:names:research-assistant          -> Name index (60s TTL)
-truvag3:capabilities:research_topic       -> Capability index (60s TTL)
-truvag3:capabilities:discover_tools       -> Capability index (60s TTL)
-truvag3:capabilities:analyze_data         -> Capability index (60s TTL)
-truvag3:capabilities:orchestrate_workflow -> Capability index (60s TTL)
+truvag3:v1:default:registry:{default:registry}:service:research-assistant
+  -> Full service data (30s TTL)
+...:index:all                             -> All-service index (60s TTL)
+...:index:type:agent                      -> Set of all agents (60s TTL)
+...:index:name:research-assistant         -> Name index (60s TTL)
+...:index:capability:research_topic       -> Capability index (60s TTL)
+...:index:capability:discover_tools       -> Capability index (60s TTL)
+...:index:capability:analyze_data         -> Capability index (60s TTL)
+...:index:capability:orchestrate_workflow -> Capability index (60s TTL)
 ```
 
 **Phase 2 Input Summary:**
@@ -1875,19 +1877,19 @@ You can inspect this data in your cluster:
 ```bash
 # Get the full agent entry
 kubectl exec -it deployment/redis -n truvag3-examples -- \
-  redis-cli GET "truvag3:services:research-assistant"
+  redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:research-assistant'
 
 # List all registered services
 kubectl exec -it deployment/redis -n truvag3-examples -- \
-  redis-cli KEYS "truvag3:services:*"
+  redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # See all agents
 kubectl exec -it deployment/redis -n truvag3-examples -- \
-  redis-cli SMEMBERS "truvag3:types:agent"
+  redis-cli SMEMBERS 'truvag3:v1:default:registry:{default:registry}:index:type:agent'
 
 # Check which services have specific capabilities
 kubectl exec -it deployment/redis -n truvag3-examples -- \
-  redis-cli SMEMBERS "truvag3:capabilities:research_topic"
+  redis-cli SMEMBERS 'truvag3:v1:default:registry:{default:registry}:index:capability:research_topic'
 ```
 
 **How Agents Use Discovery:**

@@ -640,9 +640,11 @@ for stepName, step := range execution.Steps {
 ```
 
 `backends` is created once by application bootstrap. New workflow/runtime code
-should depend on `OrchestrationBackends` or the narrow `StateStore` it exposes,
-not construct Redis itself. `NewRedisStateStore` remains supported for
-compatibility.
+should consume the narrow `WorkflowStateStore` returned by `backends.Workflow()`,
+not construct Redis itself. `StateStore` is an alias for that workflow-scoped
+contract. Direct Redis composition uses
+`NewRedisStateStoreWithClient(client, keyspace, ttl)`; the obsolete
+`NewRedisStateStore` constructor is removed.
 
 ### How Variables Work - Data Flow Between Steps
 
@@ -1335,7 +1337,6 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | unset (DB 0) | Deprecated standalone-only role-database compatibility input; canonical composition uses the versioned shared DB 0 keyspace |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |

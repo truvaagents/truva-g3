@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -25,6 +24,10 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisConnection, redisKeyspace, err := resolveRedisRuntime()
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
 
 	// 2. Set component type for service_type labeling in telemetry
 	core.SetCurrentComponentType(core.ComponentTypeAgent)
@@ -38,7 +41,7 @@ func main() {
 	}()
 
 	// 4. Create agent AFTER telemetry is initialized
-	agent, err := NewTravelChatAgent()
+	agent, err := NewTravelChatAgent(redisConnection, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -61,7 +64,7 @@ func main() {
 		core.WithName("travel-chat-agent"),
 		core.WithPort(getPort()),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORSDefaults(), // Browser UI needs Accept + X-User-ID; the strict default only allows Content-Type + Authorization
 		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("travel-chat-agent", middlewareConfig)),
@@ -183,11 +186,6 @@ func validateConfig() error {
 	}
 	if !foundProvider {
 		log.Println("Warning: No AI provider API key found. Configure a supported provider key in .env")
-	}
-
-	// Redis is required for service discovery and session storage
-	if os.Getenv("REDIS_URL") == "" {
-		return fmt.Errorf("REDIS_URL is required for service discovery and session storage")
 	}
 
 	return nil

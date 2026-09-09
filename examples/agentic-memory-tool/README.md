@@ -220,8 +220,7 @@ agentic-memory-tool/
 ├── .env.example         # Configuration template
 ├── setup.sh             # Build/deploy/test lifecycle
 ├── Dockerfile.workspace # Container build (workspace mode)
-├── k8-deployment.yaml   # Kubernetes manifests
-└── PLAN.md              # Implementation plan
+└── k8-deployment.yaml   # Kubernetes manifests
 ```
 
 ---

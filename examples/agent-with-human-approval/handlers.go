@@ -183,7 +183,7 @@ func (t *HITLChatAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	_ = json.NewEncoder(w).Encode(health)
 }
 
 // handleDiscover shows available tools and their capabilities.
@@ -304,7 +304,7 @@ func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Apply header override for original_request_id before BuildResumeContext (RC7-B6).
+	// Apply the original_request_id header override before BuildResumeContext.
 	// Priority: 1) Header from UI (already read above), 2) Checkpoint's OriginalRequestID.
 	if originalRequestIDFromHeader != "" {
 		checkpoint.OriginalRequestID = originalRequestIDFromHeader
@@ -343,7 +343,7 @@ func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request) 
 			attribute.String("interrupt_reason", string(checkpoint.Decision.Reason)),
 		)
 	}
-	// Use typed fields (populated by createCheckpoint after RC7-B2 deployed)
+	// Prefer typed trace-linkage fields when the checkpoint contains them.
 	if checkpoint.OriginalTraceID != "" {
 		loadedAttrs = append(loadedAttrs, attribute.String("original_trace_id", checkpoint.OriginalTraceID))
 		if checkpoint.OriginalSpanID != "" {
@@ -480,7 +480,7 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // writeError writes an error response with CORS headers.
@@ -496,7 +496,7 @@ func writeError(w http.ResponseWriter, statusCode int, message string, err error
 	setCORSHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // extractPathParam extracts a path parameter from a URL path.
@@ -893,7 +893,7 @@ func (t *HITLChatAgent) handleResumeSyncJSON(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Apply header override for original_request_id before BuildResumeContext (RC7-B7).
+	// Apply the original_request_id header override before BuildResumeContext.
 	if originalRequestIDFromHeader != "" {
 		checkpoint.OriginalRequestID = originalRequestIDFromHeader
 	}

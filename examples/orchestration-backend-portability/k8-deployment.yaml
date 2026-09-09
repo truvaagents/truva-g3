@@ -7,7 +7,10 @@ metadata:
     app.kubernetes.io/part-of: orchestration-backend-portability
 data:
   NATS_URL: nats://portability-nats:4222
-  REDIS_URL: redis://redis:6379
+  TRUVAG3_REDIS_MODE: standalone
+  TRUVAG3_REDIS_ADDRS: redis:6379
+  TRUVAG3_REDIS_DB: "0"
+  TRUVAG3_REDIS_NAMESPACE: default
   NAMESPACE: truvag3-examples
   PORTABILITY_BACKEND_NAMESPACE: orchestration-portability
   PORTABILITY_QUEUE: portable-work

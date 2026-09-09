@@ -59,12 +59,10 @@ type RedisCommandStore struct {
 // redisCommandStoreConfig holds configuration for the command store
 type redisCommandStoreConfig struct {
 	redisURL          string
-	redisDB           int
 	keyPrefix         string
 	logger            core.Logger
 	telemetry         core.Telemetry
 	keyPrefixExplicit bool
-	legacyPrefix      bool
 }
 
 // RedisCommandStoreOption configures the command store
@@ -77,30 +75,11 @@ func WithCommandStoreRedisURL(url string) RedisCommandStoreOption {
 	}
 }
 
-// WithCommandStoreRedisDB selects a numbered standalone database.
-// Deprecated: use DB 0 and an injected provider client.
-func WithCommandStoreRedisDB(db int) RedisCommandStoreOption {
-	return func(c *redisCommandStoreConfig) {
-		c.redisDB = db
-	}
-}
-
-// WithCommandStoreKeyPrefix sets the precursor standalone key prefix.
-// Deprecated: use WithCommandStoreKeyspace for cluster-capable composition.
-func WithCommandStoreKeyPrefix(prefix string) RedisCommandStoreOption {
-	return func(c *redisCommandStoreConfig) {
-		c.keyPrefix = prefix
-		c.keyPrefixExplicit = true
-		c.legacyPrefix = true
-	}
-}
-
 // WithCommandStoreKeyspace selects the canonical versioned DB-0 HITL keyspace.
 func WithCommandStoreKeyspace(keyspace core.RedisKeyspace, agentScope string) RedisCommandStoreOption {
 	return func(c *redisCommandStoreConfig) {
 		c.keyPrefix = keyspace.Tagged("hitl", agentScope)
 		c.keyPrefixExplicit = true
-		c.legacyPrefix = false
 	}
 }
 
@@ -137,11 +116,9 @@ func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, 
 	identity := resolveRedisCheckpointIdentity()
 	// Initialize config with defaults
 	config := &redisCommandStoreConfig{
-		redisURL:     "",
-		redisDB:      0,
-		keyPrefix:    identity.keyPrefix,
-		logger:       &core.NoOpLogger{},
-		legacyPrefix: identity.legacyPrefix,
+		redisURL:  "",
+		keyPrefix: identity.keyPrefix,
+		logger:    &core.NoOpLogger{},
 	}
 
 	// Apply options
@@ -154,13 +131,9 @@ func NewRedisCommandStore(opts ...RedisCommandStoreOption) (*RedisCommandStore, 
 		return nil, identity.validationErr
 	}
 
-	client, connection, err := newOwnedRedisUniversalClient(config.redisURL, config.redisDB, config.logger)
+	client, _, err := newOwnedRedisUniversalClient(config.redisURL, "TRUVAG3_HITL_REDIS_DB", "TRUVAG3_HITL_KEY_PREFIX")
 	if err != nil {
 		return nil, fmt.Errorf("initialize Redis command store: %w", err)
-	}
-	if err := rejectLegacyRedisPrefixForMode(connection.Mode, config.legacyPrefix, "HITL command store"); err != nil {
-		_ = client.Close()
-		return nil, err
 	}
 
 	return &RedisCommandStore{
@@ -183,9 +156,8 @@ func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisC
 	}
 	identity := resolveRedisCheckpointIdentity()
 	config := &redisCommandStoreConfig{
-		keyPrefix:    identity.keyPrefix,
-		logger:       &core.NoOpLogger{},
-		legacyPrefix: identity.legacyPrefix,
+		keyPrefix: identity.keyPrefix,
+		logger:    &core.NoOpLogger{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -194,9 +166,6 @@ func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisC
 	}
 	if identity.validationErr != nil && !config.keyPrefixExplicit {
 		return nil, identity.validationErr
-	}
-	if err := rejectLegacyRedisPrefixForClient(client, config.legacyPrefix, "HITL command store"); err != nil {
-		return nil, err
 	}
 	return &RedisCommandStore{
 		client: client, keyPrefix: config.keyPrefix, keys: newHITLKeys(config.keyPrefix), logger: config.logger,

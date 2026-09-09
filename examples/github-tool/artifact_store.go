@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // ArtifactStore stores raw PR patches/files outside of orchestration state.
@@ -32,7 +33,7 @@ type SliceRequest struct {
 // NewArtifactStore returns a backend per cfg.ArtifactBackend. Only "redis" is
 // implemented in the MVP; other values return an explicit error so misconfig
 // fails loudly at startup.
-func NewArtifactStore(cfg Config, redisClient *redis.Client) (ArtifactStore, error) {
+func NewArtifactStore(cfg Config, redisClient redis.Cmdable) (ArtifactStore, error) {
 	switch cfg.ArtifactBackend {
 	case "redis", "":
 		if redisClient == nil {
@@ -47,6 +48,7 @@ func NewArtifactStore(cfg Config, redisClient *redis.Client) (ArtifactStore, err
 		}
 		return &RedisArtifactStore{
 			Client:           redisClient,
+			Keyspace:         cfg.RedisKeyspace,
 			TTL:              cfg.ArtifactTTL,
 			MaxArtifactBytes: ceiling,
 			MaxSliceBytes:    cfg.MaxSliceBytes,
@@ -61,7 +63,8 @@ func NewArtifactStore(cfg Config, redisClient *redis.Client) (ArtifactStore, err
 // --- Redis implementation ---
 
 type RedisArtifactStore struct {
-	Client           *redis.Client
+	Client           redis.Cmdable
+	Keyspace         core.RedisKeyspace
 	TTL              time.Duration
 	MaxArtifactBytes int64
 	MaxSliceBytes    int64
@@ -82,7 +85,7 @@ func (s *RedisArtifactStore) Put(ctx context.Context, bundleID, name string, dat
 	}
 
 	id := NewArtifactID(name)
-	key := artifactKey(bundleID, id)
+	key := s.artifactKey(bundleID, id)
 
 	if err := s.Client.Set(ctx, key, data, s.TTL).Err(); err != nil {
 		return ArtifactRef{}, fmt.Errorf("redis set: %w", err)
@@ -96,7 +99,7 @@ func (s *RedisArtifactStore) Put(ctx context.Context, bundleID, name string, dat
 }
 
 func (s *RedisArtifactStore) Get(ctx context.Context, bundleID, artifactID string) ([]byte, error) {
-	key := artifactKey(bundleID, artifactID)
+	key := s.artifactKey(bundleID, artifactID)
 	data, err := s.Client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
 		return nil, fmt.Errorf("artifact not found: %s", artifactID)
@@ -135,8 +138,8 @@ func (s *RedisArtifactStore) GetSlice(ctx context.Context, bundleID, artifactID 
 
 // --- Helpers ---
 
-func artifactKey(bundleID, artifactID string) string {
-	return "github-tool:artifact:" + bundleID + ":" + artifactID
+func (s *RedisArtifactStore) artifactKey(bundleID, artifactID string) string {
+	return s.Keyspace.Plain("github-tool", "artifact", bundleID, artifactID)
 }
 
 // NewArtifactID derives a deterministic, filesystem-safe ID from a payload

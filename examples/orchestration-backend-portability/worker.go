@@ -12,26 +12,28 @@ import (
 )
 
 type Worker struct {
-	workflow orchestration.StateStore
-	consumer core.TaskConsumer
-	queue    string
-	logger   core.Logger
+	workflow   orchestration.WorkflowStateStore
+	consumer   core.TaskConsumer
+	queue      string
+	workflowID string
+	logger     core.Logger
 }
 
 var _ core.Runnable = (*Worker)(nil)
 
 func NewWorker(backends WorkerBackends, logger core.Logger) (*Worker, error) {
-	if backends.Workflow == nil || backends.Consumer == nil {
+	if backends.Workflow == nil || backends.Consumer == nil || strings.TrimSpace(backends.WorkflowID) == "" {
 		return nil, fmt.Errorf("live portability: worker workflow and consumer backends are required")
 	}
 	if logger == nil {
 		return nil, fmt.Errorf("live portability: logger is required")
 	}
 	return &Worker{
-		workflow: backends.Workflow,
-		consumer: backends.Consumer,
-		queue:    backends.Queue,
-		logger:   logger,
+		workflow:   backends.Workflow,
+		consumer:   backends.Consumer,
+		queue:      backends.Queue,
+		workflowID: backends.WorkflowID,
+		logger:     logger,
 	}, nil
 }
 
@@ -71,7 +73,7 @@ func (worker *Worker) process(ctx context.Context, handle core.TaskHandle) error
 	if task == nil || strings.TrimSpace(task.ID) == "" {
 		return handle.Nack(ctx, "invalid_task")
 	}
-	execution, err := worker.workflow.GetExecution(ctx, task.ID)
+	execution, err := worker.workflow.GetExecution(ctx, worker.workflowID, task.ID)
 	if err != nil {
 		// Leave the claim unsettled so transient PostgreSQL failures redeliver.
 		return fmt.Errorf("load PostgreSQL execution: %w", err)

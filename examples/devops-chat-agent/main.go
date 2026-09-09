@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
@@ -29,6 +27,10 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisConnection, redisKeyspace, err := resolveRedisRuntime()
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
 
 	// 2. Set component type for service_type labeling in telemetry
 	core.SetCurrentComponentType(core.ComponentTypeAgent)
@@ -38,11 +40,13 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		telemetry.Shutdown(ctx)
+		if err := telemetry.Shutdown(ctx); err != nil {
+			log.Println("Telemetry shutdown did not complete")
+		}
 	}()
 
 	// 4. Create agent AFTER telemetry is initialized
-	agent, err := NewDevOpsChatAgent()
+	agent, err := NewDevOpsChatAgent(redisConnection, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -60,12 +64,16 @@ func main() {
 	hitlConfig := orchestration.DefaultConfig().HITL
 	var hitl *HITLInfrastructure
 	if hitlConfig.Enabled {
-		var hitlErr error
-		hitl, hitlErr = SetupHITL(agent.Logger, hitlConfig)
+		hitlRedisClient, hitlErr := core.NewRedisUniversalClient(redisConnection)
+		if hitlErr != nil {
+			log.Fatalf("HITL Redis connection failed: %v", hitlErr)
+		}
+		defer func() { _ = hitlRedisClient.Close() }()
+		hitl, hitlErr = SetupHITL(hitlRedisClient, redisKeyspace, "devops-chat-agent", agent.Logger, hitlConfig)
 		if hitlErr != nil {
 			log.Fatalf("HITL setup failed: %v", hitlErr)
 		}
-		defer hitl.Close()
+		defer func() { _ = hitl.Close() }()
 		log.Printf("HITL enabled: step_sensitive_capabilities=%v", hitlConfig.StepSensitiveCapabilities)
 	}
 
@@ -81,7 +89,7 @@ func main() {
 		core.WithName("devops-chat-agent"),
 		core.WithPort(getPort()),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORSDefaults(), // Allows all headers including X-Truvag3-Original-Request-ID
 		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("devops-chat-agent", middlewareConfig)),
@@ -104,32 +112,39 @@ func main() {
 	// Phase 1 (Redis): episodic + coordination + activity signals + digest cache
 	// Phase 2 (Qdrant + embeddings): knowledge search + extraction — requires WithEmbeddingClient
 	var memBackends *memory.SharedBackends
-	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-		redisOpt, err := redis.ParseURL(redisURL)
-		if err == nil {
-			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
+	if redisClient, clientErr := core.NewRedisUniversalClient(redisConnection); clientErr != nil {
+		agent.Logger.Warn("Shared memory Redis unavailable, running without cross-agent memory", map[string]interface{}{
+			"operation":  "shared_memory_setup",
+			"status":     "degraded",
+			"error":      "redis shared memory startup failed",
+			"error_type": "backend_startup",
+		})
+	} else {
+		defer func() { _ = redisClient.Close() }()
+		// Phase 2: create embedding client if configured (memory module can't import ai)
+		var embedOpt memory.SharedBackendsOption
+		embedder, embErr := ai.NewEmbeddingClient(ai.WithEmbeddingLogger(agent.Logger))
+		if embErr == nil && embedder != nil {
+			embedOpt = memory.WithEmbeddingClient(embedder)
+		}
 
-			// Phase 2: create embedding client if configured (memory module can't import ai)
-			var embedOpt memory.SharedBackendsOption
-			embedder, embErr := ai.NewEmbeddingClient(ai.WithEmbeddingLogger(agent.Logger))
-			if embErr == nil && embedder != nil {
-				embedOpt = memory.WithEmbeddingClient(embedder)
-			}
+		opts := []memory.SharedBackendsOption{
+			memory.WithAgentName("devops-chat-agent"),
+			memory.WithDomain("infrastructure"),
+			memory.WithRedisDeployment(redisKeyspace.Deployment()),
+		}
+		if embedOpt != nil {
+			opts = append(opts, embedOpt)
+		}
 
-			opts := []memory.SharedBackendsOption{
-				memory.WithAgentName("devops-chat-agent"),
-				memory.WithDomain("infrastructure"),
-			}
-			if embedOpt != nil {
-				opts = append(opts, embedOpt)
-			}
-
-			memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger, opts...)
-			if err != nil {
-				agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
-					"error": err.Error(),
-				})
-			}
+		memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger, opts...)
+		if err != nil {
+			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
+				"operation":  "shared_memory_setup",
+				"status":     "degraded",
+				"error":      "shared memory backend setup failed",
+				"error_type": "backend_startup",
+			})
 		}
 	}
 	if memBackends != nil {
@@ -147,7 +162,7 @@ func main() {
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.BaseAgent.Discovery == nil {
+		for agent.Discovery == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
@@ -215,8 +230,10 @@ func main() {
 	// 9b. Reflection Job: bridge episodic events to long-term knowledge
 	// Layer 1 wiring — framework manages lifecycle via Runnable interface.
 	// Returns nil when Phase 2 backends (Qdrant + embedder) are unavailable.
-	if reflectionJob, _ := memory.BuildReflectionJob(memBackends.ToDeps(), agent.AI, agent.Logger); reflectionJob != nil {
-		framework.RegisterRunnable(reflectionJob)
+	if memBackends != nil {
+		if reflectionJob, _ := memory.BuildReflectionJob(memBackends.ToDeps(), agent.AI, agent.Logger); reflectionJob != nil {
+			framework.RegisterRunnable(reflectionJob)
+		}
 	}
 
 	// 10. Run the framework
@@ -263,11 +280,6 @@ func validateConfig() error {
 		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 	}
 
-	// Redis is required for service discovery and session storage
-	if os.Getenv("REDIS_URL") == "" {
-		return fmt.Errorf("REDIS_URL is required for service discovery and session storage")
-	}
-
 	return nil
 }
 
@@ -312,11 +324,11 @@ func initTelemetry(serviceName string) {
 	telemetry.EnableFrameworkIntegration(nil)
 
 	log.Printf("Telemetry initialized successfully")
-	log.Printf("  Environment: %s", env)
+	log.Printf("  Environment profile: %s", profile)
 	log.Printf("  Profile: %s", profile)
 	log.Printf("  Service: %s", serviceName)
 	if config.Endpoint != "" {
-		log.Printf("  Endpoint: %s", config.Endpoint)
+		log.Println("  Exporter endpoint configured")
 	}
 }
 
@@ -329,7 +341,7 @@ func getPort() int {
 	}
 	p, err := strconv.Atoi(port)
 	if err != nil || p <= 0 {
-		log.Fatalf("PORT must be a positive integer, got: %s", port)
+		log.Fatal("PORT must be a positive integer")
 	}
 	return p
 }

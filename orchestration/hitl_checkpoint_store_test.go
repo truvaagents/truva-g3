@@ -118,7 +118,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 	mr, client := setupCheckpointTestRedis(t)
 	defer mr.Close()
 	defer func() { _ = client.Close() }()
-	t.Setenv("TRUVAG3_HITL_KEY_PREFIX", "legacy:hitl")
+	t.Setenv("TRUVAG3_REDIS_NAMESPACE", "identity-test")
 	t.Setenv("TRUVAG3_AGENT_NAME", "travel-agent")
 	t.Setenv(core.EnvServiceName, "travel-service")
 	t.Setenv("TRUVAG3_PORT", "9090")
@@ -127,7 +127,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoints.keyPrefix != "legacy:hitl:travel-agent" || checkpoints.agentName != "travel-agent" {
+	if checkpoints.keyPrefix != mustRedisTestKeyspace(t, "identity-test").Tagged("hitl", "travel-agent") || checkpoints.agentName != "travel-agent" {
 		t.Fatalf("checkpoint identity = prefix %q, agent %q", checkpoints.keyPrefix, checkpoints.agentName)
 	}
 	if checkpoints.agentAddress == "" {
@@ -138,7 +138,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cp.AgentName != checkpoints.agentName || cp.AgentAddress != checkpoints.agentAddress ||
-		!mr.Exists("legacy:hitl:travel-agent:checkpoint:identity") {
+		!mr.Exists(checkpoints.keys.checkpoint("identity")) {
 		t.Fatalf("saved checkpoint identity = %#v", cp)
 	}
 	legacyCommands, err := NewRedisCommandStore(WithCommandStoreRedisURL("redis://" + mr.Addr()))
@@ -146,7 +146,7 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = legacyCommands.Close() })
-	if legacyCommands.keyPrefix != "legacy:hitl:travel-agent" {
+	if legacyCommands.keyPrefix != mustRedisTestKeyspace(t, "identity-test").Tagged("hitl", "travel-agent") {
 		t.Fatalf("legacy command prefix = %q, want environment value", legacyCommands.keyPrefix)
 	}
 
@@ -154,15 +154,15 @@ func TestApplicationOwnedHITLStoresUseDocumentedIdentitySources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if commands.keyPrefix != "legacy:hitl:travel-agent" {
+	if commands.keyPrefix != mustRedisTestKeyspace(t, "identity-test").Tagged("hitl", "travel-agent") {
 		t.Fatalf("application-owned command prefix = %q, want deterministic default", commands.keyPrefix)
 	}
 
-	explicitCommands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyPrefix("explicit:hitl"))
+	explicitCommands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyspace(mustRedisTestKeyspace(t, "explicit"), "agent"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if explicitCommands.keyPrefix != "explicit:hitl" {
+	if explicitCommands.keyPrefix != mustRedisTestKeyspace(t, "explicit").Tagged("hitl", "agent") {
 		t.Fatalf("explicit command prefix = %q, want explicit:hitl", explicitCommands.keyPrefix)
 	}
 }
@@ -202,18 +202,18 @@ func TestHITLStoresRejectInvalidRedisNamespace(t *testing.T) {
 		})
 	}
 
-	checkpoints, err := NewRedisCheckpointStoreWithClient(client, WithCheckpointKeyPrefix("explicit:hitl"))
+	checkpoints, err := NewRedisCheckpointStoreWithClient(client, WithCheckpointKeyspace(mustRedisTestKeyspace(t, "explicit"), "agent"))
 	if err != nil {
 		t.Fatalf("explicit checkpoint prefix did not override environment: %v", err)
 	}
-	if checkpoints.keyPrefix != "explicit:hitl" {
+	if checkpoints.keyPrefix != mustRedisTestKeyspace(t, "explicit").Tagged("hitl", "agent") {
 		t.Fatalf("checkpoint prefix = %q, want explicit:hitl", checkpoints.keyPrefix)
 	}
-	commands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyPrefix("explicit:hitl"))
+	commands, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyspace(mustRedisTestKeyspace(t, "explicit"), "agent"))
 	if err != nil {
 		t.Fatalf("explicit command prefix did not override environment: %v", err)
 	}
-	if commands.keyPrefix != "explicit:hitl" {
+	if commands.keyPrefix != mustRedisTestKeyspace(t, "explicit").Tagged("hitl", "agent") {
 		t.Fatalf("command prefix = %q, want explicit:hitl", commands.keyPrefix)
 	}
 }
@@ -1141,7 +1141,7 @@ func (l *checkpointTestCapturingLogger) DebugWithContext(ctx context.Context, ms
 }
 
 // =============================================================================
-// Agent Name Fallback Tests (RC2)
+// Agent Name Fallback Tests
 // =============================================================================
 
 // TestCheckpointStoreAgentNameFallback verifies TRUVAG3_AGENT_NAME > TRUVAG3_K8S_SERVICE_NAME

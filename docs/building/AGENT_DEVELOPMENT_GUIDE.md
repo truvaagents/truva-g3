@@ -358,7 +358,7 @@ func NewYourChatAgent() (*YourChatAgent, error) {
     if err != nil {
         return nil, fmt.Errorf("resolve Redis namespace: %w", err)
     }
-    sessionStore, err := NewSessionStore(redisResolution.Config, redisKeyspace, 48*time.Hour, 50, agent.Logger)
+    sessionStore, err := NewSessionStore(redisResolution, redisKeyspace, 48*time.Hour, 50, agent.Logger)
     if err != nil {
         return nil, fmt.Errorf("failed to create session store: %w", err)
     }

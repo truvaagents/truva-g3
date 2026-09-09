@@ -34,24 +34,13 @@ import (
 // Compile-time check: RedisScheduleStore satisfies core.ScheduleStore.
 var _ core.ScheduleStore = (*RedisScheduleStore)(nil)
 
-var defaultScheduleKeyPrefix = defaultRedisKeyspace().Plain("schedules")
-
 const (
-	dataKeySuffix       = ":data:"
-	dueKeySuffix        = ":due"
-	allKeySuffix        = ":all"
 	defaultMaxSchedules = 10_000
 )
 
 // RedisScheduleStoreConfig configures a RedisScheduleStore.
 type RedisScheduleStoreConfig struct {
-	// KeyPrefix is the Redis key namespace for this store.
-	// Default: "truvag3:schedules"
-	KeyPrefix string
-
-	// Keyspace selects the canonical tagged DB-0 schema. A custom KeyPrefix
-	// without Keyspace retains the standalone-only compatibility layout and is
-	// rejected when the client uses Redis Cluster topology.
+	// Keyspace selects the versioned, tagged DB-0 schedule schema.
 	Keyspace *core.RedisKeyspace
 
 	// MaxSchedules bounds the control-plane catalog enumerated by List.
@@ -64,21 +53,18 @@ type RedisScheduleStoreConfig struct {
 // DefaultRedisScheduleStoreConfig returns a config with sensible defaults.
 func DefaultRedisScheduleStoreConfig() *RedisScheduleStoreConfig {
 	return &RedisScheduleStoreConfig{
-		KeyPrefix:    defaultScheduleKeyPrefix,
 		MaxSchedules: defaultMaxSchedules,
 	}
 }
 
 // RedisScheduleStore is a Redis-backed implementation of core.ScheduleStore.
 //
-// Accepts redis.Cmdable (rather than the concrete *redis.Client) so tests
+// Accepts redis.UniversalClient (rather than the concrete *redis.Client) so tests
 // can inject miniredis clients and production can use *redis.ClusterClient
 // transparently — matching the pattern established by memory.RedisDistributedLock.
 type RedisScheduleStore struct {
 	client       redis.UniversalClient
-	prefix       string
 	keyspace     core.RedisKeyspace
-	legacyPrefix bool
 	maxSchedules int
 	logger       core.Logger
 }
@@ -97,10 +83,6 @@ func NewRedisScheduleStore(client redis.UniversalClient, config *RedisScheduleSt
 	if config == nil {
 		config = DefaultRedisScheduleStoreConfig()
 	}
-	prefix := config.KeyPrefix
-	if prefix == "" {
-		prefix = defaultScheduleKeyPrefix
-	}
 	explicitMaxSchedules := config.MaxSchedules
 	if !configProvided {
 		explicitMaxSchedules = 0
@@ -110,14 +92,8 @@ func NewRedisScheduleStore(client redis.UniversalClient, config *RedisScheduleSt
 		return nil, err
 	}
 	keyspace := defaultRedisKeyspace()
-	legacyPrefix := false
 	if config.Keyspace != nil {
 		keyspace = *config.Keyspace
-	} else if prefix != defaultScheduleKeyPrefix {
-		legacyPrefix = true
-	}
-	if err := rejectLegacyRedisPrefixForClient(client, legacyPrefix, "schedule store"); err != nil {
-		return nil, err
 	}
 	var logger core.Logger = &core.NoOpLogger{}
 	if config.Logger != nil {
@@ -125,8 +101,8 @@ func NewRedisScheduleStore(client redis.UniversalClient, config *RedisScheduleSt
 	}
 	logger = orchestrationComponentLogger(logger)
 	return &RedisScheduleStore{
-		client: client, prefix: prefix, keyspace: keyspace,
-		legacyPrefix: legacyPrefix, maxSchedules: maxSchedules, logger: logger,
+		client: client, keyspace: keyspace,
+		maxSchedules: maxSchedules, logger: logger,
 	}, nil
 }
 
@@ -146,25 +122,16 @@ func resolveMaxSchedules(explicit int) (int, error) {
 
 // dataKey returns the Redis key for a schedule's JSON data.
 func (s *RedisScheduleStore) dataKey(id string) string {
-	if !s.legacyPrefix {
-		return s.keyspace.Tagged("schedules", "", "data", id)
-	}
-	return s.prefix + dataKeySuffix + id
+	return s.keyspace.Tagged("schedules", "", "data", id)
 }
 
 // dueKey returns the Redis key for the due-index sorted set.
 func (s *RedisScheduleStore) dueKey() string {
-	if !s.legacyPrefix {
-		return s.keyspace.Tagged("schedules", "", "index", "due")
-	}
-	return s.prefix + dueKeySuffix
+	return s.keyspace.Tagged("schedules", "", "index", "due")
 }
 
 func (s *RedisScheduleStore) allKey() string {
-	if !s.legacyPrefix {
-		return s.keyspace.Tagged("schedules", "", "index", "all")
-	}
-	return s.prefix + allKeySuffix
+	return s.keyspace.Tagged("schedules", "", "index", "all")
 }
 
 // Create persists a new schedule.

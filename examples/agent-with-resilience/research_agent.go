@@ -97,7 +97,7 @@ func NewResearchAgent() (*ResearchAgent, error) {
 	agent := core.NewBaseAgent("research-assistant-resilience")
 
 	// Auto-configured AI client - detects from environment
-	aiClient, err := ai.NewClient()
+	aiClient, err := ai.NewClient(ai.WithTelemetry(telemetry.GetTelemetryProvider()))
 	if err != nil {
 		log.Printf("AI client creation failed, using mock: %v", err)
 	}
@@ -129,9 +129,19 @@ func NewResearchAgent() (*ResearchAgent, error) {
 			aiClient = instrumentedClient // Use instrumented client for all LLM calls
 			agent.AI = aiClient
 			// Use log.Printf — agent.Logger is NoOpLogger until NewFramework runs
-			log.Printf("✅ LLM debug recording enabled (component=research-assistant-resilience, redis_db=7)")
+			log.Printf("✅ LLM debug recording enabled (component=research-assistant-resilience)")
 		}
 	}
+
+	// Propagate the active request trace and baggage to tools.
+	tracedClient := telemetry.NewTracedHTTPClientWithTransport(&http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableKeepAlives:   false,
+		ForceAttemptHTTP2:   true,
+	})
+	tracedClient.Timeout = 30 * time.Second
 
 	// Create the research agent with resilience support
 	researchAgent := &ResearchAgent{
@@ -139,18 +149,9 @@ func NewResearchAgent() (*ResearchAgent, error) {
 		aiClient:           aiClient,
 		instrumentedClient: instrumentedClient, // nil if not enabled
 		debugRecorder:      debugRecorder,      // nil if not enabled; Close() on shutdown
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-				DisableKeepAlives:   false,
-				ForceAttemptHTTP2:   true,
-			},
-		},
-		circuitBreakers: make(map[string]*resilience.CircuitBreaker),
-		retryConfig:     resilience.DefaultRetryConfig(), // Use framework defaults
+		httpClient:         tracedClient,
+		circuitBreakers:    make(map[string]*resilience.CircuitBreaker),
+		retryConfig:        resilience.DefaultRetryConfig(), // Use framework defaults
 	}
 
 	// Register agent capabilities

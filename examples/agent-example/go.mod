@@ -3,7 +3,6 @@ module github.com/truvaagents/truva-g3/examples/agent-example
 go 1.27.0
 
 require (
-	github.com/redis/go-redis/v9 v9.22.0
 	github.com/truvaagents/truva-g3/ai v0.4.0
 	github.com/truvaagents/truva-g3/core v0.4.0
 	github.com/truvaagents/truva-g3/telemetry v0.4.0
@@ -24,6 +23,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect

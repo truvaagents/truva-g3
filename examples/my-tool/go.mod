@@ -2,11 +2,6 @@ module github.com/truvaagents/truva-g3/examples/my-tool
 
 go 1.27.0
 
-require (
-	github.com/truvaagents/truva-g3/core v0.4.0
-	github.com/truvaagents/truva-g3/telemetry v0.4.0
-)
-
 // Use local workspace modules for development
 replace (
 	github.com/truvaagents/truva-g3/core => ../../core

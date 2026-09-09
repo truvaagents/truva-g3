@@ -26,11 +26,15 @@ func TestRedisSkillStoreConformance(t *testing.T) {
 			_ = firstClient.Close()
 			_ = secondClient.Close()
 		})
-		first, err := NewSkillStore(firstClient, WithSkillStoreKeyPrefix("conformance:skills"))
+		keyspace, err := core.NewRedisKeyspace("conformance")
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := NewSkillStore(secondClient, WithSkillStoreKeyPrefix("conformance:skills"))
+		first, err := NewSkillStore(firstClient, WithSkillStoreKeyspace(keyspace))
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := NewSkillStore(secondClient, WithSkillStoreKeyspace(keyspace))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,6 +75,66 @@ func TestRedisSkillStoreConformance(t *testing.T) {
 			},
 		}
 	})
+}
+
+func TestRedisSkillStoreCanonicalKeys(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	for _, deployment := range []string{"default", "team-a"} {
+		t.Run(deployment, func(t *testing.T) {
+			var options []SkillStoreOption
+			if deployment != "default" {
+				keyspace, err := core.NewRedisKeyspace(deployment)
+				if err != nil {
+					t.Fatal(err)
+				}
+				options = append(options, WithSkillStoreKeyspace(keyspace))
+			}
+			store, err := NewSkillStore(client, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix := "truvag3:v1:" + deployment + ":skills:{" + deployment + ":skills}:"
+			ref := orchestration.SkillRef{Namespace: "travel", Name: "weather"}
+			keys := []string{
+				store.catalogKey(), store.currentKey(ref), store.nextVersionKey(ref),
+				store.versionsKey(ref), store.revisionKey(ref, 1), store.candidateKey(ref, 1),
+				store.manifestKey(ref, 1), store.resourceKey(ref, 1, "guide.md"),
+				store.tombstoneKey(ref, 1), store.idempotencyKey(ref, "request-1"),
+				store.auditKey("event-1"), store.auditIndexKey(),
+			}
+			for _, key := range keys {
+				if !strings.HasPrefix(key, prefix) {
+					t.Errorf("key %q does not share canonical deployment/slot prefix %q", key, prefix)
+				}
+			}
+		})
+	}
+}
+
+func TestRedisSkillStoreDeploymentIsolation(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	ref := orchestration.SkillRef{Namespace: "travel", Name: "weather"}
+	for _, deployment := range []string{"team-a", "team-b"} {
+		keyspace, err := core.NewRedisKeyspace(deployment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := NewSkillStore(client, WithSkillStoreKeyspace(keyspace))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.GetPublished(t.Context(), ref); !errors.Is(err, orchestration.ErrSkillNotFound) {
+			t.Fatalf("%s sees another deployment's skill: %v", deployment, err)
+		}
+		publishRedisSkill(t, store, ref, "travel", "weather")
+		if _, err := store.GetPublished(t.Context(), ref); err != nil {
+			t.Fatalf("%s cannot read its published skill: %v", deployment, err)
+		}
+	}
 }
 
 func TestRedisSkillStoreAuditIsIdempotentAndBodyFree(t *testing.T) {

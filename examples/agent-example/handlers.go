@@ -321,7 +321,7 @@ Please provide:
 		MaxTokens:   1000,
 	})
 	if err != nil {
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			r.Logger.Warn("LLM provider returned client error", map[string]interface{}{

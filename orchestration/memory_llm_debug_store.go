@@ -186,7 +186,6 @@ func (s *MemoryLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMD
 	// SourceComponents is derived from the ORIGINAL slice because typed
 	// rows always carry an empty SourceComponent; the only populated values
 	// come from agent_llm_call partners and orphans.
-	// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
 	summaries := make([]LLMDebugRecordSummary, len(records))
 	for i, record := range records {
 		deduped := DedupeLLMInteractions(record.Interactions)

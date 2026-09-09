@@ -355,11 +355,11 @@ func TestRedisCheckpointConformance(t *testing.T) {
 		firstClient := redis.NewClient(&redis.Options{Addr: server.Addr()})
 		secondClient := redis.NewClient(&redis.Options{Addr: server.Addr()})
 		t.Cleanup(func() { _ = firstClient.Close(); _ = secondClient.Close() })
-		first, err := orchestration.NewRedisCheckpointStoreWithClient(firstClient, orchestration.WithCheckpointKeyPrefix("conformance:hitl"))
+		first, err := orchestration.NewRedisCheckpointStoreWithClient(firstClient, orchestration.WithCheckpointKeyspace(mustProviderKeyspace(t, "conformance"), "agent"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := orchestration.NewRedisCheckpointStoreWithClient(secondClient, orchestration.WithCheckpointKeyPrefix("conformance:hitl"))
+		second, err := orchestration.NewRedisCheckpointStoreWithClient(secondClient, orchestration.WithCheckpointKeyspace(mustProviderKeyspace(t, "conformance"), "agent"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -380,30 +380,30 @@ func TestRedisDebugStoreConformance(t *testing.T) {
 	}
 	backendconformance.RunExecutionStoreConformance(t, func(t *testing.T) backendconformance.ExecutionFixture {
 		config := orchestration.NewDefaultOrchestratorConfig().ExecutionStore
-		first, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyPrefix("conformance:execution"))
+		first, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyspace(mustProviderKeyspace(t, "conformance")))
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyPrefix("conformance:execution"))
+		second, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyspace(mustProviderKeyspace(t, "conformance")))
 		if err != nil {
 			t.Fatal(err)
 		}
-		isolated, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyPrefix("isolated:execution"))
+		isolated, err := orchestration.NewRedisExecutionDebugStoreWithClient(newClient(t), config, orchestration.WithExecutionDebugKeyspace(mustProviderKeyspace(t, "isolated")))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return backendconformance.ExecutionFixture{First: first, Second: second, Isolated: isolated}
 	})
 	backendconformance.RunLLMDebugStoreConformance(t, func(t *testing.T) backendconformance.LLMDebugFixture {
-		first, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyPrefix("conformance:llm"))
+		first, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyspace(mustProviderKeyspace(t, "conformance")))
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyPrefix("conformance:llm"))
+		second, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyspace(mustProviderKeyspace(t, "conformance")))
 		if err != nil {
 			t.Fatal(err)
 		}
-		isolated, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyPrefix("isolated:llm"))
+		isolated, err := orchestration.NewRedisLLMDebugStoreWithClient(newClient(t), orchestration.WithDebugKeyspace(mustProviderKeyspace(t, "isolated")))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,11 +419,11 @@ func TestRedisCoordinationConformance(t *testing.T) {
 		return client
 	}
 	backendconformance.RunCommandStoreConformance(t, func(t *testing.T) backendconformance.CommandFixture {
-		publisher, err := orchestration.NewRedisCommandStoreWithClient(newClient(t), orchestration.WithCommandStoreKeyPrefix("conformance:commands"))
+		publisher, err := orchestration.NewRedisCommandStoreWithClient(newClient(t), orchestration.WithCommandStoreKeyspace(mustProviderKeyspace(t, "conformance"), "agent"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		subscriber, err := orchestration.NewRedisCommandStoreWithClient(newClient(t), orchestration.WithCommandStoreKeyPrefix("conformance:commands"))
+		subscriber, err := orchestration.NewRedisCommandStoreWithClient(newClient(t), orchestration.WithCommandStoreKeyspace(mustProviderKeyspace(t, "conformance"), "agent"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -445,17 +445,7 @@ func TestRedisCoordinationConformance(t *testing.T) {
 		}
 		return backendconformance.WorkflowFixture{First: first, Second: second}
 	})
-	backendconformance.RunLegacyWorkflowStateConformance(t, func(t *testing.T) backendconformance.LegacyWorkflowFixture {
-		first, err := orchestration.NewLegacyRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:legacy-workflow")
-		if err != nil {
-			t.Fatal(err)
-		}
-		second, err := orchestration.NewLegacyRedisStateStoreWithClientAndPrefix(newClient(t), time.Hour, "conformance:legacy-workflow")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return backendconformance.LegacyWorkflowFixture{First: first, Second: second}
-	})
+
 }
 
 func TestRedisDistributedLockConformance(t *testing.T) {
@@ -691,10 +681,7 @@ func TestRedisPresetRejectsProcessorBeforeCheckpointDependencyOverride(t *testin
 func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		values := map[string]string{
-			"REDIS_URL":                   "redis://standard:6379",
-			"TRUVAG3_HITL_REDIS_DB":       "4",
-			"TRUVAG3_SCHEDULING_REDIS_DB": "5",
-			"TRUVAG3_SKILLS_REDIS_DB":     "9",
+			"REDIS_URL": "redis://standard:6379",
 		}
 		value, ok := values[name]
 		return value, ok
@@ -703,24 +690,23 @@ func TestClientConfigurationPrecedenceAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fromEnvironment.connection.Mode != core.RedisModeStandalone || fromEnvironment.connection.Addrs[0] != "standard:6379" || fromEnvironment.legacyRoleDB[ClientRoleHITL] != 4 ||
-		fromEnvironment.legacyRoleDB[ClientRoleScheduling] != 5 || fromEnvironment.legacyRoleDB[ClientRoleSkills] != 9 {
+	if fromEnvironment.connection.Mode != core.RedisModeStandalone || fromEnvironment.connection.Addrs[0] != "standard:6379" || fromEnvironment.connection.DB != 0 {
 		t.Fatalf("environment config = %#v", fromEnvironment)
 	}
 	configured, err := ConfigureClientConfig(fromEnvironment,
-		WithClientURL("redis://code:6379"), WithRoleDatabase(ClientRoleHITL, 9),
+		WithClientURL("redis://code:6379"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.connection.Addrs[0] != "code:6379" || configured.legacyRoleDB[ClientRoleHITL] != 9 {
+	if configured.connection.Addrs[0] != "code:6379" || configured.connection.DB != 0 {
 		t.Fatalf("code overrides did not win: %#v", configured)
 	}
 
 	if _, err := ConfigureClientConfig(DefaultClientConfig(), WithClientURL("")); err == nil {
 		t.Fatal("empty Redis URL was accepted")
 	}
-	if _, err := ConfigureClientConfig(DefaultClientConfig(), WithRoleDatabase(ClientRoleHITL, -1)); err == nil {
+	if _, err := ConfigureClientConfig(DefaultClientConfig(), WithDatabase(-1)); err == nil {
 		t.Fatal("negative logical database was accepted")
 	}
 	if _, err := LoadClientConfigFromEnvironment(DefaultClientConfig(), func(name string) (string, bool) {
@@ -957,4 +943,13 @@ func TestOwnedClientsShareDBZeroClientAndCloseOnce(t *testing.T) {
 	if err := owned.Close(); err != nil {
 		t.Fatalf("second close was not idempotent: %v", err)
 	}
+}
+
+func mustProviderKeyspace(t *testing.T, deployment string) core.RedisKeyspace {
+	t.Helper()
+	keyspace, err := core.NewRedisKeyspace(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keyspace
 }

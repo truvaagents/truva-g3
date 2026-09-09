@@ -7,15 +7,13 @@ import (
 )
 
 // =============================================================================
-// Unit tests for RC8 (Issue 5) and RC9 (Issue 6) fixes
-//
-// RC8: Skip plan validation and step ID conflict check for HITL resume plans.
-// RC9: Persist enriched checkpoint (with accumulated multi-phase step results)
-//      back to the DB-0 HITL checkpoint store via the CheckpointEnricher interface.
+// Unit tests for HITL resume plan validation and checkpoint enrichment.
+// Resume plans skip the new-plan step ID conflict check, while enriched
+// checkpoints persist accumulated multi-phase results through CheckpointEnricher.
 // =============================================================================
 
 // =============================================================================
-// RC9: CheckpointEnricher Interface Tests
+// CheckpointEnricher Interface Tests
 // =============================================================================
 
 // --- SaveEnrichedCheckpoint on DefaultInterruptController ---
@@ -161,7 +159,7 @@ func TestCheckpointEnricher_TypeAssertion_NonImplementor_GracefulNoOp(t *testing
 }
 
 // =============================================================================
-// RC8: Plan Source Guard Tests (unit-level)
+// Resume Plan Source Guard Tests (unit-level)
 // =============================================================================
 
 // These tests verify the planSource-based logic at the unit level.
@@ -169,7 +167,6 @@ func TestCheckpointEnricher_TypeAssertion_NonImplementor_GracefulNoOp(t *testing
 // is tested via the existing iterative_planning_test.go patterns.
 
 func TestValidateNoStepIDConflicts_ResumeScenario_WouldConflict(t *testing.T) {
-	// This test documents the scenario that RC8 guards against:
 	// A resume plan intentionally contains already-executed step IDs.
 	// Without the planSource guard, validateNoStepIDConflicts would reject it.
 	plan := &RoutingPlan{
@@ -184,7 +181,7 @@ func TestValidateNoStepIDConflicts_ResumeScenario_WouldConflict(t *testing.T) {
 	// The conflict check WOULD fire (step-5 overlaps)
 	err := validateNoStepIDConflicts(plan, executedStepIDs)
 	if err == nil {
-		t.Fatal("expected conflict for overlapping step-5 — this is the scenario RC8 guards against")
+		t.Fatal("expected conflict for overlapping step-5 without the resume-plan source guard")
 	}
 
 	// In the orchestrator, planSource == "hitl_resume" skips this check entirely.
@@ -226,13 +223,13 @@ func TestValidateNoStepIDConflicts_ResumePhase1_NoConflict(t *testing.T) {
 }
 
 // =============================================================================
-// RC8 + RC9: Context Helpers for Resume (verify contract)
+// Context Helpers for Resume (verify contract)
 // =============================================================================
 
 func TestResumeContextHelpers_PlanOverrideAndCompletedSteps(t *testing.T) {
 	// Verify that WithPlanOverride and WithCompletedSteps round-trip correctly.
-	// These are used by BuildResumeContext (RC9 depends on completedSteps being
-	// loaded from the enriched checkpoint in the DB-0 HITL keyspace).
+	// BuildResumeContext relies on completedSteps loaded from the enriched
+	// checkpoint in the DB-0 HITL keyspace.
 	ctx := context.Background()
 
 	plan := &RoutingPlan{
@@ -281,7 +278,7 @@ func TestResumeContextHelpers_PlanOverrideAndCompletedSteps(t *testing.T) {
 }
 
 // =============================================================================
-// RC9: Checkpoint Enrichment Simulation
+// Checkpoint Enrichment Simulation
 // =============================================================================
 
 func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
@@ -325,7 +322,7 @@ func TestCheckpointEnrichment_PlanLevel(t *testing.T) {
 		initial.StepResults[stepID] = result
 	}
 
-	// Step 3: RC9 saves the enriched checkpoint back to the DB-0 HITL keyspace
+	// Step 3: save the enriched checkpoint back to the DB-0 HITL keyspace.
 	if err := controller.SaveEnrichedCheckpoint(context.Background(), initial); err != nil {
 		t.Fatalf("SaveEnrichedCheckpoint failed: %v", err)
 	}
@@ -395,7 +392,7 @@ func TestCheckpointEnrichment_StepLevel(t *testing.T) {
 	}
 	afterProgress.ExecutedStepIDs = []string{"step-1", "step-2", "step-3", "step-4", "step-5"}
 
-	// Step 3: RC9 saves the enriched checkpoint back to the DB-0 HITL keyspace
+	// Step 3: save the enriched checkpoint back to the DB-0 HITL keyspace.
 	if err := controller.SaveEnrichedCheckpoint(context.Background(), afterProgress); err != nil {
 		t.Fatalf("SaveEnrichedCheckpoint failed: %v", err)
 	}
@@ -422,7 +419,7 @@ func TestCheckpointEnrichment_StepLevel(t *testing.T) {
 }
 
 func TestCheckpointEnrichment_SaveFailure_NonFatal(t *testing.T) {
-	// RC9 design: save failure should be non-fatal (warn-and-continue).
+	// Save failure should be non-fatal (warn-and-continue).
 	// This test verifies the controller method propagates the error so the
 	// orchestrator can log a warning and continue.
 	store := newMockCheckpointStore()

@@ -31,11 +31,9 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 
 	// Import AI providers for auto-detection
@@ -49,6 +47,10 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
 
 	// Create research agent
 	agent, err := NewResearchAgent()
@@ -56,33 +58,14 @@ func main() {
 		log.Fatalf("Failed to create research agent: %v", err)
 	}
 
-	// Initialize schema cache with Redis (for Phase 3 validation caching)
-	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-		// Parse Redis options from URL
-		redisOpt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			log.Printf("⚠️  Warning: Failed to parse REDIS_URL for schema cache: %v", err)
-			log.Println("   Schema caching will be disabled")
-		} else {
-			// Create Redis client for schema cache
-			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-			// Test connection
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-
-			if err := redisClient.Ping(ctx).Err(); err != nil {
-				log.Printf("⚠️  Warning: Redis connection failed for schema cache: %v", err)
-				log.Println("   Schema caching will be disabled")
-				redisClient.Close()
-			} else {
-				// Initialize schema cache with Redis backend
-				agent.SchemaCache = core.NewSchemaCache(redisClient)
-				log.Println("✅ Schema cache initialized with Redis backend")
-			}
-		}
+	// Initialize the optional schema cache from the same topology as discovery.
+	if redisClient, cacheErr := core.NewRedisUniversalClient(redisResolution); cacheErr != nil {
+		log.Printf("⚠️  Warning: Redis unavailable for schema cache: %v", cacheErr)
+		log.Println("   Schema caching will be disabled")
 	} else {
-		log.Println("ℹ️  Schema caching disabled (no REDIS_URL)")
+		defer redisClient.Close()
+		agent.SchemaCache = core.NewSchemaCache(redisClient)
+		log.Println("✅ Schema cache initialized with Redis backend")
 	}
 
 	// Get port configuration
@@ -98,7 +81,7 @@ func main() {
 		core.WithName("research-assistant"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -165,15 +148,8 @@ func main() {
 
 // validateConfig validates all required configuration at startup
 func validateConfig() error {
-	// REDIS_URL is required for discovery
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-
-	// Validate Redis URL format
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 
 	// Validate port if set

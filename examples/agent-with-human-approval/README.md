@@ -247,7 +247,7 @@ Edit `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` to add or remove gated operation
 │  │                   HITLChatAgent                              ││
 │  │  - AI Chain Client (auto-detected provider priority)        ││
 │  │  - Orchestrator with HITL Controller                         ││
-│  │  - Checkpoint Store (Redis DB 6)                             ││
+│  │  - Checkpoint Store (DB 0, versioned HITL subspace)          ││
 │  └──────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -1410,9 +1410,13 @@ For SSE streaming workflow:
 | `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | (empty) | `stock_quote,company_profile,company_news,market_news` | **Option B** — same syntax, but triggers ONLY step approval (the recommended companion when `REQUIRE_PLAN_APPROVAL=true`, since Option A would double-gate) |
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | `60s` | Checkpoint expiry timeout (e.g. `30s`, `5m`, `1h`) — shorter value lets timeout-driven tests (Test 3 / Test 4) finish quickly |
 | `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | `3` | Failed-step retries before HITL escalation |
-| `TRUVAG3_HITL_REDIS_DB` | `6` | `6` | Redis database for checkpoints (separate from sessions at DB 2) |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | `truvag3:hitl` | Key prefix (per-agent suffix added from `TRUVAG3_AGENT_NAME` or `TRUVAG3_K8S_SERVICE_NAME`) |
+| `TRUVAG3_REDIS_NAMESPACE` | `default` | `default` when unset | Deployment namespace shared by the versioned DB 0 registry, sessions, and HITL subspaces |
 | `TRUVAG3_HITL_WEBHOOK_URL` | - | `http://localhost:8352/internal/hitl-webhook` | Where the controller POSTs checkpoint notifications |
+
+The example composes the checkpoint and command stores with
+`truvag3:v1:<deployment>:hitl:{<deployment>:hitl:agent-with-human-approval}:*`;
+numbered role databases and custom HITL prefixes are not part of its active
+configuration.
 
 **Note on DefaultAction:** The action taken on timeout (`approve`/`reject`) is determined by the HITL policy based on checkpoint type:
 - **Plan checkpoints** (`plan_generated`): Auto-approve on timeout
@@ -1429,6 +1433,5 @@ The agent is designed to work with `examples/chat-ui/hitl.html` which provides:
 
 ## Related Documentation
 
-- [HITL Chat Assistant Plan](../HITL_CHAT_ASSISTANT_PLAN.md) - Detailed implementation plan
-- [Human-in-the-Loop Proposal](../../orchestration/HUMAN_IN_THE_LOOP_PROPOSAL.md) - Original design proposal
+- [Human-in-the-Loop User Guide](../../docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) - Framework concepts, configuration, and operations
 - [Travel Chat Agent](../travel-chat-agent/README.md) - Similar agent without HITL

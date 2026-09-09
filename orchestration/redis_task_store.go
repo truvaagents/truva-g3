@@ -44,7 +44,7 @@ func (err *TaskIndexUpdateError) Unwrap() error { return err.Cause }
 // RedisTaskStoreConfig configures the Redis task store.
 type RedisTaskStoreConfig struct {
 	// KeyPrefix is the prefix for all task keys
-	// Default: "truvag3:tasks"
+	// Default: "truvag3:v1:default:tasks". Canonical composition uses keyspace.Plain("tasks").
 	KeyPrefix string `json:"key_prefix"`
 
 	// TTL is how long to keep task data after completion

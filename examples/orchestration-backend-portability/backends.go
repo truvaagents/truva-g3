@@ -23,16 +23,19 @@ const (
 	DefaultWorkflowID = "portable-weather-workflow"
 )
 
-// Config contains provider endpoints and the example's logical isolation.
-// Each role validates only the fields that it actually consumes.
+// Config contains provider endpoints and explicit logical isolation. Namespace
+// scopes the PostgreSQL/NATS proof backends; RedisKeyspace independently scopes
+// framework registry, discovery, and lock keys. Each role validates only the
+// fields that it actually consumes.
 type Config struct {
-	PostgresURL string
-	NATSURL     string
-	RedisURL    string
-	Namespace   string
-	Queue       string
-	WorkflowID  string
-	AckWait     time.Duration
+	PostgresURL   string
+	NATSURL       string
+	Redis         core.RedisConnectionConfig
+	RedisKeyspace core.RedisKeyspace
+	Namespace     string
+	Queue         string
+	WorkflowID    string
+	AckWait       time.Duration
 }
 
 type BackendSelection struct {
@@ -49,7 +52,7 @@ type BackendDescriptor struct {
 }
 
 type APIBackends struct {
-	Workflow   orchestration.StateStore
+	Workflow   orchestration.WorkflowStateStore
 	Dispatcher core.TaskDispatcher
 	Queue      string
 	WorkflowID string
@@ -57,9 +60,10 @@ type APIBackends struct {
 }
 
 type WorkerBackends struct {
-	Workflow   orchestration.StateStore
+	Workflow   orchestration.WorkflowStateStore
 	Consumer   core.TaskConsumer
 	Queue      string
+	WorkflowID string
 	Descriptor BackendDescriptor
 }
 
@@ -68,6 +72,7 @@ type SchedulerBackends struct {
 	Tasks      core.TaskStore
 	Dispatcher core.TaskDispatcher
 	Lock       core.DistributedLock
+	Registry   core.Registry
 	Descriptor BackendDescriptor
 }
 
@@ -153,7 +158,7 @@ func buildAPIBackends(ctx context.Context, config Config) (APIBackends, *backend
 }
 
 func buildWorkerBackends(ctx context.Context, config Config) (WorkerBackends, *backendOwner, error) {
-	if err := validateRoleConfig("worker", config, roleNeeds{Queue: true}); err != nil {
+	if err := validateRoleConfig("worker", config, roleNeeds{Queue: true, WorkflowID: true}); err != nil {
 		return WorkerBackends{}, nil, err
 	}
 	owner := &backendOwner{}
@@ -195,7 +200,7 @@ func buildWorkerBackends(ctx context.Context, config Config) (WorkerBackends, *b
 	built = true
 	return WorkerBackends{
 		Workflow: workflow, Consumer: transport,
-		Queue: config.Queue, Descriptor: descriptor,
+		Queue: config.Queue, WorkflowID: config.WorkflowID, Descriptor: descriptor,
 	}, owner, nil
 }
 
@@ -233,9 +238,13 @@ func buildSchedulerBackends(
 	if err != nil {
 		return SchedulerBackends{}, nil, err
 	}
-	lock, err := redisadapter.NewDistributedLock(redisClient, config.Namespace)
+	lock, err := redisadapter.NewDistributedLock(redisClient, config.RedisKeyspace)
 	if err != nil {
 		return SchedulerBackends{}, nil, fmt.Errorf("scheduler lock: %w", err)
+	}
+	registry, err := core.NewRedisRegistryWithClient(redisClient, config.RedisKeyspace, 0)
+	if err != nil {
+		return SchedulerBackends{}, nil, fmt.Errorf("scheduler registry: %w", err)
 	}
 	backends, err := orchestration.NewOrchestrationBackends(
 		orchestration.WithScheduleBackend(schedules),
@@ -255,13 +264,14 @@ func buildSchedulerBackends(
 		orchestration.BackendTasks:          {provider: "postgresql", implementation: tasks},
 		orchestration.BackendTaskDispatcher: {provider: "nats-jetstream", implementation: transport},
 		orchestration.BackendLock:           {provider: "redis", implementation: lock},
-	})
+	}, providerBinding{name: "registry", provider: "redis", implementation: registry})
 	if err != nil {
 		return SchedulerBackends{}, nil, err
 	}
 	built = true
 	return SchedulerBackends{
-		Schedules: schedules, Tasks: tasks, Dispatcher: transport, Lock: lock, Descriptor: descriptor,
+		Schedules: schedules, Tasks: tasks, Dispatcher: transport, Lock: lock,
+		Registry: registry, Descriptor: descriptor,
 	}, owner, nil
 }
 
@@ -288,7 +298,11 @@ func buildExecutorBackends(ctx context.Context, config Config) (ExecutorBackends
 	if err != nil {
 		return ExecutorBackends{}, nil, err
 	}
-	discovery, err := core.NewRedisDiscovery(config.RedisURL)
+	redisClient, err := openRedis(ctx, config, owner)
+	if err != nil {
+		return ExecutorBackends{}, nil, err
+	}
+	discovery, err := core.NewRedisDiscoveryWithClient(redisClient, config.RedisKeyspace, 0)
 	if err != nil {
 		return ExecutorBackends{}, nil, fmt.Errorf("scheduled executor discovery: %w", err)
 	}
@@ -379,9 +393,6 @@ func validateRoleConfig(role string, config Config, needs roleNeeds) error {
 		{name: "NATS_URL", value: config.NATSURL},
 		{name: "PORTABILITY_BACKEND_NAMESPACE", value: config.Namespace},
 	}
-	if needs.Redis {
-		required = append(required, configRequirement{name: "REDIS_URL", value: config.RedisURL})
-	}
 	if needs.Queue {
 		required = append(required, configRequirement{name: "PORTABILITY_QUEUE", value: config.Queue})
 	}
@@ -391,6 +402,11 @@ func validateRoleConfig(role string, config Config, needs roleNeeds) error {
 	for _, field := range required {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s backends: %s is required", role, field.name)
+		}
+	}
+	if needs.Redis {
+		if _, err := core.ResolveRedisConnectionConfig(&config.Redis, nil); err != nil {
+			return fmt.Errorf("%s backends: Redis connection is invalid: %w", role, err)
 		}
 	}
 	if config.AckWait <= 0 {
@@ -415,7 +431,7 @@ func openWorkflowStore(
 	ctx context.Context,
 	config Config,
 	owner *backendOwner,
-) (orchestration.StateStore, error) {
+) (orchestration.WorkflowStateStore, error) {
 	pool, err := openPostgres(ctx, config, owner)
 	if err != nil {
 		return nil, err
@@ -456,14 +472,15 @@ func openTaskTransport(
 }
 
 func openRedis(ctx context.Context, config Config, owner *backendOwner) (redis.UniversalClient, error) {
-	options, err := redis.ParseURL(config.RedisURL)
+	client, err := core.NewRedisUniversalClient(config.Redis)
 	if err != nil {
-		return nil, fmt.Errorf("parse Redis URL: %w", err)
+		return nil, fmt.Errorf("open Redis: %w", err)
 	}
-	client := redis.NewClient(core.ApplyRedisClientDefaults(options))
 	owner.add(client.Close)
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("ping Redis: %w", err)
+	// The shared factory already performs a bounded startup check. Keep ctx in
+	// the signature because all provider open functions share the same shape.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return client, nil
 }

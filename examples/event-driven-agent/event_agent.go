@@ -22,15 +22,16 @@ import (
 //   - AI pipeline: worker BRPOP -> context enrichment -> orchestrator -> HITL -> cleanup
 type EventDrivenAgent struct {
 	*core.BaseAgent
-	redisClient  *redis.Client
-	httpClient   *http.Client
-	orchestrator *orchestration.AIOrchestrator
-	hitl         *HITLInfrastructure // HITL infrastructure (checkpoint store, controller, etc.)
-	mu           sync.RWMutex
+	redisClient   redis.UniversalClient
+	redisKeyspace core.RedisKeyspace
+	httpClient    *http.Client
+	orchestrator  *orchestration.AIOrchestrator
+	hitl          *HITLInfrastructure // HITL infrastructure (checkpoint store, controller, etc.)
+	mu            sync.RWMutex
 }
 
 // NewEventDrivenAgent creates a new event-driven agent.
-func NewEventDrivenAgent(redisClient *redis.Client) (*EventDrivenAgent, error) {
+func NewEventDrivenAgent(redisClient redis.UniversalClient, keyspace core.RedisKeyspace) (*EventDrivenAgent, error) {
 	baseAgent := core.NewBaseAgent("event-driven-agent")
 
 	// Create AI client with provider chain for failover.
@@ -82,15 +83,24 @@ func NewEventDrivenAgent(redisClient *redis.Client) (*EventDrivenAgent, error) {
 	tracedClient.Timeout = 60 * time.Second
 
 	agent := &EventDrivenAgent{
-		BaseAgent:   baseAgent,
-		redisClient: redisClient,
-		httpClient:  tracedClient,
+		BaseAgent:     baseAgent,
+		redisClient:   redisClient,
+		redisKeyspace: keyspace,
+		httpClient:    tracedClient,
 	}
 
 	// Register capabilities (all Internal: true)
 	agent.registerCapabilities()
 
 	return agent, nil
+}
+
+func (a *EventDrivenAgent) alertQueueKey() string {
+	return a.redisKeyspace.Plain("events", "alerts", "queue")
+}
+
+func (a *EventDrivenAgent) alertDedupKey(fingerprint string) string {
+	return a.redisKeyspace.Plain("events", "alerts", "dedup", fingerprint)
 }
 
 // InitializeOrchestrator sets up the AI orchestrator with HITL for write operations.

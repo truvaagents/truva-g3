@@ -10,8 +10,6 @@ retrieval, and write calls for review comments.
 This tool does **not** decide whether a finding is valid or whether a review
 should be posted — those decisions live in the agent.
 
-Implementation plan: [`PLAN.md`](./PLAN.md).
-
 ## Table of Contents
 
 1. [Quickstart](#quickstart)

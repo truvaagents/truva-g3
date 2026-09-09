@@ -88,8 +88,6 @@ spec:
               fieldPath: metadata.namespace
         - name: REDIS_URL
           value: "redis://redis.truvag3-examples:6379"
-        - name: TRUVAG3_REDIS_URL
-          value: "redis://redis.truvag3-examples:6379"
         # Redis Registration Resilience (handles Redis startup race conditions)
         - name: TRUVAG3_DISCOVERY_RETRY
           value: "true"

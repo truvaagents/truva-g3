@@ -251,7 +251,7 @@ cd examples/devops-tool
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────────┐  │
 │  │   Session    │  │     SSE      │  │        AI Orchestrator        │  │
 │  │    Store     │  │   Handler    │  │   (Plan → Execute → Synth)    │  │
-│  │  (Redis DB2) │  │              │  │       + HITL gates            │  │
+│  │  (Redis DB0) │  │              │  │       + HITL gates            │  │
 │  └──────────────┘  └──────────────┘  └───────────────┬───────────────┘  │
 │  ┌──────────────────────────────────┐                │                  │
 │  │      Shared Agent Memory         │                │                  │
@@ -272,7 +272,7 @@ cd examples/devops-tool
 ### How It Works
 
 1. **User sends a message** via the Chat UI or API
-2. **Session store** retrieves conversation history from Redis (DB 2)
+2. **Session store** retrieves conversation history from the versioned sessions subspace in Redis/Valkey DB 0
 3. **Shared memory hooks** enrich the request with relevant episodic events (e.g., recent JIRA ticket for the same entity)
 4. **AI Orchestrator** analyzes the query and plans which tools to call
 5. **HITL gate** intercepts step-sensitive capabilities (rollout restart, scale deployment, delete pod by default) and pauses execution for human approval. Raw `kubectl_command` is **not** gated by default — add it to `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` if you want the same protection.
@@ -283,13 +283,13 @@ cd examples/devops-tool
 
 ### Data Isolation
 
-| Data Type | Redis Database | Key Pattern |
-|-----------|----------------|-------------|
-| Service Registry | DB 0 | `truvag3:services:*` |
-| Shared Agent Memory (episodic + coordination) | DB 0 (shares the default DB with the registry, isolated by key prefix) | `truvag3:memory:*` |
-| Chat Sessions | DB 2 | `truvag3:sessions:*` |
-| HITL Checkpoints & Commands | DB 6 (override with `TRUVAG3_HITL_REDIS_DB`) | `truvag3:hitl:*` (scoped per agent name) |
-| LLM Debug Records | DB 7 | `llm_debug:*` |
+| Data Type | Redis/Valkey Location | Key Pattern |
+|-----------|------------------------|-------------|
+| Service Registry | DB 0 registry subspace | `truvag3:v1:<deployment>:registry:*` |
+| Shared Agent Memory (episodic + coordination) | DB 0 memory subspace | `truvag3:v1:<deployment>:memory:*` |
+| Chat Sessions | DB 0 sessions subspace | `truvag3:v1:<deployment>:sessions:*` |
+| HITL Checkpoints & Commands | DB 0 HITL subspace | `truvag3:v1:<deployment>:hitl:*` (cluster-tagged per agent name) |
+| LLM Debug Records | DB 0 LLM-debug subspace | `truvag3:v1:<deployment>:llm-debug:*` |
 
 ---
 
@@ -424,7 +424,7 @@ List available tools discovered by the orchestrator.
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | TTL for error debug records | `168h` | No |
 | `TRUVAG3_SKILLS_ENABLED` | Enable the framework skill runtime | `true` in this example | No |
 | `TRUVAG3_SKILL_BINDINGS_JSON` | Complete replacement for the code binding list | (code bindings) | No |
-| `TRUVAG3_SKILLS_REDIS_DB` | Included skill-registry Redis database | `9` | No |
+| `TRUVAG3_REDIS_NAMESPACE` | Deployment namespace shared by all versioned Redis/Valkey subspaces | `default` | No |
 
 *At least one AI provider key is required.
 
@@ -532,7 +532,7 @@ See `.env.example` for complete documentation of all supported providers.
 
 ## Human-in-the-Loop (HITL)
 
-This agent is HITL-enabled by default. Any plan step whose capability matches `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` is intercepted before execution; the orchestrator emits a `checkpoint` SSE event, persists the checkpoint to Redis (DB 6), and waits for a decision via the HITL endpoints.
+This agent is HITL-enabled by default. Any plan step whose capability matches `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` is intercepted before execution; the orchestrator emits a `checkpoint` SSE event, persists the checkpoint in the versioned DB 0 HITL subspace, and waits for a decision via the HITL endpoints.
 
 ### Default Sensitive Capabilities
 
@@ -564,12 +564,12 @@ The agent participates in a cross-agent memory system that's useful for incident
 
 | Layer | Backend | What it stores |
 |-------|---------|----------------|
-| **Episodic events** | Redis (`truvag3:memory:{domain}:events:*`) | Every significant action (rollout, scaling, JIRA ticket creation, Slack notification) is recorded with the entity it touched |
-| **Coordination signals** | Redis (`truvag3:memory:{domain}:investigating:*`) | Real-time "currently investigating X" signals so two agents don't duplicate work |
-| **Activity digest cache** | Redis (`truvag3:memory:{domain}:digest`) | Short-TTL summary of recent activity per entity |
+| **Episodic events** | Redis/Valkey DB 0 versioned memory/domain keys | Every significant action (rollout, scaling, JIRA ticket creation, Slack notification) is recorded with the entity it touched |
+| **Coordination signals** | Redis/Valkey DB 0 cluster-tagged memory/domain keys | Real-time "currently investigating X" signals so two agents don't duplicate work |
+| **Activity digest cache** | Redis/Valkey DB 0 versioned memory/domain digest key | Short-TTL summary of recent activity per entity |
 | **Long-term knowledge** (Phase 2) | Qdrant + embeddings | Curated lessons extracted by the Reflection Job — failure patterns, runbooks, post-incident notes |
 
-The agent runs with `domain = "infrastructure"` (set in `main.go`), so its memory keys live under `truvag3:memory:infrastructure:*` in the same Redis DB used for service discovery.
+The agent runs with `domain = "infrastructure"` (set in `main.go`), so its memory keys live under `truvag3:v1:<deployment>:memory:infrastructure:*` in the same Redis/Valkey DB 0 used for service discovery.
 
 Phase 1 (episodic + coordination) is always on when Redis is configured. Phase 2 (knowledge search and the Reflection Job) activates automatically when both `TRUVAG3_VECTOR_DB_URL` and `TRUVAG3_EMBEDDING_BASE_URL` are set in `.env`.
 
@@ -579,13 +579,13 @@ Memory hooks inject relevant prior events into the prompt as `<agent_memory>` so
 
 ## Session Management
 
-Sessions are stored in Redis (DB 2) with the following characteristics:
+Sessions are stored in the versioned sessions subspace of Redis/Valkey DB 0 with the following characteristics:
 
 | Property | Value |
 |----------|-------|
 | **TTL** | 48 hours of inactivity |
 | **Max Messages** | 50 per session (sliding window) |
-| **Storage** | Redis DB 2 (`truvag3:sessions:*`) |
+| **Storage** | Redis/Valkey DB 0 (`truvag3:v1:<deployment>:sessions:*`) |
 | **Multi-pod Support** | Yes (shared Redis) |
 
 ### Session Flow
@@ -618,7 +618,7 @@ For debugging orchestration issues, enable the LLM Debug Store to capture comple
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 ```
 
-This captures all LLM interactions at 6 recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`), plus background calls from the Reflection Job and Knowledge Extraction hooks. Records are stored in Redis DB 7 with configurable TTL.
+This captures all LLM interactions at 6 recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`), plus background calls from the Reflection Job and Knowledge Extraction hooks. Records are stored in the versioned LLM-debug subspace of Redis/Valkey DB 0 with configurable TTL.
 
 ### Metrics (Prometheus/Grafana)
 
@@ -704,7 +704,8 @@ curl -s http://devops-chat-agent.localhost/discover | jq .
 
 Ensure tools are registered with Redis:
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **4. Plan hangs without responding**
@@ -746,14 +747,16 @@ curl -v http://devops-chat-agent.localhost/health
 # Check ingress routes
 kubectl get ingress -n truvag3-examples
 
-# Check Redis session data
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 2 KEYS 'truvag3:sessions:*'
+# Check one known session record
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  GET 'truvag3:v1:default:sessions:<session-id>'
 
 # Check pending HITL checkpoints
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 6 KEYS 'truvag3:hitl:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  SMEMBERS 'truvag3:v1:default:hitl:{default:hitl:devops-chat-agent}:pending'
 
-# Inspect shared episodic memory (same DB as the service registry)
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:memory:infrastructure:*'
+# Inspect shared episodic memory through Registry Viewer's Memory tab
+open http://registry.localhost
 
 # Test the API
 ./setup.sh test

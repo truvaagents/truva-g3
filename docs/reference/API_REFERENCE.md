@@ -3879,14 +3879,17 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 | Option | Description |
 |--------|-------------|
 | `WithRecorderRedisURL(url)` | Redis connection URL |
-| `WithRecorderRedisDB(db)` | Redis database number (default: 7) |
+| `WithRecorderKeyspace(keyspace)` | Validated deployment namespace in shared DB 0 |
 | `WithRecorderLogger(logger)` | Logger for recorder operations |
 | `WithRecorderTTL(ttl)` | Base TTL for successful records (default: 24h); an existing longer/persistent lifetime or retention floor wins |
 | `WithRecorderErrorTTL(ttl)` | Base TTL for error records (default: 7 days); an existing longer/persistent lifetime or retention floor wins |
 
 **Built-in resilience:** Layer 1 retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures within 30s triggers cooldown).
 
-The Redis write is an atomic append/metadata/index/minimum-TTL operation. It
+The request-local Redis write atomically appends the interaction and updates
+metadata and minimum TTL. The cross-request recent index is a separate advisory
+write so the portable Redis/Valkey Cluster baseline never requires cross-slot
+atomicity. The authoritative write
 does not shorten a longer lifetime or make a persistent record expiring, so it
 can safely share a request record with `orchestration.RedisLLMDebugStore` after
 execution or lineage retention has been promoted. The built-in recorder
@@ -4650,7 +4653,6 @@ func DefaultClientConfig() ClientConfig
 func ConfigureClientConfig(ClientConfig, ...ClientConfigOption) (ClientConfig, error)
 func LoadClientConfigFromEnvironment(ClientConfig, func(string) (string, bool)) (ClientConfig, error)
 func WithClientURL(string) ClientConfigOption
-func WithRoleDatabase(ClientRole, int) ClientConfigOption
 func NewClientSet(redis.UniversalClient, ...ClientSetOption) (*ClientSet, error)
 func WithRoleClient(ClientRole, redis.UniversalClient) ClientSetOption
 func NewOwnedClients(ClientConfig, ...OwnedClientsOption) (*OwnedClients, error)
@@ -4685,24 +4687,37 @@ func WithCheckpointExpiry(
 ```
 
 For adapter-specific composition, the application-owned client constructors
-are also public compatibility APIs:
+are supported direct-composition APIs:
 
 ```go
 func NewRedisExecutionDebugStoreWithClient(redis.UniversalClient, ExecutionStoreConfig, ...RedisExecutionDebugStoreOption) (*RedisExecutionDebugStore, error)
 func NewRedisLLMDebugStoreWithClient(redis.UniversalClient, ...RedisLLMDebugStoreOption) (*RedisLLMDebugStore, error)
 func NewRedisCheckpointStoreWithClient(redis.UniversalClient, ...RedisCheckpointStoreOption) (*RedisCheckpointStore, error)
 func NewRedisCommandStoreWithClient(redis.UniversalClient, ...RedisCommandStoreOption) (*RedisCommandStore, error)
-func NewRedisStateStoreWithClient(redis.UniversalClient, time.Duration) (*RedisStateStore, error)
-func NewRedisStateStoreWithClientAndPrefix(redis.UniversalClient, time.Duration, string) (*RedisStateStore, error)
+func NewRedisStateStoreWithClient(redis.UniversalClient, core.RedisKeyspace, time.Duration) (*RedisStateStore, error)
 func NewRedisTaskQueue(redis.Cmdable, *RedisTaskQueueConfig) *RedisTaskQueue
 func NewRedisTaskStore(redis.Cmdable, *RedisTaskStoreConfig) *RedisTaskStore
 func NewRedisTaskDispatcherWithPrefix(redis.Cmdable, string) (*RedisTaskDispatcher, error)
 func NewRedisTaskConsumerWithPrefix(redis.Cmdable, string, string) (*RedisTaskConsumer, error)
 ```
 
-These constructors never close the supplied client. The prefixed forms are
-useful when composing adapters without the preset; the application must give
-the producer and consumer sides the same namespace.
+These constructors never close the supplied client. Workflow state requires
+`workflowID` for `GetExecution` and `UpdateStepExecution`; `StateStore` aliases
+`WorkflowStateStore`. The obsolete execution-ID-only constructors are removed.
+The task-prefixed forms remain supported routing seams: derive their prefix
+from `keyspace.Plain("tasks")` and give producer and consumer the same scope.
+
+The skills adapter lives in `redisprovider`:
+
+```go
+func NewSkillStore(redis.UniversalClient, ...SkillStoreOption) (*SkillStore, error)
+func WithSkillStoreKeyspace(core.RedisKeyspace) SkillStoreOption
+func WithSkillStoreLogger(core.Logger) SkillStoreOption
+```
+
+It borrows the client and uses only the versioned deployment-scoped skills
+keyspace. The default deployment is `default`; `WithSkillStoreKeyPrefix` is
+removed. See the [skills storage contract](../orchestration/AGENT_SKILLS_GUIDE.md#where-are-skill-packages-stored).
 
 #### Checkpoint expiry processor
 
@@ -5728,7 +5743,7 @@ type LLMInteraction struct {
 }
 ```
 
-#### Factory Options and Compatibility Constructors
+#### Factory Options and Direct Redis Constructors
 
 ```go
 // Environment-compatible orchestrator options
@@ -5737,14 +5752,14 @@ orchestration.WithLLMDebugStore(customStore)        // Inject custom store
 orchestration.WithLLMDebugTTL(48 * time.Hour)       // Custom TTL for success
 orchestration.WithLLMDebugErrorTTL(14 * 24 * time.Hour) // Custom TTL for errors
 
-// Direct Redis compatibility-constructor options
+// Direct Redis constructor options
+keyspace, _ := core.NewRedisKeyspace("team-a")
 orchestration.WithDebugRedisURL("redis://localhost:6379")
-orchestration.WithDebugRedisDB(7)
 orchestration.WithDebugLogger(logger)
 orchestration.WithDebugCircuitBreaker(cb)
 orchestration.WithDebugTTL(24 * time.Hour)
 orchestration.WithDebugErrorTTL(168 * time.Hour)
-orchestration.WithDebugKeyPrefix("team-a:llm:debug")
+orchestration.WithDebugKeyspace(keyspace)
 ```
 
 `NewRedisLLMDebugStore` creates and owns its Redis client. For application-owned
@@ -5759,13 +5774,12 @@ func NewRedisLLMDebugStoreWithClient(
 
 The supplied client remains open when the store is closed. The `WithClient`
 constructor does not read Redis connection or database environment variables;
-configure routing on the supplied client and use `WithDebugKeyPrefix` for key
-isolation. `WithDebugRedisURL` and `WithDebugRedisDB` do not reconfigure an
-already-supplied client.
+configure DB-0 routing on the supplied client and use `WithDebugKeyspace` for
+key isolation. `WithDebugRedisURL` does not reconfigure an already-supplied client.
 
 New applications should normally construct the included adapter through the
-Redis preset and inject the provider-neutral store. The direct constructors and
-`CreateOrchestratorWithOptions` remain supported compatibility paths.
+Redis preset and inject the provider-neutral store. Direct Redis constructors
+remain available for explicit adapter composition.
 
 **Example - Enable Debug Capture:**
 ```go
@@ -5840,7 +5854,6 @@ type LLMDebugRecordSummary struct {
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | unset (DB 0) | Deprecated standalone-only role-database compatibility input; canonical composition uses the versioned shared DB 0 keyspace and this is not part of `LLMDebugStore` |
 
 ### Execution Debug Store
 
@@ -6073,10 +6086,9 @@ func NewRedisExecutionDebugStoreWithClient(
 ) (*RedisExecutionDebugStore, error)
 
 func WithExecutionDebugRedisURL(url string) RedisExecutionDebugStoreOption
-func WithExecutionDebugRedisDB(db int) RedisExecutionDebugStoreOption
 func WithExecutionDebugLogger(logger core.Logger) RedisExecutionDebugStoreOption
 func WithExecutionDebugCircuitBreaker(cb core.CircuitBreaker) RedisExecutionDebugStoreOption
-func WithExecutionDebugKeyPrefix(prefix string) RedisExecutionDebugStoreOption
+func WithExecutionDebugKeyspace(keyspace core.RedisKeyspace) RedisExecutionDebugStoreOption
 func WithExecutionDebugTTL(ttl time.Duration) RedisExecutionDebugStoreOption
 func WithExecutionDebugErrorTTL(ttl time.Duration) RedisExecutionDebugStoreOption
 ```
@@ -6085,8 +6097,11 @@ The first two constructors create and own their Redis clients. The
 `WithClient` form leaves the application-owned client open on `Close` and does
 not read Redis connection or database environment variables. `config` supplies
 the normalized execution-store limits and retention policy; explicit adapter
-options apply afterward. `WithExecutionDebugRedisURL` and
-`WithExecutionDebugRedisDB` do not reconfigure an already-supplied client.
+options apply afterward. Redis key isolation uses `WithExecutionDebugKeyspace`;
+a custom `ExecutionStoreConfig.KeyPrefix` is only for generic StorageProvider
+keys and is rejected by this adapter unless an explicit typed keyspace overrides
+it. `WithExecutionDebugRedisURL` does not reconfigure an already-supplied client,
+which must use DB 0.
 
 Positive programmatic values are authoritative. Per-call result limits are
 clamped to `ConversationQueryLimit`, and stale-index work is bounded by
@@ -6235,7 +6250,7 @@ func WithCheckpointExpiryLogger(logger core.Logger) CheckpointExpiryProcessorOpt
 func WithCheckpointExpiryTelemetry(telemetry core.Telemetry) CheckpointExpiryProcessorOption
 func WithCheckpointExpiryPolicy(policy CheckpointExpiryPolicy) CheckpointExpiryProcessorOption
 
-// Included Redis compatibility constructor. Prefer redisprovider composition
+// Included Redis owning constructor. Prefer redisprovider composition
 // for new application bootstrap code.
 func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 func NewRedisCheckpointStoreWithClient(
@@ -6245,8 +6260,7 @@ func NewRedisCheckpointStoreWithClient(
 
 // Options
 func WithCheckpointRedisURL(url string) RedisCheckpointStoreOption
-func WithCheckpointRedisDB(db int) RedisCheckpointStoreOption
-func WithCheckpointKeyPrefix(prefix string) RedisCheckpointStoreOption
+func WithCheckpointKeyspace(keyspace core.RedisKeyspace, agentScope string) RedisCheckpointStoreOption
 func WithCheckpointTTL(ttl time.Duration) RedisCheckpointStoreOption
 func WithInstanceID(id string) RedisCheckpointStoreOption  // Legacy store-owned expiry lifecycle only
 func WithCheckpointStoreLogger(logger core.Logger) RedisCheckpointStoreOption
@@ -6254,12 +6268,11 @@ func WithCheckpointStoreTelemetry(telemetry core.Telemetry) RedisCheckpointStore
 ```
 
 `NewRedisCheckpointStoreWithClient` leaves the supplied client open on
-`Close`. Unlike the command-store `WithClient` constructor, it retains the
-checkpoint identity resolution used by the compatibility constructor:
-`TRUVAG3_HITL_KEY_PREFIX`, followed by `TRUVAG3_AGENT_NAME` or
-`TRUVAG3_K8S_SERVICE_NAME`. `WithCheckpointKeyPrefix` remains the final
-in-code override. `WithCheckpointRedisURL` and `WithCheckpointRedisDB` do not
-reconfigure the supplied client.
+`Close`. Both HITL stores derive identity from `TRUVAG3_REDIS_NAMESPACE` and
+`TRUVAG3_AGENT_NAME` (falling back to `TRUVAG3_K8S_SERVICE_NAME`). Explicit
+`WithCheckpointKeyspace` / `WithCommandStoreKeyspace` options override that
+identity. Connection options do not reconfigure a supplied client; the
+application must configure DB 0.
 
 `CheckpointExpiryProcessor` implements `core.Runnable`. Register it before
 `Framework.Run()` and allow framework shutdown to cancel it. The processor owns
@@ -6275,19 +6288,17 @@ func NewRedisCommandStoreWithClient(client redis.UniversalClient, opts ...RedisC
 
 // Options
 func WithCommandStoreRedisURL(url string) RedisCommandStoreOption
-func WithCommandStoreRedisDB(db int) RedisCommandStoreOption
-func WithCommandStoreKeyPrefix(prefix string) RedisCommandStoreOption
+func WithCommandStoreKeyspace(keyspace core.RedisKeyspace, agentScope string) RedisCommandStoreOption
 func WithCommandStoreLogger(logger core.Logger) RedisCommandStoreOption
 func WithCommandStoreTelemetry(t core.Telemetry) RedisCommandStoreOption
 ```
 
-`NewRedisCommandStore` is the environment-aware compatibility constructor.
+`NewRedisCommandStore` is the environment-aware owning constructor.
 `NewRedisCommandStoreWithClient` uses an application-owned client, derives its
 default versioned key prefix from deployment and agent-identity configuration,
 and leaves the supplied client open on `Close`.
-Canonical composition passes the same
-`keyspace.Tagged("hitl", agentScope)` value to
-`WithCommandStoreKeyPrefix` and `WithCheckpointKeyPrefix`.
+Canonical composition passes the same typed `keyspace` and `agentScope` to
+`WithCommandStoreKeyspace` and `WithCheckpointKeyspace`.
 
 **InterruptHandler:**
 ```go
@@ -6570,7 +6581,6 @@ func WithExpiryProcessor(config ExpiryProcessorConfig) HITLOption
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | Checkpoint expiration time |
 | `TRUVAG3_HITL_DEFAULT_ACTION` | `reject` | Action on timeout (approve, reject, abort) |
 | `TRUVAG3_REDIS_NAMESPACE` | `default` | Deployment namespace for canonical versioned DB 0 HITL keys |
-| `TRUVAG3_HITL_KEY_PREFIX` | unset | Deprecated precursor custom-prefix compatibility input |
 
 #### Expiry Processor Configuration
 

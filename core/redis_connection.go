@@ -71,13 +71,6 @@ func (config RedisConnectionConfig) String() string {
 // GoString keeps %#v diagnostics credential-free as well.
 func (config RedisConnectionConfig) GoString() string { return config.String() }
 
-// RedisConnectionResolution is the resolved connection plus bounded
-// diagnostics that application bootstrap may emit once.
-type RedisConnectionResolution struct {
-	Config      RedisConnectionConfig
-	Diagnostics []string
-}
-
 // RedisStartupError preserves the underlying client error for errors.Is/As
 // while keeping its observable message bounded and credential-free.
 type RedisStartupError struct {
@@ -90,27 +83,6 @@ func (err *RedisStartupError) Error() string {
 }
 
 func (err *RedisStartupError) Unwrap() error { return err.cause }
-
-func logRedisConnectionDiagnostics(logger Logger, diagnostics []string) {
-	logger = coreComponentLogger(logger)
-	if logger == nil {
-		return
-	}
-	seen := make(map[string]struct{}, len(diagnostics))
-	for _, diagnostic := range diagnostics {
-		if diagnostic == "" {
-			continue
-		}
-		if _, duplicate := seen[diagnostic]; duplicate {
-			continue
-		}
-		seen[diagnostic] = struct{}{}
-		logger.Warn("Redis configuration notice", map[string]interface{}{
-			"operation":  "redis_configuration_notice",
-			"diagnostic": diagnostic,
-		})
-	}
-}
 
 var structuredRedisConnectionVariables = []string{
 	"TRUVAG3_REDIS_MODE",
@@ -148,20 +120,9 @@ func NewRedisUniversalClient(config RedisConnectionConfig) (redis.UniversalClien
 }
 
 func newRedisUniversalClient(config RedisConnectionConfig, verify bool) (redis.UniversalClient, error) {
-	return newRedisUniversalClientWithCompatibility(config, verify, false)
-}
-
-func newRedisUniversalClientWithCompatibility(
-	config RedisConnectionConfig,
-	verify bool,
-	allowNumberedDatabase bool,
-) (redis.UniversalClient, error) {
 	normalized, err := normalizeRedisConnectionConfig(config)
 	if err != nil {
 		return nil, err
-	}
-	if normalized.DB != 0 && !allowNumberedDatabase {
-		return nil, fmt.Errorf("canonical Redis clients require DB 0: %w", ErrInvalidConfiguration)
 	}
 	options := ApplyRedisUniversalDefaults(&redis.UniversalOptions{
 		Addrs:            append([]string(nil), normalized.Addrs...),
@@ -235,19 +196,13 @@ func CheckRedisStartup(client redis.UniversalClient, timeout time.Duration) erro
 	}
 }
 
-// ParseStandaloneRedisURL parses the standard standalone URL shorthand. The
-// canonical shorthand is DB 0; numbered databases remain available only to
-// isolated deprecated compatibility paths.
+// ParseStandaloneRedisURL parses the standard DB-0 standalone URL shorthand.
 func ParseStandaloneRedisURL(rawURL string) (RedisConnectionConfig, error) {
-	return parseStandaloneRedisURL(rawURL, false)
-}
-
-func parseStandaloneRedisURL(rawURL string, allowNonZeroDB bool) (RedisConnectionConfig, error) {
 	options, err := redis.ParseURL(strings.TrimSpace(rawURL))
 	if err != nil {
 		return RedisConnectionConfig{}, fmt.Errorf("invalid Redis URL: %w", ErrInvalidConfiguration)
 	}
-	if options.DB != 0 && !allowNonZeroDB {
+	if options.DB != 0 {
 		return RedisConnectionConfig{}, fmt.Errorf("REDIS_URL must select DB 0: %w", ErrInvalidConfiguration)
 	}
 	return normalizeRedisConnectionConfig(RedisConnectionConfig{
@@ -280,46 +235,37 @@ func redisURLMinIdle(rawURL string, parsed int) int {
 
 // ResolveRedisConnectionConfig selects exactly one connection source. Explicit
 // Go configuration is never merged with environment connection settings.
-func ResolveRedisConnectionConfig(explicit *RedisConnectionConfig, lookup LookupEnv) (RedisConnectionResolution, error) {
+func ResolveRedisConnectionConfig(explicit *RedisConnectionConfig, lookup LookupEnv) (RedisConnectionConfig, error) {
 	if explicit != nil {
-		config, err := normalizeRedisConnectionConfig(*explicit)
-		return RedisConnectionResolution{Config: config}, err
+		return normalizeRedisConnectionConfig(*explicit)
 	}
 	if lookup == nil {
-		return RedisConnectionResolution{}, fmt.Errorf("redis environment lookup is required: %w", ErrInvalidConfiguration)
+		return RedisConnectionConfig{}, fmt.Errorf("redis environment lookup is required: %w", ErrInvalidConfiguration)
+	}
+	if _, present := nonEmptyEnvironment(lookup, "TRUVAG3_REDIS_URL"); present {
+		return RedisConnectionConfig{}, fmt.Errorf("TRUVAG3_REDIS_URL is unsupported; use REDIS_URL: %w", ErrInvalidConfiguration)
 	}
 
 	rawURL, hasURL := nonEmptyEnvironment(lookup, "REDIS_URL")
-	legacyURL, hasLegacyURL := nonEmptyEnvironment(lookup, "TRUVAG3_REDIS_URL")
 	hasStructured := anyEnvironmentVariablePresent(lookup, structuredRedisConnectionVariables)
-	if countTrue(hasURL, hasLegacyURL, hasStructured) > 1 {
-		return RedisConnectionResolution{}, fmt.Errorf("REDIS_URL and structured or deprecated Redis topology configuration cannot be combined: %w", ErrInvalidConfiguration)
+	if hasURL && hasStructured {
+		return RedisConnectionConfig{}, fmt.Errorf("REDIS_URL and structured Redis topology configuration cannot be combined: %w", ErrInvalidConfiguration)
 	}
 
-	var (
-		config      RedisConnectionConfig
-		diagnostics []string
-		err         error
-	)
+	var config RedisConnectionConfig
+	var err error
 	switch {
 	case hasURL:
 		config, err = ParseStandaloneRedisURL(rawURL)
-	case hasLegacyURL:
-		config, err = parseStandaloneRedisURL(legacyURL, true)
-		diagnostics = []string{"TRUVAG3_REDIS_URL is deprecated; use REDIS_URL"}
 	case hasStructured:
 		config, err = loadStructuredRedisConnectionConfig(lookup)
 	default:
-		config, err = normalizeRedisConnectionConfig(DefaultRedisConnectionConfig())
+		config = DefaultRedisConnectionConfig()
 	}
 	if err != nil {
-		return RedisConnectionResolution{}, err
+		return RedisConnectionConfig{}, err
 	}
-	config, err = loadRedisOperationalConfig(config, lookup)
-	if err != nil {
-		return RedisConnectionResolution{}, err
-	}
-	return RedisConnectionResolution{Config: config, Diagnostics: diagnostics}, nil
+	return loadRedisOperationalConfig(config, lookup)
 }
 
 func normalizeRedisConnectionConfig(config RedisConnectionConfig) (RedisConnectionConfig, error) {
@@ -352,8 +298,8 @@ func normalizeRedisConnectionConfig(config RedisConnectionConfig) (RedisConnecti
 	default:
 		return RedisConnectionConfig{}, fmt.Errorf("unsupported Redis mode: %w", ErrInvalidConfiguration)
 	}
-	if config.DB < 0 || config.DB > 15 {
-		return RedisConnectionConfig{}, fmt.Errorf("redis database must be between 0 and 15: %w", ErrInvalidConfiguration)
+	if config.DB != 0 {
+		return RedisConnectionConfig{}, fmt.Errorf("redis connections require DB 0: %w", ErrInvalidConfiguration)
 	}
 
 	if config.PoolSize == 0 {
@@ -531,16 +477,6 @@ func anyEnvironmentVariablePresent(lookup LookupEnv, names []string) bool {
 	return false
 }
 
-func countTrue(values ...bool) int {
-	count := 0
-	for _, value := range values {
-		if value {
-			count++
-		}
-	}
-	return count
-}
-
 func redisConnectionSourcePresent(lookup LookupEnv) bool {
 	if lookup == nil {
 		return false
@@ -556,8 +492,7 @@ func redisConnectionSourcePresent(lookup LookupEnv) bool {
 
 func redisConnectionForDiscovery(config DiscoveryConfig) (RedisConnectionConfig, error) {
 	if config.RedisConnection != nil {
-		resolution, err := ResolveRedisConnectionConfig(config.RedisConnection, nil)
-		return resolution.Config, err
+		return ResolveRedisConnectionConfig(config.RedisConnection, nil)
 	}
 	if strings.TrimSpace(config.RedisURL) != "" {
 		return ParseStandaloneRedisURL(config.RedisURL)

@@ -24,14 +24,14 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 	startTime := time.Now()
 	ctx := core.ExtractRequestContext(req.Context(), req)
 
-	r.Logger.Info("Starting resilient research topic orchestration", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Starting resilient research topic orchestration", map[string]interface{}{
 		"method": req.Method,
 		"path":   req.URL.Path,
 	})
 
 	var request ResearchRequest
 	if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
-		r.Logger.Error("Failed to decode research request", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Failed to decode research request", map[string]interface{}{
 			"error": err.Error(),
 		})
 		http.Error(rw, "Invalid request format", http.StatusBadRequest)
@@ -40,7 +40,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 
 	// Step 1: Discover available tools
 	if r.Discovery == nil {
-		r.Logger.Error("Service discovery not available", nil)
+		r.Logger.ErrorWithContext(ctx, "Service discovery not available", nil)
 		http.Error(rw, "Service discovery not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -49,7 +49,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 		Type: core.ComponentTypeTool,
 	})
 	if err != nil {
-		r.Logger.Error("Failed to discover tools", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Failed to discover tools", map[string]interface{}{
 			"error": err.Error(),
 		})
 		http.Error(rw, "Service discovery failed", http.StatusServiceUnavailable)
@@ -62,7 +62,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 		toolNames = append(toolNames, tool.Name)
 	}
 
-	r.Logger.Info("Discovered tools for resilient research", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Discovered tools for resilient research", map[string]interface{}{
 		"tool_count":       len(tools),
 		"tools_discovered": toolNames,
 		"topic":            request.Topic,
@@ -76,7 +76,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 	// Check for multi-entity comparison
 	entities, err := r.extractEntitiesForComparison(ctx, request.Topic)
 	if err == nil && len(entities) >= 2 {
-		r.Logger.Info("Multi-entity comparison detected", map[string]interface{}{
+		r.Logger.InfoWithContext(ctx, "Multi-entity comparison detected", map[string]interface{}{
 			"entities": entities,
 		})
 
@@ -95,7 +95,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 					}
 				} else {
 					failedTools = append(failedTools, result.ToolName)
-					r.Logger.Warn("Tool call failed, continuing with partial results", map[string]interface{}{
+					r.Logger.WarnWithContext(ctx, "Tool call failed, continuing with partial results", map[string]interface{}{
 						"tool":  result.ToolName,
 						"error": result.Error,
 					})
@@ -108,7 +108,7 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 		if len(selections) > 0 {
 			selection := selections[0]
 
-			r.Logger.Info("Calling tool with resilience protection", map[string]interface{}{
+			r.Logger.InfoWithContext(ctx, "Calling tool with resilience protection", map[string]interface{}{
 				"tool":       selection.Tool.Name,
 				"capability": selection.Capability.Name,
 			})
@@ -121,14 +121,14 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 					toolsUsed = append(toolsUsed, result.ToolName)
 				} else {
 					failedTools = append(failedTools, result.ToolName)
-					r.Logger.Warn("Tool call failed", map[string]interface{}{
+					r.Logger.WarnWithContext(ctx, "Tool call failed", map[string]interface{}{
 						"tool":  result.ToolName,
 						"error": result.Error,
 					})
 				}
 			}
 		} else {
-			r.Logger.Warn("No relevant tools found", map[string]interface{}{
+			r.Logger.WarnWithContext(ctx, "No relevant tools found", map[string]interface{}{
 				"topic":           request.Topic,
 				"available_tools": len(tools),
 			})
@@ -192,9 +192,12 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 		rw.WriteHeader(http.StatusOK)
 	}
 
-	json.NewEncoder(rw).Encode(response)
+	if err := json.NewEncoder(rw).Encode(response); err != nil {
+		r.Logger.WarnWithContext(ctx, "Research response write failed", map[string]interface{}{"operation": "response_write"})
+		return
+	}
 
-	r.Logger.Info("Resilient research completed", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Resilient research completed", map[string]interface{}{
 		"topic":        request.Topic,
 		"tools_used":   len(toolsUsed),
 		"tools_failed": len(failedTools),
@@ -207,19 +210,19 @@ func (r *ResearchAgent) handleResearchTopic(rw http.ResponseWriter, req *http.Re
 func (r *ResearchAgent) handleDiscoverTools(rw http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 
-	r.Logger.Info("Discovering components", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Discovering components", map[string]interface{}{
 		"path": req.URL.Path,
 	})
 
 	if r.Discovery == nil {
-		r.Logger.Error("Service discovery not available", nil)
+		r.Logger.ErrorWithContext(ctx, "Service discovery not available", nil)
 		http.Error(rw, "Service discovery not configured", http.StatusServiceUnavailable)
 		return
 	}
 
 	allComponents, err := r.Discovery.Discover(ctx, core.DiscoveryFilter{})
 	if err != nil {
-		r.Logger.Error("Discovery failed", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Discovery failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		http.Error(rw, fmt.Sprintf("Discovery failed: %v", err), http.StatusServiceUnavailable)
@@ -256,7 +259,9 @@ func (r *ResearchAgent) handleDiscoverTools(rw http.ResponseWriter, req *http.Re
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(response)
+	if err := json.NewEncoder(rw).Encode(response); err != nil {
+		r.Logger.WarnWithContext(ctx, "Discovery response write failed", map[string]interface{}{"operation": "response_write"})
+	}
 }
 
 // handleAnalyzeData demonstrates AI-powered data analysis
@@ -264,7 +269,7 @@ func (r *ResearchAgent) handleAnalyzeData(rw http.ResponseWriter, req *http.Requ
 	ctx := core.ExtractRequestContext(req.Context(), req)
 
 	if r.aiClient == nil {
-		r.Logger.Error("AI analysis requested but AI client not available", nil)
+		r.Logger.ErrorWithContext(ctx, "AI analysis requested but AI client not available", nil)
 		http.Error(rw, "AI client not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -303,7 +308,7 @@ func (r *ResearchAgent) handleAnalyzeData(rw http.ResponseWriter, req *http.Requ
 	}
 
 	if data == "" {
-		r.Logger.Error("Missing data field in request", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Missing data field in request", map[string]interface{}{
 			"received_keys": getMapKeys(requestData),
 		})
 		http.Error(rw, "Missing 'data' or 'content' field in request", http.StatusBadRequest)
@@ -325,10 +330,10 @@ Please provide:
 		MaxTokens:   1000,
 	})
 	if err != nil {
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
-			r.Logger.Warn("LLM provider returned client error", map[string]interface{}{
+			r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
 				"operation":    "ai_analysis",
 				"error":        pe.Error(),
 				"error_type":   "provider_client_error",
@@ -339,14 +344,16 @@ Please provide:
 			})
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(pe.StatusCode())
-			json.NewEncoder(rw).Encode(map[string]string{
+			if err := json.NewEncoder(rw).Encode(map[string]string{
 				"error":    pe.Error(),
 				"source":   "llm_provider",
 				"provider": pe.Provider(),
-			})
+			}); err != nil {
+				r.Logger.WarnWithContext(ctx, "Provider error response write failed", map[string]interface{}{"operation": "response_write"})
+			}
 			return
 		}
-		r.Logger.Error("AI analysis failed", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "AI analysis failed", map[string]interface{}{
 			"error":      err.Error(),
 			"error_type": fmt.Sprintf("%T", err),
 		})
@@ -362,7 +369,9 @@ Please provide:
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(response)
+	if err := json.NewEncoder(rw).Encode(response); err != nil {
+		r.Logger.WarnWithContext(ctx, "Analysis response write failed", map[string]interface{}{"operation": "response_write"})
+	}
 }
 
 // handleOrchestateWorkflow demonstrates workflow orchestration with resilience
@@ -381,7 +390,7 @@ func (r *ResearchAgent) handleOrchestateWorkflow(rw http.ResponseWriter, req *ht
 	ctx := req.Context()
 	workflowID := fmt.Sprintf("workflow-%d", time.Now().Unix())
 
-	r.Logger.Info("Starting resilient workflow orchestration", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Starting resilient workflow orchestration", map[string]interface{}{
 		"workflow_id":   workflowID,
 		"workflow_type": workflowReq.WorkflowType,
 	})
@@ -399,7 +408,7 @@ func (r *ResearchAgent) handleOrchestateWorkflow(rw http.ResponseWriter, req *ht
 	}
 
 	if err != nil {
-		r.Logger.Error("Workflow orchestration failed", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Workflow orchestration failed", map[string]interface{}{
 			"workflow_id": workflowID,
 			"error":       err.Error(),
 		})
@@ -417,7 +426,9 @@ func (r *ResearchAgent) handleOrchestateWorkflow(rw http.ResponseWriter, req *ht
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(response)
+	if err := json.NewEncoder(rw).Encode(response); err != nil {
+		r.Logger.WarnWithContext(ctx, "Workflow response write failed", map[string]interface{}{"operation": "response_write"})
+	}
 }
 
 // handleHealth implements health check with circuit breaker states
@@ -485,9 +496,11 @@ func (r *ResearchAgent) handleHealth(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+		r.Logger.WarnWithContext(ctx, "Health response write failed", map[string]interface{}{"operation": "response_write"})
+	}
 
-	r.Logger.Debug("Health check completed", map[string]interface{}{
+	r.Logger.DebugWithContext(ctx, "Health check completed", map[string]interface{}{
 		"status":   health["status"],
 		"duration": time.Since(startTime).String(),
 	})

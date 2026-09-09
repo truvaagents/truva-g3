@@ -17,7 +17,6 @@ import (
 
 // CapabilityResult contains both the LLM-ready formatted string and structured agent data.
 // This eliminates the need for regex parsing to extract agent names for hallucination validation.
-// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for context.
 type CapabilityResult struct {
 	// FormattedInfo is the capability information formatted for LLM consumption
 	FormattedInfo string

@@ -223,8 +223,7 @@ cleanup() {
     # Clean up Redis registration for this agent only
     print_step "Cleaning up Redis registration..."
     kubectl exec -n default deploy/redis -- redis-cli DEL \
-        "truvag3:services:research-assistant-resilience" \
-        "truvag3:names:research-assistant-resilience" 2>/dev/null || true
+        "truvag3:v1:default:registry:{default:registry}:service:research-assistant-resilience" 2>/dev/null || true
 
     print_success "Cleanup complete (infrastructure preserved)"
 }
@@ -249,7 +248,8 @@ status() {
     echo ""
 
     echo -e "${BLUE}Redis Registration:${NC}"
-    kubectl exec -n default deploy/redis -- redis-cli GET "truvag3:services:research-assistant-resilience" 2>/dev/null | head -c 200 || echo "Not registered"
+    kubectl exec -n default deploy/redis -- redis-cli GET \
+        "truvag3:v1:default:registry:{default:registry}:service:research-assistant-resilience" 2>/dev/null | head -c 200 || echo "Not registered"
     echo ""
 }
 

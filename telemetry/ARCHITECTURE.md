@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.8
+**Version**: 1.11
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -419,7 +419,9 @@ created by those factories are wrapped normally.
    client ignores context deadlines; an outstanding PING still requires its
    socket deadline or owner-driven close to finish. Owning construction delegates
    topology resolution and client creation to Core and closes only the client
-   it created, exactly once.
+   it created, exactly once. Every owned topology requires DB 0. The numbered-DB
+   recorder option is removed; non-empty old LLM-debug DB/prefix settings are
+   rejected by owning construction. Use `WithRecorderKeyspace` for isolation.
 
 5. **Layer 1 resilience**: Built-in retry uses exponential backoff (3 attempts,
    100ms→2s) and a failure cooldown (5 failures in 30s triggers a 30s pause).
@@ -1694,6 +1696,7 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.11 | 2026-09-08 | Removed recorder numbered-DB options and deprecation-only resolution notices; owning construction uses Core's canonical DB-0 factory while injected-client lifetime and request diagnostics remain unchanged |
 | 1.10 | 2026-09-08 | Enforced injected-recorder startup deadlines independently of client context-timeout settings without changing borrowed-client options or ownership |
 | 1.9 | 2026-09-04 | Scoped Redis-recorder logs to `framework/telemetry` and made retry diagnostics request-aware, fixed-text, and explicitly classified |
 | 1.8 | 2026-09-02 | Required explicit keyspace and bounded startup verification for injected Redis recorders and replaced raw retry errors with fixed diagnostic classifications |

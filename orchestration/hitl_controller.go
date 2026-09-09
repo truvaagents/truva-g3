@@ -888,9 +888,8 @@ func (c *DefaultInterruptController) createCheckpoint(
 		userContext = make(map[string]interface{})
 	}
 
-	// Capture OTel trace context for checkpoint fields (RC7-B2).
-	// Stored in both typed fields (primary, BuildResumeContext reads these first) and
-	// UserContext (backward compat during transition — old consumers read UserContext).
+	// Capture OTel trace context in typed checkpoint fields. Mirror it into
+	// UserContext for consumers that operate on the general context map.
 	// After all consumers migrate to typed fields, the UserContext writes can be removed.
 	tc := telemetry.GetTraceContext(ctx)
 	if tc.TraceID != "" {

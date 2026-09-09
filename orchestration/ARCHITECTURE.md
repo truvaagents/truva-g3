@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.19
+**Version**: 1.23
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -997,14 +997,14 @@ The `TieredCapabilityProvider` implements a research-backed 2-phase capability r
 - **Graceful fallback**: On Tier 1 failure, falls back to sending all tools (safe degradation)
 - **Hallucination filtering**: Validates LLM-selected tools exist in catalog before proceeding
 - **No external dependencies**: Works without RAG service or vector database
-- **CustomInstructions-aware**: Injects `PromptConfig.CustomInstructions` into selection prompts so domain-required tools are not filtered out (ORCH-014)
+- **CustomInstructions-aware**: Injects `PromptConfig.CustomInstructions` into selection prompts so domain-required tools are not filtered out
 
 ```go
 type TieredCapabilityProvider struct {
     catalog            *AgentCatalog
     aiClient           core.AIClient
     MinToolsForTiering int      // Default: 20
-    customInstructions []string // Domain rules from PromptConfig (ORCH-014)
+    customInstructions []string // Domain rules from PromptConfig
 
     // Optional dependencies (injected)
     logger     core.Logger
@@ -1879,9 +1879,9 @@ export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h # Error records (7 days)
 export TRUVAG3_REDIS_NAMESPACE=production
 ```
 
-`TRUVAG3_LLM_DEBUG_REDIS_DB` remains a deprecated standalone-only compatibility
-input during the precursor release. Canonical composition does not set it and
-uses DB 0. Cluster mode rejects every non-zero database.
+All Redis topologies use DB 0. Removed role-database environment settings are
+rejected for selected roles; settings belonging only to unselected roles are
+outside that process's effective configuration. Empty values count as absent.
 
 **Canonical Programmatic Usage:**
 ```go
@@ -1927,7 +1927,8 @@ When implementing resilience patterns:
 - [ ] Update factory functions to accept dependencies
 - [ ] Add WithCircuitBreaker option function
 - [ ] Write unit tests with mock circuit breaker
-- [ ] Write integration tests with real circuit breaker
+- [ ] Optionally add a manually invoked, non-CI integration test with a real
+      circuit breaker when it adds useful evidence
 - [ ] Update documentation with usage examples
 - [ ] Create migration guide for existing users
 - [ ] Add telemetry metrics for resilience monitoring
@@ -2357,8 +2358,9 @@ keeps client configuration, owned clients, provider options, and
 `redisprovider.NewOrchestrationBackends` separately callable. An application
 may also assemble Layer-3 domain adapters directly. Runtime workflow
 code consumes only the narrow `WorkflowStateStore` returned by `Workflow()` and never
-imports or infers a storage provider. `NewRedisStateStore` remains a supported
-compatibility constructor, but it is not the preferred pattern for new code.
+imports or infers a storage provider. Direct Redis composition uses
+`NewRedisStateStoreWithClient(client, keyspace, ttl)` with an application-owned
+client. The obsolete `NewRedisStateStore` constructor is removed.
 The proof-only `examples/orchestration-backend-portability` module implements
 PostgreSQL workflow state and NATS command/task adapters using only these public
 contracts, then validates a mixed Redis/PostgreSQL/NATS composition in an
@@ -2585,7 +2587,10 @@ until cancellation even when disabled, and obtains atomic claims through
 The claim lease is operational runtime configuration, while the claim-owner
 length cap is a fixed coordination-protocol invariant.
 
-The optional `redisprovider` preset owns only Redis adapter composition.
+The optional `redisprovider` package owns Redis-specific client/preset
+composition plus the skills and distributed-lock adapters; root orchestration
+continues to own the Redis adapters that remain colocated with their backend
+contracts.
 `NewDefaultBackends` is its Layer-1 path: it delegates to the lower layers,
 constructs only explicitly selected roles when requested, validates every
 capability promised by those roles, and returns `OwnedBackends` for deterministic
@@ -2614,16 +2619,19 @@ its default against final caller overrides.
 
 Direct Redis constructors that receive an application-owned client never close
 that client. For the execution-debug, LLM-debug, checkpoint, and command stores,
-the URL-owning compatibility constructors create and close their own clients;
-their corresponding `WithClient` constructors leave connection and database
-routing to application bootstrap.
+URL-owning constructors resolve the standard DB-0 shorthand or structured
+topology through Core and close only their own clients; `WithClient`
+constructors leave connection ownership to application bootstrap.
 
 Prefix behavior is explicit per adapter. Canonical provider composition passes
 one `core.RedisKeyspace` and a validated agent scope to command and checkpoint
-stores, so both use the same deployment-scoped HITL tag. Direct compatibility
-constructors retain their documented prefix inputs during the precursor
-release. Task and workflow adapter constructors take their keyspace through
-explicit configuration and never infer another logical database.
+stores, so both use the same deployment-scoped HITL tag. Direct Redis adapters
+use typed keyspace options as well; raw HITL, schedule, skills, execution, and LLM-debug
+prefix paths are removed. The generic non-Redis execution storage adapter may
+still use its logical `ExecutionStoreConfig.KeyPrefix`; Redis construction
+requires its default or an explicit `WithExecutionDebugKeyspace` override.
+Task and workflow adapter constructors take their keyspace through explicit
+configuration and never infer another logical database.
 
 **Legacy exception — pending dedicated audit:** Some error paths that predate
 the framework payload-fidelity policy still sanitize downstream failure bodies
@@ -2652,10 +2660,17 @@ across every framework call site.
 
 ## Redis/Valkey Backend Contract
 
-The root orchestration package remains provider-neutral. Redis implementation
-and composition live in the optional `orchestration/redisprovider` package,
-which may depend on orchestration; the inverse dependency is prohibited and
-enforced by the repository architecture test.
+Orchestration runtime behavior consumes provider-neutral backend interfaces.
+Redis adapter implementations currently live in two places: workflow, HITL,
+schedule/task, execution-debug, and LLM-debug adapters remain in the root
+orchestration package, while the skills and distributed-lock adapters plus the
+default Redis client/preset composition live in the optional
+`orchestration/redisprovider` package.
+Portability comes from interface consumption and replaceable application
+composition, not from physical separation of every Redis implementation. The
+provider package may depend on root orchestration; root orchestration must not
+import the provider package. `TestBackendPackageDependencyDirection` enforces
+that one-way dependency.
 
 Canonical application composition resolves one `core.RedisConnectionConfig`
 and one `core.RedisKeyspace`, creates a `redis.UniversalClient`, and injects it
@@ -2713,28 +2728,39 @@ caller context and explicit request correlation; raw Redis and stored-payload
 errors are not copied into ordinary logs. Detached bounded maintenance uses a
 non-context logger and does not manufacture or retain request trace context.
 
-During the precursor release, numbered-DB options, concrete `*redis.Client`
-wrappers, `TRUVAG3_REDIS_URL`, and URL-owning direct constructors remain labeled
-compatibility APIs. They delegate to the shared resolver/factory and are not
-used by canonical examples. Cluster mode and canonical provider composition
-require DB 0; removal of the deprecated paths belongs to the later major
-cutover. Raw HITL, schedule, execution-debug, and LLM-debug key-prefix options
-are likewise standalone compatibility inputs: cluster composition must use
-their typed `RedisKeyspace` options so every transactional or Lua aggregate has
-a verified hash tag.
+The development-stage cleanup removes role-database options, the duplicate
+Redis URL alias, obsolete Redis key-prefix options, execution-debug option aliases,
+and the execution-ID-only workflow adapter. `StateStore` aliases the canonical
+`WorkflowStateStore`: lookup and step mutation require both workflow and
+execution IDs. This follows the author-approved exception in the framework
+principles; there is no compatibility waiting period or data-migration layer.
+Direct URL-owning constructors remain a supported convenience path and use
+the same DB-0 resolver/factory. Removed settings fail with bounded configuration
+errors for selected roles. Dependency, ownership, retention, logging, and
+caller-owned span-error contracts remain unchanged.
+
+The skills adapter has one key path, including direct construction through
+`WithSkillStoreKeyspace`: `truvag3:v1:<deployment>:skills:{<deployment>:skills}:…`.
+The former `WithSkillStoreKeyPrefix` / `:{store}` branch is removed. Skill
+package namespaces are identities within that deployment, not replacements for
+the deployment namespace. Task adapters retain their explicit queue-key and
+prefix composition seams; callers derive those values from `RedisKeyspace`, as
+the provider preset does. These are supported routing primitives, not a
+numbered-DB compatibility mode.
 
 ### Real-topology verification contract
 
-The existing CI workflow and its full default unit-test selection remain the
-primary gate, without `-short` or real Redis/Valkey service jobs. Isolated
-contracts use narrow mocks, fakes, miniredis, and in-memory telemetry exporters;
-cover successful behavior, error paths, ownership, and concurrency without
-introducing complex test infrastructure.
+The existing CI workflow and its complete default unit-test selection remain
+the mandatory gate. CI does not use `-short`, so no default unit-test path is
+omitted from that gate. Isolated contracts use narrow mocks, fakes, miniredis,
+and in-memory telemetry exporters; they cover successful behavior, error paths,
+ownership, and concurrency without introducing real-service dependencies.
 
 Real-topology verification is optional, manually invoked supplemental evidence,
-not a CI or merge prerequisite. The existing integration-tagged matrix runs
-the same provider-neutral workflow, HITL, command, execution, LLM-debug, scheduling,
-lock, and skill conformance surfaces against three-primary/three-replica
+never a CI job or a substitute for unit coverage. The existing
+integration-tagged matrix runs the same provider-neutral workflow, HITL,
+command, execution, LLM-debug, scheduling, lock, and skill conformance surfaces
+against three-primary/three-replica
 clusters for Redis OSS 8.8.0, Valkey 8.1.9, and Valkey 9.1.1 in DB 0. It also
 asks the server for key slots, proves a cross-slot command is rejected, moves a
 slot under load, performs a coordinated primary failover, and requires the
@@ -2909,6 +2935,7 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.23 | 2026-09-08 | Removed numbered-DB, obsolete raw-prefix (including skills), duplicate execution-debug options, and execution-ID-only workflow compatibility paths under the development-stage exception; preserved typed composition, explicit task routing, scoped workflow identity, and observability/ownership contracts |
 | 1.22 | 2026-09-08 | Preserved the unchanged CI workflow and full unit-test selection as the primary gate; real-topology and capacity fixtures are integration-tagged, optional manual verification, superseding the mandatory integration-gate policy in 1.14 |
 | 1.21 | 2026-09-08 | Gated enrichment/effect serialization on active debug capture and made HITL checkpoint/command adapters preserve caller-owned span errors while emitting bounded, correlated diagnostics |
 | 1.20 | 2026-09-04 | Aligned direct Redis stores with component-scoped, request-correlated, bounded logging and clarified that detached projection maintenance neither inherits nor manufactures request trace context |

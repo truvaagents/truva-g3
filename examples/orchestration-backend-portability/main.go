@@ -91,7 +91,8 @@ func run() error {
 		return RunSchedulerTool(
 			rootContext,
 			backends,
-			config.RedisURL,
+			config.Redis,
+			config.RedisKeyspace,
 			port,
 			envOrDefault("NAMESPACE", defaultApplicationNS),
 		)
@@ -170,7 +171,8 @@ func newAgentFramework(
 		core.WithName(serviceName),
 		core.WithPort(port),
 		core.WithNamespace(envOrDefault("NAMESPACE", defaultApplicationNS)),
-		core.WithRedisURL(config.RedisURL),
+		core.WithRedisConnection(config.Redis),
+		core.WithRedisDeployment(config.RedisKeyspace.Deployment()),
 		core.WithDiscovery(discoveryEnabled, "redis"),
 		core.WithCORSDefaults(),
 		core.WithDevelopmentMode(strings.EqualFold(envOrDefault("DEV_MODE", "false"), "true")),
@@ -209,15 +211,36 @@ func loadConfig() (Config, error) {
 	if err != nil || ackWait <= 0 {
 		return Config{}, fmt.Errorf("PORTABILITY_ACK_WAIT must be a positive duration")
 	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve Redis connection: %w", err)
+	}
+	redisKeyspace, err := resolvePortabilityRedisKeyspace(os.LookupEnv)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		PostgresURL: os.Getenv("POSTGRES_URL"),
-		NATSURL:     os.Getenv("NATS_URL"),
-		RedisURL:    os.Getenv("REDIS_URL"),
-		Namespace:   envOrDefault("PORTABILITY_BACKEND_NAMESPACE", defaultBackendNamespace),
-		Queue:       envOrDefault("PORTABILITY_QUEUE", DefaultQueue),
-		WorkflowID:  envOrDefault("PORTABILITY_WORKFLOW_ID", DefaultWorkflowID),
-		AckWait:     ackWait,
+		PostgresURL:   os.Getenv("POSTGRES_URL"),
+		NATSURL:       os.Getenv("NATS_URL"),
+		Redis:         redisResolution,
+		RedisKeyspace: redisKeyspace,
+		Namespace:     envOrDefault("PORTABILITY_BACKEND_NAMESPACE", defaultBackendNamespace),
+		Queue:         envOrDefault("PORTABILITY_QUEUE", DefaultQueue),
+		WorkflowID:    envOrDefault("PORTABILITY_WORKFLOW_ID", DefaultWorkflowID),
+		AckWait:       ackWait,
 	}, nil
+}
+
+func resolvePortabilityRedisKeyspace(lookup func(string) (string, bool)) (core.RedisKeyspace, error) {
+	if lookup == nil {
+		return core.RedisKeyspace{}, fmt.Errorf("resolve Redis keyspace: environment lookup is required")
+	}
+	deployment, _ := lookup("TRUVAG3_REDIS_NAMESPACE")
+	keyspace, err := core.NewRedisKeyspace(deployment)
+	if err != nil {
+		return core.RedisKeyspace{}, fmt.Errorf("resolve Redis keyspace: %w", err)
+	}
+	return keyspace, nil
 }
 
 func applicationPort() (int, error) {

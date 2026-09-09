@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +27,7 @@ type HITLChatAgent struct {
 }
 
 // NewHITLChatAgent creates a new HITL-enabled chat agent.
-func NewHITLChatAgent() (*HITLChatAgent, error) {
+func NewHITLChatAgent(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace) (*HITLChatAgent, error) {
 	agent := core.NewBaseAgent("agent-with-human-approval")
 
 	// Create AI client with provider chain for failover.
@@ -107,12 +106,8 @@ func NewHITLChatAgent() (*HITLChatAgent, error) {
 	})
 	tracedClient.Timeout = 300 * time.Second
 
-	// Create Redis-backed session store
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required for session storage")
-	}
-	sessionStore, err := NewSessionStore(redisURL, 48*time.Hour, 50, agent.Logger)
+	// Session data shares DB 0 and is isolated by the versioned deployment keyspace.
+	sessionStore, err := NewSessionStore(connection, keyspace, 48*time.Hour, 50, agent.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session store: %w", err)
 	}
@@ -263,7 +258,7 @@ func (t *HITLChatAgent) formatConversationHistory(history []Message) string {
 		if msg.Role == "assistant" {
 			role = "Assistant"
 		}
-		sb.WriteString(fmt.Sprintf("%s: %s\n", role, msg.Content))
+		fmt.Fprintf(&sb, "%s: %s\n", role, msg.Content)
 	}
 	return strings.TrimSpace(sb.String())
 }

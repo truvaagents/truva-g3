@@ -884,22 +884,18 @@ kubectl logs -n truvag3-examples -l app=agent-with-human-approval | \
 ```logql
 # One HITL request family
 {service_name="agent-with-human-approval"}
-  | json
   | original_request_id="req-abc123"
 
 # All top-level turns and related executions in the conversation
 {service_name="agent-with-human-approval"}
-  | json
   | conversation_id="chat-456"
 
 # HITL interrupts only
 {k8s_namespace_name="truvag3-examples"}
-  | json
   | interrupted="true"
 
 # Correlation: find resume logs for a checkpoint
 {k8s_namespace_name="truvag3-examples"}
-  | json
   | checkpoint_id="cp-xyz789"
   | operation="hitl_resume"
 ```
@@ -1197,16 +1193,29 @@ metadata — filterable with `| key="value"` pipe syntax, not `{key="value"}`):
 |-----------|--------|---------|
 | `k8s_node_name` | pod metadata | `truvag3-demo-kind-control-plane` |
 
-Application JSON fields such as `request_id`, `original_request_id`,
-`conversation_id`, `checkpoint_id`, `operation`, and `level` are not Loki
-stream labels in the repository’s reference deployment. Parse and filter them
-after selecting a bounded stream:
+Application fields such as `trace_id`, `span_id`, `request_id`,
+`original_request_id`, `conversation_id`, `checkpoint_id`, `operation`, and
+`level` are not indexed Loki stream labels in the reference deployment. The
+logs collector parses the application JSON into record attributes; Loki exposes
+them as structured metadata. Filter after selecting a bounded stream:
 
 ```logql
 {service_name="travel-chat-agent"}
-  | json
   | conversation_id="chat-456"
 ```
+
+For one span within a trace, use both identifiers:
+
+```logql
+{k8s_namespace_name="truvag3-examples"}
+  | trace_id="<trace-id>"
+  | span_id="<span-id>"
+```
+
+Do not put `trace_id` or `span_id` inside the stream selector: that can return
+no records even when the logs are present. `| json` is needed only for a
+different ingestion pipeline that retains JSON solely in the log body, not for
+these already-parsed reference-deployment fields.
 
 This description is specific to
 `examples/k8-deployment/otel-collector-logs.yaml` and the supplied Loki
@@ -1323,6 +1332,12 @@ if o.logger != nil {
 
 **Standard operation values:**
 
+The development-stage Redis cleanup retired `redis_configuration_notice` and
+`redis_client_compatibility` together with their deprecated configuration paths.
+Removed settings now return bounded construction errors instead of advisory
+warnings. Startup/shutdown remains non-request work; this removal does not
+change request correlation or caller-owned span-error handling.
+
 | Module | Operation | Description |
 |--------|-----------|-------------|
 | orchestration | `process_request` | Main request handling |
@@ -1370,8 +1385,7 @@ if o.logger != nil {
 | core | `framework_runnable_start` | `Framework.Run` is about to launch all registered runnables in parallel goroutines. Emitted once per `Run`, skipped when no runnables are registered |
 | core | `framework_runnable_exit` | A registered runnable's `Start` method returned. Emitted at INFO level on clean exit (returned `nil` or `context.Canceled`), or at ERROR level with `error_type=runnable_exit` on any other error |
 | core | `framework_runnable_drain` | Runnable drain lifecycle event. Emitted in three contexts: (1) INFO when draining begins after the HTTP server stops, (2) INFO when all runnables exit cleanly within the drain budget, (3) WARN with `error_type=runnable_drain_timeout` when the drain budget (`TRUVAG3_FRAMEWORK_RUNNABLE_DRAIN_TIMEOUT`, default `10s`) is exceeded |
-| core | `redis_configuration_notice` | One bounded, deduplicated startup advisory for deprecated Redis configuration. Carries no URL, address, credential, or raw environment value |
-| core | `redis_client_compatibility` / `redis_client_connect` / `redis_client_close` / `redis_health_check` | Namespaced Redis-client compatibility, lifecycle, and explicit health checks. These records are scoped to `framework/core`; request-scoped health checks carry `request_id` and `duration_ms`; failures use fixed text and bounded `error_type=backend` |
+| core | `redis_client_connect` / `redis_client_close` / `redis_health_check` | Redis-client lifecycle and explicit health checks. These records are scoped to `framework/core`; request-scoped health checks carry `request_id` and `duration_ms`; failures use fixed text and bounded `error_type=backend` |
 | core | `redis_discovery_initialize` / `redis_registry_initialize` | Agent/tool Redis discovery startup. Carries topology mode and bounded startup status, never seed addresses or credentials |
 | core | `discovery_index_cleanup` | Fail-open removal of stale members from a Redis discovery index. WARN with request correlation, bounded counts, and `error_type=index_write`; the authoritative discovery result remains successful |
 | core | `redis_registry_retry_configuration` | Retry startup was rejected before the background loop because topology configuration was invalid. WARN with `status=rejected`, request correlation when available, and bounded `error_type=invalid_configuration` |
@@ -2114,36 +2128,39 @@ If using Grafana Loki for log aggregation:
 {service_name="hotel-tool"}
 
 # All agents' handler logs
-{k8s_namespace_name="truvag3-examples"} | json | component =~ "agent/.*"
+{k8s_namespace_name="truvag3-examples"} | component =~ "agent/.*"
 
 # Framework orchestration errors from a specific agent
-{service_name="travel-chat-agent"} | json | component="framework/orchestration" | level="ERROR"
+{service_name="travel-chat-agent"} | component="framework/orchestration" | level="ERROR"
 
 # All tool logs with slow responses (>1 second)
-{k8s_namespace_name="truvag3-examples"} | json | component =~ "tool/.*" | duration_ms > 1000
+{k8s_namespace_name="truvag3-examples"} | component =~ "tool/.*" | duration_ms > 1000
 
 # Trace a request across all components using trace_id
-{k8s_namespace_name="truvag3-examples"} | json | trace_id="abc123def456"
+{k8s_namespace_name="truvag3-examples"} | trace_id="<trace-id>"
+
+# Restrict the same trace to one span
+{k8s_namespace_name="truvag3-examples"} | trace_id="<trace-id>" | span_id="<span-id>"
 
 # One orchestration execution
-{k8s_namespace_name="truvag3-examples"} | json | request_id="orch-1776904450804389754"
+{k8s_namespace_name="truvag3-examples"} | request_id="orch-1776904450804389754"
 
 # All turns and related executions in a conversation
-{k8s_namespace_name="truvag3-examples"} | json | conversation_id="chat-456"
+{k8s_namespace_name="truvag3-examples"} | conversation_id="chat-456"
 
 # One interrupt/resume or delegation request family
-{k8s_namespace_name="truvag3-examples"} | json | original_request_id="orch-1776904450804389754"
+{k8s_namespace_name="truvag3-examples"} | original_request_id="orch-1776904450804389754"
 
 # One HITL checkpoint
-{service_name="agent-with-human-approval"} | json | checkpoint_id="cp-abc123"
+{service_name="agent-with-human-approval"} | checkpoint_id="cp-abc123"
 ```
 
 **Why `{service_name="…"}` and `{k8s_namespace_name="…"}`?** These are the indexed
 stream labels Loki actually exposes for this pipeline. `service_name` comes from the
 pod's `app:` label (set per-record by `k8sattributes`), and `k8s_namespace_name` comes
 from pod metadata. Filtering by either is cheap. The old `{namespace="…"}` idiom does
-not work — that label is not indexed. Correlation fields after `| json` are
-parsed application fields, not stream selectors.
+not work — that label is not indexed. Correlation fields use structured-metadata
+filters after the selector; the collector already parsed the application JSON.
 
 ### Identifying Log Origins
 

@@ -11,10 +11,10 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// TestStore indexes test run metadata in Redis for fast querying.
-// Uses a dedicated Redis DB (default DB 9) to avoid conflicts with other TruvaG3 stores.
+// TestStore indexes test run metadata in the versioned shared DB-0 keyspace.
 type TestStore struct {
-	rdb *redis.Client
+	rdb      redis.UniversalClient
+	keyspace core.RedisKeyspace
 }
 
 // RunMetadata is the metadata stored in Redis for each test run
@@ -38,24 +38,33 @@ type RunFilter struct {
 	Limit    int
 }
 
-// NewTestStore creates a new test store connected to Redis
-func NewTestStore(redisURL string, db int) (*TestStore, error) {
-	opts, err := redis.ParseURL(redisURL)
+// NewTestStore creates a new test store using the shared topology factory.
+func NewTestStore(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace) (*TestStore, error) {
+	rdb, err := core.NewRedisUniversalClient(connection)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
+		return nil, err
 	}
-	opts.DB = db
+	return &TestStore{rdb: rdb, keyspace: keyspace}, nil
+}
 
-	rdb := redis.NewClient(core.ApplyRedisClientDefaults(opts))
+func (s *TestStore) runKey(runID string) string {
+	return s.keyspace.Plain("playwright", "runs", "record", runID)
+}
 
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis DB %d: %w", db, err)
-	}
+func (s *TestStore) runSiteIndex(site string) string {
+	return s.keyspace.Plain("playwright", "runs", "index", "site", site)
+}
 
-	return &TestStore{rdb: rdb}, nil
+func (s *TestStore) runRecentIndex() string {
+	return s.keyspace.Plain("playwright", "runs", "index", "recent")
+}
+
+func (s *TestStore) scriptKey(site, name string) string {
+	return s.keyspace.Plain("playwright", "scripts", "record", site, name)
+}
+
+func (s *TestStore) scriptSiteIndex(site string) string {
+	return s.keyspace.Plain("playwright", "scripts", "index", "site", site)
 }
 
 // IndexRun stores test run metadata in Redis
@@ -66,7 +75,7 @@ func (s *TestStore) IndexRun(ctx context.Context, meta RunMetadata) error {
 		return fmt.Errorf("failed to marshal run metadata: %w", err)
 	}
 
-	key := "truvag3:qa:runs:" + meta.RunID
+	key := s.runKey(meta.RunID)
 	if err := s.rdb.Set(ctx, key, data, 30*24*time.Hour).Err(); err != nil { // 30-day TTL
 		return fmt.Errorf("failed to store run metadata: %w", err)
 	}
@@ -75,12 +84,15 @@ func (s *TestStore) IndexRun(ctx context.Context, meta RunMetadata) error {
 	ts, _ := time.Parse(time.RFC3339, meta.Timestamp)
 	score := float64(ts.Unix())
 
-	siteKey := "truvag3:qa:runs:by_site:" + meta.Site
+	siteKey := s.runSiteIndex(meta.Site)
 	if err := s.rdb.ZAdd(ctx, siteKey, redis.Z{
 		Score:  score,
 		Member: meta.RunID,
 	}).Err(); err != nil {
 		return fmt.Errorf("failed to index run by site: %w", err)
+	}
+	if err := s.rdb.ZAdd(ctx, s.runRecentIndex(), redis.Z{Score: score, Member: meta.RunID}).Err(); err != nil {
+		return fmt.Errorf("failed to index recent run: %w", err)
 	}
 
 	return nil
@@ -97,7 +109,7 @@ func (s *TestStore) QueryRuns(ctx context.Context, filter RunFilter) ([]RunMetad
 
 	if filter.Site != "" {
 		// Query by site using sorted set
-		siteKey := "truvag3:qa:runs:by_site:" + filter.Site
+		siteKey := s.runSiteIndex(filter.Site)
 
 		// Build score range from date filters
 		minScore := "-inf"
@@ -127,32 +139,17 @@ func (s *TestStore) QueryRuns(ctx context.Context, filter RunFilter) ([]RunMetad
 		}
 		runIDs = ids
 	} else {
-		// Scan for all run keys (less efficient, but works without site filter)
-		var cursor uint64
-		var keys []string
-		for {
-			var batch []string
-			var err error
-			batch, cursor, err = s.rdb.Scan(ctx, cursor, "truvag3:qa:runs:run-*", int64(limit)).Result()
-			if err != nil {
-				return nil, fmt.Errorf("failed to scan runs: %w", err)
-			}
-			keys = append(keys, batch...)
-			if cursor == 0 || len(keys) >= limit {
-				break
-			}
+		ids, err := s.rdb.ZRevRange(ctx, s.runRecentIndex(), 0, int64(limit-1)).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to query recent runs: %w", err)
 		}
-		for _, key := range keys {
-			// Extract run ID from key
-			id := key[len("truvag3:qa:runs:"):]
-			runIDs = append(runIDs, id)
-		}
+		runIDs = ids
 	}
 
 	// Fetch metadata for each run ID
 	var results []RunMetadata
 	for _, runID := range runIDs {
-		key := "truvag3:qa:runs:" + runID
+		key := s.runKey(runID)
 		data, err := s.rdb.Get(ctx, key).Bytes()
 		if err != nil {
 			continue // Skip missing/expired entries
@@ -197,13 +194,13 @@ func (s *TestStore) SaveScriptRef(ctx context.Context, site string, meta ScriptM
 		return fmt.Errorf("failed to marshal script metadata: %w", err)
 	}
 
-	key := fmt.Sprintf("truvag3:qa:scripts:%s:%s", site, meta.Name)
+	key := s.scriptKey(site, meta.Name)
 	if err := s.rdb.Set(ctx, key, data, 0).Err(); err != nil { // No TTL for scripts
 		return fmt.Errorf("failed to save script ref: %w", err)
 	}
 
 	// Add to site's script set
-	siteKey := "truvag3:qa:scripts:by_site:" + site
+	siteKey := s.scriptSiteIndex(site)
 	s.rdb.SAdd(ctx, siteKey, meta.Name)
 
 	return nil
@@ -211,7 +208,7 @@ func (s *TestStore) SaveScriptRef(ctx context.Context, site string, meta ScriptM
 
 // GetScriptRef retrieves full script metadata for a named script
 func (s *TestStore) GetScriptRef(ctx context.Context, site, name string) (*ScriptMetadata, error) {
-	key := fmt.Sprintf("truvag3:qa:scripts:%s:%s", site, name)
+	key := s.scriptKey(site, name)
 	data, err := s.rdb.Get(ctx, key).Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("script not found: %s/%s", site, name)
@@ -227,7 +224,7 @@ func (s *TestStore) GetScriptRef(ctx context.Context, site, name string) (*Scrip
 
 // ListScripts returns all script metadata for a hostname
 func (s *TestStore) ListScripts(ctx context.Context, hostname string) ([]ScriptMetadata, error) {
-	siteKey := "truvag3:qa:scripts:by_site:" + hostname
+	siteKey := s.scriptSiteIndex(hostname)
 	names, err := s.rdb.SMembers(ctx, siteKey).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list scripts for %s: %w", hostname, err)
@@ -247,7 +244,7 @@ func (s *TestStore) ListScripts(ctx context.Context, hostname string) ([]ScriptM
 
 // GetRunMetadata retrieves run metadata by run ID
 func (s *TestStore) GetRunMetadata(ctx context.Context, runID string) (*RunMetadata, error) {
-	key := "truvag3:qa:runs:" + runID
+	key := s.runKey(runID)
 	data, err := s.rdb.Get(ctx, key).Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("run not found: %s", runID)

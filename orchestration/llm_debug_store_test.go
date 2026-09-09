@@ -327,7 +327,6 @@ func TestMemoryLLMDebugStore_ListRecent(t *testing.T) {
 // see correct totals even on historical traces written before Layer 2
 // landed. Without the fix, InteractionCount and TotalTokens are
 // inflated ~2× for wrapping-agent records.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
 func TestMemoryLLMDebugStore_ListRecent_DedupeShadowsInSummary(t *testing.T) {
 	store := NewMemoryLLMDebugStore()
 	ctx := context.Background()

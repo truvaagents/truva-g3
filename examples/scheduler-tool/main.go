@@ -24,7 +24,7 @@
 //
 // Required environment variables:
 //
-//	REDIS_URL                         — e.g. redis://localhost:6379
+//	REDIS_URL or TRUVAG3_REDIS_*      — Redis/Valkey topology
 //	PORT                              — HTTP server port (default: 9010)
 //	TRUVAG3_K8S_SERVICE_NAME           — this tool's service identity
 //
@@ -46,11 +46,9 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
@@ -91,8 +89,15 @@ func main() {
 	// 5. Connect to Redis. We construct the client ourselves here (rather
 	//    than letting the framework do it) because the scheduler module and
 	//    the memory module both need a redis.Cmdable.
-	redisURL := os.Getenv("REDIS_URL")
-	redisClient, err := connectRedis(redisURL)
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
+	redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Redis namespace error: %v", err)
+	}
+	redisClient, err := core.NewRedisUniversalClient(redisResolution)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
@@ -106,7 +111,7 @@ func main() {
 		core.WithName(serviceName),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -124,14 +129,17 @@ func main() {
 
 	// At this point tool.Logger is the real ProductionLogger.
 	tool.Logger.Info("Connected to Redis", map[string]interface{}{
-		"operation": "startup",
-		"redis_url": redactRedisURL(redisURL),
+		"operation":  "startup",
+		"redis_mode": redisResolution.Mode,
 	})
 
 	// 7. Build the scheduler backends from the orchestration module.
 	//    These are the vendor-specific ScheduleStore + TaskDispatcher
 	//    implementations.
-	backends, err := orchestration.NewRedisSchedulerBackends(redisClient)
+	backends, err := orchestration.NewRedisSchedulerBackends(
+		redisClient,
+		orchestration.WithRedisSchedulerKeyspace(redisKeyspace),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create scheduler backends: %v", err)
 	}
@@ -140,7 +148,11 @@ func main() {
 	//    We reuse memory.RedisDistributedLock rather than duplicating it in
 	//    the scheduler module — a single source of truth for lock semantics
 	//    across the framework.
-	lock, err := memory.NewRedisDistributedLock(redisClient, tool.Logger)
+	lock, err := memory.NewRedisDistributedLock(
+		redisClient,
+		tool.Logger,
+		memory.WithDistributedLockKeyspace(redisKeyspace),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create distributed lock: %v", err)
 	}
@@ -148,7 +160,10 @@ func main() {
 	// 9. Build the TaskStore — reusing the existing orchestration.RedisTaskStore.
 	//    The Scheduler uses it for idempotent task creation via the
 	//    core.ErrTaskAlreadyExists sentinel.
-	taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
+	taskStoreConfig := orchestration.DefaultRedisTaskStoreConfig()
+	taskStoreConfig.KeyPrefix = redisKeyspace.Plain("tasks")
+	taskStoreConfig.Logger = tool.Logger
+	taskStore := orchestration.NewRedisTaskStore(redisClient, &taskStoreConfig)
 
 	// 10. Register the 5 scheduling capabilities on the tool via the
 	//     orchestration module's helper. This is the producer side — the
@@ -216,12 +231,8 @@ func main() {
 // validateConfig verifies required environment variables are set and
 // well-formed. Fails fast at startup per framework error-handling principle §1.
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 	if portStr := os.Getenv("PORT"); portStr != "" {
 		if _, err := strconv.Atoi(portStr); err != nil {
@@ -229,37 +240,6 @@ func validateConfig() error {
 		}
 	}
 	return nil
-}
-
-// connectRedis parses REDIS_URL and establishes a *redis.Client, verifying
-// connectivity with a ping so we fail fast if Redis is unreachable at
-// startup rather than later in a capability handler.
-func connectRedis(redisURL string) (*redis.Client, error) {
-	opt, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse REDIS_URL: %w", err)
-	}
-	client := redis.NewClient(core.ApplyRedisClientDefaults(opt))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("ping redis: %w", err)
-	}
-	return client, nil
-}
-
-// redactRedisURL strips any password from a Redis URL before logging it.
-// Returns the URL unchanged if there's no userinfo component to strip.
-func redactRedisURL(redisURL string) string {
-	// Simple redaction: if there's an '@' with '//' before it, replace the
-	// userinfo. Avoids importing net/url for a one-shot logging helper.
-	at := strings.Index(redisURL, "@")
-	slashSlash := strings.Index(redisURL, "//")
-	if at == -1 || slashSlash == -1 || at < slashSlash {
-		return redisURL
-	}
-	return redisURL[:slashSlash+2] + "***@" + redisURL[at+1:]
 }
 
 // resolvePort reads PORT from the environment with a sensible default.

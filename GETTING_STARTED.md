@@ -237,6 +237,14 @@ so you can run them side-by-side.
 
 ### Quick Start: Travel Chat Agent
 
+Local setup defaults to one standalone Redis pod. All framework-owned Redis
+clients use DB 0, with versioned deployment keyspaces; sessions, skills, HITL,
+and debug data do not need separate databases. Keep topology overrides
+commented in `.env.example` when the local manifests already supply them.
+`REDIS_URL` is the standalone shorthand; do not combine it with structured
+`TRUVAG3_REDIS_*` connection fields. Cluster mode is optional—see the
+[three-primary local validation runbook](examples/registry-viewer-app/LIVE_DATA_VERIFICATION.md#run-the-local-kind-cluster-matrix).
+
 #### Step 1: Clone the repository
 
 ```bash

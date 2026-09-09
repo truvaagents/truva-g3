@@ -162,11 +162,11 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 		data["current_step"] = currentStepData
 	}
 
-	if checkpoint.ResolvedParameters != nil && len(checkpoint.ResolvedParameters) > 0 {
+	if len(checkpoint.ResolvedParameters) > 0 {
 		data["resolved_parameters"] = checkpoint.ResolvedParameters
 	}
 
-	if checkpoint.CompletedSteps != nil && len(checkpoint.CompletedSteps) > 0 {
+	if len(checkpoint.CompletedSteps) > 0 {
 		completedSteps := make([]map[string]interface{}, len(checkpoint.CompletedSteps))
 		for i, step := range checkpoint.CompletedSteps {
 			completedSteps[i] = map[string]interface{}{
@@ -209,7 +209,7 @@ func (c *SSECallback) sendEvent(eventType string, data interface{}) {
 		return
 	}
 
-	fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData)
+	_, _ = fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData)
 	c.flusher.Flush()
 }
 

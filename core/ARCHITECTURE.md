@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.10
+**Version**: 1.13
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -112,7 +112,7 @@ require (
 
 Framework-owned Redis clients pass their options through
 `ApplyRedisUniversalDefaults`; `ApplyRedisClientDefaults` remains a standalone
-compatibility wrapper. This keeps go-redis/v9 on RESP2 and preserves the
+options helper. This keeps go-redis/v9 on RESP2 and preserves the
 established timeout, retry, and idle-connection defaults across standalone,
 Sentinel, and cluster clients.
 The dialer implementation, TCP keepalive, and buffer sizing use go-redis/v9
@@ -130,16 +130,19 @@ is explicit—address count never guesses topology—and
 `NewRedisUniversalClient` constructs exactly one of a standalone, Sentinel, or
 cluster client. Standalone requires one address, Sentinel requires one or more
 Sentinel addresses plus a master name, and cluster requires one or more seed
-addresses with DB 0. Cluster rejects a non-zero DB at configuration time.
+addresses. Every mode requires DB 0 and rejects a non-zero DB at configuration time.
 
 `REDIS_URL` is the standard DB-0 standalone shorthand. Structured
 `TRUVAG3_REDIS_MODE` and `TRUVAG3_REDIS_*` connection fields express all three
 topologies. Those sources are mutually exclusive; combining them is an invalid
-configuration rather than a precedence case. `TRUVAG3_REDIS_URL` is a
-deprecated precursor-minor standalone compatibility source, emits one bounded
-diagnostic, and is the only path that temporarily retains numbered-database
-behavior. Pool size is per node in cluster mode, so the deployment-wide upper
-bound is approximately `PoolSize * shard nodes` (plus Sentinel/control-plane
+configuration rather than a precedence case. The removed
+`TRUVAG3_REDIS_URL` alias fails with a bounded configuration error when non-empty.
+`ResolveRedisConnectionConfig` returns the validated `RedisConnectionConfig`
+directly; there is no deprecation-diagnostic wrapper. Numbered-DB constants,
+reserved-DB naming helpers, and the old `RedisClientOptions` constructor are
+removed. Namespaced command clients use `NewRedisClientWithConnection` or
+`NewRedisClientWithClient`. Pool size is per node in cluster mode, so the
+deployment-wide upper bound is approximately `PoolSize * shard nodes` (plus Sentinel/control-plane
 connections where applicable).
 
 Constructors that create a client own and close it. Injected construction accepts
@@ -535,8 +538,7 @@ func (c *Config) LoadFromEnv() error {
         if err != nil {
             return err
         }
-        c.Discovery.RedisConnection = &resolution.Config
-        c.Discovery.RedisDiagnostics = resolution.Diagnostics
+        c.Discovery.RedisConnection = &resolution
     }
     // Memory is in-process only; no env-var URL.
     if v := os.Getenv("TRUVAG3_MEMORY_CLEANUP_INTERVAL"); v != "" {
@@ -749,15 +751,20 @@ persistence and coordination contracts remain in
 `orchestration/backendconformance`; moving those suites into Core would move
 ownership in the wrong direction.
 
-### Integration Testing Patterns
+### Optional Integration Testing Pattern
+
+Integration tests are optional, manually invoked supplements and must remain
+outside CI. Put them behind the `integration` build tag instead of relying on
+`testing.Short`; CI runs the complete default unit suite without `-short`.
 
 #### 1. **Discovery System Testing**
+
 ```go
+//go:build integration
+
+package core
+
 func TestRedisDiscoveryIntegration(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping Redis integration test in short mode")
-    }
-    
     registry, err := NewRedisRegistry("redis://localhost:6379")
     assert.NoError(t, err)
     
@@ -978,24 +985,29 @@ func (r *RedisRegistry) StartHeartbeat(ctx context.Context, id string, heartbeat
 ```go
 // ✅ Owning path: construct, verify, and close with the registry.
 func NewRedisRegistryWithConnection(
-    connection RedisConnectionConfig,
-    namespace string,
+    profile RedisConnectionConfig,
+    keyspace RedisKeyspace,
     ttl time.Duration,
 ) (*RedisRegistry, error) {
-    client, err := NewRedisUniversalClient(connection)
+    client, err := NewRedisUniversalClient(profile)
     if err != nil {
+        return nil, fmt.Errorf("initialize Redis registry: %w: %w", ErrConnectionFailed, err)
+    }
+    registry, err := newRedisRegistry(client, true, keyspace, ttl)
+    if err != nil {
+        _ = client.Close()
         return nil, err
     }
-    return newRedisRegistry(client, true, namespace, ttl)
+    return registry, nil
 }
 
 // ✅ Injected path: the application retains client lifecycle ownership.
 func NewRedisRegistryWithClient(
     client redis.UniversalClient,
-    namespace string,
+    keyspace RedisKeyspace,
     ttl time.Duration,
 ) (*RedisRegistry, error) {
-    return newRedisRegistry(client, false, namespace, ttl)
+    return newRedisRegistry(client, false, keyspace, ttl)
 }
 ```
 
@@ -1062,7 +1074,8 @@ producer-reported; it is not an independent verification of backend durability.
 - [ ] **Error Handling**: Graceful degradation for optional features
 - [ ] **Thread Safety**: Proper synchronization for concurrent access
 - [ ] **Resource Cleanup**: Proper cleanup in shutdown scenarios
-- [ ] **Testing**: Comprehensive unit and integration tests
+- [ ] **Testing**: Mandatory comprehensive unit tests; optional integration
+      tests remain manual and outside CI
 
 ### Configuration Changes
 
@@ -1108,6 +1121,7 @@ producer-reported; it is not an independent verification of backend durability.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.13 | 2026-09-08 | Removed numbered-DB constructors/constants and deprecation-only resolution plumbing under the author-approved development exception; all owned topologies validate DB 0 and borrowed-client ownership is unchanged |
 | 1.12 | 2026-09-08 | Made discovery cleanup atomic with its missing-record recheck, preserved explicit namespace precedence over invalid environment values, and shared independently bounded startup checks without taking ownership of borrowed clients |
 | 1.11 | 2026-09-04 | Scoped topology-aware Redis client and configuration diagnostics to `framework/core` and required bounded, request-correlated health/error observations without endpoint or credential text |
 | 1.10 | 2026-09-04 | Added the typed request-scoped pipeline-hook effect reporting seam, producer-reported status semantics, exact debug-data ownership, and race-free pending-effect lifecycle contract |

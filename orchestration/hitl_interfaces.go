@@ -354,8 +354,8 @@ type ExecutionCheckpoint struct {
 
 	// OriginalTraceID is the W3C trace ID from the span active when this checkpoint
 	// was created. Populated by createCheckpoint for use in BuildResumeContext.
-	// Empty when no active OTel span existed at interrupt time (e.g., untraced workers
-	// before RC6 is deployed). BuildResumeContext degrades gracefully — it creates a
+	// Empty when no active OTel span existed at interrupt time. BuildResumeContext
+	// degrades gracefully by creating a
 	// valid unlinked root span rather than failing.
 	OriginalTraceID string `json:"original_trace_id,omitempty"`
 

@@ -1,7 +1,7 @@
 // Package orchestration — Redis BRPOP-based core.TaskConsumer (default, at-most-once).
 //
 // This is the default consumer-side reference implementation. It uses BRPOP
-// against the same truvag3:tasks:queue:{name} list pattern that RedisTaskQueue
+// against the same versioned deployment-scoped queue list that RedisTaskQueue
 // and RedisTaskDispatcher already use, so a BRPOP-based consumer is wire-
 // compatible with the existing producer. Delivery semantics are at-most-once:
 // the task is removed from the list when BRPOP returns, and there is no
@@ -10,7 +10,7 @@
 //
 // TaskHandle implementation: the returned handle (redisAtMostOnceHandle) has
 // no-op Ack. Nack persists a dead-letter entry via LPUSH to
-// truvag3:tasks:dead:{queueName}.
+// <task-prefix>:dead:<queueName>.
 //
 // For at-least-once semantics, use RedisStreamsTaskConsumer via
 // NewRedisStreamsSchedulerBackends instead.
@@ -62,6 +62,8 @@ func NewRedisTaskConsumer(client redis.Cmdable, queueName string) (*RedisTaskCon
 	return NewRedisTaskConsumerWithPrefix(client, queueName, defaultRedisKeyspace().Plain("tasks"))
 }
 
+// NewRedisTaskConsumerWithPrefix accepts an explicit task-routing prefix.
+// Supply the dispatcher's keyspace.Plain("tasks") value; the caller owns client.
 func NewRedisTaskConsumerWithPrefix(client redis.Cmdable, queueName, prefix string) (*RedisTaskConsumer, error) {
 	if client == nil {
 		return nil, errNilRedisClient

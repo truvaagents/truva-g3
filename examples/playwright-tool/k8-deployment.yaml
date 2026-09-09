@@ -101,9 +101,7 @@ spec:
         # Playwright script directory
         - name: PLAYWRIGHT_SCRIPT_DIR
           value: "/app/scripts"
-        # Redis DB for QA data (must match the env var read by main.go)
-        - name: REDIS_QA_DB
-          value: "9"
+        # QA data uses the shared versioned DB-0 Playwright subspace.
         - name: DEV_MODE
           value: "false"
         - name: TRUVAG3_LOG_LEVEL

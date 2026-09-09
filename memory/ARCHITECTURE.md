@@ -1,6 +1,6 @@
 # TruvaG3 Memory Module Architecture
 
-**Version**: 1.3
+**Version**: 1.5
 **Module**: `github.com/truvaagents/truva-g3/memory`
 **Purpose**: Pluggable storage backend implementations for cross-agent shared memory
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
@@ -656,7 +656,7 @@ func (x *XxxSharedKnowledge) Close() error { ... }
 
 The current default implementation uses Qdrant as the vector search backend. This is a **batteries-included default**, not an architectural requirement. It can be swapped for any other backend (pgvector, Weaviate, Milvus) by providing an alternative implementation of `core.SharedKnowledge`.
 
-**Why Qdrant was chosen as default:** Purpose-built vector DB, Apache 2.0 license, 4 years mature, 20K+ GitHub stars, official Go client (gRPC), lightweight Rust binary (~128Mi pod). See the implementation plan's Decision Log for the full evaluation.
+**Why Qdrant was chosen as default:** Purpose-built vector DB, Apache 2.0 license, mature ecosystem, official Go client (gRPC), and a lightweight Rust binary (~128Mi pod).
 
 **Qdrant-specific storage schema:**
 
@@ -1127,7 +1127,16 @@ Use mock backend clients (not real servers) for unit tests. Each backend provide
 
 ### Integration Tests
 
+Integration tests are optional, manually invoked supplements. If added, keep
+them behind the `integration` build tag and outside CI; they do not replace the
+mandatory unit coverage above. CI runs the complete default unit suite without
+`-short`.
+
 ```go
+//go:build integration
+
+package memory
+
 func TestSharedKnowledge_Integration(t *testing.T) {
     // Uses testcontainers or a shared backend instance
     // 1. Store a fragment in domain "infrastructure"
@@ -1192,7 +1201,7 @@ Domain scoping is enforced at the **query level**, not the application level. Ev
 
 ### Regulated Domains
 
-For compliance-critical domains, the application points the backend implementation at a **dedicated instance** within an isolated K8s namespace. The module doesn't need to know about compliance — it connects to whatever backend address is configured. Isolation is enforced by infrastructure (K8s NetworkPolicy + separate instances), not by application code. See the implementation plan's §0.6.4 for the compliance isolation topology.
+For compliance-critical domains, the application points the backend implementation at a **dedicated instance** within an isolated K8s namespace. The module doesn't need to know about compliance — it connects to whatever backend address is configured. Isolation is enforced by infrastructure (K8s NetworkPolicy + separate instances), not by application code.
 
 ### Secrets Management
 

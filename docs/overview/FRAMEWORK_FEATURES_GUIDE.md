@@ -996,7 +996,7 @@ See [README.md](https://github.com/truvaagents/truva-g3/blob/main/README.md#25-e
 
 Common runtime backends include:
 
-- Redis/Valkey for discovery, sessions, memory events, scheduling, async tasks, Redis Streams consumers, debug stores, and the included skills package store (database 9 by default)
+- Redis/Valkey for discovery, sessions, memory events, scheduling, async tasks, Redis Streams consumers, debug stores, and the included skills package store (shared DB 0 with versioned deployment keyspaces in standalone, Sentinel, and cluster modes)
 - Qdrant for vector-backed shared knowledge and user memory
 - OpenTelemetry Collector for metrics and traces
 - Prometheus, Jaeger, Grafana, and Loki in the example stack

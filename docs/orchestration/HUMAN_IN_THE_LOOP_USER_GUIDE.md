@@ -1179,8 +1179,6 @@ When a checkpoint times out (decision timeout expires), what happens?
 | `TRUVAG3_REDIS_NAMESPACE` | `default` | Deployment namespace used by the canonical versioned DB 0 HITL keyspace |
 | `TRUVAG3_AGENT_NAME` | `""` | Agent name appended to the base prefix for multi-agent isolation |
 | `TRUVAG3_K8S_SERVICE_NAME` | `""` | K8s Service name; used as `TRUVAG3_AGENT_NAME` fallback when unset |
-| `TRUVAG3_HITL_REDIS_DB` | unset (DB 0) | **Deprecated:** standalone-only numbered-database compatibility input |
-| `TRUVAG3_HITL_KEY_PREFIX` | unset | **Deprecated:** precursor custom-prefix compatibility input; canonical composition derives the prefix from the deployment namespace and agent scope |
 
 **The agent identity is structural, not optional.** Canonical provider
 composition derives the prefix with
@@ -1199,8 +1197,7 @@ HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME
 
 The warning suppresses when isolation has been supplied through
 `TRUVAG3_AGENT_NAME`, `TRUVAG3_K8S_SERVICE_NAME`, or an explicit
-`WithCheckpointKeyPrefix` option. The deprecated custom-prefix variable also
-suppresses it during the compatibility window. K8s deployments using the
+`WithCheckpointKeyspace` option. K8s deployments using the
 framework's standard manifests already set the service identity; for local
 development with more than one HITL-enabled agent, set `TRUVAG3_AGENT_NAME`.
 
@@ -1530,18 +1527,17 @@ TRUVAG3_K8S_SERVICE_NAME=my-agent
 TRUVAG3_REDIS_NAMESPACE=production
 ```
 
-Or derive the cluster-safe prefix explicitly and pass it to both HITL stores:
+Or pass the same typed deployment keyspace and agent scope to both HITL stores:
 
 ```go
 keyspace, _ := core.NewRedisKeyspace("production")
-hitlPrefix := keyspace.Tagged("hitl", "my-agent")
 checkpointStore, _ := orchestration.NewRedisCheckpointStoreWithClient(
     redisClient,
-    orchestration.WithCheckpointKeyPrefix(hitlPrefix),
+    orchestration.WithCheckpointKeyspace(keyspace, "my-agent"),
 )
 commandStore, _ := orchestration.NewRedisCommandStoreWithClient(
     redisClient,
-    orchestration.WithCommandStoreKeyPrefix(hitlPrefix),
+    orchestration.WithCommandStoreKeyspace(keyspace, "my-agent"),
 )
 ```
 
@@ -1873,11 +1869,12 @@ operational prefix `truvag3:v1:<deployment>:hitl`.
 The resulting canonical base is
 `truvag3:v1:<deployment>:hitl:{<deployment>:hitl:<agent>}`. The braces are a
 Redis Cluster hash tag: checkpoint, pending-index, claim, and command keys for
-that agent share one slot. `WithCheckpointKeyPrefix` and
-`WithCommandStoreKeyPrefix` override the fully resolved prefix and must receive
-the same `RedisKeyspace.Tagged("hitl", agentScope)` value. The shared-prefix
-Warn fires when no agent identity or explicit prefix was supplied. The
-deprecated `TRUVAG3_HITL_KEY_PREFIX` remains a compatibility override only.
+that agent share one slot. `WithCheckpointKeyspace` and
+`WithCommandStoreKeyspace` override the resolved identity and must receive the
+same `RedisKeyspace` and `agentScope`. The shared-prefix Warn fires when no agent
+identity or explicit keyspace was supplied. `TRUVAG3_HITL_KEY_PREFIX` and
+`TRUVAG3_HITL_REDIS_DB` are removed; selected owning Redis constructors reject
+non-empty values with an actionable configuration error.
 
 #### Configure isolation through any of these paths
 
@@ -1895,14 +1892,13 @@ TRUVAG3_REDIS_NAMESPACE=staging
 ```go
 // Path 4 — explicit composition with an application-owned topology-aware client
 keyspace, _ := core.NewRedisKeyspace("staging")
-hitlPrefix := keyspace.Tagged("hitl", "trading-agent")
 checkpointStore, _ := orchestration.NewRedisCheckpointStoreWithClient(
     redisClient,
-    orchestration.WithCheckpointKeyPrefix(hitlPrefix),
+    orchestration.WithCheckpointKeyspace(keyspace, "trading-agent"),
 )
 commandStore, _ := orchestration.NewRedisCommandStoreWithClient(
     redisClient,
-    orchestration.WithCommandStoreKeyPrefix(hitlPrefix),
+    orchestration.WithCommandStoreKeyspace(keyspace, "trading-agent"),
 )
 ```
 
@@ -1969,14 +1965,16 @@ func TestMyAgent_WithHITL(t *testing.T) {
 
 ### Integration Testing with Real HITL
 
-For integration tests, use a real Redis but with test-specific configuration:
+For optional, manually run integration tests, use a real DB-0 Redis with a
+test-specific namespace. These checks are not part of the unit-test CI gate:
 
 ```go
 func TestHITL_PlanApproval(t *testing.T) {
     // Use test Redis (e.g., testcontainers or local)
+    keyspace, _ := core.NewRedisKeyspace("test")
     store, _ := orchestration.NewRedisCheckpointStore(
         orchestration.WithCheckpointRedisURL("redis://localhost:6379"),
-        orchestration.WithCheckpointKeyPrefix("test:hitl"),  // Isolated prefix
+        orchestration.WithCheckpointKeyspace(keyspace, "test-agent"),
     )
     defer store.Close()
 

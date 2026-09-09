@@ -327,8 +327,8 @@ REDIS_URL=redis://localhost:6379 go run .
 
 For this process it:
 
-1. loads the Redis URL and role-specific database configuration;
-2. creates only the `skills` client role;
+1. resolves the Redis connection topology and deployment keyspace;
+2. creates one owned DB-0 client and selects only the `skills` role;
 3. builds the runtime and administration skill contracts for that role;
 4. validates every capability promised by the role; and
 5. returns `OwnedBackends`, whose `Close` method releases the clients that the
@@ -336,6 +336,10 @@ For this process it:
 
 It does not start a goroutine, pass Redis into the skill runtime, or construct
 unrelated workflow, scheduling, human-in-the-loop, or debug roles.
+Roles select capabilities, not logical databases. Non-empty removed settings
+for a selected role fail before dialing; settings for unselected roles are
+ignored. `REDIS_URL` remains the standalone shorthand and cannot be combined
+with structured connection settings.
 
 ### Add logical isolation
 
@@ -460,11 +464,10 @@ if err != nil {
 }
 ```
 
-The default role-to-database assignments preserve legacy behavior. They are
-compatibility values, not recommendations for a new Redis deployment. Use the
-documented role-specific environment variables or
-`redisprovider.WithRoleDatabase` when your deployment needs a different
-isolation plan.
+All included Redis roles share DB 0 and use versioned deployment/subsystem
+keys. Use `WithDeployment`/typed keyspace options for isolation; numbered-role
+routing is removed. Explicitly injected per-role clients remain supported and
+application-owned.
 
 If your application already owns Redis clients, construct a `ClientSet`
 instead. A non-nil default client is an explicit fallback for every role:
@@ -1538,7 +1541,6 @@ redisprovider.WithDefaultBackendOverrides(overrides...)
 redisprovider.DefaultClientConfig()
 redisprovider.LoadClientConfigFromEnvironment(config, lookup)
 redisprovider.ConfigureClientConfig(config, options...)
-redisprovider.WithRoleDatabase(role, database)
 redisprovider.NewOwnedClients(config, options...)
 redisprovider.WithOwnedClientRoles(roles...)
 redisprovider.NewClientSet(defaultClient, roleOptions...)

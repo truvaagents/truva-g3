@@ -1106,7 +1106,7 @@ func StartRegistryRetryWithConnection(
 		heartbeatInterval: heartbeatInterval,
 	}
 
-	go registryRetryManager(ctx, resolution.Config, state, logger)
+	go registryRetryManager(ctx, resolution, state, logger)
 }
 
 func stateServiceID(serviceInfo *ServiceInfo) string {

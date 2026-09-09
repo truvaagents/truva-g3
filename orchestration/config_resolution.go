@@ -1130,7 +1130,6 @@ func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool
 		{"TRUVAG3_HALLUCINATION_MAX_RETRIES", &config.HallucinationMaxRetries},
 		{"TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS", &config.SemanticRetry.MaxAttempts},
 		{"TRUVAG3_TIERED_SELECTION_RETRY_MAX", &config.TieredResolution.MaxRetries},
-		{"TRUVAG3_LLM_DEBUG_REDIS_DB", &config.LLMDebug.RedisDB},
 		{"TRUVAG3_HITL_ESCALATE_AFTER_RETRIES", &config.HITL.EscalateAfterRetries},
 		{"TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD", &config.ResultTrim.SchemaGuidedMappingThreshold},
 		{"TRUVAG3_CONTINUATION_MAX_ESCALATIONS", &config.ContinuationMaxEscalations},

@@ -32,7 +32,7 @@ func TestRedisProviderAgainstManagedCluster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Config.Mode != core.RedisModeCluster || resolution.Config.DB != 0 {
+	if resolution.Mode != core.RedisModeCluster || resolution.DB != 0 {
 		t.Fatal("managed smoke test requires cluster mode and DB 0")
 	}
 	deployment := strings.TrimSpace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
@@ -43,7 +43,7 @@ func TestRedisProviderAgainstManagedCluster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := ConfigureClientConfig(DefaultClientConfig(), WithConnectionConfig(resolution.Config))
+	config, err := ConfigureClientConfig(DefaultClientConfig(), WithConnectionConfig(resolution))
 	if err != nil {
 		t.Fatal(err)
 	}

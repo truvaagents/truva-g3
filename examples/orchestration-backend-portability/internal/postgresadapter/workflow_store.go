@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS portability_workflow_executions (
     payload      JSONB       NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (namespace, execution_id)
+    PRIMARY KEY (namespace, workflow_id, execution_id)
 );
 CREATE INDEX IF NOT EXISTS portability_workflow_by_workflow
     ON portability_workflow_executions (namespace, workflow_id, created_at DESC);
@@ -67,7 +67,7 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// WorkflowStore implements orchestration.StateStore with application-owned
+// WorkflowStore implements orchestration.WorkflowStateStore with application-owned
 // PostgreSQL connections. It never closes the supplied pool.
 type WorkflowStore struct {
 	pool      *pgxpool.Pool
@@ -111,9 +111,9 @@ func (s *WorkflowStore) UpdateExecution(ctx context.Context, execution *orchestr
 	}
 	result, err := s.pool.Exec(ctx, `
         UPDATE portability_workflow_executions
-        SET workflow_id = $3, payload = $4, updated_at = now()
-        WHERE namespace = $1 AND execution_id = $2
-    `, s.namespace, execution.ID, execution.WorkflowID, payload)
+		SET payload = $4, updated_at = now()
+		WHERE namespace = $1 AND workflow_id = $2 AND execution_id = $3
+	`, s.namespace, execution.WorkflowID, execution.ID, payload)
 	if err != nil {
 		return fmt.Errorf("postgres adapter: update workflow execution: %w", err)
 	}
@@ -125,10 +125,15 @@ func (s *WorkflowStore) UpdateExecution(ctx context.Context, execution *orchestr
 
 func (s *WorkflowStore) UpdateStepExecution(
 	ctx context.Context,
+	workflowID string,
 	executionID string,
 	step *orchestration.StepExecution,
 ) error {
+	workflowID = strings.TrimSpace(workflowID)
 	executionID = strings.TrimSpace(executionID)
+	if workflowID == "" {
+		return fmt.Errorf("postgres adapter: workflow ID is required")
+	}
 	if executionID == "" {
 		return fmt.Errorf("postgres adapter: execution ID is required")
 	}
@@ -146,9 +151,9 @@ func (s *WorkflowStore) UpdateStepExecution(
 	if err := tx.QueryRow(ctx, `
         SELECT payload
         FROM portability_workflow_executions
-        WHERE namespace = $1 AND execution_id = $2
+		WHERE namespace = $1 AND workflow_id = $2 AND execution_id = $3
         FOR UPDATE
-    `, s.namespace, executionID).Scan(&payload); err != nil {
+	`, s.namespace, workflowID, executionID).Scan(&payload); err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("postgres adapter: workflow execution %q not found", executionID)
 		}
@@ -169,9 +174,9 @@ func (s *WorkflowStore) UpdateStepExecution(
 	}
 	if _, err := tx.Exec(ctx, `
         UPDATE portability_workflow_executions
-        SET payload = $3, updated_at = now()
-        WHERE namespace = $1 AND execution_id = $2
-    `, s.namespace, executionID, payload); err != nil {
+		SET payload = $4, updated_at = now()
+		WHERE namespace = $1 AND workflow_id = $2 AND execution_id = $3
+	`, s.namespace, workflowID, executionID, payload); err != nil {
 		return fmt.Errorf("postgres adapter: persist step update: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -182,9 +187,14 @@ func (s *WorkflowStore) UpdateStepExecution(
 
 func (s *WorkflowStore) GetExecution(
 	ctx context.Context,
+	workflowID string,
 	executionID string,
 ) (*orchestration.WorkflowExecution, error) {
+	workflowID = strings.TrimSpace(workflowID)
 	executionID = strings.TrimSpace(executionID)
+	if workflowID == "" {
+		return nil, fmt.Errorf("postgres adapter: workflow ID is required")
+	}
 	if executionID == "" {
 		return nil, fmt.Errorf("postgres adapter: execution ID is required")
 	}
@@ -192,8 +202,8 @@ func (s *WorkflowStore) GetExecution(
 	if err := s.pool.QueryRow(ctx, `
         SELECT payload
         FROM portability_workflow_executions
-        WHERE namespace = $1 AND execution_id = $2
-    `, s.namespace, executionID).Scan(&payload); err != nil {
+		WHERE namespace = $1 AND workflow_id = $2 AND execution_id = $3
+	`, s.namespace, workflowID, executionID).Scan(&payload); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("postgres adapter: workflow execution %q not found", executionID)
 		}
@@ -271,4 +281,4 @@ func decodeExecution(payload []byte) (*orchestration.WorkflowExecution, error) {
 	return &execution, nil
 }
 
-var _ orchestration.StateStore = (*WorkflowStore)(nil)
+var _ orchestration.WorkflowStateStore = (*WorkflowStore)(nil)

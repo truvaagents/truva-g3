@@ -180,12 +180,12 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 
 	// Include resolved parameters for step-level approvals (Scenario 2)
 	// This shows the user the actual values that will be sent to the tool
-	if checkpoint.ResolvedParameters != nil && len(checkpoint.ResolvedParameters) > 0 {
+	if len(checkpoint.ResolvedParameters) > 0 {
 		data["resolved_parameters"] = checkpoint.ResolvedParameters
 	}
 
 	// Include completed steps for context (shows what has already executed)
-	if checkpoint.CompletedSteps != nil && len(checkpoint.CompletedSteps) > 0 {
+	if len(checkpoint.CompletedSteps) > 0 {
 		completedSteps := make([]map[string]interface{}, len(checkpoint.CompletedSteps))
 		for i, step := range checkpoint.CompletedSteps {
 			completedSteps[i] = map[string]interface{}{
@@ -230,7 +230,7 @@ func (c *SSECallback) sendEvent(eventType string, data interface{}) {
 		return
 	}
 
-	fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData)
+	_, _ = fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData)
 	c.flusher.Flush()
 }
 

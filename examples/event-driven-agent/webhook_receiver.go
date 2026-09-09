@@ -41,7 +41,7 @@ type Alert struct {
 }
 
 // alertEnvelope carries an alert and its originating HTTP trace context through the
-// Redis raw alert queue, so workers can restore the trace via StartLinkedSpan (RC5).
+// Redis raw alert queue, so workers can restore the trace via StartLinkedSpan.
 type alertEnvelope struct {
 	AlertJSON string `json:"alert_json"`
 	TraceID   string `json:"trace_id,omitempty"`
@@ -167,7 +167,7 @@ func (a *EventDrivenAgent) handleAlertManagerWebhook(w http.ResponseWriter, r *h
 	if enqueued > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":   "accepted",
 			"enqueued": enqueued,
 			"skipped":  skipped,
@@ -180,7 +180,7 @@ func (a *EventDrivenAgent) handleAlertManagerWebhook(w http.ResponseWriter, r *h
 	// Return 200 if all alerts were handled synchronously
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "processed",
 		"skipped": skipped,
 		"warned":  warned,
@@ -192,7 +192,7 @@ func (a *EventDrivenAgent) handleAlertManagerWebhook(w http.ResponseWriter, r *h
 // Returns true if the alert was enqueued, false if it was deduplicated.
 func (a *EventDrivenAgent) enqueueCriticalAlert(ctx context.Context, alert Alert) bool {
 	// Dedup key: fingerprint-based, 5min TTL (configurable via EVENT_AGENT_DEDUP_TTL)
-	dedupKey := fmt.Sprintf("truvag3:event:dedup:%s", alert.Fingerprint)
+	dedupKey := a.alertDedupKey(alert.Fingerprint)
 	dedupTTL := getDedupTTL()
 
 	// SET NX (set if not exists) with TTL for deduplication
@@ -216,7 +216,7 @@ func (a *EventDrivenAgent) enqueueCriticalAlert(ctx context.Context, alert Alert
 		return false
 	}
 
-	// Serialize alert and wrap in trace-carrying envelope before LPUSH (RC5).
+	// Serialize the alert and wrap it in a trace-carrying envelope before LPUSH.
 	// Capture HTTP trace context so the worker can restore it via StartLinkedSpan.
 	// telemetry.GetTraceContext returns empty strings if no span is active (graceful).
 	alertJSON, err := json.Marshal(alert)
@@ -244,7 +244,7 @@ func (a *EventDrivenAgent) enqueueCriticalAlert(ctx context.Context, alert Alert
 		return false
 	}
 
-	queueKey := "truvag3:event:alert_queue"
+	queueKey := a.alertQueueKey()
 	if err := a.redisClient.LPush(ctx, queueKey, envelopeJSON).Err(); err != nil {
 		a.Logger.ErrorWithContext(ctx, "Failed to enqueue alert", map[string]interface{}{
 			"fingerprint": alert.Fingerprint,
@@ -304,18 +304,20 @@ func (a *EventDrivenAgent) sendWarningSlackNotification(ctx context.Context, ale
 	}
 
 	body, _ := json.Marshal(payload)
+	// #nosec G704 -- the destination is fixed except for the operator-configured Kubernetes namespace; alert input never selects a host or path.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, slackToolURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create slack-tool request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// #nosec G704 -- this request targets the deployment's configured slack-tool service, not a URL supplied by the webhook caller.
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		telemetry.Counter("event_agent.slack_notifications", "status", "error", "module", "agent")
 		return fmt.Errorf("call slack-tool send_message: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		telemetry.Counter("event_agent.slack_notifications", "status", "error", "module", "agent")

@@ -27,11 +27,12 @@ const (
 func RunSchedulerTool(
 	ctx context.Context,
 	backends SchedulerBackends,
-	redisURL string,
+	redisConnection core.RedisConnectionConfig,
+	redisKeyspace core.RedisKeyspace,
 	port int,
 	serviceNamespace string,
 ) error {
-	if backends.Schedules == nil || backends.Tasks == nil || backends.Dispatcher == nil || backends.Lock == nil {
+	if backends.Schedules == nil || backends.Tasks == nil || backends.Dispatcher == nil || backends.Lock == nil || backends.Registry == nil {
 		return fmt.Errorf("live portability: complete scheduler backends are required")
 	}
 	serviceNamespace = strings.TrimSpace(serviceNamespace)
@@ -40,17 +41,22 @@ func RunSchedulerTool(
 	}
 
 	tool := core.NewTool(SchedulerServiceName)
+	tool.Registry = backends.Registry
 	framework, err := core.NewFramework(
 		tool,
 		core.WithName(SchedulerServiceName),
 		core.WithPort(port),
 		core.WithNamespace(serviceNamespace),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisConnection),
+		core.WithRedisDeployment(redisKeyspace.Deployment()),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORSDefaults(),
 	)
 	if err != nil {
 		return fmt.Errorf("live portability: construct scheduler framework: %w", err)
+	}
+	if loggingRegistry, ok := backends.Registry.(interface{ SetLogger(core.Logger) }); ok {
+		loggingRegistry.SetLogger(tool.Logger)
 	}
 
 	orchestration.RegisterScheduleCapabilities(tool, backends.Schedules)

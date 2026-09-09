@@ -34,8 +34,8 @@ kubectl exec -n "$NAMESPACE" deployment/portability-nats -- \
 
 printf '\n=== Redis discovery and scheduler lock ===\n'
 kubectl exec -n "$NAMESPACE" deployment/redis -- \
-    redis-cli GET truvag3:services:portable-target-agent |
+    redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:portable-target-agent' |
     jq '{id, name, type, address, port, health}'
 printf 'scheduler_lock_ttl_seconds='
 kubectl exec -n "$NAMESPACE" deployment/redis -- \
-    redis-cli TTL truvag3:lock:orchestration-portability:truvag3:scheduler
+    redis-cli TTL 'truvag3:v1:orchestration-portability:locks:{orchestration-portability:locks:scheduler}:lease'

@@ -100,7 +100,7 @@ func TestLoadFromEnv(t *testing.T) {
 		"TRUVAG3_CORS_ENABLED":     "true",
 		"TRUVAG3_CORS_ORIGINS":     "https://example.com,https://*.example.com",
 		"TRUVAG3_CORS_CREDENTIALS": "true",
-		"TRUVAG3_REDIS_URL":        "redis://test-redis:6379",
+		"REDIS_URL":                "redis://test-redis:6379",
 		"TRUVAG3_DISCOVERY_CACHE":  "false",
 		"OPENAI_API_KEY":           "sk-test-key",
 		"TRUVAG3_AI_MODEL":         "gpt-4-turbo",
@@ -146,6 +146,43 @@ func TestLoadFromEnv(t *testing.T) {
 	assert.True(t, cfg.Development.Enabled)
 	assert.True(t, cfg.Development.MockAI)
 	assert.True(t, cfg.Development.MockDiscovery)
+}
+
+func TestSharedMemoryRedisURLFallback(t *testing.T) {
+	for _, test := range []struct {
+		name, redisURL, sharedURL, want string
+	}{
+		{"discovery default", "", "", "redis://localhost:6379"},
+		{"standard URL", "redis://standard:6379/0", "", "redis://standard:6379/0"},
+		{"explicit shared memory URL", "redis://standard:6379/0", "redis://memory:6379/0", "redis://memory:6379/0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearRedisConnectionEnvironment(t)
+			t.Setenv("KUBERNETES_SERVICE_HOST", "")
+			t.Setenv("REDIS_URL", test.redisURL)
+			cfg := DefaultConfig()
+			cfg.SharedMemory.RedisURL = test.sharedURL
+			require.NoError(t, cfg.LoadFromEnv())
+			assert.Equal(t, test.want, cfg.SharedMemory.RedisURL)
+		})
+	}
+}
+
+func TestSharedMemoryDoesNotReadRemovedRedisURLAlias(t *testing.T) {
+	clearRedisConnectionEnvironment(t)
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("TRUVAG3_REDIS_URL", "redis://removed:6379/8")
+
+	cfg := DefaultConfig()
+	require.ErrorIs(t, cfg.LoadFromEnv(), ErrInvalidConfiguration)
+	assert.Empty(t, cfg.SharedMemory.RedisURL)
+
+	// NewConfig defers Redis errors so explicit options can replace invalid
+	// discovery configuration. The removed alias must not leak into memory.
+	cfg, err := NewConfig(WithRedisURL("redis://explicit:6379/0"))
+	require.NoError(t, err)
+	assert.Equal(t, "redis://explicit:6379/0", cfg.Discovery.RedisURL)
+	assert.Equal(t, "redis://localhost:6379", cfg.SharedMemory.RedisURL)
 }
 
 // TestLoadFromFile verifies JSON file loading
@@ -786,7 +823,7 @@ func TestProductionLogger_ContextCorrelationIsLoggedButNotExplicitMetricLabel(t 
 }
 
 // =============================================================================
-// Agent Name Precedence Tests (RC2)
+// Agent Name Precedence Tests
 // =============================================================================
 
 // TestAgentNamePrecedence verifies the TRUVAG3_AGENT_NAME > TRUVAG3_K8S_SERVICE_NAME

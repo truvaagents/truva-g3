@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
@@ -14,23 +13,24 @@ import (
 // Redis is required; Qdrant + embedder are optional (graceful degradation).
 func (t *MemoryTool) setupBackends() error {
 	// --- Redis (required for query_events + query_investigations) ---
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		redisURL = os.Getenv("TRUVAG3_REDIS_URL")
-	}
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL is required for memory backends")
-	}
-
-	redisOpt, err := redis.ParseURL(redisURL)
+	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		return fmt.Errorf("failed to parse REDIS_URL: %w", err)
+		return fmt.Errorf("resolve Redis connection: %w", err)
 	}
-	redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
+	keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		return fmt.Errorf("resolve Redis keyspace: %w", err)
+	}
+	redisClient, err := core.NewRedisUniversalClient(resolution)
+	if err != nil {
+		return fmt.Errorf("connect Redis memory backend: %w", err)
+	}
+	t.backendCloser = redisClient
 
 	episodic, err := memory.NewStreamEpisodicMemory(
-		memory.WithEpisodicRedisClient(redisClient),
+		memory.WithEpisodicRedisUniversalClient(redisClient),
 		memory.WithEpisodicDomain(t.domain),
+		memory.WithEpisodicKeyspace(keyspace),
 		memory.WithEpisodicLogger(t.Logger),
 	)
 	if err != nil {
@@ -39,8 +39,9 @@ func (t *MemoryTool) setupBackends() error {
 	t.episodic = episodic
 
 	coordinator, err := memory.NewAtomicLockCoordinator(
-		memory.WithCoordinatorRedisClient(redisClient),
+		memory.WithCoordinatorRedisUniversalClient(redisClient),
 		memory.WithCoordinatorDomain(t.domain),
+		memory.WithCoordinatorKeyspace(keyspace),
 		memory.WithCoordinatorLogger(t.Logger),
 	)
 	if err != nil {

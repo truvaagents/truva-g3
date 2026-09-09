@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -355,32 +357,6 @@ func TestLLMCallRecord_ToInteractionJSON_Mapping(t *testing.T) {
 // Environment variable helpers
 // ---------------------------------------------------------------------------
 
-func TestRecorderRedisConnectionResolution(t *testing.T) {
-	// Clean state
-	os.Unsetenv("REDIS_URL")
-	os.Unsetenv("TRUVAG3_REDIS_URL")
-	defer os.Unsetenv("REDIS_URL")
-	defer os.Unsetenv("TRUVAG3_REDIS_URL")
-
-	connection, diagnostics, err := resolveRecorderRedisConnection("", 0)
-	if err != nil || connection.Addrs[0] != "localhost:6379" || len(diagnostics) != 0 {
-		t.Fatalf("default resolution = (%#v, %#v, %v)", connection, diagnostics, err)
-	}
-
-	// TRUVAG3_REDIS_URL set
-	os.Setenv("TRUVAG3_REDIS_URL", "redis://truvag3:6379")
-	connection, diagnostics, err = resolveRecorderRedisConnection("", 0)
-	if err != nil || connection.Addrs[0] != "truvag3:6379" || len(diagnostics) != 1 {
-		t.Fatalf("deprecated resolution = (%#v, %#v, %v)", connection, diagnostics, err)
-	}
-
-	// Contradictory connection forms are rejected instead of ranked.
-	os.Setenv("REDIS_URL", "redis://standard:6379")
-	if _, _, err := resolveRecorderRedisConnection("", 0); err == nil {
-		t.Fatal("mixed standard and deprecated URL forms were accepted")
-	}
-}
-
 func TestRecorderGetEnvInt(t *testing.T) {
 	const key = "TEST_RECORDER_INT"
 	defer os.Unsetenv(key)
@@ -462,8 +438,7 @@ func TestRecorderConstants_MatchOrchestrationDefaults(t *testing.T) {
 func TestRedisLLMCallRecorderOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 	mr := miniredis.RunT(t)
 	recorder, err := NewRedisLLMCallRecorder(
-		WithRecorderRedisURL(mr.Addr()),
-		WithRecorderRedisDB(0),
+		WithRecorderRedisURL("redis://"+mr.Addr()),
 		WithRecorderTTL(0),
 		WithRecorderErrorTTL(-time.Second),
 	)
@@ -695,18 +670,29 @@ func TestRedisLLMCallRecorderRetryLogsUseBoundedFailureClass(t *testing.T) {
 }
 
 func TestClassifyRecorderRedisDiagnosticUsesFixedVocabulary(t *testing.T) {
+	const backendText = "redis://user:unit-test-secret@private.invalid/0 payload=private"
 	for _, test := range []struct {
+		name string
 		err  error
 		want string
 	}{
-		{nil, "none"},
-		{context.Canceled, "canceled"},
-		{context.DeadlineExceeded, "timeout"},
-		{errors.New("redis://user:secret@index.invalid/0"), "redis_backend_failure"},
+		{"nil", nil, "none"},
+		{"canceled", context.Canceled, "canceled"},
+		{"wrapped canceled", fmt.Errorf("%s: %w", backendText, context.Canceled), "canceled"},
+		{"deadline", context.DeadlineExceeded, "timeout"},
+		{"wrapped deadline", fmt.Errorf("%s: %w", backendText, context.DeadlineExceeded), "timeout"},
+		{"network timeout", &net.DNSError{Err: backendText, IsTimeout: true}, "timeout"},
+		{"wrapped network timeout", fmt.Errorf("%s: %w", backendText, &net.DNSError{IsTimeout: true}), "timeout"},
+		{"network failure", &net.DNSError{Err: backendText}, "redis_backend_failure"},
+		{"redis nil", redis.Nil, "redis_backend_failure"},
+		{"backend text", errors.New(backendText), "redis_backend_failure"},
+		{"cancellation takes precedence", errors.Join(context.DeadlineExceeded, context.Canceled), "canceled"},
 	} {
-		if got := classifyRecorderRedisDiagnostic(test.err); got != test.want {
-			t.Fatalf("classification = %q, want %q", got, test.want)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyRecorderRedisDiagnostic(test.err); got != test.want {
+				t.Fatalf("classification = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -1015,5 +1001,49 @@ func TestRecordLLMCall_ConversationFirstValidWriterWins(t *testing.T) {
 	metaKey := recorder.keys.Meta(requestID)
 	if got := mr.HGet(metaKey, "meta:conversation_id"); got != "conversation-first" {
 		t.Fatalf("conversation field = %q", got)
+	}
+}
+
+func TestResolveRecorderRedisConnection(t *testing.T) {
+	t.Setenv("REDIS_URL", "")
+	t.Setenv("TRUVAG3_REDIS_URL", "")
+	connection, err := resolveRecorderRedisConnection("")
+	if err != nil || connection.Addrs[0] != "localhost:6379" {
+		t.Fatalf("default resolution = (%#v, %v)", connection, err)
+	}
+	t.Setenv("REDIS_URL", "redis://standard:6379/0")
+	connection, err = resolveRecorderRedisConnection("")
+	if err != nil || connection.Addrs[0] != "standard:6379" {
+		t.Fatalf("standalone resolution = (%#v, %v)", connection, err)
+	}
+	t.Setenv("TRUVAG3_REDIS_URL", "redis://removed:6379/8")
+	if _, err := resolveRecorderRedisConnection(""); err == nil {
+		t.Fatal("removed URL alias was accepted")
+	}
+	connection, err = resolveRecorderRedisConnection("redis://explicit:6379/0")
+	if err != nil || connection.Addrs[0] != "explicit:6379" {
+		t.Fatalf("explicit resolution = (%#v, %v)", connection, err)
+	}
+	if _, err := resolveRecorderRedisConnection("redis://explicit:6379/8"); err == nil {
+		t.Fatal("numbered database URL was accepted")
+	}
+}
+
+func TestRecorderRejectsRemovedSettingsBeforeConnecting(t *testing.T) {
+	for _, name := range []string{"TRUVAG3_LLM_DEBUG_REDIS_DB", "TRUVAG3_LLM_DEBUG_KEY_PREFIX"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "unit-test-secret")
+			recorder, err := NewRedisLLMCallRecorder()
+			if recorder != nil {
+				_ = recorder.Close()
+				t.Fatal("obsolete configuration must not produce a recorder")
+			}
+			if !errors.Is(err, core.ErrInvalidConfiguration) {
+				t.Fatalf("expected invalid configuration, got %v", err)
+			}
+			if strings.Contains(err.Error(), "unit-test-secret") {
+				t.Fatal("configuration error exposed an environment value")
+			}
+		})
 	}
 }

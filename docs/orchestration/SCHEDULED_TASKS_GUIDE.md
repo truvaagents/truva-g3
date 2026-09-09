@@ -485,7 +485,7 @@ All log lines include structured fields:
 Cross-service Loki query:
 
 ```
-{namespace="truvag3-examples"} |= "schedule_id=sch-abc123"
+{k8s_namespace_name="truvag3-examples"} | schedule_id="sch-abc123"
 ```
 
 ### Dead-Letter Queue Inspection
@@ -496,10 +496,14 @@ Tasks that fail permanently land in the DLQ. Inspect via:
 
 ```bash
 kubectl exec -n truvag3-examples deploy/redis -- \
-    redis-cli LRANGE truvag3:tasks:dead:scheduled-executor 0 -1
+    redis-cli -n 0 LRANGE 'truvag3:v1:default:tasks:dead:scheduled-executor' 0 99
 ```
 
 Each entry is JSON with `task`, `reason`, and `failed_at` fields.
+This command targets the standalone example deployment and `default` keyspace.
+Use the configured deployment namespace and a reachable primary with
+`redis-cli -c` when inspecting a cluster. The bounded range shows the first 100
+entries; page subsequent ranges when necessary.
 
 ---
 
@@ -515,7 +519,7 @@ Each entry is JSON with `task`, `reason`, and `failed_at` fields.
 | DLQ entry with `target_not_agent` | `target_agent` resolved to a tool, not an agent | Rebuild scheduler-tool to pick up the server-side `target_agent` default |
 | DLQ entry with `max_retries_exhausted` | Agent's `/api/v1/scheduled` returning 5xx | Check agent logs for orchestrator errors |
 | `dlq_writes_total{status=failure}` | Redis transport error during DLQ persistence | **Page on this** -- tasks are permanently lost |
-| Executor not consuming tasks | BRPOP not returning | Check Redis connectivity and queue key `truvag3:tasks:queue:scheduled-executor` |
+| Executor not consuming tasks | BRPOP not returning | Check Redis connectivity, the shared deployment namespace, and queue key `truvag3:v1:<deployment>:tasks:queue:scheduled-executor` |
 | Duplicate task execution (Streams backend) | Ack failed, task redelivered | Check `ack_errors_total` metric; expected at-least-once behavior |
 | `catalog_agents_known` drops to 0 | Registry empty or Redis unreachable | Check Redis connectivity and agent registration |
 

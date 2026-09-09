@@ -659,7 +659,7 @@ The store organizes products into the following categories:
 
 | Data Type | Redis Database | Key Pattern |
 |-----------|----------------|-------------|
-| Service Registry | DB 0 | `truvag3:services:*` |
+| Service Registry | Redis/Valkey DB 0 | Versioned deployment registry subspace |
 
 ---
 
@@ -1013,7 +1013,7 @@ pkill -f 'kubectl.*port-forward.*truvag3-examples'
 ./setup.sh status
 
 # Check Redis service registry
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Test the API
 ./setup.sh test

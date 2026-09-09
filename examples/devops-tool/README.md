@@ -769,7 +769,7 @@ redis-cli ping
 
 Ensure the tool is registered with Redis:
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **3. Connection refused on port 8347**

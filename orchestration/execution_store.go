@@ -75,7 +75,7 @@ type ConversationExecutionLister interface {
 // StoredExecution contains everything needed for DAG visualization.
 // This is stored as a single record to ensure atomicity and self-containment.
 //
-// # Multi-phase record contract (ORCH-022)
+// # Multi-phase record contract
 //
 // For every multi-phase StoredExecution — success, interrupted, errored, or
 // intermediate (inter-phase snapshot) — the following shape applies:
@@ -91,8 +91,8 @@ type ConversationExecutionLister interface {
 //     execution (prior phases in accumulator order, then any current-phase
 //     partials populated on interrupt or error).
 //   - Interrupted == true signals HITL interruption. This is the canonical
-//     "is interrupted" signal. Do NOT use Result == nil as a proxy; post
-//     ORCH-022, Result is non-nil for all records that reached the phase loop.
+//     "is interrupted" signal. Do NOT use Result == nil as a proxy; Result is
+//     non-nil for all records that reached the phase loop.
 //
 // The registry viewer's normalizeSteps helper
 // (examples/registry-viewer-app/main.go) follows this contract. API consumers
@@ -117,8 +117,8 @@ type StoredExecution struct {
 	// multi-phase executions.
 	Plan *RoutingPlan `json:"plan"`
 
-	// Result contains the execution's step-level results. Post ORCH-022,
-	// Result is non-nil for all records that reached the phase loop — including
+	// Result contains the execution's step-level results. It is non-nil for all
+	// records that reached the phase loop, including
 	// interrupted records. Use Interrupted, not Result == nil, to detect HITL
 	// interruption.
 	Result *ExecutionResult `json:"result"`
@@ -345,13 +345,10 @@ type ExecutionStoreConfig struct {
 	// Default: 168h (7 days). Override via TRUVAG3_EXECUTION_DEBUG_ERROR_TTL.
 	ErrorTTL time.Duration `json:"error_ttl"`
 
-	// KeyPrefix is the prefix for all storage keys.
+	// KeyPrefix scopes logical keys in the generic StorageProvider implementation.
+	// Redis adapters use typed RedisKeyspace options instead; a non-default
+	// generic prefix requires an explicit WithExecutionDebugKeyspace override.
 	// Default: "truvag3:v1:default:execution-debug:".
-	// Override via TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX.
-	// This allows multi-tenant deployments or custom namespacing.
-	// Per FRAMEWORK_DESIGN_PRINCIPLES.md: "Explicit Override: Always allow explicit configuration"
-	// Deprecated: configure provider namespacing with redisprovider.WithNamespace.
-	// This field remains for the legacy compatibility factory.
 	KeyPrefix string `json:"key_prefix"`
 
 	// ConversationQueryLimit bounds the most recent execution window returned

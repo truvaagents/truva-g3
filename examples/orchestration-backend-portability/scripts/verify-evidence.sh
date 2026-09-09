@@ -48,7 +48,7 @@ jq -e '
 ' >/dev/null <<<"$nats_json" || fail "NATS stream/consumer state does not prove settled work-queue delivery"
 
 target_json="$(kubectl exec -n "$NAMESPACE" deployment/redis -- \
-    redis-cli GET truvag3:services:portable-target-agent)"
+    redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:portable-target-agent')"
 jq -e '
     .name == "portable-target-agent" and
     .type == "agent" and
@@ -59,7 +59,7 @@ jq -e '
 lock_ttl=-2
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     lock_ttl="$(kubectl exec -n "$NAMESPACE" deployment/redis -- \
-        redis-cli TTL truvag3:lock:orchestration-portability:truvag3:scheduler)"
+        redis-cli TTL 'truvag3:v1:orchestration-portability:locks:{orchestration-portability:locks:scheduler}:lease')"
     if [ "$lock_ttl" -gt 0 ]; then
         break
     fi

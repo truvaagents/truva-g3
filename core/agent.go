@@ -198,7 +198,6 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 					"reason":   "development_mode",
 				})
 			} else if b.Config.Discovery.Provider == "redis" && (b.Config.Discovery.RedisConnection != nil || b.Config.Discovery.RedisURL != "") {
-				logRedisConnectionDiagnostics(b.Logger, b.Config.Discovery.RedisDiagnostics)
 				connection, connectionErr := redisConnectionForDiscovery(b.Config.Discovery)
 				var discovery *RedisDiscovery
 				if connectionErr == nil {

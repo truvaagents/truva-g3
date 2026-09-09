@@ -945,51 +945,6 @@ func TestDirectRedisIndexTTLHelperHandlesMissingAndPersistentKeys(t *testing.T) 
 
 }
 
-func TestExecutionStoreCanonicalKeysMatchAcrossImplementations(t *testing.T) {
-	for _, prefix := range []string{
-		"tenant:execution:debug",
-		"tenant:execution:debug:",
-		"tenant:execution:debug::",
-	} {
-		config := DefaultExecutionStoreConfig()
-		config.KeyPrefix = prefix
-		providerStore := NewExecutionStoreWithProvider(
-			newMockStorageProvider(),
-			config,
-			nil,
-		).(*executionStoreImpl)
-		directStore := &RedisExecutionDebugStore{
-			keyPrefix: normalizeExecutionKeyPrefix(prefix),
-			keys:      legacyRedisExecutionDebugKeys(prefix),
-		}
-		conversationID := "conversation-key"
-
-		keys := [][2]string{
-			{providerStore.recordKey("request"), directStore.recordKey("request")},
-			{providerStore.indexKey(), directStore.indexKey()},
-			{providerStore.traceKey("trace"), directStore.traceKey("trace")},
-			{
-				providerStore.conversationIndexKey(conversationID),
-				directStore.conversationIndexKey(conversationID),
-			},
-		}
-		for _, pair := range keys {
-			if pair[0] != pair[1] {
-				t.Fatalf("prefix %q key mismatch: %q != %q", prefix, pair[0], pair[1])
-			}
-			if strings.Contains(pair[0], "debug::") {
-				t.Fatalf("prefix %q produced double separator: %q", prefix, pair[0])
-			}
-		}
-		if strings.Contains(
-			providerStore.conversationIndexKey(conversationID),
-			conversationID,
-		) {
-			t.Fatal("conversation index key retained the raw conversation ID")
-		}
-	}
-}
-
 func TestExecutionStoreTraceLookupIsLastWriter(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1090,12 +1045,12 @@ func TestRedisExecutionStoreWithConfigUsesExplicitLimits(t *testing.T) {
 	t.Setenv("TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT", "99")
 	t.Setenv("TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT", "199")
 	config := DefaultExecutionStoreConfig()
-	config.KeyPrefix = "explicit:execution"
 	config.ConversationQueryLimit = 3
 	config.ConversationIndexScanLimit = 7
 	store, err := NewRedisExecutionDebugStoreWithConfig(
 		config,
 		WithExecutionDebugRedisURL("redis://"+mr.Addr()),
+		WithExecutionDebugKeyspace(mustRedisTestKeyspace(t, "explicit")),
 	)
 	if err != nil {
 		t.Fatalf("NewRedisExecutionDebugStoreWithConfig: %v", err)
@@ -1109,7 +1064,7 @@ func TestRedisExecutionStoreWithConfigUsesExplicitLimits(t *testing.T) {
 			store.indexScanLimit,
 		)
 	}
-	if store.keyPrefix != "explicit:execution:" {
+	if store.keyPrefix != mustRedisTestKeyspace(t, "explicit").Plain("execution-debug") {
 		t.Fatalf("normalized prefix = %q", store.keyPrefix)
 	}
 }
