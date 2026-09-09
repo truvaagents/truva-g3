@@ -14,6 +14,7 @@ import (
 // registerCapabilities registers all HTTP endpoints.
 // ALL capabilities are Internal: true (agent is not externally discoverable as a tool).
 func (a *EventDrivenAgent) registerCapabilities() {
+	a.RegisterCapability(hitlWebhookCapability())
 	// AlertManager webhook receiver
 	a.RegisterCapability(core.Capability{
 		Name:        "alertmanager_webhook",

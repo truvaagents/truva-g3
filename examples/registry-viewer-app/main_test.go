@@ -3,14 +3,50 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 )
+
+type blockingPingHook struct {
+	calls    atomic.Int32
+	started  chan struct{}
+	startOne sync.Once
+	release  chan struct{}
+	finished chan struct{}
+}
+
+func (*blockingPingHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (hook *blockingPingHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, command redis.Cmder) error {
+		if command.Name() != "ping" {
+			return next(ctx, command)
+		}
+		hook.calls.Add(1)
+		hook.startOne.Do(func() { close(hook.started) })
+		<-hook.release
+		close(hook.finished)
+		return errors.New("released stalled Redis probe")
+	}
+}
+
+func (*blockingPingHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
 
 // newInMemoryBackendFactory returns a MemoryBackendFactory backed by the
 // framework's in-memory implementations. Test-only — kept in *_test.go so
@@ -44,6 +80,262 @@ func resetDiscoveryState() {
 	discoveryClient = nil
 	discoveryClientMu.Unlock()
 	servicesCache.Store(nil)
+}
+
+func TestViewerDefaultRedisNamespaceMatchesFramework(t *testing.T) {
+	keyspace, err := core.NewRedisKeyspace("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultViewerRedisNamespace != keyspace.Deployment() {
+		t.Fatalf("viewer default namespace = %q, framework default = %q", defaultViewerRedisNamespace, keyspace.Deployment())
+	}
+}
+
+func TestSetupInstallsEffectiveRedisConfigurationBeforeWorkload(t *testing.T) {
+	scriptBytes, err := os.ReadFile("setup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptBytes)
+	workloadApply := strings.Index(script, "--selector='truvag3.io/setup-workload=true'")
+	if workloadApply < 0 {
+		t.Fatal("setup.sh does not select the workload-only manifest objects")
+	}
+	for _, prerequisite := range []string{
+		"kubectl create configmap registry-viewer-config",
+		"kubectl create secret generic registry-viewer-redis-credentials",
+		"kubectl create secret generic registry-viewer-redis-ca",
+	} {
+		position := strings.Index(script, prerequisite)
+		if position < 0 {
+			t.Fatalf("setup.sh is missing %q", prerequisite)
+		}
+		if position > workloadApply {
+			t.Fatalf("setup.sh configures %q after applying the workload", prerequisite)
+		}
+	}
+
+	manifestBytes, err := os.ReadFile("k8-deployment.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := string(manifestBytes)
+	const workloadLabel = `truvag3.io/setup-workload: "true"`
+	if count := strings.Count(manifest, workloadLabel); count != 2 {
+		t.Fatalf("workload selector label count = %d, want Deployment and Service only", count)
+	}
+	configDocument, _, found := strings.Cut(manifest, "kind: Deployment")
+	if !found {
+		t.Fatal("k8-deployment.yaml is missing its Deployment")
+	}
+	if strings.Contains(configDocument, workloadLabel) {
+		t.Fatal("portable ConfigMap is incorrectly selected as a setup workload")
+	}
+
+	if !strings.Contains(script, `if [ "$redis_db" != "0" ]; then`) ||
+		strings.Contains(script, `if [ "$redis_mode" = "cluster" ] && [ "$redis_db" != "0" ]; then`) {
+		t.Fatal("setup.sh does not enforce DB 0 for every structured Redis topology")
+	}
+	if !strings.Contains(script, "trap cleanup_registry_viewer_secret_temp_dir EXIT") ||
+		!strings.Contains(script, `chmod 700 "$REGISTRY_VIEWER_SECRET_TEMP_DIR"`) ||
+		!strings.Contains(script, `chmod 600 "$REGISTRY_VIEWER_SECRET_TEMP_DIR"/*`) {
+		t.Fatal("setup.sh does not protect and clean up staged Redis credentials")
+	}
+	for _, credential := range []string{
+		"REDIS_URL",
+		"TRUVAG3_REDIS_USERNAME",
+		"TRUVAG3_REDIS_PASSWORD",
+		"TRUVAG3_REDIS_SENTINEL_USERNAME",
+		"TRUVAG3_REDIS_SENTINEL_PASSWORD",
+	} {
+		if strings.Contains(script, "--from-literal="+credential+"=") {
+			t.Fatalf("setup.sh exposes %s through a kubectl literal argument", credential)
+		}
+		if !strings.Contains(script, "--from-file="+credential+"=") {
+			t.Fatalf("setup.sh does not load %s from a protected file", credential)
+		}
+	}
+}
+
+func TestBoundedRedisProbeHonorsDeadlinesWithoutOverlappingPings(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "unused.invalid:6379", MaxRetries: -1})
+	hook := &blockingPingHook{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	client.AddHook(hook)
+	t.Cleanup(func() { _ = client.Close() })
+
+	var probe boundedRedisProbe
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- probe.Ping(firstCtx, client) }()
+	select {
+	case <-hook.started:
+	case <-time.After(time.Second):
+		t.Fatal("first Redis probe did not start")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelSecond()
+	startedAt := time.Now()
+	if err := probe.Ping(secondCtx, client); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bounded probe error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("bounded probe returned after %s, want less than 500ms", elapsed)
+	}
+	if calls := hook.calls.Load(); calls != 1 {
+		t.Fatalf("concurrent bounded probes issued %d PINGs, want 1", calls)
+	}
+	cancelFirst()
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first bounded probe error = %v, want context canceled", err)
+	}
+
+	close(hook.release)
+	select {
+	case <-hook.finished:
+	case <-time.After(time.Second):
+		t.Fatal("stalled Redis probe did not finish after release")
+	}
+}
+
+func TestReadinessReportsBoundedRedisTopology(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	keyspace, err := core.NewRedisKeyspace("viewer-readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	viewerRedisClientMu.Lock()
+	previousClient := viewerRedisClient
+	previousProfile := viewerRedisProfile
+	previousKeyspace := viewerRedisKeyspace
+	viewerRedisClient = client
+	viewerRedisProfile = core.RedisConnectionConfig{
+		Mode: core.RedisModeStandalone, Addrs: []string{server.Addr()}, DB: 0,
+	}
+	viewerRedisKeyspace = keyspace
+	viewerRedisClientMu.Unlock()
+	previousMock := useMock
+	useMock = false
+	t.Cleanup(func() {
+		viewerRedisClientMu.Lock()
+		viewerRedisClient = previousClient
+		viewerRedisProfile = previousProfile
+		viewerRedisKeyspace = previousKeyspace
+		viewerRedisClientMu.Unlock()
+		useMock = previousMock
+		_ = client.Close()
+	})
+
+	recorder := httptest.NewRecorder()
+	handleReadiness(recorder, httptest.NewRequest(http.MethodGet, "/api/readiness", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.Bytes()
+	var response ViewerReadinessResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "ready" || response.Backend != "redis" ||
+		response.RedisMode != string(core.RedisModeStandalone) || response.RedisDB == nil || *response.RedisDB != 0 ||
+		response.Namespace != "viewer-readiness" || response.SeedCount != 1 {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
+	if strings.Contains(string(body), server.Addr()) {
+		t.Fatal("readiness response exposed a Redis address")
+	}
+	if !strings.Contains(string(body), `"redis_db":0`) {
+		t.Fatal("readiness response omitted the required DB-0 assertion")
+	}
+}
+
+func TestReadinessReportsMockModeWithoutRedis(t *testing.T) {
+	previousMock := useMock
+	useMock = true
+	t.Cleanup(func() { useMock = previousMock })
+
+	recorder := httptest.NewRecorder()
+	handleReadiness(recorder, httptest.NewRequest(http.MethodGet, "/api/readiness", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response ViewerReadinessResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "ready" || response.Backend != "mock" {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
+	if response.RedisMode != "" || response.RedisDB != nil || response.Namespace != "" || response.SeedCount != 0 {
+		t.Fatalf("mock readiness exposed Redis-only fields: %#v", response)
+	}
+	if strings.Contains(recorder.Body.String(), "redis_db") {
+		t.Fatalf("mock readiness encoded a Redis database: %s", recorder.Body.String())
+	}
+}
+
+func TestReadinessDoesNotExposeBackendFailureDetails(t *testing.T) {
+	const (
+		backendAddress = "private.redis.internal:6379"
+		backendError   = "redis://viewer:super-secret@private.redis.internal:6379"
+	)
+	client := redis.NewClient(&redis.Options{
+		Addr:       backendAddress,
+		MaxRetries: -1,
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New(backendError)
+		},
+	})
+	keyspace, err := core.NewRedisKeyspace("viewer-readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	viewerRedisClientMu.Lock()
+	previousClient := viewerRedisClient
+	previousProfile := viewerRedisProfile
+	previousKeyspace := viewerRedisKeyspace
+	viewerRedisClient = client
+	viewerRedisProfile = core.RedisConnectionConfig{
+		Mode: core.RedisModeCluster, Addrs: []string{backendAddress}, DB: 0,
+	}
+	viewerRedisKeyspace = keyspace
+	viewerRedisClientMu.Unlock()
+	previousMock := useMock
+	useMock = false
+	t.Cleanup(func() {
+		viewerRedisClientMu.Lock()
+		viewerRedisClient = previousClient
+		viewerRedisProfile = previousProfile
+		viewerRedisKeyspace = previousKeyspace
+		viewerRedisClientMu.Unlock()
+		useMock = previousMock
+		_ = client.Close()
+	})
+
+	recorder := httptest.NewRecorder()
+	handleReadiness(recorder, httptest.NewRequest(http.MethodGet, "/api/readiness", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, backendAddress) || strings.Contains(body, backendError) || strings.Contains(body, "super-secret") {
+		t.Fatalf("readiness response exposed backend details: %s", body)
+	}
+	var response ViewerReadinessResponse
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "not_ready" || response.Backend != "redis" || response.Failure != "unavailable" {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
 }
 
 // disableMockMode flips the useMock flag off for the duration of a test.
@@ -382,4 +674,55 @@ func TestMemoryInjection(t *testing.T) {
 			t.Errorf("activity=%+v", act)
 		}
 	})
+}
+
+func TestSetupRejectsRemovedRedisURLWithoutExposingItsValue(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	content, err := os.ReadFile("setup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	start := strings.Index(script, "validate_redis_environment() {")
+	if start < 0 {
+		t.Fatal("missing Redis environment validator")
+	}
+	end := strings.Index(script[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("unterminated Redis environment validator")
+	}
+	validator := script[start : start+end+3]
+	for _, test := range []struct{ name, value string }{
+		{"empty", ""},
+		{"whitespace", " \t\n "},
+		{"removed", "redis://user:unit-test-secret@obsolete.invalid/7"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TRUVAG3_REDIS_URL", test.value)
+			command := exec.Command("bash", "-c", validator+"\nlog_error() { printf '%s\\n' \"$1\"; }\nvalidate_redis_environment")
+			output, runErr := command.CombinedOutput()
+			if strings.TrimSpace(test.value) == "" {
+				if runErr != nil {
+					t.Fatalf("empty setting rejected: %s", output)
+				}
+				return
+			}
+			if runErr == nil {
+				t.Fatal("obsolete URL was accepted")
+			}
+			if !strings.Contains(string(output), "TRUVAG3_REDIS_URL is unsupported") {
+				t.Fatalf("missing actionable error: %s", output)
+			}
+			if strings.Contains(string(output), "unit-test-secret") {
+				t.Fatal("setup diagnostic exposed the URL credential")
+			}
+		})
+	}
+	for _, obsolete := range []string{"--from-file=TRUVAG3_REDIS_URL=", "$legacy_redis_url"} {
+		if strings.Contains(script, obsolete) {
+			t.Fatalf("setup still deploys removed alias: %s", obsolete)
+		}
+	}
 }

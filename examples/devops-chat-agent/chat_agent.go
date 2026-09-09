@@ -1015,6 +1015,7 @@ func (t *DevOpsChatAgent) GetHITL() *HITLInfrastructure {
 
 // RegisterHITLCapabilities registers HITL-specific endpoints using the framework's handler.
 func (t *DevOpsChatAgent) RegisterHITLCapabilities(hitlHandler *orchestration.HITLHandler) {
+	t.RegisterCapability(hitlWebhookCapability())
 	// Custom SSE resume endpoint (returns SSE, not JSON)
 	t.RegisterCapability(core.Capability{
 		Name:        "hitl_resume_sse",

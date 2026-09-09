@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -85,6 +86,20 @@ type RegistryResponse struct {
 	Timestamp  time.Time     `json:"timestamp"`
 }
 
+// ViewerReadinessResponse reports whether the Viewer can reach its configured
+// backend without exposing endpoints or credentials. The liveness endpoint is
+// deliberately separate: an external Redis outage should make the pod
+// unready, not trigger a restart loop.
+type ViewerReadinessResponse struct {
+	Status    string `json:"status"`
+	Backend   string `json:"backend"`
+	RedisMode string `json:"redis_mode,omitempty"`
+	RedisDB   *int   `json:"redis_db,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	SeedCount int    `json:"seed_count,omitempty"`
+	Failure   string `json:"failure,omitempty"`
+}
+
 // nonNilSlice returns an empty slice for nil input. Use at API-response
 // construction sites whenever a list field is about to be JSON-encoded —
 // clients expect `[]` not `null` for a list-typed field, and normalizing
@@ -154,7 +169,7 @@ type HITLCheckpoint struct {
 	Status             string                 `json:"status"`
 	AgentName          string                 `json:"agent_name,omitempty"`
 	AgentAddress       string                 `json:"agent_address,omitempty"` // Direct HTTP address for command routing (populated by framework at creation)
-	RequestMode        string                 `json:"request_mode,omitempty"`  // "streaming" or "non_streaming" — drives RC3 approve/reject guard
+	RequestMode        string                 `json:"request_mode,omitempty"`  // "streaming" or "non_streaming" — controls available approval actions
 }
 
 // InterruptDecision contains the decision context for an interrupt
@@ -255,12 +270,8 @@ type HITLCheckpointListResponse struct {
 // Execution DAG Types (mirrors orchestration/execution_store.go)
 // ============================================================================
 
-// Redis key patterns for Execution DAG (mirrors orchestration/redis_execution_store.go)
 const (
-	executionKeyPrefix   = "truvag3:execution:debug:"
-	executionIndexKey    = "truvag3:execution:debug:index"
-	executionTracePrefix = "truvag3:execution:debug:trace:"
-
+	defaultViewerRedisNamespace         = "default"
 	viewerDefaultGroupPageSize          = 50
 	viewerMaxGroupPageSize              = 200
 	viewerGlobalExecutionScanLimit      = 5000
@@ -278,20 +289,21 @@ const (
 
 // StoredExecution contains everything needed for DAG visualization
 type StoredExecution struct {
-	RequestID           string                             `json:"request_id"`
-	OriginalRequestID   string                             `json:"original_request_id,omitempty"`
-	TraceID             string                             `json:"trace_id"`
-	AgentName           string                             `json:"agent_name,omitempty"`
-	OriginalRequest     string                             `json:"original_request"`
-	Plan                *RoutingPlan                       `json:"plan"`
-	Result              *ExecutionResult                   `json:"result"`
-	Interrupted         bool                               `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint          *HITLCheckpoint                    `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
-	CreatedAt           time.Time                          `json:"created_at"`
-	Metadata            map[string]string                  `json:"metadata,omitempty"`
-	Skills              *orchestration.SkillExecutionDebug `json:"skills,omitempty"`
-	FinalResponse       *string                            `json:"final_response,omitempty"`
-	FinalResponseSource string                             `json:"final_response_source,omitempty"`
+	RequestID           string                                `json:"request_id"`
+	OriginalRequestID   string                                `json:"original_request_id,omitempty"`
+	TraceID             string                                `json:"trace_id"`
+	AgentName           string                                `json:"agent_name,omitempty"`
+	OriginalRequest     string                                `json:"original_request"`
+	Plan                *RoutingPlan                          `json:"plan"`
+	Result              *ExecutionResult                      `json:"result"`
+	Interrupted         bool                                  `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint          *HITLCheckpoint                       `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
+	CreatedAt           time.Time                             `json:"created_at"`
+	Metadata            map[string]string                     `json:"metadata,omitempty"`
+	Skills              *orchestration.SkillExecutionDebug    `json:"skills,omitempty"`
+	PipelineHooks       []orchestration.PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+	FinalResponse       *string                               `json:"final_response,omitempty"`
+	FinalResponseSource string                                `json:"final_response_source,omitempty"`
 
 	// Multi-phase execution data
 	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
@@ -419,25 +431,22 @@ type ResolutionAnalyticsResponse struct {
 // This provides a "one-stop shop" for debugging and understanding request execution
 type UnifiedExecutionView struct {
 	// Core execution data
-	RequestID             string                  `json:"request_id"`
-	OriginalRequestID     string                  `json:"original_request_id,omitempty"`
-	ConversationID        string                  `json:"conversation_id,omitempty"`
-	TraceID               string                  `json:"trace_id,omitempty"`
-	AsyncTaskID           string                  `json:"async_task_id,omitempty"`
-	LinkedTraces          []LinkedTrace           `json:"linked_traces,omitempty"`
-	PipelineHooks         []PipelineHookExecution `json:"pipeline_hooks,omitempty"`
-	TraceEnrichmentStatus string                  `json:"trace_enrichment_status,omitempty"`
-	AgentName             string                  `json:"agent_name,omitempty"`
-	OriginalRequest       string                  `json:"original_request"`
-	CreatedAt             time.Time               `json:"created_at"`
-	Success               bool                    `json:"success"`
-	TotalDurationMs       int64                   `json:"total_duration_ms"` // Phase-loop duration; retained for compatibility.
-	WallClockDurationMs   int64                   `json:"wall_clock_duration_ms,omitempty"`
-	DurationSource        string                  `json:"duration_source,omitempty"`
-	Plan                  *RoutingPlan            `json:"plan,omitempty"`
-	Result                *ExecutionResult        `json:"result,omitempty"`
-	Interrupted           bool                    `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint            *HITLCheckpoint         `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted (includes completed_steps, step_results)
+	RequestID           string                                `json:"request_id"`
+	OriginalRequestID   string                                `json:"original_request_id,omitempty"`
+	ConversationID      string                                `json:"conversation_id,omitempty"`
+	TraceID             string                                `json:"trace_id,omitempty"`
+	PipelineHooks       []orchestration.PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+	AgentName           string                                `json:"agent_name,omitempty"`
+	OriginalRequest     string                                `json:"original_request"`
+	CreatedAt           time.Time                             `json:"created_at"`
+	Success             bool                                  `json:"success"`
+	TotalDurationMs     int64                                 `json:"total_duration_ms"` // Phase-loop duration; retained for compatibility.
+	WallClockDurationMs int64                                 `json:"wall_clock_duration_ms,omitempty"`
+	DurationSource      string                                `json:"duration_source,omitempty"`
+	Plan                *RoutingPlan                          `json:"plan,omitempty"`
+	Result              *ExecutionResult                      `json:"result,omitempty"`
+	Interrupted         bool                                  `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint          *HITLCheckpoint                       `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted (includes completed_steps, step_results)
 
 	// Multi-phase execution data
 	PhasePlans          []*RoutingPlan `json:"phase_plans,omitempty"`
@@ -466,7 +475,7 @@ type UnifiedExecutionView struct {
 	// a completed sibling execution exists under the same original_request_id
 	// (written by the HITL resume path). The UI uses this to surface a banner
 	// linking to the completed resume. Empty when no sibling exists or when
-	// this record is not interrupted. (ORCH-022 Layer 4)
+	// this record is not interrupted.
 	ResumeSiblingRequestID string `json:"resume_sibling_request_id,omitempty"`
 }
 
@@ -507,18 +516,137 @@ type LLMDebugSummary struct {
 // (see orchestration/llm_debug_dedupe.go). Callers: handleExecution above
 // and handleLLMDebugRecord below.
 
+type redisProbeAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+// boundedRedisProbe shares one outstanding PING across concurrent callers.
+// Framework Redis clients intentionally retain go-redis's command-context
+// behavior, so a caller deadline alone cannot interrupt a stalled PING. The
+// outer select keeps readiness and lazy memory initialization bounded, while
+// single-flight behavior prevents periodic probes from accumulating commands
+// during an outage.
+type boundedRedisProbe struct {
+	mu       sync.Mutex
+	inFlight *redisProbeAttempt
+}
+
+func (probe *boundedRedisProbe) Ping(ctx context.Context, client redis.UniversalClient) error {
+	if client == nil {
+		return errors.New("redis client is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	probe.mu.Lock()
+	attempt := probe.inFlight
+	if attempt == nil {
+		attempt = &redisProbeAttempt{done: make(chan struct{})}
+		probe.inFlight = attempt
+		// #nosec G118 -- this one process-wide probe intentionally outlives any
+		// individual HTTP request; the Redis client's socket deadline or Close
+		// ends it, and single-flight state prevents unbounded goroutine growth.
+		go probe.run(client, attempt)
+	}
+	probe.mu.Unlock()
+
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (probe *boundedRedisProbe) run(client redis.UniversalClient, attempt *redisProbeAttempt) {
+	// A background context is deliberate: callers may stop waiting at different
+	// times, while the one shared command must run to its configured socket
+	// deadline and publish one result to every waiter.
+	err := client.Ping(context.Background()).Err()
+
+	probe.mu.Lock()
+	attempt.err = err
+	close(attempt.done)
+	if probe.inFlight == attempt {
+		probe.inFlight = nil
+	}
+	probe.mu.Unlock()
+}
+
 var (
-	useMock   bool
-	redisURL  string
-	namespace string
-	port      int
+	useMock             bool
+	redisURL            string // Deprecated CLI-only standalone shorthand.
+	namespace           string
+	port                int
+	viewerRedisClient   redis.UniversalClient
+	viewerRedisClientMu sync.Mutex
+	viewerRedisProfile  core.RedisConnectionConfig
+	viewerRedisKeyspace core.RedisKeyspace
+	viewerExecutionKeys orchestration.RedisExecutionDebugKeys
+	viewerLLMKeys       telemetry.RedisLLMDebugKeys
+	viewerRedisProbe    boundedRedisProbe
+	viewerLogger        core.Logger = &core.NoOpLogger{}
 )
 
 func init() {
 	flag.BoolVar(&useMock, "mock", true, "Use mock data instead of Redis")
-	flag.StringVar(&redisURL, "redis-url", "", "Redis/Valkey URL (required when -mock=false, or set REDIS_URL env var)")
-	flag.StringVar(&namespace, "namespace", "truvag3", "Redis key namespace")
+	flag.StringVar(&redisURL, "redis-url", "", "Deprecated standalone Redis/Valkey URL override")
+	flag.StringVar(&namespace, "namespace", defaultViewerRedisNamespace, "Redis key namespace")
 	flag.IntVar(&port, "port", 8361, "HTTP server port")
+}
+
+func redisConnectionConfigured() bool {
+	if strings.TrimSpace(redisURL) != "" {
+		return true
+	}
+	for _, name := range []string{
+		"REDIS_URL", "TRUVAG3_REDIS_URL", "TRUVAG3_REDIS_MODE", "TRUVAG3_REDIS_ADDRS",
+	} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func getViewerRedisClient() (redis.UniversalClient, error) {
+	viewerRedisClientMu.Lock()
+	defer viewerRedisClientMu.Unlock()
+	if viewerRedisClient != nil {
+		return viewerRedisClient, nil
+	}
+	var (
+		resolution core.RedisConnectionConfig
+		err        error
+	)
+	if strings.TrimSpace(redisURL) != "" {
+		connection, parseErr := core.ParseStandaloneRedisURL(redisURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse -redis-url: %w", parseErr)
+		}
+		resolution, err = core.ResolveRedisConnectionConfig(&connection, nil)
+	} else {
+		resolution, err = core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve Redis connection: %w", err)
+	}
+	keyspace, err := core.NewRedisKeyspace(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Redis keyspace: %w", err)
+	}
+	client, err := core.NewRedisUniversalClient(resolution)
+	if err != nil {
+		return nil, err
+	}
+	viewerRedisClient = client
+	viewerRedisProfile = resolution
+	viewerRedisKeyspace = keyspace
+	viewerExecutionKeys = orchestration.NewRedisExecutionDebugKeys(keyspace)
+	viewerLLMKeys = telemetry.NewRedisLLMDebugKeys(keyspace)
+	return viewerRedisClient, nil
 }
 
 // getEnvOrDefault returns environment variable value or default
@@ -579,7 +707,14 @@ func initViewerTelemetry() core.Telemetry {
 		config.Endpoint = endpoint
 	}
 	if err := telemetry.Initialize(config); err != nil {
-		log.Printf("[WARN] Registry Viewer telemetry unavailable: %v", err)
+		if viewerLogger != nil {
+			viewerLogger.Warn("Registry Viewer telemetry unavailable", map[string]interface{}{
+				"operation":  "viewer_telemetry_initialize",
+				"status":     "degraded",
+				"error":      "telemetry initialization failed",
+				"error_type": "backend_startup",
+			})
+		}
 		return nil
 	}
 	return telemetry.GetTelemetryProvider()
@@ -587,13 +722,18 @@ func initViewerTelemetry() core.Telemetry {
 
 func main() {
 	flag.Parse()
+	viewerLogger = core.NewProductionLogger(
+		core.LoggingConfig{
+			Level: envOrDefault("TRUVAG3_LOG_LEVEL", "info"), Format: "json", Output: "stdout",
+		},
+		core.DevelopmentConfig{}, "registry-viewer",
+	)
 
 	// Environment variables override command-line flags
 	// This allows K8s ConfigMaps/Secrets to configure the app
-	if envRedisURL := os.Getenv("REDIS_URL"); envRedisURL != "" {
-		redisURL = envRedisURL
-	}
-	if envNamespace := os.Getenv("REDIS_NAMESPACE"); envNamespace != "" {
+	if envNamespace := os.Getenv("TRUVAG3_REDIS_NAMESPACE"); envNamespace != "" {
+		namespace = envNamespace
+	} else if envNamespace := os.Getenv("REDIS_NAMESPACE"); envNamespace != "" {
 		namespace = envNamespace
 	}
 	if envPort := getEnvInt("PORT", 0); envPort != 0 {
@@ -605,7 +745,7 @@ func main() {
 		useMock = getEnvBool("USE_MOCK", useMock)
 	}
 
-	// Auto-disable mock when REDIS_URL is set and the operator hasn't asked
+	// Auto-disable mock when Redis is configured and the operator hasn't asked
 	// for mock explicitly. The flag's default is true so a bare `go run`
 	// still works for UI-only exploration, but as soon as Redis is wired up
 	// the viewer should show live data by default. Honor explicit -mock=true
@@ -616,14 +756,32 @@ func main() {
 			mockFlagExplicit = true
 		}
 	})
-	if useMock && redisURL != "" && !mockFlagExplicit && mockEnv == "" {
+	if useMock && redisConnectionConfigured() && !mockFlagExplicit && mockEnv == "" {
 		useMock = false
-		log.Printf("REDIS_URL is set and -mock/-USE_MOCK not explicitly provided — auto-disabling mock mode")
+		if viewerLogger != nil {
+			viewerLogger.Info("Redis configuration selected live-data mode", map[string]interface{}{
+				"operation": "viewer_mode_selection",
+				"mode":      "redis",
+				"reason":    "redis_configured",
+			})
+		}
 	}
-
-	// Validate Redis URL is provided when not in mock mode
-	if !useMock && redisURL == "" {
-		log.Fatalf("REDIS_URL environment variable or -redis-url flag is required when not using mock mode")
+	if !useMock {
+		client, err := getViewerRedisClient()
+		if err != nil {
+			log.Fatalf("Failed to initialize Redis backends: %v", err)
+		}
+		defer func() {
+			if err := client.Close(); err != nil {
+				if viewerLogger != nil {
+					viewerLogger.Warn("Failed to close Redis client", map[string]interface{}{
+						"operation":  "viewer_redis_close",
+						"error":      "redis client close failed",
+						"error_type": "backend",
+					})
+				}
+			}
+		}()
 	}
 
 	viewerTelemetry := initViewerTelemetry()
@@ -632,17 +790,16 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := telemetry.Shutdown(ctx); err != nil {
-				log.Printf("Telemetry shutdown failed: %s", core.RedactSensitiveText(err.Error()))
+				if viewerLogger != nil {
+					viewerLogger.Warn("Telemetry shutdown failed", map[string]interface{}{
+						"operation":  "viewer_telemetry_shutdown",
+						"error":      "telemetry shutdown failed",
+						"error_type": "backend",
+					})
+				}
 			}
 		}()
 	}
-	viewerLogger := core.NewProductionLogger(
-		core.LoggingConfig{
-			Level: envOrDefault("TRUVAG3_LOG_LEVEL", "info"), Format: "json", Output: "stdout",
-		},
-		core.DevelopmentConfig{}, "registry-viewer",
-	)
-
 	mux := http.NewServeMux()
 
 	// API endpoints — all wrapped with apiMiddleware (CORS + gzip + ETag)
@@ -652,6 +809,7 @@ func main() {
 	// so new tools/agents appear without editing any static config.
 	mux.HandleFunc("/swagger-urls.json", apiMiddleware(handleSwaggerURLs))
 	mux.HandleFunc("/api/health", apiMiddleware(handleHealth))
+	mux.HandleFunc("/api/readiness", apiMiddleware(handleReadiness))
 	mux.HandleFunc("/api/llm-debug", apiMiddleware(handleLLMDebugList))
 	mux.HandleFunc("/api/llm-debug/", apiMiddleware(handleLLMDebugRecord))
 	mux.HandleFunc("/api/hitl/checkpoints", apiMiddleware(handleHITLCheckpointList))
@@ -665,14 +823,20 @@ func main() {
 	mux.HandleFunc("/api/conversations", apiMiddleware(handleConversationTimeline))
 	mux.HandleFunc("/api/analytics/resolution", apiMiddleware(handleResolutionAnalytics))
 	if !useMock {
-		skillHandler, closer, skillErr := newSkillAdminAPI(namespace, viewerLogger, viewerTelemetry)
+		client, clientErr := getViewerRedisClient()
+		if clientErr != nil {
+			log.Fatalf("Failed to initialize shared Redis client: %v", clientErr)
+		}
+		skillHandler, closer, skillErr := newSkillAdminAPI(client, namespace, viewerLogger, viewerTelemetry)
 		if skillErr != nil {
 			log.Fatalf("Failed to initialize skills API: %v", skillErr)
 		}
 		defer func() {
 			if err := closer.Close(); err != nil {
 				viewerLogger.Warn("Failed to close skills backend", map[string]interface{}{
-					"error": core.RedactSensitiveText(err.Error()),
+					"operation":  "viewer_skills_backend_close",
+					"error":      "skills backend close failed",
+					"error_type": "backend",
 				})
 			}
 		}()
@@ -724,7 +888,7 @@ func main() {
 	log.Printf("Starting Registry Viewer on http://localhost%s", addr)
 	log.Printf("Mode: %s", map[bool]string{true: "MOCK", false: "REDIS"}[useMock])
 	if !useMock {
-		log.Printf("Redis URL: %s", redisURL)
+		log.Printf("Redis mode: %s (seed_count=%d, db=%d)", viewerRedisProfile.Mode, len(viewerRedisProfile.Addrs), viewerRedisProfile.DB)
 		log.Printf("Redis Namespace: %s", namespace)
 	}
 
@@ -884,6 +1048,41 @@ func safeLogText(value string) string {
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func handleReadiness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if useMock {
+		writeJSON(w, ViewerReadinessResponse{Status: "ready", Backend: "mock"})
+		return
+	}
+
+	client, err := getViewerRedisClient()
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, ViewerReadinessResponse{
+			Status: "not_ready", Backend: "redis", Failure: "configuration",
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := viewerRedisProbe.Ping(ctx, client); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, ViewerReadinessResponse{
+			Status: "not_ready", Backend: "redis", Failure: "unavailable",
+		})
+		return
+	}
+	redisDB := viewerRedisProfile.DB
+	writeJSON(w, ViewerReadinessResponse{
+		Status:    "ready",
+		Backend:   "redis",
+		RedisMode: string(viewerRedisProfile.Mode),
+		RedisDB:   &redisDB,
+		Namespace: viewerRedisKeyspace.Deployment(),
+		SeedCount: len(viewerRedisProfile.Addrs),
+	})
 }
 
 func handleServices(w http.ResponseWriter, r *http.Request) {
@@ -1188,7 +1387,11 @@ func getDiscovery() (core.Discovery, error) {
 	defer discoveryClientMu.Unlock()
 
 	if discoveryClient == nil {
-		d, err := core.NewRedisDiscoveryWithNamespace(redisURL, namespace)
+		client, err := getViewerRedisClient()
+		if err != nil {
+			return nil, err
+		}
+		d, err := core.NewRedisDiscoveryWithClient(client, viewerRedisKeyspace, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create discovery client: %w", err)
 		}
@@ -1386,8 +1589,12 @@ func getLLMDebugStore() (orchestration.LLMDebugStore, error) {
 	defer llmDebugStoreMu.Unlock()
 
 	if llmDebugStore == nil {
-		store, err := orchestration.NewRedisLLMDebugStore(
-			orchestration.WithDebugRedisURL(redisURL),
+		client, err := getViewerRedisClient()
+		if err != nil {
+			return nil, err
+		}
+		store, err := orchestration.NewRedisLLMDebugStoreWithClient(
+			client, orchestration.WithDebugKeyspace(viewerRedisKeyspace),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create LLM debug store: %w", err)
@@ -1397,34 +1604,7 @@ func getLLMDebugStore() (orchestration.LLMDebugStore, error) {
 	return llmDebugStore, nil
 }
 
-// Execution Debug Redis client singleton (uses DB 8).
-// Same lazy-reconnect pattern as getRedisClient — see that function's
-// docstring for rationale.
-var (
-	executionDebugClient   *redis.Client
-	executionDebugClientMu sync.Mutex
-)
-
-func getExecutionDebugClient() (*redis.Client, error) {
-	executionDebugClientMu.Lock()
-	defer executionDebugClientMu.Unlock()
-
-	if executionDebugClient == nil {
-		opt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid redis URL: %w", err)
-		}
-		opt.DB = core.RedisDBExecutionDebug // Use DB 8 for Execution Debug
-		executionDebugClient = redis.NewClient(core.ApplyRedisClientDefaults(opt))
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := executionDebugClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed (DB %d): %w", core.RedisDBExecutionDebug, err)
-	}
-	return executionDebugClient, nil
-}
+func getExecutionDebugClient() (redis.UniversalClient, error) { return getViewerRedisClient() }
 
 // handleLLMDebugList returns a list of recent LLM debug records
 func handleLLMDebugList(w http.ResponseWriter, r *http.Request) {
@@ -1508,10 +1688,8 @@ func handleLLMDebugRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Apply Layer 1 dedupe so historical records (written before the
-	// framework-side Layer 2 landed) render correctly in the standalone
-	// LLM Debug view — same invariant as handleExecution above.
-	// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
+	// Collapse paired instrumented and typed rows so each physical LLM call
+	// renders once in the standalone LLM Debug view.
 	if record != nil {
 		record.Interactions = orchestration.DedupeLLMInteractions(record.Interactions)
 	}
@@ -1670,8 +1848,8 @@ func handleHITLCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use AgentAddress from checkpoint directly (populated by framework at creation time).
-	// Fall back to service registry lookup for old checkpoints that predate RC3-Backend.
+	// Use AgentAddress from the checkpoint when present; otherwise resolve the
+	// agent through the service registry using AgentName.
 	agentAddr := checkpoint.AgentAddress
 	if agentAddr == "" {
 		if checkpoint.AgentName == "" {
@@ -1969,7 +2147,6 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 	if isUnifiedRequest {
 		// Return unified view combining execution, LLM debug, and HITL data
 		unified := buildUnifiedViewWithContext(r.Context(), execution)
-		enrichUnifiedViewWithTrace(r.Context(), unified)
 		writeJSON(w, unified)
 	} else if isDAGRequest {
 		// Return computed DAG structure
@@ -1987,11 +2164,9 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 // single normalized shape regardless of which storage-era or record-type
 // produced the execution.
 //
-// After the orchestrator's ORCH-022 Layer 1 fix, PhasePlans is authoritative
-// for multi-phase records and Result.Steps covers the runtime status. This
-// helper also folds Checkpoint.StepResults into the step list as a back-compat
-// fallback for records persisted BEFORE the orchestrator fix landed — no new
-// records need this path.
+// PhasePlans is authoritative for multi-phase plan definitions and Result.Steps
+// supplies runtime status. Checkpoint.StepResults is also folded into the
+// result map so interrupted executions retain every completed step.
 //
 // Field-level merge:
 //   - steps are populated from plan side (authoritative for definition fields:
@@ -2360,23 +2535,40 @@ func handleResolutionAnalytics(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		pipe := client.Pipeline()
-		cmds := make([]*redis.StringCmd, len(summaries))
+		requestIDs := make([]string, len(summaries))
 		for i, s := range summaries {
-			cmds[i] = pipe.Get(ctx, executionKeyPrefix+s.RequestID)
+			requestIDs[i] = s.RequestID
 		}
-		if _, pipeErr := pipe.Exec(ctx); pipeErr != nil && pipeErr != redis.Nil {
-			if ctx.Err() != nil {
-				http.Error(w, fmt.Sprintf("Redis pipeline error: %v", pipeErr), http.StatusInternalServerError)
-				return
+		cmds, pipeErr := pipelineExecutionGets(ctx, client, requestIDs)
+		if pipeErr != nil {
+			if viewerLogger != nil {
+				viewerLogger.WarnWithContext(ctx, "Execution analytics hydration failed", map[string]interface{}{
+					"operation":  "viewer_execution_analytics",
+					"request_id": core.GetRequestID(ctx),
+					"error":      "redis execution hydration failed",
+					"error_type": "backend_read",
+				})
 			}
+			http.Error(w, "Execution analytics data is unavailable", http.StatusInternalServerError)
+			return
 		}
 
 		for i, summary := range summaries {
 			data, err := cmds[i].Bytes()
-			if err != nil {
-				log.Printf("Warning: analytics skipping execution %s: %v", summary.RequestID, err)
+			if errors.Is(err, redis.Nil) {
 				continue
+			}
+			if err != nil {
+				if viewerLogger != nil {
+					viewerLogger.WarnWithContext(ctx, "Execution analytics record read failed", map[string]interface{}{
+						"operation":  "viewer_execution_analytics",
+						"request_id": core.GetRequestID(ctx),
+						"error":      "redis execution record read failed",
+						"error_type": "backend_read",
+					})
+				}
+				http.Error(w, "Execution analytics data is unavailable", http.StatusInternalServerError)
+				return
 			}
 			execution, err := deserializeExecution(data)
 			if err != nil {
@@ -2800,6 +2992,7 @@ func buildUnifiedViewWithContext(ctx context.Context, execution *StoredExecution
 		PhaseCount:          execution.PhaseCount,
 		ForcedTerminal:      execution.ForcedTerminal,
 		Skills:              execution.Skills,
+		PipelineHooks:       execution.PipelineHooks,
 		FinalResponse:       execution.FinalResponse,
 		FinalResponseSource: execution.FinalResponseSource,
 	}
@@ -2845,12 +3038,8 @@ func buildUnifiedViewWithContext(ctx context.Context, execution *StoredExecution
 					orchestration.LLMDebugConversationID(llmRecord)
 			}
 
-			// Dedupe agent_llm_call shadows before building the summary so
-			// historical records (written before the framework-side Layer 2
-			// landed) and any still-unmigrated call sites produce correct
-			// totals. Newly-written records from migrated code paths are
-			// already single-recorded, so this is a no-op for them.
-			// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
+			// Collapse paired agent_llm_call and typed rows before computing
+			// totals. Unpaired calls remain visible.
 			deduped := orchestration.DedupeLLMInteractions(llmRecord.Interactions)
 			unified.LLMInteractions = deduped
 			unified.HasLLMData = len(deduped) > 0
@@ -2956,7 +3145,7 @@ type executionPage struct {
 }
 
 func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error) {
-	client, err := getExecutionDebugClient() // Uses Redis DB 8 for Execution Debug
+	client, err := getExecutionDebugClient()
 	if err != nil {
 		return nil, err
 	}
@@ -2974,7 +3163,7 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 
 	// Fetch limit+1 to detect hasMore
 	fetchCount := int64(limit + 1)
-	zResults, err := client.ZRevRangeByScoreWithScores(ctx, executionIndexKey, &redis.ZRangeBy{
+	zResults, err := client.ZRevRangeByScoreWithScores(ctx, viewerExecutionKeys.RecentIndex(), &redis.ZRangeBy{
 		Min:   "-inf",
 		Max:   maxScore,
 		Count: fetchCount,
@@ -3003,26 +3192,20 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 		}
 	}
 
-	// Batch-fetch all executions via Redis pipeline (replaces N individual GET calls)
-	pipe := client.Pipeline()
-	cmds := make([]*redis.StringCmd, len(requestIDs))
-	for i, id := range requestIDs {
-		cmds[i] = pipe.Get(ctx, executionKeyPrefix+id)
-	}
-	// Pipeline Exec returns an error if ANY command fails — individual key misses
-	// (redis.Nil) are checked per-command below, so we only fail on context errors.
-	if _, pipeErr := pipe.Exec(ctx); pipeErr != nil && pipeErr != redis.Nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("pipeline exec failed: %w", pipeErr)
-		}
+	// Batch-fetch all executions via cluster-aware Redis pipeline.
+	cmds, pipeErr := pipelineExecutionGets(ctx, client, requestIDs)
+	if pipeErr != nil {
+		return nil, fmt.Errorf("pipeline exec failed: %w", pipeErr)
 	}
 
 	summaries := make([]ExecutionSummary, 0, len(requestIDs))
 	for i, requestID := range requestIDs {
 		data, err := cmds[i].Bytes()
-		if err != nil {
-			log.Printf("Warning: skipping execution %s: %v", requestID, err)
+		if errors.Is(err, redis.Nil) {
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read execution %q: %w", requestID, err)
 		}
 		execution, err := deserializeExecution(data)
 		if err != nil {
@@ -3033,9 +3216,8 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 		summaries = append(summaries, summarizeExecution(execution))
 	}
 
-	// Batch-fetch LLM debug data for all executions to get LLM durations.
-	// This is a separate store (different Redis DB), so a separate read-only
-	// pipeline. Missing DB 7 data is intentionally fail-open.
+	// Batch-fetch optional LLM-debug data from the shared DB-0 keyspace.
+	// Missing enrichment data is intentionally fail-open.
 	_, _, _ = enrichExecutionSummariesFromLLMDebug(ctx, summaries)
 
 	page := &executionPage{Summaries: summaries, HasMore: hasMore}
@@ -3047,7 +3229,7 @@ func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error
 
 // getRedisExecution fetches a single execution from Redis
 func getRedisExecution(requestID string) (*StoredExecution, error) {
-	client, err := getExecutionDebugClient() // Uses Redis DB 8 for Execution Debug
+	client, err := getExecutionDebugClient()
 	if err != nil {
 		return nil, err
 	}
@@ -3055,7 +3237,7 @@ func getRedisExecution(requestID string) (*StoredExecution, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	key := executionKeyPrefix + requestID
+	key := viewerExecutionKeys.Record(requestID)
 	data, err := client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
 		return nil, fmt.Errorf("execution not found: %s", requestID)
@@ -3328,7 +3510,7 @@ func getMockExecution(requestID string) *StoredExecution {
 }
 
 // ============================================================================
-// HITL HTTP Fan-Out Helpers (RC3-Backend)
+// HITL HTTP Fan-Out Helpers
 // Replace direct Redis access with HTTP delegation to each agent's /hitl/checkpoints endpoints.
 // ============================================================================
 
@@ -4024,7 +4206,7 @@ var (
 
 	// Package-level factory singleton. Both call sites (startup + lazy
 	// retry) go through getMemoryBackendFactory() so they share ONE
-	// factory and therefore ONE underlying *redis.Client — mirroring the
+	// factory and therefore one topology-aware Redis client, mirroring the
 	// pre-refactor singleton behavior of getRedisClient().
 	memoryBackendFactory   MemoryBackendFactory
 	memoryBackendFactoryMu sync.Mutex
@@ -4034,7 +4216,7 @@ func getMemoryBackendFactory() MemoryBackendFactory {
 	memoryBackendFactoryMu.Lock()
 	defer memoryBackendFactoryMu.Unlock()
 	if memoryBackendFactory == nil {
-		memoryBackendFactory = newRedisMemoryBackendFactory(redisURL)
+		memoryBackendFactory = newRedisMemoryBackendFactory()
 	}
 	return memoryBackendFactory
 }
@@ -4042,7 +4224,7 @@ func getMemoryBackendFactory() MemoryBackendFactory {
 // newRedisMemoryBackendFactory returns a MemoryBackendFactory that builds
 // the Redis-backed implementations of all four memory interfaces for a
 // given domain. Do not call directly — go through getMemoryBackendFactory()
-// so the factory and its *redis.Client remain process-wide singletons.
+// so the factory and its universal client remain process-wide singletons.
 //
 // The factory's getClient() re-Pings on every call. This is non-negotiable:
 // the four Redis memory constructors only check for a non-nil client, not
@@ -4050,25 +4232,20 @@ func getMemoryBackendFactory() MemoryBackendFactory {
 // a dead Redis, populate memoryDomains with live objects wrapping a dead
 // connection, and the lazy-retry path in getMemoryDomain (which only fires
 // when memoryDomains == nil) would never run again.
-func newRedisMemoryBackendFactory(redisURL string) MemoryBackendFactory {
+func newRedisMemoryBackendFactory() MemoryBackendFactory {
 	var (
-		mu     sync.Mutex
-		client *redis.Client
+		mu sync.Mutex
 	)
-	getClient := func() (*redis.Client, error) {
+	getClient := func() (redis.UniversalClient, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		if client == nil {
-			opt, err := redis.ParseURL(redisURL)
-			if err != nil {
-				return nil, fmt.Errorf("invalid redis URL: %w", err)
-			}
-			opt.DB = 0
-			client = redis.NewClient(core.ApplyRedisClientDefaults(opt))
+		client, err := getViewerRedisClient()
+		if err != nil {
+			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := client.Ping(ctx).Err(); err != nil {
+		if err := viewerRedisProbe.Ping(ctx, client); err != nil {
 			return nil, fmt.Errorf("redis connection failed: %w", err)
 		}
 		return client, nil
@@ -4080,24 +4257,26 @@ func newRedisMemoryBackendFactory(redisURL string) MemoryBackendFactory {
 			return MemoryBackends{}, fmt.Errorf("redis client: %w", err)
 		}
 		episodic, err := memory.NewStreamEpisodicMemory(
-			memory.WithEpisodicRedisClient(c),
+			memory.WithEpisodicRedisUniversalClient(c),
 			memory.WithEpisodicDomain(domain),
+			memory.WithEpisodicKeyspace(viewerRedisKeyspace),
 		)
 		if err != nil {
 			return MemoryBackends{}, fmt.Errorf("episodic: %w", err)
 		}
 		coordinator, err := memory.NewAtomicLockCoordinator(
-			memory.WithCoordinatorRedisClient(c),
+			memory.WithCoordinatorRedisUniversalClient(c),
 			memory.WithCoordinatorDomain(domain),
+			memory.WithCoordinatorKeyspace(viewerRedisKeyspace),
 		)
 		if err != nil {
 			return MemoryBackends{}, fmt.Errorf("coordinator: %w", err)
 		}
-		digest, err := memory.NewRedisDigestCache(c, nil)
+		digest, err := memory.NewRedisDigestCache(c, nil, memory.WithDigestCacheKeyspace(viewerRedisKeyspace))
 		if err != nil {
 			return MemoryBackends{}, fmt.Errorf("digest: %w", err)
 		}
-		activity, err := memory.NewRedisActivityCoordinator(c, domain)
+		activity, err := memory.NewRedisActivityCoordinator(c, domain, memory.WithActivityCoordinatorKeyspace(viewerRedisKeyspace))
 		if err != nil {
 			return MemoryBackends{}, fmt.Errorf("activity: %w", err)
 		}

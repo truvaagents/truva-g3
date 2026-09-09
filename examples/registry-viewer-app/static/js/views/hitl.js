@@ -20,6 +20,7 @@ import {
 
 import { fetchAPI, postAPI } from '../api.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
+import { formatCheckpointExpiry, renderCheckpointContext } from '../utils/hitl-content.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state (replaces former globals)
@@ -171,7 +172,7 @@ function renderTable(list) {
                 </div>
             </td>
             <td><span class="time-ago">${formatTimeAgo(cp.created_at)}</span></td>
-            <td><span class="time-ago" style="color: ${isExpiringSoon(cp.expires_at) ? 'var(--accent-orange)' : 'inherit'}">${formatTimeAgo(cp.expires_at)}</span></td>
+            <td><span class="time-ago" style="color: ${isExpiringSoon(cp.expires_at) ? 'var(--accent-orange)' : 'inherit'}">${formatCheckpointExpiry(cp.expires_at)}</span></td>
         </tr>
     `}).join('');
 }
@@ -232,7 +233,7 @@ function renderDetail() {
 function renderOverviewView(checkpoint) {
     let html = `<div class="formatted-view">`;
 
-    // Hoist canAct / isStreaming before the Blocked Step card (RC3 + RC4).
+    // Hoist canAct / isStreaming before the Blocked Step card.
     const isPending = checkpoint.status === 'pending';
     const canAct = isPending && !!checkpoint.agent_name;
     const isStreaming = checkpoint.request_mode === 'streaming';
@@ -242,7 +243,7 @@ function renderOverviewView(checkpoint) {
             Ensure the agent sets <code>TRUVAG3_AGENT_NAME</code>.
         </div>` : '';
 
-    // Blocked Step card — rendered FIRST with embedded Approve/Reject buttons (RC4).
+    // Blocked Step card — rendered FIRST with embedded Approve/Reject buttons.
     // When current_step exists the standalone action panel below is suppressed.
     if (checkpoint.current_step) {
         const step = checkpoint.current_step;
@@ -316,7 +317,7 @@ function renderOverviewView(checkpoint) {
     </div>`;
 
     // Standalone action panel — only for plan-level HITL (no current_step).
-    // When current_step exists, buttons are embedded on the Blocked Step card above (RC4).
+    // When current_step exists, buttons are embedded on the Blocked Step card above.
     if (!checkpoint.current_step && isPending) {
         if (isStreaming) {
             html += `
@@ -407,7 +408,7 @@ function renderOverviewView(checkpoint) {
     // User Context
     if (checkpoint.user_context && Object.keys(checkpoint.user_context).length > 0) {
         html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">👤</span> User Context</div><div class="info-grid">
-            ${Object.entries(checkpoint.user_context).map(([key, value]) => `<div class="info-label">${key}</div><div class="info-value mono">${value}</div>`).join('')}
+            ${renderCheckpointContext(checkpoint.user_context)}
         </div></div>`;
     }
 

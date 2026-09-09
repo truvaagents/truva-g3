@@ -3,20 +3,48 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/orchestration"
 )
+
+type viewerPipelineFailureHook struct{}
+
+func (*viewerPipelineFailureHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (*viewerPipelineFailureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+
+func (*viewerPipelineFailureHook) ProcessPipelineHook(redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(context.Context, []redis.Cmder) error {
+		return errors.New("cluster topology unavailable")
+	}
+}
 
 func newConversationAPIRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	t.Helper()
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	keyspace, err := core.NewRedisKeyspace("viewer-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerExecutionKeys = orchestration.NewRedisExecutionDebugKeys(keyspace)
 	t.Cleanup(func() { _ = client.Close() })
 	return server, client
+}
+
+func TestPipelineExecutionGetsReturnsTopologyFailure(t *testing.T) {
+	_, client := newConversationAPIRedis(t)
+	client.AddHook(&viewerPipelineFailureHook{})
+	if _, err := pipelineExecutionGets(t.Context(), client, []string{"request-1"}); err == nil {
+		t.Fatal("pipeline topology failure was suppressed")
+	}
 }
 
 func storeViewerExecution(
@@ -31,7 +59,7 @@ func storeViewerExecution(
 	}
 	if err := client.Set(
 		context.Background(),
-		executionKeyPrefix+execution.RequestID,
+		viewerExecutionKeys.Record(execution.RequestID),
 		data,
 		time.Hour,
 	).Err(); err != nil {
@@ -201,13 +229,13 @@ func TestConfirmedMissingIndexCleanupPreservesUnreadableRecords(t *testing.T) {
 	_, client := newConversationAPIRedis(t)
 	ctx := context.Background()
 	for index, requestID := range []string{"missing", "unreadable"} {
-		if err := client.ZAdd(ctx, executionIndexKey, redis.Z{
+		if err := client.ZAdd(ctx, viewerExecutionKeys.RecentIndex(), redis.Z{
 			Score: float64(index), Member: requestID,
 		}).Err(); err != nil {
 			t.Fatalf("seed index: %v", err)
 		}
 	}
-	if err := client.Set(ctx, executionKeyPrefix+"unreadable", "not-json", time.Hour).Err(); err != nil {
+	if err := client.Set(ctx, viewerExecutionKeys.Record("unreadable"), "not-json", time.Hour).Err(); err != nil {
 		t.Fatalf("seed unreadable record: %v", err)
 	}
 	cache := newExecutionReadCache()
@@ -218,14 +246,14 @@ func TestConfirmedMissingIndexCleanupPreservesUnreadableRecords(t *testing.T) {
 	pruneConfirmedMissingIndexMembers(
 		ctx,
 		client,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		[]string{"missing", "unreadable"},
 		cache.missing,
 	)
-	if _, err := client.ZScore(ctx, executionIndexKey, "missing").Result(); err != redis.Nil {
+	if _, err := client.ZScore(ctx, viewerExecutionKeys.RecentIndex(), "missing").Result(); err != redis.Nil {
 		t.Fatal("confirmed missing member remains indexed")
 	}
-	if _, err := client.ZScore(ctx, executionIndexKey, "unreadable").Result(); err != nil {
+	if _, err := client.ZScore(ctx, viewerExecutionKeys.RecentIndex(), "unreadable").Result(); err != nil {
 		t.Fatal("unreadable but existing record was incorrectly pruned")
 	}
 }
@@ -235,7 +263,7 @@ func TestBoundedMaintenanceEventuallyPrunesOldStaleMembers(t *testing.T) {
 	ctx := context.Background()
 	for index := 0; index < viewerStaleIndexMaintenanceBatch*3; index++ {
 		requestID := fmt.Sprintf("stale-%04d", index)
-		if err := client.ZAdd(ctx, executionIndexKey, redis.Z{
+		if err := client.ZAdd(ctx, viewerExecutionKeys.RecentIndex(), redis.Z{
 			Score: float64(index), Member: requestID,
 		}).Err(); err != nil {
 			t.Fatalf("seed stale index: %v", err)
@@ -247,7 +275,7 @@ func TestBoundedMaintenanceEventuallyPrunesOldStaleMembers(t *testing.T) {
 	staleIndexSweepMu.Unlock()
 	for attempt := 0; attempt < 20; attempt++ {
 		maintainStaleGlobalExecutionIndex(ctx, client)
-		remaining, err := client.ZCard(ctx, executionIndexKey).Result()
+		remaining, err := client.ZCard(ctx, viewerExecutionKeys.RecentIndex()).Result()
 		if err != nil {
 			t.Fatalf("count stale index: %v", err)
 		}
@@ -258,7 +286,7 @@ func TestBoundedMaintenanceEventuallyPrunesOldStaleMembers(t *testing.T) {
 		staleIndexSweepLastRun = time.Time{}
 		staleIndexSweepMu.Unlock()
 	}
-	if remaining, err := client.ZCard(ctx, executionIndexKey).Result(); err != nil || remaining != 0 {
+	if remaining, err := client.ZCard(ctx, viewerExecutionKeys.RecentIndex()).Result(); err != nil || remaining != 0 {
 		t.Fatalf("stale members remaining after bounded sweeps = %d", remaining)
 	}
 }
@@ -277,23 +305,23 @@ func TestStaleIndexMaintenanceIsRateLimited(t *testing.T) {
 		staleIndexSweepMu.Unlock()
 	})
 
-	if err := client.ZAdd(ctx, executionIndexKey, redis.Z{
+	if err := client.ZAdd(ctx, viewerExecutionKeys.RecentIndex(), redis.Z{
 		Score: 1, Member: "first-stale",
 	}).Err(); err != nil {
 		t.Fatalf("seed first stale member: %v", err)
 	}
 	maintainStaleGlobalExecutionIndex(ctx, client)
-	if _, err := client.ZScore(ctx, executionIndexKey, "first-stale").Result(); err != redis.Nil {
+	if _, err := client.ZScore(ctx, viewerExecutionKeys.RecentIndex(), "first-stale").Result(); err != redis.Nil {
 		t.Fatalf("eligible sweep did not remove first stale member: %v", err)
 	}
 
-	if err := client.ZAdd(ctx, executionIndexKey, redis.Z{
+	if err := client.ZAdd(ctx, viewerExecutionKeys.RecentIndex(), redis.Z{
 		Score: 2, Member: "second-stale",
 	}).Err(); err != nil {
 		t.Fatalf("seed second stale member: %v", err)
 	}
 	maintainStaleGlobalExecutionIndex(ctx, client)
-	if _, err := client.ZScore(ctx, executionIndexKey, "second-stale").Result(); err != nil {
+	if _, err := client.ZScore(ctx, viewerExecutionKeys.RecentIndex(), "second-stale").Result(); err != nil {
 		t.Fatalf("rate-limited sweep unexpectedly removed second member: %v", err)
 	}
 
@@ -301,7 +329,7 @@ func TestStaleIndexMaintenanceIsRateLimited(t *testing.T) {
 	staleIndexSweepLastRun = time.Now().Add(-viewerStaleIndexMaintenanceInterval)
 	staleIndexSweepMu.Unlock()
 	maintainStaleGlobalExecutionIndex(ctx, client)
-	if _, err := client.ZScore(ctx, executionIndexKey, "second-stale").Result(); err != redis.Nil {
+	if _, err := client.ZScore(ctx, viewerExecutionKeys.RecentIndex(), "second-stale").Result(); err != redis.Nil {
 		t.Fatalf("eligible follow-up sweep did not remove second stale member: %v", err)
 	}
 }

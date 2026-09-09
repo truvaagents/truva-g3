@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -23,12 +20,7 @@ import (
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
-const (
-	viewerLLMDebugKeyPrefix   = "truvag3:llm:debug:"
-	viewerLLMDebugMetaSuffix  = ":meta"
-	viewerLLMDebugInterSuffix = ":interactions"
-	groupedCursorSchema       = 1
-)
+const groupedCursorSchema = 1
 
 // ConversationTimelineTurn is one top-level user turn plus any related
 // HITL/delegated executions. Related executions are lineage, not independent
@@ -123,27 +115,12 @@ type llmDebugEnrichment struct {
 }
 
 var (
-	llmDebugReadClient     *redis.Client
-	llmDebugReadClientMu   sync.Mutex
 	staleIndexSweepMu      sync.Mutex
 	staleIndexSweepCursor  uint64
 	staleIndexSweepLastRun time.Time
 )
 
-func getLLMDebugReadClient() (*redis.Client, error) {
-	llmDebugReadClientMu.Lock()
-	defer llmDebugReadClientMu.Unlock()
-
-	if llmDebugReadClient == nil {
-		opt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid redis URL: %w", err)
-		}
-		opt.DB = core.RedisDBLLMDebug
-		llmDebugReadClient = redis.NewClient(core.ApplyRedisClientDefaults(opt))
-	}
-	return llmDebugReadClient, nil
-}
+func getLLMDebugReadClient() (redis.UniversalClient, error) { return getViewerRedisClient() }
 
 func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 	if execution == nil {
@@ -192,8 +169,7 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 }
 
 func viewerConversationIndexKey(conversationID string) string {
-	digest := sha256.Sum256([]byte(conversationID))
-	return fmt.Sprintf("%sconversation:%x", executionKeyPrefix, digest)
+	return viewerExecutionKeys.Conversation(conversationID)
 }
 
 func newExecutionReadCache() *executionReadCache {
@@ -206,7 +182,7 @@ func newExecutionReadCache() *executionReadCache {
 
 func (c *executionReadCache) load(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	requestIDs []string,
 ) (bool, error) {
 	remaining := viewerExecutionHydrationLimit - c.hydrated
@@ -217,7 +193,7 @@ func (c *executionReadCache) load(
 
 func (c *executionReadCache) loadExactOwners(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	requestIDs []string,
 ) (bool, error) {
 	remaining := viewerExactOwnerHydrationLimit - c.exactHydrated
@@ -228,7 +204,7 @@ func (c *executionReadCache) loadExactOwners(
 
 func (c *executionReadCache) loadWithBudget(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	requestIDs []string,
 	remaining int,
 ) (int, bool, error) {
@@ -265,31 +241,20 @@ func (c *executionReadCache) loadWithBudget(
 		return 0, truncated, nil
 	}
 
-	keys := make([]string, len(unknown))
-	for i, requestID := range unknown {
-		keys[i] = executionKeyPrefix + requestID
-	}
-	values, err := client.MGet(ctx, keys...).Result()
+	commands, err := pipelineExecutionGets(ctx, client, unknown)
 	if err != nil {
 		return 0, truncated, fmt.Errorf("failed to hydrate executions: %w", err)
 	}
 	partial := truncated
-	for i, value := range values {
+	for i, command := range commands {
 		requestID := unknown[i]
-		if value == nil {
+		data, commandErr := command.Bytes()
+		if commandErr == redis.Nil {
 			c.missing[requestID] = struct{}{}
 			continue
 		}
-		var data []byte
-		switch typed := value.(type) {
-		case string:
-			data = []byte(typed)
-		case []byte:
-			data = typed
-		default:
-			c.unreadable[requestID] = struct{}{}
-			partial = true
-			continue
+		if commandErr != nil {
+			return i, partial, fmt.Errorf("read execution %d: %w", i, commandErr)
 		}
 		execution, decodeErr := deserializeExecution(data)
 		if decodeErr != nil {
@@ -302,9 +267,25 @@ func (c *executionReadCache) loadWithBudget(
 	return len(unknown), partial, nil
 }
 
+func pipelineExecutionGets(
+	ctx context.Context,
+	client redis.UniversalClient,
+	requestIDs []string,
+) ([]*redis.StringCmd, error) {
+	pipe := client.Pipeline()
+	commands := make([]*redis.StringCmd, len(requestIDs))
+	for index, requestID := range requestIDs {
+		commands[index] = pipe.Get(ctx, viewerExecutionKeys.Record(requestID))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
+	return commands, nil
+}
+
 func pruneConfirmedMissingIndexMembers(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	indexKey string,
 	requestIDs []string,
 	missing map[string]struct{},
@@ -324,7 +305,15 @@ func pruneConfirmedMissingIndexMembers(
 		return
 	}
 	if err := client.ZRem(ctx, indexKey, stale...).Err(); err != nil {
-		log.Printf("[WARN] execution index cleanup failed")
+		if viewerLogger != nil {
+			viewerLogger.WarnWithContext(ctx, "Execution index cleanup failed", map[string]interface{}{
+				"operation":   "viewer_execution_index_cleanup",
+				"request_id":  core.GetRequestID(ctx),
+				"error":       "redis execution index cleanup failed",
+				"error_type":  "index_write",
+				"stale_count": len(stale),
+			})
+		}
 	}
 }
 
@@ -332,7 +321,7 @@ func pruneConfirmedMissingIndexMembers(
 // ZSCAN cursor. Unlike newest-first page cleanup, repeated eligible calls
 // eventually inspect old members outside the normal hydration window without
 // adding a scan and hydration round trip to every grouped-list request.
-func maintainStaleGlobalExecutionIndex(ctx context.Context, client *redis.Client) {
+func maintainStaleGlobalExecutionIndex(ctx context.Context, client redis.UniversalClient) {
 	if !staleIndexSweepMu.TryLock() {
 		return
 	}
@@ -348,13 +337,13 @@ func maintainStaleGlobalExecutionIndex(ctx context.Context, client *redis.Client
 
 	rows, nextCursor, err := client.ZScan(
 		ctx,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		staleIndexSweepCursor,
 		"",
 		viewerStaleIndexMaintenanceBatch,
 	).Result()
 	if err != nil {
-		log.Printf("[WARN] execution index maintenance scan failed")
+		logViewerExecutionIndexMaintenanceFailure(ctx, "scan", "index_scan")
 		return
 	}
 	requestIDs := make([]string, 0, len(rows)/2)
@@ -365,29 +354,41 @@ func maintainStaleGlobalExecutionIndex(ctx context.Context, client *redis.Client
 		staleIndexSweepCursor = nextCursor
 		return
 	}
-	keys := make([]string, len(requestIDs))
-	for index, requestID := range requestIDs {
-		keys[index] = executionKeyPrefix + requestID
-	}
-	values, err := client.MGet(ctx, keys...).Result()
+	commands, err := pipelineExecutionGets(ctx, client, requestIDs)
 	if err != nil {
-		log.Printf("[WARN] execution index maintenance hydration failed")
+		logViewerExecutionIndexMaintenanceFailure(ctx, "hydrate", "backend_read")
 		return
 	}
 	missing := make(map[string]struct{})
-	for index, value := range values {
-		if value == nil {
+	for index, command := range commands {
+		if command.Err() == redis.Nil {
 			missing[requestIDs[index]] = struct{}{}
+		} else if command.Err() != nil {
+			logViewerExecutionIndexMaintenanceFailure(ctx, "hydrate", "backend_read")
+			return
 		}
 	}
 	pruneConfirmedMissingIndexMembers(
 		ctx,
 		client,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		requestIDs,
 		missing,
 	)
 	staleIndexSweepCursor = nextCursor
+}
+
+func logViewerExecutionIndexMaintenanceFailure(ctx context.Context, stage, errorType string) {
+	if viewerLogger == nil {
+		return
+	}
+	viewerLogger.WarnWithContext(ctx, "Execution index maintenance failed", map[string]interface{}{
+		"operation":  "viewer_execution_index_maintenance",
+		"request_id": core.GetRequestID(ctx),
+		"stage":      stage,
+		"error":      "redis execution index maintenance failed",
+		"error_type": errorType,
+	})
 }
 
 func unresolvedExecutionOwnerIDs(
@@ -414,7 +415,7 @@ func unresolvedExecutionOwnerIDs(
 
 func hydrateAndClassifyGroupedExecutionOwners(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	cache *executionReadCache,
 	summaries map[string]ExecutionSummary,
 ) (bool, error) {
@@ -521,7 +522,7 @@ func loadConversationTimeline(
 
 	globalRows, err := client.ZRevRangeWithScores(
 		ctx,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		0,
 		viewerGlobalExecutionScanLimit,
 	).Result()
@@ -548,7 +549,7 @@ func loadConversationTimeline(
 	pruneConfirmedMissingIndexMembers(
 		ctx,
 		client,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		globalIDs,
 		cache.missing,
 	)
@@ -904,7 +905,7 @@ func loadGroupedExecutions(
 	pruneConfirmedMissingIndexMembers(
 		ctx,
 		client,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		globalIDs,
 		cache.missing,
 	)
@@ -1062,7 +1063,7 @@ func loadGroupedExecutions(
 		enrichmentErr        error
 	)
 	if query.Sort == "total_duration_ms" {
-		// Combined duration ordering depends on mutable DB 7 data, so it must
+		// Combined duration ordering depends on mutable LLM-debug data, so it must
 		// be enriched before grouping. An incomplete read makes this bounded
 		// point-in-time result partial; duration cursors are rejected.
 		enrichment, enrichmentIncomplete, enrichmentErr =
@@ -1089,9 +1090,9 @@ func loadGroupedExecutions(
 		return response, nil
 	}
 
-	// Created-at and request-text ordering depend only on immutable DB 8
+	// Created-at and request-text ordering depend only on immutable execution
 	// fields. Paginate first, then enrich just the returned page so optional
-	// DB 7 bounds or failures cannot suppress a valid DB 8 continuation.
+	// LLM-enrichment bounds or failures cannot suppress a valid continuation.
 	pageSummaries := groupedExecutionPageSummaries(response.Groups)
 	enrichment, enrichmentIncomplete, enrichmentErr =
 		enrichExecutionSummariesFromLLMDebug(ctx, pageSummaries)
@@ -1103,7 +1104,7 @@ func loadGroupedExecutions(
 
 func readGroupedGlobalSnapshot(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	cursor *groupedExecutionCursor,
 ) ([]indexedExecution, string, string, bool, error) {
 	maxScore := "+inf"
@@ -1116,7 +1117,7 @@ func readGroupedGlobalSnapshot(
 	}
 	rows, err := client.ZRevRangeByScoreWithScores(
 		ctx,
-		executionIndexKey,
+		viewerExecutionKeys.RecentIndex(),
 		&redis.ZRangeBy{
 			Min:   "-inf",
 			Max:   maxScore,
@@ -1178,7 +1179,7 @@ func executionIsNewerThanSnapshot(
 
 func readConversationMembers(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	conversationIDs []string,
 ) (map[string][]string, bool, error) {
 	result := make(map[string][]string, len(conversationIDs))
@@ -1215,7 +1216,7 @@ func readConversationMembers(
 
 func findMissingConversationIndexMembers(
 	ctx context.Context,
-	client *redis.Client,
+	client redis.UniversalClient,
 	checks map[string][]string,
 ) (map[string][]string, error) {
 	missing := make(map[string][]string)
@@ -1629,7 +1630,7 @@ func paginateGroupedExecutionUnits(
 
 	hasMore := len(groups) > query.Limit
 	if hasMore && query.Sort == "total_duration_ms" {
-		// The combined duration includes mutable DB 7 LLM data. It is valid for
+		// The combined duration includes mutable LLM-debug data. It is valid for
 		// a bounded point-in-time sort, but cannot be used as a keyset cursor
 		// across requests without risking skipped or duplicated groups.
 		partial = true
@@ -1691,7 +1692,7 @@ func enrichExecutionSummariesFromLLMDebug(
 	}
 
 	// Prefer the newest executions when a bounded grouped/timeline request
-	// contains more candidates than the DB 7 enrichment budget. The DB 8
+	// contains more candidates than the LLM enrichment budget. Execution
 	// membership remains complete up to its independent bounds, while callers
 	// receive an explicit incomplete signal for optional LLM-derived fields.
 	summaryIndexes := make([]int, len(summaries))
@@ -1714,25 +1715,18 @@ func enrichExecutionSummariesFromLLMDebug(
 	pipe := client.Pipeline()
 	interactionCommands := make(map[string]*redis.StringSliceCmd, len(summaryIndexes))
 	metaCommands := make(map[string]*redis.IntCmd, len(summaryIndexes))
-	legacyCommands := make(map[string]*redis.StringCmd, len(summaryIndexes))
 	for _, summaryIndex := range summaryIndexes {
 		summary := summaries[summaryIndex]
 		requestID := summary.RequestID
 		interactionCommands[requestID] = pipe.LRange(
 			ctx,
-			viewerLLMDebugKeyPrefix+requestID+viewerLLMDebugInterSuffix,
+			viewerLLMKeys.Interactions(requestID),
 			0,
 			viewerLLMInteractionLimit,
 		)
 		metaCommands[requestID] = pipe.Exists(
 			ctx,
-			viewerLLMDebugKeyPrefix+requestID+viewerLLMDebugMetaSuffix,
-		)
-		legacyCommands[requestID] = pipe.GetRange(
-			ctx,
-			viewerLLMDebugKeyPrefix+requestID,
-			0,
-			viewerLLMInteractionBytesLimit,
+			viewerLLMKeys.Meta(requestID),
 		)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
@@ -1768,33 +1762,9 @@ func enrichExecutionSummariesFromLLMDebug(
 				}
 			}
 		}
-		if len(interactions) == 0 && !recordIncomplete {
-			if legacy, legacyErr := legacyCommands[requestID].Bytes(); legacyErr == nil {
-				if len(legacy) > viewerLLMInteractionBytesLimit {
-					incomplete = true
-					recordIncomplete = true
-				} else if len(legacy) > 0 {
-					var record orchestration.LLMDebugRecord
-					if decodeViewerStoredJSON(
-						legacy,
-						&record,
-						viewerLLMInteractionBytesLimit,
-					) != nil {
-						incomplete = true
-						recordIncomplete = true
-					} else {
-						interactions = record.Interactions
-						if len(interactions) > viewerLLMInteractionLimit {
-							incomplete = true
-							recordIncomplete = true
-						}
-					}
-				}
-			}
-		}
 		if recordIncomplete {
 			// Do not publish partial duration/count values as exact enrichment.
-			// Callers still receive DB 8 membership plus the incomplete signal.
+			// Callers still receive execution membership plus the incomplete signal.
 			continue
 		}
 		if len(interactions) == 0 {
@@ -1835,29 +1805,4 @@ func enrichExecutionSummariesFromLLMDebug(
 		}
 	}
 	return enrichment, incomplete, nil
-}
-
-func decodeViewerStoredJSON(data []byte, target interface{}, maxBytes int) error {
-	if len(data) == 0 {
-		return fmt.Errorf("empty data")
-	}
-	payload := data
-	switch data[0] {
-	case 0:
-		payload = data[1:]
-	case 1:
-		reader, err := gzip.NewReader(bytes.NewReader(data[1:]))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = reader.Close() }()
-		payload, err = io.ReadAll(io.LimitReader(reader, int64(maxBytes)+1))
-		if err != nil {
-			return err
-		}
-	}
-	if len(payload) > maxBytes {
-		return fmt.Errorf("decoded payload exceeds limit")
-	}
-	return json.Unmarshal(payload, target)
 }

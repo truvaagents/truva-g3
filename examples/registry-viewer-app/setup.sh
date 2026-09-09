@@ -22,7 +22,21 @@ NAMESPACE="truvag3-examples"
 APP_NAME="registry-viewer"
 APP_PORT=8361
 IMAGE_NAME="registry-viewer:latest"
-REDIS_NAMESPACE="truvag3"
+REDIS_NAMESPACE="default"
+REGISTRY_VIEWER_SECRET_TEMP_DIR=""
+
+cleanup_registry_viewer_secret_temp_dir() {
+    case "$REGISTRY_VIEWER_SECRET_TEMP_DIR" in
+        /tmp/truvag3-registry-viewer-secrets.*)
+            rm -rf -- "$REGISTRY_VIEWER_SECRET_TEMP_DIR"
+            ;;
+    esac
+    REGISTRY_VIEWER_SECRET_TEMP_DIR=""
+}
+
+# Credential staging is process-local and always removed, including when a
+# later kubectl command fails under `set -e`.
+trap cleanup_registry_viewer_secret_temp_dir EXIT
 
 # Extract Redis configuration from k8-deployment/redis.yaml
 # Sets REDIS_SERVICE_NAME and REDIS_PORT variables
@@ -53,7 +67,7 @@ get_redis_config() {
 
 # Build Redis URL from config (can be overridden by REDIS_URL env var)
 get_redis_url() {
-    if [ -n "$REDIS_URL" ]; then
+    if [ -n "${REDIS_URL:-}" ]; then
         echo "$REDIS_URL"
     else
         get_redis_config
@@ -203,8 +217,19 @@ load_to_kind() {
     echo ""
 }
 
+# Reject the removed alias before building, changing a workload, or running Redis mode.
+# Whitespace-only values are absent, matching core.ResolveRedisConnectionConfig.
+validate_redis_environment() {
+    local removed_url="${TRUVAG3_REDIS_URL:-}"
+    if [ -n "${removed_url//[[:space:]]/}" ]; then
+        log_error "TRUVAG3_REDIS_URL is unsupported; remove it and use REDIS_URL"
+        return 1
+    fi
+}
+
 # Deploy to Kubernetes
 deploy_k8s() {
+    validate_redis_environment
     log_info "Deploying to Kubernetes..."
 
     if [ "$KUBECTL_AVAILABLE" != true ]; then
@@ -212,35 +237,141 @@ deploy_k8s() {
         exit 1
     fi
 
-    # Get Redis URL from config or environment
-    local redis_url=$(get_redis_url)
-    log_info "Using Redis URL: $redis_url"
+    local redis_url=""
+    local redis_mode="${TRUVAG3_REDIS_MODE:-}"
+    local redis_addrs="${TRUVAG3_REDIS_ADDRS:-}"
+    local redis_db=""
+    local structured_source=false
+    local connection_name=""
+    for connection_name in \
+        TRUVAG3_REDIS_MODE \
+        TRUVAG3_REDIS_ADDRS \
+        TRUVAG3_REDIS_MASTER_NAME \
+        TRUVAG3_REDIS_USERNAME \
+        TRUVAG3_REDIS_PASSWORD \
+        TRUVAG3_REDIS_SENTINEL_USERNAME \
+        TRUVAG3_REDIS_SENTINEL_PASSWORD \
+        TRUVAG3_REDIS_TLS_ENABLED \
+        TRUVAG3_REDIS_TLS_SERVER_NAME \
+        TRUVAG3_REDIS_CA_FILE \
+        TRUVAG3_REDIS_DB; do
+        if [ -n "${!connection_name}" ]; then
+            structured_source=true
+            break
+        fi
+    done
+    if [ -n "${REDIS_URL:-}" ] && [ "$structured_source" = true ]; then
+        log_error "URL shorthand cannot be combined with structured TRUVAG3_REDIS_* connection settings"
+        exit 1
+    fi
+    if [ "$structured_source" = true ]; then
+        if [ -z "$redis_mode" ]; then
+            log_error "TRUVAG3_REDIS_MODE is required with structured Redis connection settings"
+            exit 1
+        fi
+        if [ -z "$redis_addrs" ]; then
+            log_error "TRUVAG3_REDIS_ADDRS is required with TRUVAG3_REDIS_MODE"
+            exit 1
+        fi
+        redis_mode=$(printf '%s' "$redis_mode" | tr '[:upper:]' '[:lower:]')
+        case "$redis_mode" in
+            standalone|sentinel|cluster) ;;
+            *)
+                log_error "TRUVAG3_REDIS_MODE must be standalone, sentinel, or cluster"
+                exit 1
+                ;;
+        esac
+        if [ "$redis_mode" = "sentinel" ] && [ -z "${TRUVAG3_REDIS_MASTER_NAME:-}" ]; then
+            log_error "TRUVAG3_REDIS_MASTER_NAME is required in Sentinel mode"
+            exit 1
+        fi
+        redis_db="${TRUVAG3_REDIS_DB:-0}"
+        if [ "$redis_db" != "0" ]; then
+            log_error "Registry Viewer requires TRUVAG3_REDIS_DB=0 in every Redis topology"
+            exit 1
+        fi
+        if [ -n "${TRUVAG3_REDIS_CA_FILE:-}" ] && [ ! -r "$TRUVAG3_REDIS_CA_FILE" ]; then
+            log_error "TRUVAG3_REDIS_CA_FILE must name a readable PEM file"
+            exit 1
+        fi
+        log_info "Using structured Redis topology: $redis_mode"
+    else
+        redis_url=$(get_redis_url)
+        log_info "Using standalone Redis URL shorthand"
+    fi
 
     # Create namespace if not exists
     kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-    # Apply the workload objects first. The manifest carries portable defaults;
-    # the generated ConfigMap below is authoritative for this deployment and
-    # must be applied afterwards so environment-specific values are retained.
-    kubectl apply -f "$SCRIPT_DIR/k8-deployment.yaml"
-
-    # Update ConfigMap with the effective Redis configuration.
-    # This allows the Redis URL to be derived from k8-deployment/redis.yaml
-    # or overridden via REDIS_URL environment variable
+    # Update the non-secret topology and Viewer configuration. REDIS_URL and
+    # ACL credentials are written to a Secret below because the URL may itself
+    # contain credentials. These objects must exist before a new workload pod
+    # can start, otherwise it could briefly connect with the portable defaults
+    # embedded in k8-deployment.yaml.
     log_info "Configuring registry-viewer-config ConfigMap..."
     kubectl create configmap registry-viewer-config \
         --namespace="$NAMESPACE" \
-        --from-literal=REDIS_URL="$redis_url" \
-        --from-literal=REDIS_NAMESPACE="${REDIS_NAMESPACE}" \
+        --from-literal=TRUVAG3_REDIS_MODE="$redis_mode" \
+        --from-literal=TRUVAG3_REDIS_ADDRS="$redis_addrs" \
+        --from-literal=TRUVAG3_REDIS_MASTER_NAME="${TRUVAG3_REDIS_MASTER_NAME:-}" \
+        --from-literal=TRUVAG3_REDIS_DB="$redis_db" \
+        --from-literal=TRUVAG3_REDIS_NAMESPACE="${TRUVAG3_REDIS_NAMESPACE:-$REDIS_NAMESPACE}" \
+        --from-literal=TRUVAG3_REDIS_TLS_ENABLED="${TRUVAG3_REDIS_TLS_ENABLED:-}" \
+        --from-literal=TRUVAG3_REDIS_TLS_SERVER_NAME="${TRUVAG3_REDIS_TLS_SERVER_NAME:-}" \
+        --from-literal=TRUVAG3_REDIS_CA_FILE="${TRUVAG3_REDIS_CA_FILE:+/etc/truvag3/redis-ca/ca.crt}" \
+        --from-literal=TRUVAG3_REDIS_POOL_SIZE="${TRUVAG3_REDIS_POOL_SIZE:-}" \
+        --from-literal=TRUVAG3_REDIS_MIN_IDLE_CONNS="${TRUVAG3_REDIS_MIN_IDLE_CONNS:-}" \
+        --from-literal=TRUVAG3_REDIS_DIAL_TIMEOUT="${TRUVAG3_REDIS_DIAL_TIMEOUT:-}" \
+        --from-literal=TRUVAG3_REDIS_READ_TIMEOUT="${TRUVAG3_REDIS_READ_TIMEOUT:-}" \
+        --from-literal=TRUVAG3_REDIS_WRITE_TIMEOUT="${TRUVAG3_REDIS_WRITE_TIMEOUT:-}" \
+        --from-literal=TRUVAG3_REDIS_MAX_RETRIES="${TRUVAG3_REDIS_MAX_RETRIES:-}" \
         --from-literal=USE_MOCK="false" \
         --from-literal=PORT="${APP_PORT}" \
         --from-literal=APP_ENV="${APP_ENV:-development}" \
         --from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}" \
-        --from-literal=JAEGER_QUERY_URL="${JAEGER_QUERY_URL:-http://jaeger-query}" \
         --from-literal=JAEGER_UI_URL="${JAEGER_UI_URL:-http://jaeger.localhost}" \
         --from-literal=TRUVAG3_VIEWER_MEMORY_DOMAINS="${TRUVAG3_VIEWER_MEMORY_DOMAINS:-infrastructure}" \
-        --from-literal=TRUVAG3_SKILLS_REDIS_DB="${TRUVAG3_SKILLS_REDIS_DB:-9}" \
         --dry-run=client -o yaml | kubectl apply -f -
+
+    log_info "Configuring Registry Viewer Redis credentials Secret..."
+    REGISTRY_VIEWER_SECRET_TEMP_DIR=$(mktemp -d "/tmp/truvag3-registry-viewer-secrets.XXXXXX")
+    chmod 700 "$REGISTRY_VIEWER_SECRET_TEMP_DIR"
+    printf '%s' "$redis_url" > "$REGISTRY_VIEWER_SECRET_TEMP_DIR/REDIS_URL"
+    printf '%s' "${TRUVAG3_REDIS_USERNAME:-}" > "$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_USERNAME"
+    printf '%s' "${TRUVAG3_REDIS_PASSWORD:-}" > "$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_PASSWORD"
+    printf '%s' "${TRUVAG3_REDIS_SENTINEL_USERNAME:-}" > "$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_SENTINEL_USERNAME"
+    printf '%s' "${TRUVAG3_REDIS_SENTINEL_PASSWORD:-}" > "$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_SENTINEL_PASSWORD"
+    chmod 600 "$REGISTRY_VIEWER_SECRET_TEMP_DIR"/*
+    kubectl create secret generic registry-viewer-redis-credentials \
+        --namespace="$NAMESPACE" \
+        --from-file=REDIS_URL="$REGISTRY_VIEWER_SECRET_TEMP_DIR/REDIS_URL" \
+        --from-file=TRUVAG3_REDIS_USERNAME="$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_USERNAME" \
+        --from-file=TRUVAG3_REDIS_PASSWORD="$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_PASSWORD" \
+        --from-file=TRUVAG3_REDIS_SENTINEL_USERNAME="$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_SENTINEL_USERNAME" \
+        --from-file=TRUVAG3_REDIS_SENTINEL_PASSWORD="$REGISTRY_VIEWER_SECRET_TEMP_DIR/TRUVAG3_REDIS_SENTINEL_PASSWORD" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    cleanup_registry_viewer_secret_temp_dir
+
+    log_info "Configuring Registry Viewer Redis CA Secret..."
+    if [ -n "${TRUVAG3_REDIS_CA_FILE:-}" ]; then
+        kubectl create secret generic registry-viewer-redis-ca \
+            --namespace="$NAMESPACE" \
+            --from-file=ca.crt="$TRUVAG3_REDIS_CA_FILE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    else
+        kubectl create secret generic registry-viewer-redis-ca \
+            --namespace="$NAMESPACE" \
+            --from-literal=ca.crt="" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    fi
+
+    # Apply only the workload objects from the portable manifest. Its ConfigMap
+    # is useful for direct `kubectl apply`, but setup.sh has already installed
+    # the authoritative environment-specific ConfigMap above and must not
+    # overwrite it with standalone/default values.
+    kubectl apply \
+        --selector='truvag3.io/setup-workload=true' \
+        -f "$SCRIPT_DIR/k8-deployment.yaml"
 
     # Restart to pick up new image
     log_info "Rolling out new version..."
@@ -305,6 +436,9 @@ port_forward() {
 
 # Run locally (with mock data by default)
 run_local() {
+    if [ "${1:-}" = "redis" ]; then
+        validate_redis_environment
+    fi
     log_info "Starting registry-viewer locally..."
 
     cd "$SCRIPT_DIR"
@@ -327,7 +461,10 @@ run_local() {
     echo ""
 
     if [ "$1" = "redis" ]; then
-        ./registry-viewer -port="$APP_PORT" -mock=false -redis-url="${REDIS_URL:-redis://localhost:6379}"
+        if [ -z "${TRUVAG3_REDIS_MODE:-}" ] && [ -z "${REDIS_URL:-}" ]; then
+            export REDIS_URL="redis://localhost:6379"
+        fi
+        ./registry-viewer -port="$APP_PORT" -mock=false
     else
         ./registry-viewer -port="$APP_PORT" -mock=true
     fi
@@ -335,10 +472,14 @@ run_local() {
 
 # Run with Redis (connects to existing Redis)
 run_redis() {
+    validate_redis_environment
     log_info "Starting registry-viewer with Redis connection..."
 
-    # Check if Redis port-forward exists or Redis is local
-    if ! nc -z localhost 6379 2>/dev/null; then
+    # Check the conventional local endpoint only when no explicit connection
+    # source was supplied. Remote URLs and structured topologies must not be
+    # mistaken for a missing localhost port-forward.
+    if [ -z "${TRUVAG3_REDIS_MODE:-}" ] && [ -z "${REDIS_URL:-}" ] && \
+        ! nc -z localhost 6379 2>/dev/null; then
         log_warn "Redis not available on localhost:6379"
         echo ""
         echo "Options:"
@@ -356,6 +497,14 @@ run_redis() {
     fi
 
     run_local redis
+}
+
+# Verify every Redis-backed Viewer API against the running application. The
+# script is read-only and accepts expected IDs through environment variables so
+# evidence is always produced by framework agents/tools rather than raw keys.
+verify_live_data() {
+    local strict_arg="${1:-}"
+    bash "$SCRIPT_DIR/scripts/verify-live-data.sh" "$strict_arg"
 }
 
 # Rebuild and redeploy
@@ -385,6 +534,8 @@ cleanup() {
     # Delete K8s resources
     if [ "$KUBECTL_AVAILABLE" = true ]; then
         kubectl delete -f "$SCRIPT_DIR/k8-deployment.yaml" --ignore-not-found 2>/dev/null || true
+        kubectl delete secret registry-viewer-redis-credentials registry-viewer-redis-ca \
+            -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
     fi
 
     # Remove local binary
@@ -406,11 +557,18 @@ status() {
     fi
     echo "  Redis Service: $REDIS_SERVICE_NAME"
     echo "  Redis Port: $REDIS_PORT"
-    echo "  Redis URL: redis://${REDIS_SERVICE_NAME}:${REDIS_PORT}"
-    if [ -n "$REDIS_URL" ]; then
-        echo "  REDIS_URL override: $REDIS_URL"
+    echo "  Default Redis endpoint: ${REDIS_SERVICE_NAME}:${REDIS_PORT}"
+    if [ -n "${REDIS_URL:-}" ]; then
+        echo "  REDIS_URL override: configured (value hidden)"
     fi
-    echo "  Redis Namespace: $REDIS_NAMESPACE"
+    if [ -n "${TRUVAG3_REDIS_URL:-}" ]; then
+        echo "  Unsupported TRUVAG3_REDIS_URL is set; remove it and use REDIS_URL"
+    fi
+    if [ -n "${TRUVAG3_REDIS_MODE:-}" ]; then
+        echo "  Structured Redis mode: $TRUVAG3_REDIS_MODE"
+        echo "  Structured Redis seeds: configured (values hidden)"
+    fi
+    echo "  Redis Namespace: ${TRUVAG3_REDIS_NAMESPACE:-$REDIS_NAMESPACE}"
     echo "  App Port: $APP_PORT"
 
     echo ""
@@ -471,11 +629,14 @@ Local Development:
   build         Build the application locally
   run           Run locally with mock data (default)
   run-redis     Run locally connected to Redis
+  verify        Read-only verification of every Viewer data path
+  verify-all    Strict verification using all TRUVAG3_VIEWER_EXPECT_* IDs
   status        Show status of local/docker/k8s resources
 
 Docker:
-  docker        Build Docker image
-  docker-run    Run Docker container locally
+  docker             Build Docker image
+  docker-run         Run Docker container locally with mock data
+  docker-run redis   Run Docker container with URL or structured Redis configuration
 
 Kubernetes Deployment:
   deploy        Build, load to Kind, and deploy to K8s
@@ -496,6 +657,9 @@ Examples:
   $0 deploy
   $0 forward
 
+  # In another terminal, verify the live data paths
+  $0 verify
+
   # Full rebuild and deploy
   $0 rebuild
   $0 forward
@@ -507,8 +671,25 @@ Environment Variables:
   REDIS_URL         Override Redis connection URL
                     Default: Extracted from ../k8-deployment/redis.yaml
                     (service name + port from Redis Service definition)
-  REDIS_NAMESPACE   Redis key namespace (default: truvag3)
-  JAEGER_QUERY_URL  Jaeger Query base URL (default: http://jaeger-query)
+  REDIS_NAMESPACE   Redis key namespace (default: default)
+  TRUVAG3_REDIS_MODE, TRUVAG3_REDIS_ADDRS
+                    Structured standalone, Sentinel, or cluster topology.
+                    Do not combine these with REDIS_URL.
+  TRUVAG3_REDIS_MASTER_NAME
+                    Required in Sentinel mode.
+  TRUVAG3_REDIS_DB   Must be 0 for every Registry Viewer Redis topology.
+  TRUVAG3_REDIS_NAMESPACE
+                    Versioned DB-0 deployment namespace.
+  TRUVAG3_REDIS_USERNAME, TRUVAG3_REDIS_PASSWORD
+                    Data-node ACL credentials; stored in a Kubernetes Secret.
+  TRUVAG3_REDIS_SENTINEL_USERNAME, TRUVAG3_REDIS_SENTINEL_PASSWORD
+                    Sentinel ACL credentials; stored in a Kubernetes Secret.
+  TRUVAG3_REDIS_TLS_ENABLED, TRUVAG3_REDIS_TLS_SERVER_NAME
+                    TLS settings for structured topology.
+  TRUVAG3_REDIS_CA_FILE
+                    Local PEM CA file mounted read-only into the Viewer pod.
+  TRUVAG3_VIEWER_URL
+                    Base URL used by verify/verify-all (default: http://localhost:$APP_PORT).
   JAEGER_UI_URL     Browser-facing Jaeger UI base URL (default: http://jaeger.localhost)
   DOCKER_NO_CACHE   Set to 'true' to build Docker with --no-cache
 
@@ -526,6 +707,9 @@ EOF
 
 # Docker run locally
 docker_run() {
+    if [ "${1:-}" = "redis" ]; then
+        validate_redis_environment
+    fi
     log_info "Running Docker container locally..."
 
     if [ "$DOCKER_AVAILABLE" != true ]; then
@@ -542,12 +726,55 @@ docker_run() {
     "${TRUVAG3_CONTAINER_RUNTIME:-docker}" stop $APP_NAME 2>/dev/null || true
     "${TRUVAG3_CONTAINER_RUNTIME:-docker}" rm $APP_NAME 2>/dev/null || true
 
-    local redis_arg=""
+    local app_args=(-mock=true)
+    local redis_env_args=()
     if [ "$1" = "redis" ]; then
-        redis_arg="-mock=false -redis-url=redis://host.docker.internal:6379"
+        app_args=(-mock=false)
+
+        # Pass Redis settings by environment-variable name so credentials do
+        # not appear in the docker command line. If no topology was provided,
+        # retain the convenient local standalone default.
+        if [ -z "${TRUVAG3_REDIS_MODE:-}" ] && [ -z "${REDIS_URL:-}" ]; then
+            redis_env_args+=(--env "REDIS_URL=redis://host.docker.internal:6379")
+        fi
+
+        local redis_env_name=""
+        for redis_env_name in \
+            REDIS_URL \
+            TRUVAG3_REDIS_MODE \
+            TRUVAG3_REDIS_ADDRS \
+            TRUVAG3_REDIS_MASTER_NAME \
+            TRUVAG3_REDIS_DB \
+            TRUVAG3_REDIS_NAMESPACE \
+            TRUVAG3_REDIS_USERNAME \
+            TRUVAG3_REDIS_PASSWORD \
+            TRUVAG3_REDIS_SENTINEL_USERNAME \
+            TRUVAG3_REDIS_SENTINEL_PASSWORD \
+            TRUVAG3_REDIS_TLS_ENABLED \
+            TRUVAG3_REDIS_TLS_SERVER_NAME \
+            TRUVAG3_REDIS_POOL_SIZE \
+            TRUVAG3_REDIS_MIN_IDLE_CONNS \
+            TRUVAG3_REDIS_DIAL_TIMEOUT \
+            TRUVAG3_REDIS_READ_TIMEOUT \
+            TRUVAG3_REDIS_WRITE_TIMEOUT \
+            TRUVAG3_REDIS_MAX_RETRIES; do
+            if [ -n "${!redis_env_name}" ]; then
+                redis_env_args+=(--env "$redis_env_name")
+            fi
+        done
+
+        if [ -n "${TRUVAG3_REDIS_CA_FILE:-}" ]; then
+            if [ ! -r "$TRUVAG3_REDIS_CA_FILE" ]; then
+                log_error "TRUVAG3_REDIS_CA_FILE must name a readable PEM file"
+                exit 1
+            fi
+            redis_env_args+=(
+                --volume "$TRUVAG3_REDIS_CA_FILE:/etc/truvag3/redis-ca/ca.crt:ro"
+                --env "TRUVAG3_REDIS_CA_FILE=/etc/truvag3/redis-ca/ca.crt"
+            )
+        fi
         log_info "Running with Redis connection"
     else
-        redis_arg="-mock=true"
         log_info "Running with mock data"
     fi
 
@@ -556,7 +783,12 @@ docker_run() {
     echo "Press Ctrl+C to stop"
     echo ""
 
-    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run --rm -p $APP_PORT:$APP_PORT --name $APP_NAME "$IMAGE_NAME" $redis_arg
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" run --rm \
+        -p "$APP_PORT:$APP_PORT" \
+        --name "$APP_NAME" \
+        "${redis_env_args[@]}" \
+        "$IMAGE_NAME" \
+        "${app_args[@]}"
 }
 
 # Handle arguments
@@ -573,6 +805,12 @@ case "${1:-help}" in
         check_prerequisites
         run_redis
         ;;
+    verify)
+        verify_live_data
+        ;;
+    verify-all)
+        verify_live_data --strict
+        ;;
     docker)
         check_prerequisites
         build_docker
@@ -582,6 +820,7 @@ case "${1:-help}" in
         docker_run "$2"
         ;;
     deploy)
+        validate_redis_environment
         check_prerequisites
         print_header
         build_docker
@@ -589,6 +828,7 @@ case "${1:-help}" in
         deploy_k8s
         ;;
     rebuild)
+        validate_redis_environment
         check_prerequisites
         rebuild
         ;;
